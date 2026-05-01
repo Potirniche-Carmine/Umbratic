@@ -5,6 +5,10 @@ contextBridge.exposeInMainWorld("aegis", {
   restartDaemon: () => ipcRenderer.invoke("daemon:restart"),
   pickProjectFolder: () => ipcRenderer.invoke("project:pick-folder"),
   pickAttachments: (projectRoot?: string) => ipcRenderer.invoke("file:pick-attachments", projectRoot),
+  openProjectInIde: (payload: { ideId: string; command: string; projectRoot: string }) =>
+    ipcRenderer.invoke("ide:open-project", payload),
+  openFileInIde: (payload: { ideId: string; command: string; projectRoot: string; file: string; line?: number | null }) =>
+    ipcRenderer.invoke("ide:open-file", payload),
   startTerminal: (cwd?: string) => ipcRenderer.invoke("terminal:start", cwd),
   writeTerminal: (data: string) => ipcRenderer.invoke("terminal:write", data),
   onTerminalData: (callback: (data: string) => void) => {

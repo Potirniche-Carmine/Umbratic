@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, OpenDialogOptions, shell } from "electron";
 import { ChildProcess, spawn } from "node:child_process";
 import fs = require("node:fs");
 import path = require("node:path");
@@ -38,10 +38,11 @@ function daemonSourcePath(): string {
   const exe = process.platform === "win32" ? "aegis-app.exe" : "aegis-app";
   if (isDev) {
     const release = path.resolve(__dirname, "../../../aegis-daemon/target/release", exe);
-    if (fs.existsSync(release)) {
-      return release;
+    const debug = path.resolve(__dirname, "../../../aegis-daemon/target/debug", exe);
+    if (fs.existsSync(release) && fs.existsSync(debug)) {
+      return fs.statSync(debug).mtimeMs >= fs.statSync(release).mtimeMs ? debug : release;
     }
-    return path.resolve(__dirname, "../../../aegis-daemon/target/debug", exe);
+    return fs.existsSync(release) ? release : debug;
   }
   return path.join(process.resourcesPath, "daemon", exe);
 }
@@ -57,8 +58,9 @@ function ensureRunnableBinary(): string {
   try {
     fs.mkdirSync(targetDir, { recursive: true });
     const sourceStat = fs.statSync(source);
-    let needsCopy = true;
-    if (fs.existsSync(target)) {
+    const targetExists = fs.existsSync(target);
+    let needsCopy = isDev || !targetExists;
+    if (!needsCopy && targetExists) {
       const targetStat = fs.statSync(target);
       if (targetStat.size === sourceStat.size && targetStat.mtimeMs >= sourceStat.mtimeMs) {
         needsCopy = false;
@@ -328,6 +330,38 @@ function startTerminal(cwd?: string): { started: boolean; shell: string } {
   return { started: true, shell: shell.command };
 }
 
+function launchCommand(command: string, args: string[]): { ok: true } | { ok: false; message: string } {
+  // Spawn an external editor reliably on Windows. Direct spawn with shell:true
+  // breaks for paths with spaces (e.g. "C:\Program Files\Microsoft VS Code\Code.exe"),
+  // and direct spawn fails for .cmd / .bat shims (e.g. code.cmd) because Windows
+  // refuses to CreateProcess a batch file. Pick the right strategy per command.
+  if (!command) {
+    return { ok: false, message: "No command for the chosen editor." };
+  }
+  try {
+    const isWindows = process.platform === "win32";
+    const isBatch = isWindows && /\.(cmd|bat)$/i.test(command);
+    const child = isBatch
+      ? spawn("cmd.exe", ["/c", command, ...args], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        })
+      : spawn(command, args, {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+    child.once("error", (error) => {
+      console.error(`[aegis] failed to launch ${command}:`, error);
+    });
+    child.unref();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: String(error instanceof Error ? error.message : error) };
+  }
+}
+
 async function createWindow() {
   const isMac = process.platform === "darwin";
   const isWin = process.platform === "win32";
@@ -399,6 +433,56 @@ app.whenReady().then(async () => {
       files: result.filePaths.map((filePath) => readAttachment(filePath, projectRoot)),
     };
   });
+  ipcMain.handle(
+    "ide:open-project",
+    async (_event, payload: { ideId: string; command: string; projectRoot: string }) => {
+      try {
+        const root = path.resolve(payload.projectRoot);
+        if (!fs.existsSync(root)) {
+          return { ok: false, message: `Project root does not exist: ${root}` };
+        }
+        if (payload.ideId === "explorer") {
+          const error = await shell.openPath(root);
+          if (error) {
+            return { ok: false, message: error };
+          }
+          return { ok: true };
+        }
+        return launchCommand(payload.command, [root]);
+      } catch (error) {
+        return { ok: false, message: String(error instanceof Error ? error.message : error) };
+      }
+    },
+  );
+  ipcMain.handle(
+    "ide:open-file",
+    async (
+      _event,
+      payload: { ideId: string; command: string; projectRoot: string; file: string; line?: number | null },
+    ) => {
+      try {
+        const root = path.resolve(payload.projectRoot);
+        const target = path.isAbsolute(payload.file) ? payload.file : path.join(root, payload.file);
+        if (!fs.existsSync(target)) {
+          return { ok: false, message: `File does not exist: ${target}` };
+        }
+        if (payload.ideId === "explorer") {
+          shell.showItemInFolder(target);
+          return { ok: true };
+        }
+        if (payload.ideId === "code") {
+          const gotoArg = payload.line ? `${target}:${payload.line}` : target;
+          const args = payload.line
+            ? ["--reuse-window", root, "--goto", gotoArg]
+            : ["--reuse-window", root, target];
+          return launchCommand(payload.command, args);
+        }
+        return launchCommand(payload.command, [target]);
+      } catch (error) {
+        return { ok: false, message: String(error instanceof Error ? error.message : error) };
+      }
+    },
+  );
   ipcMain.handle("terminal:start", (_event, cwd?: string) => startTerminal(cwd));
   ipcMain.handle("terminal:write", (_event, data: string) => {
     if (!terminalProcess) {

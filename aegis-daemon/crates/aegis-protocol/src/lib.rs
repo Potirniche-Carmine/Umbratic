@@ -129,11 +129,22 @@ pub struct ChatResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextUsageResult {
+    pub prompt_tokens: usize,
+    #[serde(default)]
+    pub max_context_tokens: Option<usize>,
+    pub message_count: usize,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendTaskParams {
     pub project_id: Option<String>,
     #[serde(default)]
     pub project_root: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub conversation_history: Vec<ChatMessage>,
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default)]
@@ -146,6 +157,8 @@ pub struct SendTaskParams {
     pub permission_mode: String,
     #[serde(default)]
     pub enabled_tools: Vec<String>,
+    #[serde(default)]
+    pub approved_tool_actions: Vec<String>,
     #[serde(default)]
     pub tool_context: Vec<AgentToolContext>,
     #[serde(default)]
@@ -260,6 +273,12 @@ pub struct ProjectFileEntry {
     pub path: String,
     pub name: String,
     pub directory: String,
+    #[serde(default = "default_project_file_kind")]
+    pub kind: String,
+}
+
+fn default_project_file_kind() -> String {
+    "file".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

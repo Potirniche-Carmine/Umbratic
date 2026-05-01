@@ -406,6 +406,7 @@ pub async fn open_file(
     if ide_id == "explorer" {
         command_builder.arg(format!("/select,\"{}\"", full_path.display()));
     } else if ide_id == "code" {
+        command_builder.arg("--reuse-window").arg(project_root.canonicalize()?);
         if let Some(line) = line {
             command_builder
                 .arg("--goto")
@@ -556,6 +557,25 @@ fn collect_project_files(
             if should_skip_dir_name(&name) {
                 continue;
             }
+            let relative = path.strip_prefix(project_root).unwrap_or(&path);
+            let display = relative.display().to_string().replace('\\', "/");
+            let directory = relative
+                .parent()
+                .map(|parent| parent.display().to_string().replace('\\', "/"))
+                .unwrap_or_default();
+            files.push(ProjectFileEntry {
+                name: path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                directory,
+                path: display,
+                kind: "directory".to_string(),
+            });
+            if files.len() >= limit {
+                return Ok(());
+            }
             collect_project_files(project_root, &path, limit, files)?;
             continue;
         }
@@ -576,6 +596,7 @@ fn collect_project_files(
                 .to_string(),
             directory,
             path: display,
+            kind: "file".to_string(),
         });
         if files.len() >= limit {
             return Ok(());

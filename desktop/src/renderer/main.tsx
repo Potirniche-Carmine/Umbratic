@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   ArrowLeft,
   ArrowUp,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Code2,
   Copy,
   Database,
@@ -59,11 +61,15 @@ type ServerEvent =
   | { type: "agent_stream"; turn_id: string; kind: string; content?: string; data?: unknown };
 
 type ChatLine = {
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "thinking";
   content: string;
   toolName?: string;
   status?: ServiceStatus;
   detail?: string;
+  streaming?: boolean;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
 };
 
 type ProjectSummary = {
@@ -123,6 +129,7 @@ type ProjectFileEntry = {
   path: string;
   name: string;
   directory: string;
+  kind?: "file" | "directory" | string;
 };
 
 type AttachedFile = {
@@ -144,11 +151,46 @@ type SendTaskResult = {
   assistant_message: string;
 };
 
+type ContextUsageResult = {
+  prompt_tokens: number;
+  max_context_tokens?: number | null;
+  message_count: number;
+  source: string;
+};
+
+type ContextUsageState = {
+  promptTokens: number;
+  maxContextTokens?: number | null;
+  messageCount: number;
+  percent: number;
+  status: "loading" | "ready" | "unavailable";
+  detail: string;
+};
+
 type TimelineRow = {
   id: string;
   name: string;
   status: ServiceStatus;
   detail: string;
+  at: string;
+};
+
+type ToolApprovalRequest = {
+  id: string;
+  toolName: string;
+  actionKey: string;
+  command: string;
+  summary: string;
+  requestedAt: string;
+};
+
+type ToolApprovalEvent = {
+  id: string;
+  toolName: string;
+  actionKey: string;
+  command: string;
+  decision: "accepted" | "declined";
+  quality: "Good" | "Bad";
   at: string;
 };
 
@@ -164,7 +206,27 @@ type LocalChat = {
   worktreeEnabled: boolean;
   diffAvailable?: boolean;
   changedFileCount?: number;
+  changedLineStats?: DiffLineStats;
+  pendingApproval?: ToolApprovalRequest;
+  approvedToolActions: string[];
+  approvalEvents: ToolApprovalEvent[];
 };
+
+type DiffLineStats = {
+  added: number;
+  removed: number;
+};
+
+type PersistedWorkspace = {
+  chats: LocalChat[];
+  activeChatId: string;
+  selectedProjectId?: string | null;
+  selectedModel?: string;
+  selectedIdeId?: string;
+  permissionMode?: PermissionMode;
+};
+
+const CHAT_STORAGE_KEY = "aegis.workspace.v2";
 
 type AgentTool = {
   id: string;
@@ -197,6 +259,8 @@ type PickProjectResult =
   | { canceled: true }
   | { canceled: false; rootPath: string; name: string };
 
+type IdeOpenResult = { ok: true } | { ok: false; message: string };
+
 type DesktopApi = {
   getDaemonConnection(): Promise<DesktopConnection>;
   restartDaemon(): Promise<DesktopConnection>;
@@ -205,6 +269,8 @@ type DesktopApi = {
     | { canceled: true }
     | { canceled: false; files: AttachedFile[] }
   >;
+  openProjectInIde?(payload: { ideId: string; command: string; projectRoot: string }): Promise<IdeOpenResult>;
+  openFileInIde?(payload: { ideId: string; command: string; projectRoot: string; file: string; line?: number | null }): Promise<IdeOpenResult>;
   startTerminal(cwd?: string): Promise<{ started: boolean; shell: string }>;
   writeTerminal(data: string): Promise<{ written: boolean }>;
   onTerminalData(callback: (data: string) => void): () => void;
@@ -243,7 +309,160 @@ function newLocalChat(branch?: string): LocalChat {
     timeline: [],
     branch,
     worktreeEnabled: false,
+    approvedToolActions: [],
+    approvalEvents: [],
   };
+}
+
+function sanitizeChatLine(line: Partial<ChatLine>): ChatLine | null {
+  const role = line.role;
+  if (!role || !["user", "assistant", "tool", "thinking"].includes(role)) {
+    return null;
+  }
+  return {
+    role,
+    content: typeof line.content === "string" ? line.content : "",
+    toolName: typeof line.toolName === "string" ? line.toolName : undefined,
+    status: line.status,
+    detail: typeof line.detail === "string" ? line.detail : undefined,
+    streaming: false,
+    startedAt: typeof line.startedAt === "string" ? line.startedAt : undefined,
+    endedAt: typeof line.endedAt === "string" ? line.endedAt : undefined,
+    durationMs: typeof line.durationMs === "number" ? line.durationMs : undefined,
+  };
+}
+
+function sanitizeApprovalRequest(value: unknown): ToolApprovalRequest | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const row = value as Partial<ToolApprovalRequest>;
+  if (
+    typeof row.id !== "string" ||
+    typeof row.toolName !== "string" ||
+    typeof row.actionKey !== "string" ||
+    typeof row.command !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    id: row.id,
+    toolName: row.toolName,
+    actionKey: row.actionKey,
+    command: row.command,
+    summary: typeof row.summary === "string" ? row.summary : "",
+    requestedAt: typeof row.requestedAt === "string" ? row.requestedAt : new Date().toISOString(),
+  };
+}
+
+function sanitizeApprovalEvent(value: unknown): ToolApprovalEvent | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const row = value as Partial<ToolApprovalEvent>;
+  if (
+    typeof row.id !== "string" ||
+    typeof row.toolName !== "string" ||
+    typeof row.actionKey !== "string" ||
+    typeof row.command !== "string" ||
+    (row.decision !== "accepted" && row.decision !== "declined")
+  ) {
+    return null;
+  }
+  return {
+    id: row.id,
+    toolName: row.toolName,
+    actionKey: row.actionKey,
+    command: row.command,
+    decision: row.decision,
+    quality: row.decision === "accepted" ? "Good" : "Bad",
+    at: typeof row.at === "string" ? row.at : new Date().toISOString(),
+  };
+}
+
+function sanitizeChat(chat: Partial<LocalChat>): LocalChat | null {
+  if (!chat.id || typeof chat.id !== "string") {
+    return null;
+  }
+  const messages = Array.isArray(chat.messages)
+    ? chat.messages.map((line) => sanitizeChatLine(line)).filter((line): line is ChatLine => !!line)
+    : [];
+  const timeline = Array.isArray(chat.timeline)
+    ? chat.timeline
+        .filter((row): row is TimelineRow =>
+          !!row &&
+          typeof row.id === "string" &&
+          typeof row.name === "string" &&
+          typeof row.detail === "string" &&
+          typeof row.at === "string",
+        )
+        .slice(0, 40)
+    : [];
+  return {
+    id: chat.id,
+    title: typeof chat.title === "string" && chat.title.trim() ? chat.title : "New chat",
+    createdAt: typeof chat.createdAt === "string" ? chat.createdAt : new Date().toISOString(),
+    messages,
+    timeline,
+    sessionId: typeof chat.sessionId === "string" ? chat.sessionId : undefined,
+    branch: typeof chat.branch === "string" ? chat.branch : undefined,
+    worktreePath: typeof chat.worktreePath === "string" ? chat.worktreePath : undefined,
+    worktreeEnabled: chat.worktreeEnabled === true,
+    diffAvailable: chat.diffAvailable === true,
+    changedFileCount: typeof chat.changedFileCount === "number" ? chat.changedFileCount : undefined,
+    changedLineStats: chat.changedLineStats,
+    pendingApproval: sanitizeApprovalRequest(chat.pendingApproval),
+    approvedToolActions: Array.isArray(chat.approvedToolActions)
+      ? chat.approvedToolActions.filter((key): key is string => typeof key === "string")
+      : [],
+    approvalEvents: Array.isArray(chat.approvalEvents)
+      ? chat.approvalEvents.map(sanitizeApprovalEvent).filter((row): row is ToolApprovalEvent => !!row).slice(-80)
+      : [],
+  };
+}
+
+function loadPersistedWorkspace(): PersistedWorkspace {
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) {
+      const chat = newLocalChat();
+      return { chats: [chat], activeChatId: chat.id };
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistedWorkspace>;
+    const chats = Array.isArray(parsed.chats)
+      ? parsed.chats.map((chat) => sanitizeChat(chat)).filter((chat): chat is LocalChat => !!chat)
+      : [];
+    const rows = chats.length > 0 ? chats : [newLocalChat()];
+    const activeChatId = rows.some((chat) => chat.id === parsed.activeChatId) ? String(parsed.activeChatId) : rows[0].id;
+    return {
+      chats: rows,
+      activeChatId,
+      selectedProjectId: parsed.selectedProjectId ?? null,
+      selectedModel: parsed.selectedModel,
+      selectedIdeId: parsed.selectedIdeId,
+      permissionMode: parsed.permissionMode,
+    };
+  } catch {
+    const chat = newLocalChat();
+    return { chats: [chat], activeChatId: chat.id };
+  }
+}
+
+function persistWorkspace(workspace: PersistedWorkspace) {
+  try {
+    window.localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        ...workspace,
+        chats: workspace.chats.map((chat) => ({
+          ...chat,
+          messages: chat.messages.map((message) => ({ ...message, streaming: false })),
+        })),
+      }),
+    );
+  } catch {
+    /* localStorage can be unavailable in hardened browser previews */
+  }
 }
 
 const DEFAULT_AGENT_TOOLS: AgentTool[] = [
@@ -373,6 +592,419 @@ function looksLikeToolCall(content: string): boolean {
   return parseToolCall(content) !== null;
 }
 
+function looksLikeToolCallFragment(content: string): boolean {
+  const trimmed = content.trim();
+  return (
+    trimmed.startsWith("{\"tool\"") ||
+    trimmed.startsWith("{\n\"tool\"") ||
+    trimmed.startsWith("<|tool_call>") ||
+    trimmed.includes("\"args\"")
+  );
+}
+
+function cleanAssistantMessage(content: string): string {
+  return content
+    .replace(/\n+\s*Files changed:\s*(?:none|[^\n]*)\s*\n\s*Verified:\s*[^\n]*\s*$/i, "")
+    .replace(/\n+\s*Files changed:\s*none\.?\s*Verified:\s*(?:not verified|tool result returned)\.?\s*$/i, "")
+    .trim();
+}
+
+function decodeMarkdownDisplayEscapes(content: string): string {
+  return content
+    .replace(/\\(["'])/g, "$1")
+    .replace(/\\\\n/g, "\\n")
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/&apos;|&#39;/g, "'");
+}
+
+function normalizeCommandShorthandBlocks(content: string): string {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  return lines
+    .map((line) => {
+      const match = /^(bash|sh|shell|powershell|pwsh|cmd|bat)\s+(.+)$/.exec(line.trim());
+      if (!match) {
+        return line;
+      }
+      const language = match[1] === "shell" ? "bash" : match[1];
+      return ["```" + language, match[2], "```"].join("\n");
+    })
+    .join("\n");
+}
+
+function toolDisplayText(toolName: string, done: boolean, success = true): string {
+  if (!done) {
+    return `Using ${toolName}`;
+  }
+  return success ? `Used ${toolName}` : `${toolName} failed`;
+}
+
+function compactLabel(input: string, maxLength = 52): string {
+  const normalized = input.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+function toolArgs(data: unknown): Record<string, unknown> {
+  if (!data || typeof data !== "object") {
+    return {};
+  }
+  const args = (data as Record<string, unknown>).args;
+  return args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+}
+
+function stringArg(args: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function mentionTarget(value: string): string {
+  const cleaned = value.replace(/^@/, "").replace(/\\/g, "/").trim();
+  return compactLabel(cleaned ? `@${cleaned}` : "");
+}
+
+function commandTarget(command: string): string {
+  const words = command.trim().split(/\s+/).slice(0, 2).join(" ");
+  return compactLabel(words || "command", 34);
+}
+
+function toolActivityLabel(toolName: string, data: unknown, success = true): string {
+  const args = toolArgs(data);
+  const path = stringArg(args, ["path", "file", "project_path"]);
+  const query = stringArg(args, ["query", "pattern"]);
+  const command = stringArg(args, ["command"]);
+  const done = (label: string) => success ? label : `${label} failed`;
+
+  if (toolName === "file.read") {
+    return done(`Reading ${mentionTarget(path) || "file"}`);
+  }
+  if (toolName === "file.write") {
+    return done(`Writing ${mentionTarget(path) || "file"}`);
+  }
+  if (toolName === "project.search" || toolName === "rg.search" || toolName === "grep.search") {
+    return done(`Searching ${compactLabel(query || "project", 40)}`);
+  }
+  if (toolName === "git.status") {
+    return done("Checking git status");
+  }
+  if (toolName === "git.diff") {
+    return done("Reading git diff");
+  }
+  if (toolName === "git.branches") {
+    return done("Reading branches");
+  }
+  if (toolName === "git.worktree_list") {
+    return done("Reading worktrees");
+  }
+  if (toolName === "terminal.run") {
+    return done(`Running ${command ? commandTarget(command) : "command"}`);
+  }
+  if (toolName === "os.context") {
+    return done("Reading system context");
+  }
+
+  const action = toolName.includes("write")
+    ? "Writing"
+    : toolName.includes("read")
+      ? "Reading"
+      : toolName.includes("search")
+        ? "Searching"
+        : "Using";
+  const target = path ? mentionTarget(path) : query ? compactLabel(query, 40) : compactLabel(toolName, 32);
+  return done(`${action} ${target}`);
+}
+
+function toolActionCommand(toolName: string, data: unknown): string {
+  if (!data || typeof data !== "object") {
+    return toolName;
+  }
+  if (toolName === "file.write") {
+    const path = stringArg(toolArgs(data), ["path", "file", "project_path"]);
+    return `Write ${mentionTarget(path) || "file"}`;
+  }
+  const record = data as Record<string, unknown>;
+  if (typeof record.command === "string" && record.command.trim()) {
+    return record.command.trim();
+  }
+  return JSON.stringify({ tool: toolName, args: toolArgs(data) });
+}
+
+function approvalRequestFromToolEvent(toolName: string, data: unknown, summary: string): ToolApprovalRequest | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+  const record = data as Record<string, unknown>;
+  if (record.approval_required !== true || typeof record.action_key !== "string" || !record.action_key.trim()) {
+    return null;
+  }
+  return {
+    id: crypto.randomUUID(),
+    toolName,
+    actionKey: record.action_key,
+    command: toolActionCommand(toolName, data),
+    summary,
+    requestedAt: new Date().toISOString(),
+  };
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJson);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalizeJson(nested)]),
+    );
+  }
+  return value;
+}
+
+function toolActionKey(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "file.write") {
+    return "file.write";
+  }
+  return `${toolName}:${JSON.stringify(canonicalizeJson(args))}`;
+}
+
+function approvalRequestFromRawToolCall(call: RequestedToolCall): ToolApprovalRequest | null {
+  if (call.tool !== "file.write" && call.tool !== "terminal.run") {
+    return null;
+  }
+  const data = {
+    tool: call.tool,
+    args: call.args,
+    action_key: toolActionKey(call.tool, call.args),
+    approval_required: true,
+    command:
+      call.tool === "terminal.run" && typeof call.args.command === "string"
+        ? call.args.command
+        : undefined,
+  };
+  return approvalRequestFromToolEvent(call.tool, data, "");
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) {
+    return `${seconds}s`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
+function thinkingDuration(line: ChatLine, now = Date.now()): number | null {
+  if (typeof line.durationMs === "number" && Number.isFinite(line.durationMs)) {
+    return line.durationMs;
+  }
+  if (!line.startedAt) {
+    return null;
+  }
+  const started = Date.parse(line.startedAt);
+  if (!Number.isFinite(started)) {
+    return null;
+  }
+  const ended = line.endedAt ? Date.parse(line.endedAt) : now;
+  return Number.isFinite(ended) ? Math.max(0, ended - started) : null;
+}
+
+function finishThinkingLine(line: ChatLine, endedAtMs: number): ChatLine {
+  const startedAtMs = line.startedAt ? Date.parse(line.startedAt) : endedAtMs;
+  const durationMs = Number.isFinite(startedAtMs) ? Math.max(0, endedAtMs - startedAtMs) : undefined;
+  return {
+    ...line,
+    streaming: false,
+    endedAt: new Date(endedAtMs).toISOString(),
+    durationMs,
+  };
+}
+
+function contextMessagesForDaemon(messages: ChatLine[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return messages
+    .filter((message) => !message.streaming && (message.role === "user" || message.role === "assistant"))
+    .map((message) => ({
+      role: message.role as "user" | "assistant",
+      content: message.role === "assistant" ? cleanAssistantMessage(message.content) : message.content,
+    }))
+    .filter((message) => message.content.trim().length > 0)
+    .slice(-12);
+}
+
+function chatHistoryForDaemon(messages: ChatLine[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return contextMessagesForDaemon(messages);
+}
+
+function contextPercent(tokens: number, maxTokens?: number | null): number {
+  if (!maxTokens || maxTokens <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, Math.round((tokens / maxTokens) * 100)));
+}
+
+type MarkdownBlock =
+  | { kind: "code"; language: string; content: string }
+  | { kind: "heading"; level: number; content: string }
+  | { kind: "list"; ordered: boolean; items: string[] }
+  | { kind: "paragraph"; content: string };
+
+function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  let paragraph: string[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+
+  const flushParagraph = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ kind: "paragraph", content: paragraph.join(" ") });
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      blocks.push({ kind: "list", ordered: list.ordered, items: list.items });
+      list = null;
+    }
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const fence = /^```([A-Za-z0-9_-]*)\s*$/.exec(line);
+    if (fence) {
+      flushParagraph();
+      flushList();
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      blocks.push({ kind: "code", language: fence[1] ?? "", content: code.join("\n") });
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      blocks.push({ kind: "heading", level: heading[1].length, content: heading[2].trim() });
+      continue;
+    }
+    const unordered = /^\s*[-*]\s+(.+)$/.exec(line);
+    const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
+    if (unordered || ordered) {
+      flushParagraph();
+      const isOrdered = !!ordered;
+      if (!list || list.ordered !== isOrdered) {
+        flushList();
+        list = { ordered: isOrdered, items: [] };
+      }
+      list.items.push((ordered?.[1] ?? unordered?.[1] ?? "").trim());
+      continue;
+    }
+    flushList();
+    paragraph.push(line.trim());
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks;
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={index}>{part.slice(1, -1)}</code>;
+    }
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    return <React.Fragment key={index}>{part}</React.Fragment>;
+  });
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  const blocks = parseMarkdownBlocks(normalizeCommandShorthandBlocks(decodeMarkdownDisplayEscapes(content)));
+  return (
+    <div className="markdownBubble">
+      {blocks.map((block, index) => {
+        if (block.kind === "code") {
+          return <CopyableCodeBlock key={index} language={block.language} content={block.content} />;
+        }
+        if (block.kind === "heading") {
+          return block.level === 1 ? (
+            <h3 key={index}>{renderInlineMarkdown(block.content)}</h3>
+          ) : (
+            <h4 key={index}>{renderInlineMarkdown(block.content)}</h4>
+          );
+        }
+        if (block.kind === "list") {
+          const List = block.ordered ? "ol" : "ul";
+          return (
+            <List key={index}>
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+              ))}
+            </List>
+          );
+        }
+        return <p key={index}>{renderInlineMarkdown(block.content)}</p>;
+      })}
+    </div>
+  );
+}
+
+function CopyableCodeBlock({ language, content }: { language?: string; content: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <div className="codeBlockShell" data-language={language || undefined}>
+      <div className="codeBlockHeader">
+        <span>{language || "code"}</span>
+        <button type="button" onClick={copy} title="Copy code">
+          <Copy size={12} />
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <pre>
+        <code>{content}</code>
+      </pre>
+    </div>
+  );
+}
+
+function renderMessageContent(content: string, role: ChatLine["role"]) {
+  if (role !== "user") {
+    return content;
+  }
+  const parts = content.split(/(@[A-Za-z0-9_.\-\\/]+)/g);
+  return parts.map((part, index) =>
+    part.startsWith("@") ? (
+      <span className="inlineMention" key={`${part}-${index}`}>
+        {part}
+      </span>
+    ) : (
+      <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>
+    ),
+  );
+}
+
 function parseToolCall(content: string): RequestedToolCall | null {
   const trimmed = content.trim();
   if (!trimmed) {
@@ -458,7 +1090,14 @@ function activeMentionStart(input: string): number | null {
 
 function activeMentionQuery(input: string): string | null {
   const index = activeMentionStart(input);
-  return index === null ? null : input.slice(index + 1);
+  if (index === null) {
+    return null;
+  }
+  const slice = input.slice(index + 1);
+  if (/\s/.test(slice)) {
+    return null;
+  }
+  return slice;
 }
 
 function summarizeForSlug(input: string): string {
@@ -529,14 +1168,22 @@ function diffFileCount(diff?: GitResult | null): number {
 }
 
 function App() {
-  const firstChat = useMemo(() => newLocalChat(), []);
+  const persistedWorkspace = useMemo(() => loadPersistedWorkspace(), []);
   const [connection, setConnection] = useState<DesktopConnection | null>(null);
   const [socketState, setSocketState] = useState<SocketState>("idle");
   const [health, setHealth] = useState<DaemonHealth | null>(null);
   const [models, setModels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState("google/gemma-4-e4b");
+  const [selectedModel, setSelectedModel] = useState(persistedWorkspace.selectedModel ?? "google/gemma-4-e4b");
+  const [contextUsage, setContextUsage] = useState<ContextUsageState>({
+    promptTokens: 0,
+    maxContextTokens: null,
+    messageCount: 0,
+    percent: 0,
+    status: "unavailable",
+    detail: "Open LM Studio to count tokens with the loaded model.",
+  });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(persistedWorkspace.selectedProjectId ?? null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [storeOverview, setStoreOverview] = useState<StoreOverview | null>(null);
   const [gitStatus, setGitStatus] = useState<GitResult | null>(null);
@@ -553,11 +1200,12 @@ function App() {
   const [activeRail, setActiveRail] = useState<RailView>("chats");
   const [activeTab, setActiveTab] = useState<MainTab>("chat");
   const [prompt, setPrompt] = useState("");
-  const [chats, setChats] = useState<LocalChat[]>([firstChat]);
-  const [activeChatId, setActiveChatId] = useState(firstChat.id);
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+  const [chats, setChats] = useState<LocalChat[]>(persistedWorkspace.chats);
+  const [activeChatId, setActiveChatId] = useState(persistedWorkspace.activeChatId);
   const [ides, setIdes] = useState<IdeInstall[]>([]);
-  const [selectedIdeId, setSelectedIdeId] = useState("code");
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
+  const [selectedIdeId, setSelectedIdeId] = useState(persistedWorkspace.selectedIdeId ?? "code");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(persistedWorkspace.permissionMode ?? "default");
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [composerBranchMenuOpen, setComposerBranchMenuOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
@@ -573,6 +1221,8 @@ function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const pendingRef = useRef(new Map<string, (response: RpcResponse<unknown>) => void>());
   const streamingChatRef = useRef<string | null>(null);
+  const streamBufferRef = useRef<string>("");
+  const streamFrameRef = useRef<number | null>(null);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const selectedProject = useMemo(
@@ -618,19 +1268,131 @@ function App() {
       enabledTools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
       toolContext,
       attachedFiles,
+      approvalBehavior: chats.flatMap((chat) =>
+        chat.approvalEvents.map((event) => ({
+          chatId: chat.id,
+          chatTitle: chat.title,
+          ...event,
+        })),
+      ),
+      pendingApproval: activeChat.pendingApproval,
+      approvedToolActions: activeChat.approvedToolActions,
       operatingSystem: detectHarnessOs(),
       lastError: error,
     }),
-    [activeChat, activeFile, agentTools, attachedFiles, branchInfo, chats.length, connection, error, health, models, permissionMode, selectedModel, sessions, storeOverview, toolContext, visibleProject, worktrees],
+    [activeChat, activeFile, agentTools, attachedFiles, branchInfo, chats, connection, error, health, models, permissionMode, selectedModel, sessions, storeOverview, toolContext, visibleProject, worktrees],
   );
   const agentTimeline = useMemo(
     () => activeChat.timeline.filter((row) => ["agent", "reasoning", "tool"].includes(row.name)),
     [activeChat.timeline],
   );
-
   const updateChat = useCallback((chatId: string, updater: (chat: LocalChat) => LocalChat) => {
     setChats((rows) => rows.map((chat) => (chat.id === chatId ? updater(chat) : chat)));
   }, []);
+
+  const flushStreamBuffer = useCallback(() => {
+    streamFrameRef.current = null;
+    const chunk = streamBufferRef.current;
+    streamBufferRef.current = "";
+    const chatId = streamingChatRef.current;
+    if (!chatId || !chunk) {
+      return;
+    }
+    updateChat(chatId, (chat) => {
+      const messages = [...chat.messages];
+      const last = messages[messages.length - 1];
+      if (last?.role === "assistant" && last.streaming) {
+        messages[messages.length - 1] = { ...last, content: `${last.content}${chunk}` };
+      } else {
+        messages.push({ role: "assistant", content: chunk, streaming: true });
+      }
+      return { ...chat, messages };
+    });
+  }, [updateChat]);
+
+  const enqueueStreamDelta = useCallback((delta: string) => {
+    streamBufferRef.current += delta;
+    if (streamFrameRef.current !== null) {
+      return;
+    }
+    streamFrameRef.current = requestAnimationFrame(flushStreamBuffer);
+  }, [flushStreamBuffer]);
+
+  const enqueueThinkingDelta = useCallback((chatId: string, delta: string) => {
+    updateChat(chatId, (chat) => {
+      const messages = [...chat.messages];
+      let thinkingIndex = -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === "thinking" && messages[index].streaming) {
+          thinkingIndex = index;
+          break;
+        }
+      }
+      if (thinkingIndex >= 0) {
+        messages[thinkingIndex] = {
+          ...messages[thinkingIndex],
+          content: `${messages[thinkingIndex].content}${delta}`,
+        };
+        return { ...chat, messages };
+      }
+      let assistantIndex = -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === "assistant" && messages[index].streaming) {
+          assistantIndex = index;
+          break;
+        }
+      }
+      const thinking: ChatLine = {
+        role: "thinking",
+        content: delta,
+        streaming: true,
+        startedAt: new Date().toISOString(),
+      };
+      if (assistantIndex >= 0) {
+        messages.splice(assistantIndex, 0, thinking);
+      } else {
+        messages.push(thinking);
+      }
+      return { ...chat, messages };
+    });
+  }, [updateChat]);
+
+  const finishStreaming = useCallback((chatId: string) => {
+    const endedAtMs = Date.now();
+    if (streamFrameRef.current !== null) {
+      cancelAnimationFrame(streamFrameRef.current);
+      streamFrameRef.current = null;
+    }
+    if (streamBufferRef.current) {
+      const tail = streamBufferRef.current;
+      streamBufferRef.current = "";
+      updateChat(chatId, (chat) => {
+        const messages = chat.messages.map((message) =>
+          message.role === "thinking" && message.streaming ? finishThinkingLine(message, endedAtMs) : message,
+        );
+        const last = messages[messages.length - 1];
+        if (last?.role === "assistant" && last.streaming) {
+          messages[messages.length - 1] = { ...last, content: `${last.content}${tail}`, streaming: false };
+        } else {
+          messages.push({ role: "assistant", content: tail });
+        }
+        return { ...chat, messages };
+      });
+      return;
+    }
+    updateChat(chatId, (chat) => {
+      const messages = chat.messages.map((message, index) => {
+        if (index === chat.messages.length - 1 && message.role === "assistant" && message.streaming) {
+          return { ...message, streaming: false };
+        }
+        if (message.role === "thinking" && message.streaming) {
+          return finishThinkingLine(message, endedAtMs);
+        }
+        return message;
+      });
+      return { ...chat, messages };
+    });
+  }, [updateChat]);
 
   const addTimeline = useCallback((name: string, status: ServiceStatus, detail: string, chatId = activeChatId) => {
     const row: TimelineRow = {
@@ -666,6 +1428,89 @@ function App() {
       }, 45000);
     });
   }, []);
+
+  useEffect(() => {
+    if (socketState !== "open") {
+      setContextUsage((current) => ({
+        ...current,
+        status: "unavailable",
+        detail: "Daemon is not connected.",
+      }));
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const workingRoot = activeChat.worktreePath ?? selectedProject?.root_path;
+      const message = prompt.trim();
+      setContextUsage((current) => ({ ...current, status: "loading" }));
+      void rpc<ContextUsageResult>("agent.context_usage", {
+        project_id: selectedProject?.id,
+        project_root: workingRoot,
+        message,
+        conversation_history: chatHistoryForDaemon(activeChat.messages),
+        model: selectedModel,
+        git_branch: selectedBranch || undefined,
+        worktree_enabled: activeChat.worktreeEnabled,
+        worktree_path: workingRoot,
+        permission_mode: permissionMode,
+        enabled_tools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
+        approved_tool_actions: activeChat.approvedToolActions,
+        tool_context: toolContext,
+        attached_files: attachedFiles.map((file) => ({
+          path: file.path,
+          project_path: file.projectPath,
+          content: file.projectPath ? undefined : file.content,
+        })),
+        operating_system: detectHarnessOs(),
+      })
+        .then((usage) => {
+          if (cancelled) {
+            return;
+          }
+          setContextUsage({
+            promptTokens: usage.prompt_tokens,
+            maxContextTokens: usage.max_context_tokens,
+            messageCount: usage.message_count,
+            percent: contextPercent(usage.prompt_tokens, usage.max_context_tokens),
+            status: "ready",
+            detail: "Counted by LM Studio using the selected model context.",
+          });
+        })
+        .catch((cause) => {
+          if (cancelled) {
+            return;
+          }
+          const message = String(cause instanceof Error ? cause.message : cause);
+          setContextUsage((current) => ({
+            ...current,
+            status: "unavailable",
+            detail: message,
+          }));
+        });
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeChat.approvedToolActions,
+    activeChat.id,
+    activeChat.messages,
+    activeChat.worktreeEnabled,
+    activeChat.worktreePath,
+    agentTools,
+    attachedFiles,
+    permissionMode,
+    prompt,
+    rpc,
+    selectedBranch,
+    selectedModel,
+    selectedProject,
+    socketState,
+    toolContext,
+  ]);
 
   const refreshStore = useCallback(async () => {
     setStoreOverview(await rpc<StoreOverview>("store.overview", {}));
@@ -755,13 +1600,14 @@ function App() {
     setModels(modelRows.map((model) => model.id));
     setSelectedModel((current) => modelRows.some((model) => model.id === current) ? current : modelRows[0]?.id ?? current);
     setSelectedIdeId((current) => detectedIdes.some((ide) => ide.id === current) ? current : detectedIdes.find((ide) => ide.id === "code")?.id ?? detectedIdes[0]?.id ?? "code");
-    setSelectedProjectId((current) => current ?? projectRows[0]?.id ?? null);
-    if (projectRows[0]) {
-      void refreshProjectFiles(projectRows[0]).catch(() => setProjectFiles([]));
+    setSelectedProjectId((current) => projectRows.some((project) => project.id === current) ? current : projectRows[0]?.id ?? null);
+    const projectForFiles = projectRows.find((project) => project.id === selectedProjectId) ?? projectRows[0];
+    if (projectForFiles) {
+      void refreshProjectFiles(projectForFiles).catch(() => setProjectFiles([]));
     }
     addTimeline("daemon", "ready", "connected");
     addTimeline("lm-studio", healthResult.lm_studio, `${modelRows.length} model(s)`);
-  }, [addTimeline, refreshProjectFiles, rpc]);
+  }, [addTimeline, refreshProjectFiles, rpc, selectedProjectId]);
 
   const connect = useCallback(async () => {
     setSocketState("connecting");
@@ -811,73 +1657,105 @@ function App() {
           return;
         }
         if (parsed.kind === "message.delta" && parsed.content) {
-          updateChat(chatId, (chat) => {
-            const messages = [...chat.messages];
-            const last = messages[messages.length - 1];
-            if (last?.role === "assistant") {
-              messages[messages.length - 1] = { ...last, content: `${last.content}${parsed.content}` };
-            } else {
-              messages.push({ role: "assistant", content: parsed.content ?? "" });
-            }
-            return { ...chat, messages };
-          });
+          enqueueStreamDelta(parsed.content);
+        }
+        if (parsed.kind === "reasoning.delta" && parsed.content) {
+          enqueueThinkingDelta(chatId, parsed.content);
+          addTimeline("reasoning", "degraded", "thinking", chatId);
         }
         if (parsed.kind === "reasoning.start") {
-          addTimeline("reasoning", "degraded", "model reasoning stream active", chatId);
+          enqueueThinkingDelta(chatId, "");
+          addTimeline("reasoning", "degraded", "thinking", chatId);
         }
         if (parsed.kind === "tool.start") {
+          if (streamFrameRef.current !== null) {
+            cancelAnimationFrame(streamFrameRef.current);
+            streamFrameRef.current = null;
+          }
+          streamBufferRef.current = "";
           const toolName = typeof parsed.data === "object" && parsed.data && "tool" in parsed.data
             ? String((parsed.data as Record<string, unknown>).tool)
             : "tool";
-          const detail = shortToolDetail(parsed.data);
+          const detail = toolActivityLabel(toolName, parsed.data);
           updateChat(chatId, (chat) => {
             const messages = [...chat.messages];
             const last = messages[messages.length - 1];
-            if (last?.role === "assistant" && looksLikeToolCall(last.content)) {
+            const isToolCall =
+              last?.role === "assistant" &&
+              (looksLikeToolCall(last.content) || looksLikeToolCallFragment(last.content));
+            const isEmptyStreamingPlaceholder =
+              last?.role === "assistant" && last.streaming === true && last.content.length === 0;
+            const isBackgroundStreamingText =
+              last?.role === "assistant" && last.streaming === true;
+            if (isToolCall || isEmptyStreamingPlaceholder || isBackgroundStreamingText) {
               messages.pop();
             }
             return {
               ...chat,
               messages: [
                 ...messages,
-              {
-                role: "tool",
-                toolName,
-                status: "degraded",
-                detail,
-                content: detail ? `Running ${toolName} on ${detail}` : `Running ${toolName}`,
-              },
+                {
+                  role: "tool",
+                  toolName,
+                  status: "degraded",
+                  detail,
+                  content: detail,
+                },
               ],
             };
           });
-          addTimeline("tool", "degraded", detail ? `${toolName}: ${detail}` : toolName, chatId);
+          addTimeline("tool", "degraded", detail, chatId);
         }
         if (parsed.kind === "tool.end") {
           const data = parsed.data as Record<string, unknown>;
           const toolName = typeof data?.tool === "string" ? data.tool : "tool";
           const success = data?.success !== false;
-          const summary = typeof data?.summary === "string" ? data.summary : "";
-          updateChat(chatId, (chat) => ({
-            ...chat,
-            messages: [
-              ...chat.messages,
-              {
+          const approvalRequest = approvalRequestFromToolEvent(toolName, data, String(data?.summary ?? ""));
+          const summary = approvalRequest
+            ? `Approval needed: ${toolActionCommand(toolName, data)}`
+            : toolActivityLabel(toolName, data, success);
+          updateChat(chatId, (chat) => {
+            const messages = [...chat.messages];
+            let updated = false;
+            for (let index = messages.length - 1; index >= 0; index -= 1) {
+              if (messages[index].role === "tool" && messages[index].toolName === toolName && messages[index].status === "degraded") {
+                const display = approvalRequest
+                  ? messages[index].detail || toolActivityLabel(toolName, data, true)
+                  : success
+                    ? messages[index].detail || summary
+                    : summary;
+                messages[index] = {
+                  ...messages[index],
+                  status: success ? "ready" : approvalRequest ? "degraded" : "unavailable",
+                  detail: display,
+                  content: display,
+                };
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              messages.push({
                 role: "tool",
                 toolName,
-                status: success ? "ready" : "unavailable",
+                status: success ? "ready" : approvalRequest ? "degraded" : "unavailable",
                 detail: summary,
-                content: summary ? `${toolName} finished: ${summary}` : `${toolName} finished`,
-              },
-            ],
-          }));
-          addTimeline("tool", success ? "ready" : "unavailable", summary ? `${toolName}: ${summary}` : toolName, chatId);
+                content: summary,
+              });
+            }
+            return { ...chat, messages, pendingApproval: approvalRequest ?? chat.pendingApproval };
+          });
+          addTimeline("tool", success ? "ready" : approvalRequest ? "degraded" : "unavailable", summary, chatId);
+          if (approvalRequest) {
+            addTimeline("approval", "degraded", `Pending: ${approvalRequest.command}`, chatId);
+          }
         }
         if (parsed.kind === "terminal.output" && parsed.content) {
           setTerminalOutput((current) => `${current}${parsed.content}`.slice(-80_000));
         }
       }
     };
-  }, [addTimeline, loadInitialData, updateChat]);
+  }, [addTimeline, enqueueStreamDelta, enqueueThinkingDelta, loadInitialData, updateChat]);
 
   const pickProject = useCallback(async () => {
     setError(null);
@@ -937,6 +1815,17 @@ function App() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    persistWorkspace({
+      chats,
+      activeChatId,
+      selectedProjectId,
+      selectedModel,
+      selectedIdeId,
+      permissionMode,
+    });
+  }, [activeChatId, chats, permissionMode, selectedIdeId, selectedModel, selectedProjectId]);
+
   const newChat = () => {
     const chat = newLocalChat(selectedBranch);
     setChats((rows) => [chat, ...rows]);
@@ -954,7 +1843,7 @@ function App() {
       }
       const nextRows = rows.filter((chat) => chat.id !== chatId);
       if (chatId === activeChatId) {
-        setActiveChatId(nextRows[0]?.id ?? firstChat.id);
+        setActiveChatId(nextRows[0]?.id ?? rows[0]?.id ?? newLocalChat(selectedBranch).id);
       }
       return nextRows;
     });
@@ -997,62 +1886,31 @@ function App() {
     return worktree;
   };
 
-  const executeReturnedToolCall = async (content: string, projectRoot?: string): Promise<string> => {
+  const executeReturnedToolCall = async (content: string, projectRoot: string | undefined, chatId: string): Promise<string> => {
     const call = parseToolCall(content);
     if (!call || !projectRoot) {
       return content;
     }
-    const query = typeof call.args.query === "string" ? call.args.query : "";
-    const params = { projectRoot, project_root: projectRoot };
-    addTimeline("tool", "degraded", query ? `${call.tool}: ${query}` : call.tool);
-    try {
-      if (call.tool === "file.read") {
-        const path = resolveProjectFileReference(
-          String(call.args.path ?? call.args.file ?? ""),
-          projectFiles,
-          attachedFiles,
-        );
-        const fileContent = await rpc<string>("file.read", {
-          ...params,
-          path,
-        });
-        addTimeline("tool", "ready", `file.read: ${path}`);
-        return `I read ${path}.\n\n${fileContent.trim() || "(file was empty)"}`;
-      }
-      if (["project.search", "rg.search", "grep.search"].includes(call.tool)) {
-        const matches = await rpc<SearchMatch[]>("project.search", {
-          ...params,
-          query,
-          limit: 20,
-        });
-        addTimeline("tool", "ready", `${call.tool}: ${matches.length} match${matches.length === 1 ? "" : "es"}`);
-        if (matches.length === 0) {
-          return `I searched for "${query || "(empty query)"}" and did not find matching text.`;
-        }
-        return `I searched for "${query || "(empty query)"}" and found:\n\n${matches
-          .map((match) => `${normalizeDiffPath(match.path)}:${match.line} ${match.snippet}`)
-          .join("\n")}`;
-      }
-      if (call.tool === "git.status") {
-        const status = await rpc<GitResult>("git.status", params);
-        addTimeline("tool", status.success ? "ready" : "unavailable", "git.status");
-        return (status.stdout + status.stderr).trim() || "Working tree clean.";
-      }
-      if (call.tool === "git.diff") {
-        const diff = await rpc<GitResult>("git.diff", params);
-        addTimeline("tool", diff.success ? "ready" : "unavailable", "git.diff");
-        return (diff.stdout + diff.stderr).trim() || "No diff in the selected project.";
-      }
-      return `Aegis returned a tool call for ${call.tool}, but this running daemon did not execute it. Restart the daemon to use the updated tool runner.`;
-    } catch (cause) {
-      const message = String(cause instanceof Error ? cause.message : cause);
-      addTimeline("tool", "unavailable", message);
-      return `Aegis tried to run ${call.tool}, but it failed: ${message}`;
+    const approvalRequest = approvalRequestFromRawToolCall(call);
+    if (approvalRequest) {
+      updateChat(chatId, (chat) => ({ ...chat, pendingApproval: approvalRequest }));
+      addTimeline("approval", "degraded", `Pending: ${approvalRequest.command}`, chatId);
+      return `I need your approval before ${approvalRequest.command}.`;
     }
+    addTimeline("tool", "unavailable", `${call.tool} returned as final text`, chatId);
+    return [
+      `The model returned a raw ${call.tool} tool call as the final answer instead of letting the daemon continue the tool loop.`,
+      "",
+      "Send the request again and Aegis can continue from the current chat context.",
+    ].join("\n");
   };
 
-  const sendTask = async () => {
-    const trimmed = prompt.trim();
+  const sendTaskWithMessage = async (
+    message: string,
+    promptAttachments: AttachedFile[] = [],
+    options: { clearPrompt?: boolean; extraApprovedActions?: string[]; hideUserMessage?: boolean } = {},
+  ) => {
+    const trimmed = message.trim();
     const chatId = activeChat.id;
     if (!trimmed || busy) {
       return;
@@ -1060,13 +1918,27 @@ function App() {
 
     setBusy(true);
     setError(null);
-    setPrompt("");
+    if (options.clearPrompt) {
+      setPrompt("");
+    }
+    setAttachedFiles([]);
     streamingChatRef.current = chatId;
+    streamBufferRef.current = "";
+    if (streamFrameRef.current !== null) {
+      cancelAnimationFrame(streamFrameRef.current);
+      streamFrameRef.current = null;
+    }
     updateChat(chatId, (chat) => ({
       ...chat,
       title: chat.messages.length === 0 ? trimmed.slice(0, 64) : chat.title,
       branch: selectedBranch,
-      messages: [...chat.messages, { role: "user", content: trimmed }],
+      messages: options.hideUserMessage
+        ? [...chat.messages, { role: "assistant", content: "", streaming: true }]
+        : [
+            ...chat.messages,
+            { role: "user", content: trimmed },
+            { role: "assistant", content: "", streaming: true },
+          ],
     }));
     addTimeline("agent", "degraded", "generating response", chatId);
     if (selectedProject) {
@@ -1076,33 +1948,61 @@ function App() {
       const chat = chats.find((row) => row.id === chatId);
       const lazyWorktree = await ensureWorktree(chatId, trimmed);
       const workingRoot = lazyWorktree?.path ?? chat?.worktreePath ?? selectedProject?.root_path;
+      const conversationHistory = chatHistoryForDaemon(chat?.messages ?? []);
+      const approvedToolActions = Array.from(
+        new Set([...(chat?.approvedToolActions ?? []), ...(options.extraApprovedActions ?? [])]),
+      );
       const result = await rpc<SendTaskResult>("agent.send_task", {
         project_id: selectedProject?.id,
         project_root: workingRoot,
         message: trimmed,
+        conversation_history: conversationHistory,
         model: selectedModel,
         git_branch: lazyWorktree?.branch ?? (selectedBranch || undefined),
         worktree_enabled: chat?.worktreeEnabled ?? false,
         worktree_path: workingRoot,
         permission_mode: permissionMode,
         enabled_tools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
+        approved_tool_actions: approvedToolActions,
         tool_context: toolContext,
-        attached_files: attachedFiles.map((file) => ({
+        attached_files: promptAttachments.map((file) => ({
           path: file.path,
           project_path: file.projectPath,
           content: file.projectPath ? undefined : file.content,
         })),
         operating_system: detectHarnessOs(),
       });
-      const assistantMessage = await executeReturnedToolCall(result.assistant_message, workingRoot);
+      finishStreaming(chatId);
+      const assistantMessage = cleanAssistantMessage(
+        await executeReturnedToolCall(result.assistant_message, workingRoot, chatId),
+      );
       updateChat(chatId, (row) => ({
         ...row,
         sessionId: result.session_id,
         messages: (() => {
-          const messages = [...row.messages];
+          const messages = row.messages.filter(
+            (message) =>
+              !(
+                message.role === "assistant" &&
+                (looksLikeToolCall(message.content) || looksLikeToolCallFragment(message.content))
+              ),
+          );
+          if (row.pendingApproval && /^I need your approval\b/i.test(assistantMessage)) {
+            return messages.filter(
+              (message, index) =>
+                !(
+                  index === messages.length - 1 &&
+                  message.role === "assistant" &&
+                  (message.streaming || /^I need your approval\b/i.test(message.content) || message.content.trim() === "")
+                ),
+            );
+          }
           const last = messages[messages.length - 1];
           if (last?.role === "assistant") {
-            messages[messages.length - 1] = { role: "assistant", content: assistantMessage || last.content || "(empty response)" };
+            messages[messages.length - 1] = {
+              role: "assistant",
+              content: assistantMessage || cleanAssistantMessage(last.content) || "(empty response)",
+            };
             return messages;
           }
           let toolCallIndex = -1;
@@ -1119,23 +2019,35 @@ function App() {
         })(),
       }));
       addTimeline("agent", "ready", `turn ${result.turn_id.slice(0, 8)} finished`, chatId);
-      const [, , refreshedDiff] = await Promise.all([refreshSessions(selectedProjectId), refreshStore(), refreshGit(selectedProject ?? undefined)]);
+      const [, , refreshedDiff] = await Promise.all([
+        refreshSessions(selectedProjectId),
+        refreshStore(),
+        refreshGit(selectedProject ?? undefined),
+        refreshProjectFiles(selectedProject ?? undefined),
+      ]);
       const changedFileCount = diffFileCount(refreshedDiff);
       if (changedFileCount > 0) {
+        const changedLineStats = totalDiffLineStats(parseDiff(refreshedDiff?.stdout ?? ""));
         updateChat(chatId, (row) => ({
           ...row,
           diffAvailable: true,
           changedFileCount,
+          changedLineStats,
         }));
       }
     } catch (cause) {
       const message = String(cause instanceof Error ? cause.message : cause);
       setError(message);
       addTimeline("agent", "unavailable", message, chatId);
+      finishStreaming(chatId);
     } finally {
       streamingChatRef.current = null;
       setBusy(false);
     }
+  };
+
+  const sendTask = async () => {
+    await sendTaskWithMessage(prompt, attachedFiles, { clearPrompt: true });
   };
 
   const toggleWorktree = (enabled: boolean) => {
@@ -1150,12 +2062,18 @@ function App() {
     if (!selectedProject) {
       return;
     }
+    const ide = ides.find((row) => row.id === ideId) ?? selectedIde;
+    const projectRoot = activeChat.worktreePath ?? selectedProject.root_path;
     try {
-      await rpc("ide.open_project", {
-        ideId,
-        projectRoot: activeChat.worktreePath ?? selectedProject.root_path,
-      });
-      addTimeline("ide", "ready", `opened ${selectedProject.name}`);
+      if (aegisApi.openProjectInIde) {
+        const result = await aegisApi.openProjectInIde({ ideId, command: ide.command, projectRoot });
+        if (!result.ok) {
+          throw new Error(result.message);
+        }
+      } else {
+        await rpc("ide.open_project", { ideId, projectRoot });
+      }
+      addTimeline("ide", "ready", `opened ${selectedProject.name} in ${ide.label}`);
     } catch (cause) {
       const message = String(cause instanceof Error ? cause.message : cause);
       setError(message);
@@ -1163,19 +2081,29 @@ function App() {
     }
   };
 
-  const openFileInIde = async (path: string, line: number, ideId = selectedIdeId) => {
+  const openFileInIde = async (filePath: string, line: number, ideId = selectedIdeId) => {
     if (!selectedProject) {
       return;
     }
-    setActiveFile({ path, line, snippet: "Changed in current diff" });
+    const ide = ides.find((row) => row.id === ideId) ?? selectedIde;
+    const projectRoot = activeChat.worktreePath ?? selectedProject.root_path;
+    setActiveFile({ path: filePath, line, snippet: "Changed in current diff" });
     try {
-      await rpc("ide.open_file", {
-        ideId,
-        projectRoot: activeChat.worktreePath ?? selectedProject.root_path,
-        file: path,
-        line,
-      });
-      addTimeline("ide", "ready", `opened ${path}`);
+      if (aegisApi.openFileInIde) {
+        const result = await aegisApi.openFileInIde({
+          ideId,
+          command: ide.command,
+          projectRoot,
+          file: filePath,
+          line,
+        });
+        if (!result.ok) {
+          throw new Error(result.message);
+        }
+      } else {
+        await rpc("ide.open_file", { ideId, projectRoot, file: filePath, line });
+      }
+      addTimeline("ide", "ready", `opened ${filePath} in ${ide.label}`);
     } catch (cause) {
       const message = String(cause instanceof Error ? cause.message : cause);
       setError(message);
@@ -1218,6 +2146,39 @@ function App() {
 
   const removeAttachedFile = (path: string) => {
     setAttachedFiles((files) => files.filter((file) => (file.projectPath ?? file.path) !== path));
+  };
+
+  const resolveApproval = (request: ToolApprovalRequest, decision: "accepted" | "declined") => {
+    const event: ToolApprovalEvent = {
+      id: crypto.randomUUID(),
+      toolName: request.toolName,
+      actionKey: request.actionKey,
+      command: request.command,
+      decision,
+      quality: decision === "accepted" ? "Good" : "Bad",
+      at: new Date().toISOString(),
+    };
+    updateChat(activeChat.id, (chat) => ({
+      ...chat,
+      pendingApproval: chat.pendingApproval?.id === request.id ? undefined : chat.pendingApproval,
+      approvedToolActions:
+        decision === "accepted" && !chat.approvedToolActions.includes(request.actionKey)
+          ? [...chat.approvedToolActions, request.actionKey]
+          : chat.approvedToolActions,
+      approvalEvents: [...chat.approvalEvents, event].slice(-80),
+    }));
+    addTimeline(
+      "approval",
+      decision === "accepted" ? "ready" : "unavailable",
+      `${event.quality}: ${decision} ${request.command}`,
+      activeChat.id,
+    );
+    if (decision === "accepted") {
+      void sendTaskWithMessage(`Internal approval granted for ${request.command}. Continue the previous request. Do not mention this approval event.`, [], {
+        extraApprovedActions: [request.actionKey],
+        hideUserMessage: true,
+      });
+    }
   };
 
   const startTerminal = async () => {
@@ -1295,10 +2256,22 @@ function App() {
         .slice(0, 80);
 
   useEffect(() => {
-    if (mentionQuery !== null && selectedProject && projectFiles.length === 0 && socketState === "open") {
-      void refreshProjectFiles(selectedProject).catch(() => setProjectFiles([]));
+    setMentionSelectedIndex(0);
+  }, [mentionQuery]);
+
+  useEffect(() => {
+    setMentionSelectedIndex((index) => Math.max(0, Math.min(index, Math.max(mentionMatches.length - 1, 0))));
+  }, [mentionMatches.length]);
+
+  useEffect(() => {
+    if (mentionQuery !== null && selectedProject && socketState === "open") {
+      const timer = window.setTimeout(() => {
+        void refreshProjectFiles(selectedProject).catch(() => setProjectFiles([]));
+      }, 120);
+      return () => window.clearTimeout(timer);
     }
-  }, [mentionQuery, projectFiles.length, refreshProjectFiles, selectedProject, socketState]);
+    return undefined;
+  }, [mentionQuery, refreshProjectFiles, selectedProject, socketState]);
 
   return (
     <main
@@ -1324,55 +2297,19 @@ function App() {
         </div>
         <div className="titlebar-drag" />
         <div className="titlebar-right">
-          <select className="modelSelect" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Model">
-            {[selectedModel, ...models.filter((model) => model !== selectedModel)].map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </select>
-          <div className="menuControl">
-            <div className="ideSplitControl">
-              <button
-                className="ideButton idePrimaryButton"
-                onClick={() => void openProjectInIde()}
-                disabled={!selectedProject}
-                title={`Open project in ${selectedIde.label}`}
-              >
-                <IdeGlyph id={selectedIde.id} />
-                <span>{selectedIde.label}</span>
-              </button>
-              <button
-                className="ideButton ideChevronButton"
-                onClick={() => setIdeMenuOpen((open) => !open)}
-                disabled={!selectedProject}
-                aria-haspopup="menu"
-                aria-expanded={ideMenuOpen}
-                title="Choose editor"
-              >
-                <ChevronDown size={13} />
-              </button>
-            </div>
-            {ideMenuOpen ? (
-              <div className="menuPopover ideMenu" role="menu">
-                {(ides.length > 0 ? ides : [{ id: "code", label: "VS Code", command: "code" }]).map((ide) => (
-                  <button
-                    key={ide.id}
-                    type="button"
-                    role="menuitem"
-                    className={ide.id === selectedIdeId ? "active" : ""}
-                    onClick={() => {
-                      setSelectedIdeId(ide.id);
-                      setIdeMenuOpen(false);
-                    }}
-                  >
-                    <IdeGlyph id={ide.id} />
-                    <span>{ide.label}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          <IdePicker
+            ides={ides}
+            selectedIde={selectedIde}
+            selectedIdeId={selectedIdeId}
+            disabled={!selectedProject}
+            open={ideMenuOpen}
+            onOpenChange={setIdeMenuOpen}
+            onOpenProject={() => void openProjectInIde()}
+            onSelectIde={(id) => {
+              setSelectedIdeId(id);
+              setIdeMenuOpen(false);
+            }}
+          />
           <button className="ctrlButton" title="Restart daemon" onClick={restart}>
             <RefreshCw size={14} />
           </button>
@@ -1478,6 +2415,14 @@ function App() {
           ) : null}
         </div>
         <footer className="composer">
+          {activeChat.pendingApproval ? (
+            <PermissionApprovalBar
+              request={activeChat.pendingApproval}
+              busy={busy}
+              onAccept={() => resolveApproval(activeChat.pendingApproval!, "accepted")}
+              onDecline={() => resolveApproval(activeChat.pendingApproval!, "declined")}
+            />
+          ) : null}
           <div className="composerMeta">
             <BranchMenu
               selectedBranch={selectedBranch}
@@ -1500,7 +2445,7 @@ function App() {
             <div className="menuControl composerMenu">
               <button
                 type="button"
-                className="permissionButton"
+                className={`permissionButton ${permissionMode === "bypass" ? "bypass" : ""}`}
                 onClick={() => setPermissionMenuOpen((open) => !open)}
                 aria-haspopup="menu"
                 aria-expanded={permissionMenuOpen}
@@ -1524,6 +2469,7 @@ function App() {
             <button className="headerAttachButton" title="Attach files" onClick={() => void attachLocalFiles()} disabled={!selectedProject}>
               <Paperclip size={13} />
             </button>
+            <ContextMeter usage={contextUsage} />
             <button className="folderButton" onClick={pickProject} title="Open folder">
               <FolderOpen size={13} />
               <span>{selectedProject?.name ?? "Open Folder"}</span>
@@ -1549,9 +2495,15 @@ function App() {
             {mentionQuery !== null ? (
               <div className="mentionPopover">
                 {mentionMatches.length > 0 ? (
-                  mentionMatches.map((file) => (
-                    <button type="button" key={file.path} onClick={() => attachProjectFile(file)}>
-                      <FileText size={14} />
+                  mentionMatches.map((file, index) => (
+                    <button
+                      type="button"
+                      key={file.path}
+                      className={index === mentionSelectedIndex ? "active" : ""}
+                      onMouseEnter={() => setMentionSelectedIndex(index)}
+                      onClick={() => attachProjectFile(file)}
+                    >
+                      {file.kind === "directory" ? <FolderOpen size={14} /> : <FileText size={14} />}
                       <span>
                         <strong>{file.name}</strong>
                         <small>{file.directory || "."}</small>
@@ -1572,12 +2524,33 @@ function App() {
               placeholder={socketState === "open" ? "Ask Gemma for a coding task…" : "Connecting to daemon…"}
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  if (mentionQuery !== null && mentionMatches[0]) {
-                    attachProjectFile(mentionMatches[0]);
+                if (mentionQuery !== null) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setMentionSelectedIndex((index) => Math.min(index + 1, Math.max(mentionMatches.length - 1, 0)));
                     return;
                   }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setMentionSelectedIndex((index) => Math.max(index - 1, 0));
+                    return;
+                  }
+                  if ((event.key === "Enter" || event.key === "Tab") && mentionMatches[mentionSelectedIndex]) {
+                    event.preventDefault();
+                    attachProjectFile(mentionMatches[mentionSelectedIndex]);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setPrompt((current) => {
+                      const start = activeMentionStart(current);
+                      return start === null ? current : current.slice(0, start);
+                    });
+                    return;
+                  }
+                }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
                   void sendTask();
                 }
               }}
@@ -1647,9 +2620,11 @@ function BranchMenu({
   const rows = selectedBranch
     ? [selectedBranch, ...branches.filter((branch) => branch !== selectedBranch)]
     : branches;
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   return (
     <div className="menuControl branchMenuControl">
       <button
+        ref={buttonRef}
         type="button"
         className="branchMenuButton"
         disabled={disabled}
@@ -1661,31 +2636,195 @@ function BranchMenu({
         <span>{selectedBranch || "No branch"}</span>
         <ChevronDown size={12} />
       </button>
-      {open ? (
-        <div className="menuPopover branchMenu" role="menu">
-          {rows.length === 0 ? (
-            <button type="button" disabled>
-              No branches
-            </button>
-          ) : null}
-          {rows.map((branch) => (
-            <button
-              key={branch}
-              type="button"
-              role="menuitem"
-              className={branch === selectedBranch ? "active" : ""}
-              onClick={() => {
-                onSelect(branch);
-                onOpenChange(false);
-              }}
-            >
-              <GitBranch size={12} />
-              <span>{branch}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <FloatingMenu
+        anchorRef={buttonRef}
+        open={open}
+        onClose={() => onOpenChange(false)}
+        className="branchMenu"
+      >
+        {rows.length === 0 ? (
+          <button type="button" disabled>
+            No branches
+          </button>
+        ) : null}
+        {rows.map((branch) => (
+          <button
+            key={branch}
+            type="button"
+            role="menuitem"
+            className={branch === selectedBranch ? "active" : ""}
+            onClick={() => {
+              onSelect(branch);
+              onOpenChange(false);
+            }}
+          >
+            <GitBranch size={12} />
+            <span>{branch}</span>
+          </button>
+        ))}
+      </FloatingMenu>
     </div>
+  );
+}
+
+function IdePicker({
+  ides,
+  selectedIde,
+  selectedIdeId,
+  disabled,
+  open,
+  onOpenChange,
+  onOpenProject,
+  onSelectIde,
+}: {
+  ides: IdeInstall[];
+  selectedIde: IdeInstall;
+  selectedIdeId: string;
+  disabled: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onOpenProject: () => void;
+  onSelectIde: (id: string) => void;
+}) {
+  const chevronRef = useRef<HTMLButtonElement | null>(null);
+  const list = ides.length > 0 ? ides : [{ id: "code", label: "VS Code", command: "code" }];
+  return (
+    <div className="menuControl">
+      <div className="ideSplitControl">
+        <button
+          className="ideButton idePrimaryButton"
+          onClick={onOpenProject}
+          disabled={disabled}
+          title={`Open project in ${selectedIde.label}`}
+        >
+          <IdeGlyph id={selectedIde.id} />
+          <span>{selectedIde.label}</span>
+        </button>
+        <button
+          ref={chevronRef}
+          className="ideButton ideChevronButton"
+          onClick={() => onOpenChange(!open)}
+          disabled={disabled}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          title="Choose editor"
+        >
+          <ChevronDown size={13} />
+        </button>
+      </div>
+      <FloatingMenu
+        anchorRef={chevronRef}
+        open={open}
+        onClose={() => onOpenChange(false)}
+        className="ideMenu"
+      >
+        {list.map((ide) => (
+          <button
+            key={ide.id}
+            type="button"
+            role="menuitem"
+            className={ide.id === selectedIdeId ? "active" : ""}
+            onClick={() => onSelectIde(ide.id)}
+          >
+            <IdeGlyph id={ide.id} />
+            <span>{ide.label}</span>
+          </button>
+        ))}
+      </FloatingMenu>
+    </div>
+  );
+}
+
+function FloatingMenu({
+  anchorRef,
+  open,
+  onClose,
+  className,
+  children,
+}: {
+  anchorRef: React.RefObject<HTMLElement | null>;
+  open: boolean;
+  onClose: () => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<{ top: number; left: number; placement: "top" | "bottom" } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+    const measure = () => {
+      const anchor = anchorRef.current;
+      if (!anchor) {
+        return;
+      }
+      const rect = anchor.getBoundingClientRect();
+      const menu = menuRef.current;
+      const menuHeight = menu?.offsetHeight ?? 240;
+      const menuWidth = menu?.offsetWidth ?? rect.width;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const placement = spaceBelow < menuHeight + 16 && rect.top > menuHeight ? "top" : "bottom";
+      const left = Math.min(
+        Math.max(8, rect.left),
+        Math.max(8, window.innerWidth - menuWidth - 8),
+      );
+      const top = placement === "bottom" ? rect.bottom + 6 : rect.top - menuHeight - 6;
+      setPosition({ top, left, placement });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [open, anchorRef]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (menuRef.current?.contains(target)) return;
+      if (anchorRef.current?.contains(target)) return;
+      onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose, anchorRef]);
+
+  if (!open) {
+    return null;
+  }
+  return createPortal(
+    <div
+      ref={menuRef}
+      className={`menuPopover floatingMenu ${className ?? ""}`}
+      role="menu"
+      style={{
+        position: "fixed",
+        top: position?.top ?? -9999,
+        left: position?.left ?? -9999,
+        opacity: position ? 1 : 0,
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
   );
 }
 
@@ -1850,20 +2989,27 @@ function SidebarGit({
       ) : null}
       {!hasProject ? <div className="emptyState">Open a project to inspect git status.</div> : null}
       {files.length > 0 ? (
-        <div className="diffFileList gitFileList">
+        <div className="changedFileList">
           {files.map((file) => {
             const dir = fileDirectory(file.path);
             const stats = statsByPath.get(normalizeDiffPath(file.path));
             return (
-              <button type="button" key={`${file.status}-${file.path}`} onClick={() => onOpenChangedFile(file.path)}>
-                <FileText size={14} />
-                <span>
-                  <strong>{fileName(file.path)}</strong>
-                  <small>{dir || "."}</small>
-                </span>
-                <DiffStatsBadge stats={stats} />
-                <em data-status={file.status}>{file.status}</em>
-              </button>
+              <div className="changedFileRow" key={`${file.status}-${file.path}`}>
+                <button
+                  type="button"
+                  className="changedFileMain"
+                  onClick={() => onOpenChangedFile(file.path)}
+                >
+                  <FileText size={14} />
+                  <span className="changedFileText">
+                    <span className="changedFileTitle">
+                      <strong>{fileName(file.path)}</strong>
+                    </span>
+                    {dir ? <small>{dir}</small> : null}
+                    {stats ? <DiffStatsBadge stats={stats} block /> : null}
+                  </span>
+                </button>
+              </div>
             );
           })}
         </div>
@@ -1924,51 +3070,178 @@ function SidebarTools({
   onReset: () => void;
 }) {
   const enabledCount = tools.filter((tool) => tool.enabled).length;
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const allEnabled = enabledCount === tools.length;
+  const setAll = (enabled: boolean) => {
+    for (const tool of tools) {
+      if (tool.enabled !== enabled) {
+        onToggle(tool.id, enabled);
+      }
+    }
+  };
   return (
     <div className="sidebarStack toolsStack">
-      <div className="toolSummary">
-        <div>
-          <strong>{enabledCount}/{tools.length}</strong>
+      <div className="toolHeader">
+        <div className="toolHeaderStat">
+          <strong>{enabledCount}</strong>
+          <span>/ {tools.length} enabled</span>
         </div>
-        <div>
+        <div className="toolHeaderStat alt" title="Harness operating system">
           <strong>{operatingSystem}</strong>
+          <span>harness</span>
         </div>
       </div>
-      <button className="secondaryButton" onClick={onReset}>
-        Enable default tools
-      </button>
-      <div className="toolToggleList">
-        {tools.map((tool) => (
-          <div className={`toolToggle ${tool.enabled ? "enabled" : ""}`} key={tool.id}>
-            <input
-              aria-label={`${tool.id} enabled`}
-              type="checkbox"
-              checked={tool.enabled}
-              onChange={(event) => onToggle(tool.id, event.target.checked)}
-            />
-            <span className={`toolKind ${tool.kind}`}>{tool.kind}</span>
-            <span className="toolEditor">
-              <input
-                aria-label={`${tool.id} label`}
-                value={tool.label}
-                onChange={(event) => onUpdate(tool.id, { label: event.target.value })}
-              />
-              <textarea
-                aria-label={`${tool.id} summary`}
-                value={tool.summary}
-                onChange={(event) => onUpdate(tool.id, { summary: event.target.value })}
-                rows={2}
-              />
-              <input
-                aria-label={`${tool.id} command`}
-                className="toolCommandInput"
-                value={tool.command}
-                onChange={(event) => onUpdate(tool.id, { command: event.target.value })}
-              />
-            </span>
-          </div>
-        ))}
+      <div className="toolHeaderActions">
+        <button
+          type="button"
+          className="ghostButton"
+          onClick={() => setAll(!allEnabled)}
+        >
+          {allEnabled ? "Disable all" : "Enable all"}
+        </button>
+        <button type="button" className="ghostButton" onClick={onReset}>
+          Reset
+        </button>
       </div>
+      <div className="toolCardList">
+        {tools.map((tool) => {
+          const expanded = expandedId === tool.id;
+          return (
+            <div className={`toolCard ${tool.enabled ? "enabled" : "disabled"}`} key={tool.id}>
+              <div className="toolCardHead">
+                <span className={`toolKindDot ${tool.kind}`} aria-hidden="true" />
+                <div className="toolCardTitle">
+                  <strong>{tool.label}</strong>
+                  <small>{tool.summary}</small>
+                </div>
+                <div className="toolCardActions">
+                  <button
+                    type="button"
+                    className="toolEditButton"
+                    title={expanded ? "Hide details" : "Edit"}
+                    onClick={() => setExpandedId(expanded ? null : tool.id)}
+                    aria-expanded={expanded}
+                  >
+                    <ChevronDown
+                      size={13}
+                      style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 120ms ease" }}
+                    />
+                  </button>
+                  <label className="toolSwitch" title={tool.enabled ? "Enabled" : "Disabled"}>
+                    <input
+                      type="checkbox"
+                      checked={tool.enabled}
+                      onChange={(event) => onToggle(tool.id, event.target.checked)}
+                      aria-label={`${tool.id} enabled`}
+                    />
+                    <span className="toolSwitchTrack" aria-hidden="true">
+                      <span className="toolSwitchThumb" />
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div className="toolCardMeta">
+                <span className={`toolKind ${tool.kind}`}>{tool.kind}</span>
+                <code className="toolCardCommand">{tool.command}</code>
+              </div>
+              {expanded ? (
+                <div className="toolCardEditor">
+                  <label>
+                    <span>Label</span>
+                    <input
+                      aria-label={`${tool.id} label`}
+                      value={tool.label}
+                      onChange={(event) => onUpdate(tool.id, { label: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>Summary</span>
+                    <textarea
+                      aria-label={`${tool.id} summary`}
+                      value={tool.summary}
+                      onChange={(event) => onUpdate(tool.id, { summary: event.target.value })}
+                      rows={2}
+                    />
+                  </label>
+                  <label>
+                    <span>Command</span>
+                    <input
+                      aria-label={`${tool.id} command`}
+                      className="toolCommandInput"
+                      value={tool.command}
+                      onChange={(event) => onUpdate(tool.id, { command: event.target.value })}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PermissionApprovalBar({
+  request,
+  busy,
+  onAccept,
+  onDecline,
+}: {
+  request: ToolApprovalRequest;
+  busy: boolean;
+  onAccept: () => void;
+  onDecline: () => void;
+}) {
+  const isTerminalCommand = request.toolName === "terminal.run";
+  return (
+    <div className="approvalBar">
+      <div className="approvalCopy">
+        <span>Permission request</span>
+        {isTerminalCommand ? (
+          <CopyableCodeBlock language="command" content={request.command} />
+        ) : (
+          <code>{request.command}</code>
+        )}
+      </div>
+      <div className="approvalActions">
+        <button type="button" className="approvalAccept" onClick={onAccept} disabled={busy}>
+          <CheckCircle2 size={13} />
+          Accept
+        </button>
+        <button type="button" className="approvalDecline" onClick={onDecline} disabled={busy}>
+          <X size={13} />
+          Decline
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ContextMeter({ usage }: { usage: ContextUsageState }) {
+  const used = usage.promptTokens.toLocaleString();
+  const max = usage.maxContextTokens ? usage.maxContextTokens.toLocaleString() : "unknown";
+  const statusLabel =
+    usage.status === "loading"
+      ? "Counting"
+      : usage.status === "ready"
+        ? "Exact count"
+        : "Unavailable";
+  return (
+    <div
+      className={`contextMeterWrap ${usage.status}`}
+      style={{ "--context-percent": `${usage.percent}%` } as React.CSSProperties}
+      aria-label={`Context tokens: ${used} of ${max}`}
+      tabIndex={0}
+    >
+      <span className="contextMeter" />
+      <span className="contextPopover" role="tooltip">
+        <strong>{statusLabel}</strong>
+        <span>{used} tokens used</span>
+        <span>{max} max context</span>
+        <span>{usage.messageCount} app messages in payload</span>
+        <small>{usage.detail}</small>
+      </span>
     </div>
   );
 }
@@ -2022,7 +3295,43 @@ function TerminalView({
   );
 }
 
+function ThinkingBubble({ line }: { line: ChatLine }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!line.streaming) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [line.streaming]);
+
+  const elapsed = thinkingDuration(line, now);
+  const durationText = elapsed === null ? "" : ` for ${formatDuration(elapsed)}`;
+  const label = line.streaming ? `Working${durationText}` : `Worked${durationText}`;
+
+  return (
+    <details className="thinkingBubble" open={line.streaming || undefined}>
+      <summary>
+        <span className="thinkingSummaryText">
+          {line.streaming ? <span className="thinkingPulse" /> : null}
+          <span>{label}</span>
+        </span>
+        <ChevronRight className="thinkingChevron" size={13} />
+      </summary>
+      <p>{line.content || "Starting..."}</p>
+    </details>
+  );
+}
+
 function ChatView({ chat, busy, onShowDiff }: { chat: LocalChat; busy: boolean; onShowDiff: () => void }) {
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = streamRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [chat.messages.length, chat.messages[chat.messages.length - 1]?.content]);
+
   if (chat.messages.length === 0 && !busy) {
     return (
       <div className="blankSlate">
@@ -2031,36 +3340,48 @@ function ChatView({ chat, busy, onShowDiff }: { chat: LocalChat; busy: boolean; 
       </div>
     );
   }
-  const lastMessage = chat.messages[chat.messages.length - 1];
-  const hasStreamingAssistant = lastMessage?.role === "assistant" && lastMessage.content.length > 0;
   return (
-    <div className="chatStream">
-      {chat.messages.map((line, index) => (
-        <article className={`message ${line.role}`} key={`${line.role}-${index}`}>
-          {line.role === "tool" ? (
-            <div className="toolBubble">
-              {line.status === "ready" ? <CheckCircle2 size={14} /> : line.status === "unavailable" ? <TriangleAlert size={14} /> : <Wrench size={14} />}
-              <div>
-                <strong>{line.toolName ?? "tool"}</strong>
-                <span>{line.detail || line.content}</span>
+    <div className="chatStream" ref={streamRef}>
+      {chat.messages.map((line, index) => {
+        const isStreamingPlaceholder = line.role === "assistant" && line.streaming && line.content.length === 0;
+        return (
+          <article className={`message ${line.role}${line.streaming ? " streaming" : ""}`} key={`${line.role}-${index}`}>
+            {line.role === "tool" ? (
+              <div className="toolBubble">
+                {line.status === "ready" ? <CheckCircle2 size={12} /> : line.status === "unavailable" ? <TriangleAlert size={12} /> : <Wrench size={12} />}
+                <div>
+                  <span>{line.detail || line.content || toolDisplayText(line.toolName ?? "tool", line.status !== "degraded", line.status !== "unavailable")}</span>
+                </div>
               </div>
-            </div>
-          ) : (
-            <p>{line.content}</p>
-          )}
-        </article>
-      ))}
+            ) : line.role === "thinking" ? (
+              <ThinkingBubble line={line} />
+            ) : isStreamingPlaceholder ? (
+              <p className="streamingPending">
+                <span className="streamDot" />
+                <span className="streamDot" />
+                <span className="streamDot" />
+              </p>
+            ) : line.role === "assistant" ? (
+              <>
+                <MarkdownContent content={cleanAssistantMessage(line.content)} />
+                {line.streaming ? <span className="streamingCaret markdownCaret" aria-hidden="true" /> : null}
+              </>
+            ) : (
+              <p>
+                {renderMessageContent(line.content, line.role)}
+                {line.streaming ? <span className="streamingCaret" aria-hidden="true" /> : null}
+              </p>
+            )}
+          </article>
+        );
+      })}
       {chat.diffAvailable ? (
         <div className="chatDiffNotice">
           <GitBranch size={14} />
-          <span>{chat.changedFileCount ?? 0} changed file{chat.changedFileCount === 1 ? "" : "s"} detected</span>
+          <span>{chat.changedFileCount ?? 0} changed file{chat.changedFileCount === 1 ? "" : "s"}</span>
+          <DiffStatsBadge stats={chat.changedLineStats} />
           <button type="button" onClick={onShowDiff}>View diff</button>
         </div>
-      ) : null}
-      {busy && !hasStreamingAssistant ? (
-        <article className="message assistant pending">
-          <p>Generating response…</p>
-        </article>
       ) : null}
     </div>
   );
@@ -2085,11 +3406,6 @@ type SideBySideRow = {
   newLine?: number;
   oldContent: string;
   newContent: string;
-};
-
-type DiffLineStats = {
-  added: number;
-  removed: number;
 };
 
 const DIFF_ROW_LIMIT = 450;
@@ -2202,17 +3518,18 @@ function diffStatsByPath(files: ParsedDiffFile[]): Map<string, DiffLineStats> {
   return stats;
 }
 
-function DiffStatsBadge({ stats }: { stats?: DiffLineStats }) {
+function DiffStatsBadge({ stats, block = false }: { stats?: DiffLineStats; block?: boolean }) {
   if (!stats || (stats.added === 0 && stats.removed === 0)) {
     return null;
   }
   return (
-    <span className="diffStatsBadge">
+    <span className={`diffStatsBadge${block ? " block" : ""}`}>
       {stats.added > 0 ? <strong className="added">+{stats.added}</strong> : null}
       {stats.removed > 0 ? <strong className="removed">-{stats.removed}</strong> : null}
     </span>
   );
 }
+
 
 function visibleFilePath(file: ParsedDiffFile): string {
   return normalizeDiffPath(file.newPath || file.oldPath).replace(/^\/dev\/null$/, "New file");
@@ -2404,26 +3721,29 @@ function DiffView({
           <strong>Changed Files</strong>
           <span>{files.length}</span>
         </div>
-        <div className="diffFileList">
+        <div className="changedFileList">
           {files.map((file) => {
             const path = visibleFilePath(file);
             const dir = fileDirectory(path);
             const stats = diffLineStats(file);
+            const isActive = selectedFile && diffPathKeys(selectedFile).includes(path);
             return (
-              <button
-                key={`${file.oldPath}-${file.newPath}`}
-                type="button"
-                className={selectedFile && diffPathKeys(selectedFile).includes(path) ? "active" : ""}
-                onClick={() => onSelectFile(path)}
-              >
-                <FileText size={14} />
-                <span>
-                  <strong>{fileName(path)}</strong>
-                  <small>{dir || "."}</small>
-                </span>
-                <DiffStatsBadge stats={stats} />
-                <em data-status={fileChangeStatus(file)}>{fileChangeStatus(file)}</em>
-              </button>
+              <div className="changedFileRow" key={`${file.oldPath}-${file.newPath}`}>
+                <button
+                  type="button"
+                  className={`changedFileMain${isActive ? " active" : ""}`}
+                  onClick={() => onSelectFile(path)}
+                >
+                  <FileText size={14} />
+                  <span className="changedFileText">
+                    <span className="changedFileTitle">
+                      <strong>{fileName(path)}</strong>
+                    </span>
+                    {dir ? <small>{dir}</small> : null}
+                    <DiffStatsBadge stats={stats} block />
+                  </span>
+                </button>
+              </div>
             );
           })}
         </div>

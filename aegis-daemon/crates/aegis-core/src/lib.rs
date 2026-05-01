@@ -1,13 +1,16 @@
 use aegis_model::{local_system_prompt, ChatStreamEvent, ChatStreamSink, ModelClient};
-use aegis_protocol::{ChatMessage, ChatRequest, SendTaskParams, SendTaskResult};
+use aegis_protocol::{
+    ChatMessage, ChatRequest, ContextUsageResult, SendTaskParams, SendTaskResult,
+};
 use aegis_store::Store;
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::Arc};
 
-const AGENT_RESPONSE_FOOTER_INSTRUCTION: &str = "At the end of every final response, include a compact review note with two short sections: Files changed and Verified. Use short sentences. If no files changed, say none. If nothing was verified, say not verified.";
+const MAX_TOOL_ROUNDS: usize = 12;
+const APPROVAL_REQUIRED_PREFIX: &str = "AEGIS_APPROVAL_REQUIRED:";
 
 #[derive(Clone)]
 pub struct AegisCore {
@@ -46,17 +49,7 @@ impl AegisCore {
             .await
             .context("failed to create turn")?;
 
-        let mut messages = vec![
-            local_system_prompt(),
-            ChatMessage {
-                role: "system".to_string(),
-                content: work_context(&params),
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: params.message.clone(),
-            },
-        ];
+        let mut messages = task_messages(&params);
 
         let chat = ChatRequest {
             model: params.model.clone(),
@@ -75,30 +68,71 @@ impl AegisCore {
             }
         };
 
-        let mut tool_fallback_response: Option<String> = None;
+        let mut last_tool_fallback_response: Option<String> = None;
+        let mut executed_tool_count = 0usize;
+        let mut repaired_missing_write_tool = false;
 
-        if let Some(mut call) = extract_tool_call(&response.content) {
+        for _ in 0..MAX_TOOL_ROUNDS {
+            let Some(mut call) = extract_tool_call(&response.content) else {
+                if !repaired_missing_write_tool
+                    && should_repair_missing_write_tool(&params, &response.content, executed_tool_count)
+                {
+                    repaired_missing_write_tool = true;
+                    messages.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: response.content.clone(),
+                    });
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: "No file-changing tool has run yet. If the task requires creating or modifying files, output exactly one file.write tool call now and no prose. Do not claim files were written until a file.write observation is returned.".to_string(),
+                    });
+                    response = match self
+                        .chat_with_optional_stream(
+                            ChatRequest {
+                                model: params.model.clone(),
+                                messages: messages.clone(),
+                            },
+                            stream_sink.clone(),
+                        )
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            self.store.finish_turn(&turn_id, "failed").await?;
+                            self.store.finish_session(&session_id, "failed").await?;
+                            return Err(error);
+                        }
+                    };
+                    continue;
+                }
+                break;
+            };
             normalize_tool_call(&mut call);
             let result = self
                 .execute_tool(&turn_id, &params, &call, stream_sink.clone())
                 .await;
-            tool_fallback_response = Some(tool_result_fallback(&call.tool, &result));
+            if let Some(message) = result.strip_prefix(APPROVAL_REQUIRED_PREFIX) {
+                response.content = message.trim().to_string();
+                break;
+            }
+            executed_tool_count += 1;
+            last_tool_fallback_response = Some(tool_result_fallback(&call.tool, &result));
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: response.content,
             });
             messages.push(ChatMessage {
-                role: "system".to_string(),
+                role: "user".to_string(),
                 content: format!(
-                    "Aegis tool result for {}:\n{}\nNow answer the user with the result and any next step.\n{}",
-                    call.tool, result, AGENT_RESPONSE_FOOTER_INSTRUCTION
+                    "<tool_response name=\"{}\">\n{}\n</tool_response>\n\nUse this background observation to continue my original request. If you have enough context, answer normally now. Do not say you merely ran or read a tool; give the requested result.",
+                    call.tool, result
                 ),
             });
             response = match self
                 .chat_with_optional_stream(
                     ChatRequest {
                         model: params.model.clone(),
-                        messages,
+                        messages: messages.clone(),
                     },
                     stream_sink.clone(),
                 )
@@ -113,8 +147,10 @@ impl AegisCore {
             };
         }
 
-        if response.content.trim().is_empty() {
-            if let Some(fallback) = tool_fallback_response {
+        if extract_tool_call(&response.content).is_some() {
+            response.content = "I hit the tool-call limit while gathering context. Please send the request again and I can continue from the latest project state.".to_string();
+        } else if response.content.trim().is_empty() {
+            if let Some(fallback) = last_tool_fallback_response {
                 response.content = fallback;
             }
         }
@@ -143,6 +179,15 @@ impl AegisCore {
         self.model.chat(chat).await
     }
 
+    pub async fn context_usage(&self, params: SendTaskParams) -> Result<ContextUsageResult> {
+        self.model
+            .count_chat_tokens(ChatRequest {
+                model: params.model.clone(),
+                messages: task_messages(&params),
+            })
+            .await
+    }
+
     async fn execute_tool(
         &self,
         turn_id: &str,
@@ -168,6 +213,23 @@ impl AegisCore {
                 &summary,
             );
             return summary;
+        }
+
+        if approval_required(params, call) {
+            let summary = approval_request(call);
+            let _ = self
+                .store
+                .record_tool_call(turn_id, &call.tool, &args_json, false, "approval_required", &summary)
+                .await;
+            emit_tool_event(
+                &stream_sink,
+                "tool.end",
+                &call.tool,
+                &call.args,
+                false,
+                &summary,
+            );
+            return format!("{APPROVAL_REQUIRED_PREFIX} {summary}");
         }
 
         let result = match call.tool.as_str() {
@@ -256,6 +318,7 @@ impl AegisCore {
                     .get("content")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                let content = normalize_file_write_content(content);
                 let create_dirs = call
                     .args
                     .get("create_dirs")
@@ -264,7 +327,7 @@ impl AegisCore {
                 match aegis_tools::write_text_file(
                     &root,
                     &PathBuf::from(file),
-                    content,
+                    &content,
                     create_dirs,
                 ) {
                     Ok(summary) => summary,
@@ -327,6 +390,13 @@ impl AegisCore {
                     Err(error) => error.to_string(),
                 }
             }
+            "os.context" => format!(
+                "Harness operating system: {}. Project root: {}.",
+                params.operating_system,
+                project_root(params)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "not available".to_string())
+            ),
             _ => format!("unknown or unavailable tool: {}", call.tool),
         };
 
@@ -355,25 +425,48 @@ fn fingerprint(input: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn task_messages(params: &SendTaskParams) -> Vec<ChatMessage> {
+    let mut messages = vec![
+        local_system_prompt(),
+        ChatMessage {
+            role: "system".to_string(),
+            content: work_context(params),
+        },
+    ];
+    messages.extend(compact_history(&params.conversation_history));
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: params.message.clone(),
+    });
+    messages
+}
+
 fn work_context(params: &SendTaskParams) -> String {
     let branch = params.git_branch.as_deref().unwrap_or("unknown");
     let tools = tool_prompt(params);
     let attachments = attachment_prompt(params);
+    let permission_note = permission_prompt(params);
     if params.worktree_enabled {
         format!(
-            "Aegis work mode: use a git worktree for file-changing work when tools are available. Target branch: {branch}. Worktree path: {}. Tool permission mode: {}. Harness operating system: {}. {tools} {attachments} {}",
+            "Aegis work mode: use a git worktree for file-changing work when tools are available. Target branch: {branch}. Worktree path: {}. Tool permission mode: {}. Harness operating system: {}. {permission_note} {tools} {attachments}",
             params.worktree_path.as_deref().unwrap_or("not created yet"),
             params.permission_mode,
-            params.operating_system,
-            AGENT_RESPONSE_FOOTER_INSTRUCTION,
+            params.operating_system
         )
     } else {
         format!(
-            "Aegis work mode: normal project checkout. Target git branch context: {branch}. Tool permission mode: {}. Harness operating system: {}. Prefer small, reviewable changes. {tools} {attachments} {}",
+            "Aegis work mode: normal project checkout. Target git branch context: {branch}. Tool permission mode: {}. Harness operating system: {}. Prefer small, reviewable changes. {permission_note} {tools} {attachments}",
             params.permission_mode,
-            params.operating_system,
-            AGENT_RESPONSE_FOOTER_INSTRUCTION,
+            params.operating_system
         )
+    }
+}
+
+fn permission_prompt(params: &SendTaskParams) -> &'static str {
+    if params.permission_mode == "default" {
+        "Default permissions: read/search/git inspection tools may run automatically. Before file.write or terminal.run, ask for explicit user approval. A file.write approval covers file writes for this chat; terminal.run approvals are exact to the command."
+    } else {
+        "Bypass permissions: tool execution may proceed, but destructive or broad commands still require care."
     }
 }
 
@@ -446,7 +539,7 @@ fn tool_prompt(params: &SendTaskParams) -> String {
         }
     }
     format!(
-        "Enabled tools: {}. To use one tool, end your answer with exactly one JSON object like {{\"tool\":\"file.read\",\"args\":{{\"path\":\"README.md\"}}}}. If the user mentions @file, omit the @ in tool args. All file paths must stay inside the project root.",
+        "Enabled tools: {}. To use a tool, output only exactly one JSON object like {{\"tool\":\"file.read\",\"args\":{{\"path\":\"README.md\"}}}} and no prose. For file.write, content must be the raw file text inside the JSON string; do not wrap the whole file in extra quotes and do not include markdown fences. The harness executes approved tools in the background and sends the observation back so you can continue the original task. You may use multiple tool rounds to read, inspect, write, run, and then verify. After file.write observations, do not repeat full file contents unless explicitly asked; summarize changed files and next steps. Put terminal commands for the user in fenced code blocks. In default permission mode, file.write and terminal.run will be paused until the user explicitly approves. If the user mentions @file, omit the @ in tool args. All file paths must stay inside the project root.",
         descriptions.join(", ")
     )
 }
@@ -470,16 +563,189 @@ fn default_enabled_tools() -> Vec<String> {
     .collect()
 }
 
+fn compact_history(history: &[ChatMessage]) -> Vec<ChatMessage> {
+    history
+        .iter()
+        .filter_map(|message| {
+            let role = match message.role.as_str() {
+                "user" | "assistant" => message.role.clone(),
+                _ => return None,
+            };
+            let content = message.content.trim();
+            if content.is_empty() {
+                return None;
+            }
+            Some(ChatMessage {
+                role,
+                content: content.chars().take(4_000).collect(),
+            })
+        })
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn should_repair_missing_write_tool(
+    params: &SendTaskParams,
+    response: &str,
+    executed_tool_count: usize,
+) -> bool {
+    if executed_tool_count > 0 || !tool_enabled(params, "file.write") {
+        return false;
+    }
+
+    let latest = params.message.to_lowercase();
+    let response = response.to_lowercase();
+    let task_is_write_like = [
+        "write",
+        "create",
+        "generate",
+        "make",
+        "modify",
+        "main.c",
+        "cmakelists",
+        "cmake",
+    ]
+    .iter()
+    .any(|needle| latest.contains(needle));
+    let latest_is_approval = latest_message_approves(&params.message);
+    let response_is_false_write_or_approval = [
+        "i have written",
+        "i wrote",
+        "i created",
+        "created both",
+        "have created",
+        "would you like me to write",
+        "please approve",
+        "let me know if you approve",
+        "need your approval",
+    ]
+    .iter()
+    .any(|needle| response.contains(needle));
+
+    (task_is_write_like || latest_is_approval) && response_is_false_write_or_approval
+}
+
+fn approval_required(params: &SendTaskParams, call: &RequestedTool) -> bool {
+    if params.permission_mode != "default" {
+        return false;
+    }
+    if !matches!(call.tool.as_str(), "file.write" | "terminal.run") {
+        return false;
+    }
+    let action_key = tool_action_key(&call.tool, &call.args);
+    if params.approved_tool_actions.iter().any(|key| key == &action_key) {
+        return false;
+    }
+    !latest_message_approves(&params.message)
+}
+
+fn latest_message_approves(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    let approval_words = [
+        "approve",
+        "approved",
+        "yes",
+        "yep",
+        "go ahead",
+        "proceed",
+        "you can run",
+        "permission granted",
+    ];
+    approval_words.iter().any(|word| lower.contains(word))
+}
+
+fn approval_request(call: &RequestedTool) -> String {
+    match call.tool.as_str() {
+        "terminal.run" => {
+            let command = call
+                .args
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if command.is_empty() {
+                "I need your approval before running a terminal command. Reply with approval and the command you want me to run.".to_string()
+            } else {
+                format!("I need your approval before running this command:\n\n`{command}`\n\nReply with approval if you want me to run it.")
+            }
+        }
+        "file.write" => {
+            let file = call
+                .args
+                .get("path")
+                .or_else(|| call.args.get("file"))
+                .and_then(Value::as_str)
+                .unwrap_or("the requested file");
+            format!("I need your approval before writing `{file}`. Reply with approval if you want me to create or modify it.")
+        }
+        _ => "I need your approval before running that tool.".to_string(),
+    }
+}
+
+fn tool_action_key(tool: &str, args: &Value) -> String {
+    if tool == "file.write" {
+        return "file.write".to_string();
+    }
+    format!("{tool}:{}", canonical_json(args))
+}
+
+fn canonical_json(value: &Value) -> String {
+    serde_json::to_string(&canonical_value(value)).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn canonical_value(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(canonical_value).collect()),
+        Value::Object(map) => {
+            let mut sorted = Map::new();
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                if let Some(value) = map.get(key) {
+                    sorted.insert(key.clone(), canonical_value(value));
+                }
+            }
+            Value::Object(sorted)
+        }
+        other => other.clone(),
+    }
+}
+
+fn tool_action_command(tool: &str, args: &Value) -> String {
+    if tool == "terminal.run" {
+        return args
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+    }
+    if tool == "file.write" {
+        let file = args
+            .get("path")
+            .or_else(|| args.get("file"))
+            .and_then(Value::as_str)
+            .unwrap_or("file");
+        return format!("Write {file}");
+    }
+    json!({
+        "tool": tool,
+        "args": canonical_value(args),
+    })
+    .to_string()
+}
+
 fn tool_result_fallback(tool: &str, result: &str) -> String {
     let trimmed = result.trim();
-    let body = if trimmed.is_empty() {
-        "The tool completed, but returned no text.".to_string()
+    let note = if trimmed.is_empty() {
+        "The tool completed, but returned no text."
     } else {
-        trimmed.chars().take(2_400).collect()
+        "The tool completed and returned context."
     };
-    format!(
-        "I ran {tool} and got:\n\n{body}\n\nFiles changed: none.\nVerified: tool result returned."
-    )
+    format!("I used {tool} for context, but the model did not produce a final answer after the observation. {note}")
 }
 
 fn tool_enabled(params: &SendTaskParams, tool: &str) -> bool {
@@ -520,8 +786,52 @@ fn normalize_tool_path(path: &str) -> String {
     path.trim()
         .trim_matches('`')
         .trim_matches('"')
+        .trim_end_matches(|c| matches!(c, '}' | ')' | ']' | '"' | '`'))
         .trim_start_matches('@')
         .replace('\\', "/")
+}
+
+fn normalize_file_write_content(content: &str) -> String {
+    let mut text = content
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\\"", "\"")
+        .replace("\\'", "'");
+
+    let trimmed = text.trim();
+    if trimmed.starts_with("```") && trimmed.ends_with("```") {
+        let mut lines = trimmed.lines().collect::<Vec<_>>();
+        if lines.len() >= 2 {
+            lines.remove(0);
+            lines.pop();
+            text = lines.join("\n");
+        }
+    }
+
+    let original_trimmed = content.trim();
+    let had_escaped_wrapper = original_trimmed.starts_with("\\\"") || original_trimmed.starts_with("\\'");
+    if had_escaped_wrapper {
+        text = text.trim_start_matches(['"', '\'']).to_string();
+        if let Some((first, rest)) = text.split_once('\n') {
+            let quote_count = first.chars().filter(|character| *character == '"').count();
+            if quote_count == 1 && first.ends_with('"') {
+                text = format!("{}\n{rest}", first.trim_end_matches('"'));
+            }
+        }
+    }
+
+    if had_escaped_wrapper {
+        while text.ends_with('\\') || text.ends_with('"') || text.ends_with('\'') {
+            text.pop();
+        }
+    } else if text.ends_with('\\') && content.trim_end().ends_with('\\') {
+        text.pop();
+    }
+
+    text
 }
 
 fn emit_tool_event(
@@ -533,6 +843,7 @@ fn emit_tool_event(
     summary: &str,
 ) {
     if let Some(sink) = stream_sink {
+        let approval_required = summary.starts_with("I need your approval before");
         sink(ChatStreamEvent {
             kind: kind.to_string(),
             content: None,
@@ -540,6 +851,9 @@ fn emit_tool_event(
                 "tool": tool,
                 "args": args,
                 "success": success,
+                "approval_required": approval_required,
+                "action_key": tool_action_key(tool, args),
+                "command": tool_action_command(tool, args),
                 "summary": summary.chars().take(240).collect::<String>(),
             }),
         });

@@ -301,6 +301,18 @@ async fn dispatch(
                 Err(error) => RpcResponse::err(request.id, error.to_string()),
             }
         }
+        "agent.context_usage" => {
+            let params = match serde_json::from_value::<SendTaskParams>(request.params) {
+                Ok(params) => params,
+                Err(error) => {
+                    return RpcResponse::err(request.id, format!("invalid params: {error}"))
+                }
+            };
+            match state.core.context_usage(params).await {
+                Ok(result) => RpcResponse::ok(request.id, result),
+                Err(error) => RpcResponse::err(request.id, error.to_string()),
+            }
+        }
         "ide.detect" => RpcResponse::ok(request.id, aegis_tools::detect_ides()),
         "ide.open_project" => {
             let ide_id = request.params.get("ideId").and_then(Value::as_str);
