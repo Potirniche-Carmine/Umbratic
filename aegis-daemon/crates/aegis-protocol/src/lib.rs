@@ -144,6 +144,36 @@ pub struct SendTaskParams {
     pub worktree_enabled: bool,
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    #[serde(default)]
+    pub enabled_tools: Vec<String>,
+    #[serde(default)]
+    pub tool_context: Vec<AgentToolContext>,
+    #[serde(default)]
+    pub attached_files: Vec<AttachedFileContext>,
+    #[serde(default = "default_operating_system")]
+    pub operating_system: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentToolContext {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachedFileContext {
+    pub path: String,
+    #[serde(default)]
+    pub project_path: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 fn default_model() -> String {
@@ -152,6 +182,10 @@ fn default_model() -> String {
 
 fn default_permission_mode() -> String {
     "default".to_string()
+}
+
+fn default_operating_system() -> String {
+    std::env::consts::OS.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +237,7 @@ pub struct StoreOverview {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSearchParams {
+    #[serde(alias = "projectRoot")]
     pub project_root: String,
     pub query: String,
     #[serde(default = "default_search_limit")]
@@ -218,6 +253,13 @@ pub struct ProjectSearchMatch {
     pub path: String,
     pub line: usize,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectFileEntry {
+    pub path: String,
+    pub name: String,
+    pub directory: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

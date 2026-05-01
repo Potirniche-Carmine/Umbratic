@@ -1,9 +1,17 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
 contextBridge.exposeInMainWorld("aegis", {
   getDaemonConnection: () => ipcRenderer.invoke("daemon:get-connection"),
   restartDaemon: () => ipcRenderer.invoke("daemon:restart"),
   pickProjectFolder: () => ipcRenderer.invoke("project:pick-folder"),
+  pickAttachments: (projectRoot?: string) => ipcRenderer.invoke("file:pick-attachments", projectRoot),
+  startTerminal: (cwd?: string) => ipcRenderer.invoke("terminal:start", cwd),
+  writeTerminal: (data: string) => ipcRenderer.invoke("terminal:write", data),
+  onTerminalData: (callback: (data: string) => void) => {
+    const listener = (_event: IpcRendererEvent, data: string) => callback(data);
+    ipcRenderer.on("terminal:data", listener);
+    return () => ipcRenderer.removeListener("terminal:data", listener);
+  },
   onOpenProjectRequested: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on("menu:open-project", listener);

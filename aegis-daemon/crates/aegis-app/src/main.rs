@@ -207,6 +207,66 @@ async fn dispatch(
                 Err(error) => RpcResponse::err(request.id, error.to_string()),
             }
         }
+        "project.files" => {
+            let root = request
+                .params
+                .get("projectRoot")
+                .or_else(|| request.params.get("project_root"))
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            let limit = request
+                .params
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(10_000) as usize;
+            match root {
+                Some(root) => match aegis_tools::list_project_files(&root, limit) {
+                    Ok(files) => RpcResponse::ok(request.id, files),
+                    Err(error) => RpcResponse::err(request.id, error.to_string()),
+                },
+                None => RpcResponse::err(request.id, "projectRoot is required"),
+            }
+        }
+        "file.read" => {
+            let root = request
+                .params
+                .get("projectRoot")
+                .or_else(|| request.params.get("project_root"))
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            let file = request
+                .params
+                .get("path")
+                .or_else(|| request.params.get("file"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .trim_start_matches('@')
+                .replace('\\', "/");
+            match root {
+                Some(root) => {
+                    match aegis_tools::read_text_file(&root, &PathBuf::from(&file), 12_000) {
+                        Ok(content) => RpcResponse::ok(request.id, content),
+                        Err(error) => {
+                            match aegis_tools::resolve_project_file_reference(&root, &file, 10_000)
+                            {
+                                Ok(Some(resolved)) => {
+                                    match aegis_tools::read_text_file(&root, &resolved, 12_000) {
+                                        Ok(content) => RpcResponse::ok(request.id, content),
+                                        Err(second_error) => {
+                                            RpcResponse::err(request.id, second_error.to_string())
+                                        }
+                                    }
+                                }
+                                Ok(None) => RpcResponse::err(request.id, error.to_string()),
+                                Err(_) => RpcResponse::err(request.id, error.to_string()),
+                            }
+                        }
+                    }
+                }
+                None => RpcResponse::err(request.id, "projectRoot is required"),
+            }
+        }
         "session.list" => {
             let project_id = request.params.get("projectId").and_then(Value::as_str);
             match state.store.list_sessions(project_id).await {

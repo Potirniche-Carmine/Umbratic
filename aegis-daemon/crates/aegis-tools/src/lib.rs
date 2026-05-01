@@ -1,7 +1,7 @@
-use aegis_protocol::{GitBranchInfo, GitWorktreeInfo, ProjectSearchMatch};
+use aegis_protocol::{GitBranchInfo, GitWorktreeInfo, ProjectFileEntry, ProjectSearchMatch};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,6 +220,51 @@ pub fn lexical_search(
     Ok(matches)
 }
 
+pub fn list_project_files(project_root: &Path, limit: usize) -> Result<Vec<ProjectFileEntry>> {
+    ensure_project_root(project_root)?;
+    let mut files = Vec::new();
+    collect_project_files(
+        project_root,
+        project_root,
+        limit.max(1).min(10_000),
+        &mut files,
+    )?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+pub fn resolve_project_file_reference(
+    project_root: &Path,
+    reference: &str,
+    limit: usize,
+) -> Result<Option<PathBuf>> {
+    let normalized = normalize_project_reference(reference);
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    let normalized_lower = normalized.to_lowercase();
+    let files = list_project_files(project_root, limit)?;
+    let exact = files
+        .iter()
+        .find(|file| file.path.to_lowercase() == normalized_lower);
+    let suffix = files
+        .iter()
+        .find(|file| file.path.to_lowercase().ends_with(&normalized_lower));
+    let by_name = files
+        .iter()
+        .find(|file| file.name.to_lowercase() == normalized_lower);
+    let contains = files.iter().find(|file| {
+        let path = file.path.to_lowercase();
+        let name = file.name.to_lowercase();
+        path.contains(&normalized_lower) || name.contains(&normalized_lower)
+    });
+    Ok(exact
+        .or(suffix)
+        .or(by_name)
+        .or(contains)
+        .map(|file| PathBuf::from(&file.path)))
+}
+
 pub fn read_text_file(project_root: &Path, file: &Path, max_bytes: usize) -> Result<String> {
     ensure_project_root(project_root)?;
     let full_path = if file.is_absolute() {
@@ -242,6 +287,34 @@ pub fn read_text_file(project_root: &Path, file: &Path, max_bytes: usize) -> Res
         content.push_str("\n[truncated]");
     }
     Ok(content)
+}
+
+pub fn write_text_file(
+    project_root: &Path,
+    file: &Path,
+    content: &str,
+    create_dirs: bool,
+) -> Result<String> {
+    ensure_project_root(project_root)?;
+    let root = project_root.canonicalize()?;
+    let full_path = resolve_project_path_for_write(&root, file)?;
+
+    if let Some(parent) = full_path.parent() {
+        if create_dirs {
+            std::fs::create_dir_all(parent)?;
+        }
+        if !parent.exists() {
+            bail!("parent directory does not exist: {}", parent.display());
+        }
+    }
+
+    std::fs::write(&full_path, content)?;
+    let relative = full_path.strip_prefix(&root).unwrap_or(&full_path);
+    Ok(format!(
+        "wrote {} bytes to {}",
+        content.len(),
+        relative.display()
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,8 +373,9 @@ pub fn detect_ides() -> Vec<IdeInstall> {
 
 pub async fn open_project(command: &str, project_root: &Path) -> Result<()> {
     ensure_project_root(project_root)?;
+    let root = project_root.canonicalize()?;
     Command::new(command)
-        .arg(project_root)
+        .arg(root)
         .spawn()
         .with_context(|| format!("failed to open project with {command}"))?;
     Ok(())
@@ -330,11 +404,11 @@ pub async fn open_file(
 
     let mut command_builder = Command::new(command);
     if ide_id == "explorer" {
-        command_builder.arg(format!("/select,{}", full_path.display()));
+        command_builder.arg(format!("/select,\"{}\"", full_path.display()));
     } else if ide_id == "code" {
         if let Some(line) = line {
             command_builder
-                .arg("-g")
+                .arg("--goto")
                 .arg(format!("{}:{line}", full_path.display()));
         } else {
             command_builder.arg(full_path);
@@ -349,6 +423,31 @@ pub async fn open_file(
     Ok(())
 }
 
+pub async fn run_terminal_command(project_root: &Path, command: &str) -> Result<GitStatus> {
+    ensure_project_root(project_root)?;
+    let output = if cfg!(windows) {
+        Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", command])
+            .current_dir(project_root)
+            .output()
+            .await
+            .context("failed to run terminal command")?
+    } else {
+        Command::new("sh")
+            .args(["-lc", command])
+            .current_dir(project_root)
+            .output()
+            .await
+            .context("failed to run terminal command")?
+    };
+
+    Ok(GitStatus {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: output.status.success(),
+    })
+}
+
 fn ensure_project_root(project_root: &Path) -> Result<()> {
     if !project_root.exists() {
         bail!("project root does not exist");
@@ -357,6 +456,26 @@ fn ensure_project_root(project_root: &Path) -> Result<()> {
         bail!("project root is not a directory");
     }
     Ok(())
+}
+
+fn resolve_project_path_for_write(project_root: &Path, file: &Path) -> Result<PathBuf> {
+    if file.is_absolute() {
+        if !file.starts_with(project_root) {
+            bail!("file is outside project root");
+        }
+        return Ok(file.to_path_buf());
+    }
+
+    for component in file.components() {
+        if matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
+            bail!("file path must stay inside project root");
+        }
+    }
+
+    Ok(project_root.join(file))
 }
 
 fn search_dir(
@@ -393,8 +512,9 @@ fn search_dir(
             Err(_) => continue,
         };
 
+        let query_lower = query.to_lowercase();
         for (index, line) in content.lines().enumerate() {
-            if line.to_lowercase().contains(query) {
+            if line.to_lowercase().contains(&query_lower) {
                 let relative = path
                     .strip_prefix(project_root)
                     .unwrap_or(&path)
@@ -415,16 +535,80 @@ fn search_dir(
     Ok(())
 }
 
+fn collect_project_files(
+    project_root: &Path,
+    dir: &Path,
+    limit: usize,
+    files: &mut Vec<ProjectFileEntry>,
+) -> Result<()> {
+    if files.len() >= limit {
+        return Ok(());
+    }
+
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if should_skip_dir_name(&name) {
+                continue;
+            }
+            collect_project_files(project_root, &path, limit, files)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let relative = path.strip_prefix(project_root).unwrap_or(&path);
+        let display = relative.display().to_string().replace('\\', "/");
+        let directory = relative
+            .parent()
+            .map(|parent| parent.display().to_string().replace('\\', "/"))
+            .unwrap_or_default();
+        files.push(ProjectFileEntry {
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            directory,
+            path: display,
+        });
+        if files.len() >= limit {
+            return Ok(());
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_project_reference(reference: &str) -> String {
+    reference
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_start_matches('@')
+        .replace('\\', "/")
+}
+
 fn should_skip(name: &str, path: &Path) -> bool {
-    matches!(
-        name,
-        ".git" | "node_modules" | "vendor" | ".venv" | "dist" | "build" | "target" | "__pycache__"
-    ) || name.ends_with(".lock")
+    should_skip_dir_name(name)
+        || name.ends_with(".lock")
         || name.ends_with(".min.js")
         || path.components().any(|component| {
             let part = component.as_os_str().to_string_lossy();
             matches!(part.as_ref(), ".git" | "node_modules" | "target" | "dist")
         })
+}
+
+fn should_skip_dir_name(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | "node_modules" | "vendor" | ".venv" | "dist" | "build" | "target" | "__pycache__"
+    )
 }
 
 fn is_probably_binary_or_large(path: &Path) -> Result<bool> {

@@ -43,15 +43,6 @@ impl LmStudioClient {
     fn url(&self, path: &str) -> String {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
-
-    fn api_url(&self, path: &str) -> String {
-        let root = self.base_url.strip_suffix("/v1").unwrap_or(&self.base_url);
-        format!(
-            "{}/{}",
-            root.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
 }
 
 #[async_trait]
@@ -96,7 +87,7 @@ impl ModelClient for LmStudioClient {
         let model = request.model.clone();
         let response = self
             .http
-            .post(self.api_url("/api/v1/chat"))
+            .post(self.url("/chat/completions"))
             .bearer_auth(&self.api_key)
             .json(&json!({
                 "model": request.model,
@@ -200,13 +191,34 @@ fn parse_sse_frame(frame: &str) -> Option<ChatStreamEvent> {
             data_lines.push(value.trim_start().to_string());
         }
     }
-    let kind = event_type?;
     let data_text = data_lines.join("\n");
+    if data_text.trim() == "[DONE]" {
+        return Some(ChatStreamEvent {
+            kind: "chat.end".to_string(),
+            content: None,
+            data: json!({}),
+        });
+    }
     let data = serde_json::from_str::<Value>(&data_text).unwrap_or_else(|_| json!({}));
     let content = data
         .get("content")
         .and_then(Value::as_str)
+        .or_else(|| {
+            data.get("choices")?
+                .as_array()?
+                .first()?
+                .get("delta")?
+                .get("content")?
+                .as_str()
+        })
         .map(ToOwned::to_owned);
+    let kind = event_type.unwrap_or_else(|| {
+        if content.is_some() {
+            "message.delta".to_string()
+        } else {
+            "stream.event".to_string()
+        }
+    });
     Some(ChatStreamEvent {
         kind,
         content,

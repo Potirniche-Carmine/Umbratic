@@ -1,33 +1,35 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Activity,
   ArrowLeft,
-  Bot,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   Code2,
   Copy,
   Database,
-  Eye,
-  FileCode2,
+  FileText,
   FolderOpen,
   GitBranch,
   GitFork,
+  MessageSquare,
+  Paperclip,
   PanelLeft,
   Plus,
-  Play,
   RefreshCw,
+  Send,
   Terminal,
   Trash2,
   TriangleAlert,
+  Wrench,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type SocketState = "idle" | "connecting" | "open" | "closed";
-type RailView = "chats" | "git";
-type MainTab = "chat" | "diff" | "data";
+type RailView = "chats" | "git" | "tools" | "data";
+type MainTab = "chat" | "diff" | "terminal";
 type PermissionMode = "default" | "bypass";
 
 type DaemonHealth = {
@@ -57,8 +59,11 @@ type ServerEvent =
   | { type: "agent_stream"; turn_id: string; kind: string; content?: string; data?: unknown };
 
 type ChatLine = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   content: string;
+  toolName?: string;
+  status?: ServiceStatus;
+  detail?: string;
 };
 
 type ProjectSummary = {
@@ -114,6 +119,19 @@ type SearchMatch = {
   snippet: string;
 };
 
+type ProjectFileEntry = {
+  path: string;
+  name: string;
+  directory: string;
+};
+
+type AttachedFile = {
+  path: string;
+  name: string;
+  projectPath?: string;
+  content?: string;
+};
+
 type IdeInstall = {
   id: "code" | "devenv" | "clion" | "explorer" | string;
   label: string;
@@ -148,6 +166,28 @@ type LocalChat = {
   changedFileCount?: number;
 };
 
+type AgentTool = {
+  id: string;
+  label: string;
+  summary: string;
+  command: string;
+  kind: "read" | "search" | "write" | "git" | "context";
+  enabled: boolean;
+};
+
+type AgentToolContext = {
+  id: string;
+  label: string;
+  summary: string;
+  command: string;
+  enabled: boolean;
+};
+
+type RequestedToolCall = {
+  tool: string;
+  args: Record<string, unknown>;
+};
+
 type DesktopConnection =
   | { status: "ready"; url: string; token: string }
   | { status: "missing"; message: string }
@@ -161,6 +201,13 @@ type DesktopApi = {
   getDaemonConnection(): Promise<DesktopConnection>;
   restartDaemon(): Promise<DesktopConnection>;
   pickProjectFolder(): Promise<PickProjectResult>;
+  pickAttachments(projectRoot?: string): Promise<
+    | { canceled: true }
+    | { canceled: false; files: AttachedFile[] }
+  >;
+  startTerminal(cwd?: string): Promise<{ started: boolean; shell: string }>;
+  writeTerminal(data: string): Promise<{ written: boolean }>;
+  onTerminalData(callback: (data: string) => void): () => void;
   onOpenProjectRequested(callback: () => void): () => void;
   onBackToChatRequested(callback: () => void): () => void;
   onToggleSidebarRequested(callback: () => void): () => void;
@@ -178,6 +225,10 @@ const aegisApi: DesktopApi =
       message: "This is the browser preview. Open the Electron window from npm run desktop:dev.",
     }),
     pickProjectFolder: async () => ({ canceled: true }),
+    pickAttachments: async () => ({ canceled: true }),
+    startTerminal: async () => ({ started: false, shell: "browser preview" }),
+    writeTerminal: async () => ({ written: false }),
+    onTerminalData: () => () => undefined,
     onOpenProjectRequested: () => () => undefined,
     onBackToChatRequested: () => () => undefined,
     onToggleSidebarRequested: () => () => undefined,
@@ -195,6 +246,221 @@ function newLocalChat(branch?: string): LocalChat {
   };
 }
 
+const DEFAULT_AGENT_TOOLS: AgentTool[] = [
+  {
+    id: "project.search",
+    label: "Project search",
+    summary: "Search text inside the selected project directory.",
+    command: 'project.search {"query":"text"}',
+    kind: "search",
+    enabled: true,
+  },
+  {
+    id: "rg.search",
+    label: "Ripgrep search",
+    summary: "Use rg-style search when the agent asks for fast project lookup.",
+    command: 'rg.search {"query":"text"}',
+    kind: "search",
+    enabled: true,
+  },
+  {
+    id: "grep.search",
+    label: "Grep search",
+    summary: "Use grep-style search as a portable fallback.",
+    command: 'grep.search {"query":"text"}',
+    kind: "search",
+    enabled: true,
+  },
+  {
+    id: "file.read",
+    label: "Read file",
+    summary: "Read text files inside the project root.",
+    command: 'file.read {"path":"relative/path"}',
+    kind: "read",
+    enabled: true,
+  },
+  {
+    id: "file.write",
+    label: "Write/create file",
+    summary: "Create or replace text files inside the project root.",
+    command: 'file.write {"path":"relative/path","content":"..."}',
+    kind: "write",
+    enabled: true,
+  },
+  {
+    id: "git.status",
+    label: "Git status",
+    summary: "Inspect modified, staged, and untracked files.",
+    command: "git.status {}",
+    kind: "git",
+    enabled: true,
+  },
+  {
+    id: "git.diff",
+    label: "Git diff",
+    summary: "Review the current project diff.",
+    command: "git.diff {}",
+    kind: "git",
+    enabled: true,
+  },
+  {
+    id: "git.branches",
+    label: "Git branches",
+    summary: "Read local branch information.",
+    command: "git.branches {}",
+    kind: "git",
+    enabled: true,
+  },
+  {
+    id: "git.worktree_list",
+    label: "Git worktrees",
+    summary: "Inspect project worktrees.",
+    command: "git.worktree_list {}",
+    kind: "git",
+    enabled: true,
+  },
+  {
+    id: "terminal.run",
+    label: "Run terminal command",
+    summary: "Run a project-scoped command through the harness shell and stream the output.",
+    command: 'terminal.run {"command":"pwd"}',
+    kind: "write",
+    enabled: true,
+  },
+  {
+    id: "os.context",
+    label: "Harness OS context",
+    summary: "Tell the agent which operating system the harness is running on.",
+    command: "operating_system",
+    kind: "context",
+    enabled: true,
+  },
+];
+
+function detectHarnessOs(): string {
+  const ua = navigator.userAgent;
+  if (/Mac|iPhone|iPad/i.test(ua)) {
+    return "macOS";
+  }
+  if (/Windows/i.test(ua)) {
+    return "Windows";
+  }
+  return "Linux";
+}
+
+function shortToolDetail(data: unknown): string {
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+  const record = data as Record<string, unknown>;
+  const args = record.args;
+  if (!args || typeof args !== "object") {
+    return "";
+  }
+  const argsRecord = args as Record<string, unknown>;
+  const path = argsRecord.path ?? argsRecord.file;
+  const query = argsRecord.query;
+  if (typeof path === "string" && path.trim()) {
+    return path;
+  }
+  if (typeof query === "string" && query.trim()) {
+    return query;
+  }
+  return JSON.stringify(argsRecord).slice(0, 120);
+}
+
+function looksLikeToolCall(content: string): boolean {
+  return parseToolCall(content) !== null;
+}
+
+function parseToolCall(content: string): RequestedToolCall | null {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const taggedStart = trimmed.indexOf("<|tool_call>");
+  if (taggedStart >= 0) {
+    const rest = trimmed.slice(taggedStart + "<|tool_call>".length);
+    const taggedEnd = rest.indexOf("<tool_call|>");
+    const body = (taggedEnd >= 0 ? rest.slice(0, taggedEnd) : rest).trim().replace(/^call:/, "");
+    const jsonStart = body.indexOf("{");
+    if (jsonStart > 0) {
+      const tool = body.slice(0, jsonStart).trim();
+      const args = parseToolArgsText(body.slice(jsonStart));
+      return tool && args ? { tool, args } : null;
+    }
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    return typeof parsed.tool === "string" && typeof parsed.args === "object" && parsed.args !== null
+      ? { tool: parsed.tool, args: parsed.args as Record<string, unknown> }
+      : null;
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        const parsed = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+        return typeof parsed.tool === "string" && typeof parsed.args === "object" && parsed.args !== null
+          ? { tool: parsed.tool, args: parsed.args as Record<string, unknown> }
+          : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function parseToolArgsText(text: string): Record<string, unknown> | null {
+  const normalized = text.replaceAll('<|"|>', '"').replaceAll("<|'|>", "'");
+  try {
+    const parsed = JSON.parse(normalized) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return parseLooseToolArgs(normalized);
+  }
+}
+
+function parseLooseToolArgs(text: string): Record<string, unknown> | null {
+  const body = text.trim().replace(/^\{/, "").replace(/\}$/, "");
+  if (!body.trim()) {
+    return {};
+  }
+  const args: Record<string, unknown> = {};
+  for (const part of body.split(",")) {
+    const separator = part.indexOf(":");
+    if (separator <= 0) {
+      continue;
+    }
+    const key = part.slice(0, separator).trim().replace(/^["']|["']$/g, "");
+    const value = part.slice(separator + 1).trim().replace(/^["']|["']$/g, "");
+    if (key) {
+      args[key] = value;
+    }
+  }
+  return Object.keys(args).length > 0 ? args : null;
+}
+
+function activeMentionStart(input: string): number | null {
+  const index = input.lastIndexOf("@");
+  if (index < 0) {
+    return null;
+  }
+  if (index > 0 && !/\s/.test(input[index - 1])) {
+    return null;
+  }
+  if (input.slice(index + 1).includes("\n")) {
+    return null;
+  }
+  return index;
+}
+
+function activeMentionQuery(input: string): string | null {
+  const index = activeMentionStart(input);
+  return index === null ? null : input.slice(index + 1);
+}
+
 function summarizeForSlug(input: string): string {
   const words = input
     .toLowerCase()
@@ -210,6 +476,49 @@ function cleanPath(path?: string | null): string {
     return "";
   }
   return path.replace(/^\\\\\?\\/, "").replace(/\\/g, "\\");
+}
+
+function projectEntriesFromSearch(matches: SearchMatch[]): ProjectFileEntry[] {
+  const entries = new Map<string, ProjectFileEntry>();
+  for (const match of matches) {
+    const path = normalizeDiffPath(match.path);
+    if (!path || entries.has(path)) {
+      continue;
+    }
+    entries.set(path, {
+      path,
+      name: fileName(path),
+      directory: fileDirectory(path),
+    });
+  }
+  return [...entries.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function normalizeMentionPath(path: string): string {
+  return path.trim().replace(/^@/, "").replace(/\\/g, "/");
+}
+
+function resolveProjectFileReference(reference: string, files: ProjectFileEntry[], attached: AttachedFile[]): string {
+  const normalized = normalizeMentionPath(reference).toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  const candidates = [
+    ...attached
+      .map((file) => file.projectPath ?? file.path)
+      .filter(Boolean)
+      .map((path) => ({ path, name: fileName(path) })),
+    ...files.map((file) => ({ path: file.path, name: file.name })),
+  ];
+  const exact = candidates.find((file) => file.path.toLowerCase() === normalized);
+  const suffix = candidates.find((file) => file.path.toLowerCase().endsWith(normalized));
+  const byName = candidates.find((file) => file.name.toLowerCase() === normalized);
+  const contains = candidates.find((file) => {
+    const path = file.path.toLowerCase();
+    const name = file.name.toLowerCase();
+    return path.includes(normalized) || name.includes(normalized);
+  });
+  return exact?.path ?? suffix?.path ?? byName?.path ?? contains?.path ?? normalizeMentionPath(reference);
 }
 
 function diffFileCount(diff?: GitResult | null): number {
@@ -235,7 +544,12 @@ function App() {
   const [branchInfo, setBranchInfo] = useState<GitBranchInfo>({ branches: [] });
   const [selectedBranch, setSelectedBranch] = useState("");
   const [worktrees, setWorktrees] = useState<GitWorktreeInfo[]>([]);
+  const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
+  const [projectFilesLoading, setProjectFilesLoading] = useState(false);
+  const [projectFilesError, setProjectFilesError] = useState<string | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [activeFile, setActiveFile] = useState<SearchMatch | null>(null);
+  const [activeDiffPath, setActiveDiffPath] = useState("");
   const [activeRail, setActiveRail] = useState<RailView>("chats");
   const [activeTab, setActiveTab] = useState<MainTab>("chat");
   const [prompt, setPrompt] = useState("");
@@ -245,11 +559,15 @@ function App() {
   const [selectedIdeId, setSelectedIdeId] = useState("code");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
+  const [composerBranchMenuOpen, setComposerBranchMenuOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [showBypassConfirm, setShowBypassConfirm] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
-  const [leftWidth, setLeftWidth] = useState(286);
-  const [rightWidth, setRightWidth] = useState(360);
+  const [chatLeftWidth, setChatLeftWidth] = useState(280);
+  const [dataLeftWidth, setDataLeftWidth] = useState(280);
+  const [agentTools, setAgentTools] = useState<AgentTool[]>(DEFAULT_AGENT_TOOLS);
+  const [terminalOutput, setTerminalOutput] = useState("");
+  const [terminalInput, setTerminalInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -269,6 +587,17 @@ function App() {
     () => ides.find((ide) => ide.id === selectedIdeId) ?? ides[0] ?? { id: "code", label: "VS Code", command: "code" },
     [ides, selectedIdeId],
   );
+  const toolContext = useMemo<AgentToolContext[]>(
+    () =>
+      agentTools.map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+        summary: tool.summary,
+        command: tool.command,
+        enabled: tool.enabled,
+      })),
+    [agentTools],
+  );
 
   const telemetry = useMemo(
     () => ({
@@ -286,9 +615,13 @@ function App() {
       models,
       selectedModel,
       permissionMode,
+      enabledTools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
+      toolContext,
+      attachedFiles,
+      operatingSystem: detectHarnessOs(),
       lastError: error,
     }),
-    [activeChat, activeFile, branchInfo, chats.length, connection, error, health, models, permissionMode, selectedModel, sessions, storeOverview, visibleProject, worktrees],
+    [activeChat, activeFile, agentTools, attachedFiles, branchInfo, chats.length, connection, error, health, models, permissionMode, selectedModel, sessions, storeOverview, toolContext, visibleProject, worktrees],
   );
   const agentTimeline = useMemo(
     () => activeChat.timeline.filter((row) => ["agent", "reasoning", "tool"].includes(row.name)),
@@ -342,6 +675,44 @@ function App() {
     setSessions(await rpc<SessionSummary[]>("session.list", { projectId }));
   }, [rpc, selectedProjectId]);
 
+  const refreshProjectFiles = useCallback(async (project = selectedProject) => {
+    if (!project) {
+      setProjectFiles([]);
+      setProjectFilesError(null);
+      return;
+    }
+    setProjectFilesLoading(true);
+    setProjectFilesError(null);
+    try {
+      setProjectFiles(await rpc<ProjectFileEntry[]>("project.files", { projectRoot: project.root_path, limit: 10_000 }));
+    } catch (cause) {
+      const message = String(cause instanceof Error ? cause.message : cause);
+      if (/unknown method project\.files/i.test(message)) {
+        try {
+          const matches = await rpc<SearchMatch[]>("project.search", {
+            project_root: project.root_path,
+            query: "",
+            limit: 10_000,
+          });
+          setProjectFiles(projectEntriesFromSearch(matches));
+          setProjectFilesError(null);
+          return;
+        } catch (fallbackCause) {
+          const fallbackMessage = String(fallbackCause instanceof Error ? fallbackCause.message : fallbackCause);
+          setProjectFiles([]);
+          setProjectFilesError(fallbackMessage);
+          throw fallbackCause;
+        }
+      } else {
+        setProjectFiles([]);
+        setProjectFilesError(message);
+        throw cause;
+      }
+    } finally {
+      setProjectFilesLoading(false);
+    }
+  }, [rpc, selectedProject]);
+
   const refreshGit = useCallback(async (project = selectedProject) => {
     if (!project) {
       setGitStatus(null);
@@ -385,9 +756,12 @@ function App() {
     setSelectedModel((current) => modelRows.some((model) => model.id === current) ? current : modelRows[0]?.id ?? current);
     setSelectedIdeId((current) => detectedIdes.some((ide) => ide.id === current) ? current : detectedIdes.find((ide) => ide.id === "code")?.id ?? detectedIdes[0]?.id ?? "code");
     setSelectedProjectId((current) => current ?? projectRows[0]?.id ?? null);
+    if (projectRows[0]) {
+      void refreshProjectFiles(projectRows[0]).catch(() => setProjectFiles([]));
+    }
     addTimeline("daemon", "ready", "connected");
     addTimeline("lm-studio", healthResult.lm_studio, `${modelRows.length} model(s)`);
-  }, [addTimeline, rpc]);
+  }, [addTimeline, refreshProjectFiles, rpc]);
 
   const connect = useCallback(async () => {
     setSocketState("connecting");
@@ -451,6 +825,56 @@ function App() {
         if (parsed.kind === "reasoning.start") {
           addTimeline("reasoning", "degraded", "model reasoning stream active", chatId);
         }
+        if (parsed.kind === "tool.start") {
+          const toolName = typeof parsed.data === "object" && parsed.data && "tool" in parsed.data
+            ? String((parsed.data as Record<string, unknown>).tool)
+            : "tool";
+          const detail = shortToolDetail(parsed.data);
+          updateChat(chatId, (chat) => {
+            const messages = [...chat.messages];
+            const last = messages[messages.length - 1];
+            if (last?.role === "assistant" && looksLikeToolCall(last.content)) {
+              messages.pop();
+            }
+            return {
+              ...chat,
+              messages: [
+                ...messages,
+              {
+                role: "tool",
+                toolName,
+                status: "degraded",
+                detail,
+                content: detail ? `Running ${toolName} on ${detail}` : `Running ${toolName}`,
+              },
+              ],
+            };
+          });
+          addTimeline("tool", "degraded", detail ? `${toolName}: ${detail}` : toolName, chatId);
+        }
+        if (parsed.kind === "tool.end") {
+          const data = parsed.data as Record<string, unknown>;
+          const toolName = typeof data?.tool === "string" ? data.tool : "tool";
+          const success = data?.success !== false;
+          const summary = typeof data?.summary === "string" ? data.summary : "";
+          updateChat(chatId, (chat) => ({
+            ...chat,
+            messages: [
+              ...chat.messages,
+              {
+                role: "tool",
+                toolName,
+                status: success ? "ready" : "unavailable",
+                detail: summary,
+                content: summary ? `${toolName} finished: ${summary}` : `${toolName} finished`,
+              },
+            ],
+          }));
+          addTimeline("tool", success ? "ready" : "unavailable", summary ? `${toolName}: ${summary}` : toolName, chatId);
+        }
+        if (parsed.kind === "terminal.output" && parsed.content) {
+          setTerminalOutput((current) => `${current}${parsed.content}`.slice(-80_000));
+        }
       }
     };
   }, [addTimeline, loadInitialData, updateChat]);
@@ -470,9 +894,11 @@ function App() {
     setActiveRail("chats");
     setActiveTab("chat");
     setActiveFile(null);
+    setActiveDiffPath("");
+    setAttachedFiles([]);
     addTimeline("project", "ready", project.root_path);
-    await Promise.all([refreshSessions(project.id), refreshStore(), refreshGit(project)]);
-  }, [addTimeline, refreshGit, refreshSessions, refreshStore, rpc]);
+    await Promise.all([refreshSessions(project.id), refreshStore(), refreshGit(project), refreshProjectFiles(project)]);
+  }, [addTimeline, refreshGit, refreshProjectFiles, refreshSessions, refreshStore, rpc]);
 
   useEffect(() => {
     void connect();
@@ -485,7 +911,6 @@ function App() {
       unsubscribeBack();
       unsubscribeSidebar();
     };
-    // The connection is intentionally single-shot; project state changes must not reconnect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -501,8 +926,16 @@ function App() {
         setGitStatus({ stdout: "", stderr: String(cause), success: false });
         setGitDiff(null);
       });
+      void refreshProjectFiles(selectedProject).catch(() => setProjectFiles([]));
     }
-  }, [selectedProjectId, socketState]);
+  }, [refreshProjectFiles, selectedProject, selectedProjectId, socketState]);
+
+  useEffect(() => {
+    const unsubscribe = aegisApi.onTerminalData((data) => {
+      setTerminalOutput((current) => `${current}${data}`.slice(-80_000));
+    });
+    return unsubscribe;
+  }, []);
 
   const newChat = () => {
     const chat = newLocalChat(selectedBranch);
@@ -564,6 +997,60 @@ function App() {
     return worktree;
   };
 
+  const executeReturnedToolCall = async (content: string, projectRoot?: string): Promise<string> => {
+    const call = parseToolCall(content);
+    if (!call || !projectRoot) {
+      return content;
+    }
+    const query = typeof call.args.query === "string" ? call.args.query : "";
+    const params = { projectRoot, project_root: projectRoot };
+    addTimeline("tool", "degraded", query ? `${call.tool}: ${query}` : call.tool);
+    try {
+      if (call.tool === "file.read") {
+        const path = resolveProjectFileReference(
+          String(call.args.path ?? call.args.file ?? ""),
+          projectFiles,
+          attachedFiles,
+        );
+        const fileContent = await rpc<string>("file.read", {
+          ...params,
+          path,
+        });
+        addTimeline("tool", "ready", `file.read: ${path}`);
+        return `I read ${path}.\n\n${fileContent.trim() || "(file was empty)"}`;
+      }
+      if (["project.search", "rg.search", "grep.search"].includes(call.tool)) {
+        const matches = await rpc<SearchMatch[]>("project.search", {
+          ...params,
+          query,
+          limit: 20,
+        });
+        addTimeline("tool", "ready", `${call.tool}: ${matches.length} match${matches.length === 1 ? "" : "es"}`);
+        if (matches.length === 0) {
+          return `I searched for "${query || "(empty query)"}" and did not find matching text.`;
+        }
+        return `I searched for "${query || "(empty query)"}" and found:\n\n${matches
+          .map((match) => `${normalizeDiffPath(match.path)}:${match.line} ${match.snippet}`)
+          .join("\n")}`;
+      }
+      if (call.tool === "git.status") {
+        const status = await rpc<GitResult>("git.status", params);
+        addTimeline("tool", status.success ? "ready" : "unavailable", "git.status");
+        return (status.stdout + status.stderr).trim() || "Working tree clean.";
+      }
+      if (call.tool === "git.diff") {
+        const diff = await rpc<GitResult>("git.diff", params);
+        addTimeline("tool", diff.success ? "ready" : "unavailable", "git.diff");
+        return (diff.stdout + diff.stderr).trim() || "No diff in the selected project.";
+      }
+      return `Aegis returned a tool call for ${call.tool}, but this running daemon did not execute it. Restart the daemon to use the updated tool runner.`;
+    } catch (cause) {
+      const message = String(cause instanceof Error ? cause.message : cause);
+      addTimeline("tool", "unavailable", message);
+      return `Aegis tried to run ${call.tool}, but it failed: ${message}`;
+    }
+  };
+
   const sendTask = async () => {
     const trimmed = prompt.trim();
     const chatId = activeChat.id;
@@ -582,6 +1069,9 @@ function App() {
       messages: [...chat.messages, { role: "user", content: trimmed }],
     }));
     addTimeline("agent", "degraded", "generating response", chatId);
+    if (selectedProject) {
+      void refreshGit(selectedProject).catch(() => undefined);
+    }
     try {
       const chat = chats.find((row) => row.id === chatId);
       const lazyWorktree = await ensureWorktree(chatId, trimmed);
@@ -595,7 +1085,16 @@ function App() {
         worktree_enabled: chat?.worktreeEnabled ?? false,
         worktree_path: workingRoot,
         permission_mode: permissionMode,
+        enabled_tools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
+        tool_context: toolContext,
+        attached_files: attachedFiles.map((file) => ({
+          path: file.path,
+          project_path: file.projectPath,
+          content: file.projectPath ? undefined : file.content,
+        })),
+        operating_system: detectHarnessOs(),
       });
+      const assistantMessage = await executeReturnedToolCall(result.assistant_message, workingRoot);
       updateChat(chatId, (row) => ({
         ...row,
         sessionId: result.session_id,
@@ -603,10 +1102,20 @@ function App() {
           const messages = [...row.messages];
           const last = messages[messages.length - 1];
           if (last?.role === "assistant") {
-            messages[messages.length - 1] = { role: "assistant", content: result.assistant_message || last.content || "(empty response)" };
+            messages[messages.length - 1] = { role: "assistant", content: assistantMessage || last.content || "(empty response)" };
             return messages;
           }
-          return [...messages, { role: "assistant", content: result.assistant_message || "(empty response)" }];
+          let toolCallIndex = -1;
+          for (let index = messages.length - 1; index >= 0; index -= 1) {
+            if (messages[index].role === "assistant" && looksLikeToolCall(messages[index].content)) {
+              toolCallIndex = index;
+              break;
+            }
+          }
+          if (toolCallIndex >= 0) {
+            messages.splice(toolCallIndex, 1);
+          }
+          return [...messages, { role: "assistant", content: assistantMessage || "(empty response)" }];
         })(),
       }));
       addTimeline("agent", "ready", `turn ${result.turn_id.slice(0, 8)} finished`, chatId);
@@ -637,32 +1146,92 @@ function App() {
     }));
   };
 
-  const openInIde = async (ideId = selectedIdeId) => {
+  const openProjectInIde = async (ideId = selectedIdeId) => {
     if (!selectedProject) {
       return;
     }
-    const target = activeFile;
     try {
-      if (target) {
-        await rpc("ide.open_file", {
-          ideId,
-          projectRoot: activeChat.worktreePath ?? selectedProject.root_path,
-          file: target.path,
-          line: target.line,
-        });
-        addTimeline("ide", "ready", `opened ${target.path}`);
-      } else {
-        await rpc("ide.open_project", {
-          ideId,
-          projectRoot: activeChat.worktreePath ?? selectedProject.root_path,
-        });
-        addTimeline("ide", "ready", `opened ${selectedProject.name}`);
-      }
+      await rpc("ide.open_project", {
+        ideId,
+        projectRoot: activeChat.worktreePath ?? selectedProject.root_path,
+      });
+      addTimeline("ide", "ready", `opened ${selectedProject.name}`);
     } catch (cause) {
       const message = String(cause instanceof Error ? cause.message : cause);
       setError(message);
       addTimeline("ide", "unavailable", message);
     }
+  };
+
+  const openFileInIde = async (path: string, line: number, ideId = selectedIdeId) => {
+    if (!selectedProject) {
+      return;
+    }
+    setActiveFile({ path, line, snippet: "Changed in current diff" });
+    try {
+      await rpc("ide.open_file", {
+        ideId,
+        projectRoot: activeChat.worktreePath ?? selectedProject.root_path,
+        file: path,
+        line,
+      });
+      addTimeline("ide", "ready", `opened ${path}`);
+    } catch (cause) {
+      const message = String(cause instanceof Error ? cause.message : cause);
+      setError(message);
+      addTimeline("ide", "unavailable", message);
+    }
+  };
+
+  const attachProjectFile = (file: ProjectFileEntry) => {
+    setAttachedFiles((files) => {
+      if (files.some((row) => row.projectPath === file.path)) {
+        return files;
+      }
+      return [...files, { path: file.path, name: file.name, projectPath: file.path }];
+    });
+    setPrompt((current) => {
+      const start = activeMentionStart(current);
+      if (start === null) {
+        return `${current.trimEnd()} @${file.name} `;
+      }
+      return `${current.slice(0, start)}@${file.name} `;
+    });
+  };
+
+  const attachLocalFiles = async () => {
+    const picked = await aegisApi.pickAttachments(activeChat.worktreePath ?? selectedProject?.root_path);
+    if (picked.canceled) {
+      return;
+    }
+    setAttachedFiles((files) => {
+      const next = [...files];
+      for (const file of picked.files) {
+        const key = file.projectPath ?? file.path;
+        if (!next.some((row) => (row.projectPath ?? row.path) === key)) {
+          next.push(file);
+        }
+      }
+      return next;
+    });
+  };
+
+  const removeAttachedFile = (path: string) => {
+    setAttachedFiles((files) => files.filter((file) => (file.projectPath ?? file.path) !== path));
+  };
+
+  const startTerminal = async () => {
+    const root = activeChat.worktreePath ?? selectedProject?.root_path;
+    const result = await aegisApi.startTerminal(root);
+    setTerminalOutput((current) => current || `[started ${result.shell}]\r\n`);
+  };
+
+  const submitTerminalInput = async () => {
+    if (!terminalInput.trim()) {
+      return;
+    }
+    await aegisApi.writeTerminal(`${terminalInput}\n`);
+    setTerminalInput("");
   };
 
   const copyTelemetry = async () => {
@@ -679,17 +1248,19 @@ function App() {
     setPermissionMode(mode);
   };
 
-  const startResize = (side: "left" | "right", event: React.PointerEvent) => {
+  const leftWidth = activeRail === "data" ? dataLeftWidth : chatLeftWidth;
+
+  const startResize = (event: React.PointerEvent) => {
     event.preventDefault();
     const startX = event.clientX;
-    const initial = side === "left" ? leftWidth : rightWidth;
+    const initial = leftWidth;
     const onMove = (moveEvent: PointerEvent) => {
       const delta = moveEvent.clientX - startX;
-      if (side === "left") {
-        setLeftWidth(Math.max(230, Math.min(520, initial + delta)));
-      } else {
-        setRightWidth(Math.max(300, Math.min(640, initial - delta)));
-      }
+      const workspaceMinimum = 320;
+      const maxSidebarWidth = Math.max(230, Math.min(640, window.innerWidth - 52 - workspaceMinimum));
+      const next = Math.max(230, Math.min(maxSidebarWidth, initial + delta));
+      if (activeRail === "data") setDataLeftWidth(next);
+      else setChatLeftWidth(next);
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -701,91 +1272,125 @@ function App() {
 
   const railTitle = {
     chats: "Chats",
-    git: "Git",
+    git: "Source Control",
+    tools: "Tools",
+    data: "Telemetry",
   }[activeRail];
+
+  const toggleAgentTool = (id: string, enabled: boolean) => {
+    setAgentTools((tools) => tools.map((tool) => (tool.id === id ? { ...tool, enabled } : tool)));
+  };
+  const updateAgentTool = (id: string, patch: Partial<Pick<AgentTool, "label" | "summary" | "command">>) => {
+    setAgentTools((tools) => tools.map((tool) => (tool.id === id ? { ...tool, ...patch } : tool)));
+  };
+  const mentionQuery = activeMentionQuery(prompt);
+  const mentionMatches = mentionQuery === null
+    ? []
+    : projectFiles
+        .filter((file) => {
+          const query = mentionQuery.toLowerCase();
+          const haystack = `${file.path} ${file.name} ${file.directory}`.toLowerCase();
+          return haystack.includes(query);
+        })
+        .slice(0, 80);
+
+  useEffect(() => {
+    if (mentionQuery !== null && selectedProject && projectFiles.length === 0 && socketState === "open") {
+      void refreshProjectFiles(selectedProject).catch(() => setProjectFiles([]));
+    }
+  }, [mentionQuery, projectFiles.length, refreshProjectFiles, selectedProject, socketState]);
 
   return (
     <main
       className={`app ${sidebarVisible ? "" : "sidebarCollapsed"}`}
       style={{
-        gridTemplateColumns: `56px ${sidebarVisible ? leftWidth : 0}px minmax(520px, 1fr) ${rightWidth}px`,
+        gridTemplateColumns: `52px ${sidebarVisible ? leftWidth : 0}px minmax(0, 1fr)`,
       }}
     >
-      <header className="topbar">
-        <div className="brand">
-          <Code2 size={22} />
-          <span>Aegis</span>
+      <header className="titlebar">
+        <div className="titlebar-left">
+          <div className="window-controls">
+            <button className="ctrlButton" title="Back to chat" onClick={() => setActiveTab("chat")}>
+              <ArrowLeft size={15} />
+            </button>
+            <button className="ctrlButton" title="Toggle sidebar" onClick={() => setSidebarVisible((visible) => !visible)}>
+              <PanelLeft size={15} />
+            </button>
+          </div>
+          <div className="brand">
+            <Code2 size={15} className="brandMark" />
+            <span>Aegis</span>
+          </div>
         </div>
-        <div className="navControls">
-          <button className="iconButton" title="Back to chat" onClick={() => setActiveTab("chat")}>
-            <ArrowLeft size={17} />
-          </button>
-          <button className="iconButton" title="Toggle sidebar" onClick={() => setSidebarVisible((visible) => !visible)}>
-            <PanelLeft size={17} />
-          </button>
-        </div>
-        <button className="projectButton glassControl" title="Open folder" onClick={pickProject}>
-          <FolderOpen size={17} />
-          <span>{selectedProject?.name ?? "Open folder"}</span>
-        </button>
-        <div className="statusPill" data-status={socketState === "open" ? "ready" : "unavailable"}>
-          <Activity size={16} />
-          <span>{socketState}</span>
-        </div>
-        <div className="statusPill" data-status={health?.lm_studio ?? "unavailable"}>
-          <Bot size={16} />
-          <span>LM Studio</span>
-        </div>
-        <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Model">
-          {[selectedModel, ...models.filter((model) => model !== selectedModel)].map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
-        <div className="menuControl">
-          <button
-            className={`openIdeButton ${selectedIde.id === "code" ? "vscodeButton" : ""}`}
-            onClick={() => setIdeMenuOpen((open) => !open)}
-            disabled={!selectedProject}
-            aria-haspopup="menu"
-            aria-expanded={ideMenuOpen}
-          >
-            <IdeGlyph id={selectedIde.id} />
-            <span>{selectedIde.label}</span>
-            <ChevronDown size={14} />
-          </button>
-          {ideMenuOpen ? (
-            <div className="menuPopover ideMenu" role="menu">
-              {(ides.length > 0 ? ides : [{ id: "code", label: "VS Code", command: "code" }]).map((ide) => (
-                <button
-                  key={ide.id}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setSelectedIdeId(ide.id);
-                    setIdeMenuOpen(false);
-                    void openInIde(ide.id);
-                  }}
-                >
-                  <IdeGlyph id={ide.id} />
-                  <span>{ide.label}</span>
-                </button>
-              ))}
+        <div className="titlebar-drag" />
+        <div className="titlebar-right">
+          <select className="modelSelect" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Model">
+            {[selectedModel, ...models.filter((model) => model !== selectedModel)].map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+          <div className="menuControl">
+            <div className="ideSplitControl">
+              <button
+                className="ideButton idePrimaryButton"
+                onClick={() => void openProjectInIde()}
+                disabled={!selectedProject}
+                title={`Open project in ${selectedIde.label}`}
+              >
+                <IdeGlyph id={selectedIde.id} />
+                <span>{selectedIde.label}</span>
+              </button>
+              <button
+                className="ideButton ideChevronButton"
+                onClick={() => setIdeMenuOpen((open) => !open)}
+                disabled={!selectedProject}
+                aria-haspopup="menu"
+                aria-expanded={ideMenuOpen}
+                title="Choose editor"
+              >
+                <ChevronDown size={13} />
+              </button>
             </div>
-          ) : null}
+            {ideMenuOpen ? (
+              <div className="menuPopover ideMenu" role="menu">
+                {(ides.length > 0 ? ides : [{ id: "code", label: "VS Code", command: "code" }]).map((ide) => (
+                  <button
+                    key={ide.id}
+                    type="button"
+                    role="menuitem"
+                    className={ide.id === selectedIdeId ? "active" : ""}
+                    onClick={() => {
+                      setSelectedIdeId(ide.id);
+                      setIdeMenuOpen(false);
+                    }}
+                  >
+                    <IdeGlyph id={ide.id} />
+                    <span>{ide.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <button className="ctrlButton" title="Restart daemon" onClick={restart}>
+            <RefreshCw size={14} />
+          </button>
         </div>
-        <button className="iconButton" title="Restart daemon" onClick={restart}>
-          <RefreshCw size={17} />
-        </button>
       </header>
 
       <aside className="rail">
         <RailButton active={activeRail === "chats"} title="Chats" onClick={() => setActiveRail("chats")}>
-          <Terminal size={19} />
+          <MessageSquare size={18} />
         </RailButton>
-        <RailButton active={activeRail === "git"} title="Git status" onClick={() => setActiveRail("git")}>
-          <GitBranch size={19} />
+        <RailButton active={activeRail === "git"} title="Source control" onClick={() => setActiveRail("git")}>
+          <GitBranch size={18} />
+        </RailButton>
+        <RailButton active={activeRail === "tools"} title="Tools" onClick={() => setActiveRail("tools")}>
+          <Wrench size={18} />
+        </RailButton>
+        <RailButton active={activeRail === "data"} title="Telemetry" onClick={() => setActiveRail("data")}>
+          <Database size={18} />
         </RailButton>
       </aside>
 
@@ -795,7 +1400,12 @@ function App() {
           <h2>{railTitle}</h2>
           {activeRail === "chats" ? (
             <button className="newChatButton" onClick={newChat} title="New chat">
-              <Plus size={15} />
+              <Plus size={14} />
+            </button>
+          ) : null}
+          {activeRail === "data" ? (
+            <button className="newChatButton" onClick={copyTelemetry} title="Copy telemetry JSON">
+              <Copy size={13} />
             </button>
           ) : null}
         </div>
@@ -811,16 +1421,32 @@ function App() {
             selectedBranch={selectedBranch}
             setSelectedBranch={setSelectedBranch}
             onRefresh={() => void refreshGit()}
+            onOpenChangedFile={(path) => {
+              setActiveDiffPath(path);
+              setActiveTab("diff");
+            }}
             hasProject={!!selectedProject}
           />
         ) : null}
+        {activeRail === "tools" ? (
+          <SidebarTools
+            tools={agentTools}
+            operatingSystem={detectHarnessOs()}
+            onToggle={toggleAgentTool}
+            onUpdate={updateAgentTool}
+            onReset={() => setAgentTools(DEFAULT_AGENT_TOOLS)}
+          />
+        ) : null}
+        {activeRail === "data" ? (
+          <SidebarData telemetry={telemetry} health={health} socketState={socketState} storeOverview={storeOverview} />
+        ) : null}
       </section>
       ) : null}
-      {sidebarVisible ? <div className="resizeHandle leftHandle" onPointerDown={(event) => startResize("left", event)} /> : null}
+      {sidebarVisible ? <div className="resizeHandle leftHandle" onPointerDown={startResize} /> : null}
 
       <section className="workspace">
         <nav className="tabs">
-          {(["chat", "diff", "data"] as const).map((tab) => (
+          {(["chat", "diff", "terminal"] as const).map((tab) => (
             <button key={tab} className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)}>
               {tab}
             </button>
@@ -832,25 +1458,35 @@ function App() {
             <DiffView
               diff={gitDiff}
               hasProject={!!selectedProject}
-              onOpenFile={(path, line) => setActiveFile({ path, line, snippet: "Changed in current diff" })}
+              selectedPath={activeDiffPath}
+              openLabel={`Open with ${selectedIde.label}`}
+              onOpenFile={(path, line) => void openFileInIde(path, line)}
+              onSelectFile={setActiveDiffPath}
             />
           ) : null}
-          {activeTab === "data" ? <DataView telemetry={telemetry} onCopy={copyTelemetry} /> : null}
+          {activeTab === "terminal" ? (
+            <TerminalView
+              projectRoot={cleanPath(activeChat.worktreePath ?? selectedProject?.root_path)}
+              operatingSystem={detectHarnessOs()}
+              output={terminalOutput}
+              input={terminalInput}
+              locked={busy}
+              onInputChange={setTerminalInput}
+              onStart={startTerminal}
+              onSubmit={submitTerminalInput}
+            />
+          ) : null}
         </div>
         <footer className="composer">
           <div className="composerMeta">
-            <label>
-              <GitBranch size={14} />
-              <select value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)} disabled={branchInfo.branches.length === 0}>
-                {!selectedBranch ? <option value="">No branch</option> : null}
-                {selectedBranch ? <option value={selectedBranch}>{selectedBranch}</option> : null}
-                {branchInfo.branches.filter((branch) => branch !== selectedBranch).map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <BranchMenu
+              selectedBranch={selectedBranch}
+              branches={branchInfo.branches}
+              disabled={branchInfo.branches.length === 0}
+              open={composerBranchMenuOpen}
+              onOpenChange={setComposerBranchMenuOpen}
+              onSelect={setSelectedBranch}
+            />
             <label className={activeChat.worktreeEnabled ? "worktreeCheck active" : "worktreeCheck"}>
               <input
                 type="checkbox"
@@ -858,8 +1494,8 @@ function App() {
                 onChange={(event) => toggleWorktree(event.target.checked)}
                 disabled={!selectedProject}
               />
-              <GitFork size={14} />
-              <span>{activeChat.worktreePath ? cleanPath(activeChat.worktreePath) : "Create worktree on send"}</span>
+              <GitFork size={12} />
+              <span>{activeChat.worktreePath ? cleanPath(activeChat.worktreePath).split(/[\\/]/).pop() : "Worktree"}</span>
             </label>
             <div className="menuControl composerMenu">
               <button
@@ -869,8 +1505,8 @@ function App() {
                 aria-haspopup="menu"
                 aria-expanded={permissionMenuOpen}
               >
-                <span>{permissionMode === "default" ? "Default permissions" : "Bypass permissions"}</span>
-                <ChevronDown size={14} />
+                <span>{permissionMode === "default" ? "Default" : "Bypass"}</span>
+                <ChevronDown size={12} />
               </button>
               {permissionMenuOpen ? (
                 <div className="menuPopover permissionMenu" role="menu">
@@ -885,80 +1521,75 @@ function App() {
                 </div>
               ) : null}
             </div>
+            <button className="headerAttachButton" title="Attach files" onClick={() => void attachLocalFiles()} disabled={!selectedProject}>
+              <Paperclip size={13} />
+            </button>
+            <button className="folderButton" onClick={pickProject} title="Open folder">
+              <FolderOpen size={13} />
+              <span>{selectedProject?.name ?? "Open Folder"}</span>
+            </button>
           </div>
-          <textarea
-            value={prompt}
-            placeholder={socketState === "open" ? "Ask Gemma for a local coding task..." : "Connecting to daemon..."}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void sendTask();
-              }
-            }}
-          />
-          <button title="Send task" onClick={sendTask} disabled={busy || socketState !== "open" || prompt.trim().length === 0}>
-            <Play size={18} />
-          </button>
+          {attachedFiles.length > 0 ? (
+            <div className="attachmentStrip">
+              {attachedFiles.map((file) => {
+                const key = file.projectPath ?? file.path;
+                return (
+                  <span className="attachmentChip" key={key} title={file.projectPath ?? file.path}>
+                    <FileText size={12} />
+                    <span>{file.name}</span>
+                    <button type="button" title="Remove attachment" onClick={() => removeAttachedFile(key)}>
+                      <X size={11} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="composerInput">
+            {mentionQuery !== null ? (
+              <div className="mentionPopover">
+                {mentionMatches.length > 0 ? (
+                  mentionMatches.map((file) => (
+                    <button type="button" key={file.path} onClick={() => attachProjectFile(file)}>
+                      <FileText size={14} />
+                      <span>
+                        <strong>{file.name}</strong>
+                        <small>{file.directory || "."}</small>
+                      </span>
+                    </button>
+                  ))
+                ) : projectFilesLoading ? (
+                  <div className="mentionEmpty">Loading files...</div>
+                ) : projectFilesError ? (
+                  <div className="mentionEmpty">{projectFilesError}</div>
+                ) : (
+                  <div className="mentionEmpty">No files found</div>
+                )}
+              </div>
+            ) : null}
+            <textarea
+              value={prompt}
+              placeholder={socketState === "open" ? "Ask Gemma for a coding task…" : "Connecting to daemon…"}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  if (mentionQuery !== null && mentionMatches[0]) {
+                    attachProjectFile(mentionMatches[0]);
+                    return;
+                  }
+                  void sendTask();
+                }
+              }}
+            />
+            <button className="sendButton" title="Send task" onClick={sendTask} disabled={busy || socketState !== "open" || prompt.trim().length === 0}>
+              {prompt.trim().length > 0 ? <ArrowUp size={16} /> : <Send size={15} />}
+            </button>
+          </div>
         </footer>
       </section>
-      <div className="resizeHandle rightHandle" onPointerDown={(event) => startResize("right", event)} />
+      {error ? <div className="toastError">{error}</div> : null}
 
-      <aside className="inspect">
-        <section className="panel">
-          <div className="panelHeader">
-            <h2>Tool Activity</h2>
-            <button className="tinyButton" onClick={() => setActiveTab("data")} title="View collected data">
-              <Database size={14} />
-            </button>
-          </div>
-          <div className="timeline">
-            {agentTimeline.length === 0 ? <div className="emptyState">Agent activity for this chat appears here.</div> : null}
-            {agentTimeline.map((row) => (
-              <div className="toolRow" key={row.id}>
-                {row.status === "ready" ? <CheckCircle2 size={17} /> : <TriangleAlert size={17} />}
-                <div>
-                  <strong>{row.name}</strong>
-                  <span>{row.detail}</span>
-                </div>
-                <small data-status={row.status}>{row.at}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-        <section className="panel">
-          <h2>Selected Context</h2>
-          {activeFile ? (
-            <button className="contextTarget" onClick={() => setActiveTab("diff")}>
-              <strong>{activeFile.path}:{activeFile.line}</strong>
-              <span>{activeFile.snippet}</span>
-            </button>
-          ) : (
-            <div className="emptyState">Select a changed file in Diff to target it for IDE handoff.</div>
-          )}
-        </section>
-        <section className="panel">
-          <h2>Runtime</h2>
-          <dl>
-            <dt>Bridge</dt>
-            <dd>{connection?.status ?? "starting"}</dd>
-            <dt>Project</dt>
-            <dd>{cleanPath(activeChat.worktreePath ?? selectedProject?.root_path) || "none"}</dd>
-            <dt>Branch</dt>
-            <dd>{selectedBranch || "none"}</dd>
-            <dt>IDE</dt>
-            <dd>{ides.find((ide) => ide.id === selectedIdeId)?.label ?? "not detected"}</dd>
-          </dl>
-          {error ? <p className="error">{error}</p> : null}
-        </section>
-      </aside>
-
-      <footer className="statusbar">
-        <span>Daemon: {health?.daemon ?? (socketState === "open" ? "ready" : "starting")}</span>
-        <span>LM Studio: {health?.lm_studio ?? "checking"}</span>
-        <span>Index: {health?.semantic_index ?? "pending"}</span>
-        <span>Permissions: {permissionMode === "default" ? "default" : "bypass"}</span>
-      </footer>
       {showBypassConfirm ? (
         <div className="modalScrim" role="dialog" aria-modal="true" aria-labelledby="bypass-title">
           <section className="confirmDialog">
@@ -998,32 +1629,139 @@ function RailButton({ active, title, onClick, children }: React.PropsWithChildre
   );
 }
 
-function IdeGlyph({ id }: { id: string }) {
-  if (id === "code") {
-    return <span className="vscodeMark">VS</span>;
-  }
-  if (id === "explorer") {
-    return <FolderOpen size={16} />;
-  }
-  return <FileCode2 size={16} />;
-}
-
-function DataView({ telemetry, onCopy }: { telemetry: unknown; onCopy: () => void }) {
+function BranchMenu({
+  selectedBranch,
+  branches,
+  disabled,
+  open,
+  onOpenChange,
+  onSelect,
+}: {
+  selectedBranch: string;
+  branches: string[];
+  disabled: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (branch: string) => void;
+}) {
+  const rows = selectedBranch
+    ? [selectedBranch, ...branches.filter((branch) => branch !== selectedBranch)]
+    : branches;
   return (
-    <div className="dataView">
-      <div className="dataHeader">
-        <div>
-          <h1>Collected Data</h1>
-          <p>Connection health, project state, chat activity, sessions, git context, worktrees, model choice, permissions, and recent errors.</p>
+    <div className="menuControl branchMenuControl">
+      <button
+        type="button"
+        className="branchMenuButton"
+        disabled={disabled}
+        onClick={() => onOpenChange(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <GitBranch size={12} />
+        <span>{selectedBranch || "No branch"}</span>
+        <ChevronDown size={12} />
+      </button>
+      {open ? (
+        <div className="menuPopover branchMenu" role="menu">
+          {rows.length === 0 ? (
+            <button type="button" disabled>
+              No branches
+            </button>
+          ) : null}
+          {rows.map((branch) => (
+            <button
+              key={branch}
+              type="button"
+              role="menuitem"
+              className={branch === selectedBranch ? "active" : ""}
+              onClick={() => {
+                onSelect(branch);
+                onOpenChange(false);
+              }}
+            >
+              <GitBranch size={12} />
+              <span>{branch}</span>
+            </button>
+          ))}
         </div>
-        <button className="secondaryButton compactButton" onClick={onCopy}>
-          <Copy size={15} />
-          <span>Copy JSON</span>
-        </button>
-      </div>
-      <pre>{JSON.stringify(telemetry, null, 2)}</pre>
+      ) : null}
     </div>
   );
+}
+
+function VsCodeLogo() {
+  return (
+    <svg viewBox="0 0 32 32" width="14" height="14" aria-hidden="true">
+      <defs>
+        <linearGradient id="vscG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#3aafff" />
+          <stop offset="100%" stopColor="#0e75ce" />
+        </linearGradient>
+      </defs>
+      <path
+        fill="url(#vscG)"
+        d="M24.4 1.3c.45-.27 1.02-.27 1.47 0l4.62 2.27c.6.3.97.91.97 1.59v21.66c0 .68-.37 1.29-.97 1.59l-4.62 2.27c-.45.27-1.02.27-1.47 0L12.04 21.32 6.65 25.5c-.5.4-1.22.36-1.69-.07L3.1 23.59c-.55-.51-.55-1.39 0-1.91L8.78 16 3.1 10.32c-.55-.52-.55-1.4 0-1.91L4.96 6.57c.47-.43 1.19-.47 1.69-.07l5.39 4.18L24.4 1.3zm-.27 7.78L15.2 16l8.93 6.92V9.08z"
+      />
+    </svg>
+  );
+}
+
+function VisualStudioLogo() {
+  return (
+    <svg viewBox="0 0 32 32" width="14" height="14" aria-hidden="true">
+      <defs>
+        <linearGradient id="vsG" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#b18cf2" />
+          <stop offset="100%" stopColor="#5c2d91" />
+        </linearGradient>
+      </defs>
+      <path
+        fill="url(#vsG)"
+        d="M22.5 2.4 30 6.1c.6.3 1 .9 1 1.6v16.6c0 .7-.4 1.3-1 1.6l-7.5 3.7c-.7.3-1.5.2-2.1-.3L8.6 18.4 4 22.2c-.5.4-1.2.4-1.7 0l-1.1-1c-.4-.3-.4-1 0-1.4L6 16 1.2 12.2c-.4-.4-.4-1 0-1.4l1.1-1c.5-.4 1.2-.4 1.7 0l4.6 3.8L20.4 2.7c.6-.5 1.4-.6 2.1-.3zm0 9-7 4.6 7 4.6V11.4z"
+      />
+    </svg>
+  );
+}
+
+function ExplorerLogo() {
+  return (
+    <svg viewBox="0 0 32 32" width="14" height="14" aria-hidden="true">
+      <path fill="#dba74a" d="M3 9.2c0-1.1.9-2 2-2h6.4c.45 0 .88.18 1.2.5l1.7 1.7c.32.32.75.5 1.2.5H27c1.1 0 2 .9 2 2v9.9c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V9.2z" />
+      <path fill="#f3c869" d="M5 12.5h22V22c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V12.5z" />
+    </svg>
+  );
+}
+
+function ClionLogo() {
+  return (
+    <svg viewBox="0 0 32 32" width="14" height="14" aria-hidden="true">
+      <defs>
+        <linearGradient id="clionG" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#22d4f4" />
+          <stop offset="50%" stopColor="#2090f4" />
+          <stop offset="100%" stopColor="#ed358c" />
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="28" height="28" rx="6" fill="url(#clionG)" />
+      <text x="16" y="21" textAnchor="middle" fontFamily="-apple-system, Segoe UI, sans-serif" fontSize="11" fontWeight="800" fill="#fff">CL</text>
+    </svg>
+  );
+}
+
+function IdeGlyph({ id }: { id: string }) {
+  if (id === "code") {
+    return <VsCodeLogo />;
+  }
+  if (id === "devenv") {
+    return <VisualStudioLogo />;
+  }
+  if (id === "explorer") {
+    return <ExplorerLogo />;
+  }
+  if (id === "clion") {
+    return <ClionLogo />;
+  }
+  return <ExplorerLogo />;
 }
 
 function SidebarChats({
@@ -1049,7 +1787,7 @@ function SidebarChats({
             <span>{chat.branch || "no branch"} · {chat.messages.length} messages</span>
           </button>
           <button type="button" className="chatDeleteButton" title="Delete chat" onClick={() => onDelete(chat.id)}>
-            <Trash2 size={14} />
+            <Trash2 size={13} />
           </button>
         </div>
       ))}
@@ -1065,6 +1803,7 @@ function SidebarGit({
   selectedBranch,
   setSelectedBranch,
   onRefresh,
+  onOpenChangedFile,
   hasProject,
 }: {
   status: GitResult | null;
@@ -1074,35 +1813,211 @@ function SidebarGit({
   selectedBranch: string;
   setSelectedBranch: (branch: string) => void;
   onRefresh: () => void;
+  onOpenChangedFile: (path: string) => void;
   hasProject: boolean;
 }) {
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const files = parseGitStatusFiles(status);
+  const diffFiles = diff?.stdout.trim() ? parseDiff(diff.stdout) : [];
+  const statsByPath = diffStatsByPath(diffFiles);
+  const totalStats = totalDiffLineStats(diffFiles);
   return (
-    <div className="sidebarStack">
-      <button className="secondaryButton" onClick={onRefresh} disabled={!hasProject}>
-        Refresh Git
-      </button>
-      <select className="branchSelect" value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)} disabled={!hasProject}>
-        {!selectedBranch ? <option value="">No branch</option> : null}
-        {selectedBranch ? <option value={selectedBranch}>{selectedBranch}</option> : null}
-        {branchInfo.branches.filter((branch) => branch !== selectedBranch).map((branch) => (
-          <option key={branch} value={branch}>
-            {branch}
-          </option>
-        ))}
-      </select>
-      {!hasProject ? <div className="emptyState">Open a project to inspect git status.</div> : null}
-      {status ? <pre className="miniPre">{status.stdout || status.stderr || "Working tree clean."}</pre> : null}
-      {diff ? <div className="statLine">{diff.stdout ? `${diff.stdout.split("\n").length} diff lines` : "No unstaged diff"}</div> : null}
-      {worktrees.length > 0 ? (
-        <div className="worktreeList">
-          {worktrees.map((row) => (
-            <div key={row.path}>
-              <strong>{row.branch || "detached"}</strong>
-              <span>{cleanPath(row.path)}</span>
-            </div>
-          ))}
+    <div className="sidebarStack sourceControlStack">
+      <div className="sourceControlTop">
+        <button className="secondaryButton" onClick={onRefresh} disabled={!hasProject}>
+          Refresh
+        </button>
+        <BranchMenu
+          selectedBranch={selectedBranch}
+          branches={branchInfo.branches}
+          disabled={!hasProject}
+          open={branchMenuOpen}
+          onOpenChange={setBranchMenuOpen}
+          onSelect={setSelectedBranch}
+        />
+      </div>
+      {hasProject ? (
+        <div className="sourceBranchLabel">
+          <GitBranch size={12} />
+          <span>{selectedBranch || branchInfo.current || "No branch"}</span>
         </div>
       ) : null}
+      {diffFiles.length > 0 ? (
+        <div className="sourceSummaryLine">
+          <span>{diffFiles.length} file{diffFiles.length === 1 ? "" : "s"} changed</span>
+          <DiffStatsBadge stats={totalStats} />
+        </div>
+      ) : null}
+      {!hasProject ? <div className="emptyState">Open a project to inspect git status.</div> : null}
+      {files.length > 0 ? (
+        <div className="diffFileList gitFileList">
+          {files.map((file) => {
+            const dir = fileDirectory(file.path);
+            const stats = statsByPath.get(normalizeDiffPath(file.path));
+            return (
+              <button type="button" key={`${file.status}-${file.path}`} onClick={() => onOpenChangedFile(file.path)}>
+                <FileText size={14} />
+                <span>
+                  <strong>{fileName(file.path)}</strong>
+                  <small>{dir || "."}</small>
+                </span>
+                <DiffStatsBadge stats={stats} />
+                <em data-status={file.status}>{file.status}</em>
+              </button>
+            );
+          })}
+        </div>
+      ) : status ? (
+        <div className="emptyState">{status.stderr || "Working tree clean."}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SidebarData({
+  telemetry,
+  health,
+  socketState,
+  storeOverview,
+}: {
+  telemetry: unknown;
+  health: DaemonHealth | null;
+  socketState: SocketState;
+  storeOverview: StoreOverview | null;
+}) {
+  return (
+    <div className="sidebarStack dataStack">
+      <div className="kvCard">
+        <div className="kvRow"><span>Socket</span><strong>{socketState}</strong></div>
+        <div className="kvRow"><span>Daemon</span><strong>{health?.daemon ?? "—"}</strong></div>
+        <div className="kvRow"><span>LM Studio</span><strong>{health?.lm_studio ?? "—"}</strong></div>
+        <div className="kvRow"><span>Index</span><strong>{health?.semantic_index ?? "—"}</strong></div>
+      </div>
+      {storeOverview ? (
+        <div className="kvCard">
+          <div className="kvRow"><span>Projects</span><strong>{storeOverview.projects}</strong></div>
+          <div className="kvRow"><span>Sessions</span><strong>{storeOverview.sessions}</strong></div>
+          <div className="kvRow"><span>Turns</span><strong>{storeOverview.turns}</strong></div>
+          <div className="kvRow"><span>Tool calls</span><strong>{storeOverview.tool_calls}</strong></div>
+          <div className="kvRow"><span>Index chunks</span><strong>{storeOverview.index_chunks}</strong></div>
+        </div>
+      ) : null}
+      <details className="rawTelemetry">
+        <summary>Raw JSON</summary>
+        <pre>{JSON.stringify(telemetry, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function SidebarTools({
+  tools,
+  operatingSystem,
+  onToggle,
+  onUpdate,
+  onReset,
+}: {
+  tools: AgentTool[];
+  operatingSystem: string;
+  onToggle: (id: string, enabled: boolean) => void;
+  onUpdate: (id: string, patch: Partial<Pick<AgentTool, "label" | "summary" | "command">>) => void;
+  onReset: () => void;
+}) {
+  const enabledCount = tools.filter((tool) => tool.enabled).length;
+  return (
+    <div className="sidebarStack toolsStack">
+      <div className="toolSummary">
+        <div>
+          <strong>{enabledCount}/{tools.length}</strong>
+        </div>
+        <div>
+          <strong>{operatingSystem}</strong>
+        </div>
+      </div>
+      <button className="secondaryButton" onClick={onReset}>
+        Enable default tools
+      </button>
+      <div className="toolToggleList">
+        {tools.map((tool) => (
+          <div className={`toolToggle ${tool.enabled ? "enabled" : ""}`} key={tool.id}>
+            <input
+              aria-label={`${tool.id} enabled`}
+              type="checkbox"
+              checked={tool.enabled}
+              onChange={(event) => onToggle(tool.id, event.target.checked)}
+            />
+            <span className={`toolKind ${tool.kind}`}>{tool.kind}</span>
+            <span className="toolEditor">
+              <input
+                aria-label={`${tool.id} label`}
+                value={tool.label}
+                onChange={(event) => onUpdate(tool.id, { label: event.target.value })}
+              />
+              <textarea
+                aria-label={`${tool.id} summary`}
+                value={tool.summary}
+                onChange={(event) => onUpdate(tool.id, { summary: event.target.value })}
+                rows={2}
+              />
+              <input
+                aria-label={`${tool.id} command`}
+                className="toolCommandInput"
+                value={tool.command}
+                onChange={(event) => onUpdate(tool.id, { command: event.target.value })}
+              />
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TerminalView({
+  projectRoot,
+  operatingSystem,
+  output,
+  input,
+  locked,
+  onInputChange,
+  onStart,
+  onSubmit,
+}: {
+  projectRoot: string;
+  operatingSystem: string;
+  output: string;
+  input: string;
+  locked: boolean;
+  onInputChange: (value: string) => void;
+  onStart: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="terminalView">
+      <div className="terminalHeader">
+        <Terminal size={14} />
+        <span>{projectRoot || "No project opened"}</span>
+        <button type="button" onClick={onStart}>Start</button>
+      </div>
+      <pre className="terminalPre">
+        {`os=${operatingSystem}\ncwd=${projectRoot || "(none)"}\n`}
+        {output || "\n# Start a terminal to run commands here."}
+      </pre>
+      <div className="terminalInputRow">
+        <span>$</span>
+        <input
+          value={input}
+          disabled={locked}
+          onChange={(event) => onInputChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void onSubmit();
+            }
+          }}
+          placeholder={locked ? "Agent is using the terminal" : "Run a command"}
+        />
+      </div>
     </div>
   );
 }
@@ -1122,21 +2037,29 @@ function ChatView({ chat, busy, onShowDiff }: { chat: LocalChat; busy: boolean; 
     <div className="chatStream">
       {chat.messages.map((line, index) => (
         <article className={`message ${line.role}`} key={`${line.role}-${index}`}>
-          <span>{line.role}</span>
-          <p>{line.content}</p>
+          {line.role === "tool" ? (
+            <div className="toolBubble">
+              {line.status === "ready" ? <CheckCircle2 size={14} /> : line.status === "unavailable" ? <TriangleAlert size={14} /> : <Wrench size={14} />}
+              <div>
+                <strong>{line.toolName ?? "tool"}</strong>
+                <span>{line.detail || line.content}</span>
+              </div>
+            </div>
+          ) : (
+            <p>{line.content}</p>
+          )}
         </article>
       ))}
       {chat.diffAvailable ? (
         <div className="chatDiffNotice">
-          <GitBranch size={15} />
+          <GitBranch size={14} />
           <span>{chat.changedFileCount ?? 0} changed file{chat.changedFileCount === 1 ? "" : "s"} detected</span>
           <button type="button" onClick={onShowDiff}>View diff</button>
         </div>
       ) : null}
       {busy && !hasStreamingAssistant ? (
         <article className="message assistant pending">
-          <span>assistant</span>
-          <p>Generating response...</p>
+          <p>Generating response…</p>
         </article>
       ) : null}
     </div>
@@ -1156,6 +2079,21 @@ type ParsedDiffFile = {
   lines: ParsedDiffLine[];
 };
 
+type SideBySideRow = {
+  kind: "context" | "add" | "remove" | "change" | "meta" | "hunk";
+  oldLine?: number;
+  newLine?: number;
+  oldContent: string;
+  newContent: string;
+};
+
+type DiffLineStats = {
+  added: number;
+  removed: number;
+};
+
+const DIFF_ROW_LIMIT = 450;
+
 function parseDiff(text: string): ParsedDiffFile[] {
   const files: ParsedDiffFile[] = [];
   let current: ParsedDiffFile | null = null;
@@ -1164,7 +2102,7 @@ function parseDiff(text: string): ParsedDiffFile[] {
 
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      current = { oldPath: "", newPath: "", lines: [{ kind: "meta", content: line }] };
+      current = { oldPath: "", newPath: "", lines: [] };
       files.push(current);
       continue;
     }
@@ -1173,12 +2111,21 @@ function parseDiff(text: string): ParsedDiffFile[] {
     }
     if (line.startsWith("--- ")) {
       current.oldPath = line.replace(/^---\s+a\//, "").trim();
-      current.lines.push({ kind: "meta", content: line });
       continue;
     }
     if (line.startsWith("+++ ")) {
       current.newPath = line.replace(/^\+\+\+\s+b\//, "").trim();
-      current.lines.push({ kind: "meta", content: line });
+      continue;
+    }
+    if (
+      line.startsWith("index ") ||
+      line.startsWith("new file mode ") ||
+      line.startsWith("deleted file mode ") ||
+      line.startsWith("similarity index ") ||
+      line.startsWith("rename from ") ||
+      line.startsWith("rename to ") ||
+      line.startsWith("\\ No newline")
+    ) {
       continue;
     }
     if (line.startsWith("@@")) {
@@ -1210,50 +2157,324 @@ function firstChangedLine(file: ParsedDiffFile): number {
   return file.lines.find((line) => line.kind === "add" && line.newLine)?.newLine ?? 1;
 }
 
+function changedLineCount(file: ParsedDiffFile): number {
+  return file.lines.filter((line) => line.kind === "add" || line.kind === "remove").length;
+}
+
+function diffLineStats(file: ParsedDiffFile): DiffLineStats {
+  return {
+    added: file.lines.filter((line) => line.kind === "add").length,
+    removed: file.lines.filter((line) => line.kind === "remove").length,
+  };
+}
+
+function totalDiffLineStats(files: ParsedDiffFile[]): DiffLineStats {
+  return files.reduce(
+    (total, file) => {
+      const stats = diffLineStats(file);
+      return {
+        added: total.added + stats.added,
+        removed: total.removed + stats.removed,
+      };
+    },
+    { added: 0, removed: 0 },
+  );
+}
+
+function normalizeDiffPath(path: string): string {
+  return path.replace(/^"|"$/g, "").replace(/\\/g, "/");
+}
+
+function diffPathKeys(file: ParsedDiffFile): string[] {
+  return [file.newPath, file.oldPath, visibleFilePath(file), openableDiffPath(file)]
+    .filter((path): path is string => !!path && path !== "/dev/null")
+    .map(normalizeDiffPath);
+}
+
+function diffStatsByPath(files: ParsedDiffFile[]): Map<string, DiffLineStats> {
+  const stats = new Map<string, DiffLineStats>();
+  for (const file of files) {
+    const fileStats = diffLineStats(file);
+    for (const path of diffPathKeys(file)) {
+      stats.set(path, fileStats);
+    }
+  }
+  return stats;
+}
+
+function DiffStatsBadge({ stats }: { stats?: DiffLineStats }) {
+  if (!stats || (stats.added === 0 && stats.removed === 0)) {
+    return null;
+  }
+  return (
+    <span className="diffStatsBadge">
+      {stats.added > 0 ? <strong className="added">+{stats.added}</strong> : null}
+      {stats.removed > 0 ? <strong className="removed">-{stats.removed}</strong> : null}
+    </span>
+  );
+}
+
+function visibleFilePath(file: ParsedDiffFile): string {
+  return normalizeDiffPath(file.newPath || file.oldPath).replace(/^\/dev\/null$/, "New file");
+}
+
+function openableDiffPath(file: ParsedDiffFile): string {
+  if (file.newPath && file.newPath !== "/dev/null") {
+    return file.newPath;
+  }
+  return file.oldPath;
+}
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function fileDirectory(path: string): string {
+  const parts = path.split(/[\\/]/);
+  parts.pop();
+  return parts.join("/");
+}
+
+function fileChangeStatus(file: ParsedDiffFile): string {
+  if (file.oldPath === "/dev/null") {
+    return "A";
+  }
+  if (file.newPath === "/dev/null") {
+    return "D";
+  }
+  return "M";
+}
+
+function statusLabel(status: string): string {
+  const trimmed = status.trim();
+  if (trimmed.includes("A") || trimmed.includes("?")) {
+    return "A";
+  }
+  if (trimmed.includes("D")) {
+    return "D";
+  }
+  return "M";
+}
+
+function parseGitStatusFiles(status?: GitResult | null): Array<{ path: string; status: string }> {
+  if (!status?.stdout.trim()) {
+    return [];
+  }
+  return status.stdout
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const statusPart = line.slice(0, 2);
+      const pathPart = line.slice(3).trim();
+      const renamed = pathPart.includes(" -> ") ? pathPart.split(" -> ").pop() ?? pathPart : pathPart;
+      return {
+        path: normalizeDiffPath(renamed),
+        status: statusLabel(statusPart),
+      };
+    });
+}
+
+function hunkLabel(content: string): string {
+  const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@\s*(.*)/.exec(content);
+  if (!match) {
+    return "Changed section";
+  }
+  const title = match[3]?.trim();
+  return title ? `Changed around line ${match[2]} · ${title}` : `Changed around line ${match[2]}`;
+}
+
+function toSideBySideRows(file: ParsedDiffFile): SideBySideRow[] {
+  const rows: SideBySideRow[] = [];
+  for (let index = 0; index < file.lines.length; index += 1) {
+    const line = file.lines[index];
+    if (line.kind === "remove") {
+      rows.push({
+        kind: "remove",
+        oldLine: line.oldLine,
+        oldContent: line.content.slice(1),
+        newContent: "",
+      });
+      continue;
+    }
+    if (line.kind === "add") {
+      rows.push({
+        kind: "add",
+        newLine: line.newLine,
+        oldContent: "",
+        newContent: line.content.slice(1),
+      });
+      continue;
+    }
+    if (line.kind === "context") {
+      const content = line.content.startsWith(" ") ? line.content.slice(1) : line.content;
+      rows.push({
+        kind: "context",
+        oldLine: line.oldLine,
+        newLine: line.newLine,
+        oldContent: content,
+        newContent: content,
+      });
+      continue;
+    }
+    if (line.kind === "hunk") {
+      continue;
+    }
+    rows.push({
+      kind: line.kind,
+      oldContent: line.content,
+      newContent: line.content,
+    });
+  }
+  return rows;
+}
+
+function oldDiffCellKind(row: SideBySideRow): string {
+  if (row.kind === "add") {
+    return "blank";
+  }
+  if (row.kind === "change") {
+    return "remove";
+  }
+  return row.kind;
+}
+
+function newDiffCellKind(row: SideBySideRow): string {
+  if (row.kind === "remove") {
+    return "blank";
+  }
+  if (row.kind === "change") {
+    return "add";
+  }
+  return row.kind;
+}
+
+function diffCellContent(row: SideBySideRow, side: "old" | "new"): string {
+  if (side === "old") {
+    if (row.kind === "remove" || row.kind === "change") {
+      return row.oldContent;
+    }
+    if (row.kind === "add") {
+      return "";
+    }
+    return row.oldContent;
+  }
+  if (row.kind === "add" || row.kind === "change") {
+    return row.newContent;
+  }
+  if (row.kind === "remove") {
+    return "";
+  }
+  return row.newContent;
+}
+
 function DiffView({
   diff,
   hasProject,
+  selectedPath,
+  openLabel,
   onOpenFile,
+  onSelectFile,
 }: {
   diff: GitResult | null;
   hasProject: boolean;
+  selectedPath: string;
+  openLabel: string;
   onOpenFile: (path: string, line: number) => void;
+  onSelectFile: (path: string) => void;
 }) {
+  const diffText = diff?.stdout ?? "";
+  const files = diffText.trim() ? parseDiff(diffText) : [];
+  const selectedKey = normalizeDiffPath(selectedPath);
+  const selectedFile = files.find((file) => diffPathKeys(file).includes(selectedKey)) ?? files[0];
+  const selectedRows = selectedFile ? toSideBySideRows(selectedFile) : [];
+  const tooLarge = selectedRows.length > DIFF_ROW_LIMIT;
+  const visibleRows = tooLarge ? selectedRows.slice(0, DIFF_ROW_LIMIT) : selectedRows;
+
   if (!hasProject) {
     return <div className="blankSlate"><h1>Diff</h1><p>Open a project to inspect the current git diff.</p></div>;
   }
-  const diffText = diff?.stdout ?? "";
   if (!diffText.trim()) {
     return <div className="blankSlate"><h1>Diff</h1><p>{diff?.stderr || "No unstaged diff in the selected project."}</p></div>;
   }
-  const files = parseDiff(diffText);
   return (
-    <div className="diffView">
-      {files.map((file) => (
-        <details className="diffFile" key={`${file.oldPath}-${file.newPath}`} open>
-          <summary className="diffFileHeader">
-            <ChevronDown size={15} />
-            <button type="button" onClick={(event) => {
-              event.preventDefault();
-              onOpenFile(file.newPath || file.oldPath, firstChangedLine(file));
-            }}>
-              <Eye size={15} />
-              <span>{file.newPath || file.oldPath}</span>
-            </button>
-          </summary>
-          <div className="diffCode">
-            {file.lines.map((line, index) => (
-              <div className={`diffLine ${line.kind}`} key={`${line.kind}-${index}`}>
-                <span className="lineNo">{line.oldLine ?? ""}</span>
-                <span className="lineNo">{line.newLine ?? ""}</span>
-                <code>{line.content}</code>
+    <div className="diffReview">
+      <aside className="diffExplorer">
+        <div className="diffExplorerHeader">
+          <strong>Changed Files</strong>
+          <span>{files.length}</span>
+        </div>
+        <div className="diffFileList">
+          {files.map((file) => {
+            const path = visibleFilePath(file);
+            const dir = fileDirectory(path);
+            const stats = diffLineStats(file);
+            return (
+              <button
+                key={`${file.oldPath}-${file.newPath}`}
+                type="button"
+                className={selectedFile && diffPathKeys(selectedFile).includes(path) ? "active" : ""}
+                onClick={() => onSelectFile(path)}
+              >
+                <FileText size={14} />
+                <span>
+                  <strong>{fileName(path)}</strong>
+                  <small>{dir || "."}</small>
+                </span>
+                <DiffStatsBadge stats={stats} />
+                <em data-status={fileChangeStatus(file)}>{fileChangeStatus(file)}</em>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+      <section className="diffWorkbench">
+        {selectedFile ? (
+          <>
+            <header className="diffWorkbenchHeader">
+              <div>
+                <strong>{fileName(visibleFilePath(selectedFile))}</strong>
+                <span>{visibleFilePath(selectedFile)} · {changedLineCount(selectedFile)} changed line{changedLineCount(selectedFile) === 1 ? "" : "s"}</span>
               </div>
-            ))}
-          </div>
-        </details>
-      ))}
+              <button type="button" onClick={() => onOpenFile(openableDiffPath(selectedFile), firstChangedLine(selectedFile))}>
+                <FileText size={14} />
+                {openLabel}
+              </button>
+            </header>
+            {tooLarge ? (
+              <div className="diffLimitNotice">
+                This file has {selectedRows.length} diff rows. Showing the first {DIFF_ROW_LIMIT}; choose files one-by-one from the explorer to review changes step by step.
+              </div>
+            ) : null}
+            <div className="sideBySideDiff">
+              <div className="sideHeader">Previous</div>
+              <div className="sideHeader">Current</div>
+              {visibleRows.map((row, index) => (
+                <React.Fragment key={`${row.kind}-${index}`}>
+                  <div className={`sideCell old ${oldDiffCellKind(row)}`}>
+                    <span className="lineNo">{row.oldLine ?? ""}</span>
+                    <code>{diffCellContent(row, "old")}</code>
+                  </div>
+                  <div className={`sideCell new ${newDiffCellKind(row)}`}>
+                    <span className="lineNo">{row.newLine ?? ""}</span>
+                    <code>{diffCellContent(row, "new")}</code>
+                  </div>
+                </React.Fragment>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="blankSlate"><h1>Diff</h1><p>No changed files to review.</p></div>
+        )}
+      </section>
     </div>
   );
+}
+
+{
+  const ua = navigator.userAgent;
+  const platform = /Mac|iPhone|iPad/i.test(ua) ? "mac" : /Windows/i.test(ua) ? "win" : "linux";
+  document.documentElement.dataset.platform = platform;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
