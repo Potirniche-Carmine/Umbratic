@@ -1,0 +1,7 @@
+node_modules/
+desktop/dist/
+desktop/dist-electron/
+aegis-daemon/target/
+*.log
+.env
+

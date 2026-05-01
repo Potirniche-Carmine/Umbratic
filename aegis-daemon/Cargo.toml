@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/aegis-protocol",
+  "crates/aegis-model",
+  "crates/aegis-store",
+  "crates/aegis-tools",
+  "crates/aegis-core",
+  "crates/aegis-app",
+]
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "5"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["chrono", "runtime-tokio-rustls", "sqlite", "uuid"] }
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "signal", "time"] }
+tokio-stream = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+
