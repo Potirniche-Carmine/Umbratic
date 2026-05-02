@@ -35,6 +35,8 @@ type SocketState = "idle" | "connecting" | "open" | "closed";
 type RailView = "chats" | "data";
 type MainTab = "chat" | "diff" | "terminal";
 type PermissionMode = "default" | "bypass";
+type OpenCodeRuntime = "docker-sandbox" | "host";
+type StreamPartKind = "answer" | "reasoning" | "pending";
 
 type OpenCodeHealth = {
   opencode: ServiceStatus;
@@ -207,6 +209,12 @@ type DesktopConnection =
   | {
       status: "ready";
       url: string;
+      runtime: OpenCodeRuntime;
+      sandbox?: {
+        driver: "sbx" | "docker-sandbox";
+        name: string;
+        workspace: string;
+      };
       username: string;
       password: string;
       authHeader: string;
@@ -752,6 +760,22 @@ const COT_PREFIXES = [
   "Given the",
   "Okay, the user",
 ];
+
+function looksLikePotentialReasoningPrefix(content: string): boolean {
+  const trimmed = content.trimStart().replace(/^[:\s*-]+/, "").toLowerCase();
+  if (!trimmed) {
+    return false;
+  }
+  return COT_PREFIXES.some((prefix) => {
+    const normalizedPrefix = prefix.toLowerCase();
+    return normalizedPrefix.startsWith(trimmed) && trimmed.length < normalizedPrefix.length;
+  });
+}
+
+function shouldHoldOpeningStreamFragment(content: string): boolean {
+  const trimmed = content.trim();
+  return looksLikePotentialReasoningPrefix(trimmed) || /^[A-Za-z]{1,12}$/.test(trimmed);
+}
 
 function stripChainOfThought(content: string): string {
   const trimmed = content.trimStart().replace(/^[:\s*-]+(?=(?:\d+\.|thinking|thought|reasoning|analysis|the user|i need|i will))/i, "");
@@ -1370,7 +1394,7 @@ function renderMessageContent(content: string, role: ChatLine["role"]) {
   if (role !== "user") {
     return content;
   }
-  const parts = content.split(/(@[A-Za-z0-9_.\-\\/]+)/g);
+  const parts = content.split(/(@"[^"]+"|@`[^`]+`|@[A-Za-z0-9_.\-\\/]+)/g);
   return parts.map((part, index) =>
     part.startsWith("@") ? (
       <span className="inlineMention" key={`${part}-${index}`}>
@@ -1658,7 +1682,29 @@ function projectEntriesFromSearch(matches: SearchMatch[]): ProjectFileEntry[] {
 }
 
 function normalizeMentionPath(path: string): string {
-  return path.trim().replace(/^@/, "").replace(/\\/g, "/");
+  return path.trim().replace(/^@/, "").replace(/^["`]|["`]$/g, "").replace(/\\/g, "/");
+}
+
+function mentionTokenForPath(path: string): string {
+  const normalized = normalizeMentionPath(path);
+  return /\s/.test(normalized) ? `@"${normalized.replace(/"/g, "\\\"")}"` : `@${normalized}`;
+}
+
+function promptWithAttachmentContext(message: string, attachments: AttachedFile[]): string {
+  if (attachments.length === 0) {
+    return message;
+  }
+  const lines = attachments.map((file) => {
+    const projectPath = file.projectPath ?? file.path;
+    const label = file.name || fileName(projectPath);
+    return `- ${label}: ${projectPath}`;
+  });
+  return [
+    message,
+    "",
+    "Attached project files. When the user refers to an @ file, use these exact project-relative paths:",
+    ...lines,
+  ].join("\n");
 }
 
 function resolveProjectFileReference(reference: string, files: ProjectFileEntry[], attached: AttachedFile[]): string {
@@ -1738,7 +1784,7 @@ function App() {
   const sessionChatRef = useRef<Map<string, string>>(new Map());
   const sessionMonitorRef = useRef<Map<string, AbortController>>(new Map());
   const streamPartTextRef = useRef<Map<string, string>>(new Map());
-  const streamPartKindRef = useRef<Map<string, "answer" | "reasoning">>(new Map());
+  const streamPartKindRef = useRef<Map<string, StreamPartKind>>(new Map());
   const streamBufferRef = useRef<Map<string, string>>(new Map());
   const thinkingBufferRef = useRef<Map<string, string>>(new Map());
   const streamFrameRef = useRef<number | null>(null);
@@ -1761,6 +1807,8 @@ function App() {
   const telemetry = useMemo(
     () => ({
       connection,
+      runtime: connection?.status === "ready" ? connection.runtime : "unavailable",
+      sandbox: connection?.status === "ready" ? connection.sandbox ?? null : null,
       health,
       selectedProject: visibleProject,
       activeFile,
@@ -2576,15 +2624,29 @@ function App() {
                   setAssistantSnapshot(chatId, split.answer);
                 } else if (explicitReasoningPart || priorKind === "reasoning") {
                   streamPartKindRef.current.set(key, "reasoning");
-                  enqueueThinkingDelta(chatId, delta);
+                  if (priorKind === "pending") {
+                    setThinkingSnapshot(chatId, wholeText);
+                  } else {
+                    enqueueThinkingDelta(chatId, delta);
+                  }
                   addTimeline("reasoning", "degraded", "thinking", chatId);
                 } else if (split.reasoning) {
                   streamPartKindRef.current.set(key, "reasoning");
-                  enqueueThinkingDelta(chatId, delta);
+                  if (priorKind === "pending") {
+                    setThinkingSnapshot(chatId, split.reasoning);
+                  } else {
+                    enqueueThinkingDelta(chatId, delta);
+                  }
                   addTimeline("reasoning", "degraded", "thinking", chatId);
+                } else if (shouldHoldOpeningStreamFragment(wholeText)) {
+                  streamPartKindRef.current.set(key, "pending");
                 } else {
                   streamPartKindRef.current.set(key, "answer");
-                  enqueueStreamDelta(chatId, delta);
+                  if (priorKind === "pending") {
+                    setAssistantSnapshot(chatId, wholeText);
+                  } else {
+                    enqueueStreamDelta(chatId, delta);
+                  }
                 }
               }
               if (part && eventText(part.type).includes("tool")) {
@@ -2912,6 +2974,7 @@ function App() {
       const lazyWorktree = await ensureWorktree(chatId, trimmed);
       const workingRoot = lazyWorktree?.path ?? chat?.worktreePath ?? selectedProject?.root_path;
       const conversationHistory = chatHistoryForOpenCode(chat?.messages ?? []);
+      const deliveryMessage = promptWithAttachmentContext(trimmed, promptAttachments);
       const approvedToolActions = Array.from(
         new Set([...(chat?.approvedToolActions ?? []), ...(options.extraApprovedActions ?? [])]),
       );
@@ -2919,7 +2982,7 @@ function App() {
         chat_id: chatId,
         project_id: selectedProject?.id,
         project_root: workingRoot,
-        message: trimmed,
+        message: deliveryMessage,
         conversation_history: conversationHistory,
         model: selectedModel,
         git_branch: lazyWorktree?.branch ?? (selectedBranch || undefined),
@@ -3021,6 +3084,7 @@ function App() {
   };
 
   const attachProjectFile = (file: ProjectFileEntry) => {
+    const token = mentionTokenForPath(file.path);
     setAttachedFiles((files) => {
       if (files.some((row) => row.projectPath === file.path)) {
         return files;
@@ -3030,9 +3094,9 @@ function App() {
     setPrompt((current) => {
       const start = activeMentionStart(current);
       if (start === null) {
-        return `${current.trimEnd()} @${file.name} `;
+        return `${current.trimEnd()} ${token} `;
       }
-      return `${current.slice(0, start)}@${file.name} `;
+      return `${current.slice(0, start)}${token} `;
     });
   };
 
@@ -3412,7 +3476,9 @@ function App() {
       {bypassConfirmOpen ? (
         <ConfirmDialog
           title="Enable Bypass?"
-          body="Bypass permissions lets the agent run commands and access external directories without asking first. Use it only for a workspace you trust."
+          body={connection?.status === "ready" && connection.runtime === "docker-sandbox"
+            ? "Bypass permissions removes prompts and lets the agent run commands and change mounted workspace files without asking first. The Docker Sandbox limits host exposure, but workspace changes still happen on your machine."
+            : "Bypass permissions removes prompts and lets the agent run commands and access files without asking first. In host mode this can give the AI agent full access to your computer, so there is real risk involved."}
           confirmLabel="Enable Bypass"
           onCancel={() => setBypassConfirmOpen(false)}
           onConfirm={() => {
@@ -3564,7 +3630,7 @@ function PermissionModeControl({
         type="button"
         className={mode === "default" ? "active" : ""}
         disabled={busy}
-        title="Default: ask before a command runs for the first time in this chat"
+        title="Default permissions: running in a sandbox when available. Only sensitive information gathering and destructive or write actions ask for approval."
         onClick={() => onChange("default")}
       >
         <ShieldQuestion size={12} />
@@ -3574,7 +3640,7 @@ function PermissionModeControl({
         type="button"
         className={mode === "bypass" ? "active danger" : ""}
         disabled={busy}
-        title="Bypass permissions: allow commands and file access without approval"
+        title="Bypass permissions: full access without approval prompts. In host mode the agent can access your computer, so there is real risk involved."
         onClick={() => onChange("bypass")}
       >
         <ShieldCheck size={12} />
@@ -3952,6 +4018,7 @@ function SidebarData({
     <div className="sidebarStack dataStack">
       <div className="kvCard">
         <div className="kvRow"><span>Connection</span><strong>{socketState}</strong></div>
+        <div className="kvRow"><span>Runtime</span><strong>{typeof telemetry === "object" && telemetry && "runtime" in telemetry ? String((telemetry as { runtime?: unknown }).runtime) : "—"}</strong></div>
         <div className="kvRow"><span>OpenCode</span><strong>{health?.opencode ?? "—"}</strong></div>
         <div className="kvRow"><span>LM Studio</span><strong>{health?.lm_studio ?? "—"}</strong></div>
         <div className="kvRow"><span>Index</span><strong>{health?.semantic_index ?? "—"}</strong></div>

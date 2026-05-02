@@ -4,6 +4,12 @@ export type OpenCodeConnection =
   | {
       status: "ready";
       url: string;
+      runtime: "docker-sandbox" | "host";
+      sandbox?: {
+        driver: "sbx" | "docker-sandbox";
+        name: string;
+        workspace: string;
+      };
       username: string;
       password: string;
       authHeader: string;
@@ -30,6 +36,7 @@ declare global {
       getOpenCodeConnection(): Promise<OpenCodeConnection>;
       restartOpenCode(): Promise<OpenCodeConnection>;
       nativeRequest<T = unknown>(payload: unknown): Promise<T>;
+      setPermissionMode(mode: "default" | "bypass"): Promise<OpenCodeConnection>;
       pickProjectFolder(): Promise<
         | { canceled: true }
         | { canceled: false; rootPath: string; name: string }

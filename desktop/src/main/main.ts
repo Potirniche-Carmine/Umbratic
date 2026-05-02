@@ -8,11 +8,19 @@ import path = require("node:path");
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "default" | "bypass";
+type OpenCodeRuntime = "docker-sandbox" | "host";
+type SandboxDriver = "sbx" | "docker-sandbox";
 
 type OpenCodeConnection =
   | {
       status: "ready";
       url: string;
+      runtime: OpenCodeRuntime;
+      sandbox?: {
+        driver: SandboxDriver;
+        name: string;
+        workspace: string;
+      };
       username: string;
       password: string;
       authHeader: string;
@@ -105,6 +113,18 @@ let opencodeConnection: Promise<OpenCodeConnection> | null = null;
 let terminalProcess: ChildProcess | null = null;
 let lastGeneratedConfig: Record<string, unknown> | null = null;
 let permissionMode: PermissionMode = "default";
+
+type CommandOutput = {
+  stdout: string;
+  stderr: string;
+};
+
+type SandboxLaunch = {
+  driver: SandboxDriver;
+  name: string;
+  workspace: string;
+  process: ChildProcess;
+};
 
 function dataFile(name: string): string {
   return path.join(app.getPath("userData"), name);
@@ -205,7 +225,9 @@ async function resolveLmStudioModel(): Promise<{ status: ServiceStatus; modelId:
   }
 }
 
-function generatedOpenCodeConfig(modelId: string): Record<string, unknown> {
+function generatedOpenCodeConfig(modelId: string, runtime: OpenCodeRuntime): Record<string, unknown> {
+  const sandboxed = runtime === "docker-sandbox";
+  const modelBaseUrl = sandboxed ? "http://host.docker.internal:1234/v1" : lmStudioBaseUrl;
   const permission =
     permissionMode === "bypass"
       ? {
@@ -229,9 +251,12 @@ function generatedOpenCodeConfig(modelId: string): Record<string, unknown> {
           edit: "ask",
           bash: {
             "*": "ask",
+            "ls": "allow",
             "ls *": "allow",
+            "dir": "allow",
             "dir *": "allow",
             "pwd": "allow",
+            "echo": "allow",
             "echo *": "allow",
             "cat *": "allow",
             "type *": "allow",
@@ -242,15 +267,25 @@ function generatedOpenCodeConfig(modelId: string): Record<string, unknown> {
             "git diff*": "allow",
             "git log*": "allow",
             "git branch*": "allow",
+            "Get-ChildItem": "allow",
             "Get-ChildItem *": "allow",
             "Get-Content *": "allow",
             "Select-String *": "allow",
             "Remove-Item *": "ask",
             "rm *": "ask",
             "del *": "ask",
+            "erase *": "ask",
             "rmdir *": "ask",
+            "rd *": "ask",
             "mv *": "ask",
+            "move *": "ask",
             "Move-Item *": "ask",
+            "cp *": "ask",
+            "copy *": "ask",
+            "Copy-Item *": "ask",
+            "chmod *": "ask",
+            "chown *": "ask",
+            "sed -i *": "ask",
             "git clean*": "ask",
             "git reset*": "ask",
             "git restore*": "ask",
@@ -258,6 +293,35 @@ function generatedOpenCodeConfig(modelId: string): Record<string, unknown> {
             "git push*": "ask",
             "npm install*": "ask",
             "pnpm install*": "ask",
+            "yarn install*": "ask",
+            "yarn add*": "ask",
+            "bun install*": "ask",
+            "pip install*": "ask",
+            "python -m pip install*": "ask",
+            "env": "ask",
+            "env *": "ask",
+            "printenv*": "ask",
+            "set": "ask",
+            "set *": "ask",
+            "Get-ChildItem env:*": "ask",
+            "Get-Item env:*": "ask",
+            "gci env:*": "ask",
+            "ls env:*": "ask",
+            "cat *.env*": "ask",
+            "cat *secret*": "ask",
+            "cat *token*": "ask",
+            "cat *credential*": "ask",
+            "cat *id_rsa*": "ask",
+            "type *.env*": "ask",
+            "type *secret*": "ask",
+            "type *token*": "ask",
+            "type *credential*": "ask",
+            "type *id_rsa*": "ask",
+            "Get-Content *.env*": "ask",
+            "Get-Content *secret*": "ask",
+            "Get-Content *token*": "ask",
+            "Get-Content *credential*": "ask",
+            "Get-Content *id_rsa*": "ask",
           },
           external_directory: "ask",
         };
@@ -274,7 +338,7 @@ function generatedOpenCodeConfig(modelId: string): Record<string, unknown> {
         npm: "@ai-sdk/openai-compatible",
         name: "Aegis Local Model",
         options: {
-          baseURL: lmStudioBaseUrl,
+          baseURL: modelBaseUrl,
         },
         models: {
           [modelId]: {
@@ -306,8 +370,11 @@ function generatedOpenCodeConfig(modelId: string): Record<string, unknown> {
         prompt:
           [
             "You are Aegis, a local-first coding agent running inside OpenCode.",
+            sandboxed
+              ? "You are running inside a Docker Sandbox microVM; the project workspace is mounted from the host, but host files outside mounted workspaces are outside your boundary."
+              : "You are running directly on the user's host device; be conservative with file and shell access.",
             "Use OpenCode's file and shell tools directly when the user asks for coding work.",
-            "Exploratory reads and searches can run without interruption; destructive or write actions must go through OpenCode permission approval.",
+            "Exploratory reads and searches can run without interruption; only sensitive information-gathering commands and destructive or write actions must go through OpenCode permission approval.",
             "If an operation needs host approval, OpenCode will request permission from the UI.",
             "Avoid web tools and keep user data on this machine.",
           ].join(" "),
@@ -393,6 +460,154 @@ function opencodeBinaryPath(): string | null {
   }
 }
 
+function execFileOutput(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<CommandOutput> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, windowsHide: true, timeout: 180000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${error.message}${stderr ? `\n${stderr}` : ""}`));
+        return;
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
+async function commandAvailable(command: string): Promise<boolean> {
+  try {
+    await execFileOutput(process.platform === "win32" ? "where.exe" : "which", [command]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sandboxNameFor(workspace: string): string {
+  const basename = path.basename(workspace).toLowerCase().replace(/[^a-z0-9.+-]+/g, "-").replace(/^-+|-+$/g, "");
+  const hash = crypto.createHash("sha256").update(path.resolve(workspace).toLowerCase()).digest("hex").slice(0, 8);
+  return `aegis-opencode-${basename || "workspace"}-${hash}`;
+}
+
+async function detectSandboxDriver(): Promise<SandboxDriver | null> {
+  if (await commandAvailable("sbx")) {
+    return "sbx";
+  }
+  if (await commandAvailable("docker")) {
+    try {
+      await execFileOutput("docker", ["sandbox", "version"]);
+      return "docker-sandbox";
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function sandboxExists(driver: SandboxDriver, name: string): Promise<boolean> {
+  try {
+    const output =
+      driver === "sbx"
+        ? await execFileOutput("sbx", ["ls", "-q"])
+        : await execFileOutput("docker", ["sandbox", "ls", "-q"]);
+    return output.stdout.split(/\r?\n/).map((row) => row.trim()).includes(name);
+  } catch {
+    return false;
+  }
+}
+
+async function ensureOpenCodeSandbox(driver: SandboxDriver, name: string, workspace: string) {
+  if (await sandboxExists(driver, name)) {
+    return;
+  }
+  if (driver === "sbx") {
+    await execFileOutput("sbx", ["create", "--name", name, "opencode", workspace]);
+  } else {
+    await execFileOutput("docker", ["sandbox", "create", "--name", name, "opencode", workspace]);
+  }
+}
+
+async function startSandboxIfNeeded(driver: SandboxDriver, name: string) {
+  if (driver === "sbx") {
+    await execFileOutput("sbx", ["exec", name, "true"]);
+  } else {
+    await execFileOutput("docker", ["sandbox", "exec", name, "true"]);
+  }
+}
+
+async function allowLmStudioFromSandbox(driver: SandboxDriver, name: string) {
+  if (driver === "sbx") {
+    await execFileOutput("sbx", ["policy", "allow", "network", "localhost:1234"]);
+  } else {
+    await execFileOutput("docker", ["sandbox", "network", "proxy", name, "--allow-host", "localhost:1234"]);
+  }
+}
+
+async function publishSandboxPort(driver: SandboxDriver, name: string, hostPort: number, sandboxPort: number) {
+  const spec = `127.0.0.1:${hostPort}:${sandboxPort}`;
+  if (driver === "sbx") {
+    await execFileOutput("sbx", ["ports", name, "--publish", spec]);
+  } else {
+    await execFileOutput("docker", ["sandbox", "ports", name, "--publish", spec]);
+  }
+}
+
+function spawnSandboxOpenCode(
+  driver: SandboxDriver,
+  name: string,
+  workspace: string,
+  password: string,
+  config: Record<string, unknown>,
+  port: number,
+): ChildProcess {
+  const envArgs = [
+    "--env",
+    "OPENCODE_SERVER_USERNAME=opencode",
+    "--env",
+    `OPENCODE_SERVER_PASSWORD=${password}`,
+    "--env",
+    `OPENCODE_CONFIG_CONTENT=${JSON.stringify(config)}`,
+  ];
+  const opencodeArgs = [
+    "opencode",
+    "serve",
+    "--hostname",
+    "0.0.0.0",
+    "--port",
+    String(port),
+    "--cors",
+    "http://127.0.0.1:5173",
+  ];
+  if (driver === "sbx") {
+    return spawn("sbx", ["exec", ...envArgs, "--workdir", workspace, name, ...opencodeArgs], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  }
+  return spawn("docker", ["sandbox", "exec", ...envArgs, "--workdir", workspace, name, ...opencodeArgs], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+}
+
+async function launchSandboxOpenCode(password: string, config: Record<string, unknown>, port: number): Promise<SandboxLaunch | null> {
+  const driver = await detectSandboxDriver();
+  if (!driver) {
+    return null;
+  }
+  const workspace = app.getPath("home");
+  const name = sandboxNameFor(workspace);
+  await ensureOpenCodeSandbox(driver, name, workspace);
+  await allowLmStudioFromSandbox(driver, name);
+  await startSandboxIfNeeded(driver, name);
+  await publishSandboxPort(driver, name, port, port);
+  const child = spawnSandboxOpenCode(driver, name, workspace, password, config, port);
+  return {
+    driver,
+    name,
+    workspace,
+    process: child,
+  };
+}
+
 async function pollOpenCode(baseUrl: string, authHeader: string) {
   let lastError = "";
   for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -432,38 +647,53 @@ async function startOpenCode(): Promise<OpenCodeConnection> {
     return opencodeConnection;
   }
   opencodeConnection = (async (): Promise<OpenCodeConnection> => {
-    const binary = opencodeBinaryPath();
-    if (!binary) {
-      return {
-        status: "missing",
-        message: "OpenCode CLI package was not found. Run npm install from the repository root.",
-      };
-    }
-
     const resolvedModel = await resolveLmStudioModel();
     const password = crypto.randomBytes(24).toString("base64url");
     const username = "opencode";
     const port = await getFreePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     const authHeader = basicAuth(username, password);
-    const config = generatedOpenCodeConfig(resolvedModel.modelId);
-    lastGeneratedConfig = config;
-
-    const args = [
-      "serve",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--cors",
-      "http://127.0.0.1:5173",
-    ];
-    opencodeProcess = spawn(binary, args, {
-      cwd: app.getPath("home"),
-      env: scrubbedOpenCodeEnv(password, config),
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    let runtime: OpenCodeRuntime = "docker-sandbox";
+    let sandbox: SandboxLaunch | null = null;
+    let config = generatedOpenCodeConfig(resolvedModel.modelId, runtime);
+    try {
+      sandbox = await launchSandboxOpenCode(password, config, port);
+    } catch (error) {
+      console.warn("[aegis] Docker Sandbox launch failed; falling back to host OpenCode.", error);
+    }
+    if (sandbox) {
+      opencodeProcess = sandbox.process;
+    } else {
+      runtime = "host";
+      const binary = opencodeBinaryPath();
+      if (!binary) {
+        return {
+          status: "missing",
+          message: "OpenCode CLI package was not found, and Docker Sandboxes were not available. Install Docker Sandboxes (`sbx`) or run npm install from the repository root.",
+        };
+      }
+      config = generatedOpenCodeConfig(resolvedModel.modelId, runtime);
+      const args = [
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--cors",
+        "http://127.0.0.1:5173",
+      ];
+      opencodeProcess = spawn(binary, args, {
+        cwd: app.getPath("home"),
+        env: scrubbedOpenCodeEnv(password, config),
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    }
+    lastGeneratedConfig = {
+      ...config,
+      aegis_runtime: runtime,
+      aegis_sandbox: sandbox ? { driver: sandbox.driver, name: sandbox.name, workspace: sandbox.workspace } : null,
+    };
 
     let stderr = "";
     opencodeProcess.stderr?.on("data", (chunk: Buffer) => {
@@ -484,6 +714,8 @@ async function startOpenCode(): Promise<OpenCodeConnection> {
       return {
         status: "ready",
         url: baseUrl,
+        runtime,
+        sandbox: sandbox ? { driver: sandbox.driver, name: sandbox.name, workspace: sandbox.workspace } : undefined,
         username,
         password,
         authHeader,
@@ -831,18 +1063,24 @@ async function createWindow() {
 
   mainWindow.webContents.on("context-menu", (_event, params) => {
     const template: MenuItemConstructorOptions[] = [];
-    if (params.isEditable) {
+    const inputFieldType = (params as { inputFieldType?: string }).inputFieldType;
+    const isEditable = params.isEditable || (typeof inputFieldType === "string" && inputFieldType !== "none");
+    if (isEditable) {
       template.push(
         { role: "undo", enabled: params.editFlags.canUndo },
         { role: "redo", enabled: params.editFlags.canRedo },
         { type: "separator" },
         { role: "cut", enabled: params.editFlags.canCut },
         { role: "copy", enabled: params.editFlags.canCopy },
-        { role: "paste", enabled: params.editFlags.canPaste },
-        { role: "selectAll", enabled: params.editFlags.canSelectAll },
+        { role: "paste" },
+        { type: "separator" },
+        { role: "selectAll" },
       );
-    } else if (params.selectionText.trim()) {
-      template.push({ role: "copy", enabled: params.editFlags.canCopy });
+    } else {
+      template.push(
+        { role: "copy", enabled: params.selectionText.trim().length > 0 },
+        { role: "selectAll" },
+      );
     }
     if (template.length > 0) {
       Menu.buildFromTemplate(template).popup({ window: mainWindow ?? undefined });

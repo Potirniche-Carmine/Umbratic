@@ -869,6 +869,8 @@ dd {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .blankSlate {
@@ -899,6 +901,8 @@ dd {
   padding: 0;
   border: 0;
   background: transparent;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message p {
@@ -908,6 +912,8 @@ dd {
   font-size: 13.5px;
   line-height: 1.6;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message.user {
@@ -1120,6 +1126,8 @@ dd {
   border-radius: 0;
   background: transparent;
   margin: 0;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .markdownBubble pre code,
@@ -1855,6 +1863,8 @@ dd {
   font-size: 13.5px;
   line-height: 1.5;
   transition: border-color 120ms ease, box-shadow 120ms ease;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .composerInput textarea:focus {
