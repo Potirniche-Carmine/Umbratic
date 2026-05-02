@@ -1,8 +1,10 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
 contextBridge.exposeInMainWorld("aegis", {
-  getDaemonConnection: () => ipcRenderer.invoke("daemon:get-connection"),
-  restartDaemon: () => ipcRenderer.invoke("daemon:restart"),
+  getOpenCodeConnection: () => ipcRenderer.invoke("opencode:get-connection"),
+  restartOpenCode: () => ipcRenderer.invoke("opencode:restart"),
+  nativeRequest: (payload: unknown) => ipcRenderer.invoke("aegis:native-request", payload),
+  setPermissionMode: (mode: "default" | "bypass") => ipcRenderer.invoke("opencode:set-permission-mode", mode),
   pickProjectFolder: () => ipcRenderer.invoke("project:pick-folder"),
   pickAttachments: (projectRoot?: string) => ipcRenderer.invoke("file:pick-attachments", projectRoot),
   openProjectInIde: (payload: { ideId: string; command: string; projectRoot: string }) =>

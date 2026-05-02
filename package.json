@@ -7,8 +7,6 @@
   ],
   "scripts": {
     "desktop:dev": "npm --workspace desktop run dev",
-    "desktop:build": "npm --workspace desktop run build",
-    "daemon:build": "cargo build --manifest-path aegis-daemon/Cargo.toml -p aegis-app"
+    "desktop:build": "npm --workspace desktop run build"
   }
 }
-

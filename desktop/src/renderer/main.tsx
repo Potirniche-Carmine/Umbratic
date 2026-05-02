@@ -20,6 +20,8 @@ import {
   Plus,
   RefreshCw,
   Send,
+  ShieldCheck,
+  ShieldQuestion,
   Terminal,
   Trash2,
   TriangleAlert,
@@ -30,35 +32,17 @@ import "./styles.css";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type SocketState = "idle" | "connecting" | "open" | "closed";
-type RailView = "chats" | "git" | "tools" | "data";
+type RailView = "chats" | "data";
 type MainTab = "chat" | "diff" | "terminal";
 type PermissionMode = "default" | "bypass";
 
-type DaemonHealth = {
-  daemon: ServiceStatus;
+type OpenCodeHealth = {
+  opencode: ServiceStatus;
   sqlite_path: string;
   lm_studio: ServiceStatus;
   model_base_url: string;
   semantic_index: ServiceStatus;
 };
-
-type RpcResponse<T> = {
-  id: string;
-  result?: T;
-  error?: { message: string };
-};
-
-type ServerEvent =
-  | {
-      type: "status";
-      daemon: ServiceStatus;
-      sqlite_path: string;
-      lm_studio: ServiceStatus;
-      model_base_url: string;
-      semantic_index: ServiceStatus;
-    }
-  | { type: "trace"; at: string; level: string; message: string; data?: unknown }
-  | { type: "agent_stream"; turn_id: string; kind: string; content?: string; data?: unknown };
 
 type ChatLine = {
   role: "user" | "assistant" | "tool" | "thinking";
@@ -66,6 +50,8 @@ type ChatLine = {
   toolName?: string;
   status?: ServiceStatus;
   detail?: string;
+  command?: string;
+  output?: string;
   streaming?: boolean;
   startedAt?: string;
   endedAt?: string;
@@ -148,23 +134,7 @@ type IdeInstall = {
 type SendTaskResult = {
   session_id: string;
   turn_id: string;
-  assistant_message: string;
-};
-
-type ContextUsageResult = {
-  prompt_tokens: number;
-  max_context_tokens?: number | null;
-  message_count: number;
-  source: string;
-};
-
-type ContextUsageState = {
-  promptTokens: number;
-  maxContextTokens?: number | null;
-  messageCount: number;
-  percent: number;
-  status: "loading" | "ready" | "unavailable";
-  detail: string;
+  assistant_message?: string;
 };
 
 type TimelineRow = {
@@ -207,6 +177,7 @@ type LocalChat = {
   diffAvailable?: boolean;
   changedFileCount?: number;
   changedLineStats?: DiffLineStats;
+  changedFilePaths?: string[];
   pendingApproval?: ToolApprovalRequest;
   approvedToolActions: string[];
   approvalEvents: ToolApprovalEvent[];
@@ -223,27 +194,9 @@ type PersistedWorkspace = {
   selectedProjectId?: string | null;
   selectedModel?: string;
   selectedIdeId?: string;
-  permissionMode?: PermissionMode;
 };
 
 const CHAT_STORAGE_KEY = "aegis.workspace.v2";
-
-type AgentTool = {
-  id: string;
-  label: string;
-  summary: string;
-  command: string;
-  kind: "read" | "search" | "write" | "git" | "context";
-  enabled: boolean;
-};
-
-type AgentToolContext = {
-  id: string;
-  label: string;
-  summary: string;
-  command: string;
-  enabled: boolean;
-};
 
 type RequestedToolCall = {
   tool: string;
@@ -251,7 +204,26 @@ type RequestedToolCall = {
 };
 
 type DesktopConnection =
-  | { status: "ready"; url: string; token: string }
+  | {
+      status: "ready";
+      url: string;
+      username: string;
+      password: string;
+      authHeader: string;
+      model: {
+        providerId: "aegis-lmstudio";
+        modelId: string;
+        displayName: string;
+        lmStudioBaseUrl: string;
+        lmStudio: ServiceStatus;
+      };
+      privacy: {
+        share: "disabled";
+        enabledProviders: string[];
+        disabledProviders: string[];
+        webTools: "disabled";
+      };
+    }
   | { status: "missing"; message: string }
   | { status: "error"; message: string };
 
@@ -262,8 +234,10 @@ type PickProjectResult =
 type IdeOpenResult = { ok: true } | { ok: false; message: string };
 
 type DesktopApi = {
-  getDaemonConnection(): Promise<DesktopConnection>;
-  restartDaemon(): Promise<DesktopConnection>;
+  getOpenCodeConnection(): Promise<DesktopConnection>;
+  restartOpenCode(): Promise<DesktopConnection>;
+  nativeRequest<T = unknown>(payload: unknown): Promise<T>;
+  setPermissionMode?(mode: PermissionMode): Promise<DesktopConnection>;
   pickProjectFolder(): Promise<PickProjectResult>;
   pickAttachments(projectRoot?: string): Promise<
     | { canceled: true }
@@ -282,13 +256,20 @@ type DesktopApi = {
 const aegisApi: DesktopApi =
   window.aegis ??
   {
-    getDaemonConnection: async () => ({
+    getOpenCodeConnection: async () => ({
       status: "missing",
       message: "This is the browser preview. Open the Electron window from npm run desktop:dev.",
     }),
-    restartDaemon: async () => ({
+    restartOpenCode: async () => ({
       status: "missing",
       message: "This is the browser preview. Open the Electron window from npm run desktop:dev.",
+    }),
+    nativeRequest: async () => {
+      throw new Error("Native Aegis helpers are only available in Electron.");
+    },
+    setPermissionMode: async () => ({
+      status: "missing",
+      message: "Permission modes are only available in Electron.",
     }),
     pickProjectFolder: async () => ({ canceled: true }),
     pickAttachments: async () => ({ canceled: true }),
@@ -325,6 +306,8 @@ function sanitizeChatLine(line: Partial<ChatLine>): ChatLine | null {
     toolName: typeof line.toolName === "string" ? line.toolName : undefined,
     status: line.status,
     detail: typeof line.detail === "string" ? line.detail : undefined,
+    command: typeof line.command === "string" ? line.command : undefined,
+    output: typeof line.output === "string" ? line.output : undefined,
     streaming: false,
     startedAt: typeof line.startedAt === "string" ? line.startedAt : undefined,
     endedAt: typeof line.endedAt === "string" ? line.endedAt : undefined,
@@ -411,6 +394,9 @@ function sanitizeChat(chat: Partial<LocalChat>): LocalChat | null {
     diffAvailable: chat.diffAvailable === true,
     changedFileCount: typeof chat.changedFileCount === "number" ? chat.changedFileCount : undefined,
     changedLineStats: chat.changedLineStats,
+    changedFilePaths: Array.isArray(chat.changedFilePaths)
+      ? chat.changedFilePaths.filter((path): path is string => typeof path === "string")
+      : [],
     pendingApproval: sanitizeApprovalRequest(chat.pendingApproval),
     approvedToolActions: Array.isArray(chat.approvedToolActions)
       ? chat.approvedToolActions.filter((key): key is string => typeof key === "string")
@@ -440,7 +426,6 @@ function loadPersistedWorkspace(): PersistedWorkspace {
       selectedProjectId: parsed.selectedProjectId ?? null,
       selectedModel: parsed.selectedModel,
       selectedIdeId: parsed.selectedIdeId,
-      permissionMode: parsed.permissionMode,
     };
   } catch {
     const chat = newLocalChat();
@@ -464,97 +449,6 @@ function persistWorkspace(workspace: PersistedWorkspace) {
     /* localStorage can be unavailable in hardened browser previews */
   }
 }
-
-const DEFAULT_AGENT_TOOLS: AgentTool[] = [
-  {
-    id: "project.search",
-    label: "Project search",
-    summary: "Search text inside the selected project directory.",
-    command: 'project.search {"query":"text"}',
-    kind: "search",
-    enabled: true,
-  },
-  {
-    id: "rg.search",
-    label: "Ripgrep search",
-    summary: "Use rg-style search when the agent asks for fast project lookup.",
-    command: 'rg.search {"query":"text"}',
-    kind: "search",
-    enabled: true,
-  },
-  {
-    id: "grep.search",
-    label: "Grep search",
-    summary: "Use grep-style search as a portable fallback.",
-    command: 'grep.search {"query":"text"}',
-    kind: "search",
-    enabled: true,
-  },
-  {
-    id: "file.read",
-    label: "Read file",
-    summary: "Read text files inside the project root.",
-    command: 'file.read {"path":"relative/path"}',
-    kind: "read",
-    enabled: true,
-  },
-  {
-    id: "file.write",
-    label: "Write/create file",
-    summary: "Create or replace text files inside the project root.",
-    command: 'file.write {"path":"relative/path","content":"..."}',
-    kind: "write",
-    enabled: true,
-  },
-  {
-    id: "git.status",
-    label: "Git status",
-    summary: "Inspect modified, staged, and untracked files.",
-    command: "git.status {}",
-    kind: "git",
-    enabled: true,
-  },
-  {
-    id: "git.diff",
-    label: "Git diff",
-    summary: "Review the current project diff.",
-    command: "git.diff {}",
-    kind: "git",
-    enabled: true,
-  },
-  {
-    id: "git.branches",
-    label: "Git branches",
-    summary: "Read local branch information.",
-    command: "git.branches {}",
-    kind: "git",
-    enabled: true,
-  },
-  {
-    id: "git.worktree_list",
-    label: "Git worktrees",
-    summary: "Inspect project worktrees.",
-    command: "git.worktree_list {}",
-    kind: "git",
-    enabled: true,
-  },
-  {
-    id: "terminal.run",
-    label: "Run terminal command",
-    summary: "Run a project-scoped command through the harness shell and stream the output.",
-    command: 'terminal.run {"command":"pwd"}',
-    kind: "write",
-    enabled: true,
-  },
-  {
-    id: "os.context",
-    label: "Harness OS context",
-    summary: "Tell the agent which operating system the harness is running on.",
-    command: "operating_system",
-    kind: "context",
-    enabled: true,
-  },
-];
 
 function detectHarnessOs(): string {
   const ua = navigator.userAgent;
@@ -603,10 +497,284 @@ function looksLikeToolCallFragment(content: string): boolean {
 }
 
 function cleanAssistantMessage(content: string): string {
-  return content
+  const cleaned = stripRepeatedSuffix(stripDuplicatedText(stripChainOfThought(
+    stripPartialToolCallTail(stripInlineToolCallJson(stripTaggedToolCalls(content))),
+  )))
     .replace(/\n+\s*Files changed:\s*(?:none|[^\n]*)\s*\n\s*Verified:\s*[^\n]*\s*$/i, "")
     .replace(/\n+\s*Files changed:\s*none\.?\s*Verified:\s*(?:not verified|tool result returned)\.?\s*$/i, "")
     .trim();
+  return /^[\s:.,;*-]*$/.test(cleaned) ? "" : cleaned;
+}
+
+function stripDuplicatedText(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length % 2 === 0) {
+    const half = trimmed.length / 2;
+    const left = trimmed.slice(0, half).trim();
+    const right = trimmed.slice(half).trim();
+    if (left && left === right) {
+      return left;
+    }
+  }
+  const lines = trimmed.split("\n");
+  if (lines.length % 2 === 0) {
+    const half = lines.length / 2;
+    const left = lines.slice(0, half).join("\n").trim();
+    const right = lines.slice(half).join("\n").trim();
+    if (left && left === right) {
+      return left;
+    }
+  }
+  return trimmed;
+}
+
+function stripRepeatedSuffix(content: string): string {
+  let text = content.trim();
+  if (!text) return "";
+  for (let length = Math.floor(text.length / 2); length >= 24; length -= 1) {
+    const suffix = text.slice(text.length - length).trim();
+    const before = text.slice(0, text.length - length).trimEnd();
+    if (!suffix || !before.endsWith(suffix)) {
+      continue;
+    }
+    text = before;
+    break;
+  }
+  return text;
+}
+
+function mergeRelatedText(existing: string, incoming: string): string {
+  const left = existing.trim();
+  const right = incoming.trim();
+  if (!left) return right;
+  if (!right) return left;
+  if (left === right) return left;
+  if (right.startsWith(left) || right.includes(left)) return right;
+  if (left.startsWith(right) || left.includes(right)) return left;
+  return right.length >= left.length ? right : left;
+}
+
+function splitReasoningFromAnswer(content: string): { reasoning: string; answer: string } {
+  const text = content.trim();
+  if (!looksLikeReasoningText(text)) {
+    return { reasoning: "", answer: content };
+  }
+  const lower = text.toLowerCase();
+  const markers = [
+    "final output generation.",
+    "final output generation",
+    "final answer:",
+    "final response:",
+    "\nanswer:",
+    "\nresponse:",
+  ];
+  for (const marker of markers) {
+    const index = lower.lastIndexOf(marker);
+    if (index >= 0) {
+      const answerStart = index + marker.length;
+      return {
+        reasoning: text.slice(0, index).trim(),
+        answer: text.slice(answerStart).trim(),
+      };
+    }
+  }
+  const conclusion = /\n\s*(?:\*{0,2}Conclusion:\*{0,2}|Conclusion:)[^\n]*(?:\n+|$)/i.exec(text);
+  if (conclusion && conclusion.index + conclusion[0].length < text.length) {
+    const answer = text.slice(conclusion.index + conclusion[0].length).trim();
+    if (answer && !looksLikeReasoningText(answer)) {
+      return {
+        reasoning: text.slice(0, conclusion.index + conclusion[0].length).trim(),
+        answer,
+      };
+    }
+  }
+  return { reasoning: text, answer: "" };
+}
+
+function looksLikeReasoningText(content: string): boolean {
+  const trimmed = content.trimStart().replace(/^[:\s*-]+/, "").toLowerCase();
+  return (
+    trimmed.startsWith("thinking process:") ||
+    trimmed.startsWith("thought process:") ||
+    trimmed.startsWith("reasoning:") ||
+    trimmed.startsWith("analysis:") ||
+    trimmed.startsWith("1. **analyze the user's input") ||
+    trimmed.startsWith("1. analyze the user's input") ||
+    COT_PREFIXES.some((prefix) => trimmed.startsWith(prefix.toLowerCase()))
+  );
+}
+
+function stripLeadingUserEcho(content: string, userMessage: string): string {
+  const user = userMessage.trim();
+  const text = content.trimStart();
+  if (!user || !text.startsWith(user)) {
+    return content;
+  }
+  const rest = text.slice(user.length);
+  return rest.length === 0 || /^[\s:.-]/.test(rest) ? rest.trimStart() : content;
+}
+
+function appendDistinctText(chunks: string[]): string {
+  const rows: string[] = [];
+  for (const chunk of chunks.map((value) => value.trim()).filter(Boolean)) {
+    const duplicateIndex = rows.findIndex((row) => row === chunk || row.includes(chunk) || chunk.includes(row));
+    if (duplicateIndex >= 0) {
+      if (chunk.length > rows[duplicateIndex].length) {
+        rows[duplicateIndex] = chunk;
+      }
+      continue;
+    }
+    rows.push(chunk);
+  }
+  return stripDuplicatedText(rows.join("\n"));
+}
+
+function stripPartialToolCallTail(content: string): string {
+  const markers = ["{\"tool\"", "{ \"tool\"", "{\n\"tool\"", "<|tool_call>"];
+  let cut = -1;
+  for (const marker of markers) {
+    const idx = content.indexOf(marker);
+    if (idx >= 0 && (cut < 0 || idx < cut)) {
+      cut = idx;
+    }
+  }
+  if (cut < 0) return content;
+  let preceding = cut;
+  while (preceding > 0 && /[ \t]/.test(content[preceding - 1])) {
+    preceding -= 1;
+  }
+  return content.slice(0, preceding);
+}
+
+function stripTaggedToolCalls(content: string): string {
+  let out = "";
+  let rest = content;
+  while (true) {
+    const start = rest.indexOf("<|tool_call>");
+    if (start < 0) {
+      out += rest;
+      break;
+    }
+    out += rest.slice(0, start);
+    const after = rest.slice(start + "<|tool_call>".length);
+    const end = after.indexOf("<tool_call|>");
+    rest = end >= 0 ? after.slice(end + "<tool_call|>".length) : "";
+  }
+  return out;
+}
+
+function stripInlineToolCallJson(content: string): string {
+  let out = "";
+  let i = 0;
+  let lastEmitted = 0;
+  while (i < content.length) {
+    if (content[i] === "{") {
+      const end = matchingBrace(content, i);
+      if (end > i) {
+        const candidate = content.slice(i, end + 1);
+        if (candidate.includes("\"tool\"")) {
+          try {
+            const parsed = JSON.parse(candidate) as Record<string, unknown>;
+            if (typeof parsed.tool === "string") {
+              out += content.slice(lastEmitted, i);
+              let after = end + 1;
+              while (after < content.length && /[\s,]/.test(content[after])) {
+                after += 1;
+              }
+              lastEmitted = after;
+              i = after;
+              continue;
+            }
+          } catch {
+            // not JSON; fall through
+          }
+        }
+      }
+    }
+    i += 1;
+  }
+  out += content.slice(lastEmitted);
+  return out;
+}
+
+function matchingBrace(content: string, start: number): number {
+  if (content[start] !== "{") return -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < content.length; i += 1) {
+    const ch = content[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+const COT_PREFIXES = [
+  "Thinking Process:",
+  "Thought Process:",
+  "Reasoning:",
+  "The user wants",
+  "The user is asking",
+  "The user has",
+  "The user provided",
+  "The user's request",
+  "Let me think",
+  "Let me start",
+  "Let me first",
+  "I need to",
+  "I will start",
+  "I will use",
+  "I will create",
+  "I will write",
+  "I will now",
+  "First, I",
+  "First I",
+  "Plan:",
+  "**Plan",
+  "Let's start",
+  "Looking at",
+  "Analysis:",
+  "Since this",
+  "Given the",
+  "Okay, the user",
+];
+
+function stripChainOfThought(content: string): string {
+  const trimmed = content.trimStart().replace(/^[:\s*-]+(?=(?:\d+\.|thinking|thought|reasoning|analysis|the user|i need|i will))/i, "");
+  const lower = trimmed.toLowerCase();
+  if (!looksLikeReasoningText(trimmed)) {
+    return content;
+  }
+  const split = splitReasoningFromAnswer(trimmed);
+  if (split.answer) {
+    return split.answer;
+  }
+  const markers = ["\nhere is", "\nhere's", "\nhere are", "\n```", "\n# ", "\n## ", "\n### "];
+  let earliest = -1;
+  for (const marker of markers) {
+    const idx = lower.indexOf(marker);
+    if (idx >= 0 && (earliest < 0 || idx + 1 < earliest)) {
+      earliest = idx + 1;
+    }
+  }
+  if (earliest > 0) {
+    return trimmed.slice(earliest);
+  }
+  return "";
 }
 
 function decodeMarkdownDisplayEscapes(content: string): string {
@@ -650,8 +818,15 @@ function toolArgs(data: unknown): Record<string, unknown> {
   if (!data || typeof data !== "object") {
     return {};
   }
-  const args = (data as Record<string, unknown>).args;
-  return args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const record = data as Record<string, unknown>;
+  const state = record.state && typeof record.state === "object" ? (record.state as Record<string, unknown>) : {};
+  const candidates = [record.args, record.input, state.args, state.input, state.metadata];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === "object") {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  return {};
 }
 
 function stringArg(args: Record<string, unknown>, keys: string[]): string {
@@ -724,8 +899,13 @@ function toolActionCommand(toolName: string, data: unknown): string {
   if (!data || typeof data !== "object") {
     return toolName;
   }
+  const args = toolArgs(data);
+  const directCommand = stringArg(args, ["command", "cmd"]);
+  if (directCommand) {
+    return directCommand;
+  }
   if (toolName === "file.write") {
-    const path = stringArg(toolArgs(data), ["path", "file", "project_path"]);
+    const path = stringArg(args, ["path", "file", "project_path"]);
     return `Write ${mentionTarget(path) || "file"}`;
   }
   const record = data as Record<string, unknown>;
@@ -733,6 +913,81 @@ function toolActionCommand(toolName: string, data: unknown): string {
     return record.command.trim();
   }
   return JSON.stringify({ tool: toolName, args: toolArgs(data) });
+}
+
+function toolOutputText(data: unknown): string {
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+  const record = data as Record<string, unknown>;
+  const state = record.state && typeof record.state === "object" ? (record.state as Record<string, unknown>) : {};
+  for (const value of [state.output, state.stdout, state.stderr, state.result, state.error, record.output, record.result]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+    if (value && typeof value === "object") {
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        // ignore non-serializable tool payloads
+      }
+    }
+  }
+  return "";
+}
+
+function toolChangedPath(toolName: string, data: unknown): string {
+  const name = toolName.toLowerCase();
+  if (!/(^|\.)(write|edit)$/.test(name) && !name.includes("write") && !name.includes("edit")) {
+    return "";
+  }
+  const path = stringArg(toolArgs(data), ["filePath", "filepath", "path", "file", "project_path"]);
+  return path ? normalizeDiffPath(path) : "";
+}
+
+function eventToolPayload(properties: Record<string, unknown>, part: Record<string, unknown> | null): {
+  toolName: string;
+  status: "running" | "completed" | "error";
+  detail: string;
+  command: string;
+  output: string;
+  raw: unknown;
+} | null {
+  const source = part ?? properties;
+  const toolName =
+    eventText(source.tool) ||
+    eventText(source.name) ||
+    eventText(source.toolName) ||
+    eventText(source.id) ||
+    "tool";
+  const state = source.state && typeof source.state === "object" ? (source.state as Record<string, unknown>) : {};
+  const statusText = eventText(state.status) || eventText(properties.status);
+  const eventType = eventText(properties.type);
+  const status =
+    statusText === "error" || eventType.endsWith(".after") && (state.error || properties.error)
+      ? "error"
+      : statusText === "completed" ||
+          statusText === "success" ||
+          eventText(state.kind) === "completed" ||
+          eventText(state.kind) === "success" ||
+          eventType.endsWith(".after") ||
+          !!state.output ||
+          !!state.result
+        ? "completed"
+        : "running";
+  const detail =
+    eventText(state.title) ||
+    eventText(source.title) ||
+    eventText(source.description) ||
+    toolActivityLabel(toolName, source, status === "completed");
+  return {
+    toolName,
+    status,
+    detail,
+    command: toolActionCommand(toolName, source),
+    output: toolOutputText(source) || eventText(properties.output) || eventText(properties.stdout) || eventText(properties.stderr),
+    raw: source,
+  };
 }
 
 function approvalRequestFromToolEvent(toolName: string, data: unknown, summary: string): ToolApprovalRequest | null {
@@ -827,7 +1082,7 @@ function finishThinkingLine(line: ChatLine, endedAtMs: number): ChatLine {
   };
 }
 
-function contextMessagesForDaemon(messages: ChatLine[]): Array<{ role: "user" | "assistant"; content: string }> {
+function contextMessagesForOpenCode(messages: ChatLine[]): Array<{ role: "user" | "assistant"; content: string }> {
   return messages
     .filter((message) => !message.streaming && (message.role === "user" || message.role === "assistant"))
     .map((message) => ({
@@ -838,21 +1093,17 @@ function contextMessagesForDaemon(messages: ChatLine[]): Array<{ role: "user" | 
     .slice(-12);
 }
 
-function chatHistoryForDaemon(messages: ChatLine[]): Array<{ role: "user" | "assistant"; content: string }> {
-  return contextMessagesForDaemon(messages);
-}
-
-function contextPercent(tokens: number, maxTokens?: number | null): number {
-  if (!maxTokens || maxTokens <= 0) {
-    return 0;
-  }
-  return Math.min(100, Math.max(0, Math.round((tokens / maxTokens) * 100)));
+function chatHistoryForOpenCode(messages: ChatLine[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return contextMessagesForOpenCode(messages);
 }
 
 type MarkdownBlock =
   | { kind: "code"; language: string; content: string }
   | { kind: "heading"; level: number; content: string }
   | { kind: "list"; ordered: boolean; items: string[] }
+  | { kind: "quote"; content: string }
+  | { kind: "rule" }
+  | { kind: "table"; header: string[]; rows: string[][] }
   | { kind: "paragraph"; content: string };
 
 function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
@@ -860,6 +1111,7 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   let paragraph: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
+  let quote: string[] = [];
 
   const flushParagraph = () => {
     if (paragraph.length > 0) {
@@ -873,6 +1125,17 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
       list = null;
     }
   };
+  const flushQuote = () => {
+    if (quote.length > 0) {
+      blocks.push({ kind: "quote", content: quote.join(" ") });
+      quote = [];
+    }
+  };
+
+  const splitTableRow = (line: string): string[] => {
+    const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+    return trimmed.split("|").map((cell) => cell.trim());
+  };
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -880,6 +1143,7 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
     if (fence) {
       flushParagraph();
       flushList();
+      flushQuote();
       const code: string[] = [];
       index += 1;
       while (index < lines.length && !/^```\s*$/.test(lines[index])) {
@@ -892,19 +1156,36 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
     if (!line.trim()) {
       flushParagraph();
       flushList();
+      flushQuote();
       continue;
     }
-    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (/^\s*(?:---|\*\*\*|___)\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      blocks.push({ kind: "rule" });
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading) {
       flushParagraph();
       flushList();
+      flushQuote();
       blocks.push({ kind: "heading", level: heading[1].length, content: heading[2].trim() });
       continue;
     }
-    const unordered = /^\s*[-*]\s+(.+)$/.exec(line);
+    const blockquote = /^\s*>\s?(.*)$/.exec(line);
+    if (blockquote) {
+      flushParagraph();
+      flushList();
+      quote.push(blockquote[1]);
+      continue;
+    }
+    const unordered = /^\s*[-*+]\s+(.+)$/.exec(line);
     const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
     if (unordered || ordered) {
       flushParagraph();
+      flushQuote();
       const isOrdered = !!ordered;
       if (!list || list.ordered !== isOrdered) {
         flushList();
@@ -913,26 +1194,92 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
       list.items.push((ordered?.[1] ?? unordered?.[1] ?? "").trim());
       continue;
     }
+    if (line.includes("|") && lines[index + 1] && /^\s*\|?\s*:?-{2,}/.test(lines[index + 1])) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      const header = splitTableRow(line);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim().length > 0) {
+        rows.push(splitTableRow(lines[index]));
+        index += 1;
+      }
+      index -= 1;
+      blocks.push({ kind: "table", header, rows });
+      continue;
+    }
     flushList();
+    flushQuote();
     paragraph.push(line.trim());
   }
 
   flushParagraph();
   flushList();
+  flushQuote();
   return blocks;
 }
 
 function renderInlineMarkdown(text: string) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={index}>{part.slice(1, -1)}</code>;
+  const tokens = tokenizeInline(text);
+  return tokens.map((token, index) => {
+    if (token.kind === "code") return <code key={index}>{token.text}</code>;
+    if (token.kind === "bold") return <strong key={index}>{renderInlineMarkdown(token.text)}</strong>;
+    if (token.kind === "italic") return <em key={index}>{renderInlineMarkdown(token.text)}</em>;
+    if (token.kind === "strike") return <del key={index}>{renderInlineMarkdown(token.text)}</del>;
+    if (token.kind === "link") {
+      return (
+        <a key={index} href={token.href} target="_blank" rel="noopener noreferrer">
+          {renderInlineMarkdown(token.text)}
+        </a>
+      );
     }
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (token.kind === "url") {
+      return (
+        <a key={index} href={token.text} target="_blank" rel="noopener noreferrer">
+          {token.text}
+        </a>
+      );
     }
-    return <React.Fragment key={index}>{part}</React.Fragment>;
+    return <React.Fragment key={index}>{token.text}</React.Fragment>;
   });
+}
+
+type InlineToken =
+  | { kind: "text"; text: string }
+  | { kind: "code"; text: string }
+  | { kind: "bold"; text: string }
+  | { kind: "italic"; text: string }
+  | { kind: "strike"; text: string }
+  | { kind: "link"; text: string; href: string }
+  | { kind: "url"; text: string };
+
+function tokenizeInline(text: string): InlineToken[] {
+  const tokens: InlineToken[] = [];
+  const pattern =
+    /(`[^`]+`)|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*\n]+\*|_[^_\n]+_)|(~~[^~]+~~)|(\[[^\]]+\]\([^)]+\))|(\bhttps?:\/\/[^\s)]+)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push({ kind: "text", text: text.slice(lastIndex, match.index) });
+    }
+    const [whole, code, bold, italic, strike, link, url] = match;
+    if (code) tokens.push({ kind: "code", text: code.slice(1, -1) });
+    else if (bold) tokens.push({ kind: "bold", text: bold.slice(2, -2) });
+    else if (italic) tokens.push({ kind: "italic", text: italic.slice(1, -1) });
+    else if (strike) tokens.push({ kind: "strike", text: strike.slice(2, -2) });
+    else if (link) {
+      const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(link);
+      if (linkMatch) tokens.push({ kind: "link", text: linkMatch[1], href: linkMatch[2] });
+      else tokens.push({ kind: "text", text: whole });
+    } else if (url) tokens.push({ kind: "url", text: url });
+    lastIndex = match.index + whole.length;
+  }
+  if (lastIndex < text.length) {
+    tokens.push({ kind: "text", text: text.slice(lastIndex) });
+  }
+  return tokens.length > 0 ? tokens : [{ kind: "text", text }];
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -944,11 +1291,9 @@ function MarkdownContent({ content }: { content: string }) {
           return <CopyableCodeBlock key={index} language={block.language} content={block.content} />;
         }
         if (block.kind === "heading") {
-          return block.level === 1 ? (
-            <h3 key={index}>{renderInlineMarkdown(block.content)}</h3>
-          ) : (
-            <h4 key={index}>{renderInlineMarkdown(block.content)}</h4>
-          );
+          const level = Math.min(Math.max(block.level, 1), 6);
+          const Tag = `h${level + 2 > 6 ? 6 : level + 2}` as "h3" | "h4" | "h5" | "h6";
+          return <Tag key={index}>{renderInlineMarkdown(block.content)}</Tag>;
         }
         if (block.kind === "list") {
           const List = block.ordered ? "ol" : "ul";
@@ -958,6 +1303,38 @@ function MarkdownContent({ content }: { content: string }) {
                 <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
               ))}
             </List>
+          );
+        }
+        if (block.kind === "quote") {
+          return (
+            <blockquote key={index}>{renderInlineMarkdown(block.content)}</blockquote>
+          );
+        }
+        if (block.kind === "rule") {
+          return <hr key={index} />;
+        }
+        if (block.kind === "table") {
+          return (
+            <div className="markdownTableWrap" key={index}>
+              <table className="markdownTable">
+                <thead>
+                  <tr>
+                    {block.header.map((cell, cellIndex) => (
+                      <th key={cellIndex}>{renderInlineMarkdown(cell)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {row.map((cell, cellIndex) => (
+                        <td key={cellIndex}>{renderInlineMarkdown(cell)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           );
         }
         return <p key={index}>{renderInlineMarkdown(block.content)}</p>;
@@ -1117,6 +1494,153 @@ function cleanPath(path?: string | null): string {
   return path.replace(/^\\\\\?\\/, "").replace(/\\/g, "\\");
 }
 
+function stableProjectIdFromRoot(root: string): string {
+  let hash = 2166136261;
+  const normalized = root.toLowerCase();
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function textFromOpenCodeParts(parts: unknown): string {
+  if (!Array.isArray(parts)) {
+    return "";
+  }
+  return appendDistinctText(parts
+    .map((part) => {
+      const row = recordValue(part);
+      if (!row || row.type !== "text") {
+        return "";
+      }
+      const text = typeof row.text === "string" ? row.text : "";
+      const split = splitReasoningFromAnswer(text);
+      return split.answer || (split.reasoning ? "" : text);
+    })
+    .filter(Boolean));
+}
+
+function reasoningFromOpenCodeParts(parts: unknown): string {
+  if (!Array.isArray(parts)) {
+    return "";
+  }
+  return appendDistinctText(parts
+    .map((part) => {
+      const row = recordValue(part);
+      if (!row) {
+        return "";
+      }
+      const type = typeof row.type === "string" ? row.type.toLowerCase() : "";
+      if (type === "text") {
+        return splitReasoningFromAnswer(eventText(row.text)).reasoning;
+      }
+      if (!type.includes("reasoning")) {
+        return "";
+      }
+      return eventText(row.text) || eventText(row.content) || eventText(row.reasoning) || eventText(row.reasoningContent) || eventText(row.reasoning_content);
+    })
+    .filter(Boolean));
+}
+
+function latestAssistantSnapshot(messages: unknown[]): { text: string; reasoning: string; error: string } {
+  const assistantMessages = messages.filter((message) => recordValue(recordValue(message)?.info)?.role === "assistant");
+  const lastAssistant = assistantMessages[assistantMessages.length - 1];
+  const error = openCodeMessageError(lastAssistant);
+  const parts = recordValue(lastAssistant)?.parts;
+  return {
+    text: textFromOpenCodeParts(parts),
+    reasoning: reasoningFromOpenCodeParts(parts),
+    error,
+  };
+}
+
+function openCodeMessageError(message: unknown): string {
+  const info = recordValue(recordValue(message)?.info);
+  const error = recordValue(info?.error);
+  const data = recordValue(error?.data);
+  const messageText = typeof data?.message === "string" ? data.message : typeof error?.name === "string" ? error.name : "";
+  return messageText;
+}
+
+function eventText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function openCodePartKey(sessionID: string, part: Record<string, unknown> | null, properties: Record<string, unknown>) {
+  const messageID = eventText(part?.messageID) || eventText(properties.messageID) || eventText(properties.messageId);
+  const partID = eventText(part?.id) || eventText(properties.partID) || eventText(properties.partId);
+  const partType = eventText(part?.type) || eventText(properties.partType) || "part";
+  return `${sessionID}:${messageID || "message"}:${partID || partType}:${partType}`;
+}
+
+function openCodeEventDelta(
+  part: Record<string, unknown> | null,
+  properties: Record<string, unknown>,
+  previous: string,
+): { delta: string; snapshot?: string } {
+  const direct =
+    eventText(properties.delta) ||
+    eventText(properties.textDelta) ||
+    eventText(properties.text_delta) ||
+    eventText(part?.delta);
+  if (direct) {
+    return { delta: direct };
+  }
+  const snapshot =
+    eventText(part?.text) ||
+    eventText(part?.content) ||
+    eventText(part?.reasoning) ||
+    eventText(part?.reasoningContent) ||
+    eventText(part?.reasoning_content) ||
+    eventText(properties.text) ||
+    eventText(properties.content) ||
+    eventText(properties.reasoning) ||
+    eventText(properties.reasoningContent) ||
+    eventText(properties.reasoning_content);
+  if (!snapshot) {
+    return { delta: "" };
+  }
+  return {
+    delta: snapshot.startsWith(previous) ? snapshot.slice(previous.length) : snapshot,
+    snapshot,
+  };
+}
+
+function isReasoningPart(part: Record<string, unknown> | null, properties: Record<string, unknown>) {
+  const field = eventText(properties.field).toLowerCase();
+  const partType = eventText(part?.type).toLowerCase();
+  return (
+    field.includes("reasoning") ||
+    partType.includes("reasoning") ||
+    "reasoning" in properties ||
+    "reasoningContent" in properties ||
+    "reasoning_content" in properties ||
+    !!part?.reasoning ||
+    !!part?.reasoningContent ||
+    !!part?.reasoning_content
+  );
+}
+
+function splitOpenCodeModel(selection: string, fallbackModelId: string): { providerID: string; modelID: string } {
+  const slash = selection.indexOf("/");
+  if (slash <= 0) {
+    return { providerID: "aegis-lmstudio", modelID: fallbackModelId };
+  }
+  return {
+    providerID: selection.slice(0, slash),
+    modelID: selection.slice(slash + 1) || fallbackModelId,
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function projectEntriesFromSearch(matches: SearchMatch[]): ProjectFileEntry[] {
   const entries = new Map<string, ProjectFileEntry>();
   for (const match of matches) {
@@ -1171,17 +1695,9 @@ function App() {
   const persistedWorkspace = useMemo(() => loadPersistedWorkspace(), []);
   const [connection, setConnection] = useState<DesktopConnection | null>(null);
   const [socketState, setSocketState] = useState<SocketState>("idle");
-  const [health, setHealth] = useState<DaemonHealth | null>(null);
-  const [models, setModels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState(persistedWorkspace.selectedModel ?? "google/gemma-4-e4b");
-  const [contextUsage, setContextUsage] = useState<ContextUsageState>({
-    promptTokens: 0,
-    maxContextTokens: null,
-    messageCount: 0,
-    percent: 0,
-    status: "unavailable",
-    detail: "Open LM Studio to count tokens with the loaded model.",
-  });
+  const [health, setHealth] = useState<OpenCodeHealth | null>(null);
+  const [models, setModels] = useState<string[]>(["aegis-lmstudio/local"]);
+  const [selectedModel, setSelectedModel] = useState(persistedWorkspace.selectedModel ?? "aegis-lmstudio/local");
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(persistedWorkspace.selectedProjectId ?? null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -1205,24 +1721,29 @@ function App() {
   const [activeChatId, setActiveChatId] = useState(persistedWorkspace.activeChatId);
   const [ides, setIdes] = useState<IdeInstall[]>([]);
   const [selectedIdeId, setSelectedIdeId] = useState(persistedWorkspace.selectedIdeId ?? "code");
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(persistedWorkspace.permissionMode ?? "default");
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [composerBranchMenuOpen, setComposerBranchMenuOpen] = useState(false);
-  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
-  const [showBypassConfirm, setShowBypassConfirm] = useState(false);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
+  const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [chatLeftWidth, setChatLeftWidth] = useState(280);
   const [dataLeftWidth, setDataLeftWidth] = useState(280);
-  const [agentTools, setAgentTools] = useState<AgentTool[]>(DEFAULT_AGENT_TOOLS);
   const [terminalOutput, setTerminalOutput] = useState("");
   const [terminalInput, setTerminalInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const pendingRef = useRef(new Map<string, (response: RpcResponse<unknown>) => void>());
+  const connectionRef = useRef<DesktopConnection | null>(null);
+  const eventAbortRef = useRef<AbortController | null>(null);
   const streamingChatRef = useRef<string | null>(null);
-  const streamBufferRef = useRef<string>("");
+  const sessionChatRef = useRef<Map<string, string>>(new Map());
+  const sessionMonitorRef = useRef<Map<string, AbortController>>(new Map());
+  const streamPartTextRef = useRef<Map<string, string>>(new Map());
+  const streamPartKindRef = useRef<Map<string, "answer" | "reasoning">>(new Map());
+  const streamBufferRef = useRef<Map<string, string>>(new Map());
+  const thinkingBufferRef = useRef<Map<string, string>>(new Map());
   const streamFrameRef = useRef<number | null>(null);
+  const liveStreamSeenRef = useRef<Map<string, boolean>>(new Map());
+  const lastUserMessageRef = useRef<Map<string, string>>(new Map());
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const selectedProject = useMemo(
@@ -1237,18 +1758,6 @@ function App() {
     () => ides.find((ide) => ide.id === selectedIdeId) ?? ides[0] ?? { id: "code", label: "VS Code", command: "code" },
     [ides, selectedIdeId],
   );
-  const toolContext = useMemo<AgentToolContext[]>(
-    () =>
-      agentTools.map((tool) => ({
-        id: tool.id,
-        label: tool.label,
-        summary: tool.summary,
-        command: tool.command,
-        enabled: tool.enabled,
-      })),
-    [agentTools],
-  );
-
   const telemetry = useMemo(
     () => ({
       connection,
@@ -1265,8 +1774,6 @@ function App() {
       models,
       selectedModel,
       permissionMode,
-      enabledTools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
-      toolContext,
       attachedFiles,
       approvalBehavior: chats.flatMap((chat) =>
         chat.approvalEvents.map((event) => ({
@@ -1280,7 +1787,7 @@ function App() {
       operatingSystem: detectHarnessOs(),
       lastError: error,
     }),
-    [activeChat, activeFile, agentTools, attachedFiles, branchInfo, chats, connection, error, health, models, permissionMode, selectedModel, sessions, storeOverview, toolContext, visibleProject, worktrees],
+    [activeChat, activeFile, attachedFiles, branchInfo, chats, connection, error, health, models, permissionMode, selectedModel, sessions, storeOverview, visibleProject, worktrees],
   );
   const agentTimeline = useMemo(
     () => activeChat.timeline.filter((row) => ["agent", "reasoning", "tool"].includes(row.name)),
@@ -1292,26 +1799,78 @@ function App() {
 
   const flushStreamBuffer = useCallback(() => {
     streamFrameRef.current = null;
-    const chunk = streamBufferRef.current;
-    streamBufferRef.current = "";
-    const chatId = streamingChatRef.current;
-    if (!chatId || !chunk) {
+    const chunks = Array.from(streamBufferRef.current.entries()).filter(([, chunk]) => chunk.length > 0);
+    const thinkingChunks = Array.from(thinkingBufferRef.current.entries()).filter(([, chunk]) => chunk.length > 0);
+    streamBufferRef.current.clear();
+    thinkingBufferRef.current.clear();
+    if (chunks.length === 0 && thinkingChunks.length === 0) {
       return;
     }
-    updateChat(chatId, (chat) => {
-      const messages = [...chat.messages];
-      const last = messages[messages.length - 1];
-      if (last?.role === "assistant" && last.streaming) {
-        messages[messages.length - 1] = { ...last, content: `${last.content}${chunk}` };
-      } else {
-        messages.push({ role: "assistant", content: chunk, streaming: true });
-      }
-      return { ...chat, messages };
-    });
+    for (const [chatId, chunk] of thinkingChunks) {
+      updateChat(chatId, (chat) => {
+        const messages = [...chat.messages];
+        let thinkingIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          if (messages[index].role === "thinking" && messages[index].streaming) {
+            thinkingIndex = index;
+            break;
+          }
+        }
+        if (thinkingIndex >= 0) {
+          const existing = messages[thinkingIndex].content;
+          messages[thinkingIndex] = {
+            ...messages[thinkingIndex],
+            content: stripDuplicatedText(`${existing}${chunk}`),
+          };
+          return { ...chat, messages };
+        }
+        let assistantIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          if (messages[index].role === "assistant" && messages[index].streaming) {
+            assistantIndex = index;
+            break;
+          }
+        }
+        const thinking: ChatLine = {
+          role: "thinking",
+          content: chunk,
+          streaming: true,
+          startedAt: new Date().toISOString(),
+        };
+        if (assistantIndex >= 0) {
+          messages.splice(assistantIndex, 0, thinking);
+        } else {
+          messages.push(thinking);
+        }
+        return { ...chat, messages };
+      });
+    }
+    for (const [chatId, chunk] of chunks) {
+      updateChat(chatId, (chat) => {
+        const messages = [...chat.messages];
+        const last = messages[messages.length - 1];
+        const userMessage = lastUserMessageRef.current.get(chatId) ?? "";
+        if (last?.role === "assistant" && last.streaming) {
+          messages[messages.length - 1] = {
+            ...last,
+            content: stripDuplicatedText(stripLeadingUserEcho(`${last.content}${chunk}`, userMessage)),
+          };
+        } else {
+          const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+          const content = stripLeadingUserEcho(chunk, userMessage);
+          if (lastAssistant && cleanAssistantMessage(lastAssistant.content) === cleanAssistantMessage(content)) {
+            return { ...chat, messages };
+          }
+          messages.push({ role: "assistant", content, streaming: true });
+        }
+        return { ...chat, messages };
+      });
+    }
   }, [updateChat]);
 
-  const enqueueStreamDelta = useCallback((delta: string) => {
-    streamBufferRef.current += delta;
+  const enqueueStreamDelta = useCallback((chatId: string, delta: string) => {
+    liveStreamSeenRef.current.set(chatId, true);
+    streamBufferRef.current.set(chatId, `${streamBufferRef.current.get(chatId) ?? ""}${delta}`);
     if (streamFrameRef.current !== null) {
       return;
     }
@@ -1319,6 +1878,50 @@ function App() {
   }, [flushStreamBuffer]);
 
   const enqueueThinkingDelta = useCallback((chatId: string, delta: string) => {
+    liveStreamSeenRef.current.set(chatId, true);
+    thinkingBufferRef.current.set(chatId, `${thinkingBufferRef.current.get(chatId) ?? ""}${delta}`);
+    if (streamFrameRef.current !== null) {
+      return;
+    }
+    streamFrameRef.current = requestAnimationFrame(flushStreamBuffer);
+  }, [flushStreamBuffer]);
+
+  const setAssistantSnapshot = useCallback((chatId: string, content: string) => {
+    const cleaned = cleanAssistantMessage(stripLeadingUserEcho(content, lastUserMessageRef.current.get(chatId) ?? ""));
+    if (!cleaned) {
+      return;
+    }
+    updateChat(chatId, (chat) => {
+      const messages = [...chat.messages];
+      let assistantIndex = -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === "assistant" && messages[index].streaming) {
+          assistantIndex = index;
+          break;
+        }
+      }
+      if (assistantIndex >= 0) {
+        const existing = cleanAssistantMessage(messages[assistantIndex].content);
+        messages[assistantIndex] = {
+          ...messages[assistantIndex],
+          content: mergeRelatedText(existing, cleaned),
+        };
+      } else {
+        const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+        if (lastAssistant && cleanAssistantMessage(lastAssistant.content) === cleaned) {
+          return { ...chat, messages };
+        }
+        messages.push({ role: "assistant", content: cleaned, streaming: true });
+      }
+      return { ...chat, messages };
+    });
+  }, [updateChat]);
+
+  const setThinkingSnapshot = useCallback((chatId: string, content: string) => {
+      const cleaned = stripDuplicatedText(content);
+    if (!cleaned) {
+      return;
+    }
     updateChat(chatId, (chat) => {
       const messages = [...chat.messages];
       let thinkingIndex = -1;
@@ -1328,30 +1931,31 @@ function App() {
           break;
         }
       }
+      const startedAt = new Date().toISOString();
       if (thinkingIndex >= 0) {
+        const existing = messages[thinkingIndex].content.trim();
         messages[thinkingIndex] = {
           ...messages[thinkingIndex],
-          content: `${messages[thinkingIndex].content}${delta}`,
+          content: mergeRelatedText(existing, cleaned),
         };
-        return { ...chat, messages };
-      }
-      let assistantIndex = -1;
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        if (messages[index].role === "assistant" && messages[index].streaming) {
-          assistantIndex = index;
-          break;
-        }
-      }
-      const thinking: ChatLine = {
-        role: "thinking",
-        content: delta,
-        streaming: true,
-        startedAt: new Date().toISOString(),
-      };
-      if (assistantIndex >= 0) {
-        messages.splice(assistantIndex, 0, thinking);
       } else {
-        messages.push(thinking);
+        let assistantIndex = -1;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          if (messages[index].role === "assistant" && messages[index].streaming) {
+            assistantIndex = index;
+            break;
+          }
+        }
+        const lastThinking = [...messages].reverse().find((message) => message.role === "thinking");
+        if (lastThinking && stripDuplicatedText(lastThinking.content) === cleaned) {
+          return { ...chat, messages };
+        }
+        const thinking: ChatLine = { role: "thinking", content: cleaned, streaming: true, startedAt };
+        if (assistantIndex >= 0) {
+          messages.splice(assistantIndex, 0, thinking);
+        } else {
+          messages.push(thinking);
+        }
       }
       return { ...chat, messages };
     });
@@ -1363,18 +1967,40 @@ function App() {
       cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
     }
-    if (streamBufferRef.current) {
-      const tail = streamBufferRef.current;
-      streamBufferRef.current = "";
+    const tail = streamBufferRef.current.get(chatId) ?? "";
+    const thinkingTail = thinkingBufferRef.current.get(chatId) ?? "";
+    streamBufferRef.current.delete(chatId);
+    thinkingBufferRef.current.delete(chatId);
+    if (tail || thinkingTail) {
       updateChat(chatId, (chat) => {
+        const cleanTail = stripLeadingUserEcho(tail, lastUserMessageRef.current.get(chatId) ?? "");
         const messages = chat.messages.map((message) =>
           message.role === "thinking" && message.streaming ? finishThinkingLine(message, endedAtMs) : message,
         );
+        if (thinkingTail) {
+          let thinkingIndex = -1;
+          for (let index = messages.length - 1; index >= 0; index -= 1) {
+            if (messages[index].role === "thinking") {
+              thinkingIndex = index;
+              break;
+            }
+          }
+          if (thinkingIndex >= 0) {
+            messages[thinkingIndex] = finishThinkingLine({
+              ...messages[thinkingIndex],
+              content: stripDuplicatedText(`${messages[thinkingIndex].content}${thinkingTail}`),
+            }, endedAtMs);
+          }
+        }
         const last = messages[messages.length - 1];
-        if (last?.role === "assistant" && last.streaming) {
-          messages[messages.length - 1] = { ...last, content: `${last.content}${tail}`, streaming: false };
-        } else {
-          messages.push({ role: "assistant", content: tail });
+        if (tail && last?.role === "assistant" && last.streaming) {
+          messages[messages.length - 1] = {
+            ...last,
+            content: stripDuplicatedText(stripLeadingUserEcho(`${last.content}${tail}`, lastUserMessageRef.current.get(chatId) ?? "")),
+            streaming: false,
+          };
+        } else if (tail) {
+          messages.push({ role: "assistant", content: cleanTail });
         }
         return { ...chat, messages };
       });
@@ -1390,7 +2016,14 @@ function App() {
         }
         return message;
       });
-      return { ...chat, messages };
+      const last = messages[messages.length - 1];
+      return {
+        ...chat,
+        messages:
+          last?.role === "assistant" && !last.streaming && last.content.trim() === ""
+            ? messages.slice(0, -1)
+            : messages,
+      };
     });
   }, [updateChat]);
 
@@ -1405,112 +2038,362 @@ function App() {
     updateChat(chatId, (chat) => ({ ...chat, timeline: [row, ...chat.timeline].slice(0, 40) }));
   }, [activeChatId, updateChat]);
 
-  const rpc = useCallback(<T,>(method: string, params: unknown): Promise<T> => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("Daemon socket is not open."));
-    }
-    const id = crypto.randomUUID();
-    ws.send(JSON.stringify({ id, method, params }));
-    return new Promise<T>((resolve, reject) => {
-      pendingRef.current.set(id, (response) => {
-        if (response.error) {
-          reject(new Error(response.error.message));
-        } else {
-          resolve(response.result as T);
-        }
-      });
-      setTimeout(() => {
-        if (pendingRef.current.has(id)) {
-          pendingRef.current.delete(id);
-          reject(new Error(`${method} timed out.`));
-        }
-      }, 45000);
-    });
-  }, []);
-
-  useEffect(() => {
-    if (socketState !== "open") {
-      setContextUsage((current) => ({
-        ...current,
-        status: "unavailable",
-        detail: "Daemon is not connected.",
-      }));
+  const recordToolChangedFile = useCallback((chatId: string, toolName: string, data: unknown) => {
+    const changedPath = toolChangedPath(toolName, data);
+    if (!changedPath) {
       return;
     }
+    updateChat(chatId, (chat) => {
+      const changedFilePaths = Array.from(new Set([...(chat.changedFilePaths ?? []), changedPath]));
+      return {
+        ...chat,
+        diffAvailable: changedFilePaths.length > 0,
+        changedFileCount: changedFilePaths.length,
+        changedFilePaths,
+      };
+    });
+  }, [updateChat]);
 
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      const workingRoot = activeChat.worktreePath ?? selectedProject?.root_path;
-      const message = prompt.trim();
-      setContextUsage((current) => ({ ...current, status: "loading" }));
-      void rpc<ContextUsageResult>("agent.context_usage", {
-        project_id: selectedProject?.id,
-        project_root: workingRoot,
-        message,
-        conversation_history: chatHistoryForDaemon(activeChat.messages),
-        model: selectedModel,
-        git_branch: selectedBranch || undefined,
-        worktree_enabled: activeChat.worktreeEnabled,
-        worktree_path: workingRoot,
-        permission_mode: permissionMode,
-        enabled_tools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
-        approved_tool_actions: activeChat.approvedToolActions,
-        tool_context: toolContext,
-        attached_files: attachedFiles.map((file) => ({
-          path: file.path,
-          project_path: file.projectPath,
-          content: file.projectPath ? undefined : file.content,
-        })),
-        operating_system: detectHarnessOs(),
-      })
-        .then((usage) => {
-          if (cancelled) {
-            return;
-          }
-          setContextUsage({
-            promptTokens: usage.prompt_tokens,
-            maxContextTokens: usage.max_context_tokens,
-            messageCount: usage.message_count,
-            percent: contextPercent(usage.prompt_tokens, usage.max_context_tokens),
-            status: "ready",
-            detail: "Counted by LM Studio using the selected model context.",
+  const upsertToolRun = useCallback((
+    chatId: string,
+    toolName: string,
+    status: "running" | "completed" | "error",
+    detail: string,
+    command: string,
+    output: string,
+    raw: unknown,
+  ) => {
+    if (status === "running" || status === "completed") {
+      recordToolChangedFile(chatId, toolName, raw);
+    }
+    updateChat(chatId, (chat) => {
+      const nextStatus: ServiceStatus =
+        status === "running" ? "degraded" : status === "completed" ? "ready" : "unavailable";
+      const messages = [...chat.messages.filter((message) => !(message.role === "assistant" && message.streaming && message.content.length === 0))];
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (
+          messages[index].role === "tool" &&
+          messages[index].toolName === toolName &&
+          messages[index].command === command &&
+          messages[index].status === "degraded"
+        ) {
+          messages[index] = {
+            ...messages[index],
+            status: nextStatus,
+            detail,
+            command,
+            output,
+            content: detail,
+          };
+          return { ...chat, messages };
+        }
+      }
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (
+          messages[index].role === "tool" &&
+          messages[index].toolName === toolName &&
+          messages[index].status === "degraded"
+        ) {
+          messages[index] = {
+            ...messages[index],
+            status: nextStatus,
+            detail,
+            command: command || messages[index].command,
+            output,
+            content: detail,
+          };
+          return { ...chat, messages };
+        }
+      }
+      const toolLine: ChatLine = {
+        role: "tool",
+        toolName,
+        status: nextStatus,
+        detail,
+        command,
+        output,
+        content: detail,
+      };
+      let insertAt = messages.length;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message.role === "tool") {
+          break;
+        }
+        if (message.role === "assistant") {
+          insertAt = index;
+          break;
+        }
+      }
+      messages.splice(insertAt, 0, toolLine);
+      return { ...chat, messages };
+    });
+    addTimeline("tool", status === "completed" ? "ready" : status === "error" ? "unavailable" : "degraded", detail, chatId);
+  }, [addTimeline, recordToolChangedFile, updateChat]);
+
+  const openCodeFetch = useCallback(async <T,>(
+    endpoint: string,
+    options: RequestInit = {},
+    directory?: string,
+  ): Promise<T> => {
+    const currentConnection = connectionRef.current;
+    if (!currentConnection || currentConnection.status !== "ready") {
+      throw new Error("OpenCode is not connected.");
+    }
+    const url = new URL(endpoint, currentConnection.url);
+    if (directory) {
+      url.searchParams.set("directory", directory);
+    }
+    const headers = new Headers(options.headers);
+    headers.set("Authorization", currentConnection.authHeader);
+    if (options.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    const response = await fetch(url.toString(), { ...options, headers });
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}${text ? `: ${text.slice(0, 500)}` : ""}`);
+    }
+    return (text ? JSON.parse(text) : undefined) as T;
+  }, []);
+
+  const monitorSessionMessages = useCallback((chatId: string, sessionId: string, directory?: string) => {
+    sessionMonitorRef.current.get(sessionId)?.abort();
+    const monitor = new AbortController();
+    sessionMonitorRef.current.set(sessionId, monitor);
+    void (async () => {
+      let lastText = "";
+      let stableTicks = 0;
+      const startedAt = Date.now();
+      try {
+        for (let attempt = 0; attempt < 240 && !monitor.signal.aborted; attempt += 1) {
+          await delay(attempt < 8 ? 250 : 500);
+          const messages = await openCodeFetch<Array<unknown>>(
+            `/session/${encodeURIComponent(sessionId)}/message?limit=40`,
+            { signal: monitor.signal },
+            directory,
+          ).catch((cause) => {
+            if (monitor.signal.aborted) {
+              return [];
+            }
+            throw cause;
           });
-        })
-        .catch((cause) => {
-          if (cancelled) {
+          const snapshot = latestAssistantSnapshot(messages);
+          if (snapshot.error) {
+            throw new Error(snapshot.error);
+          }
+          const sawEventText = liveStreamSeenRef.current.get(chatId) === true;
+          if (snapshot.reasoning && !sawEventText && Date.now() - startedAt > 2500) {
+            setThinkingSnapshot(chatId, snapshot.reasoning);
+          }
+          if (snapshot.text && !sawEventText) {
+            setAssistantSnapshot(chatId, snapshot.text);
+            stableTicks = snapshot.text === lastText ? stableTicks + 1 : 0;
+            lastText = snapshot.text;
+          } else if (snapshot.text) {
+            stableTicks = snapshot.text === lastText ? stableTicks + 1 : 0;
+            lastText = snapshot.text;
+          }
+          if (snapshot.text && stableTicks >= 3) {
+            finishStreaming(chatId);
+            addTimeline("agent", "ready", `session ${sessionId.slice(0, 8)} finished`, chatId);
+            if (streamingChatRef.current === chatId) {
+              streamingChatRef.current = null;
+            }
             return;
           }
+          if (!snapshot.text && Date.now() - startedAt > 45_000) {
+            finishStreaming(chatId);
+            addTimeline("agent", "ready", `session ${sessionId.slice(0, 8)} quiet`, chatId);
+            if (streamingChatRef.current === chatId) {
+              streamingChatRef.current = null;
+            }
+            return;
+          }
+        }
+      } catch (cause) {
+        if (!monitor.signal.aborted) {
           const message = String(cause instanceof Error ? cause.message : cause);
-          setContextUsage((current) => ({
-            ...current,
-            status: "unavailable",
-            detail: message,
-          }));
-        });
-    }, 450);
+          setError(message);
+          addTimeline("agent", "unavailable", message, chatId);
+          finishStreaming(chatId);
+        }
+      } finally {
+        if (sessionMonitorRef.current.get(sessionId) === monitor) {
+          sessionMonitorRef.current.delete(sessionId);
+        }
+      }
+    })();
+  }, [addTimeline, finishStreaming, openCodeFetch, setAssistantSnapshot, setThinkingSnapshot]);
 
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [
-    activeChat.approvedToolActions,
-    activeChat.id,
-    activeChat.messages,
-    activeChat.worktreeEnabled,
-    activeChat.worktreePath,
-    agentTools,
-    attachedFiles,
-    permissionMode,
-    prompt,
-    rpc,
-    selectedBranch,
-    selectedModel,
-    selectedProject,
-    socketState,
-    toolContext,
-  ]);
+  const rpc = useCallback(async <T,>(method: string, params: unknown): Promise<T> => {
+    const input = (params ?? {}) as Record<string, unknown>;
+    const currentConnection = connectionRef.current;
+    if (method === "opencode.health") {
+      const native = await aegisApi.nativeRequest<{
+        opencode: ServiceStatus;
+        sqlite_path: string;
+        lm_studio: ServiceStatus;
+        model_base_url: string;
+        semantic_index: ServiceStatus;
+      }>({ type: "health" });
+      return {
+        opencode: native.opencode,
+        sqlite_path: native.sqlite_path,
+        lm_studio: native.lm_studio,
+        model_base_url: native.model_base_url,
+        semantic_index: native.semantic_index,
+      } as T;
+    }
+    if (method === "project.list") {
+      return aegisApi.nativeRequest<T>({ type: "project:list" });
+    }
+    if (method === "project.add") {
+      return aegisApi.nativeRequest<T>({
+        type: "project:add",
+        rootPath: String(input.root_path ?? input.rootPath ?? ""),
+        name: typeof input.name === "string" ? input.name : undefined,
+      });
+    }
+    if (method === "store.overview") {
+      return aegisApi.nativeRequest<T>({ type: "store:overview" });
+    }
+    if (method === "ide.detect") {
+      return aegisApi.nativeRequest<T>({ type: "ide:detect" });
+    }
+    if (method === "model.list") {
+      const modelId = currentConnection?.status === "ready"
+        ? `${currentConnection.model.providerId}/${currentConnection.model.modelId}`
+        : "aegis-lmstudio/local";
+      return [{ id: modelId, name: "Local LM Studio" }] as T;
+    }
+    if (method === "opencode.config") {
+      return aegisApi.nativeRequest<T>({ type: "opencode:config" });
+    }
+    if (method === "session.list") {
+      const projectId = typeof input.projectId === "string" ? input.projectId : null;
+      const projectRoot = projectId
+        ? projects.find((project) => project.id === projectId)?.root_path
+        : undefined;
+      const sessions = await openCodeFetch<Array<{
+        id: string;
+        projectID: string;
+        directory: string;
+        title: string;
+        time: { created: number; updated: number };
+      }>>("/session", {}, projectRoot);
+      return sessions
+        .filter((session) => !projectRoot || session.directory === projectRoot)
+        .map((session) => ({
+          id: session.id,
+          project_id:
+            projects.find((project) => project.root_path === session.directory)?.id ??
+            stableProjectIdFromRoot(session.directory || projectRoot || session.projectID),
+          title: session.title,
+          model_id: currentConnection?.status === "ready" ? `${currentConnection.model.providerId}/${currentConnection.model.modelId}` : "aegis-lmstudio/local",
+          started_at: new Date(session.time.created).toISOString(),
+          finished_at: null,
+          status: "idle",
+          user_message: session.title,
+        })) as T;
+    }
+    if (method === "project.files") {
+      const projectRoot = String(input.projectRoot ?? "");
+      const limit = Number(input.limit ?? 10000);
+      return aegisApi.nativeRequest<T>({ type: "project:files", projectRoot, limit });
+    }
+    if (method === "project.search") {
+      const projectRoot = String(input.project_root ?? input.projectRoot ?? "");
+      const pattern = String(input.query ?? "");
+      return aegisApi.nativeRequest<T>({
+        type: "project:search",
+        projectRoot,
+        query: pattern,
+        limit: Number(input.limit ?? 200),
+      });
+    }
+    if (method === "git.status") {
+      return aegisApi.nativeRequest<T>({ type: "git:status", projectRoot: String(input.projectRoot ?? "") });
+    }
+    if (method === "git.diff") {
+      return aegisApi.nativeRequest<T>({ type: "git:diff", projectRoot: String(input.projectRoot ?? "") });
+    }
+    if (method === "git.branches") {
+      return aegisApi.nativeRequest<T>({ type: "git:branches", projectRoot: String(input.projectRoot ?? "") });
+    }
+    if (method === "git.worktree_list") {
+      return aegisApi.nativeRequest<T>({ type: "git:worktree-list", projectRoot: String(input.projectRoot ?? "") });
+    }
+    if (method === "git.worktree_create") {
+      return aegisApi.nativeRequest<T>({
+        type: "git:worktree-create",
+        projectRoot: String(input.projectRoot ?? ""),
+        branch: String(input.branch ?? "HEAD"),
+        newBranch: String(input.newBranch ?? ""),
+        worktreeName: String(input.worktreeName ?? "aegis-worktree"),
+      });
+    }
+    if (method === "agent.send_task") {
+      const projectRoot = String(input.project_root ?? input.worktree_path ?? "");
+      const chatId = typeof input.chat_id === "string" ? input.chat_id : activeChatId;
+      const existingSessionId = chats.find((chat) => chat.id === chatId)?.sessionId;
+      const session = existingSessionId
+        ? { id: existingSessionId }
+        : await openCodeFetch<{ id: string }>("/session", {
+            method: "POST",
+            body: JSON.stringify({ title: String(input.message ?? "Aegis task").slice(0, 80) }),
+          }, projectRoot || undefined);
+      sessionChatRef.current.set(session.id, chatId);
+      updateChat(chatId, (chat) => ({ ...chat, sessionId: session.id }));
+      const selected = String(input.model ?? selectedModel);
+      const { providerID, modelID } = splitOpenCodeModel(
+        selected,
+        currentConnection?.status === "ready" ? currentConnection.model.modelId : "local",
+      );
+      const promptParts = [
+        {
+          type: "text",
+          text: String(input.message ?? ""),
+        },
+      ];
+      await openCodeFetch<void>(
+        `/session/${encodeURIComponent(session.id)}/prompt_async`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            agent: "aegis",
+            model: { providerID, modelID },
+            tools: {
+              webfetch: false,
+              websearch: false,
+            },
+            parts: promptParts,
+          }),
+        },
+        projectRoot || undefined,
+      );
+      return {
+        session_id: session.id,
+        turn_id: session.id,
+      } as T;
+    }
+    if (method === "opencode.permission") {
+      const sessionId = String(input.sessionId ?? "");
+      const permissionId = String(input.permissionId ?? "");
+      return openCodeFetch<T>(
+        `/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionId)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ response: input.response === "reject" ? "reject" : "once" }),
+        },
+        typeof input.directory === "string" ? input.directory : undefined,
+      );
+    }
+    throw new Error(`Unsupported Aegis/OpenCode method: ${method}`);
+  }, [activeChatId, chats, openCodeFetch, projects, selectedModel, updateChat]);
 
   const refreshStore = useCallback(async () => {
     setStoreOverview(await rpc<StoreOverview>("store.overview", {}));
@@ -1584,13 +2467,14 @@ function App() {
   }, [addTimeline, rpc, selectedProject]);
 
   const loadInitialData = useCallback(async () => {
-    const [healthResult, projectRows, sessionRows, overview, detectedIdes, modelRows] = await Promise.all([
-      rpc<DaemonHealth>("daemon.health", {}),
+    const [healthResult, projectRows, sessionRows, overview, detectedIdes, modelRows, openCodeConfig] = await Promise.all([
+      rpc<OpenCodeHealth>("opencode.health", {}),
       rpc<ProjectSummary[]>("project.list", {}),
       rpc<SessionSummary[]>("session.list", {}),
       rpc<StoreOverview>("store.overview", {}),
       rpc<IdeInstall[]>("ide.detect", {}),
       rpc<Array<{ id: string }>>("model.list", {}),
+      rpc<Record<string, unknown>>("opencode.config", {}).catch(() => ({})),
     ]);
     setHealth(healthResult);
     setProjects(projectRows);
@@ -1598,6 +2482,7 @@ function App() {
     setStoreOverview(overview);
     setIdes(detectedIdes);
     setModels(modelRows.map((model) => model.id));
+    setPermissionMode((openCodeConfig as Record<string, unknown>).aegis_permission_mode === "bypass" ? "bypass" : "default");
     setSelectedModel((current) => modelRows.some((model) => model.id === current) ? current : modelRows[0]?.id ?? current);
     setSelectedIdeId((current) => detectedIdes.some((ide) => ide.id === current) ? current : detectedIdes.find((ide) => ide.id === "code")?.id ?? detectedIdes[0]?.id ?? "code");
     setSelectedProjectId((current) => projectRows.some((project) => project.id === current) ? current : projectRows[0]?.id ?? null);
@@ -1605,157 +2490,201 @@ function App() {
     if (projectForFiles) {
       void refreshProjectFiles(projectForFiles).catch(() => setProjectFiles([]));
     }
-    addTimeline("daemon", "ready", "connected");
+    addTimeline("opencode", "ready", "connected");
     addTimeline("lm-studio", healthResult.lm_studio, `${modelRows.length} model(s)`);
   }, [addTimeline, refreshProjectFiles, rpc, selectedProjectId]);
 
   const connect = useCallback(async () => {
     setSocketState("connecting");
     setError(null);
-    const daemon = await aegisApi.getDaemonConnection();
-    setConnection(daemon);
+    const openCode = await aegisApi.getOpenCodeConnection();
+    connectionRef.current = openCode;
+    setConnection(openCode);
 
-    if (daemon.status !== "ready") {
+    if (openCode.status !== "ready") {
       setSocketState("closed");
-      setError(daemon.message);
-      addTimeline("desktop", "unavailable", daemon.message);
+      setError(openCode.message);
+      addTimeline("desktop", "unavailable", openCode.message);
       return;
     }
 
-    const ws = new WebSocket(`${daemon.url}?token=${encodeURIComponent(daemon.token)}`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setSocketState("open");
-      void loadInitialData().catch((cause) => setError(String(cause)));
-    };
-
-    ws.onclose = () => setSocketState("closed");
-    ws.onerror = () => setError("WebSocket connection to the daemon failed.");
-    ws.onmessage = (event) => {
-      const parsed = JSON.parse(event.data) as RpcResponse<unknown> | ServerEvent;
-      if ("id" in parsed) {
-        const handler = pendingRef.current.get(parsed.id);
-        if (handler) {
-          pendingRef.current.delete(parsed.id);
-          handler(parsed);
-        }
-        return;
-      }
-      if (parsed.type === "status") {
-        setHealth({
-          daemon: parsed.daemon,
-          sqlite_path: parsed.sqlite_path,
-          lm_studio: parsed.lm_studio,
-          model_base_url: parsed.model_base_url,
-          semantic_index: parsed.semantic_index,
+    setModels([`${openCode.model.providerId}/${openCode.model.modelId}`]);
+    setSelectedModel(`${openCode.model.providerId}/${openCode.model.modelId}`);
+    setSocketState("open");
+    eventAbortRef.current?.abort();
+    const abort = new AbortController();
+    eventAbortRef.current = abort;
+    void (async () => {
+      try {
+        const response = await fetch(new URL("/global/event", openCode.url).toString(), {
+          headers: { Authorization: openCode.authHeader },
+          signal: abort.signal,
         });
-      }
-      if (parsed.type === "agent_stream") {
-        const chatId = streamingChatRef.current;
-        if (!chatId) {
-          return;
+        if (!response.ok || !response.body) {
+          throw new Error(`OpenCode event stream failed: ${response.status} ${response.statusText}`);
         }
-        if (parsed.kind === "message.delta" && parsed.content) {
-          enqueueStreamDelta(parsed.content);
-        }
-        if (parsed.kind === "reasoning.delta" && parsed.content) {
-          enqueueThinkingDelta(chatId, parsed.content);
-          addTimeline("reasoning", "degraded", "thinking", chatId);
-        }
-        if (parsed.kind === "reasoning.start") {
-          enqueueThinkingDelta(chatId, "");
-          addTimeline("reasoning", "degraded", "thinking", chatId);
-        }
-        if (parsed.kind === "tool.start") {
-          if (streamFrameRef.current !== null) {
-            cancelAnimationFrame(streamFrameRef.current);
-            streamFrameRef.current = null;
-          }
-          streamBufferRef.current = "";
-          const toolName = typeof parsed.data === "object" && parsed.data && "tool" in parsed.data
-            ? String((parsed.data as Record<string, unknown>).tool)
-            : "tool";
-          const detail = toolActivityLabel(toolName, parsed.data);
-          updateChat(chatId, (chat) => {
-            const messages = [...chat.messages];
-            const last = messages[messages.length - 1];
-            const isToolCall =
-              last?.role === "assistant" &&
-              (looksLikeToolCall(last.content) || looksLikeToolCallFragment(last.content));
-            const isEmptyStreamingPlaceholder =
-              last?.role === "assistant" && last.streaming === true && last.content.length === 0;
-            const isBackgroundStreamingText =
-              last?.role === "assistant" && last.streaming === true;
-            if (isToolCall || isEmptyStreamingPlaceholder || isBackgroundStreamingText) {
-              messages.pop();
-            }
-            return {
-              ...chat,
-              messages: [
-                ...messages,
-                {
-                  role: "tool",
-                  toolName,
-                  status: "degraded",
-                  detail,
-                  content: detail,
-                },
-              ],
-            };
-          });
-          addTimeline("tool", "degraded", detail, chatId);
-        }
-        if (parsed.kind === "tool.end") {
-          const data = parsed.data as Record<string, unknown>;
-          const toolName = typeof data?.tool === "string" ? data.tool : "tool";
-          const success = data?.success !== false;
-          const approvalRequest = approvalRequestFromToolEvent(toolName, data, String(data?.summary ?? ""));
-          const summary = approvalRequest
-            ? `Approval needed: ${toolActionCommand(toolName, data)}`
-            : toolActivityLabel(toolName, data, success);
-          updateChat(chatId, (chat) => {
-            const messages = [...chat.messages];
-            let updated = false;
-            for (let index = messages.length - 1; index >= 0; index -= 1) {
-              if (messages[index].role === "tool" && messages[index].toolName === toolName && messages[index].status === "degraded") {
-                const display = approvalRequest
-                  ? messages[index].detail || toolActivityLabel(toolName, data, true)
-                  : success
-                    ? messages[index].detail || summary
-                    : summary;
-                messages[index] = {
-                  ...messages[index],
-                  status: success ? "ready" : approvalRequest ? "degraded" : "unavailable",
-                  detail: display,
-                  content: display,
-                };
-                updated = true;
-                break;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!abort.signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split(/\r?\n\r?\n/);
+          buffer = chunks.pop() ?? "";
+          for (const chunk of chunks) {
+            const data = chunk
+              .split(/\r?\n/)
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trimStart())
+              .join("\n");
+            if (!data) continue;
+            const event = recordValue(JSON.parse(data));
+            const payload = recordValue(event?.payload) ?? event;
+            if (!payload || typeof payload.type !== "string") continue;
+            const properties: Record<string, unknown> = { ...(recordValue(payload.properties) ?? {}), type: payload.type };
+            const part = recordValue(properties.part);
+            const sessionID =
+              typeof properties.sessionID === "string"
+                ? properties.sessionID
+                : typeof part?.sessionID === "string"
+                  ? part.sessionID
+                  : "";
+            const chatId = (sessionID ? sessionChatRef.current.get(sessionID) : undefined) ?? streamingChatRef.current;
+            if (payload.type.startsWith("message.part") && chatId) {
+              const key = openCodePartKey(sessionID, part, properties);
+              const previous = streamPartTextRef.current.get(key) ?? "";
+              const { delta, snapshot } = openCodeEventDelta(part, properties, previous);
+              if (snapshot !== undefined) {
+                streamPartTextRef.current.set(key, snapshot);
+              }
+              if (delta) {
+                const wholeText = snapshot ?? `${previous}${delta}`;
+                if (snapshot === undefined) {
+                  streamPartTextRef.current.set(key, wholeText);
+                }
+                const split = splitReasoningFromAnswer(wholeText);
+                const priorKind = streamPartKindRef.current.get(key);
+                const explicitReasoningPart = isReasoningPart(part, properties);
+                if (split.answer) {
+                  streamPartKindRef.current.set(key, "answer");
+                  if (split.reasoning) {
+                    thinkingBufferRef.current.delete(chatId);
+                    setThinkingSnapshot(chatId, split.reasoning);
+                    addTimeline("reasoning", "degraded", "thinking", chatId);
+                  }
+                  setAssistantSnapshot(chatId, split.answer);
+                } else if (explicitReasoningPart || priorKind === "reasoning") {
+                  streamPartKindRef.current.set(key, "reasoning");
+                  enqueueThinkingDelta(chatId, delta);
+                  addTimeline("reasoning", "degraded", "thinking", chatId);
+                } else if (split.reasoning) {
+                  streamPartKindRef.current.set(key, "reasoning");
+                  enqueueThinkingDelta(chatId, delta);
+                  addTimeline("reasoning", "degraded", "thinking", chatId);
+                } else {
+                  streamPartKindRef.current.set(key, "answer");
+                  enqueueStreamDelta(chatId, delta);
+                }
+              }
+              if (part && eventText(part.type).includes("tool")) {
+                const toolPayload = eventToolPayload(properties, part);
+                if (toolPayload) {
+                  upsertToolRun(
+                    chatId,
+                    toolPayload.toolName,
+                    toolPayload.status,
+                    toolPayload.detail,
+                    toolPayload.command,
+                    toolPayload.output,
+                    toolPayload.raw,
+                  );
+                }
               }
             }
-            if (!updated) {
-              messages.push({
-                role: "tool",
-                toolName,
-                status: success ? "ready" : approvalRequest ? "degraded" : "unavailable",
-                detail: summary,
-                content: summary,
-              });
+            if (
+              chatId &&
+              (payload.type === "tool.execute.before" ||
+                payload.type === "tool.execute.after" ||
+                payload.type === "command.executed" ||
+                payload.type === "file.edited")
+            ) {
+              const toolPayload = eventToolPayload(properties, part);
+              if (toolPayload) {
+                upsertToolRun(
+                  chatId,
+                  toolPayload.toolName,
+                  toolPayload.status,
+                  toolPayload.detail,
+                  toolPayload.command,
+                  toolPayload.output,
+                  toolPayload.raw,
+                );
+              }
             }
-            return { ...chat, messages, pendingApproval: approvalRequest ?? chat.pendingApproval };
-          });
-          addTimeline("tool", success ? "ready" : approvalRequest ? "degraded" : "unavailable", summary, chatId);
-          if (approvalRequest) {
-            addTimeline("approval", "degraded", `Pending: ${approvalRequest.command}`, chatId);
+            if (payload.type === "permission.updated" || payload.type === "permission.asked") {
+              const permission = properties;
+              const sessionID = typeof permission.sessionID === "string" ? permission.sessionID : "";
+              const permissionID =
+                typeof permission.id === "string"
+                  ? permission.id
+                  : typeof permission.requestID === "string"
+                    ? permission.requestID
+                    : "";
+              if (!sessionID || !permissionID) {
+                continue;
+              }
+              const rawPatterns = Array.isArray(permission.patterns) ? permission.patterns : permission.pattern;
+              const patterns = Array.isArray(rawPatterns)
+                ? rawPatterns.filter((pattern): pattern is string => typeof pattern === "string")
+                : typeof rawPatterns === "string"
+                  ? [rawPatterns]
+                  : [];
+              const permissionKind =
+                typeof permission.permission === "string"
+                  ? permission.permission
+                  : typeof permission.type === "string"
+                    ? permission.type
+                    : "permission";
+              const title =
+                typeof permission.title === "string"
+                  ? permission.title
+                  : patterns.length > 0
+                    ? `${permissionKind}: ${patterns.join(", ")}`
+                    : "OpenCode permission request";
+              const targetChat = sessionChatRef.current.get(sessionID) ?? chats.find((chat) => chat.sessionId === sessionID)?.id ?? streamingChatRef.current ?? activeChatId;
+              const request: ToolApprovalRequest = {
+                id: permissionID,
+                toolName: permissionKind,
+                actionKey: `permission:${sessionID}:${permissionID}`,
+                command: title,
+                summary: title,
+                requestedAt: new Date().toISOString(),
+              };
+              updateChat(targetChat, (chat) => ({ ...chat, pendingApproval: request }));
+              addTimeline("approval", "degraded", `Pending: ${title}`, targetChat);
+            }
+            if (payload.type === "session.idle" || (payload.type.startsWith("session.") && String(properties.status ?? "").toLowerCase() === "idle")) {
+              const sessionID = String(properties.sessionID ?? "");
+              const targetChat = sessionChatRef.current.get(sessionID) ?? chats.find((chat) => chat.sessionId === sessionID)?.id ?? streamingChatRef.current ?? activeChatId;
+              if (targetChat) {
+                finishStreaming(targetChat);
+                if (streamingChatRef.current === targetChat) {
+                  streamingChatRef.current = null;
+                }
+              }
+            }
           }
         }
-        if (parsed.kind === "terminal.output" && parsed.content) {
-          setTerminalOutput((current) => `${current}${parsed.content}`.slice(-80_000));
+      } catch (cause) {
+        if (!abort.signal.aborted) {
+          setError(String(cause instanceof Error ? cause.message : cause));
+          setSocketState("closed");
         }
       }
-    };
-  }, [addTimeline, enqueueStreamDelta, enqueueThinkingDelta, loadInitialData, updateChat]);
+    })();
+    void loadInitialData().catch((cause) => setError(String(cause)));
+  }, [activeChatId, addTimeline, chats, enqueueStreamDelta, enqueueThinkingDelta, finishStreaming, loadInitialData, upsertToolRun, updateChat]);
 
   const pickProject = useCallback(async () => {
     setError(null);
@@ -1784,7 +2713,7 @@ function App() {
     const unsubscribeBack = aegisApi.onBackToChatRequested(() => setActiveTab("chat"));
     const unsubscribeSidebar = aegisApi.onToggleSidebarRequested(() => setSidebarVisible((visible) => !visible));
     return () => {
-      wsRef.current?.close();
+      eventAbortRef.current?.abort();
       unsubscribeOpen();
       unsubscribeBack();
       unsubscribeSidebar();
@@ -1822,9 +2751,8 @@ function App() {
       selectedProjectId,
       selectedModel,
       selectedIdeId,
-      permissionMode,
     });
-  }, [activeChatId, chats, permissionMode, selectedIdeId, selectedModel, selectedProjectId]);
+  }, [activeChatId, chats, selectedIdeId, selectedModel, selectedProjectId]);
 
   const newChat = () => {
     const chat = newLocalChat(selectedBranch);
@@ -1852,11 +2780,41 @@ function App() {
   const restart = async () => {
     setSocketState("connecting");
     setError(null);
-    wsRef.current?.close();
-    pendingRef.current.clear();
-    const daemon = await aegisApi.restartDaemon();
-    setConnection(daemon);
+    eventAbortRef.current?.abort();
+    const openCode = await aegisApi.restartOpenCode();
+    connectionRef.current = openCode;
+    setConnection(openCode);
     setTimeout(() => void connect(), 150);
+  };
+
+  const applyPermissionMode = async (mode: PermissionMode) => {
+    if (mode === permissionMode || busy) {
+      return;
+    }
+    setPermissionMode(mode);
+    setSocketState("connecting");
+    setError(null);
+    eventAbortRef.current?.abort();
+    try {
+      const openCode = aegisApi.setPermissionMode
+        ? await aegisApi.setPermissionMode(mode)
+        : await aegisApi.nativeRequest<DesktopConnection>({ type: "opencode:set-permission-mode", mode });
+      connectionRef.current = openCode;
+      setConnection(openCode);
+      addTimeline("permissions", openCode.status === "ready" ? "ready" : "unavailable", `${mode} mode`);
+      setTimeout(() => void connect(), 150);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+      setSocketState("closed");
+    }
+  };
+
+  const changePermissionMode = async (mode: PermissionMode) => {
+    if (mode === "bypass" && permissionMode !== "bypass") {
+      setBypassConfirmOpen(true);
+      return;
+    }
+    await applyPermissionMode(mode);
   };
 
   const ensureWorktree = async (chatId: string, message: string): Promise<GitWorktreeInfo | null> => {
@@ -1899,7 +2857,7 @@ function App() {
     }
     addTimeline("tool", "unavailable", `${call.tool} returned as final text`, chatId);
     return [
-      `The model returned a raw ${call.tool} tool call as the final answer instead of letting the daemon continue the tool loop.`,
+      `The model returned a raw ${call.tool} tool call as the final answer instead of letting OpenCode continue the tool loop.`,
       "",
       "Send the request again and Aegis can continue from the current chat context.",
     ].join("\n");
@@ -1923,7 +2881,12 @@ function App() {
     }
     setAttachedFiles([]);
     streamingChatRef.current = chatId;
-    streamBufferRef.current = "";
+    streamBufferRef.current.clear();
+    thinkingBufferRef.current.clear();
+    streamPartTextRef.current.clear();
+    streamPartKindRef.current.clear();
+    liveStreamSeenRef.current.set(chatId, false);
+    lastUserMessageRef.current.set(chatId, trimmed);
     if (streamFrameRef.current !== null) {
       cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
@@ -1948,11 +2911,12 @@ function App() {
       const chat = chats.find((row) => row.id === chatId);
       const lazyWorktree = await ensureWorktree(chatId, trimmed);
       const workingRoot = lazyWorktree?.path ?? chat?.worktreePath ?? selectedProject?.root_path;
-      const conversationHistory = chatHistoryForDaemon(chat?.messages ?? []);
+      const conversationHistory = chatHistoryForOpenCode(chat?.messages ?? []);
       const approvedToolActions = Array.from(
         new Set([...(chat?.approvedToolActions ?? []), ...(options.extraApprovedActions ?? [])]),
       );
       const result = await rpc<SendTaskResult>("agent.send_task", {
+        chat_id: chatId,
         project_id: selectedProject?.id,
         project_root: workingRoot,
         message: trimmed,
@@ -1961,10 +2925,7 @@ function App() {
         git_branch: lazyWorktree?.branch ?? (selectedBranch || undefined),
         worktree_enabled: chat?.worktreeEnabled ?? false,
         worktree_path: workingRoot,
-        permission_mode: permissionMode,
-        enabled_tools: agentTools.filter((tool) => tool.enabled).map((tool) => tool.id),
         approved_tool_actions: approvedToolActions,
-        tool_context: toolContext,
         attached_files: promptAttachments.map((file) => ({
           path: file.path,
           project_path: file.projectPath,
@@ -1972,76 +2933,24 @@ function App() {
         })),
         operating_system: detectHarnessOs(),
       });
-      finishStreaming(chatId);
-      const assistantMessage = cleanAssistantMessage(
-        await executeReturnedToolCall(result.assistant_message, workingRoot, chatId),
-      );
       updateChat(chatId, (row) => ({
         ...row,
         sessionId: result.session_id,
-        messages: (() => {
-          const messages = row.messages.filter(
-            (message) =>
-              !(
-                message.role === "assistant" &&
-                (looksLikeToolCall(message.content) || looksLikeToolCallFragment(message.content))
-              ),
-          );
-          if (row.pendingApproval && /^I need your approval\b/i.test(assistantMessage)) {
-            return messages.filter(
-              (message, index) =>
-                !(
-                  index === messages.length - 1 &&
-                  message.role === "assistant" &&
-                  (message.streaming || /^I need your approval\b/i.test(message.content) || message.content.trim() === "")
-                ),
-            );
-          }
-          const last = messages[messages.length - 1];
-          if (last?.role === "assistant") {
-            messages[messages.length - 1] = {
-              role: "assistant",
-              content: assistantMessage || cleanAssistantMessage(last.content) || "(empty response)",
-            };
-            return messages;
-          }
-          let toolCallIndex = -1;
-          for (let index = messages.length - 1; index >= 0; index -= 1) {
-            if (messages[index].role === "assistant" && looksLikeToolCall(messages[index].content)) {
-              toolCallIndex = index;
-              break;
-            }
-          }
-          if (toolCallIndex >= 0) {
-            messages.splice(toolCallIndex, 1);
-          }
-          return [...messages, { role: "assistant", content: assistantMessage || "(empty response)" }];
-        })(),
       }));
-      addTimeline("agent", "ready", `turn ${result.turn_id.slice(0, 8)} finished`, chatId);
-      const [, , refreshedDiff] = await Promise.all([
+      addTimeline("agent", "degraded", `turn ${result.turn_id.slice(0, 8)} started`, chatId);
+      monitorSessionMessages(chatId, result.session_id, workingRoot);
+      await Promise.all([
         refreshSessions(selectedProjectId),
         refreshStore(),
         refreshGit(selectedProject ?? undefined),
         refreshProjectFiles(selectedProject ?? undefined),
       ]);
-      const changedFileCount = diffFileCount(refreshedDiff);
-      if (changedFileCount > 0) {
-        const changedLineStats = totalDiffLineStats(parseDiff(refreshedDiff?.stdout ?? ""));
-        updateChat(chatId, (row) => ({
-          ...row,
-          diffAvailable: true,
-          changedFileCount,
-          changedLineStats,
-        }));
-      }
     } catch (cause) {
       const message = String(cause instanceof Error ? cause.message : cause);
       setError(message);
       addTimeline("agent", "unavailable", message, chatId);
       finishStreaming(chatId);
     } finally {
-      streamingChatRef.current = null;
       setBusy(false);
     }
   };
@@ -2173,6 +3082,16 @@ function App() {
       `${event.quality}: ${decision} ${request.command}`,
       activeChat.id,
     );
+    if (request.actionKey.startsWith("permission:")) {
+      const [, sessionId, permissionId] = request.actionKey.split(":");
+      void rpc("opencode.permission", {
+        sessionId,
+        permissionId,
+        response: decision === "accepted" ? "once" : "reject",
+        directory: activeChat.worktreePath ?? selectedProject?.root_path,
+      }).catch((cause) => setError(String(cause instanceof Error ? cause.message : cause)));
+      return;
+    }
     if (decision === "accepted") {
       void sendTaskWithMessage(`Internal approval granted for ${request.command}. Continue the previous request. Do not mention this approval event.`, [], {
         extraApprovedActions: [request.actionKey],
@@ -2200,15 +3119,6 @@ function App() {
     addTimeline("telemetry", "ready", "copied telemetry JSON");
   };
 
-  const choosePermissionMode = (mode: PermissionMode) => {
-    setPermissionMenuOpen(false);
-    if (mode === "bypass" && permissionMode !== "bypass") {
-      setShowBypassConfirm(true);
-      return;
-    }
-    setPermissionMode(mode);
-  };
-
   const leftWidth = activeRail === "data" ? dataLeftWidth : chatLeftWidth;
 
   const startResize = (event: React.PointerEvent) => {
@@ -2233,17 +3143,9 @@ function App() {
 
   const railTitle = {
     chats: "Chats",
-    git: "Source Control",
-    tools: "Tools",
     data: "Telemetry",
   }[activeRail];
 
-  const toggleAgentTool = (id: string, enabled: boolean) => {
-    setAgentTools((tools) => tools.map((tool) => (tool.id === id ? { ...tool, enabled } : tool)));
-  };
-  const updateAgentTool = (id: string, patch: Partial<Pick<AgentTool, "label" | "summary" | "command">>) => {
-    setAgentTools((tools) => tools.map((tool) => (tool.id === id ? { ...tool, ...patch } : tool)));
-  };
   const mentionQuery = activeMentionQuery(prompt);
   const mentionMatches = mentionQuery === null
     ? []
@@ -2310,7 +3212,7 @@ function App() {
               setIdeMenuOpen(false);
             }}
           />
-          <button className="ctrlButton" title="Restart daemon" onClick={restart}>
+          <button className="ctrlButton" title="Restart OpenCode" onClick={restart}>
             <RefreshCw size={14} />
           </button>
         </div>
@@ -2319,12 +3221,6 @@ function App() {
       <aside className="rail">
         <RailButton active={activeRail === "chats"} title="Chats" onClick={() => setActiveRail("chats")}>
           <MessageSquare size={18} />
-        </RailButton>
-        <RailButton active={activeRail === "git"} title="Source control" onClick={() => setActiveRail("git")}>
-          <GitBranch size={18} />
-        </RailButton>
-        <RailButton active={activeRail === "tools"} title="Tools" onClick={() => setActiveRail("tools")}>
-          <Wrench size={18} />
         </RailButton>
         <RailButton active={activeRail === "data"} title="Telemetry" onClick={() => setActiveRail("data")}>
           <Database size={18} />
@@ -2348,31 +3244,6 @@ function App() {
         </div>
         {activeRail === "chats" ? (
           <SidebarChats chats={chats} activeChatId={activeChat.id} onSelect={setActiveChatId} onDelete={deleteChat} />
-        ) : null}
-        {activeRail === "git" ? (
-          <SidebarGit
-            status={gitStatus}
-            diff={gitDiff}
-            branchInfo={branchInfo}
-            worktrees={worktrees}
-            selectedBranch={selectedBranch}
-            setSelectedBranch={setSelectedBranch}
-            onRefresh={() => void refreshGit()}
-            onOpenChangedFile={(path) => {
-              setActiveDiffPath(path);
-              setActiveTab("diff");
-            }}
-            hasProject={!!selectedProject}
-          />
-        ) : null}
-        {activeRail === "tools" ? (
-          <SidebarTools
-            tools={agentTools}
-            operatingSystem={detectHarnessOs()}
-            onToggle={toggleAgentTool}
-            onUpdate={updateAgentTool}
-            onReset={() => setAgentTools(DEFAULT_AGENT_TOOLS)}
-          />
         ) : null}
         {activeRail === "data" ? (
           <SidebarData telemetry={telemetry} health={health} socketState={socketState} storeOverview={storeOverview} />
@@ -2442,34 +3313,10 @@ function App() {
               <GitFork size={12} />
               <span>{activeChat.worktreePath ? cleanPath(activeChat.worktreePath).split(/[\\/]/).pop() : "Worktree"}</span>
             </label>
-            <div className="menuControl composerMenu">
-              <button
-                type="button"
-                className={`permissionButton ${permissionMode === "bypass" ? "bypass" : ""}`}
-                onClick={() => setPermissionMenuOpen((open) => !open)}
-                aria-haspopup="menu"
-                aria-expanded={permissionMenuOpen}
-              >
-                <span>{permissionMode === "default" ? "Default" : "Bypass"}</span>
-                <ChevronDown size={12} />
-              </button>
-              {permissionMenuOpen ? (
-                <div className="menuPopover permissionMenu" role="menu">
-                  <button type="button" role="menuitem" onClick={() => choosePermissionMode("default")}>
-                    <span>Default permissions</span>
-                    <small>Approve once per chat</small>
-                  </button>
-                  <button type="button" role="menuitem" onClick={() => choosePermissionMode("bypass")}>
-                    <span>Bypass permissions</span>
-                    <small>Auto-run safe tools</small>
-                  </button>
-                </div>
-              ) : null}
-            </div>
+            <PermissionModeControl mode={permissionMode} busy={busy || socketState === "connecting"} onChange={(mode) => void changePermissionMode(mode)} />
             <button className="headerAttachButton" title="Attach files" onClick={() => void attachLocalFiles()} disabled={!selectedProject}>
               <Paperclip size={13} />
             </button>
-            <ContextMeter usage={contextUsage} />
             <button className="folderButton" onClick={pickProject} title="Open folder">
               <FolderOpen size={13} />
               <span>{selectedProject?.name ?? "Open Folder"}</span>
@@ -2521,7 +3368,7 @@ function App() {
             ) : null}
             <textarea
               value={prompt}
-              placeholder={socketState === "open" ? "Ask Gemma for a coding task…" : "Connecting to daemon…"}
+              placeholder={socketState === "open" ? "Ask Local LM Studio for a coding task..." : "Connecting to OpenCode..."}
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event) => {
                 if (mentionQuery !== null) {
@@ -2562,34 +3409,19 @@ function App() {
         </footer>
       </section>
       {error ? <div className="toastError">{error}</div> : null}
-
-      {showBypassConfirm ? (
-        <div className="modalScrim" role="dialog" aria-modal="true" aria-labelledby="bypass-title">
-          <section className="confirmDialog">
-            <div>
-              <h2 id="bypass-title">Bypass permissions?</h2>
-              <p>
-                Aegis will auto-run non-destructive read tools for this chat. Destructive actions and tool creation still require approval.
-              </p>
-            </div>
-            <div className="dialogActions">
-              <button type="button" className="secondaryAction" onClick={() => setShowBypassConfirm(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="primaryAction"
-                onClick={() => {
-                  setPermissionMode("bypass");
-                  setShowBypassConfirm(false);
-                }}
-              >
-                Enable bypass
-              </button>
-            </div>
-          </section>
-        </div>
+      {bypassConfirmOpen ? (
+        <ConfirmDialog
+          title="Enable Bypass?"
+          body="Bypass permissions lets the agent run commands and access external directories without asking first. Use it only for a workspace you trust."
+          confirmLabel="Enable Bypass"
+          onCancel={() => setBypassConfirmOpen(false)}
+          onConfirm={() => {
+            setBypassConfirmOpen(false);
+            void applyPermissionMode("bypass");
+          }}
+        />
       ) : null}
+
     </main>
   );
 }
@@ -2599,6 +3431,56 @@ function RailButton({ active, title, onClick, children }: React.PropsWithChildre
     <button className={`railItem ${active ? "active" : ""}`} title={title} onClick={onClick}>
       {children}
     </button>
+  );
+}
+
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return createPortal(
+    <div className="modalScrim" role="presentation" onMouseDown={onCancel}>
+      <section
+        className="confirmDialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div>
+          <h2 id="confirm-dialog-title">{title}</h2>
+          <p>{body}</p>
+        </div>
+        <div className="dialogActions">
+          <button type="button" className="secondaryAction" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="primaryAction danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body,
   );
 }
 
@@ -2663,6 +3545,41 @@ function BranchMenu({
           </button>
         ))}
       </FloatingMenu>
+    </div>
+  );
+}
+
+function PermissionModeControl({
+  mode,
+  busy,
+  onChange,
+}: {
+  mode: PermissionMode;
+  busy: boolean;
+  onChange: (mode: PermissionMode) => void;
+}) {
+  return (
+    <div className="permissionModeControl" aria-label="Permission mode">
+      <button
+        type="button"
+        className={mode === "default" ? "active" : ""}
+        disabled={busy}
+        title="Default: ask before a command runs for the first time in this chat"
+        onClick={() => onChange("default")}
+      >
+        <ShieldQuestion size={12} />
+        <span>Default</span>
+      </button>
+      <button
+        type="button"
+        className={mode === "bypass" ? "active danger" : ""}
+        disabled={busy}
+        title="Bypass permissions: allow commands and file access without approval"
+        onClick={() => onChange("bypass")}
+      >
+        <ShieldCheck size={12} />
+        <span>Bypass</span>
+      </button>
     </div>
   );
 }
@@ -3027,15 +3944,15 @@ function SidebarData({
   storeOverview,
 }: {
   telemetry: unknown;
-  health: DaemonHealth | null;
+  health: OpenCodeHealth | null;
   socketState: SocketState;
   storeOverview: StoreOverview | null;
 }) {
   return (
     <div className="sidebarStack dataStack">
       <div className="kvCard">
-        <div className="kvRow"><span>Socket</span><strong>{socketState}</strong></div>
-        <div className="kvRow"><span>Daemon</span><strong>{health?.daemon ?? "—"}</strong></div>
+        <div className="kvRow"><span>Connection</span><strong>{socketState}</strong></div>
+        <div className="kvRow"><span>OpenCode</span><strong>{health?.opencode ?? "—"}</strong></div>
         <div className="kvRow"><span>LM Studio</span><strong>{health?.lm_studio ?? "—"}</strong></div>
         <div className="kvRow"><span>Index</span><strong>{health?.semantic_index ?? "—"}</strong></div>
       </div>
@@ -3056,135 +3973,9 @@ function SidebarData({
   );
 }
 
-function SidebarTools({
-  tools,
-  operatingSystem,
-  onToggle,
-  onUpdate,
-  onReset,
-}: {
-  tools: AgentTool[];
-  operatingSystem: string;
-  onToggle: (id: string, enabled: boolean) => void;
-  onUpdate: (id: string, patch: Partial<Pick<AgentTool, "label" | "summary" | "command">>) => void;
-  onReset: () => void;
-}) {
-  const enabledCount = tools.filter((tool) => tool.enabled).length;
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const allEnabled = enabledCount === tools.length;
-  const setAll = (enabled: boolean) => {
-    for (const tool of tools) {
-      if (tool.enabled !== enabled) {
-        onToggle(tool.id, enabled);
-      }
-    }
-  };
-  return (
-    <div className="sidebarStack toolsStack">
-      <div className="toolHeader">
-        <div className="toolHeaderStat">
-          <strong>{enabledCount}</strong>
-          <span>/ {tools.length} enabled</span>
-        </div>
-        <div className="toolHeaderStat alt" title="Harness operating system">
-          <strong>{operatingSystem}</strong>
-          <span>harness</span>
-        </div>
-      </div>
-      <div className="toolHeaderActions">
-        <button
-          type="button"
-          className="ghostButton"
-          onClick={() => setAll(!allEnabled)}
-        >
-          {allEnabled ? "Disable all" : "Enable all"}
-        </button>
-        <button type="button" className="ghostButton" onClick={onReset}>
-          Reset
-        </button>
-      </div>
-      <div className="toolCardList">
-        {tools.map((tool) => {
-          const expanded = expandedId === tool.id;
-          return (
-            <div className={`toolCard ${tool.enabled ? "enabled" : "disabled"}`} key={tool.id}>
-              <div className="toolCardHead">
-                <span className={`toolKindDot ${tool.kind}`} aria-hidden="true" />
-                <div className="toolCardTitle">
-                  <strong>{tool.label}</strong>
-                  <small>{tool.summary}</small>
-                </div>
-                <div className="toolCardActions">
-                  <button
-                    type="button"
-                    className="toolEditButton"
-                    title={expanded ? "Hide details" : "Edit"}
-                    onClick={() => setExpandedId(expanded ? null : tool.id)}
-                    aria-expanded={expanded}
-                  >
-                    <ChevronDown
-                      size={13}
-                      style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 120ms ease" }}
-                    />
-                  </button>
-                  <label className="toolSwitch" title={tool.enabled ? "Enabled" : "Disabled"}>
-                    <input
-                      type="checkbox"
-                      checked={tool.enabled}
-                      onChange={(event) => onToggle(tool.id, event.target.checked)}
-                      aria-label={`${tool.id} enabled`}
-                    />
-                    <span className="toolSwitchTrack" aria-hidden="true">
-                      <span className="toolSwitchThumb" />
-                    </span>
-                  </label>
-                </div>
-              </div>
-              <div className="toolCardMeta">
-                <span className={`toolKind ${tool.kind}`}>{tool.kind}</span>
-                <code className="toolCardCommand">{tool.command}</code>
-              </div>
-              {expanded ? (
-                <div className="toolCardEditor">
-                  <label>
-                    <span>Label</span>
-                    <input
-                      aria-label={`${tool.id} label`}
-                      value={tool.label}
-                      onChange={(event) => onUpdate(tool.id, { label: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    <span>Summary</span>
-                    <textarea
-                      aria-label={`${tool.id} summary`}
-                      value={tool.summary}
-                      onChange={(event) => onUpdate(tool.id, { summary: event.target.value })}
-                      rows={2}
-                    />
-                  </label>
-                  <label>
-                    <span>Command</span>
-                    <input
-                      aria-label={`${tool.id} command`}
-                      className="toolCommandInput"
-                      value={tool.command}
-                      onChange={(event) => onUpdate(tool.id, { command: event.target.value })}
-                    />
-                  </label>
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function PermissionApprovalBar({
   request,
-  busy,
+  busy: _busy,
   onAccept,
   onDecline,
 }: {
@@ -3205,43 +3996,15 @@ function PermissionApprovalBar({
         )}
       </div>
       <div className="approvalActions">
-        <button type="button" className="approvalAccept" onClick={onAccept} disabled={busy}>
+        <button type="button" className="approvalAccept" onClick={onAccept}>
           <CheckCircle2 size={13} />
           Accept
         </button>
-        <button type="button" className="approvalDecline" onClick={onDecline} disabled={busy}>
+        <button type="button" className="approvalDecline" onClick={onDecline}>
           <X size={13} />
           Decline
         </button>
       </div>
-    </div>
-  );
-}
-
-function ContextMeter({ usage }: { usage: ContextUsageState }) {
-  const used = usage.promptTokens.toLocaleString();
-  const max = usage.maxContextTokens ? usage.maxContextTokens.toLocaleString() : "unknown";
-  const statusLabel =
-    usage.status === "loading"
-      ? "Counting"
-      : usage.status === "ready"
-        ? "Exact count"
-        : "Unavailable";
-  return (
-    <div
-      className={`contextMeterWrap ${usage.status}`}
-      style={{ "--context-percent": `${usage.percent}%` } as React.CSSProperties}
-      aria-label={`Context tokens: ${used} of ${max}`}
-      tabIndex={0}
-    >
-      <span className="contextMeter" />
-      <span className="contextPopover" role="tooltip">
-        <strong>{statusLabel}</strong>
-        <span>{used} tokens used</span>
-        <span>{max} max context</span>
-        <span>{usage.messageCount} app messages in payload</span>
-        <small>{usage.detail}</small>
-      </span>
     </div>
   );
 }
@@ -3324,6 +4087,49 @@ function ThinkingBubble({ line }: { line: ChatLine }) {
   );
 }
 
+function ToolRunGroup({ lines }: { lines: ChatLine[] }) {
+  const running = lines.some((line) => line.status === "degraded");
+  const failed = lines.some((line) => line.status === "unavailable");
+  const label = `${running ? "running" : "ran"} ${lines.length} command${lines.length === 1 ? "" : "s"} >`;
+  return (
+    <details className={`toolRunGroup ${running ? "running" : ""} ${failed ? "failed" : ""}`}>
+      <summary>
+        {failed ? <TriangleAlert size={12} /> : running ? <Wrench size={12} /> : <CheckCircle2 size={12} />}
+        <span>{label}</span>
+      </summary>
+      <div className="toolRunList">
+        {lines.map((line, index) => {
+          const toolName = line.toolName ?? "tool";
+          const isCommand = toolName === "terminal.run" || toolName === "bash";
+          const command = line.command || line.content || line.detail || "";
+          const statusLabel = line.status === "degraded" ? "running" : line.status === "unavailable" ? "failed" : "done";
+          return (
+            <div className={`toolRunItem ${line.status ?? "ready"}`} key={`${toolName}-${index}`}>
+              <div className="toolRunTitle">
+                <strong>{toolName}</strong>
+                <span>{line.detail || toolDisplayText(toolName, line.status !== "degraded", line.status !== "unavailable")}</span>
+                <em>{statusLabel}</em>
+              </div>
+              <div className="toolRunSection">
+                <span>{isCommand ? "command" : "tool call"}</span>
+                <CopyableCodeBlock language={isCommand ? "command" : "json"} content={command} />
+              </div>
+              {line.output ? (
+                <div className="toolRunSection">
+                  <span>output</span>
+                  <CopyableCodeBlock language="output" content={line.output} />
+                </div>
+              ) : (
+                <div className="toolRunEmptyOutput">{line.status === "degraded" ? "Waiting for output..." : "No output returned."}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 function ChatView({ chat, busy, onShowDiff }: { chat: LocalChat; busy: boolean; onShowDiff: () => void }) {
   const streamRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -3343,17 +4149,28 @@ function ChatView({ chat, busy, onShowDiff }: { chat: LocalChat; busy: boolean; 
   return (
     <div className="chatStream" ref={streamRef}>
       {chat.messages.map((line, index) => {
-        const isStreamingPlaceholder = line.role === "assistant" && line.streaming && line.content.length === 0;
+        if (line.role === "tool" && chat.messages[index - 1]?.role === "tool") {
+          return null;
+        }
+        if (line.role === "tool") {
+          const group = [line];
+          for (let nextIndex = index + 1; chat.messages[nextIndex]?.role === "tool"; nextIndex += 1) {
+            group.push(chat.messages[nextIndex]);
+          }
+          return (
+            <article className="message tool" key={`tool-group-${index}`}>
+              <ToolRunGroup lines={group} />
+            </article>
+          );
+        }
+        const assistantContent = line.role === "assistant" ? cleanAssistantMessage(line.content) : "";
+        const isStreamingPlaceholder = line.role === "assistant" && line.streaming && assistantContent.length === 0;
+        if (line.role === "assistant" && !line.streaming && assistantContent.length === 0) {
+          return null;
+        }
         return (
           <article className={`message ${line.role}${line.streaming ? " streaming" : ""}`} key={`${line.role}-${index}`}>
-            {line.role === "tool" ? (
-              <div className="toolBubble">
-                {line.status === "ready" ? <CheckCircle2 size={12} /> : line.status === "unavailable" ? <TriangleAlert size={12} /> : <Wrench size={12} />}
-                <div>
-                  <span>{line.detail || line.content || toolDisplayText(line.toolName ?? "tool", line.status !== "degraded", line.status !== "unavailable")}</span>
-                </div>
-              </div>
-            ) : line.role === "thinking" ? (
+            {line.role === "thinking" ? (
               <ThinkingBubble line={line} />
             ) : isStreamingPlaceholder ? (
               <p className="streamingPending">
@@ -3363,7 +4180,7 @@ function ChatView({ chat, busy, onShowDiff }: { chat: LocalChat; busy: boolean; 
               </p>
             ) : line.role === "assistant" ? (
               <>
-                <MarkdownContent content={cleanAssistantMessage(line.content)} />
+                {assistantContent ? <MarkdownContent content={assistantContent} /> : null}
                 {line.streaming ? <span className="streamingCaret markdownCaret" aria-hidden="true" /> : null}
               </>
             ) : (
@@ -3418,7 +4235,8 @@ function parseDiff(text: string): ParsedDiffFile[] {
 
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      current = { oldPath: "", newPath: "", lines: [] };
+      const paths = diffGitPaths(line);
+      current = { oldPath: paths.oldPath, newPath: paths.newPath, lines: [] };
       files.push(current);
       continue;
     }
@@ -3426,11 +4244,17 @@ function parseDiff(text: string): ParsedDiffFile[] {
       continue;
     }
     if (line.startsWith("--- ")) {
-      current.oldPath = line.replace(/^---\s+a\//, "").trim();
+      const path = diffHeaderPath(line, "---", "a");
+      if (path) {
+        current.oldPath = path;
+      }
       continue;
     }
     if (line.startsWith("+++ ")) {
-      current.newPath = line.replace(/^\+\+\+\s+b\//, "").trim();
+      const path = diffHeaderPath(line, "+++", "b");
+      if (path) {
+        current.newPath = path;
+      }
       continue;
     }
     if (
@@ -3469,6 +4293,29 @@ function parseDiff(text: string): ParsedDiffFile[] {
   return files.filter((file) => file.newPath || file.oldPath || file.lines.length > 1);
 }
 
+function diffGitPaths(line: string): { oldPath: string; newPath: string } {
+  const raw = line.slice("diff --git ".length).trim();
+  const match = /^"a\/(.+)"\s+"b\/(.+)"$/.exec(raw) || /^a\/(.+)\s+b\/(.+)$/.exec(raw);
+  if (!match) {
+    return { oldPath: "", newPath: "" };
+  }
+  return {
+    oldPath: normalizeDiffPath(match[1]),
+    newPath: normalizeDiffPath(match[2]),
+  };
+}
+
+function diffHeaderPath(line: string, marker: "---" | "+++", prefix: "a" | "b"): string {
+  const raw = line.slice(marker.length).trim();
+  if (!raw || raw === "null") {
+    return "";
+  }
+  if (raw === "/dev/null") {
+    return raw;
+  }
+  return normalizeDiffPath(raw.replace(new RegExp(`^${prefix}/`), ""));
+}
+
 function firstChangedLine(file: ParsedDiffFile): number {
   return file.lines.find((line) => line.kind === "add" && line.newLine)?.newLine ?? 1;
 }
@@ -3498,7 +4345,8 @@ function totalDiffLineStats(files: ParsedDiffFile[]): DiffLineStats {
 }
 
 function normalizeDiffPath(path: string): string {
-  return path.replace(/^"|"$/g, "").replace(/\\/g, "/");
+  const normalized = path.replace(/^"|"$/g, "").replace(/\\/g, "/").trim();
+  return normalized === "null" ? "" : normalized;
 }
 
 function diffPathKeys(file: ParsedDiffFile): string[] {
@@ -3532,14 +4380,23 @@ function DiffStatsBadge({ stats, block = false }: { stats?: DiffLineStats; block
 
 
 function visibleFilePath(file: ParsedDiffFile): string {
-  return normalizeDiffPath(file.newPath || file.oldPath).replace(/^\/dev\/null$/, "New file");
+  if (file.newPath === "/dev/null") {
+    return normalizeDiffPath(file.oldPath || "Deleted file");
+  }
+  if (file.oldPath === "/dev/null") {
+    return normalizeDiffPath(file.newPath || "New file");
+  }
+  return normalizeDiffPath(file.newPath || file.oldPath || "Changed file");
 }
 
-function openableDiffPath(file: ParsedDiffFile): string {
+function openableDiffPath(file: ParsedDiffFile): string | null {
   if (file.newPath && file.newPath !== "/dev/null") {
     return file.newPath;
   }
-  return file.oldPath;
+  if (file.oldPath && file.oldPath !== "/dev/null") {
+    return file.oldPath;
+  }
+  return null;
 }
 
 function fileName(path: string): string {
@@ -3705,6 +4562,7 @@ function DiffView({
   const selectedKey = normalizeDiffPath(selectedPath);
   const selectedFile = files.find((file) => diffPathKeys(file).includes(selectedKey)) ?? files[0];
   const selectedRows = selectedFile ? toSideBySideRows(selectedFile) : [];
+  const selectedOpenPath = selectedFile ? openableDiffPath(selectedFile) : null;
   const tooLarge = selectedRows.length > DIFF_ROW_LIMIT;
   const visibleRows = tooLarge ? selectedRows.slice(0, DIFF_ROW_LIMIT) : selectedRows;
 
@@ -3756,9 +4614,13 @@ function DiffView({
                 <strong>{fileName(visibleFilePath(selectedFile))}</strong>
                 <span>{visibleFilePath(selectedFile)} · {changedLineCount(selectedFile)} changed line{changedLineCount(selectedFile) === 1 ? "" : "s"}</span>
               </div>
-              <button type="button" onClick={() => onOpenFile(openableDiffPath(selectedFile), firstChangedLine(selectedFile))}>
+              <button
+                type="button"
+                disabled={!selectedOpenPath || selectedFile.newPath === "/dev/null"}
+                onClick={() => selectedOpenPath ? onOpenFile(selectedOpenPath, firstChangedLine(selectedFile)) : undefined}
+              >
                 <FileText size={14} />
-                {openLabel}
+                {selectedFile.newPath === "/dev/null" ? "Deleted file" : openLabel}
               </button>
             </header>
             {tooLarge ? (
