@@ -1,5 +1,0 @@
-node_modules/
-desktop/dist/
-desktop/dist-electron/
-*.log
-.env
