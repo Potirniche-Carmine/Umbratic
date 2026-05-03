@@ -1,7 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family:
-    Inter, "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-family: system-ui, sans-serif;
   --bg: #111214;
   --chrome: #1b1d22;
   --sidebar: #151619;
@@ -92,6 +91,7 @@ pre {
   min-width: 0;
   min-height: 0;
   background: var(--bg);
+  transition: grid-template-columns 205ms ease;
 }
 
 .appShell.sidebarClosed {
@@ -244,11 +244,11 @@ pre {
   opacity: 1;
   transform: translateX(0);
   transition:
-    width 170ms ease,
-    min-width 170ms ease,
-    padding 170ms ease,
-    opacity 150ms ease,
-    transform 170ms ease;
+    width 205ms ease,
+    min-width 205ms ease,
+    padding 205ms ease,
+    opacity 180ms ease,
+    transform 205ms ease;
 }
 
 .reviewSidebar > * {
@@ -1479,6 +1479,14 @@ pre {
   white-space: nowrap;
 }
 
+.reviewStats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+}
+
 .reviewTopActions {
   position: relative;
   z-index: 50;
@@ -1691,6 +1699,15 @@ pre {
   overflow: visible;
 }
 
+.idePicker.isDisabled {
+  opacity: 0.48;
+}
+
+.idePicker.isDisabled,
+.idePicker.isDisabled button {
+  cursor: default;
+}
+
 .idePickerOpen,
 .idePickerToggle {
   display: grid;
@@ -1708,9 +1725,9 @@ pre {
   color: var(--muted);
 }
 
-.idePickerOpen:hover,
-.idePickerToggle:hover,
-.idePicker:focus-within {
+.idePickerOpen:hover:not(:disabled),
+.idePickerToggle:hover:not(:disabled),
+.idePicker:not(.isDisabled):focus-within {
   background: rgba(255, 255, 255, 0.12);
 }
 

@@ -867,7 +867,7 @@ function App() {
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() => new Set());
   const [expandedCommandId, setExpandedCommandId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [reviewOpen, setReviewOpen] = useState(true);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
@@ -914,6 +914,12 @@ function App() {
   const canStart = !!repository && prompt.trim().length > 0 && !busy;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && !busy;
+  const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected";
+  const reviewEmptyLabel = !task
+    ? "No active review"
+    : task.state === "review_ready"
+      ? "No file changes found"
+      : stateLabel(task.state);
   const attachmentMenuOpen = !!mention;
   const composerItems = useMemo(() => composerTimelineFromEvents(events, task?.prompt), [events, task?.prompt]);
   const layoutStyle = {
@@ -955,6 +961,9 @@ function App() {
         );
         setExpandedReviewPaths(new Set());
         setReviewOpen(true);
+        window.setTimeout(() => {
+          void refreshTaskReviewById(event.taskId, true);
+        }, 120);
         void loadChats();
       }
       if (event.type === "approval.check") {
@@ -1011,6 +1020,10 @@ function App() {
       setSelectedIdeId(availableIdes[0].id);
     }
   }, [availableIdes, selectedIdeId]);
+
+  useEffect(() => {
+    if (!canOpenIde) setIdeMenuOpen(false);
+  }, [canOpenIde]);
 
   useEffect(() => {
     const node = streamRef.current;
@@ -1136,17 +1149,20 @@ function App() {
     }
   }
 
-  async function refreshActiveReview() {
-    if (!task || busy || task.state !== "review_ready" || reviewRefreshRef.current) return;
+  async function refreshTaskReviewById(taskId: string, openWhenReady = false) {
+    if (reviewRefreshRef.current) return;
     reviewRefreshRef.current = true;
     try {
-      const nextTask = await api.refreshTaskReview({ taskId: task.id });
+      const nextTask = await api.refreshTaskReview({ taskId });
       if (!nextTask) return;
-      setTask((current) => (current && current.id === nextTask.id ? nextTask : current));
+      setTask((current) => (!current || current.id === nextTask.id ? nextTask : current));
       setExpandedReviewPaths((current) => {
         const availablePaths = new Set(nextTask.reviewFiles.map((file) => file.path));
         return new Set(Array.from(current).filter((filePath) => availablePaths.has(filePath)));
       });
+      if (openWhenReady && nextTask.state === "review_ready") {
+        setReviewOpen(true);
+      }
       upsertChatFromTask(nextTask);
       void loadChats();
     } catch (cause) {
@@ -1154,6 +1170,11 @@ function App() {
     } finally {
       reviewRefreshRef.current = false;
     }
+  }
+
+  async function refreshActiveReview() {
+    if (!task || busy || task.state !== "review_ready") return;
+    await refreshTaskReviewById(task.id);
   }
 
   async function pickRepository() {
@@ -1213,6 +1234,7 @@ function App() {
     setExpandedCommandId(null);
     setPendingPermission(null);
     setExpandedReviewPaths(new Set());
+    setReviewOpen(false);
     try {
       let chatId = activeChatId;
       if (!chatId) {
@@ -1262,7 +1284,7 @@ function App() {
   }
 
   async function openIde(ideId: string) {
-    if (!task) return;
+    if (!canOpenIde || !task) return;
     setIdeMenuOpen(false);
     const result = await api.openTaskInIde({ taskId: task.id, ideId });
     if (!result.ok) setError(result.message);
@@ -1400,6 +1422,7 @@ function App() {
       setExpandedCommandId(null);
       setPendingPermission(null);
       setExpandedReviewPaths(new Set());
+      setReviewOpen(false);
       setAttachedFiles([]);
       setMention(null);
       setFileMatches([]);
@@ -1426,6 +1449,7 @@ function App() {
     setFileMatches([]);
     if (!chat.taskId) {
       setTask(null);
+      setReviewOpen(false);
       setPrompt(chat.draftPrompt ?? "");
       return;
     }
@@ -1466,6 +1490,7 @@ function App() {
         setExpandedCommandId(null);
         setPendingPermission(null);
         setExpandedReviewPaths(new Set());
+        setReviewOpen(false);
         setAttachedFiles([]);
         setMention(null);
         setFileMatches([]);
@@ -1522,7 +1547,15 @@ function App() {
         >
           <PanelLeft size={15} />
         </button>
-        <button className="chromeButton" type="button" onClick={() => setTask(null)} title="Back">
+        <button
+          className="chromeButton"
+          type="button"
+          onClick={() => {
+            setTask(null);
+            setReviewOpen(false);
+          }}
+          title="Back"
+        >
           <ArrowLeft size={15} />
         </button>
         <div className="topbarTitle">
@@ -1815,30 +1848,42 @@ function App() {
           <div className="reviewTopbar">
             <span className="reviewChangeSummary">
               <FileText size={15} />
-              <strong>{reviewFiles.length} file{reviewFiles.length === 1 ? "" : "s"} changed</strong>
-              <span className="additions">+{reviewTotals.additions}</span>
-              <span className="deletions">-{reviewTotals.deletions}</span>
+              <strong>Review</strong>
+              {reviewFiles.length ? (
+                <span className="reviewStats">
+                  <span>{reviewFiles.length} file{reviewFiles.length === 1 ? "" : "s"}</span>
+                  <span className="additions">+{reviewTotals.additions}</span>
+                  <span className="deletions">-{reviewTotals.deletions}</span>
+                </span>
+              ) : null}
             </span>
             <div className="reviewTopActions">
               <button className="reviewTextButton" type="button" onClick={undoTask} disabled={!canUndo} title="Undo this chat's changes">
                 <span>Undo</span>
                 <Undo2 size={13} />
               </button>
-              <div className="idePicker">
-                <button className="idePickerOpen" type="button" onClick={() => openIde(selectedIde.id)} title={`Open in ${selectedIde.label}`}>
+              <div className={`idePicker ${canOpenIde ? "" : "isDisabled"}`}>
+                <button
+                  className="idePickerOpen"
+                  type="button"
+                  onClick={() => openIde(selectedIde.id)}
+                  disabled={!canOpenIde}
+                  title={canOpenIde ? `Open in ${selectedIde.label}` : "No review folder yet"}
+                >
                   <IdeIcon icon={selectedIde.icon} />
                 </button>
                 <button
                   className="idePickerToggle"
                   type="button"
                   onClick={() => setIdeMenuOpen((open) => !open)}
-                  aria-expanded={ideMenuOpen}
+                  disabled={!canOpenIde}
+                  aria-expanded={ideMenuOpen && canOpenIde}
                   aria-haspopup="menu"
-                  title="Choose editor"
+                  title={canOpenIde ? "Choose editor" : "No review folder yet"}
                 >
                   <ChevronDown size={13} />
                 </button>
-                {ideMenuOpen ? (
+                {ideMenuOpen && canOpenIde ? (
                   <div className="ideMenu" role="menu">
                     {availableIdes.map((ide) => (
                       <button
@@ -1907,7 +1952,7 @@ function App() {
               </div>
             </div>
           ) : (
-            <Empty label={task ? stateLabel(task.state) : "No active task"} />
+            <Empty label={reviewEmptyLabel} />
           )}
 
           {task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged" ? (
