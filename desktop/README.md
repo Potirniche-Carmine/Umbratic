@@ -1,13 +1,13 @@
 # Aegis Desktop PoV
 
-This is the first runnable slice of `Local_Gemma_UI_Coding_Agent_POV.md`.
+This is the first runnable slice of `First_Implementation_Test.md`.
 
 ## Prerequisites
 
 - Node.js 24+
-- LM Studio with the OpenAI-compatible server enabled at `http://localhost:1234/v1`
-- Any chat-capable model loaded in LM Studio
-- Docker Sandboxes with the standalone `sbx` CLI, recommended for sandboxed agent runs
+- Ollama with the OpenAI-compatible endpoint at `http://127.0.0.1:11434/v1`
+- `gemma4:e4b` pulled in Ollama
+- OpenCode installed from the workspace dependencies
 
 ## Run
 
@@ -16,26 +16,26 @@ npm install
 npm run desktop:dev
 ```
 
-The Electron main process prefers Docker Sandboxes for OpenCode: it creates or reuses an `opencode` sandbox with `sbx`, allows the sandbox to reach LM Studio at `localhost:1234`, starts `opencode serve` inside it, publishes the OpenCode API back to `127.0.0.1`, and points the sandboxed OpenCode config at LM Studio through `host.docker.internal`. If Docker Sandboxes are unavailable, Aegis falls back to running the local `opencode serve` binary directly on the host.
+The Electron main process owns folder selection, optional Git worktree creation, task metadata, IDE handoff, and approval checks. The first workflow is intentionally narrow: regular folders run in place with a baseline snapshot, while Git repositories can still use an isolated worktree. Aegis runs the hello-world verification loop with visible command events and renders an in-app unified diff review before approval.
 
 `http://127.0.0.1:5173` is only the Vite web preview. It can render the UI, but it cannot use the Electron preload bridge, open folders, or talk to the spawned OpenCode server. Use `npm run desktop:dev` for the actual app.
 
 ## Permissions and Sandbox Safety
 
-Default permissions are designed to run in Docker Sandbox mode when available, keeping OpenCode inside an isolated microVM. Routine project exploration can run without interruption; approvals are reserved for sensitive information gathering and destructive or write actions. The mounted workspace is still real: changes made by the agent appear on your host working tree.
+Normal permissions ask before worktree creation and tool actions. Bypass permissions automatically create the worktree and allow local edit/bash steps for the task, but final merge approval is still manual.
 
-Bypass permissions remove those approval prompts. In Docker Sandbox mode, bypass can still freely change mounted workspace files. In host fallback mode, bypass can give the AI agent full access to your computer, including commands and files outside the project, so there is real risk involved.
+Bypass mode does not bypass IPC validation, provider lockdown, worktree boundaries, blocked-file checks, secret scanning, or final merge approval.
 
 ## Implemented
 
-- Electron-supervised OpenCode backend with random localhost port and per-launch Basic auth.
-- Docker Sandbox OpenCode runtime via `sbx`, with host fallback when sandboxing is unavailable.
-- Privacy-locked OpenCode config: LM Studio provider only, sharing disabled, web tools disabled, and cloud provider environment scrubbed.
-- LM Studio `/models` resolution for the currently loaded local model.
-- Electron + React shell with project picking, OpenCode chat flow, git/diff helpers, IDE helpers, and permission approvals.
+- Hardened Electron shell with sandboxing, context isolation, navigation blocking, window-open blocking, permission denial, strict CSP, and IPC sender validation.
+- Minimal typed preload bridge with named task/worktree/approval methods.
+- Ollama status check against `http://127.0.0.1:11434/v1/models`, defaulting to `local-ollama/gemma4:e4b`.
+- Worktree lifecycle for the hello-world proof: prompt, worktree, command stream, permission prompts, verification, IDE handoff, explicit approval, checks, merge, metadata, cleanup.
+- Approval checks for clean original branch, expected base commit, agent branch base, controlled worktree, latest passing verification, blocked files, secret scan, patch hash, commit, and fast-forward merge.
 
 ## Next Phase
 
-- Tighten OpenCode event rendering for long-running tool calls.
-- Expand session history and diff integration directly from OpenCode APIs.
-- Add local-only export/debug bundles.
+- Wire the long-running OpenCode server/SSE contract into the same Aegis task events.
+- Add richer IDE detection for Visual Studio and JetBrains products.
+- Add repository-specific test configuration after the hello-world proof passes.

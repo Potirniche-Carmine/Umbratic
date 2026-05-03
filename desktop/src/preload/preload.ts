@@ -1,36 +1,36 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
+type PermissionMode = "normal" | "bypass";
+type BackendUiEvent = Record<string, unknown>;
+type ChatInput = { title?: string };
+type ChatAttachment = { path: string; name: string };
+
 contextBridge.exposeInMainWorld("aegis", {
-  getOpenCodeConnection: () => ipcRenderer.invoke("opencode:get-connection"),
-  restartOpenCode: () => ipcRenderer.invoke("opencode:restart"),
-  nativeRequest: (payload: unknown) => ipcRenderer.invoke("aegis:native-request", payload),
-  setPermissionMode: (mode: "default" | "bypass") => ipcRenderer.invoke("opencode:set-permission-mode", mode),
-  pickProjectFolder: () => ipcRenderer.invoke("project:pick-folder"),
-  pickAttachments: (projectRoot?: string) => ipcRenderer.invoke("file:pick-attachments", projectRoot),
-  openProjectInIde: (payload: { ideId: string; command: string; projectRoot: string }) =>
-    ipcRenderer.invoke("ide:open-project", payload),
-  openFileInIde: (payload: { ideId: string; command: string; projectRoot: string; file: string; line?: number | null }) =>
-    ipcRenderer.invoke("ide:open-file", payload),
-  startTerminal: (cwd?: string) => ipcRenderer.invoke("terminal:start", cwd),
-  writeTerminal: (data: string) => ipcRenderer.invoke("terminal:write", data),
-  onTerminalData: (callback: (data: string) => void) => {
-    const listener = (_event: IpcRendererEvent, data: string) => callback(data);
-    ipcRenderer.on("terminal:data", listener);
-    return () => ipcRenderer.removeListener("terminal:data", listener);
-  },
-  onOpenProjectRequested: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("menu:open-project", listener);
-    return () => ipcRenderer.removeListener("menu:open-project", listener);
-  },
-  onBackToChatRequested: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("menu:back-to-chat", listener);
-    return () => ipcRenderer.removeListener("menu:back-to-chat", listener);
-  },
-  onToggleSidebarRequested: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("menu:toggle-sidebar", listener);
-    return () => ipcRenderer.removeListener("menu:toggle-sidebar", listener);
+  listChats: () => ipcRenderer.invoke("aegis:list-chats"),
+  createChat: (input?: ChatInput) => ipcRenderer.invoke("aegis:create-chat", input ?? {}),
+  updateChatDraft: (input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }) =>
+    ipcRenderer.invoke("aegis:update-chat-draft", input),
+  deleteChat: (input: { chatId: string }) => ipcRenderer.invoke("aegis:delete-chat", input),
+  getTask: (input: { taskId: string }) => ipcRenderer.invoke("aegis:get-task", input),
+  refreshTaskReview: (input: { taskId: string }) => ipcRenderer.invoke("aegis:refresh-task-review", input),
+  searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("aegis:search-files", input),
+  pickRepository: () => ipcRenderer.invoke("aegis:pick-repository"),
+  getBackendStatus: () => ipcRenderer.invoke("aegis:get-backend-status"),
+  setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("aegis:set-permission-mode", mode),
+  listAvailableIdes: () => ipcRenderer.invoke("aegis:list-available-ides"),
+  startTask: (input: { repositoryId: string; prompt: string; chatId?: string }) => ipcRenderer.invoke("aegis:start-task", input),
+  approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>
+    ipcRenderer.invoke("aegis:approve-worktree-creation", input),
+  respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>
+    ipcRenderer.invoke("aegis:respond-tool-permission", input),
+  openTaskInIde: (input: { taskId: string; ideId: string }) => ipcRenderer.invoke("aegis:open-task-in-ide", input),
+  approveTaskMerge: (input: { taskId: string }) => ipcRenderer.invoke("aegis:approve-task-merge", input),
+  rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("aegis:reject-task", input),
+  keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("aegis:keep-worktree", input),
+  cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("aegis:cancel-task", input),
+  onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
+    const listener = (_event: IpcRendererEvent, event: BackendUiEvent) => callback(event);
+    ipcRenderer.on("aegis:backend-event", listener);
+    return () => ipcRenderer.removeListener("aegis:backend-event", listener);
   },
 });
