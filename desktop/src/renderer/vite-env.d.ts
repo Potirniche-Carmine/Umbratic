@@ -3,6 +3,7 @@
 type AegisPermissionMode = "normal" | "bypass";
 type AegisServiceStatus = "ready" | "degraded" | "unavailable";
 type AegisWorkspaceKind = "git" | "folder";
+type AegisLocalProviderId = "local-ollama" | "local-lmstudio";
 
 type AegisRepositoryInfo = {
   id: string;
@@ -18,19 +19,34 @@ type AegisRepositoryInfo = {
 type AegisBackendStatus = {
   opencode: AegisServiceStatus;
   ollama: AegisServiceStatus;
-  model: {
-    providerId: "local-ollama";
-    modelId: string;
-    displayName: string;
-    baseUrl: string;
-  };
+  lmstudio: AegisServiceStatus;
+  model: AegisLocalModelInfo | null;
+  models: AegisLocalModelInfo[];
+  providers: AegisLocalModelProvider[];
   permissionMode: AegisPermissionMode;
   privacy: {
     share: "disabled";
-    enabledProviders: ["local-ollama"];
+    enabledProviders: AegisLocalProviderId[];
     disabledProviders: string[];
     webTools: "disabled";
   };
+  message?: string;
+};
+
+type AegisLocalModelInfo = {
+  providerId: AegisLocalProviderId;
+  providerName: string;
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+};
+
+type AegisLocalModelProvider = {
+  providerId: AegisLocalProviderId;
+  providerName: string;
+  baseUrl: string;
+  status: AegisServiceStatus;
+  models: AegisLocalModelInfo[];
   message?: string;
 };
 
@@ -66,6 +82,7 @@ type AegisPermissionRequest = {
 };
 
 type AegisBackendUiEvent =
+  | { type: "user.message"; taskId: string; text: string }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
@@ -100,7 +117,7 @@ type AegisTaskInfo = {
   repositoryId: string;
   prompt: string;
   workspaceKind: AegisWorkspaceKind;
-  state: "awaiting_worktree_approval" | "running" | "review_ready" | "approving" | "merged" | "rejected" | "failed";
+  state: "awaiting_worktree_approval" | "running" | "completed" | "review_ready" | "approving" | "merged" | "rejected" | "failed";
   originalBranch: string;
   baseCommit: string;
   agentBranch: string;
@@ -143,10 +160,17 @@ declare global {
       refreshTaskReview(input: { taskId: string }): Promise<AegisTaskInfo | null>;
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<AegisFileSearchResult[]>;
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
+      getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
       getBackendStatus(): Promise<AegisBackendStatus>;
       setPermissionMode(mode: AegisPermissionMode): Promise<AegisBackendStatus>;
+      setSelectedModel(input: { providerId: string; modelId: string }): Promise<AegisBackendStatus>;
       listAvailableIdes(): Promise<AegisIdeInfo[]>;
-      startTask(input: { repositoryId: string; prompt: string; chatId?: string }): Promise<AegisTaskInfo>;
+      startTask(input: {
+        repositoryId: string;
+        prompt: string;
+        chatId?: string;
+        attachedFiles?: AegisChatAttachment[];
+      }): Promise<AegisTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: AegisPermissionDecision): Promise<void>;
       openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<AegisIdeOpenResult>;

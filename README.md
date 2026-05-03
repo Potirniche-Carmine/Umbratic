@@ -7,7 +7,8 @@ controlled workspace. The intended product flow is:
 2. Ask for a code change in chat.
 3. Aegis creates an isolated task workspace.
 4. OpenCode runs the agent harness and tool calls.
-5. Ollama serves the local LLM through an OpenAI-compatible endpoint.
+5. Ollama or LM Studio serves the local LLM through an OpenAI-compatible
+   endpoint.
 6. The user reviews the result and explicitly approves the merge or keeps the
    worktree.
 
@@ -46,47 +47,32 @@ Implemented now:
 - Repository or folder selection.
 - Chat-style task UI with archived chats, file mentions, command stream, review
   panel, permission mode, IDE open button, and approval checks.
-- Ollama health check against `http://127.0.0.1:11434/v1/models`.
-- Default local model label/config for `local-ollama/gemma4:e4b`.
-- OpenCode binary detection and an Ollama-only OpenCode config builder.
+- Local model discovery for Ollama and LM Studio OpenAI-compatible endpoints.
+- Model picker backed by the currently reachable local providers and models.
+- OpenCode binary detection and local-only OpenCode config generation for the
+  selected provider/model.
+- Per-task password-protected OpenCode headless server startup on loopback.
+- OpenCode HTTP/SSE integration that sends the real prompt, streams assistant
+  text/tool events, and routes tool permissions through Aegis.
+- Chat-only turns can complete without file changes; Aegis only asks for a Git
+  worktree up front when the prompt clearly requests file/code changes, or later
+  when OpenCode requests an edit tool from a read-only chat turn.
+- Follow-up prompts in a chat append to the same Aegis/OpenCode session history
+  instead of replacing the conversation with a new task.
 - Git worktree flow for Git repositories, plus in-place folder proof flow.
-- Scripted Python hello-world test flow that writes `hello_world.py`, runs it,
-  shows command output, produces a review diff, and allows approve/reject.
+- Review diff and approve/reject flow for real OpenCode-authored changes.
 - Approval safety checks, including clean branch/base checks, blocked paths,
   secret scan, patch hash, commit, fast-forward merge, metadata, and cleanup.
 
-Important current limitation:
-
-The chat is not yet powered by OpenCode or a local LLM. The prompt currently
-drives a prebaked Python validation flow. That was useful to prove the secure
-UI, worktree lifecycle, review, approval, and merge path, but it is not the real
-agent product yet.
-
 ## What Is Left
-
-To turn this into the working product, the next phase is replacing the scripted
-hello-world runner with the real OpenCode/Ollama loop.
 
 Remaining work:
 
-1. Start OpenCode headlessly from the main process for each task workspace.
-2. Launch OpenCode with the generated local-only config:
-   `local-ollama/gemma4:e4b`, provider traffic only to
-   `http://127.0.0.1:11434/v1`, sharing disabled, public providers disabled,
-   web fetch/search denied.
-3. Connect to OpenCode's HTTP/SSE event stream and translate raw OpenCode events
-   into the existing Aegis UI event types.
-4. Send the user's actual prompt and attached file context into an OpenCode
-   session instead of always running the Python proof script.
-5. Route OpenCode permission requests through Aegis normal/bypass mode.
-6. Stream real assistant tokens and tool calls into the current chat timeline.
-7. Let OpenCode perform file edits and verification commands inside the
-   worktree, while Aegis keeps ownership of task state, path checks, review,
-   approval, merge, metadata, and cleanup.
-8. Replace the hello-world-only approval verification with task/repo-aware test
-   results while keeping blocked-file and secret-scan gates.
-9. Add product polish around model availability, Ollama model pull guidance,
+1. Add task/repo-aware test command discovery and surfaced verification results.
+2. Add product polish around model availability, Ollama model pull guidance,
    OpenCode startup failures, and richer IDE detection.
+3. Broaden automated coverage around OpenCode event translation, permission
+   routing, and approval edge cases.
 
 ## Run
 

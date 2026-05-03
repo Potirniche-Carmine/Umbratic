@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CheckCircle2,
   CircleDashed,
+  Copy,
   ExternalLink,
   File,
   FileText,
@@ -14,7 +15,6 @@ import {
   Loader2,
   PanelLeft,
   PanelRight,
-  Paperclip,
   Play,
   Plus,
   Send,
@@ -22,6 +22,8 @@ import {
   ShieldAlert,
   ShieldCheck,
   TerminalSquare,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   TriangleAlert,
   Undo2,
@@ -31,9 +33,11 @@ import {
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "normal" | "bypass";
 type WorkspaceKind = "git" | "folder";
+type LocalProviderId = "local-ollama" | "local-lmstudio";
 type TaskState =
   | "awaiting_worktree_approval"
   | "running"
+  | "completed"
   | "review_ready"
   | "approving"
   | "merged"
@@ -54,19 +58,34 @@ type RepositoryInfo = {
 type BackendStatus = {
   opencode: ServiceStatus;
   ollama: ServiceStatus;
-  model: {
-    providerId: "local-ollama";
-    modelId: string;
-    displayName: string;
-    baseUrl: string;
-  };
+  lmstudio: ServiceStatus;
+  model: LocalModelInfo | null;
+  models: LocalModelInfo[];
+  providers: LocalModelProvider[];
   permissionMode: PermissionMode;
   privacy: {
     share: "disabled";
-    enabledProviders: ["local-ollama"];
+    enabledProviders: LocalProviderId[];
     disabledProviders: string[];
     webTools: "disabled";
   };
+  message?: string;
+};
+
+type LocalModelInfo = {
+  providerId: LocalProviderId;
+  providerName: string;
+  modelId: string;
+  displayName: string;
+  baseUrl: string;
+};
+
+type LocalModelProvider = {
+  providerId: LocalProviderId;
+  providerName: string;
+  baseUrl: string;
+  status: ServiceStatus;
+  models: LocalModelInfo[];
   message?: string;
 };
 
@@ -143,6 +162,7 @@ type PermissionRequest = {
 };
 
 type BackendUiEvent =
+  | { type: "user.message"; taskId: string; text: string }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
@@ -187,10 +207,12 @@ type DesktopApi = {
   refreshTaskReview(input: { taskId: string }): Promise<TaskInfo | null>;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
+  getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
   getBackendStatus(): Promise<BackendStatus>;
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
+  setSelectedModel(input: { providerId: string; modelId: string }): Promise<BackendStatus>;
   listAvailableIdes(): Promise<IdeChoice[]>;
-  startTask(input: { repositoryId: string; prompt: string; chatId?: string }): Promise<TaskInfo>;
+  startTask(input: { repositoryId: string; prompt: string; chatId?: string; attachedFiles?: ChatAttachment[] }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
   openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
@@ -287,19 +309,30 @@ const fallbackApi: DesktopApi = {
       statusSummary: "preview",
     },
   }),
+  getRepository: async (input) =>
+    input.repositoryPath
+      ? {
+          id: `preview-${input.repositoryPath}`,
+          name: input.repositoryPath.split(/[\\/]/).filter(Boolean).pop() || input.repositoryPath,
+          rootPath: input.repositoryPath,
+          kind: "folder",
+          originalBranch: "folder",
+          baseCommit: "preview",
+          dirty: false,
+          statusSummary: "preview",
+        }
+      : null,
   getBackendStatus: async () => ({
     opencode: "unavailable",
     ollama: "unavailable",
-    model: {
-      providerId: "local-ollama",
-      modelId: "gemma4:e4b",
-      displayName: "Gemma 4 E4B via Ollama",
-      baseUrl: "http://127.0.0.1:11434/v1",
-    },
+    lmstudio: "unavailable",
+    model: null,
+    models: [],
+    providers: [],
     permissionMode: previewPermissionMode,
     privacy: {
       share: "disabled",
-      enabledProviders: ["local-ollama"],
+      enabledProviders: [],
       disabledProviders: [],
       webTools: "disabled",
     },
@@ -309,6 +342,7 @@ const fallbackApi: DesktopApi = {
     previewPermissionMode = mode;
     return fallbackApi.getBackendStatus();
   },
+  setSelectedModel: async () => fallbackApi.getBackendStatus(),
   listAvailableIdes: async () => defaultIdeChoices,
   startTask: async () => {
     throw new Error("Open the Electron app to run a task.");
@@ -406,6 +440,27 @@ function asBackendEvent(value: unknown): BackendUiEvent | null {
   return typeof event.type === "string" ? event : null;
 }
 
+function eventSignature(event: BackendUiEvent): string {
+  return JSON.stringify(event);
+}
+
+function mergeEventSnapshots(...groups: BackendUiEvent[][]): BackendUiEvent[] {
+  const merged: BackendUiEvent[] = [];
+  const mergedCounts = new Map<string, number>();
+  for (const group of groups) {
+    const groupCounts = new Map<string, number>();
+    for (const event of group) {
+      const signature = eventSignature(event);
+      const groupCount = (groupCounts.get(signature) ?? 0) + 1;
+      groupCounts.set(signature, groupCount);
+      if (groupCount <= (mergedCounts.get(signature) ?? 0)) continue;
+      mergedCounts.set(signature, groupCount);
+      merged.push(event);
+    }
+  }
+  return merged.slice(-300);
+}
+
 function shortHash(value: string): string {
   return value ? value.slice(0, 12) : "unknown";
 }
@@ -413,6 +468,7 @@ function shortHash(value: string): string {
 function stateLabel(state?: TaskState): string {
   if (!state) return "idle";
   if (state === "awaiting_worktree_approval") return "awaiting worktree";
+  if (state === "completed") return "answered";
   if (state === "review_ready") return "ready for review";
   if (state === "rejected") return "undone";
   return state.replace(/_/g, " ");
@@ -496,6 +552,10 @@ function attachmentName(pathValue: string): string {
   return pathValue.split(/[\\/]/).filter(Boolean).pop() ?? pathValue;
 }
 
+function attachmentMention(file: ChatAttachment): string {
+  return `@${file.name || attachmentName(file.path)}`;
+}
+
 function mentionAtCursor(value: string, cursor: number): { query: string; start: number; end: number } | null {
   const beforeCursor = value.slice(0, cursor);
   const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/);
@@ -504,8 +564,58 @@ function mentionAtCursor(value: string, cursor: number): { query: string; start:
   return { query: match[2], start, end: cursor };
 }
 
+function renderPromptHighlights(value: string, files: ChatAttachment[]): React.ReactNode[] {
+  const tokens = files
+    .map((file) => attachmentMention(normalizeAttachment(file)))
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  if (!tokens.length) return [value || "\u200b"];
+  const nodes: React.ReactNode[] = [];
+  let index = 0;
+  while (index < value.length) {
+    const token = tokens.find(
+      (candidate) =>
+        value.startsWith(candidate, index) &&
+        (index === 0 || /\s/.test(value[index - 1])) &&
+        (index + candidate.length === value.length || /\s|[.,;:!?)]/.test(value[index + candidate.length])),
+    );
+    if (token) {
+      nodes.push(
+        <span className="promptMentionToken" key={`${index}-${token}`}>
+          {token}
+        </span>,
+      );
+      index += token.length;
+      continue;
+    }
+    const nextMention = tokens
+      .map((candidate) => value.indexOf(candidate, index + 1))
+      .filter((position) => position >= 0)
+      .sort((left, right) => left - right)[0];
+    const end = nextMention ?? value.length;
+    nodes.push(value.slice(index, end));
+    index = end;
+  }
+  if (value.endsWith("\n")) nodes.push("\u200b");
+  return nodes;
+}
+
+function renderPlainInlineText(text: string, keyPrefix: string): React.ReactNode[] {
+  return text.split(/(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g).map((part, index) =>
+    part.startsWith("@") ? (
+      <span className="inlineMentionToken" key={`${keyPrefix}-mention-${index}`}>
+        {part}
+      </span>
+    ) : (
+      <React.Fragment key={`${keyPrefix}-text-${index}`}>{part}</React.Fragment>
+    ),
+  );
+}
+
 function eventTitle(event: BackendUiEvent): string {
   switch (event.type) {
+    case "user.message":
+      return "user";
     case "assistant.delta":
       return "assistant";
     case "assistant.done":
@@ -537,6 +647,8 @@ function eventTitle(event: BackendUiEvent): string {
 
 function eventDetail(event: BackendUiEvent): string {
   switch (event.type) {
+    case "user.message":
+      return event.text.trim();
     case "assistant.delta":
       return event.text.trim();
     case "assistant.done":
@@ -680,6 +792,7 @@ function commandShellText(run: CommandRun): string {
 }
 
 function taskStatusTitle(task: TaskInfo): string {
+  if (task.state === "completed") return "Answered";
   if (task.state === "review_ready") return "Ready to review";
   if (task.state === "merged") return task.workspaceKind === "git" ? "Merged" : "Approved";
   if (task.state === "approving") return "Running approval checks";
@@ -695,6 +808,7 @@ function taskStatusDetail(task: TaskInfo): string {
     const changed = task.changedFiles.length;
     return `${changed} changed file${changed === 1 ? "" : "s"} ready in Review.`;
   }
+  if (task.state === "completed") return "No file changes for this turn.";
   if (task.state === "rejected") return "Changes were undone.";
   if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
   if (task.error) return task.error;
@@ -743,8 +857,9 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
   let assistantBuffer = "";
   let assistantIndex = 0;
   const prompt = taskPrompt?.trim();
+  const hasUserMessages = events.some((event) => event.type === "user.message");
 
-  if (prompt) {
+  if (prompt && !hasUserMessages) {
     items.push({ type: "user", id: "user-prompt", text: prompt });
   }
 
@@ -759,6 +874,11 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
   };
 
   for (const event of events) {
+    if (event.type === "user.message") {
+      flushAssistant();
+      items.push({ type: "user", id: `user-${items.length}-${event.text.length}`, text: event.text });
+      continue;
+    }
     if (event.type === "assistant.delta") {
       assistantBuffer = `${assistantBuffer}${event.text}`;
       continue;
@@ -882,7 +1002,7 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
     }
-    return <React.Fragment key={index}>{part}</React.Fragment>;
+    return <React.Fragment key={index}>{renderPlainInlineText(part, `inline-${index}`)}</React.Fragment>;
   });
 }
 
@@ -934,6 +1054,8 @@ function App() {
   const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>([]);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null);
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const [promptScrollTop, setPromptScrollTop] = useState(0);
   const [deleteCandidate, setDeleteCandidate] = useState<ChatRecord | null>(null);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
   const [events, setEvents] = useState<BackendUiEvent[]>([]);
@@ -955,6 +1077,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
@@ -987,10 +1110,11 @@ function App() {
     [reviewDiffs, reviewFiles],
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
-  const canStart = !!repository && prompt.trim().length > 0 && !busy;
+  const selectedModel = backend?.model ?? null;
+  const canStart = !!repository && !!selectedModel && prompt.trim().length > 0 && !busy;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
-  const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && !busy;
-  const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected";
+  const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
+  const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const reviewEmptyLabel = !task
     ? "No active review"
     : task.state === "review_ready"
@@ -1039,6 +1163,12 @@ function App() {
       if (!event) return;
       setEvents((current) => [...current, event].slice(-300));
       if (event.type === "assistant.delta") setAssistantText((current) => `${current}${event.text}`);
+      if (event.type === "assistant.done") {
+        setTask((current) =>
+          current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
+        );
+        void loadChats();
+      }
       if (event.type === "permission.requested") setPendingPermission(event.request);
       if (event.type === "permission.resolved") {
         setPendingPermission((current) => (current?.id === event.id ? null : current));
@@ -1150,16 +1280,21 @@ function App() {
   useEffect(() => {
     if (!mention || !repository) {
       setFileMatches([]);
+      setSelectedFileIndex(0);
       return undefined;
     }
     let canceled = false;
     const timer = window.setTimeout(async () => {
       try {
         const matches = await api.searchFiles({ repositoryId: repository.id, query: mention.query, limit: 10 });
-        if (!canceled) setFileMatches(matches);
+        if (!canceled) {
+          setFileMatches(matches);
+          setSelectedFileIndex(0);
+        }
       } catch (cause) {
         if (!canceled) {
           setFileMatches([]);
+          setSelectedFileIndex(0);
           setError(String(cause instanceof Error ? cause.message : cause));
         }
       }
@@ -1169,6 +1304,12 @@ function App() {
       window.clearTimeout(timer);
     };
   }, [mention?.query, repository?.id]);
+
+  useEffect(() => {
+    const menu = attachmentMenuRef.current;
+    if (!menu || !fileMatches.length) return;
+    menu.querySelector<HTMLButtonElement>(`[data-file-index="${selectedFileIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [fileMatches.length, selectedFileIndex]);
 
   async function persistDraft(chatId: string, draftPrompt: string, files: ChatAttachment[]) {
     try {
@@ -1315,6 +1456,21 @@ function App() {
     }
   }
 
+  async function restoreChatRepository(chat: ChatRecord, repositoryId?: string) {
+    if (!chat.repositoryPath && !repositoryId) {
+      setRepository(null);
+      return;
+    }
+    try {
+      const nextRepository = await api.getRepository({ repositoryId, repositoryPath: chat.repositoryPath });
+      if (nextRepository) {
+        setRepository(nextRepository);
+      }
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
   async function updatePermissionMode(mode: PermissionMode) {
     if (mode === "bypass" && permissionMode !== "bypass") {
       setShowBypassDialog(true);
@@ -1344,22 +1500,39 @@ function App() {
     }
   }
 
+  async function selectModel(model: LocalModelInfo) {
+    setError(null);
+    setModelMenuOpen(false);
+    try {
+      const status = await api.setSelectedModel({ providerId: model.providerId, modelId: model.modelId });
+      setBackend(status);
+      setPermissionModeState(status.permissionMode);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
   async function startTask() {
     if (!repository) return;
+    if (!selectedModel) {
+      setError("Start LM Studio or Ollama with at least one loaded model.");
+      return;
+    }
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) return;
-    const promptForTask = attachedFiles.length
-      ? `${trimmedPrompt}\n\nAttached files:\n${attachedFiles.map((file) => `- ${file.path}`).join("\n")}`
-      : trimmedPrompt;
+    const isContinuingChat = !!task && task.chatId === activeChatId;
+    const preservedEvents = isContinuingChat ? events : [];
     setError(null);
     setBusy(true);
-    setEvents([]);
-    setAssistantText("");
-    setApprovalChecks([]);
-    setExpandedCommandId(null);
+    if (!isContinuingChat) {
+      setEvents([]);
+      setAssistantText("");
+      setApprovalChecks([]);
+      setExpandedCommandId(null);
+      setExpandedReviewPaths(new Set());
+      setReviewOpen(false);
+    }
     setPendingPermission(null);
-    setExpandedReviewPaths(new Set());
-    setReviewOpen(false);
     try {
       let chatId = activeChatId;
       if (!chatId) {
@@ -1368,9 +1541,18 @@ function App() {
         chatId = chat.id;
         setActiveChatId(chat.id);
       }
-      const nextTask = await api.startTask({ repositoryId: repository.id, prompt: promptForTask, chatId });
+      const nextTask = await api.startTask({
+        repositoryId: repository.id,
+        prompt: trimmedPrompt,
+        chatId,
+        attachedFiles: attachedFiles.map(normalizeAttachment),
+      });
       setTask(nextTask);
-      setEvents((current) => (current.length ? current : nextTask.events ?? []));
+      setEvents((current) =>
+        isContinuingChat
+          ? mergeEventSnapshots(preservedEvents, nextTask.events ?? [], current)
+          : mergeEventSnapshots(nextTask.events ?? [], current),
+      );
       if (nextTask.chatId) setActiveChatId(nextTask.chatId);
       upsertChatFromTask(nextTask);
       suppressDraftSaveBriefly();
@@ -1379,7 +1561,7 @@ function App() {
       setMention(null);
       setFileMatches([]);
       await persistDraft(nextTask.chatId ?? chatId, "", []);
-      setExpandedReviewPaths(new Set());
+      if (!isContinuingChat) setExpandedReviewPaths(new Set());
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -1406,6 +1588,11 @@ function App() {
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
+  }
+
+  function copyText(value: string) {
+    const write = navigator.clipboard?.writeText(value);
+    if (write) void write.catch(() => undefined);
   }
 
   async function openIde(ideId: string) {
@@ -1493,8 +1680,10 @@ function App() {
   }
 
   function handlePromptChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
-    setPrompt(event.target.value);
-    updateMention(event.target.value, event.target.selectionStart);
+    const nextPrompt = event.target.value;
+    setPrompt(nextPrompt);
+    setAttachedFiles((current) => current.filter((file) => nextPrompt.includes(attachmentMention(normalizeAttachment(file)))));
+    updateMention(nextPrompt, event.target.selectionStart);
   }
 
   function addAttachment(file: ChatAttachment) {
@@ -1503,39 +1692,49 @@ function App() {
       current.some((attached) => attached.path === normalized.path) ? current : [...current, normalized].slice(0, 16),
     );
     if (mention) {
-      const nextPrompt = `${prompt.slice(0, mention.start)}@${normalized.path} ${prompt.slice(mention.end)}`;
+      const mentionText = `${attachmentMention(normalized)} `;
+      const nextPrompt = `${prompt.slice(0, mention.start)}${mentionText}${prompt.slice(mention.end)}`;
       setPrompt(nextPrompt);
       setMention(null);
       setFileMatches([]);
+      setSelectedFileIndex(0);
       window.setTimeout(() => {
         const node = textareaRef.current;
         if (!node) return;
-        const caret = mention.start + normalized.path.length + 2;
+        const caret = mention.start + mentionText.length;
         node.focus();
         node.setSelectionRange(caret, caret);
       }, 0);
     }
   }
 
-  function removeAttachment(pathValue: string) {
-    setAttachedFiles((current) => current.filter((file) => file.path !== pathValue));
-  }
-
   function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Escape" && mention) {
-      event.preventDefault();
-      setMention(null);
-      setFileMatches([]);
-      return;
+    if (mention) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMention(null);
+        setFileMatches([]);
+        setSelectedFileIndex(0);
+        return;
+      }
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && fileMatches.length) {
+        event.preventDefault();
+        setSelectedFileIndex((current) => {
+          const direction = event.key === "ArrowDown" ? 1 : -1;
+          return (current + direction + fileMatches.length) % fileMatches.length;
+        });
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && fileMatches.length) {
+        event.preventDefault();
+        addAttachment(fileMatches[Math.min(selectedFileIndex, fileMatches.length - 1)]);
+        return;
+      }
     }
     if (event.key !== "Enter" || event.shiftKey) {
       return;
     }
     event.preventDefault();
-    if (mention && fileMatches[0]) {
-      addAttachment(fileMatches[0]);
-      return;
-    }
     void startTask();
   }
 
@@ -1565,7 +1764,10 @@ function App() {
   }
 
   async function selectChat(chat: ChatRecord) {
-    if (activeChatId === chat.id) return;
+    if (activeChatId === chat.id) {
+      void restoreChatRepository(chat, task?.repositoryId);
+      return;
+    }
     if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
     suppressDraftSaveBriefly();
     setActiveChatId(chat.id);
@@ -1579,16 +1781,17 @@ function App() {
     setAttachedFiles(chat.attachedFiles ?? []);
     setMention(null);
     setFileMatches([]);
-    if (!chat.taskId) {
-      setTask(null);
-      setReviewOpen(false);
-      setPrompt(chat.draftPrompt ?? "");
-      return;
-    }
     try {
-      let nextTask = await api.getTask({ taskId: chat.taskId });
+      let nextTask = chat.taskId ? await api.getTask({ taskId: chat.taskId }) : null;
       if (nextTask?.state === "review_ready") {
         nextTask = (await api.refreshTaskReview({ taskId: nextTask.id })) ?? nextTask;
+      }
+      await restoreChatRepository(chat, nextTask?.repositoryId);
+      if (!chat.taskId) {
+        setTask(null);
+        setReviewOpen(false);
+        setPrompt(chat.draftPrompt ?? "");
+        return;
       }
       setTask(nextTask);
       setEvents(nextTask?.events ?? []);
@@ -1835,10 +2038,26 @@ function App() {
                     item.type === "user" ? (
                       <article className="timelineMessage userMessage" key={item.id}>
                         <MarkdownContent content={item.text} />
+                        <div className="messageActions">
+                          <button className="messageAction" type="button" onClick={() => copyText(item.text)} title="Copy prompt">
+                            <Copy size={14} />
+                          </button>
+                        </div>
                       </article>
                     ) : item.type === "assistant" ? (
-                      <article className="timelineMessage" key={item.id}>
+                      <article className="timelineMessage assistantMessage" key={item.id}>
                         <MarkdownContent content={item.text} />
+                        <div className="messageActions">
+                          <button className="messageAction" type="button" onClick={() => copyText(item.text)} title="Copy response">
+                            <Copy size={14} />
+                          </button>
+                          <button className="messageAction" type="button" title="Good response">
+                            <ThumbsUp size={14} />
+                          </button>
+                          <button className="messageAction" type="button" title="Bad response">
+                            <ThumbsDown size={14} />
+                          </button>
+                        </div>
                       </article>
                     ) : (
                       <article className={`timelineCommand commandCard ${item.run.status}`} key={item.id}>
@@ -1940,33 +2159,51 @@ function App() {
             <div className="modelMenuHost">
               <button className="modelMenuButton" type="button" onClick={() => setModelMenuOpen((open) => !open)}>
                 <span>
-                  <strong>{backend?.model.modelId ?? "gemma4:e4b"}</strong>
+                  <strong>{selectedModel?.modelId ?? "No local model"}</strong>
+                  <em>{selectedModel ? selectedModel.providerName : "LM Studio / Ollama"}</em>
                 </span>
                 <ChevronDown size={15} />
               </button>
               {modelMenuOpen ? (
                 <div className="modelMenu" role="menu">
-                  <button type="button" onClick={() => setModelMenuOpen(false)}>
-                    <CheckCircle2 size={15} />
-                    <span>
-                      <strong>{backend?.model.displayName ?? "Gemma 4 E4B via Ollama"}</strong>
-                    </span>
-                  </button>
+                  {backend?.models.length ? (
+                    backend.models.map((model) => {
+                      const active = selectedModel?.providerId === model.providerId && selectedModel.modelId === model.modelId;
+                      return (
+                        <button key={`${model.providerId}:${model.modelId}`} type="button" onClick={() => selectModel(model)}>
+                          {active ? <CheckCircle2 size={15} /> : <CircleDashed size={15} />}
+                          <span>
+                            <strong>{model.modelId}</strong>
+                            <em>{model.providerName}</em>
+                          </span>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="modelMenuEmpty">No LM Studio or Ollama models found</div>
+                  )}
                 </div>
               ) : null}
             </div>
           </div>
           <div className="composer">
             {attachmentMenuOpen ? (
-              <div className="attachmentMenu">
+              <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
                   <AtSign size={14} />
                   <span>{repository ? `Search ${repository.name}` : "Select a folder first"}</span>
                 </div>
                 {repository ? (
                   fileMatches.length ? (
-                    fileMatches.map((file) => (
-                      <button key={file.path} type="button" onClick={() => addAttachment(file)}>
+                    fileMatches.map((file, index) => (
+                      <button
+                        className={index === selectedFileIndex ? "active" : ""}
+                        data-file-index={index}
+                        key={file.path}
+                        type="button"
+                        onClick={() => addAttachment(file)}
+                        onMouseEnter={() => setSelectedFileIndex(index)}
+                      >
                         <File size={14} />
                         <span>
                           <strong>{file.name}</strong>
@@ -1981,30 +2218,25 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            {attachedFiles.length ? (
-              <div className="attachmentStrip">
-                {attachedFiles.map((file) => (
-                  <span className="attachmentChip" key={file.path}>
-                    <Paperclip size={13} />
-                    <span>{file.name}</span>
-                    <button type="button" onClick={() => removeAttachment(file.path)} title={`Remove ${file.name}`}>
-                      <X size={12} />
-                    </button>
-                  </span>
-                ))}
+            <div className="promptInputShell">
+              <div className="promptHighlight" aria-hidden="true">
+                <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
+                  {renderPromptHighlights(prompt, attachedFiles)}
+                </div>
               </div>
-            ) : null}
-            <textarea
-              ref={textareaRef}
-              value={prompt}
-              onChange={handlePromptChange}
-              onKeyDown={handlePromptKeyDown}
-              onKeyUp={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
-              onClick={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
-              onSelect={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
-              disabled={busy}
-              placeholder="Ask Aegis to change something... Use @ to attach files."
-            />
+              <textarea
+                ref={textareaRef}
+                value={prompt}
+                onChange={handlePromptChange}
+                onKeyDown={handlePromptKeyDown}
+                onKeyUp={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                onClick={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                onSelect={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
+                disabled={busy}
+                placeholder="Ask Aegis to change something... Use @ to attach files."
+              />
+            </div>
             <button className="sendButton" type="button" onClick={startTask} disabled={!canStart}>
               {busy ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
             </button>

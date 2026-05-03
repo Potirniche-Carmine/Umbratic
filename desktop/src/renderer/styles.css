@@ -822,34 +822,84 @@ pre {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 8px 0 22px;
+  padding: 8px 0 28px;
   line-height: 1.58;
 }
 
 .timeline {
   display: grid;
-  gap: 12px;
+  gap: 18px;
   width: min(100%, 980px);
   max-width: 980px;
   margin: 0 auto;
 }
 
 .timelineMessage {
+  position: relative;
   min-width: 0;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.035);
+  padding: 0 88px 0 0;
+  color: var(--text);
 }
 
 .timelineMessage.userMessage {
   margin-left: auto;
+  max-width: min(720px, 88%);
+  padding: 10px 42px 10px 13px;
+  border: 1px solid rgba(87, 157, 255, 0.28);
+  border-radius: var(--radius);
   border-color: rgba(87, 157, 255, 0.28);
   background: rgba(87, 157, 255, 0.08);
 }
 
+.timelineMessage.assistantMessage {
+  width: 100%;
+  max-width: 920px;
+  padding: 0;
+}
+
 .timelineMessage .markdownContent > :last-child {
   margin-bottom: 0;
+}
+
+.messageActions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  gap: 3px;
+  opacity: 0.58;
+  transition: opacity 120ms ease;
+}
+
+.userMessage .messageActions {
+  top: 8px;
+  right: 8px;
+}
+
+.assistantMessage .messageActions {
+  position: static;
+  margin-top: 9px;
+}
+
+.timelineMessage:hover .messageActions,
+.timelineMessage:focus-within .messageActions {
+  opacity: 1;
+}
+
+.messageAction {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.messageAction:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .timelineCommand {
@@ -896,6 +946,15 @@ pre {
   background: rgba(255, 255, 255, 0.08);
   font-family: "Cascadia Code", "SF Mono", Consolas, monospace;
   font-size: 12px;
+}
+
+.inlineMentionToken {
+  display: inline;
+  padding: 1px 3px;
+  border-radius: 5px;
+  color: #9fcbff;
+  background: rgba(87, 157, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(87, 157, 255, 0.16);
 }
 
 .markdownCode {
@@ -1210,7 +1269,9 @@ pre {
   right: 0;
   bottom: calc(100% + 7px);
   z-index: 30;
-  width: min(260px, 56vw);
+  width: min(340px, 62vw);
+  max-height: 280px;
+  overflow: auto;
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -1233,6 +1294,12 @@ pre {
 
 .modelMenu button:hover {
   background: rgba(255, 255, 255, 0.065);
+}
+
+.modelMenuEmpty {
+  padding: 10px 8px;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 
 .promptRisk {
@@ -1332,8 +1399,13 @@ pre {
   text-align: left;
 }
 
-.attachmentMenu button:hover {
+.attachmentMenu button:hover,
+.attachmentMenu button.active {
   background: rgba(255, 255, 255, 0.065);
+}
+
+.attachmentMenu button.active {
+  outline: 1px solid rgba(87, 157, 255, 0.34);
 }
 
 .attachmentMenu button > svg {
@@ -1371,48 +1443,40 @@ pre {
   padding: 10px 8px;
 }
 
-.attachmentStrip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 0 8px;
+.promptInputShell {
+  position: relative;
+  min-height: 74px;
 }
 
-.attachmentChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: min(260px, 100%);
-  min-height: 26px;
-  padding: 0 5px 0 8px;
-  border: 1px solid rgba(87, 157, 255, 0.28);
-  border-radius: 999px;
-  color: #d8eaff;
-  background: rgba(87, 157, 255, 0.1);
-  font-size: 11.5px;
-}
-
-.attachmentChip > span {
+.promptHighlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  min-height: 74px;
+  max-height: 180px;
+  padding: 12px 54px 12px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--text);
+  line-height: 1.48;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 
-.attachmentChip button {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  color: #b8cce8;
-}
-
-.attachmentChip button:hover {
-  color: #fff;
-  background: rgba(255, 111, 122, 0.28);
+.promptMentionToken {
+  display: inline;
+  padding: 1px 3px;
+  border-radius: 5px;
+  color: #9fcbff;
+  background: rgba(87, 157, 255, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(87, 157, 255, 0.18);
 }
 
 .composer textarea {
+  position: relative;
+  z-index: 1;
   width: 100%;
   min-height: 74px;
   max-height: 180px;
@@ -1421,7 +1485,8 @@ pre {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   outline: 0;
-  color: var(--text);
+  color: transparent;
+  caret-color: var(--text);
   background: rgba(0, 0, 0, 0.24);
   line-height: 1.48;
 }
@@ -1429,6 +1494,14 @@ pre {
 .composer textarea:focus {
   border-color: rgba(87, 157, 255, 0.72);
   box-shadow: 0 0 0 3px rgba(87, 157, 255, 0.14);
+}
+
+.composer textarea::placeholder {
+  color: var(--faint);
+}
+
+.composer textarea::selection {
+  background: rgba(87, 157, 255, 0.32);
 }
 
 .sendButton {

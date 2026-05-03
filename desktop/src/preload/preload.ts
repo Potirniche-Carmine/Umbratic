@@ -15,10 +15,13 @@ contextBridge.exposeInMainWorld("aegis", {
   refreshTaskReview: (input: { taskId: string }) => ipcRenderer.invoke("aegis:refresh-task-review", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("aegis:search-files", input),
   pickRepository: () => ipcRenderer.invoke("aegis:pick-repository"),
+  getRepository: (input: { repositoryId?: string; repositoryPath?: string }) => ipcRenderer.invoke("aegis:get-repository", input),
   getBackendStatus: () => ipcRenderer.invoke("aegis:get-backend-status"),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("aegis:set-permission-mode", mode),
+  setSelectedModel: (input: { providerId: string; modelId: string }) => ipcRenderer.invoke("aegis:set-selected-model", input),
   listAvailableIdes: () => ipcRenderer.invoke("aegis:list-available-ides"),
-  startTask: (input: { repositoryId: string; prompt: string; chatId?: string }) => ipcRenderer.invoke("aegis:start-task", input),
+  startTask: (input: { repositoryId: string; prompt: string; chatId?: string; attachedFiles?: ChatAttachment[] }) =>
+    ipcRenderer.invoke("aegis:start-task", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>
     ipcRenderer.invoke("aegis:approve-worktree-creation", input),
   respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>

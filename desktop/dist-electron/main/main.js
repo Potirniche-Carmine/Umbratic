@@ -4,12 +4,17 @@ const electron_1 = require("electron");
 const node_child_process_1 = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const isDev = !electron_1.app.isPackaged;
-const ollamaBaseUrl = "http://127.0.0.1:11434/v1";
-const defaultModelId = "gemma4:e4b";
-const defaultModelName = "Gemma 4 E4B via Ollama";
+const defaultOllamaBaseUrl = process.env.AEGIS_OLLAMA_BASE_URL || process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434/v1";
+const defaultLmStudioBaseUrl = process.env.AEGIS_LMSTUDIO_BASE_URL || process.env.LMSTUDIO_BASE_URL || "http://127.0.0.1:1234/v1";
+const preferredModelHints = ["gemma4", "gemma-4", "gemma"];
+const localProviderCatalog = [
+    { providerId: "local-lmstudio", providerName: "LM Studio", baseUrl: defaultLmStudioBaseUrl, apiKey: "lm-studio" },
+    { providerId: "local-ollama", providerName: "Ollama", baseUrl: defaultOllamaBaseUrl, apiKey: "ollama" },
+];
 const disabledProviders = [
     "opencode",
     "openai",
@@ -26,7 +31,18 @@ const disabledProviders = [
     "together",
     "perplexity",
 ];
+const defaultDisabledProviders = [...disabledProviders];
 const taskStatesThatCanOpen = new Set(["running", "review_ready", "approving", "failed"]);
+const activeOpenCodeRuns = new Map();
+function clearPendingPermissionsForTask(taskIdValue) {
+    for (const [id, pending] of Array.from(pendingPermissions.entries())) {
+        if (pending.taskId !== taskIdValue)
+            continue;
+        pendingPermissions.delete(id);
+        emit({ type: "permission.resolved", taskId: taskIdValue, id, decision: "deny" });
+        void Promise.resolve(pending.onDeny()).catch(() => undefined);
+    }
+}
 electron_1.app.enableSandbox();
 electron_1.app.setName("Aegis");
 const cleanUserData = path.join(electron_1.app.getPath("appData"), "Aegis");
@@ -51,6 +67,9 @@ function tasksPath() {
 }
 function chatsPath() {
     return dataFile("chats.json");
+}
+function settingsPath() {
+    return dataFile("settings.json");
 }
 function readJsonFile(filePath, fallback) {
     try {
@@ -106,6 +125,21 @@ function readChats() {
 }
 function writeChats(chats) {
     writeJsonFile(chatsPath(), chats);
+}
+function readSettings() {
+    const settings = readJsonFile(settingsPath(), {});
+    const providerId = settings.selectedModel?.providerId;
+    const modelId = settings.selectedModel?.modelId;
+    if ((providerId === "local-ollama" || providerId === "local-lmstudio") && typeof modelId === "string" && modelId.trim()) {
+        return { selectedModel: { providerId, modelId: modelId.trim() } };
+    }
+    return {};
+}
+function writeSelectedModel(model) {
+    writeJsonFile(settingsPath(), {
+        ...readSettings(),
+        selectedModel: { providerId: model.providerId, modelId: model.modelId },
+    });
 }
 function saveChat(chat) {
     const chats = [chat, ...readChats().filter((row) => row.id !== chat.id)];
@@ -201,6 +235,14 @@ const titleStopWords = new Set([
     "would",
     "you",
 ]);
+const mutatingPromptPattern = /\b(add|build|change|create|delete|edit|fix|generate|implement|make|modify|patch|refactor|remove|rename|replace|scaffold|update|write)\b/i;
+const codeTargetPattern = /\b(file|code|component|function|class|module|page|screen|route|api|test|bug|readme|docs?|script|style|css|html|tsx?|jsx?|py|json|yaml|yml|toml|md)\b/i;
+function promptLooksLikeFileChange(prompt) {
+    const text = prompt.split(/\n\s*\nAttached files:/i)[0].trim();
+    if (!text)
+        return false;
+    return mutatingPromptPattern.test(text) && codeTargetPattern.test(text);
+}
 function titleWord(word) {
     if (!word)
         return word;
@@ -390,6 +432,138 @@ function snapshotFolder(rootPath) {
     }
     return snapshot;
 }
+function sanitizeAttachments(input, rootPath) {
+    if (!Array.isArray(input))
+        return [];
+    const root = path.resolve(rootPath);
+    const seen = new Set();
+    const files = [];
+    for (const item of input) {
+        if (!isRecord(item))
+            continue;
+        const rawPath = typeof item.path === "string" ? item.path.trim() : "";
+        if (!rawPath)
+            continue;
+        const absolute = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(root, normalizeRelativePath(rawPath));
+        if (!pathInside(root, absolute) || !fs.existsSync(absolute))
+            continue;
+        const relative = normalizeRelativePath(path.relative(root, absolute));
+        if (!relative || isGeneratedRuntimePath(relative) || isBlockedPath(relative) || seen.has(relative))
+            continue;
+        const name = typeof item.name === "string" && item.name.trim() ? item.name.trim().slice(0, 120) : path.basename(relative);
+        seen.add(relative);
+        files.push({ path: relative, name });
+        if (files.length >= 16)
+            break;
+    }
+    return files;
+}
+function repositoryTreePreview(rootPath, maxEntries = 90) {
+    const root = path.resolve(rootPath);
+    const rows = [];
+    const walk = (directory, depth) => {
+        if (rows.length >= maxEntries || depth > 2)
+            return;
+        let entries;
+        try {
+            entries = fs.readdirSync(directory, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        entries
+            .filter((entry) => {
+            const relative = normalizeRelativePath(path.relative(root, path.join(directory, entry.name)));
+            return !isGeneratedRuntimePath(relative) && !isBlockedPath(relative) && !ignoredSnapshotDirectories.has(entry.name);
+        })
+            .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name))
+            .forEach((entry) => {
+            if (rows.length >= maxEntries)
+                return;
+            const absolute = path.join(directory, entry.name);
+            const relative = normalizeRelativePath(path.relative(root, absolute));
+            rows.push(`${"  ".repeat(depth)}- ${relative}${entry.isDirectory() ? "/" : ""}`);
+            if (entry.isDirectory())
+                walk(absolute, depth + 1);
+        });
+    };
+    walk(root, 0);
+    return rows;
+}
+function keyWorkspaceFiles(rootPath) {
+    const candidates = ["README.md", "package.json", "desktop/package.json", "src/package.json", "pyproject.toml"];
+    const snippets = [];
+    let remaining = 12000;
+    for (const relative of candidates) {
+        const absolute = path.resolve(rootPath, relative);
+        if (!pathInside(rootPath, absolute) || !fs.existsSync(absolute))
+            continue;
+        const text = readTextFileIfSafe(absolute);
+        if (text === null)
+            continue;
+        const snippet = text.slice(0, Math.max(0, remaining));
+        if (!snippet)
+            break;
+        snippets.push({ path: normalizeRelativePath(relative), text: snippet });
+        remaining -= snippet.length;
+        if (remaining <= 0)
+            break;
+    }
+    return snippets;
+}
+function attachmentContext(rootPath, attachments) {
+    if (!attachments.length)
+        return [];
+    const lines = ["Attached file contents:"];
+    let remaining = 30000;
+    for (const file of attachments) {
+        if (remaining <= 0)
+            break;
+        const absolute = path.resolve(rootPath, file.path);
+        lines.push(`\n### ${file.path}`);
+        if (!pathInside(rootPath, absolute) || !fs.existsSync(absolute)) {
+            lines.push("(file is no longer available)");
+            continue;
+        }
+        const text = readTextFileIfSafe(absolute);
+        if (text === null) {
+            lines.push("(binary, too large, or unreadable text file)");
+            continue;
+        }
+        const snippet = text.slice(0, Math.max(0, remaining));
+        remaining -= snippet.length;
+        lines.push("```");
+        lines.push(snippet);
+        lines.push(text.length > snippet.length ? "\n...(truncated)" : "");
+        lines.push("```");
+    }
+    return lines;
+}
+function openCodePromptForTask(task, userPrompt, attachments) {
+    const repository = readProjects().find((project) => project.id === task.repositoryId);
+    const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+    const tree = repositoryTreePreview(rootPath);
+    const keyFiles = keyWorkspaceFiles(rootPath);
+    const lines = [
+        "Aegis workspace context:",
+        `- opened folder: ${rootPath}`,
+        `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
+        `- workspace kind: ${task.workspaceKind}`,
+        `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
+        "",
+        "Visible workspace files:",
+        tree.length ? tree.join("\n") : "- (no readable files found)",
+    ];
+    if (keyFiles.length) {
+        lines.push("", "Key workspace files:");
+        for (const file of keyFiles) {
+            lines.push(`\n### ${file.path}`, "```", file.text, "```");
+        }
+    }
+    lines.push(...attachmentContext(rootPath, attachments));
+    lines.push("", "User request:", userPrompt, "", "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.");
+    return lines.join("\n");
+}
 function diffHeader(filePath, status) {
     const escaped = filePath.replace(/\\/g, "/");
     if (status === "added") {
@@ -568,12 +742,34 @@ function addSearchResult(results, rootPath, relativePath, match) {
     }
     results.set(normalized, { path: normalized, name: path.basename(normalized), match });
 }
+function rankedSearchResults(results, query, limit) {
+    const queryLower = query.toLowerCase();
+    const score = (file) => {
+        if (!queryLower)
+            return 0;
+        const name = file.name.toLowerCase();
+        const filePath = file.path.toLowerCase();
+        if (name.startsWith(queryLower))
+            return 0;
+        if (filePath.startsWith(queryLower))
+            return 1;
+        if (name.includes(queryLower))
+            return 2;
+        if (filePath.includes(queryLower))
+            return 3;
+        return file.match === "content" ? 4 : 5;
+    };
+    return Array.from(results)
+        .sort((left, right) => score(left) - score(right) || left.path.length - right.path.length || left.path.localeCompare(right.path))
+        .slice(0, limit);
+}
 function fallbackFileSearch(rootPath, query, limit) {
     const root = path.resolve(rootPath);
     const queryLower = query.toLowerCase();
     const results = new Map();
+    const collectionLimit = Math.max(limit * 8, 80);
     const stack = [root];
-    while (stack.length && results.size < limit) {
+    while (stack.length && results.size < collectionLimit) {
         const current = stack.pop();
         if (!current)
             continue;
@@ -598,11 +794,11 @@ function fallbackFileSearch(rootPath, query, limit) {
             if (!queryLower || relative.toLowerCase().includes(queryLower)) {
                 addSearchResult(results, root, relative, "path");
             }
-            if (results.size >= limit)
+            if (results.size >= collectionLimit)
                 break;
         }
     }
-    return Array.from(results.values()).slice(0, limit);
+    return rankedSearchResults(results.values(), query, limit);
 }
 async function searchRepositoryFiles(input) {
     if (!isRecord(input)) {
@@ -635,22 +831,23 @@ async function searchRepositoryFiles(input) {
         "!venv",
     ];
     if (await commandAvailable("rg")) {
+        const collectionLimit = Math.max(limit * 8, 80);
         const listed = await execFileResult("rg", ["--files", ...ignoreArgs], { cwd: rootPath, timeout: 15000 });
         for (const file of listed.stdout.split(/\r?\n/)) {
             if (!query || normalizeRelativePath(file).toLowerCase().includes(query.toLowerCase())) {
                 addSearchResult(results, rootPath, file, "path");
             }
-            if (results.size >= limit)
+            if (results.size >= collectionLimit)
                 break;
         }
-        if (query.length >= 2 && results.size < limit) {
+        if (query.length >= 2 && results.size < collectionLimit) {
             const contentMatches = await execFileResult("rg", ["--ignore-case", "--files-with-matches", ...ignoreArgs, escapeRegExp(query)], {
                 cwd: rootPath,
                 timeout: 15000,
             });
             for (const file of contentMatches.stdout.split(/\r?\n/)) {
                 addSearchResult(results, rootPath, file, "content");
-                if (results.size >= limit)
+                if (results.size >= collectionLimit)
                     break;
             }
         }
@@ -660,7 +857,7 @@ async function searchRepositoryFiles(input) {
             results.set(result.path, result);
         }
     }
-    return Array.from(results.values()).slice(0, limit);
+    return rankedSearchResults(results.values(), query, limit);
 }
 async function fetchJson(url, init = {}) {
     const response = await fetch(url, init);
@@ -669,6 +866,90 @@ async function fetchJson(url, init = {}) {
         throw new Error(`${response.status} ${response.statusText}${body ? `: ${body.slice(0, 240)}` : ""}`);
     }
     return response.json();
+}
+function normalizeBaseUrl(baseUrl) {
+    return baseUrl.replace(/\/+$/, "");
+}
+function normalizeOpenAiBaseUrl(baseUrl) {
+    const normalized = normalizeBaseUrl(baseUrl);
+    return /\/v\d+$/i.test(normalized) ? normalized : `${normalized}/v1`;
+}
+function modelDisplayName(providerName, modelId) {
+    return `${modelId} via ${providerName}`;
+}
+async function probeLocalProvider(provider) {
+    const baseUrl = normalizeOpenAiBaseUrl(provider.baseUrl);
+    try {
+        const lmStudioRoot = baseUrl.replace(/\/v\d+$/i, "");
+        const lmStudioModels = provider.providerId === "local-lmstudio"
+            ? await fetchJson(`${lmStudioRoot}/api/v0/models`, { signal: AbortSignal.timeout(1800) }).catch(() => null)
+            : null;
+        const response = lmStudioModels ??
+            (await fetchJson(`${baseUrl}/models`, {
+                signal: AbortSignal.timeout(1800),
+            }));
+        const seen = new Set();
+        const models = (response.data ?? [])
+            .filter((model) => model.type !== "embeddings" && model.state !== "not-loaded")
+            .map((model) => (typeof model.id === "string" && model.id.trim() ? model.id : model.name))
+            .filter((modelId) => typeof modelId === "string" && !!modelId.trim())
+            .map((modelId) => modelId.trim())
+            .filter((modelId) => {
+            const key = modelId.toLowerCase();
+            if (seen.has(key))
+                return false;
+            seen.add(key);
+            return true;
+        })
+            .sort((left, right) => left.localeCompare(right))
+            .map((modelId) => ({
+            providerId: provider.providerId,
+            providerName: provider.providerName,
+            modelId,
+            displayName: modelDisplayName(provider.providerName, modelId),
+            baseUrl,
+        }));
+        return {
+            providerId: provider.providerId,
+            providerName: provider.providerName,
+            baseUrl,
+            status: models.length > 0 ? "ready" : "degraded",
+            models,
+            message: models.length > 0 ? undefined : `${provider.providerName} is reachable but did not list any models.`,
+        };
+    }
+    catch {
+        return {
+            providerId: provider.providerId,
+            providerName: provider.providerName,
+            baseUrl,
+            status: "unavailable",
+            models: [],
+            message: `${provider.providerName} is not reachable at ${baseUrl}.`,
+        };
+    }
+}
+async function probeLocalProviders() {
+    return Promise.all(localProviderCatalog.map((provider) => probeLocalProvider(provider)));
+}
+function chooseSelectedModel(models) {
+    if (models.length === 0) {
+        return null;
+    }
+    const selected = readSettings().selectedModel;
+    if (selected) {
+        const exact = models.find((model) => model.providerId === selected.providerId && model.modelId === selected.modelId);
+        if (exact)
+            return exact;
+    }
+    const hinted = models.find((model) => preferredModelHints.some((hint) => model.modelId.toLowerCase().includes(hint)));
+    return hinted ?? models[0];
+}
+async function resolveSelectedModel() {
+    const providers = await probeLocalProviders();
+    const models = providers.flatMap((provider) => provider.models);
+    const selected = chooseSelectedModel(models);
+    return { providers, models, selected };
 }
 function opencodeBinaryPath() {
     const binary = process.platform === "win32" ? "opencode.exe" : "opencode";
@@ -712,38 +993,32 @@ function opencodeBinaryPath() {
     }
 }
 async function getBackendStatus() {
-    let ollama = "unavailable";
-    let message;
-    try {
-        const models = await fetchJson(`${ollamaBaseUrl}/models`, {
-            signal: AbortSignal.timeout(1800),
-        });
-        const hasDefault = models.data?.some((model) => model.id === defaultModelId);
-        ollama = hasDefault ? "ready" : "degraded";
-        if (!hasDefault) {
-            message = `${defaultModelId} is not listed by Ollama. Pull it before running a real model task.`;
-        }
-    }
-    catch {
-        message = `Ollama is not reachable at ${ollamaBaseUrl}.`;
-    }
+    const { providers, models, selected } = await resolveSelectedModel();
+    const providerMessages = providers
+        .filter((provider) => provider.status !== "ready" && provider.message)
+        .map((provider) => provider.message);
+    const messages = [
+        opencodeBinaryPath() ? undefined : "OpenCode is not installed in the app bundle.",
+        selected ? undefined : "No Ollama or LM Studio models are currently available.",
+        ...providerMessages,
+    ].filter((message) => !!message);
+    const ollama = providers.find((provider) => provider.providerId === "local-ollama")?.status ?? "unavailable";
+    const lmstudio = providers.find((provider) => provider.providerId === "local-lmstudio")?.status ?? "unavailable";
     return {
         opencode: opencodeBinaryPath() ? "ready" : "unavailable",
+        lmstudio,
         ollama,
-        model: {
-            providerId: "local-ollama",
-            modelId: defaultModelId,
-            displayName: defaultModelName,
-            baseUrl: ollamaBaseUrl,
-        },
+        model: selected,
+        models,
+        providers,
         permissionMode,
         privacy: {
             share: "disabled",
-            enabledProviders: ["local-ollama"],
-            disabledProviders,
+            enabledProviders: providers.filter((provider) => provider.status === "ready").map((provider) => provider.providerId),
+            disabledProviders: defaultDisabledProviders,
             webTools: "disabled",
         },
-        message,
+        message: messages.length ? messages.join(" ") : undefined,
     };
 }
 async function inspectRepository(selectedPath) {
@@ -794,26 +1069,52 @@ async function pickRepository() {
     }
     return { canceled: false, repository: await inspectRepository(result.filePaths[0]) };
 }
-function buildOpenCodeConfig(mode) {
+async function getRepository(input) {
+    if (!isRecord(input)) {
+        throw new Error("Invalid repository lookup input.");
+    }
+    const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
+    const repositoryPath = typeof input.repositoryPath === "string" && input.repositoryPath.trim() ? path.resolve(input.repositoryPath.trim()) : "";
+    const existing = (repositoryId ? readProjects().find((project) => project.id === repositoryId) : undefined) ??
+        (repositoryPath ? readProjects().find((project) => path.resolve(project.rootPath) === repositoryPath) : undefined);
+    const targetPath = existing?.rootPath ?? repositoryPath;
+    if (!targetPath) {
+        return null;
+    }
+    if (!fs.existsSync(targetPath)) {
+        return existing ?? null;
+    }
+    return inspectRepository(targetPath);
+}
+function buildOpenCodeConfig(mode, selectedModel, availableModels) {
     const toolPermission = mode === "bypass"
         ? { webfetch: "deny", websearch: "deny", external_directory: "ask", edit: "allow", bash: "allow" }
         : { webfetch: "deny", websearch: "deny", external_directory: "ask", edit: "ask", bash: "ask" };
+    const providerCatalog = new Map(localProviderCatalog.map((provider) => [provider.providerId, provider]));
+    const modelsForSelectedProvider = availableModels.filter((model) => model.providerId === selectedModel.providerId);
+    const modelEntries = Object.fromEntries((modelsForSelectedProvider.length ? modelsForSelectedProvider : [selectedModel]).map((model) => [
+        model.modelId,
+        { name: model.displayName },
+    ]));
+    const catalogProvider = providerCatalog.get(selectedModel.providerId);
+    const enabledProviderIds = Array.from(new Set([selectedModel.providerId]));
     return {
         $schema: "https://opencode.ai/config.json",
         share: "disabled",
         autoupdate: false,
-        model: `local-ollama/${defaultModelId}`,
-        small_model: `local-ollama/${defaultModelId}`,
-        enabled_providers: ["local-ollama"],
-        disabled_providers: disabledProviders,
+        model: `${selectedModel.providerId}/${selectedModel.modelId}`,
+        small_model: `${selectedModel.providerId}/${selectedModel.modelId}`,
+        enabled_providers: enabledProviderIds,
+        disabled_providers: defaultDisabledProviders,
         provider: {
-            "local-ollama": {
+            [selectedModel.providerId]: {
                 npm: "@ai-sdk/openai-compatible",
-                name: "Local Ollama",
-                options: { baseURL: ollamaBaseUrl },
-                models: {
-                    [defaultModelId]: { name: defaultModelName },
+                name: `Local ${selectedModel.providerName}`,
+                options: {
+                    baseURL: selectedModel.baseUrl,
+                    apiKey: catalogProvider?.apiKey ?? "local",
                 },
+                models: modelEntries,
             },
         },
         server: {
@@ -848,10 +1149,14 @@ async function askPermission(task, request) {
         return;
     }
     return new Promise((resolve, reject) => {
-        pendingPermissions.set(id, { taskId: task.id, resolve, reject });
+        pendingPermissions.set(id, {
+            taskId: task.id,
+            onAllow: resolve,
+            onDeny: () => reject(new Error("The user denied the requested tool action.")),
+        });
     });
 }
-function respondToToolPermission(input) {
+async function respondToToolPermission(input) {
     if (!isRecord(input)) {
         throw new Error("Invalid permission response.");
     }
@@ -865,10 +1170,10 @@ function respondToToolPermission(input) {
     pendingPermissions.delete(id);
     emit({ type: "permission.resolved", taskId: taskIdValue, id, decision });
     if (decision === "allow") {
-        pending.resolve();
+        await pending.onAllow();
     }
     else {
-        pending.reject(new Error("The user denied the requested tool action."));
+        await pending.onDeny();
     }
 }
 async function runCommandForTask(task, command, args, options) {
@@ -939,6 +1244,9 @@ function folderReviewFiles(task) {
         .filter((file) => !!file);
 }
 async function gitReviewFiles(task) {
+    if (!task.agentBranch) {
+        return [];
+    }
     const changed = (await getChangedFiles(task.worktreePath, task.baseCommit))
         .filter((file) => !isGeneratedRuntimePath(file))
         .sort((a, b) => a.localeCompare(b));
@@ -994,96 +1302,513 @@ async function refreshTaskReview(input) {
     saveTask(task);
     return publicTask(task);
 }
-async function writeHelloWorld(task) {
-    await askPermission(task, {
-        kind: "edit",
-        summary: "write hello_world.py",
-        command: "write hello_world.py",
-        cwd: task.worktreePath,
+async function freeLocalPort() {
+    return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+            if (!address || typeof address === "string") {
+                server.close(() => reject(new Error("Unable to allocate an OpenCode port.")));
+                return;
+            }
+            const port = address.port;
+            server.close(() => resolve(port));
+        });
     });
-    const id = `cmd-${crypto.randomBytes(6).toString("hex")}`;
-    emit({ type: "command.started", taskId: task.id, id, command: "write hello_world.py", cwd: task.worktreePath });
-    fs.writeFileSync(path.join(task.worktreePath, "hello_world.py"), 'print("hello world")\n');
-    emit({ type: "command.output", taskId: task.id, id, stream: "stdout", text: "created hello_world.py\n" });
-    emit({ type: "command.finished", taskId: task.id, id, exitCode: 0 });
 }
-async function verifyHelloWorld(task) {
-    const env = runtimeEnv(task.worktreePath);
-    const candidates = process.platform === "win32"
-        ? [
-            { command: "py", args: ["-3", "hello_world.py"] },
-            { command: "python", args: ["hello_world.py"] },
-        ]
-        : [
-            { command: "python3", args: ["hello_world.py"] },
-            { command: "python", args: ["hello_world.py"] },
-        ];
-    for (const candidate of candidates) {
-        const result = await runCommandForTask(task, candidate.command, candidate.args, {
-            cwd: task.worktreePath,
-            env,
-            timeout: 120000,
-        });
-        if (result.success && result.stdout.trim() === "hello world") {
-            return {
-                command: commandText(candidate.command, candidate.args),
-                output: result.stdout.trim(),
-                passed: true,
-                exitCode: result.exitCode,
-                completedAt: new Date().toISOString(),
-            };
-        }
+function stopOpenCodeRun(run) {
+    run.abortController.abort();
+    if (!run.child.killed) {
+        run.child.kill();
     }
-    if (await commandAvailable("uv")) {
-        await runCommandForTask(task, "uv", ["python", "install", "3.12"], {
-            cwd: task.worktreePath,
-            env,
-            timeout: 10 * 60 * 1000,
-        });
-        const result = await runCommandForTask(task, "uv", ["run", "--python", "3.12", "python", "hello_world.py"], {
-            cwd: task.worktreePath,
-            env,
-            timeout: 10 * 60 * 1000,
-        });
-        return {
-            command: "uv run --python 3.12 python hello_world.py",
-            output: result.stdout.trim() || result.stderr.trim(),
-            passed: result.success && result.stdout.trim() === "hello world",
-            exitCode: result.exitCode,
-            completedAt: new Date().toISOString(),
+}
+function openCodeAuthHeader(run) {
+    return `Basic ${Buffer.from(`opencode:${run.password}`).toString("base64")}`;
+}
+function openCodeUrl(run, route) {
+    const url = new URL(route, run.url);
+    url.searchParams.set("directory", run.directory);
+    return url;
+}
+async function openCodeRequest(run, route, init = {}) {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", openCodeAuthHeader(run));
+    if (init.body !== undefined) {
+        headers.set("Content-Type", "application/json");
+    }
+    const response = await fetch(openCodeUrl(run, route), {
+        ...init,
+        headers,
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        signal: init.signal ?? run.abortController.signal,
+    });
+    if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`OpenCode ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`);
+    }
+    if (response.status === 204) {
+        return undefined;
+    }
+    return response.json();
+}
+async function startOpenCodeServer(task, model, models) {
+    const binary = opencodeBinaryPath();
+    if (!binary) {
+        throw new Error("OpenCode is not installed in the app bundle.");
+    }
+    const port = await freeLocalPort();
+    const password = crypto.randomBytes(18).toString("base64url");
+    const config = buildOpenCodeConfig(task.permissionMode, model, models);
+    const child = (0, node_child_process_1.spawn)(binary, ["serve", "--pure", "--hostname=127.0.0.1", `--port=${port}`], {
+        cwd: task.worktreePath,
+        env: {
+            ...runtimeEnv(task.worktreePath),
+            OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+            OPENCODE_SERVER_PASSWORD: password,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+    });
+    let output = "";
+    const url = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            stopOpenCodeRun({
+                taskId: task.id,
+                url: `http://127.0.0.1:${port}`,
+                password,
+                directory: task.worktreePath,
+                child,
+                abortController: new AbortController(),
+            });
+            reject(new Error(`Timed out waiting for OpenCode to start.${output.trim() ? `\n${output.trim()}` : ""}`));
+        }, 15000);
+        let settled = false;
+        const cleanup = () => {
+            clearTimeout(timer);
+            child.stdout?.off("data", onData);
+            child.stderr?.off("data", onData);
+            child.off("error", onError);
+            child.off("exit", onExit);
         };
-    }
+        const onData = (chunk) => {
+            output += chunk.toString("utf8");
+            const match = output.match(/opencode server listening on\s+(https?:\/\/[^\s]+)/);
+            if (!match || settled)
+                return;
+            settled = true;
+            cleanup();
+            resolve(match[1]);
+        };
+        const onError = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            reject(error);
+        };
+        const onExit = (code) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            reject(new Error(`OpenCode exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
+        };
+        child.stdout?.on("data", onData);
+        child.stderr?.on("data", onData);
+        child.once("error", onError);
+        child.once("exit", onExit);
+    });
     return {
-        command: "python hello_world.py",
-        output: "Python was not found and uv is not available.",
-        passed: false,
-        exitCode: null,
-        completedAt: new Date().toISOString(),
+        taskId: task.id,
+        url,
+        password,
+        directory: task.worktreePath,
+        child,
+        abortController: new AbortController(),
     };
 }
-async function runHelloWorldTask(taskIdValue) {
-    const task = getTask(taskIdValue);
+function eventSessionId(event) {
+    const properties = isRecord(event.properties) ? event.properties : {};
+    const direct = typeof properties.sessionID === "string" ? properties.sessionID : undefined;
+    if (direct)
+        return direct;
+    const info = isRecord(properties.info) ? properties.info : undefined;
+    if (typeof info?.sessionID === "string")
+        return info.sessionID;
+    const part = isRecord(properties.part) ? properties.part : undefined;
+    if (typeof part?.sessionID === "string")
+        return part.sessionID;
+    return undefined;
+}
+function openCodeErrorMessage(error) {
+    if (!isRecord(error))
+        return String(error || "OpenCode failed.");
+    const data = isRecord(error.data) ? error.data : {};
+    if (typeof data.message === "string")
+        return data.message;
+    if (typeof error.name === "string")
+        return error.name;
+    return "OpenCode failed.";
+}
+function parseSseBlock(block) {
+    const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n")
+        .trim();
+    if (!data)
+        return null;
     try {
-        emit({ type: "assistant.delta", taskId: task.id, text: "Starting the isolated hello-world task in the worktree.\n" });
-        await writeHelloWorld(task);
-        const test = await verifyHelloWorld(task);
-        task.latestTest = test;
+        return JSON.parse(data);
+    }
+    catch {
+        return null;
+    }
+}
+function beginOpenCodeEventStream(run, onEvent) {
+    let markReady;
+    let failReady;
+    const ready = new Promise((resolve, reject) => {
+        markReady = resolve;
+        failReady = reject;
+    });
+    const done = (async () => {
+        try {
+            const headers = new Headers();
+            headers.set("Authorization", openCodeAuthHeader(run));
+            headers.set("Accept", "text/event-stream");
+            const response = await fetch(openCodeUrl(run, "/event"), {
+                headers,
+                signal: run.abortController.signal,
+            });
+            if (!response.ok || !response.body) {
+                throw new Error(`OpenCode event stream failed with ${response.status} ${response.statusText}.`);
+            }
+            markReady();
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            while (true) {
+                const chunk = await reader.read();
+                if (chunk.done)
+                    break;
+                buffer += decoder.decode(chunk.value, { stream: true });
+                let boundary = buffer.search(/\r?\n\r?\n/);
+                while (boundary >= 0) {
+                    const block = buffer.slice(0, boundary);
+                    const delimiterLength = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0].length ?? 2;
+                    buffer = buffer.slice(boundary + delimiterLength);
+                    const event = parseSseBlock(block);
+                    if (isRecord(event))
+                        onEvent(event);
+                    boundary = buffer.search(/\r?\n\r?\n/);
+                }
+            }
+        }
+        catch (error) {
+            if (run.abortController.signal.aborted)
+                return;
+            failReady(error);
+            throw error;
+        }
+    })();
+    return { ready, done };
+}
+function openCodeToolCommand(part) {
+    const tool = typeof part.tool === "string" ? part.tool : "tool";
+    const state = isRecord(part.state) ? part.state : {};
+    const input = isRecord(state.input) ? state.input : {};
+    const title = typeof state.title === "string" && state.title.trim() ? state.title.trim() : tool;
+    const command = (typeof input.command === "string" && input.command.trim()) ||
+        (typeof input.cmd === "string" && input.cmd.trim()) ||
+        (typeof input.filePath === "string" && input.filePath.trim()) ||
+        (typeof input.path === "string" && input.path.trim()) ||
+        title;
+    return {
+        kind: tool.toLowerCase().includes("bash") || typeof input.command === "string" ? "bash" : "edit",
+        command,
+    };
+}
+async function replyOpenCodePermission(run, permissionId, allow) {
+    if (!run.sessionId)
+        return;
+    await openCodeRequest(run, `/session/${encodeURIComponent(run.sessionId)}/permissions/${encodeURIComponent(permissionId)}`, {
+        method: "POST",
+        body: { response: allow ? "once" : "reject" },
+    });
+}
+async function handleOpenCodePermission(task, run, permission, promptForRun, intentPrompt) {
+    const id = typeof permission.id === "string" ? permission.id : "";
+    if (!id || pendingPermissions.has(id))
+        return "pending";
+    const type = typeof permission.type === "string" ? permission.type : "tool";
+    const title = typeof permission.title === "string" && permission.title.trim() ? permission.title.trim() : type;
+    if (task.workspaceKind === "git" && !task.agentBranch && type === "edit") {
+        task.agentBranch = `aegis/${task.id}-${slugify(intentPrompt)}`;
+        task.worktreePath = path.join(worktreeRootForRepo(task.originalRepoPath), task.id);
+        task.openCodeSessionId = undefined;
+        task.pendingPrompt = promptForRun;
+        task.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
+        saveTask(task);
+        await replyOpenCodePermission(run, id, false).catch(() => undefined);
+        if (permissionMode === "bypass") {
+            void createWorktreeAndRun(task, promptForRun);
+        }
+        else {
+            emit({
+                type: "worktree.requested",
+                taskId: task.id,
+                branch: task.agentBranch,
+                path: task.worktreePath,
+                baseCommit: task.baseCommit,
+            });
+        }
+        return "worktree_requested";
+    }
+    const request = {
+        id,
+        kind: type.includes("edit") ? "edit" : "bash",
+        summary: title,
+        command: title,
+        cwd: task.worktreePath,
+    };
+    emit({ type: "permission.requested", taskId: task.id, request });
+    if (type === "webfetch" || type === "websearch") {
+        emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
+        await replyOpenCodePermission(run, id, false);
+        return "resolved";
+    }
+    if (task.permissionMode === "bypass" && (type === "edit" || type === "bash")) {
+        emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
+        await replyOpenCodePermission(run, id, true);
+        return "resolved";
+    }
+    pendingPermissions.set(id, {
+        taskId: task.id,
+        onAllow: () => replyOpenCodePermission(run, id, true),
+        onDeny: () => replyOpenCodePermission(run, id, false),
+    });
+    return "pending";
+}
+async function runOpenCodeTask(taskIdValue, promptForRun, intentPrompt) {
+    const task = getTask(taskIdValue);
+    let run = null;
+    const prompt = promptForRun ?? task.prompt;
+    const intent = intentPrompt ?? task.prompt;
+    const expectsFileChanges = promptLooksLikeFileChange(intent);
+    try {
+        const { models, selected } = await resolveSelectedModel();
+        if (!selected) {
+            failTask(task, "No local Ollama or LM Studio model is available.");
+            return;
+        }
+        task.model = selected;
+        saveTask(task);
+        run = await startOpenCodeServer(task, selected, models);
+        activeOpenCodeRuns.set(task.id, run);
+        const toolRuns = new Map();
+        const textPartLengths = new Map();
+        const messageRoles = new Map();
+        const pendingTextParts = new Map();
+        let delegatedToWorktree = false;
+        let completed = false;
+        let resolveCompletion;
+        let rejectCompletion;
+        const completion = new Promise((resolve, reject) => {
+            resolveCompletion = resolve;
+            rejectCompletion = reject;
+        });
+        const finish = () => {
+            if (completed)
+                return;
+            completed = true;
+            resolveCompletion();
+        };
+        const fail = (message) => {
+            if (completed)
+                return;
+            completed = true;
+            rejectCompletion(new Error(message));
+        };
+        const onEvent = (event) => {
+            const type = typeof event.type === "string" ? event.type : "";
+            const sessionID = eventSessionId(event);
+            if (sessionID && (!run?.sessionId || sessionID !== run.sessionId))
+                return;
+            const properties = isRecord(event.properties) ? event.properties : {};
+            if (type === "message.updated") {
+                const info = isRecord(properties.info) ? properties.info : {};
+                const messageId = typeof info.id === "string" ? info.id : "";
+                const role = info.role === "assistant" ? "assistant" : info.role === "user" ? "user" : undefined;
+                if (messageId && role) {
+                    messageRoles.set(messageId, role);
+                    if (role === "assistant") {
+                        for (const [partId, pending] of Array.from(pendingTextParts.entries())) {
+                            if (pending.messageId !== messageId)
+                                continue;
+                            pendingTextParts.delete(partId);
+                            textPartLengths.set(partId, pending.text.length);
+                            if (pending.text) {
+                                emit({ type: "assistant.delta", taskId: task.id, text: pending.text });
+                            }
+                        }
+                    }
+                    else {
+                        for (const [partId, pending] of Array.from(pendingTextParts.entries())) {
+                            if (pending.messageId === messageId)
+                                pendingTextParts.delete(partId);
+                        }
+                    }
+                }
+                if (info.role === "assistant" && info.error) {
+                    fail(openCodeErrorMessage(info.error));
+                }
+            }
+            if (type === "message.part.updated") {
+                const part = isRecord(properties.part) ? properties.part : {};
+                const partType = typeof part.type === "string" ? part.type : "";
+                const messageId = typeof part.messageID === "string" ? part.messageID : "";
+                const role = messageId ? messageRoles.get(messageId) : undefined;
+                if (partType === "text" && typeof part.id === "string" && typeof part.text === "string") {
+                    if (!role) {
+                        pendingTextParts.set(part.id, { messageId, text: part.text });
+                        return;
+                    }
+                    if (role !== "assistant") {
+                        return;
+                    }
+                    const delta = typeof properties.delta === "string" ? properties.delta : part.text.slice(textPartLengths.get(part.id) ?? 0);
+                    textPartLengths.set(part.id, part.text.length);
+                    if (delta) {
+                        emit({ type: "assistant.delta", taskId: task.id, text: delta });
+                    }
+                }
+                if (partType === "tool" && typeof part.id === "string") {
+                    const state = isRecord(part.state) ? part.state : {};
+                    const status = typeof state.status === "string" ? state.status : "pending";
+                    const existing = toolRuns.get(part.id);
+                    const tool = openCodeToolCommand(part);
+                    const commandId = existing?.commandId ?? `oc-${part.id}`;
+                    if (!existing) {
+                        toolRuns.set(part.id, { commandId, outputLength: 0, finished: false });
+                        emit({ type: "command.started", taskId: task.id, id: commandId, command: tool.command, cwd: task.worktreePath });
+                    }
+                    const current = toolRuns.get(part.id);
+                    if (!current || current.finished)
+                        return;
+                    const output = status === "completed" && typeof state.output === "string"
+                        ? state.output
+                        : status === "error" && typeof state.error === "string"
+                            ? state.error
+                            : "";
+                    if (output.length > current.outputLength) {
+                        emit({
+                            type: "command.output",
+                            taskId: task.id,
+                            id: current.commandId,
+                            stream: status === "error" ? "stderr" : "stdout",
+                            text: output.slice(current.outputLength, current.outputLength + 12000),
+                        });
+                        current.outputLength = output.length;
+                    }
+                    if (status === "completed" || status === "error") {
+                        current.finished = true;
+                        emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode: status === "completed" ? 0 : 1 });
+                    }
+                }
+            }
+            if (type === "permission.updated" && isRecord(properties)) {
+                void handleOpenCodePermission(task, run, properties, prompt, intent)
+                    .then((result) => {
+                    if (result === "worktree_requested") {
+                        delegatedToWorktree = true;
+                        finish();
+                    }
+                })
+                    .catch((error) => fail(String(error instanceof Error ? error.message : error)));
+            }
+            if (type === "session.error") {
+                fail(openCodeErrorMessage(properties.error));
+            }
+            if (type === "session.idle") {
+                finish();
+            }
+            if (type === "session.status" && isRecord(properties.status) && properties.status.type === "idle") {
+                finish();
+            }
+        };
+        const stream = beginOpenCodeEventStream(run, onEvent);
+        void stream.done.catch((error) => {
+            if (!run?.abortController.signal.aborted) {
+                fail(String(error instanceof Error ? error.message : error));
+            }
+        });
+        await stream.ready;
+        const session = task.openCodeSessionId
+            ? { id: task.openCodeSessionId }
+            : await openCodeRequest(run, "/session", {
+                method: "POST",
+                body: { title: chatTitleFromPrompt(intent) },
+            });
+        run.sessionId = session.id;
+        task.openCodeSessionId = session.id;
+        saveTask(task);
+        await openCodeRequest(run, `/session/${encodeURIComponent(session.id)}/prompt_async`, {
+            method: "POST",
+            body: {
+                model: { providerID: selected.providerId, modelID: selected.modelId },
+                agent: "build",
+                system: "You are running under Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real OpenCode tools when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing.",
+                parts: [{ type: "text", text: prompt }],
+            },
+        });
+        await Promise.race([
+            completion,
+            new Promise((_resolve, reject) => setTimeout(() => reject(new Error("OpenCode task timed out.")), 45 * 60 * 1000)),
+        ]);
+        if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
+            return;
+        }
+        task.latestTest = {
+            command: `opencode session ${session.id}`,
+            output: "OpenCode session completed",
+            passed: true,
+            exitCode: 0,
+            completedAt: new Date().toISOString(),
+        };
         const reviewFiles = await refreshReview(task);
-        if (!test.passed) {
-            failTask(task, test.output || "Verification failed.");
+        if (reviewFiles.length === 0) {
+            if (expectsFileChanges) {
+                failTask(task, "OpenCode finished without file changes.");
+                return;
+            }
+            task.state = "completed";
+            saveTask(task);
+            emit({ type: "assistant.done", taskId: task.id });
             return;
         }
         task.state = "review_ready";
         saveTask(task);
-        emit({ type: "assistant.delta", taskId: task.id, text: "hello_world.py is verified and ready for review.\n" });
+        emit({ type: "assistant.delta", taskId: task.id, text: "Ready for review.\n" });
         emit({ type: "assistant.done", taskId: task.id });
         emit({ type: "review.ready", taskId: task.id, changedFiles: task.changedFiles, reviewFiles, latestTest: task.latestTest });
+        run.abortController.abort();
+        await stream.done.catch(() => undefined);
     }
     catch (error) {
         failTask(task, String(error instanceof Error ? error.message : error));
     }
+    finally {
+        clearPendingPermissionsForTask(task.id);
+        activeOpenCodeRuns.delete(task.id);
+        if (run) {
+            stopOpenCodeRun(run);
+        }
+    }
 }
-async function createWorktreeAndRun(task) {
+async function createWorktreeAndRun(task, promptForRun) {
     try {
         fs.mkdirSync(path.dirname(task.worktreePath), { recursive: true });
         await execFileOutput("git", ["worktree", "add", "-b", task.agentBranch, task.worktreePath, task.baseCommit], {
@@ -1091,9 +1816,12 @@ async function createWorktreeAndRun(task) {
             timeout: 120000,
         });
         task.state = "running";
+        if (promptForRun && task.pendingPrompt === promptForRun) {
+            task.pendingPrompt = undefined;
+        }
         saveTask(task);
         emit({ type: "worktree.created", taskId: task.id, branch: task.agentBranch, path: task.worktreePath });
-        void runHelloWorldTask(task.id);
+        void runOpenCodeTask(task.id, promptForRun);
     }
     catch (error) {
         failTask(task, String(error instanceof Error ? error.message : error));
@@ -1113,16 +1841,65 @@ async function startTask(input) {
         throw new Error("Repository has not been selected.");
     }
     const refreshed = await inspectRepository(repository.rootPath);
+    const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath);
+    const existingTask = chat?.taskId && readTasks().find((row) => row.id === chat.taskId && row.repositoryId === repositoryId && row.state !== "merged" && row.state !== "rejected");
+    const wantsFileChange = promptLooksLikeFileChange(prompt);
+    if (existingTask) {
+        if (activeOpenCodeRuns.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
+            throw new Error("This chat already has a task in progress.");
+        }
+        existingTask.permissionMode = permissionMode;
+        existingTask.error = undefined;
+        if (existingTask.workspaceKind === "git" && wantsFileChange && !existingTask.agentBranch) {
+            const openCodePrompt = openCodePromptForTask(existingTask, prompt, attachments);
+            existingTask.originalBranch = refreshed.originalBranch;
+            existingTask.baseCommit = refreshed.baseCommit;
+            existingTask.agentBranch = `aegis/${existingTask.id}-${slugify(prompt)}`;
+            existingTask.worktreePath = path.join(worktreeRootForRepo(refreshed.rootPath), existingTask.id);
+            existingTask.originalRepoPath = refreshed.rootPath;
+            existingTask.originalWasDirty = refreshed.dirty;
+            existingTask.openCodeSessionId = undefined;
+            existingTask.pendingPrompt = openCodePrompt;
+            existingTask.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
+            saveTask(existingTask);
+            emit({ type: "user.message", taskId: existingTask.id, text: prompt });
+            if (permissionMode === "bypass") {
+                existingTask.pendingPrompt = undefined;
+                await createWorktreeAndRun(existingTask, openCodePrompt);
+            }
+            else {
+                emit({
+                    type: "worktree.requested",
+                    taskId: existingTask.id,
+                    branch: existingTask.agentBranch,
+                    path: existingTask.worktreePath,
+                    baseCommit: refreshed.baseCommit,
+                });
+            }
+            return publicTask(existingTask);
+        }
+        existingTask.state = "running";
+        existingTask.pendingPrompt = undefined;
+        existingTask.originalBranch = existingTask.agentBranch ? existingTask.originalBranch : refreshed.originalBranch;
+        existingTask.baseCommit = existingTask.agentBranch ? existingTask.baseCommit : refreshed.baseCommit;
+        existingTask.originalRepoPath = refreshed.rootPath;
+        existingTask.originalWasDirty = refreshed.dirty;
+        saveTask(existingTask);
+        emit({ type: "user.message", taskId: existingTask.id, text: prompt });
+        void runOpenCodeTask(existingTask.id, openCodePromptForTask(existingTask, prompt, attachments), prompt);
+        return publicTask(existingTask);
+    }
     const id = taskId();
-    const branch = refreshed.kind === "git" ? `aegis/${id}-${slugify(prompt)}` : "";
-    const worktreePath = refreshed.kind === "git" ? path.join(worktreeRootForRepo(refreshed.rootPath), id) : refreshed.rootPath;
+    const shouldCreateWorktree = refreshed.kind === "git" && wantsFileChange;
+    const branch = shouldCreateWorktree ? `aegis/${id}-${slugify(prompt)}` : "";
+    const worktreePath = shouldCreateWorktree ? path.join(worktreeRootForRepo(refreshed.rootPath), id) : refreshed.rootPath;
     const task = {
         id,
         chatId: chat?.id,
         repositoryId,
         prompt,
         workspaceKind: refreshed.kind,
-        state: refreshed.kind === "folder" || permissionMode === "bypass" ? "running" : "awaiting_worktree_approval",
+        state: shouldCreateWorktree && permissionMode !== "bypass" ? "awaiting_worktree_approval" : "running",
         originalBranch: refreshed.originalBranch,
         baseCommit: refreshed.baseCommit,
         agentBranch: branch,
@@ -1137,13 +1914,17 @@ async function startTask(input) {
         baselineFiles: refreshed.kind === "folder" ? snapshotFolder(refreshed.rootPath) : undefined,
     };
     saveTask(task);
-    if (refreshed.kind === "folder") {
-        void runHelloWorldTask(task.id);
+    emit({ type: "user.message", taskId: task.id, text: prompt });
+    const openCodePrompt = openCodePromptForTask(task, prompt, attachments);
+    if (!shouldCreateWorktree) {
+        void runOpenCodeTask(task.id, openCodePrompt, prompt);
     }
     else if (permissionMode === "bypass") {
-        await createWorktreeAndRun(task);
+        await createWorktreeAndRun(task, openCodePrompt);
     }
     else {
+        task.pendingPrompt = openCodePrompt;
+        saveTask(task);
         emit({ type: "worktree.requested", taskId: task.id, branch, path: worktreePath, baseCommit: refreshed.baseCommit });
     }
     return publicTask(task);
@@ -1159,12 +1940,16 @@ async function approveWorktreeCreation(input) {
     }
     if (!approved) {
         task.state = "rejected";
+        task.pendingPrompt = undefined;
         task.rejectedAt = new Date().toISOString();
         saveTask(task);
         emit({ type: "task.error", taskId: task.id, message: "Worktree creation was declined." });
         return;
     }
-    await createWorktreeAndRun(task);
+    const promptForRun = task.pendingPrompt ?? task.prompt;
+    task.pendingPrompt = undefined;
+    saveTask(task);
+    await createWorktreeAndRun(task, promptForRun);
 }
 function isGeneratedRuntimePath(filePath) {
     const normalized = normalizeRelativePath(filePath);
@@ -1226,9 +2011,9 @@ async function approveTaskMerge(input) {
         let allowedFiles = [];
         let patchHash = "";
         if (task.workspaceKind === "folder") {
-            await approvalCheck(task, "latest verification", async () => {
-                if (!task.latestTest?.passed || task.latestTest.output.trim() !== "hello world") {
-                    throw new Error("Latest passing verification did not print hello world.");
+            await approvalCheck(task, "agent run completed", async () => {
+                if (!task.latestTest?.passed) {
+                    throw new Error("OpenCode has not completed successfully for this task.");
                 }
                 return task.latestTest.command;
             });
@@ -1324,9 +2109,9 @@ async function approveTaskMerge(input) {
             }
             return task.worktreePath;
         });
-        await approvalCheck(task, "latest verification", async () => {
-            if (!task.latestTest?.passed || task.latestTest.output.trim() !== "hello world") {
-                throw new Error("Latest passing verification did not print hello world.");
+        await approvalCheck(task, "agent run completed", async () => {
+            if (!task.latestTest?.passed) {
+                throw new Error("OpenCode has not completed successfully for this task.");
             }
             return task.latestTest.command;
         });
@@ -1437,6 +2222,12 @@ async function rejectTask(input) {
         throw new Error("Invalid reject input.");
     }
     const task = getTask(requiredString(input.taskId, "taskId"));
+    const run = activeOpenCodeRuns.get(task.id);
+    if (run) {
+        activeOpenCodeRuns.delete(task.id);
+        stopOpenCodeRun(run);
+    }
+    clearPendingPermissionsForTask(task.id);
     const cleanup = input.cleanup === true;
     if (task.workspaceKind === "git" && cleanup && taskStatesThatCanOpen.has(task.state) && fs.existsSync(task.worktreePath)) {
         await execFileOutput("git", ["worktree", "remove", "--force", task.worktreePath], { cwd: task.originalRepoPath });
@@ -1486,6 +2277,15 @@ async function cancelTask(input) {
         throw new Error("Invalid cancel input.");
     }
     const task = getTask(requiredString(input.taskId, "taskId"));
+    const run = activeOpenCodeRuns.get(task.id);
+    if (run) {
+        activeOpenCodeRuns.delete(task.id);
+        if (run.sessionId) {
+            await openCodeRequest(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(() => undefined);
+        }
+        stopOpenCodeRun(run);
+    }
+    clearPendingPermissionsForTask(task.id);
     task.state = "failed";
     task.error = "Task was cancelled.";
     saveTask(task);
@@ -1627,7 +2427,23 @@ async function openTaskInIde(input) {
 }
 function setPermissionMode(input) {
     permissionMode = input === "bypass" ? "bypass" : "normal";
-    buildOpenCodeConfig(permissionMode);
+    return getBackendStatus();
+}
+async function setSelectedModel(input) {
+    if (!isRecord(input)) {
+        throw new Error("Invalid model selection.");
+    }
+    const providerId = requiredString(input.providerId, "providerId");
+    const modelId = requiredString(input.modelId, "modelId");
+    if (providerId !== "local-ollama" && providerId !== "local-lmstudio") {
+        throw new Error("Unsupported local provider.");
+    }
+    const { models } = await resolveSelectedModel();
+    const model = models.find((candidate) => candidate.providerId === providerId && candidate.modelId === modelId);
+    if (!model) {
+        throw new Error("That local model is not currently available.");
+    }
+    writeSelectedModel(model);
     return getBackendStatus();
 }
 function trustedSender(event) {
@@ -1708,6 +2524,28 @@ async function createWindow() {
             event.preventDefault();
         }
     });
+    mainWindow.webContents.on("context-menu", (_event, params) => {
+        if (!mainWindow)
+            return;
+        const template = params.isEditable
+            ? [
+                { role: "undo" },
+                { role: "redo" },
+                { type: "separator" },
+                { role: "cut" },
+                { role: "copy" },
+                { role: "paste" },
+                { type: "separator" },
+                { role: "selectAll" },
+            ]
+            : [
+                { role: "copy", enabled: !!params.selectionText },
+                { role: "paste" },
+                { type: "separator" },
+                { role: "selectAll" },
+            ];
+        electron_1.Menu.buildFromTemplate(template).popup({ window: mainWindow });
+    });
     if (isDev) {
         await mainWindow.loadURL("http://127.0.0.1:5173");
     }
@@ -1724,8 +2562,10 @@ electron_1.app.whenReady().then(async () => {
     handleIpc("aegis:refresh-task-review", (input) => refreshTaskReview(input));
     handleIpc("aegis:search-files", (input) => searchRepositoryFiles(input));
     handleIpc("aegis:pick-repository", () => pickRepository());
+    handleIpc("aegis:get-repository", (input) => getRepository(input));
     handleIpc("aegis:get-backend-status", () => getBackendStatus());
     handleIpc("aegis:set-permission-mode", (mode) => setPermissionMode(mode));
+    handleIpc("aegis:set-selected-model", (input) => setSelectedModel(input));
     handleIpc("aegis:list-available-ides", () => listAvailableIdes());
     handleIpc("aegis:start-task", (input) => startTask(input));
     handleIpc("aegis:approve-worktree-creation", (input) => approveWorktreeCreation(input));
@@ -1747,7 +2587,11 @@ electron_1.app.on("window-all-closed", () => {
 electron_1.app.on("before-quit", () => {
     for (const [id, pending] of pendingPermissions) {
         pendingPermissions.delete(id);
-        pending.reject(new Error("Aegis is quitting."));
+        void pending.onDeny();
+    }
+    for (const [taskId, run] of activeOpenCodeRuns) {
+        activeOpenCodeRuns.delete(taskId);
+        stopOpenCodeRun(run);
     }
 });
 electron_1.app.on("activate", () => {
