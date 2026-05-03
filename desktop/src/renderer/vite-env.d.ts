@@ -85,10 +85,10 @@ type AegisChatRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
-  taskId?: string;
-  taskState?: AegisTaskInfo["state"];
   repositoryName?: string;
   repositoryPath?: string;
+  taskId?: string;
+  taskState?: AegisTaskInfo["state"];
   changedFiles?: number;
   draftPrompt?: string;
   attachedFiles?: AegisChatAttachment[];
@@ -129,14 +129,14 @@ type AegisApproveResult =
 type AegisIdeInfo = {
   id: string;
   label: string;
-  icon: "vscode" | "visualstudio" | "explorer";
+  icon: "vscode" | "visualstudio" | "explorer" | "finder" | "files";
 };
 
 declare global {
   interface Window {
     aegis?: {
       listChats(): Promise<AegisChatRecord[]>;
-      createChat(input?: { title?: string }): Promise<AegisChatRecord>;
+      createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<AegisChatRecord>;
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: AegisChatAttachment[] }): Promise<AegisChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
       getTask(input: { taskId: string }): Promise<AegisTaskInfo | null>;
@@ -149,7 +149,7 @@ declare global {
       startTask(input: { repositoryId: string; prompt: string; chatId?: string }): Promise<AegisTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: AegisPermissionDecision): Promise<void>;
-      openTaskInIde(input: { taskId: string; ideId: string }): Promise<AegisIdeOpenResult>;
+      openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<AegisIdeOpenResult>;
       approveTaskMerge(input: { taskId: string }): Promise<AegisApproveResult>;
       rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
       keepWorktree(input: { taskId: string }): Promise<void>;

@@ -84,7 +84,7 @@ pre {
   grid-template-areas:
     "top top top"
     "side main review";
-  grid-template-columns: var(--sidebar-width, 276px) minmax(360px, 1fr) var(--review-width, 420px);
+  grid-template-columns: var(--sidebar-width, 276px) minmax(360px, 1fr) var(--review-width, 520px);
   grid-template-rows: 36px minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
@@ -95,7 +95,7 @@ pre {
 }
 
 .appShell.sidebarClosed {
-  grid-template-columns: 0 minmax(360px, 1fr) var(--review-width, 420px);
+  grid-template-columns: 0 minmax(360px, 1fr) var(--review-width, 520px);
 }
 
 .appShell.reviewClosed {
@@ -118,6 +118,10 @@ pre {
   padding: 0 150px 1px 8px;
   background: var(--chrome);
   border-bottom: 1px solid #262a30;
+}
+
+.macChrome .topbar {
+  padding: 0 8px 1px 84px;
 }
 
 .chromeButton,
@@ -231,9 +235,9 @@ pre {
   grid-area: review;
   position: relative;
   display: flex;
-  width: var(--review-width, 420px);
-  min-width: 300px;
-  max-width: 720px;
+  width: var(--review-width, 520px);
+  min-width: 365px;
+  max-width: 780px;
   min-height: 0;
   overflow: hidden;
   resize: none;
@@ -346,10 +350,82 @@ pre {
 .chatList {
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: 10px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+.chatProject {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chatProjectToggle {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 4px 7px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.chatProjectToggle:hover {
+  color: var(--text);
+}
+
+.chatProjectToggle svg {
+  color: var(--faint);
+  transition: transform 120ms ease;
+}
+
+.chatProjectToggle svg.collapsed {
+  transform: rotate(-90deg);
+}
+
+.chatProjectToggle span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chatProjectToggle strong,
+.chatProjectToggle em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatProjectToggle strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.chatProjectToggle em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 10px;
+}
+
+.chatProjectChats {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  margin-left: 21px;
+  padding-left: 10px;
+}
+
+.chatProjectChats::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 1px;
+  background: var(--line-strong);
 }
 
 .chatRow {
@@ -357,28 +433,33 @@ pre {
   display: flex;
   align-items: stretch;
   width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border: 1px solid transparent;
+  border-radius: 7px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.035);
+  background: transparent;
   overflow: hidden;
 }
 
 .chatRowMain {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 46px;
-  padding: 9px 34px 9px 10px;
+  min-height: 36px;
+  padding: 7px 34px 7px 10px;
   text-align: left;
 }
 
 .chatRow.active,
 .chatRow:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.chatRow.active {
+  background: rgba(87, 157, 255, 0.1);
+  border-color: rgba(87, 157, 255, 0.22);
 }
 
 .chatDeleteButton {
@@ -406,6 +487,8 @@ pre {
 
 .chatRowMain span {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 3px;
   min-width: 0;
 }
@@ -417,20 +500,10 @@ pre {
   white-space: nowrap;
 }
 
-.chatRowMain em,
-.chatRowMain small {
+.chatRowMain em {
   color: var(--faint);
   font-style: normal;
-  font-size: 11px;
-}
-
-.chatRowMain small {
-  display: grid;
-  place-items: center;
-  min-width: 22px;
-  height: 22px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  font-size: 10px;
 }
 
 .archiveEmpty {
@@ -1450,9 +1523,9 @@ pre {
   position: relative;
   z-index: 40;
   flex: 0 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   min-width: 0;
   min-height: 34px;
@@ -1464,6 +1537,7 @@ pre {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1484,7 +1558,18 @@ pre {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
   color: var(--muted);
+}
+
+.reviewStats span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reviewStats .additions,
+.reviewStats .deletions {
+  flex: 0 0 auto;
 }
 
 .reviewTopActions {
@@ -1494,6 +1579,8 @@ pre {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  justify-self: end;
+  min-width: 0;
 }
 
 .reviewTextButton {
@@ -1501,11 +1588,17 @@ pre {
   align-items: center;
   justify-content: center;
   gap: 5px;
+  flex: 0 0 auto;
   min-height: 30px;
+  min-width: 32px;
   padding: 0 7px;
   border-radius: 6px;
   color: var(--muted);
   font-weight: 700;
+}
+
+.reviewTextButton span {
+  display: none;
 }
 
 .reviewTextButton:hover:not(:disabled) {
@@ -1545,12 +1638,12 @@ pre {
 
 .reviewFileHeader {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto 18px;
+  grid-template-columns: 28px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   width: 100%;
   min-height: 37px;
-  padding: 7px 9px;
+  padding: 6px 8px;
   color: var(--text);
   text-align: left;
 }
@@ -1558,6 +1651,31 @@ pre {
 .reviewFileHeader:hover,
 .reviewFileHeader.active {
   background: rgba(255, 255, 255, 0.055);
+}
+
+.openReviewFileButton {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--faint);
+}
+
+.openReviewFileButton:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.reviewFileToggle {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto 18px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: 26px;
+  color: var(--text);
+  text-align: left;
 }
 
 .reviewFileChevron {
@@ -1987,13 +2105,15 @@ pre {
     right: 0;
     bottom: 0;
     z-index: 20;
-    width: min(520px, calc(100vw - 42px));
+    width: min(620px, calc(100vw - 42px));
+    min-width: min(365px, calc(100vw - 42px));
     max-width: none;
     box-shadow: -20px 0 40px rgba(0, 0, 0, 0.32);
   }
 
   .reviewClosed .reviewSidebar {
-    width: min(520px, calc(100vw - 42px));
+    width: min(620px, calc(100vw - 42px));
+    min-width: min(365px, calc(100vw - 42px));
     transform: translateX(100%);
   }
 }

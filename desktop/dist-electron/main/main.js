@@ -4,6 +4,7 @@ const electron_1 = require("electron");
 const node_child_process_1 = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const isDev = !electron_1.app.isPackaged;
 const ollamaBaseUrl = "http://127.0.0.1:11434/v1";
@@ -170,20 +171,74 @@ function taskId() {
 function chatId() {
     return `chat-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
 }
+const titleStopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "are",
+    "be",
+    "can",
+    "could",
+    "for",
+    "i",
+    "in",
+    "is",
+    "it",
+    "let",
+    "lets",
+    "make",
+    "my",
+    "of",
+    "on",
+    "please",
+    "should",
+    "that",
+    "the",
+    "this",
+    "to",
+    "we",
+    "with",
+    "would",
+    "you",
+]);
+function titleWord(word) {
+    if (!word)
+        return word;
+    if (word === word.toUpperCase() || word.includes("_") || word.includes("-"))
+        return word;
+    return `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`;
+}
 function chatTitleFromPrompt(prompt) {
-    const title = prompt.split(/\n\s*\nAttached files:/i)[0].replace(/\s+/g, " ").trim();
+    const text = prompt
+        .split(/\n\s*\nAttached files:/i)[0]
+        .replace(/[`*_#[\]()>.,!?;:]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const words = text.match(/[A-Za-z0-9][A-Za-z0-9'_-]*/g) ?? [];
+    const summaryWords = words
+        .filter((word) => !titleStopWords.has(word.toLowerCase().replace(/'s$/, "")))
+        .slice(0, 5);
+    const title = (summaryWords.length >= 3 ? summaryWords : words.slice(0, 5)).map(titleWord).join(" ");
     return title ? title.slice(0, 72) : "New chat";
 }
 function createChat(input) {
     const title = isRecord(input) && typeof input.title === "string" && input.title.trim()
         ? input.title.trim().slice(0, 72)
         : "New chat";
+    const repositoryName = isRecord(input) && typeof input.repositoryName === "string" && input.repositoryName.trim()
+        ? input.repositoryName.trim().slice(0, 120)
+        : undefined;
+    const repositoryPath = isRecord(input) && typeof input.repositoryPath === "string" && input.repositoryPath.trim()
+        ? path.resolve(input.repositoryPath.trim())
+        : undefined;
     const now = new Date().toISOString();
     const chat = {
         id: chatId(),
         title,
         createdAt: now,
         updatedAt: now,
+        repositoryName,
+        repositoryPath,
         draftPrompt: "",
         attachedFiles: [],
     };
@@ -1454,6 +1509,23 @@ const commandCandidatesByIde = {
     code: process.platform === "win32" ? ["code.cmd", "code"] : ["code"],
     windsurf: process.platform === "win32" ? ["windsurf.cmd", "windsurf"] : ["windsurf"],
 };
+function macApplicationExists(appName) {
+    if (process.platform !== "darwin") {
+        return false;
+    }
+    const appBundle = appName.endsWith(".app") ? appName : `${appName}.app`;
+    return [
+        path.join("/Applications", appBundle),
+        path.join(os.homedir(), "Applications", appBundle),
+    ].some((appPath) => fs.existsSync(appPath));
+}
+function fileManagerIcon() {
+    if (process.platform === "darwin")
+        return "finder";
+    if (process.platform === "win32")
+        return "explorer";
+    return "files";
+}
 async function firstAvailableCommand(candidates) {
     for (const command of candidates) {
         if (await commandAvailable(command)) {
@@ -1489,7 +1561,7 @@ async function visualStudioExecutable() {
 }
 async function listAvailableIdes() {
     const ides = [];
-    if (await firstAvailableCommand(commandCandidatesByIde.code)) {
+    if ((await firstAvailableCommand(commandCandidatesByIde.code)) || macApplicationExists("Visual Studio Code")) {
         ides.push({ id: "code", label: "VS Code", icon: "vscode" });
     }
     if (await visualStudioExecutable()) {
@@ -1498,7 +1570,7 @@ async function listAvailableIdes() {
     ides.push({
         id: "explorer",
         label: process.platform === "darwin" ? "Finder" : process.platform === "win32" ? "Explorer" : "Files",
-        icon: "explorer",
+        icon: fileManagerIcon(),
     });
     return ides;
 }
@@ -1508,27 +1580,49 @@ async function openTaskInIde(input) {
     }
     const task = getTask(requiredString(input.taskId, "taskId"));
     const ideId = requiredString(input.ideId, "ideId");
+    const relativeFilePath = typeof input.filePath === "string" && input.filePath.trim()
+        ? normalizeRelativePath(input.filePath.trim())
+        : undefined;
     if (!fs.existsSync(task.worktreePath)) {
         return { ok: false, message: "Task folder no longer exists." };
     }
     if (task.workspaceKind === "git" && !pathInside(worktreeRootForRepo(task.originalRepoPath), task.worktreePath)) {
         return { ok: false, message: "Worktree path is outside Aegis control." };
     }
+    if (relativeFilePath && path.isAbsolute(relativeFilePath)) {
+        return { ok: false, message: "File path must be relative to the review folder." };
+    }
+    const targetPath = relativeFilePath ? path.join(task.worktreePath, relativeFilePath) : task.worktreePath;
+    if (!pathInside(task.worktreePath, targetPath)) {
+        return { ok: false, message: "File path is outside the review folder." };
+    }
+    if (!fs.existsSync(targetPath)) {
+        return { ok: false, message: relativeFilePath ? "Changed file no longer exists." : "Review folder no longer exists." };
+    }
     if (ideId === "explorer") {
-        const error = await electron_1.shell.openPath(task.worktreePath);
+        if (relativeFilePath) {
+            electron_1.shell.showItemInFolder(targetPath);
+            return { ok: true };
+        }
+        const error = await electron_1.shell.openPath(targetPath);
         return error ? { ok: false, message: error } : { ok: true };
     }
     if (ideId === "visualstudio") {
         const command = await visualStudioExecutable();
         if (command) {
-            return launchCommand(command, [task.worktreePath]);
+            return launchCommand(command, [targetPath]);
         }
     }
     const command = await firstAvailableCommand(commandCandidatesByIde[ideId] ?? []);
     if (command) {
-        return launchCommand(command, ["--new-window", task.worktreePath]);
+        return launchCommand(command, relativeFilePath ? [targetPath] : ["--new-window", targetPath]);
     }
-    const error = await electron_1.shell.openPath(task.worktreePath);
+    if (ideId === "code" && macApplicationExists("Visual Studio Code")) {
+        return launchCommand("open", relativeFilePath
+            ? ["-a", "Visual Studio Code", targetPath]
+            : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath]);
+    }
+    const error = await electron_1.shell.openPath(targetPath);
     return error ? { ok: false, message: error } : { ok: true };
 }
 function setPermissionMode(input) {

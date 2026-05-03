@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CheckCircle2,
   CircleDashed,
+  ExternalLink,
   File,
   FileText,
   FolderOpen,
@@ -86,7 +87,7 @@ type ReviewFile = {
 type IdeChoice = {
   id: string;
   label: string;
-  icon: "vscode" | "visualstudio" | "explorer";
+  icon: "vscode" | "visualstudio" | "explorer" | "finder" | "files";
 };
 
 type ChatAttachment = {
@@ -124,10 +125,10 @@ type ChatRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
-  taskId?: string;
-  taskState?: TaskState;
   repositoryName?: string;
   repositoryPath?: string;
+  taskId?: string;
+  taskState?: TaskState;
   changedFiles?: number;
   draftPrompt?: string;
   attachedFiles?: ChatAttachment[];
@@ -179,7 +180,7 @@ type ComposerTimelineItem =
 
 type DesktopApi = {
   listChats(): Promise<ChatRecord[]>;
-  createChat(input?: { title?: string }): Promise<ChatRecord>;
+  createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<ChatRecord>;
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
@@ -192,7 +193,7 @@ type DesktopApi = {
   startTask(input: { repositoryId: string; prompt: string; chatId?: string }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
-  openTaskInIde(input: { taskId: string; ideId: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+  openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   approveTaskMerge(input: { taskId: string }): Promise<
     | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }
     | { ok: false; message: string }
@@ -205,6 +206,7 @@ type DesktopApi = {
 
 const previewChatsKey = "aegis-preview-chats";
 let previewPermissionMode: PermissionMode = "normal";
+const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 
 function readPreviewChats(): ChatRecord[] {
   try {
@@ -227,7 +229,7 @@ const emptyReviewFiles: ReviewFile[] = [];
 const defaultIdeChoices: IdeChoice[] = [
   { id: "code", label: "VS Code", icon: "vscode" },
   { id: "visualstudio", label: "Visual Studio", icon: "visualstudio" },
-  { id: "explorer", label: "Explorer", icon: "explorer" },
+  { id: "explorer", label: isMacLike ? "Finder" : "Explorer", icon: isMacLike ? "finder" : "explorer" },
 ];
 
 const fallbackApi: DesktopApi = {
@@ -239,6 +241,8 @@ const fallbackApi: DesktopApi = {
       title: input?.title?.trim() || "New chat",
       createdAt: now,
       updatedAt: now,
+      repositoryName: input?.repositoryName,
+      repositoryPath: input?.repositoryPath,
       draftPrompt: "",
       attachedFiles: [],
     };
@@ -377,9 +381,22 @@ function ExplorerLogo(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function FinderLogo(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...props}>
+      <path fill="#38a8ff" d="M4.2 3.2h7.6v17.6H5.8a2.6 2.6 0 0 1-2.6-2.6V4.2a1 1 0 0 1 1-1Z" />
+      <path fill="#d8f0ff" d="M11.8 3.2h8a1 1 0 0 1 1 1v14a2.6 2.6 0 0 1-2.6 2.6h-6.4V3.2Z" />
+      <path fill="#14304a" d="M8 8.4a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6Zm8 0a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6Z" />
+      <path fill="none" stroke="#14304a" strokeLinecap="round" strokeWidth="1.2" d="M9 15.4c1.7 1 4.3 1 6 0M11.8 4.5c-.6 2.8-.6 5.6 0 8.4" />
+    </svg>
+  );
+}
+
 function IdeIcon({ icon }: { icon: IdeChoice["icon"] }) {
   if (icon === "vscode") return <VsCodeLogo className="ideLogo" />;
   if (icon === "visualstudio") return <VisualStudioLogo className="ideLogo" />;
+  if (icon === "finder") return <FinderLogo className="ideLogo" />;
+  if (icon === "files") return <FolderOpen className="ideLogo" />;
   return <ExplorerLogo className="ideLogo" />;
 }
 
@@ -401,9 +418,59 @@ function stateLabel(state?: TaskState): string {
   return state.replace(/_/g, " ");
 }
 
+const titleStopWords = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "be",
+  "can",
+  "could",
+  "for",
+  "i",
+  "in",
+  "is",
+  "it",
+  "let",
+  "lets",
+  "make",
+  "my",
+  "of",
+  "on",
+  "please",
+  "should",
+  "that",
+  "the",
+  "this",
+  "to",
+  "we",
+  "with",
+  "would",
+  "you",
+]);
+
+function titleWord(word: string): string {
+  if (!word) return word;
+  if (word === word.toUpperCase() || word.includes("_") || word.includes("-")) return word;
+  return `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`;
+}
+
 function titleFromPrompt(prompt: string): string {
-  const title = prompt.split(/\n\s*\nAttached files:/i)[0].replace(/\s+/g, " ").trim();
+  const text = prompt
+    .split(/\n\s*\nAttached files:/i)[0]
+    .replace(/[`*_#[\]()>.,!?;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = text.match(/[A-Za-z0-9][A-Za-z0-9'_-]*/g) ?? [];
+  const summaryWords = words
+    .filter((word) => !titleStopWords.has(word.toLowerCase().replace(/'s$/, "")))
+    .slice(0, 5);
+  const title = (summaryWords.length >= 3 ? summaryWords : words.slice(0, 5)).map(titleWord).join(" ");
   return title ? title.slice(0, 72) : "New chat";
+}
+
+function chatDisplayTitle(chat: ChatRecord): string {
+  return chat.title === "New chat" ? chat.title : titleFromPrompt(chat.title);
 }
 
 function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolean {
@@ -413,8 +480,16 @@ function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolea
 }
 
 function chatSubline(chat: ChatRecord): string {
-  const status = chat.taskState ? stateLabel(chat.taskState) : "draft";
-  return chat.repositoryName ? `${chat.repositoryName} - ${status}` : status;
+  return chat.updatedAt ? new Date(chat.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+}
+
+function folderName(pathValue?: string): string {
+  if (!pathValue) return "No folder";
+  return pathValue.split(/[\\/]/).filter(Boolean).pop() ?? pathValue;
+}
+
+function chatProjectKey(chat: ChatRecord): string {
+  return chat.repositoryPath || "__unassigned__";
 }
 
 function attachmentName(pathValue: string): string {
@@ -860,6 +935,7 @@ function App() {
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<ChatRecord | null>(null);
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
   const [events, setEvents] = useState<BackendUiEvent[]>([]);
   const [assistantText, setAssistantText] = useState("");
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -873,7 +949,7 @@ function App() {
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
   const [sidebarWidth, setSidebarWidth] = useState(276);
-  const [reviewWidth, setReviewWidth] = useState(420);
+  const [reviewWidth, setReviewWidth] = useState(520);
   const [showBypassDialog, setShowBypassDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -922,6 +998,33 @@ function App() {
       : stateLabel(task.state);
   const attachmentMenuOpen = !!mention;
   const composerItems = useMemo(() => composerTimelineFromEvents(events, task?.prompt), [events, task?.prompt]);
+  const chatProjectGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { key: string; name: string; path?: string; chats: ChatRecord[]; latestUpdatedAt: string }
+    >();
+    for (const chat of chats) {
+      const key = chatProjectKey(chat);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.chats.push(chat);
+        if (chat.updatedAt > existing.latestUpdatedAt) existing.latestUpdatedAt = chat.updatedAt;
+        continue;
+      }
+      groups.set(key, {
+        key,
+        name: chat.repositoryName || folderName(chat.repositoryPath),
+        path: chat.repositoryPath,
+        chats: [chat],
+        latestUpdatedAt: chat.updatedAt,
+      });
+    }
+    return Array.from(groups.values()).sort((left, right) => {
+      if (left.key === "__unassigned__") return 1;
+      if (right.key === "__unassigned__") return -1;
+      return right.latestUpdatedAt.localeCompare(left.latestUpdatedAt);
+    });
+  }, [chats]);
   const layoutStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--review-width": `${reviewWidth}px`,
@@ -1110,6 +1213,8 @@ function App() {
         {
           ...chat,
           createdAt: existing?.createdAt ?? chat.createdAt,
+          repositoryName: chat.repositoryName ?? existing?.repositoryName,
+          repositoryPath: chat.repositoryPath ?? existing?.repositoryPath,
           draftPrompt: nextDraft,
           attachedFiles: nextDraft ? (existing?.attachedFiles ?? chat.attachedFiles) : [],
         },
@@ -1125,6 +1230,26 @@ function App() {
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
+  }
+
+  function chatInputForCurrentProject(title: string) {
+    return {
+      title,
+      repositoryName: repository?.name,
+      repositoryPath: repository?.rootPath,
+    };
+  }
+
+  function toggleProjectGroup(projectKey: string) {
+    setCollapsedProjectKeys((current) => {
+      const next = new Set(current);
+      if (next.has(projectKey)) {
+        next.delete(projectKey);
+      } else {
+        next.add(projectKey);
+      }
+      return next;
+    });
   }
 
   async function refreshStatus() {
@@ -1238,7 +1363,7 @@ function App() {
     try {
       let chatId = activeChatId;
       if (!chatId) {
-        const chat = await api.createChat({ title: titleFromPrompt(trimmedPrompt) });
+        const chat = await api.createChat(chatInputForCurrentProject(titleFromPrompt(trimmedPrompt)));
         mergeChat(chat);
         chatId = chat.id;
         setActiveChatId(chat.id);
@@ -1287,6 +1412,13 @@ function App() {
     if (!canOpenIde || !task) return;
     setIdeMenuOpen(false);
     const result = await api.openTaskInIde({ taskId: task.id, ideId });
+    if (!result.ok) setError(result.message);
+  }
+
+  async function openReviewFile(filePath: string) {
+    if (!canOpenIde || !task) return;
+    setError(null);
+    const result = await api.openTaskInIde({ taskId: task.id, ideId: selectedIde.id, filePath });
     if (!result.ok) setError(result.message);
   }
 
@@ -1411,7 +1543,7 @@ function App() {
     setError(null);
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
-      const chat = await api.createChat({ title: "New chat" });
+      const chat = await api.createChat(chatInputForCurrentProject("New chat"));
       mergeChat(chat);
       suppressDraftSaveBriefly();
       setActiveChatId(chat.id);
@@ -1522,21 +1654,36 @@ function App() {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = reviewWidth;
+    let closedByDrag = false;
     document.body.classList.add("isResizing");
-    const move = (moveEvent: PointerEvent) => {
-      setReviewWidth(clamp(startWidth - (moveEvent.clientX - startX), 300, 720));
-    };
-    const stop = () => {
+    const finish = () => {
       document.body.classList.remove("isResizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+    };
+    const move = (moveEvent: PointerEvent) => {
+      if (closedByDrag) return;
+      const nextWidth = startWidth - (moveEvent.clientX - startX);
+      if (nextWidth < 150) {
+        closedByDrag = true;
+        setReviewOpen(false);
+        finish();
+        return;
+      }
+      setReviewWidth(clamp(nextWidth, 365, 780));
+    };
+    const stop = () => {
+      finish();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
   }
 
   return (
-    <div className={`appShell ${sidebarOpen ? "" : "sidebarClosed"} ${reviewOpen ? "" : "reviewClosed"}`} style={layoutStyle}>
+    <div
+      className={`appShell ${isMacLike ? "macChrome" : ""} ${sidebarOpen ? "" : "sidebarClosed"} ${reviewOpen ? "" : "reviewClosed"}`}
+      style={layoutStyle}
+    >
       <header className="topbar">
         <button
           className={`chromeButton ${sidebarOpen ? "isActive" : ""}`}
@@ -1596,31 +1743,54 @@ function App() {
             </div>
             <div className="chatList">
               {chats.length ? (
-                chats.map((chat) => (
-                  <div
-                    className={`chatRow ${activeChatId === chat.id ? "active" : ""}`}
-                    key={chat.id}
-                  >
-                    <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-                      <span>
-                        <strong>{chat.title}</strong>
-                        <em>{chatSubline(chat)}</em>
-                      </span>
-                      {typeof chat.changedFiles === "number" ? <small>{chat.changedFiles}</small> : null}
-                    </button>
-                    <button
-                      className="chatDeleteButton"
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setDeleteCandidate(chat);
-                      }}
-                      title="Delete chat"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))
+                chatProjectGroups.map((group) => {
+                  const collapsed = collapsedProjectKeys.has(group.key);
+                  return (
+                    <section className="chatProject" key={group.key}>
+                      <button
+                        className="chatProjectToggle"
+                        type="button"
+                        onClick={() => toggleProjectGroup(group.key)}
+                        aria-expanded={!collapsed}
+                        title={group.path ?? group.name}
+                      >
+                        <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
+                        <span>
+                          <strong>{group.name}</strong>
+                          {group.path ? <em>{group.path}</em> : <em>Drafts without a folder</em>}
+                        </span>
+                      </button>
+                      {!collapsed ? (
+                        <div className="chatProjectChats">
+                          {group.chats.map((chat) => (
+                            <div
+                              className={`chatRow ${activeChatId === chat.id ? "active" : ""}`}
+                              key={chat.id}
+                            >
+                              <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
+                                <span>
+                                  <strong>{chatDisplayTitle(chat)}</strong>
+                                  <em>{chatSubline(chat)}</em>
+                                </span>
+                              </button>
+                              <button
+                                className="chatDeleteButton"
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setDeleteCandidate(chat);
+                                }}
+                                title="Delete chat"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </section>
+                  );
+                })
               ) : (
                 <div className="archiveEmpty">
                   <CircleDashed size={17} />
@@ -1634,7 +1804,7 @@ function App() {
         <button className="settingsPlaceholder" type="button">
           <Settings size={16} />
           <span>Settings</span>
-          <em>Soon</em>
+          <em>soon</em>
         </button>
       </aside>
 
@@ -1914,20 +2084,35 @@ function App() {
                   const expanded = expandedReviewPaths.has(file.path);
                   return (
                     <article className={`reviewFile ${expanded ? "expanded" : ""}`} key={file.path}>
-                      <button
-                        className={`reviewFileHeader ${expanded ? "active" : ""}`}
-                        type="button"
-                        onClick={() => toggleReviewFile(file.path)}
-                        aria-expanded={expanded}
-                      >
-                        <span className={`fileBadge ${displayStatus}`}>{statusLetter(displayStatus)}</span>
-                        <span className="changedFilePath">{file.path}</span>
-                        <span className="changeStats" aria-label={formatDiffStats(stats)}>
-                          <span className="additions">+{stats.additions}</span>
-                          <span className="deletions">-{stats.deletions}</span>
-                        </span>
-                        <ChevronDown className="reviewFileChevron" size={15} />
-                      </button>
+                      <div className={`reviewFileHeader ${expanded ? "active" : ""}`}>
+                        <button
+                          className="openReviewFileButton"
+                          type="button"
+                          onClick={() => openReviewFile(file.path)}
+                          disabled={!canOpenIde || file.status === "deleted"}
+                          title={
+                            file.status === "deleted"
+                              ? "Deleted files cannot be opened"
+                              : `Open ${file.path} in ${selectedIde.label}`
+                          }
+                        >
+                          <ExternalLink size={14} />
+                        </button>
+                        <button
+                          className="reviewFileToggle"
+                          type="button"
+                          onClick={() => toggleReviewFile(file.path)}
+                          aria-expanded={expanded}
+                        >
+                          <span className={`fileBadge ${displayStatus}`}>{statusLetter(displayStatus)}</span>
+                          <span className="changedFilePath">{file.path}</span>
+                          <span className="changeStats" aria-label={formatDiffStats(stats)}>
+                            <span className="additions">+{stats.additions}</span>
+                            <span className="deletions">-{stats.deletions}</span>
+                          </span>
+                          <ChevronDown className="reviewFileChevron" size={15} />
+                        </button>
+                      </div>
                       {expanded ? (
                         <div className="reviewFileDiff">
                           <div className="diffRows">
@@ -1990,7 +2175,7 @@ function App() {
             </div>
             <div>
               <h3 id="delete-chat-title">Delete chat?</h3>
-              <p>This removes "{deleteCandidate.title}" from the chat archive. Task files and folders are left alone.</p>
+              <p>This removes "{chatDisplayTitle(deleteCandidate)}" from the chat archive. Task files and folders are left alone.</p>
             </div>
             <div className="dialogActions">
               <button className="secondaryAction" type="button" onClick={() => setDeleteCandidate(null)}>

@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
 type PermissionMode = "normal" | "bypass";
 type BackendUiEvent = Record<string, unknown>;
-type ChatInput = { title?: string };
+type ChatInput = { title?: string; repositoryName?: string; repositoryPath?: string };
 type ChatAttachment = { path: string; name: string };
 
 contextBridge.exposeInMainWorld("aegis", {
@@ -23,7 +23,8 @@ contextBridge.exposeInMainWorld("aegis", {
     ipcRenderer.invoke("aegis:approve-worktree-creation", input),
   respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>
     ipcRenderer.invoke("aegis:respond-tool-permission", input),
-  openTaskInIde: (input: { taskId: string; ideId: string }) => ipcRenderer.invoke("aegis:open-task-in-ide", input),
+  openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
+    ipcRenderer.invoke("aegis:open-task-in-ide", input),
   approveTaskMerge: (input: { taskId: string }) => ipcRenderer.invoke("aegis:approve-task-merge", input),
   rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("aegis:reject-task", input),
   keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("aegis:keep-worktree", input),
