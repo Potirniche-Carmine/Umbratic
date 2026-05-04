@@ -10,8 +10,8 @@ export const pythonRuntimeSystemPrompt =
 
 export function reasoningSystemPrompt(mode: ReasoningMode): string {
   return mode === "reasoning"
-    ? "The user enabled Think mode. Use deliberate reasoning for ambiguous or multi-step work. If the model/provider exposes reasoning parts or reasoning_content, Aegis may display that stream live."
-    : "The user enabled Fast mode. Prefer direct, concise execution and only spend extra reasoning when the task clearly needs it.";
+    ? "Aegis is using a reasoning-capable local model for this task. Use deliberate reasoning for ambiguous or multi-step work. If the model/provider exposes reasoning parts or reasoning_content, Aegis may display that stream live."
+    : "The user disabled Think mode. Do not emit hidden reasoning, chain-of-thought, thinking-process text, or reasoning_content. Give direct answers and concise progress only.";
 }
 
 export const localProviderCatalog: Array<{

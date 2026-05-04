@@ -5,6 +5,22 @@ export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type LocalProviderId = "local-lmstudio";
+export type CommandClass =
+  | "read"
+  | "edit"
+  | "shell"
+  | "python-runtime"
+  | "markdown"
+  | "cmake-build"
+  | "compiler"
+  | "package-manager"
+  | "git-read"
+  | "git-write"
+  | "destructive-file"
+  | "network"
+  | "external-directory"
+  | "unknown";
+export type RuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 export type TaskState =
   | "awaiting_worktree_approval"
   | "running"
@@ -39,7 +55,51 @@ export type BackendStatus = {
     disabledProviders: string[];
     webTools: "disabled";
   };
+  diagnostics: BackendDiagnostics;
   message?: string;
+};
+
+export type BackendDiagnostics = {
+  runnerName: string;
+  runnerVersion: string;
+  runnerContractVersion: string;
+  policyVersion: string;
+  opencodeBinary: "present" | "missing";
+  configAssertions: "enabled";
+  providerAllowlist: LocalProviderId[];
+  localhostOnlyModels: boolean;
+  commandClassifier: "enabled";
+  telemetry: TelemetryPolicyInfo;
+  runtimes: RuntimeDiagnostics;
+};
+
+export type TelemetryPolicyInfo = {
+  mode: "developer_toggle" | "managed_required" | "managed_disabled";
+  localEnabled: boolean;
+  syncEnabled: false;
+  retentionDays: number;
+  exportFormat: "redacted-json";
+  storage: "task-event-snapshots";
+};
+
+export type RuntimeDiagnostics = {
+  python: {
+    profileVersion: string;
+    barePythonVerification: "denied";
+    generatedPaths: string[];
+  };
+  markdown: {
+    docsOnlyClassification: "enabled";
+  };
+  cmake: {
+    profileVersion: string;
+    buildDir: ".aegis/build";
+  };
+  shell: {
+    platform: NodeJS.Platform;
+    preferred: "pwsh" | "powershell" | "posix";
+    nonInteractive: boolean;
+  };
 };
 
 export type LocalModelInfo = {
@@ -95,6 +155,10 @@ export type TaskInfo = {
   worktreePath: string;
   permissionMode: PermissionMode;
   reasoningMode?: ReasoningMode;
+  runnerName?: string;
+  runnerVersion?: string;
+  policyVersion?: string;
+  runtimeProfile?: RuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: ReviewFile[];
@@ -124,6 +188,9 @@ export type TaskRecord = TaskInfo & {
   hiddenWorkspace?: boolean;
   baselineFiles?: Record<string, string>;
   model?: LocalModelInfo;
+  providerId?: LocalProviderId;
+  modelId?: string;
+  modelBaseUrlHost?: string;
   openCodeSessionId?: string;
   pendingPrompt?: string;
   metadataPath?: string;
@@ -136,6 +203,7 @@ export type PermissionRequest = {
   kind: "edit" | "bash";
   summary: string;
   command: string;
+  commandClass?: CommandClass;
   cwd: string;
 };
 
@@ -149,7 +217,7 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"] }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
@@ -157,6 +225,7 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
+  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
 );
 

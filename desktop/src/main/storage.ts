@@ -2,6 +2,7 @@ import { app } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { aegisPolicyVersion, aegisRunnerName, aegisRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import type { ChatRecord, LocalModelInfo, LocalProviderId, RepositoryInfo, TaskRecord } from "./types";
 
 function dataFile(name: string): string {
@@ -34,7 +35,17 @@ function readJsonFile<T>(filePath: string, fallback: T): T {
 
 export function writeJsonFile(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`);
+    fs.renameSync(temporaryPath, filePath);
+  } catch (error) {
+    fs.rmSync(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
 export function readProjects(): RepositoryInfo[] {
@@ -67,6 +78,19 @@ export function readTasks(): TaskRecord[] {
       ...task,
       workspaceKind: task.workspaceKind ?? "git",
       reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
+      runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : aegisRunnerName,
+      runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : aegisRunnerVersion,
+      policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : aegisPolicyVersion,
+      runtimeProfile:
+        task.runtimeProfile === "python" ||
+        task.runtimeProfile === "markdown" ||
+        task.runtimeProfile === "cmake" ||
+        task.runtimeProfile === "powershell" ||
+        task.runtimeProfile === "posix-shell" ||
+        task.runtimeProfile === "node" ||
+        task.runtimeProfile === "none"
+          ? task.runtimeProfile
+          : runtimeProfileForPrompt(task.prompt ?? ""),
       reviewFiles: Array.isArray(task.reviewFiles) ? task.reviewFiles : [],
       events: Array.isArray(task.events) ? task.events : [],
     }));

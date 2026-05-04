@@ -5,6 +5,22 @@ type AegisReasoningMode = "fast" | "reasoning";
 type AegisServiceStatus = "ready" | "degraded" | "unavailable";
 type AegisWorkspaceKind = "git" | "folder";
 type AegisLocalProviderId = "local-lmstudio";
+type AegisCommandClass =
+  | "read"
+  | "edit"
+  | "shell"
+  | "python-runtime"
+  | "markdown"
+  | "cmake-build"
+  | "compiler"
+  | "package-manager"
+  | "git-read"
+  | "git-write"
+  | "destructive-file"
+  | "network"
+  | "external-directory"
+  | "unknown";
+type AegisRuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 
 type AegisRepositoryInfo = {
   id: string;
@@ -30,7 +46,47 @@ type AegisBackendStatus = {
     disabledProviders: string[];
     webTools: "disabled";
   };
+  diagnostics: AegisBackendDiagnostics;
   message?: string;
+};
+
+type AegisBackendDiagnostics = {
+  runnerName: string;
+  runnerVersion: string;
+  runnerContractVersion: string;
+  policyVersion: string;
+  opencodeBinary: "present" | "missing";
+  configAssertions: "enabled";
+  providerAllowlist: AegisLocalProviderId[];
+  localhostOnlyModels: boolean;
+  commandClassifier: "enabled";
+  telemetry: {
+    mode: "developer_toggle" | "managed_required" | "managed_disabled";
+    localEnabled: boolean;
+    syncEnabled: false;
+    retentionDays: number;
+    exportFormat: "redacted-json";
+    storage: "task-event-snapshots";
+  };
+  runtimes: {
+    python: {
+      profileVersion: string;
+      barePythonVerification: "denied";
+      generatedPaths: string[];
+    };
+    markdown: {
+      docsOnlyClassification: "enabled";
+    };
+    cmake: {
+      profileVersion: string;
+      buildDir: ".aegis/build";
+    };
+    shell: {
+      platform: string;
+      preferred: "pwsh" | "powershell" | "posix";
+      nonInteractive: boolean;
+    };
+  };
 };
 
 type AegisLocalModelInfo = {
@@ -78,6 +134,7 @@ type AegisPermissionRequest = {
   kind: "edit" | "bash";
   summary: string;
   command: string;
+  commandClass?: AegisCommandClass;
   cwd: string;
 };
 
@@ -90,7 +147,7 @@ type AegisBackendUiEvent = AegisBackendEventMeta &
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: AegisPermissionRequest["kind"] }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: AegisPermissionRequest["kind"]; commandClass?: AegisCommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
   | { type: "permission.requested"; taskId: string; request: AegisPermissionRequest }
@@ -98,6 +155,7 @@ type AegisBackendUiEvent = AegisBackendEventMeta &
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: AegisReviewFile[]; latestTest?: AegisTestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
+  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
 );
 
@@ -128,6 +186,10 @@ type AegisTaskInfo = {
   worktreePath: string;
   permissionMode: AegisPermissionMode;
   reasoningMode?: AegisReasoningMode;
+  runnerName?: string;
+  runnerVersion?: string;
+  policyVersion?: string;
+  runtimeProfile?: AegisRuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: AegisReviewFile[];
@@ -167,6 +229,7 @@ declare global {
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
       getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
       getBackendStatus(): Promise<AegisBackendStatus>;
+      exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
       setPermissionMode(mode: AegisPermissionMode): Promise<AegisBackendStatus>;
       setSelectedModel(input: { providerId: string; modelId: string }): Promise<AegisBackendStatus>;
       listAvailableIdes(): Promise<AegisIdeInfo[]>;
@@ -184,6 +247,7 @@ declare global {
       rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
       keepWorktree(input: { taskId: string }): Promise<void>;
       cancelTask(input: { taskId: string }): Promise<void>;
+      setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
       onBackendEvent(callback: (event: unknown) => void): () => void;
     };
   }

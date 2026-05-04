@@ -39,6 +39,22 @@ type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type WorkspaceKind = "git" | "folder";
 type LocalProviderId = "local-lmstudio";
+type CommandClass =
+  | "read"
+  | "edit"
+  | "shell"
+  | "python-runtime"
+  | "markdown"
+  | "cmake-build"
+  | "compiler"
+  | "package-manager"
+  | "git-read"
+  | "git-write"
+  | "destructive-file"
+  | "network"
+  | "external-directory"
+  | "unknown";
+type RuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 type TaskState =
   | "awaiting_worktree_approval"
   | "running"
@@ -73,7 +89,47 @@ type BackendStatus = {
     disabledProviders: string[];
     webTools: "disabled";
   };
+  diagnostics: BackendDiagnostics;
   message?: string;
+};
+
+type BackendDiagnostics = {
+  runnerName: string;
+  runnerVersion: string;
+  runnerContractVersion: string;
+  policyVersion: string;
+  opencodeBinary: "present" | "missing";
+  configAssertions: "enabled";
+  providerAllowlist: LocalProviderId[];
+  localhostOnlyModels: boolean;
+  commandClassifier: "enabled";
+  telemetry: {
+    mode: "developer_toggle" | "managed_required" | "managed_disabled";
+    localEnabled: boolean;
+    syncEnabled: false;
+    retentionDays: number;
+    exportFormat: "redacted-json";
+    storage: "task-event-snapshots";
+  };
+  runtimes: {
+    python: {
+      profileVersion: string;
+      barePythonVerification: "denied";
+      generatedPaths: string[];
+    };
+    markdown: {
+      docsOnlyClassification: "enabled";
+    };
+    cmake: {
+      profileVersion: string;
+      buildDir: ".aegis/build";
+    };
+    shell: {
+      platform: string;
+      preferred: "pwsh" | "powershell" | "posix";
+      nonInteractive: boolean;
+    };
+  };
 };
 
 type LocalModelInfo = {
@@ -135,6 +191,10 @@ type TaskInfo = {
   worktreePath: string;
   permissionMode: PermissionMode;
   reasoningMode?: ReasoningMode;
+  runnerName?: string;
+  runnerVersion?: string;
+  policyVersion?: string;
+  runtimeProfile?: RuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: ReviewFile[];
@@ -163,6 +223,7 @@ type PermissionRequest = {
   kind: "edit" | "bash";
   summary: string;
   command: string;
+  commandClass?: CommandClass;
   cwd: string;
 };
 
@@ -175,7 +236,7 @@ type BackendUiEvent = BackendEventMeta &
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"] }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
@@ -183,6 +244,7 @@ type BackendUiEvent = BackendEventMeta &
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
+  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
 );
 
@@ -196,6 +258,7 @@ type CommandRun = {
   id: string;
   command: string;
   kind?: PermissionRequest["kind"];
+  commandClass?: CommandClass;
   cwd: string;
   stdout: string;
   stderr: string;
@@ -220,6 +283,7 @@ type DesktopApi = {
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
   getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
   getBackendStatus(): Promise<BackendStatus>;
+  exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
   setSelectedModel(input: { providerId: string; modelId: string }): Promise<BackendStatus>;
   listAvailableIdes(): Promise<IdeChoice[]>;
@@ -240,6 +304,7 @@ type DesktopApi = {
   rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
   keepWorktree(input: { taskId: string }): Promise<void>;
   cancelTask(input: { taskId: string }): Promise<void>;
+  setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
   onBackendEvent(callback: (event: unknown) => void): () => void;
 };
 
@@ -352,8 +417,38 @@ const fallbackApi: DesktopApi = {
       disabledProviders: [],
       webTools: "disabled",
     },
+    diagnostics: {
+      runnerName: "OpenCodeRunner",
+      runnerVersion: "opencode-package-adapter",
+      runnerContractVersion: "aegis-runner-1",
+      policyVersion: "aegis-local-mvp-1",
+      opencodeBinary: "missing",
+      configAssertions: "enabled",
+      providerAllowlist: ["local-lmstudio"],
+      localhostOnlyModels: true,
+      commandClassifier: "enabled",
+      telemetry: {
+        mode: "developer_toggle",
+        localEnabled: true,
+        syncEnabled: false,
+        retentionDays: 30,
+        exportFormat: "redacted-json",
+        storage: "task-event-snapshots",
+      },
+      runtimes: {
+        python: {
+          profileVersion: "python-uv-venv-1",
+          barePythonVerification: "denied",
+          generatedPaths: [".venv", "__pycache__", ".pyc", ".aegis/runtime"],
+        },
+        markdown: { docsOnlyClassification: "enabled" },
+        cmake: { profileVersion: "cmake-aegis-build-1", buildDir: ".aegis/build" },
+        shell: { platform: navigator.platform, preferred: "posix", nonInteractive: true },
+      },
+    },
     message: "Electron preload is not available in this browser preview.",
   }),
+  exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
     previewPermissionMode = mode;
     return fallbackApi.getBackendStatus();
@@ -370,6 +465,7 @@ const fallbackApi: DesktopApi = {
   rejectTask: async () => undefined,
   keepWorktree: async () => undefined,
   cancelTask: async () => undefined,
+  setResponseFeedback: async () => undefined,
   onBackendEvent: () => () => undefined,
 };
 
@@ -761,6 +857,8 @@ function eventTitle(event: BackendUiEvent): string {
       return `check ${event.status}`;
     case "merge.completed":
       return "approved";
+    case "response.feedback":
+      return event.rating === "good" ? "liked response" : "disliked response";
     case "task.error":
       return "task event";
   }
@@ -781,7 +879,7 @@ function eventDetail(event: BackendUiEvent): string {
     case "worktree.created":
       return `${event.branch} at ${event.path}`;
     case "command.started":
-      return `${event.command} - ${event.cwd}`;
+      return `${event.command}${event.commandClass ? ` - ${event.commandClass}` : ""} - ${event.cwd}`;
     case "command.output":
       return event.text.trim();
     case "command.finished":
@@ -796,6 +894,8 @@ function eventDetail(event: BackendUiEvent): string {
       return event.detail ?? event.name;
     case "merge.completed":
       return `${event.targetBranch} ${shortHash(event.commit)}`;
+    case "response.feedback":
+      return event.messageId;
     case "task.error":
       return event.message;
   }
@@ -914,7 +1014,8 @@ function commandShellText(run: CommandRun): string {
 }
 
 function commandDetailLabel(run: CommandRun): string {
-  return run.kind === "edit" && !isShellLikeCommand(run.command) ? "Tool" : "Shell";
+  const label = run.kind === "edit" && !isShellLikeCommand(run.command) ? "Tool" : "Shell";
+  return run.commandClass ? `${label} - ${run.commandClass}` : label;
 }
 
 function taskStatusTitle(task: TaskInfo): string {
@@ -951,6 +1052,7 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       if (existing) {
         existing.command = event.command;
         existing.kind = event.kind;
+        existing.commandClass = event.commandClass;
         existing.cwd = event.cwd;
         continue;
       }
@@ -958,6 +1060,7 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
         id: event.id,
         command: event.command,
         kind: event.kind,
+        commandClass: event.commandClass,
         cwd: event.cwd,
         stdout: "",
         stderr: "",
@@ -973,6 +1076,7 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
           id: event.id,
           command: event.id,
           kind: "bash",
+          commandClass: "unknown",
           cwd: "",
           stdout: "",
           stderr: "",
@@ -995,6 +1099,7 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
           id: event.id,
           command: event.id,
           kind: "bash",
+          commandClass: "unknown",
           cwd: "",
           stdout: "",
           stderr: "",
@@ -1132,6 +1237,7 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
         id: event.id,
         command: event.command,
         kind: event.kind,
+        commandClass: event.commandClass,
         cwd: event.cwd,
         stdout: "",
         stderr: "",
@@ -1395,7 +1501,7 @@ function App() {
   const [backend, setBackend] = useState<BackendStatus | null>(null);
   const [repository, setRepository] = useState<RepositoryInfo | null>(null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
-  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>("reasoning");
+  const reasoningMode: ReasoningMode = "reasoning";
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(null);
@@ -1419,6 +1525,9 @@ function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [exportingTelemetry, setExportingTelemetry] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
@@ -1475,8 +1584,21 @@ function App() {
       ? "No file changes found"
       : stateLabel(task.state);
   const attachmentMenuOpen = !!mention;
-  const composerItems = useMemo(() => composerTimelineFromEvents(events, task?.prompt, task?.state), [events, task?.prompt, task?.state]);
-  const assistantCopyText = useMemo(() => assistantTextFromEvents(events), [events]);
+  const visibleEvents = events;
+  const responseFeedback = useMemo(() => {
+    const ratings = new Map<string, "good" | "bad">();
+    for (const event of visibleEvents) {
+      if (event.type === "response.feedback") {
+        ratings.set(event.messageId, event.rating);
+      }
+    }
+    return ratings;
+  }, [visibleEvents]);
+  const composerItems = useMemo(
+    () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
+    [task?.prompt, task?.state, visibleEvents],
+  );
+  const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
     const groups = new Map<
       string,
@@ -1811,6 +1933,19 @@ function App() {
     }
   }
 
+  async function exportTelemetry() {
+    setExportingTelemetry(true);
+    setSettingsMessage(null);
+    try {
+      const result = await api.exportTelemetry();
+      setSettingsMessage(result.ok ? `Exported to ${result.path}` : result.message);
+    } catch (cause) {
+      setSettingsMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setExportingTelemetry(false);
+    }
+  }
+
   async function loadAvailableIdes() {
     try {
       const ides = (await api.listAvailableIdes()).filter((ide) => ide.id !== "cursor");
@@ -2034,6 +2169,16 @@ function App() {
       node.select();
       document.execCommand("copy");
       document.body.removeChild(node);
+    }
+  }
+
+  async function rateResponse(messageId: string, rating: "good" | "bad") {
+    if (!latestTaskId) return;
+    setError(null);
+    try {
+      await api.setResponseFeedback({ taskId: latestTaskId, messageId, rating });
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
 
@@ -2325,7 +2470,6 @@ function App() {
         return;
       }
       setTask(nextTask);
-      setReasoningMode(nextTask?.reasoningMode ?? "reasoning");
       setEvents(compactBackendEvents(nextTask?.events ?? [], 500));
       const draftPrompt = chat.draftPrompt ?? "";
       const sentDraft = nextTask ? draftMatchesTaskPrompt(draftPrompt, nextTask.prompt) : false;
@@ -2551,10 +2695,18 @@ function App() {
           </section>
         </div>
 
-        <button className="settingsPlaceholder" type="button">
+        <button
+          className="settingsPlaceholder"
+          type="button"
+          onClick={() => {
+            setSettingsOpen(true);
+            setSettingsMessage(null);
+            void refreshStatus();
+          }}
+        >
           <Settings size={16} />
           <span>Settings</span>
-          <em>soon</em>
+          <em>{backend?.diagnostics.policyVersion ?? "local"}</em>
         </button>
       </aside>
 
@@ -2577,25 +2729,42 @@ function App() {
                         </div>
                       </article>
                     ) : item.type === "assistant" ? (
-                      <article className="timelineMessage assistantMessage" key={item.id}>
-                        <MarkdownContent content={item.text} onReviewFileClick={openReviewReference} reviewFiles={reviewFiles} />
-                        <div className="messageActions">
-                          <button
-                            className="messageAction"
-                            type="button"
-                            onClick={() => void copyText(assistantCopyText || item.text)}
-                            title="Copy response"
-                          >
-                            <Copy size={14} />
-                          </button>
-                          <button className="messageAction" type="button" title="Good response">
-                            <ThumbsUp size={14} />
-                          </button>
-                          <button className="messageAction" type="button" title="Bad response">
-                            <ThumbsDown size={14} />
-                          </button>
-                        </div>
-                      </article>
+                      (() => {
+                        const rating = responseFeedback.get(item.id);
+                        return (
+                          <article className="timelineMessage assistantMessage" key={item.id}>
+                            <MarkdownContent content={item.text} onReviewFileClick={openReviewReference} reviewFiles={reviewFiles} />
+                            <div className="messageActions">
+                              <button
+                                className="messageAction"
+                                type="button"
+                                onClick={() => void copyText(assistantCopyText || item.text)}
+                                title="Copy response"
+                              >
+                                <Copy size={14} />
+                              </button>
+                              <button
+                                className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
+                                type="button"
+                                onClick={() => void rateResponse(item.id, "good")}
+                                aria-pressed={rating === "good"}
+                                title="Good response"
+                              >
+                                <ThumbsUp size={14} />
+                              </button>
+                              <button
+                                className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
+                                type="button"
+                                onClick={() => void rateResponse(item.id, "bad")}
+                                aria-pressed={rating === "bad"}
+                                title="Bad response"
+                              >
+                                <ThumbsDown size={14} />
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })()
                     ) : item.type === "reasoning" ? (
                       (() => {
                         const expanded = !item.finished || autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
@@ -2744,18 +2913,6 @@ function App() {
                 <strong>{repository ? repository.name : "Select folder"}</strong>
                 <em>{repository ? repository.rootPath : "Optional project context"}</em>
               </span>
-            </button>
-
-            <button
-              className={`reasoningToggle ${reasoningMode === "reasoning" ? "active" : ""}`}
-              type="button"
-              onClick={() => setReasoningMode((mode) => (mode === "reasoning" ? "fast" : "reasoning"))}
-              disabled={busy}
-              aria-pressed={reasoningMode === "reasoning"}
-              title={reasoningMode === "reasoning" ? "Think mode on" : "Think mode off"}
-            >
-              <Brain size={16} />
-              <span>Think</span>
             </button>
 
             <div className="permissionControl">
@@ -3039,6 +3196,100 @@ function App() {
           ) : null}
           </section>
       </aside>
+
+      {settingsOpen ? (
+        <div className="modalScrim" role="presentation">
+          <section className="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <header className="settingsDialogHeader">
+              <span>
+                <Settings size={17} />
+                <strong id="settings-title">Settings</strong>
+              </span>
+              <button className="chromeButton" type="button" onClick={() => setSettingsOpen(false)} title="Close settings">
+                <X size={15} />
+              </button>
+            </header>
+
+            <div className="settingsSections">
+              <section className="settingsSection">
+                <h3>Account</h3>
+                <div className="settingsRows">
+                  <div><span>Mode</span><strong>Local profile</strong></div>
+                  <div><span>Sign-in</span><strong>Optional</strong></div>
+                </div>
+              </section>
+
+              <section className="settingsSection">
+                <h3>Models</h3>
+                <div className="settingsRows">
+                  <div><span>Selected</span><strong>{selectedModel?.modelId ?? "None"}</strong></div>
+                  <div><span>Provider</span><strong>{selectedModel?.providerName ?? "LM Studio"}</strong></div>
+                  <div><span>Status</span><strong>{backend?.lmstudio ?? "unavailable"}</strong></div>
+                  <div><span>Base URL</span><strong>{selectedModel?.baseUrl ?? backend?.providers[0]?.baseUrl ?? "http://127.0.0.1:1234/v1"}</strong></div>
+                </div>
+              </section>
+
+              <section className="settingsSection">
+                <h3>Permissions</h3>
+                <div className="settingsRows">
+                  <div><span>Mode</span><strong>{permissionMode}</strong></div>
+                  <div><span>Web tools</span><strong>{backend?.privacy.webTools ?? "disabled"}</strong></div>
+                  <div><span>Final approval</span><strong>Manual</strong></div>
+                  <div><span>Classifier</span><strong>{backend?.diagnostics.commandClassifier ?? "enabled"}</strong></div>
+                </div>
+              </section>
+
+              <section className="settingsSection">
+                <h3>Runtimes</h3>
+                <div className="settingsRows">
+                  <div><span>Python</span><strong>{backend?.diagnostics.runtimes.python.profileVersion ?? "python-uv-venv-1"}</strong></div>
+                  <div><span>Bare Python</span><strong>{backend?.diagnostics.runtimes.python.barePythonVerification ?? "denied"}</strong></div>
+                  <div><span>CMake</span><strong>{backend?.diagnostics.runtimes.cmake.buildDir ?? ".aegis/build"}</strong></div>
+                  <div><span>Shell</span><strong>{backend?.diagnostics.runtimes.shell.preferred ?? "posix"}</strong></div>
+                </div>
+              </section>
+
+              <section className="settingsSection">
+                <h3>Privacy</h3>
+                <div className="settingsRows">
+                  <div><span>Telemetry</span><strong>{backend?.diagnostics.telemetry.localEnabled ? "Local only" : "Off"}</strong></div>
+                  <div><span>Sync</span><strong>{backend?.diagnostics.telemetry.syncEnabled ? "On" : "Disabled"}</strong></div>
+                  <div><span>Retention</span><strong>{backend?.diagnostics.telemetry.retentionDays ?? 30} days</strong></div>
+                  <div><span>Export</span><button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
+                    {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
+                    <span>Bundle</span>
+                  </button></div>
+                </div>
+                {settingsMessage ? <p className="settingsMessage">{settingsMessage}</p> : null}
+              </section>
+
+              <section className="settingsSection">
+                <h3>Editors</h3>
+                <div className="settingsRows">
+                  <div><span>Selected</span><strong>{selectedIde.label}</strong></div>
+                  <div><span>Available</span><strong>{availableIdes.map((ide) => ide.label).join(", ")}</strong></div>
+                </div>
+              </section>
+
+              <section className="settingsSection">
+                <h3>Diagnostics</h3>
+                <div className="settingsRows">
+                  <div><span>OpenCode</span><strong>{backend?.diagnostics.opencodeBinary ?? "missing"}</strong></div>
+                  <div><span>Runner</span><strong>{backend?.diagnostics.runnerName ?? "OpenCodeRunner"}</strong></div>
+                  <div><span>Policy</span><strong>{backend?.diagnostics.policyVersion ?? "aegis-local-mvp-1"}</strong></div>
+                  <div><span>Config checks</span><strong>{backend?.diagnostics.configAssertions ?? "enabled"}</strong></div>
+                  <div><span>Public providers</span><strong>{backend?.privacy.disabledProviders.length ?? 0} disabled</strong></div>
+                  <div><span>Localhost only</span><strong>{backend?.diagnostics.localhostOnlyModels ? "Yes" : "Check models"}</strong></div>
+                </div>
+                <button className="settingsRefreshButton" type="button" onClick={() => void refreshStatus()}>
+                  <RefreshCw size={13} />
+                  <span>Refresh</span>
+                </button>
+              </section>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {deleteCandidate ? (
         <div className="modalScrim" role="presentation">

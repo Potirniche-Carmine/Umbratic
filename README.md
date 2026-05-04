@@ -11,7 +11,6 @@ controlled workspace. The intended product flow is:
 6. The user reviews the result and explicitly approves the merge or keeps the
    worktree.
 
-The detailed build brief lives in [First_Implementation_Test.md](First_Implementation_Test.md).
 
 ## Security Model
 
@@ -34,44 +33,6 @@ Current protections:
   still does not bypass sandboxing, provider lockdown, path checks, blocked-file
   policy, secret scanning, or final approval.
 - Final merge is always manual.
-
-## Where We Are Now
-
-The proof-of-value desktop app is running and the UI direction has been
-validated.
-
-Implemented now:
-
-- Secure Electron/Vite/React shell.
-- Repository or folder selection.
-- Chat-style task UI with archived chats, file mentions, command stream, review
-  panel, permission mode, IDE open button, and approval checks.
-- Local model discovery for the LM Studio OpenAI-compatible endpoint.
-- Model picker backed by the currently reachable local providers and models.
-- OpenCode binary detection and local-only OpenCode config generation for the
-  selected provider/model.
-- Per-task password-protected OpenCode headless server startup on loopback.
-- OpenCode HTTP/SSE integration that sends the real prompt, streams assistant
-  text/tool events, and routes tool permissions through Aegis.
-- Chat-only turns can complete without file changes; Aegis only asks for a Git
-  worktree up front when the prompt clearly requests file/code changes, or later
-  when OpenCode requests an edit tool from a read-only chat turn.
-- Follow-up prompts in a chat append to the same Aegis/OpenCode session history
-  instead of replacing the conversation with a new task.
-- Git worktree flow for Git repositories, plus in-place folder proof flow.
-- Review diff and approve/reject flow for real OpenCode-authored changes.
-- Approval safety checks, including clean branch/base checks, blocked paths,
-  secret scan, patch hash, commit, fast-forward merge, metadata, and cleanup.
-
-## What Is Left
-
-Remaining work:
-
-1. Add task/repo-aware test command discovery and surfaced verification results.
-2. Add product polish around model availability, OpenCode startup failures, and
-   richer IDE detection.
-3. Broaden automated coverage around OpenCode event translation, permission
-   routing, and approval edge cases.
 
 ## Run
 

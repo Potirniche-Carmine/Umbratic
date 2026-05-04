@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("aegis", {
   pickRepository: () => ipcRenderer.invoke("aegis:pick-repository"),
   getRepository: (input: { repositoryId?: string; repositoryPath?: string }) => ipcRenderer.invoke("aegis:get-repository", input),
   getBackendStatus: () => ipcRenderer.invoke("aegis:get-backend-status"),
+  exportTelemetry: () => ipcRenderer.invoke("aegis:export-telemetry"),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("aegis:set-permission-mode", mode),
   setSelectedModel: (input: { providerId: string; modelId: string }) => ipcRenderer.invoke("aegis:set-selected-model", input),
   listAvailableIdes: () => ipcRenderer.invoke("aegis:list-available-ides"),
@@ -39,6 +40,8 @@ contextBridge.exposeInMainWorld("aegis", {
   rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("aegis:reject-task", input),
   keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("aegis:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("aegis:cancel-task", input),
+  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" }) =>
+    ipcRenderer.invoke("aegis:set-response-feedback", input),
   onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
     const listener = (_event: IpcRendererEvent, event: BackendUiEvent) => callback(event);
     ipcRenderer.on("aegis:backend-event", listener);

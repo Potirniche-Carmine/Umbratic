@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { defaultDisabledProviders, localProviderCatalog, permissionRulesForMode, pythonRuntimeSystemPrompt } from "./config";
+import { assertOpenCodeConfig, openCodeHardeningEnvironment } from "./policy";
 import type { LocalModelInfo, OpenCodeRun, PermissionMode, PermissionRequest, ReasoningMode, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
@@ -200,10 +201,12 @@ export async function startOpenCodeServer(
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
   const config = buildOpenCodeConfig(task.permissionMode, model, models, task.reasoningMode ?? "fast");
+  assertOpenCodeConfig(config, model);
   const child = spawn(binary, ["serve", "--pure", "--hostname=127.0.0.1", `--port=${port}`], {
     cwd: task.worktreePath,
     env: {
       ...runtimeEnv(task.worktreePath),
+      ...openCodeHardeningEnvironment(),
       OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       OPENCODE_SERVER_PASSWORD: password,
     },

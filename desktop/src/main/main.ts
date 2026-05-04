@@ -39,6 +39,23 @@ import {
   stopOpenCodeRun,
 } from "./opencodeHarness";
 import {
+  aegisPolicyVersion,
+  aegisRunnerContractVersion,
+  aegisRunnerName,
+  aegisRunnerVersion,
+  allowedLocalProviderIds,
+  baseUrlHost,
+  classifyCommandText,
+  isBarePythonCommand,
+  isBlockedPath,
+  isGeneratedRuntimePath,
+  isLocalhostUrl,
+  promptLooksLikePythonTask,
+  runtimeDiagnostics,
+  runtimeProfileForPrompt,
+  telemetryPolicyInfo,
+} from "./policy";
+import {
   readChats,
   readProjects,
   readSettings,
@@ -49,6 +66,7 @@ import {
   writeSelectedModel,
   writeTasks,
 } from "./storage";
+import { buildRedactedTelemetryBundle } from "./telemetry";
 import type {
   ApproveResult,
   BackendStatus,
@@ -208,7 +226,22 @@ function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEv
   return events.reduce<BackendUiEvent[]>((current, event) => appendTaskEvent(current, event, limit), []);
 }
 
+function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
+  task.runnerName = task.runnerName || aegisRunnerName;
+  task.runnerVersion = task.runnerVersion || aegisRunnerVersion;
+  task.policyVersion = task.policyVersion || aegisPolicyVersion;
+  if (!task.runtimeProfile || task.runtimeProfile === "none" || intentPrompt !== task.prompt) {
+    task.runtimeProfile = runtimeProfileForPrompt(intentPrompt);
+  }
+  if (task.model) {
+    task.providerId = task.model.providerId;
+    task.modelId = task.model.modelId;
+    task.modelBaseUrlHost = baseUrlHost(task.model.baseUrl);
+  }
+}
+
 function saveTask(task: TaskRecord) {
+  applyTaskPolicyMetadata(task);
   const existingTasks = readTasks();
   const existing = existingTasks.find((row) => row.id === task.id);
   const taskEvents = compactTaskEvents(Array.isArray(task.events) ? task.events : [], 500);
@@ -236,6 +269,10 @@ function publicTask(task: TaskRecord): TaskInfo {
     worktreePath,
     permissionMode: mode,
     reasoningMode,
+    runnerName,
+    runnerVersion,
+    policyVersion,
+    runtimeProfile,
     createdAt,
     changedFiles,
     reviewFiles,
@@ -257,6 +294,10 @@ function publicTask(task: TaskRecord): TaskInfo {
     worktreePath,
     permissionMode: mode,
     reasoningMode,
+    runnerName,
+    runnerVersion,
+    policyVersion,
+    runtimeProfile,
     createdAt,
     changedFiles,
     reviewFiles,
@@ -357,12 +398,9 @@ function promptLooksLikeFileChange(prompt: string): boolean {
   return mutatingPromptPattern.test(text) && codeTargetPattern.test(text);
 }
 
-function promptLooksLikePythonTask(prompt: string): boolean {
-  return /\b(python|\.py|pyproject|uv|venv)\b/i.test(prompt);
-}
-
 function parseReasoningMode(value: unknown): ReasoningMode {
-  return value === "fast" ? "fast" : "reasoning";
+  void value;
+  return "reasoning";
 }
 
 function titleWord(word: string): string {
@@ -1149,18 +1187,19 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
 
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
+  const opencodePath = opencodeBinaryPath();
   const providerMessages = providers
     .filter((provider) => provider.status !== "ready" && provider.message)
     .map((provider) => provider.message as string);
   const messages = [
-    opencodeBinaryPath() ? undefined : "OpenCode is not installed in the app bundle.",
+    opencodePath ? undefined : "OpenCode is not installed in the app bundle.",
     selected ? undefined : "No LM Studio models are currently available.",
     ...providerMessages,
   ].filter((message): message is string => !!message);
   const lmstudio = providers.find((provider) => provider.providerId === "local-lmstudio")?.status ?? "unavailable";
 
   return {
-    opencode: opencodeBinaryPath() ? "ready" : "unavailable",
+    opencode: opencodePath ? "ready" : "unavailable",
     lmstudio,
     model: selected,
     models,
@@ -1172,8 +1211,42 @@ async function getBackendStatus(): Promise<BackendStatus> {
       disabledProviders: defaultDisabledProviders,
       webTools: "disabled",
     },
+    diagnostics: {
+      runnerName: aegisRunnerName,
+      runnerVersion: aegisRunnerVersion,
+      runnerContractVersion: aegisRunnerContractVersion,
+      policyVersion: aegisPolicyVersion,
+      opencodeBinary: opencodePath ? "present" : "missing",
+      configAssertions: "enabled",
+      providerAllowlist: allowedLocalProviderIds,
+      localhostOnlyModels: models.every((model) => isLocalhostUrl(model.baseUrl)),
+      commandClassifier: "enabled",
+      telemetry: telemetryPolicyInfo,
+      runtimes: runtimeDiagnostics(),
+    },
     message: messages.length ? messages.join(" ") : undefined,
   };
+}
+
+async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const result = mainWindow
+    ? await dialog.showSaveDialog(mainWindow, {
+        title: "Export Aegis Telemetry",
+        defaultPath: `aegis-telemetry-${timestamp}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      })
+    : await dialog.showSaveDialog({
+        title: "Export Aegis Telemetry",
+        defaultPath: `aegis-telemetry-${timestamp}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+  if (result.canceled || !result.filePath) {
+    return { ok: false, message: "Export canceled." };
+  }
+  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects());
+  writeJsonFile(result.filePath, bundle);
+  return { ok: true, path: result.filePath };
 }
 
 async function inspectRepository(selectedPath: string): Promise<RepositoryInfo> {
@@ -1245,11 +1318,24 @@ async function getRepository(input: unknown): Promise<RepositoryInfo | null> {
   return inspectRepository(targetPath);
 }
 
-async function askPermission(task: TaskRecord, request: Omit<PermissionRequest, "id">): Promise<void> {
+function requiresBypassToolApproval(classification: ReturnType<typeof classifyCommandText>): boolean {
+  return (
+    classification.commandClass === "network" ||
+    classification.commandClass === "external-directory" ||
+    classification.commandClass === "destructive-file" ||
+    (classification.commandClass === "package-manager" && classification.risky)
+  );
+}
+
+async function askPermission(
+  task: TaskRecord,
+  request: Omit<PermissionRequest, "id"> & { bypassRequiresApproval?: boolean },
+): Promise<void> {
   const id = `perm-${crypto.randomBytes(6).toString("hex")}`;
-  const fullRequest: PermissionRequest = { id, ...request };
+  const { bypassRequiresApproval = false, ...visibleRequest } = request;
+  const fullRequest: PermissionRequest = { id, ...visibleRequest };
   emit({ type: "permission.requested", taskId: task.id, request: fullRequest });
-  if (task.permissionMode === "bypass") {
+  if (task.permissionMode === "bypass" && !bypassRequiresApproval) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     return;
   }
@@ -1288,14 +1374,26 @@ async function runCommandForTask(
   args: string[],
   options: { cwd: string; env?: NodeJS.ProcessEnv; timeout?: number },
 ): Promise<CommandResult> {
+  const displayCommand = commandText(command, args);
+  const classification = classifyCommandText(displayCommand, options.cwd);
   await askPermission(task, {
     kind: "bash",
-    summary: commandText(command, args),
-    command: commandText(command, args),
+    summary: displayCommand,
+    command: displayCommand,
+    commandClass: classification.commandClass,
     cwd: options.cwd,
+    bypassRequiresApproval: requiresBypassToolApproval(classification),
   });
   const id = `cmd-${crypto.randomBytes(6).toString("hex")}`;
-  emit({ type: "command.started", taskId: task.id, id, command: commandText(command, args), cwd: options.cwd, kind: "bash" });
+  emit({
+    type: "command.started",
+    taskId: task.id,
+    id,
+    command: displayCommand,
+    cwd: options.cwd,
+    kind: "bash",
+    commandClass: classification.commandClass,
+  });
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -1426,12 +1524,6 @@ async function refreshTaskReview(input: unknown): Promise<TaskInfo | null> {
   return publicTask(task);
 }
 
-function isBarePythonCommand(command: string): boolean {
-  const normalized = command.trim().replace(/^run\s+/i, "");
-  const first = normalized.split(/\s+/)[0]?.replace(/^["']|["']$/g, "").toLowerCase();
-  return first === "python" || first === "python3" || first === "py";
-}
-
 async function handleOpenCodePermission(
   task: TaskRecord,
   run: OpenCodeRun,
@@ -1443,6 +1535,9 @@ async function handleOpenCodePermission(
   if (!id || pendingPermissions.has(id)) return "pending";
   const type = openCodePermissionType(permission);
   const title = openCodePermissionSummary(permission);
+  const classification = type.includes("edit")
+    ? ({ commandClass: "edit" as const, risky: false })
+    : classifyCommandText(title, task.worktreePath);
 
   if (type === "bash" && isBarePythonCommand(title)) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
@@ -1477,6 +1572,7 @@ async function handleOpenCodePermission(
     kind: type.includes("edit") ? "edit" : "bash",
     summary: title,
     command: title,
+    commandClass: classification.commandClass,
     cwd: task.worktreePath,
   };
   emit({ type: "permission.requested", taskId: task.id, request });
@@ -1487,7 +1583,7 @@ async function handleOpenCodePermission(
     return "resolved";
   }
 
-  if (task.permissionMode === "bypass" && (type === "edit" || type === "bash")) {
+  if (task.permissionMode === "bypass" && (type === "edit" || type === "bash") && !requiresBypassToolApproval(classification)) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     await replyOpenCodePermission(run, id, true);
     return "resolved";
@@ -1514,6 +1610,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       return;
     }
     task.model = selected;
+    applyTaskPolicyMetadata(task, intent);
     saveTask(task);
     run = await startOpenCodeServer(task, selected, models);
     activeOpenCodeRuns.set(task.id, run);
@@ -1561,7 +1658,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     };
 
     const emitReasoningText = (text: string) => {
-      if (!text) return;
+      if (!text || task.reasoningMode !== "reasoning") return;
       emit({ type: "assistant.reasoning.delta", taskId: task.id, text });
     };
 
@@ -1642,14 +1739,33 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
           const status = typeof state.status === "string" ? state.status : "pending";
           const existing = toolRuns.get(part.id);
           const tool = openCodeToolCommand(part);
+          const classification = tool.kind === "edit"
+            ? ({ commandClass: "edit" as const, risky: false })
+            : classifyCommandText(tool.command, task.worktreePath);
           const commandId = existing?.commandId ?? `oc-${part.id}`;
           if (!existing) {
             toolRuns.set(part.id, { commandId, command: tool.command, kind: tool.kind, outputLength: 0, finished: false });
-            emit({ type: "command.started", taskId: task.id, id: commandId, command: tool.command, cwd: task.worktreePath, kind: tool.kind });
+            emit({
+              type: "command.started",
+              taskId: task.id,
+              id: commandId,
+              command: tool.command,
+              cwd: task.worktreePath,
+              kind: tool.kind,
+              commandClass: classification.commandClass,
+            });
           } else if ((tool.command !== existing.command || tool.kind !== existing.kind) && tool.command !== existing.command.split(/\s+/)[0]) {
             existing.command = tool.command;
             existing.kind = tool.kind;
-            emit({ type: "command.started", taskId: task.id, id: commandId, command: tool.command, cwd: task.worktreePath, kind: tool.kind });
+            emit({
+              type: "command.started",
+              taskId: task.id,
+              id: commandId,
+              command: tool.command,
+              cwd: task.worktreePath,
+              kind: tool.kind,
+              commandClass: classification.commandClass,
+            });
           }
           const current = toolRuns.get(part.id);
           if (!current || current.finished) return;
@@ -1758,7 +1874,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
         system: [
-          "You are running under Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real OpenCode tools when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
+          "Identity: you are Aegis, a local-first desktop coding agent. If the user asks who you are, answer as Aegis. Never identify yourself as OpenCode, opencode, a CLI, or an underlying runner; those are implementation details hidden behind Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Aegis tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
           pythonRuntimeSystemPrompt,
         ].join(" "),
@@ -1857,6 +1973,10 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.originalRepoPath = repository.rootPath;
   task.originalWasDirty = repository.dirty;
   task.baselineFiles = repository.kind === "folder" ? snapshotFolder(repository.rootPath) : undefined;
+  task.runnerName = aegisRunnerName;
+  task.runnerVersion = aegisRunnerVersion;
+  task.policyVersion = aegisPolicyVersion;
+  task.runtimeProfile = runtimeProfileForPrompt(task.prompt);
   task.openCodeSessionId = undefined;
   task.pendingPrompt = undefined;
   task.changedFiles = [];
@@ -1906,6 +2026,10 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     }
     existingTask.permissionMode = permissionMode;
     existingTask.reasoningMode = reasoningMode;
+    existingTask.runnerName = aegisRunnerName;
+    existingTask.runnerVersion = aegisRunnerVersion;
+    existingTask.policyVersion = aegisPolicyVersion;
+    existingTask.runtimeProfile = runtimeProfileForPrompt(prompt);
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && wantsFileChange && !existingTask.agentBranch) {
@@ -1966,6 +2090,10 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     worktreePath,
     permissionMode,
     reasoningMode,
+    runnerName: aegisRunnerName,
+    runnerVersion: aegisRunnerVersion,
+    policyVersion: aegisPolicyVersion,
+    runtimeProfile: runtimeProfileForPrompt(prompt),
     createdAt: new Date().toISOString(),
     changedFiles: [],
     reviewFiles: [],
@@ -2010,34 +2138,6 @@ async function approveWorktreeCreation(input: unknown): Promise<void> {
   task.pendingPrompt = undefined;
   saveTask(task);
   await createWorktreeAndRun(task, promptForRun);
-}
-
-function isGeneratedRuntimePath(filePath: string): boolean {
-  const normalized = normalizeRelativePath(filePath);
-  return (
-    normalized.startsWith(".aegis/runtime/") ||
-    normalized.startsWith(".venv/") ||
-    normalized.startsWith("venv/") ||
-    normalized.includes("/__pycache__/") ||
-    normalized.endsWith(".pyc") ||
-    normalized.startsWith("node_modules/") ||
-    normalized.startsWith(".git/")
-  );
-}
-
-function isBlockedPath(filePath: string): boolean {
-  const normalized = normalizeRelativePath(filePath);
-  const basename = path.posix.basename(normalized);
-  return (
-    normalized === ".env" ||
-    normalized.startsWith(".env.") ||
-    basename.endsWith(".pem") ||
-    basename.endsWith(".key") ||
-    basename === "id_rsa" ||
-    basename === "id_ed25519" ||
-    normalized.includes("credential") ||
-    normalized.includes("secret")
-  );
 }
 
 function secretScanText(text: string): string | null {
@@ -2372,6 +2472,23 @@ async function cancelTask(input: unknown): Promise<void> {
   emit({ type: "task.error", taskId: task.id, message: task.error });
 }
 
+async function setResponseFeedback(input: unknown): Promise<void> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid response feedback input.");
+  }
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
+  const rating = input.rating === "bad" ? "bad" : "good";
+  if (!/^assistant-\d+$/.test(messageId)) {
+    throw new Error("Invalid response message id.");
+  }
+  task.events = task.events.filter(
+    (event) => !(event.type === "response.feedback" && event.messageId === messageId),
+  );
+  saveTask(task);
+  emit({ type: "response.feedback", taskId: task.id, messageId, rating });
+}
+
 async function launchCommand(command: string, args: string[]): Promise<IdeOpenResult> {
   try {
     const isWindows = process.platform === "win32";
@@ -2671,6 +2788,7 @@ app.whenReady().then(async () => {
   handleIpc("aegis:pick-repository", () => pickRepository());
   handleIpc("aegis:get-repository", (input) => getRepository(input));
   handleIpc("aegis:get-backend-status", () => getBackendStatus());
+  handleIpc("aegis:export-telemetry", () => exportTelemetryBundle());
   handleIpc("aegis:set-permission-mode", (mode) => setPermissionMode(mode));
   handleIpc("aegis:set-selected-model", (input) => setSelectedModel(input));
   handleIpc("aegis:list-available-ides", () => listAvailableIdes());
@@ -2682,6 +2800,7 @@ app.whenReady().then(async () => {
   handleIpc("aegis:reject-task", (input) => rejectTask(input));
   handleIpc("aegis:keep-worktree", (input) => keepWorktree(input));
   handleIpc("aegis:cancel-task", (input) => cancelTask(input));
+  handleIpc("aegis:set-response-feedback", (input) => setResponseFeedback(input));
   Menu.setApplicationMenu(null);
   await createWindow();
   void getBackendStatus();
