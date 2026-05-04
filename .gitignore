@@ -2,3 +2,5 @@ node_modules/
 *.log
 .env
 target/
+desktop/dist/
+desktop/dist-electron/

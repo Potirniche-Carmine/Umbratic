@@ -1,0 +1,118 @@
+import { app } from "electron";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import type { ChatRecord, LocalModelInfo, LocalProviderId, RepositoryInfo, TaskRecord } from "./types";
+
+function dataFile(name: string): string {
+  return path.join(app.getPath("userData"), name);
+}
+
+function projectsPath(): string {
+  return dataFile("projects.json");
+}
+
+function tasksPath(): string {
+  return dataFile("tasks.json");
+}
+
+function chatsPath(): string {
+  return dataFile("chats.json");
+}
+
+function settingsPath(): string {
+  return dataFile("settings.json");
+}
+
+function readJsonFile<T>(filePath: string, fallback: T): T {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeJsonFile(filePath: string, value: unknown) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function readProjects(): RepositoryInfo[] {
+  return readJsonFile<RepositoryInfo[]>(projectsPath(), [])
+    .filter(
+      (project) =>
+        project &&
+        typeof project.id === "string" &&
+        typeof project.rootPath === "string" &&
+        (project.kind === "git" || project.kind === "folder" || project.kind === undefined) &&
+        fs.existsSync(project.rootPath),
+    )
+    .map((project) => ({ ...project, kind: project.kind ?? "git" }));
+}
+
+export function writeProjects(projects: RepositoryInfo[]) {
+  writeJsonFile(projectsPath(), projects);
+}
+
+export function readTasks(): TaskRecord[] {
+  return readJsonFile<TaskRecord[]>(tasksPath(), [])
+    .filter(
+      (task) =>
+        task &&
+        typeof task.id === "string" &&
+        typeof task.originalRepoPath === "string" &&
+        typeof task.worktreePath === "string",
+    )
+    .map((task) => ({
+      ...task,
+      workspaceKind: task.workspaceKind ?? "git",
+      reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
+      reviewFiles: Array.isArray(task.reviewFiles) ? task.reviewFiles : [],
+      events: Array.isArray(task.events) ? task.events : [],
+    }));
+}
+
+export function writeTasks(tasks: TaskRecord[]) {
+  writeJsonFile(tasksPath(), tasks);
+}
+
+export function readChats(): ChatRecord[] {
+  return readJsonFile<ChatRecord[]>(chatsPath(), [])
+    .filter(
+      (chat) =>
+        chat &&
+        typeof chat.id === "string" &&
+        typeof chat.title === "string" &&
+        typeof chat.createdAt === "string" &&
+        typeof chat.updatedAt === "string",
+    )
+    .map((chat) => ({
+      ...chat,
+      draftPrompt: typeof chat.draftPrompt === "string" ? chat.draftPrompt : "",
+      attachedFiles: Array.isArray(chat.attachedFiles)
+        ? chat.attachedFiles.filter((file) => file && typeof file.path === "string" && typeof file.name === "string")
+        : [],
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function writeChats(chats: ChatRecord[]) {
+  writeJsonFile(chatsPath(), chats);
+}
+
+export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string } } {
+  const settings = readJsonFile<{ selectedModel?: { providerId?: string; modelId?: string } }>(settingsPath(), {});
+  const providerId = settings.selectedModel?.providerId;
+  const modelId = settings.selectedModel?.modelId;
+  if (providerId === "local-lmstudio" && typeof modelId === "string" && modelId.trim()) {
+    return { selectedModel: { providerId, modelId: modelId.trim() } };
+  }
+  return {};
+}
+
+export function writeSelectedModel(model: LocalModelInfo) {
+  writeJsonFile(settingsPath(), {
+    ...readSettings(),
+    selectedModel: { providerId: model.providerId, modelId: model.modelId },
+  });
+}

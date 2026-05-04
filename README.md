@@ -7,8 +7,7 @@ controlled workspace. The intended product flow is:
 2. Ask for a code change in chat.
 3. Aegis creates an isolated task workspace.
 4. OpenCode runs the agent harness and tool calls.
-5. Ollama or LM Studio serves the local LLM through an OpenAI-compatible
-   endpoint.
+5. LM Studio serves the local LLM through an OpenAI-compatible endpoint.
 6. The user reviews the result and explicitly approves the merge or keeps the
    worktree.
 
@@ -47,7 +46,7 @@ Implemented now:
 - Repository or folder selection.
 - Chat-style task UI with archived chats, file mentions, command stream, review
   panel, permission mode, IDE open button, and approval checks.
-- Local model discovery for Ollama and LM Studio OpenAI-compatible endpoints.
+- Local model discovery for the LM Studio OpenAI-compatible endpoint.
 - Model picker backed by the currently reachable local providers and models.
 - OpenCode binary detection and local-only OpenCode config generation for the
   selected provider/model.
@@ -69,8 +68,8 @@ Implemented now:
 Remaining work:
 
 1. Add task/repo-aware test command discovery and surfaced verification results.
-2. Add product polish around model availability, Ollama model pull guidance,
-   OpenCode startup failures, and richer IDE detection.
+2. Add product polish around model availability, OpenCode startup failures, and
+   richer IDE detection.
 3. Broaden automated coverage around OpenCode event translation, permission
    routing, and approval edge cases.
 

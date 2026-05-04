@@ -5,8 +5,7 @@ This is the first runnable slice of `First_Implementation_Test.md`.
 ## Prerequisites
 
 - Node.js 24+
-- Ollama with the OpenAI-compatible endpoint at `http://127.0.0.1:11434/v1`
-- `gemma4:e4b` pulled in Ollama
+- LM Studio with a loaded local model and the OpenAI-compatible endpoint at `http://127.0.0.1:1234/v1`
 - OpenCode installed from the workspace dependencies
 
 ## Run
@@ -30,7 +29,7 @@ Bypass mode does not bypass IPC validation, provider lockdown, worktree boundari
 
 - Hardened Electron shell with sandboxing, context isolation, navigation blocking, window-open blocking, permission denial, strict CSP, and IPC sender validation.
 - Minimal typed preload bridge with named task/worktree/approval methods.
-- Ollama status check against `http://127.0.0.1:11434/v1/models`, defaulting to `local-ollama/gemma4:e4b`.
+- LM Studio status check against `http://127.0.0.1:1234/api/v0/models`, using the selected loaded local model.
 - Worktree lifecycle for the hello-world proof: prompt, worktree, command stream, permission prompts, verification, IDE handoff, explicit approval, checks, merge, metadata, cleanup.
 - Approval checks for clean original branch, expected base commit, agent branch base, controlled worktree, latest passing verification, blocked files, secret scan, patch hash, commit, and fast-forward merge.
 

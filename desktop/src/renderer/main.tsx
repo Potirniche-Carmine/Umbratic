@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import {
   ArrowLeft,
   AtSign,
+  Brain,
   ChevronDown,
+  ChevronRight,
   CheckCircle2,
   CircleDashed,
   Copy,
@@ -17,10 +19,13 @@ import {
   PanelRight,
   Play,
   Plus,
+  RefreshCw,
   Send,
   Settings,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
+  SquarePen,
   TerminalSquare,
   ThumbsDown,
   ThumbsUp,
@@ -32,8 +37,9 @@ import {
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "normal" | "bypass";
+type ReasoningMode = "fast" | "reasoning";
 type WorkspaceKind = "git" | "folder";
-type LocalProviderId = "local-ollama" | "local-lmstudio";
+type LocalProviderId = "local-lmstudio";
 type TaskState =
   | "awaiting_worktree_approval"
   | "running"
@@ -57,7 +63,6 @@ type RepositoryInfo = {
 
 type BackendStatus = {
   opencode: ServiceStatus;
-  ollama: ServiceStatus;
   lmstudio: ServiceStatus;
   model: LocalModelInfo | null;
   models: LocalModelInfo[];
@@ -130,6 +135,7 @@ type TaskInfo = {
   agentBranch: string;
   worktreePath: string;
   permissionMode: PermissionMode;
+  reasoningMode?: ReasoningMode;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: ReviewFile[];
@@ -161,13 +167,16 @@ type PermissionRequest = {
   cwd: string;
 };
 
-type BackendUiEvent =
+type BackendEventMeta = { at?: string; endedAt?: string };
+type BackendUiEvent = BackendEventMeta &
+(
   | { type: "user.message"; taskId: string; text: string }
   | { type: "assistant.delta"; taskId: string; text: string }
+  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"] }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
@@ -175,7 +184,8 @@ type BackendUiEvent =
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
-  | { type: "task.error"; taskId: string; message: string };
+  | { type: "task.error"; taskId: string; message: string }
+);
 
 type ApprovalCheck = {
   name: string;
@@ -186,6 +196,7 @@ type ApprovalCheck = {
 type CommandRun = {
   id: string;
   command: string;
+  kind?: PermissionRequest["kind"];
   cwd: string;
   stdout: string;
   stderr: string;
@@ -195,6 +206,7 @@ type CommandRun = {
 
 type ComposerTimelineItem =
   | { type: "user"; id: string; text: string }
+  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
   | { type: "assistant"; id: string; text: string }
   | { type: "command"; id: string; run: CommandRun };
 
@@ -212,7 +224,13 @@ type DesktopApi = {
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
   setSelectedModel(input: { providerId: string; modelId: string }): Promise<BackendStatus>;
   listAvailableIdes(): Promise<IdeChoice[]>;
-  startTask(input: { repositoryId: string; prompt: string; chatId?: string; attachedFiles?: ChatAttachment[] }): Promise<TaskInfo>;
+  startTask(input: {
+    repositoryId?: string;
+    prompt: string;
+    chatId?: string;
+    attachedFiles?: ChatAttachment[];
+    reasoningMode?: ReasoningMode;
+  }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
   openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
@@ -324,7 +342,6 @@ const fallbackApi: DesktopApi = {
       : null,
   getBackendStatus: async () => ({
     opencode: "unavailable",
-    ollama: "unavailable",
     lmstudio: "unavailable",
     model: null,
     models: [],
@@ -440,8 +457,53 @@ function asBackendEvent(value: unknown): BackendUiEvent | null {
   return typeof event.type === "string" ? event : null;
 }
 
+function isReviewReadyText(text: string): boolean {
+  return text.trim() === "Ready for review.";
+}
+
 function eventSignature(event: BackendUiEvent): string {
   return JSON.stringify(event);
+}
+
+function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, limit = 500): BackendUiEvent[] {
+  const last = events.at(-1);
+  if (
+    last &&
+    (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") &&
+    last.type === event.type &&
+    last.taskId === event.taskId
+  ) {
+    return [
+      ...events.slice(0, -1),
+      {
+        ...last,
+        text: `${last.text}${event.text}`,
+        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
+      },
+    ].slice(-limit);
+  }
+  if (
+    last &&
+    event.type === "command.output" &&
+    last.type === "command.output" &&
+    last.taskId === event.taskId &&
+    last.id === event.id &&
+    last.stream === event.stream
+  ) {
+    return [
+      ...events.slice(0, -1),
+      {
+        ...last,
+        text: `${last.text}${event.text}`,
+        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
+      },
+    ].slice(-limit);
+  }
+  return [...events, event].slice(-limit);
+}
+
+function compactBackendEvents(events: BackendUiEvent[], limit = 500): BackendUiEvent[] {
+  return events.reduce<BackendUiEvent[]>((current, event) => appendBackendEvent(current, event, limit), []);
 }
 
 function mergeEventSnapshots(...groups: BackendUiEvent[][]): BackendUiEvent[] {
@@ -458,7 +520,7 @@ function mergeEventSnapshots(...groups: BackendUiEvent[][]): BackendUiEvent[] {
       merged.push(event);
     }
   }
-  return merged.slice(-300);
+  return compactBackendEvents(merged, 500);
 }
 
 function shortHash(value: string): string {
@@ -536,7 +598,19 @@ function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolea
 }
 
 function chatSubline(chat: ChatRecord): string {
+  if (chat.taskState === "merged") return "Closed after approved merge";
+  if (chat.taskState === "rejected") return "Closed after undo";
   return chat.updatedAt ? new Date(chat.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+}
+
+function closedChatMessage(state?: TaskState): string | undefined {
+  if (state === "merged") {
+    return "This chat was closed after its approved merge. Start a new chat for more changes.";
+  }
+  if (state === "rejected") {
+    return "This chat was closed after its changes were undone. Start a new chat for more changes.";
+  }
+  return undefined;
 }
 
 function folderName(pathValue?: string): string {
@@ -600,16 +674,62 @@ function renderPromptHighlights(value: string, files: ChatAttachment[]): React.R
   return nodes;
 }
 
-function renderPlainInlineText(text: string, keyPrefix: string): React.ReactNode[] {
-  return text.split(/(@[A-Za-z0-9][A-Za-z0-9._/-]*)/g).map((part, index) =>
-    part.startsWith("@") ? (
-      <span className="inlineMentionToken" key={`${keyPrefix}-mention-${index}`}>
+type ReviewReferenceOptions = {
+  reviewFiles?: ReviewFile[];
+  onReviewFileClick?: (filePath: string) => void;
+};
+
+function normalizeReviewReference(value: string): string {
+  return value
+    .replace(/^@/, "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/^[`"']+|[`"',.:;!?]+$/g, "")
+    .trim();
+}
+
+function fileNameFromPath(value: string): string {
+  return value.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? value;
+}
+
+function reviewFileForReference(value: string, reviewFiles?: ReviewFile[]): ReviewFile | undefined {
+  if (!reviewFiles?.length) return undefined;
+  const reference = normalizeReviewReference(value);
+  if (!reference) return undefined;
+  const normalizedFiles = reviewFiles.map((file) => ({ file, path: normalizeReviewReference(file.path) }));
+  const exact = normalizedFiles.find(({ path }) => path === reference);
+  if (exact) return exact.file;
+  if (reference.includes("/")) {
+    const suffix = normalizedFiles.find(({ path }) => path.endsWith(`/${reference}`));
+    if (suffix) return suffix.file;
+  }
+  const basenameMatches = normalizedFiles.filter(({ path }) => fileNameFromPath(path) === reference);
+  return basenameMatches.length === 1 ? basenameMatches[0].file : undefined;
+}
+
+function renderReferenceToken(part: string, key: string, options?: ReviewReferenceOptions): React.ReactNode {
+  const reviewFile = reviewFileForReference(part, options?.reviewFiles);
+  if (reviewFile && options?.onReviewFileClick) {
+    return (
+      <button className="inlineMentionToken reviewReferenceToken" key={key} type="button" onClick={() => options.onReviewFileClick?.(reviewFile.path)}>
+        {normalizeReviewReference(part)}
+      </button>
+    );
+  }
+  if (part.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(part)) {
+    return (
+      <span className="inlineMentionToken" key={key}>
         {part}
       </span>
-    ) : (
-      <React.Fragment key={`${keyPrefix}-text-${index}`}>{part}</React.Fragment>
-    ),
-  );
+    );
+  }
+  return <React.Fragment key={key}>{part}</React.Fragment>;
+}
+
+function renderPlainInlineText(text: string, keyPrefix: string, options?: ReviewReferenceOptions): React.ReactNode[] {
+  return text
+    .split(/(@[A-Za-z0-9][A-Za-z0-9._/-]*|(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})/g)
+    .map((part, index) => renderReferenceToken(part, `${keyPrefix}-ref-${index}`, options));
 }
 
 function eventTitle(event: BackendUiEvent): string {
@@ -618,6 +738,8 @@ function eventTitle(event: BackendUiEvent): string {
       return "user";
     case "assistant.delta":
       return "assistant";
+    case "assistant.reasoning.delta":
+      return "thinking";
     case "assistant.done":
       return "assistant done";
     case "worktree.requested":
@@ -650,6 +772,8 @@ function eventDetail(event: BackendUiEvent): string {
     case "user.message":
       return event.text.trim();
     case "assistant.delta":
+      return event.text.trim();
+    case "assistant.reasoning.delta":
       return event.text.trim();
     case "assistant.done":
       return "stream complete";
@@ -688,19 +812,16 @@ type ParsedDiff = {
 };
 
 const emptyParsedDiff: ParsedDiff = { additions: 0, deletions: 0, rows: [] };
-
-function statusLetter(status: ReviewFile["status"]): string {
-  if (status === "added") return "A";
-  if (status === "deleted") return "D";
-  return "M";
-}
-
-function displayReviewStatus(file: ReviewFile): ReviewFile["status"] {
-  if (file.status !== "modified") return file.status;
-  if (/^(new file mode|--- \/dev\/null)/m.test(file.diff)) return "added";
-  if (/^(deleted file mode|\+\+\+ \/dev\/null)/m.test(file.diff)) return "deleted";
-  return file.status;
-}
+const sidebarDefaultWidth = 248;
+const sidebarMinWidth = 196;
+const sidebarMaxWidth = 360;
+const sidebarCloseThreshold = 150;
+const reviewMinWidth = 365;
+const reviewCloseThreshold = 260;
+const composerMinWidth = 120;
+const reviewOpenRatio = 0.7;
+const compactSidebarRatio = 0.18;
+const sidebarMaxRatio = 0.28;
 
 function parseHunkHeader(line: string): { oldStart: number; newStart: number } | null {
   const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
@@ -768,13 +889,15 @@ function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
 }
 
 function commandLabel(command: string): string {
-  const lower = command.toLowerCase();
-  if (lower.startsWith("write ")) return `Wrote ${command.replace(/^write\s+/i, "")}`;
-  return `Ran ${command}`;
+  return isShellLikeCommand(command) ? "Ran command" : `Ran ${command.split(/\s+/)[0] || "tool"}`;
 }
 
 function stripAnsi(value: string): string {
   return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function isShellLikeCommand(command: string): boolean {
+  return !/^(read|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
 }
 
 function commandSummary(run: CommandRun): string {
@@ -785,10 +908,14 @@ function commandSummary(run: CommandRun): string {
 }
 
 function commandShellText(run: CommandRun): string {
-  const parts = [`$ ${run.command}`];
+  const parts = [run.kind === "edit" && !isShellLikeCommand(run.command) ? `tool ${run.command}` : `$ ${run.command}`];
   const output = stripAnsi([run.stdout, run.stderr].filter(Boolean).join("\n")).trimEnd();
   if (output) parts.push(output);
   return parts.join("\n\n");
+}
+
+function commandDetailLabel(run: CommandRun): string {
+  return run.kind === "edit" && !isShellLikeCommand(run.command) ? "Tool" : "Shell";
 }
 
 function taskStatusTitle(task: TaskInfo): string {
@@ -808,6 +935,7 @@ function taskStatusDetail(task: TaskInfo): string {
     const changed = task.changedFiles.length;
     return `${changed} changed file${changed === 1 ? "" : "s"} ready in Review.`;
   }
+  if (task.state === "merged") return "This chat was closed after its approved merge.";
   if (task.state === "completed") return "No file changes for this turn.";
   if (task.state === "rejected") return "Changes were undone.";
   if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
@@ -820,9 +948,17 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
   const runs = new Map<string, CommandRun>();
   for (const event of events) {
     if (event.type === "command.started") {
+      const existing = runs.get(event.id);
+      if (existing) {
+        existing.command = event.command;
+        existing.kind = event.kind;
+        existing.cwd = event.cwd;
+        continue;
+      }
       runs.set(event.id, {
         id: event.id,
         command: event.command,
+        kind: event.kind,
         cwd: event.cwd,
         stdout: "",
         stderr: "",
@@ -832,8 +968,20 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       continue;
     }
     if (event.type === "command.output") {
-      const run = runs.get(event.id);
-      if (!run) continue;
+      let run = runs.get(event.id);
+      if (!run) {
+        run = {
+          id: event.id,
+          command: event.id,
+          kind: "bash",
+          cwd: "",
+          stdout: "",
+          stderr: "",
+          exitCode: null,
+          status: "running",
+        };
+        runs.set(event.id, run);
+      }
       if (event.stream === "stdout") {
         run.stdout = `${run.stdout}${event.text}`;
       } else {
@@ -842,8 +990,20 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       continue;
     }
     if (event.type === "command.finished") {
-      const run = runs.get(event.id);
-      if (!run) continue;
+      let run = runs.get(event.id);
+      if (!run) {
+        run = {
+          id: event.id,
+          command: event.id,
+          kind: "bash",
+          cwd: "",
+          stdout: "",
+          stderr: "",
+          exitCode: null,
+          status: "running",
+        };
+        runs.set(event.id, run);
+      }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
     }
@@ -851,11 +1011,52 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
   return Array.from(runs.values());
 }
 
-function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string): ComposerTimelineItem[] {
+function eventTimeMs(value?: string): number | undefined {
+  if (!value) return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : undefined;
+}
+
+function thoughtDurationMs(startedAt?: string, endedAt?: string, finished = true): number | null {
+  const start = eventTimeMs(startedAt);
+  if (start === undefined) return null;
+  const end = eventTimeMs(endedAt) ?? (finished ? start : Date.now());
+  return Math.max(0, end - start);
+}
+
+function formatDuration(value: number | null): string {
+  if (value === null) return "";
+  const totalSeconds = Math.max(1, Math.round(value / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function thoughtSummary(item: Extract<ComposerTimelineItem, { type: "reasoning" }>): string {
+  if (!item.finished) return "Thinking";
+  const duration = formatDuration(item.durationMs);
+  return duration ? `Thought for ${duration}` : "Thought";
+}
+
+function assistantTextFromEvents(events: BackendUiEvent[]): string {
+  return events
+    .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
+    .map((event) => event.text)
+    .filter((text) => !isReviewReadyText(text))
+    .join("")
+    .trim();
+}
+
+function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
   const runs = new Map<string, CommandRun>();
   const items: ComposerTimelineItem[] = [];
   let assistantBuffer = "";
   let assistantIndex = 0;
+  let reasoningBuffer = "";
+  let reasoningStartedAt: string | undefined;
+  let reasoningEndedAt: string | undefined;
+  let reasoningIndex = 0;
   const prompt = taskPrompt?.trim();
   const hasUserMessages = events.some((event) => event.type === "user.message");
 
@@ -873,25 +1074,65 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
     assistantBuffer = "";
   };
 
+  const flushReasoning = (finished = true) => {
+    if (!reasoningBuffer.trim()) {
+      reasoningBuffer = "";
+      reasoningStartedAt = undefined;
+      reasoningEndedAt = undefined;
+      return;
+    }
+    reasoningIndex += 1;
+    items.push({
+      type: "reasoning",
+      id: `reasoning-${reasoningIndex}`,
+      text: reasoningBuffer,
+      durationMs: thoughtDurationMs(reasoningStartedAt, reasoningEndedAt, finished),
+      finished,
+    });
+    reasoningBuffer = "";
+    reasoningStartedAt = undefined;
+    reasoningEndedAt = undefined;
+  };
+
   for (const event of events) {
     if (event.type === "user.message") {
+      flushReasoning();
       flushAssistant();
       items.push({ type: "user", id: `user-${items.length}-${event.text.length}`, text: event.text });
       continue;
     }
     if (event.type === "assistant.delta") {
+      if (isReviewReadyText(event.text)) continue;
+      flushReasoning();
       assistantBuffer = `${assistantBuffer}${event.text}`;
       continue;
     }
+    if (event.type === "assistant.reasoning.delta") {
+      flushAssistant();
+      reasoningStartedAt = reasoningStartedAt ?? event.at;
+      reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
+      reasoningBuffer = `${reasoningBuffer}${event.text}`;
+      continue;
+    }
     if (event.type === "assistant.done") {
+      flushReasoning();
       flushAssistant();
       continue;
     }
     if (event.type === "command.started") {
+      flushReasoning();
       flushAssistant();
+      const existingRun = runs.get(event.id);
+      if (existingRun) {
+        existingRun.command = event.command;
+        existingRun.kind = event.kind;
+        existingRun.cwd = event.cwd;
+        continue;
+      }
       const run: CommandRun = {
         id: event.id,
         command: event.command,
+        kind: event.kind,
         cwd: event.cwd,
         stdout: "",
         stderr: "",
@@ -903,8 +1144,21 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
       continue;
     }
     if (event.type === "command.output") {
-      const run = runs.get(event.id);
-      if (!run) continue;
+      let run = runs.get(event.id);
+      if (!run) {
+        run = {
+          id: event.id,
+          command: event.id,
+          kind: "bash",
+          cwd: "",
+          stdout: "",
+          stderr: "",
+          exitCode: null,
+          status: "running",
+        };
+        runs.set(event.id, run);
+        items.push({ type: "command", id: event.id, run });
+      }
       if (event.stream === "stdout") {
         run.stdout = `${run.stdout}${event.text}`;
       } else {
@@ -913,12 +1167,26 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
       continue;
     }
     if (event.type === "command.finished") {
-      const run = runs.get(event.id);
-      if (!run) continue;
+      let run = runs.get(event.id);
+      if (!run) {
+        run = {
+          id: event.id,
+          command: event.id,
+          kind: "bash",
+          cwd: "",
+          stdout: "",
+          stderr: "",
+          exitCode: null,
+          status: "running",
+        };
+        runs.set(event.id, run);
+        items.push({ type: "command", id: event.id, run });
+      }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
     }
   }
+  flushReasoning(taskState !== "running");
   flushAssistant();
   return items;
 }
@@ -994,20 +1262,25 @@ function parseMarkdown(content: string): MarkdownBlock[] {
   return blocks;
 }
 
-function renderInlineMarkdown(text: string): React.ReactNode[] {
+function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
   return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, index) => {
     if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={index}>{part.slice(1, -1)}</code>;
+      const code = part.slice(1, -1);
+      if (reviewFileForReference(code, options?.reviewFiles) || code.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(code)) {
+        return renderReferenceToken(code, `code-ref-${index}`, options);
+      }
+      return <code key={index}>{code}</code>;
     }
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
     }
-    return <React.Fragment key={index}>{renderPlainInlineText(part, `inline-${index}`)}</React.Fragment>;
+    return <React.Fragment key={index}>{renderPlainInlineText(part, `inline-${index}`, options)}</React.Fragment>;
   });
 }
 
-function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({ content, onReviewFileClick, reviewFiles }: { content: string } & ReviewReferenceOptions) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
+  const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
   return (
     <div className="markdownContent">
       {blocks.map((block, index) => {
@@ -1020,22 +1293,98 @@ function MarkdownContent({ content }: { content: string }) {
           );
         }
         if (block.type === "heading") {
-          if (block.level === 1) return <h3 key={index}>{renderInlineMarkdown(block.text)}</h3>;
-          if (block.level === 2) return <h4 key={index}>{renderInlineMarkdown(block.text)}</h4>;
-          return <h5 key={index}>{renderInlineMarkdown(block.text)}</h5>;
+          if (block.level === 1) return <h3 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h3>;
+          if (block.level === 2) return <h4 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h4>;
+          return <h5 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h5>;
         }
         if (block.type === "list") {
           return (
             <ul key={index}>
               {block.items.map((item, itemIndex) => (
-                <li key={itemIndex}>{renderInlineMarkdown(item)}</li>
+                <li key={itemIndex}>{renderInlineMarkdown(item, referenceOptions)}</li>
               ))}
             </ul>
           );
         }
-        return <p key={index}>{renderInlineMarkdown(block.text)}</p>;
+        return <p key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</p>;
       })}
     </div>
+  );
+}
+
+function ReviewSummaryCard({
+  expandedPaths,
+  files,
+  diffs,
+  onOpenReview,
+  onToggleFile,
+  totals,
+}: {
+  expandedPaths: Set<string>;
+  files: ReviewFile[];
+  diffs: Map<string, ParsedDiff>;
+  onOpenReview(): void;
+  onToggleFile(filePath: string): void;
+  totals: { additions: number; deletions: number };
+}) {
+  if (!files.length) return null;
+  return (
+    <article className="reviewSummaryCard">
+      <div className="reviewSummaryHeader">
+        <span className="reviewSummaryTitle">
+          <FileText size={15} />
+          <strong>
+            {files.length} file{files.length === 1 ? "" : "s"} changed
+          </strong>
+          <span className="additions">+{totals.additions}</span>
+          <span className="deletions">-{totals.deletions}</span>
+        </span>
+        <button className="reviewSummaryReviewButton" type="button" onClick={onOpenReview}>
+          <span>Review</span>
+          <ExternalLink size={13} />
+        </button>
+      </div>
+      <div className="reviewSummaryFiles">
+        {files.map((file) => {
+          const stats = diffs.get(file.path) ?? emptyParsedDiff;
+          const expanded = expandedPaths.has(file.path);
+          const previewRows = stats.rows.slice(0, 120);
+          return (
+            <section className={`reviewSummaryFile ${expanded ? "expanded" : ""}`} key={file.path}>
+              <button
+                className="reviewSummaryFileButton"
+                type="button"
+                onClick={() => onToggleFile(file.path)}
+                aria-expanded={expanded}
+              >
+                <span className="reviewSummaryPath">{file.path}</span>
+                <span className="changeStats" aria-label={formatDiffStats(stats)}>
+                  <span className="additions">+{stats.additions}</span>
+                  <span className="deletions">-{stats.deletions}</span>
+                </span>
+                <ChevronDown className="reviewSummaryChevron" size={14} />
+              </button>
+              <div className={`reviewSummaryFileBody ${expanded ? "open" : ""}`}>
+                <div className="diffRows compactDiffRows">
+                  {previewRows.length ? (
+                    previewRows.map((row, index) => (
+                      <div className={`diffRow ${row.kind}`} key={`${file.path}-${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
+                        <span className="diffLineNumber">{row.oldLine ?? ""}</span>
+                        <span className="diffLineNumber">{row.newLine ?? ""}</span>
+                        <span className="diffMarker">{row.marker}</span>
+                        <code>{row.content || " "}</code>
+                      </div>
+                    ))
+                  ) : (
+                    <Empty label="No text diff available" />
+                  )}
+                </div>
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </article>
   );
 }
 
@@ -1047,6 +1396,7 @@ function App() {
   const [backend, setBackend] = useState<BackendStatus | null>(null);
   const [repository, setRepository] = useState<RepositoryInfo | null>(null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
+  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>("reasoning");
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(null);
@@ -1064,13 +1414,16 @@ function App() {
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() => new Set());
   const [expandedCommandId, setExpandedCommandId] = useState<string | null>(null);
+  const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
+  const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
-  const [sidebarWidth, setSidebarWidth] = useState(276);
+  const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
   const [reviewWidth, setReviewWidth] = useState(520);
   const [showBypassDialog, setShowBypassDialog] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1111,7 +1464,9 @@ function App() {
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
-  const canStart = !!repository && !!selectedModel && prompt.trim().length > 0 && !busy;
+  const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
+  const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
+  const canStart = !!selectedModel && prompt.trim().length > 0 && !busy && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
@@ -1121,7 +1476,8 @@ function App() {
       ? "No file changes found"
       : stateLabel(task.state);
   const attachmentMenuOpen = !!mention;
-  const composerItems = useMemo(() => composerTimelineFromEvents(events, task?.prompt), [events, task?.prompt]);
+  const composerItems = useMemo(() => composerTimelineFromEvents(events, task?.prompt, task?.state), [events, task?.prompt, task?.state]);
+  const assistantCopyText = useMemo(() => assistantTextFromEvents(events), [events]);
   const chatProjectGroups = useMemo(() => {
     const groups = new Map<
       string,
@@ -1153,6 +1509,28 @@ function App() {
     "--sidebar-width": `${sidebarWidth}px`,
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
+  const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
+
+  useEffect(() => {
+    const reasoningItems = composerItems.filter(
+      (item): item is Extract<ComposerTimelineItem, { type: "reasoning" }> => item.type === "reasoning",
+    );
+    setAutoExpandedReasoningIds((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const item of reasoningItems) {
+        if (!item.finished && !next.has(item.id)) {
+          next.add(item.id);
+          changed = true;
+          continue;
+        }
+        if (item.finished && next.delete(item.id)) {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [composerItems]);
 
   useEffect(() => {
     void refreshStatus();
@@ -1161,8 +1539,11 @@ function App() {
     return api.onBackendEvent((rawEvent) => {
       const event = asBackendEvent(rawEvent);
       if (!event) return;
-      setEvents((current) => [...current, event].slice(-300));
-      if (event.type === "assistant.delta") setAssistantText((current) => `${current}${event.text}`);
+      if (event.type === "assistant.delta" && isReviewReadyText(event.text)) return;
+      setEvents((current) => appendBackendEvent(current, event, 500));
+      if (event.type === "assistant.delta") {
+        setAssistantText((current) => `${current}${event.text}`);
+      }
       if (event.type === "assistant.done") {
         setTask((current) =>
           current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
@@ -1172,6 +1553,14 @@ function App() {
       if (event.type === "permission.requested") setPendingPermission(event.request);
       if (event.type === "permission.resolved") {
         setPendingPermission((current) => (current?.id === event.id ? null : current));
+      }
+      if (event.type === "worktree.requested") {
+        setTask((current) =>
+          current && current.id === event.taskId
+            ? { ...current, state: "awaiting_worktree_approval", worktreePath: event.path, agentBranch: event.branch }
+            : current,
+        );
+        void loadChats();
       }
       if (event.type === "worktree.created") {
         setTask((current) =>
@@ -1193,9 +1582,8 @@ function App() {
             : current,
         );
         setExpandedReviewPaths(new Set());
-        setReviewOpen(true);
         window.setTimeout(() => {
-          void refreshTaskReviewById(event.taskId, true);
+          void refreshTaskReviewById(event.taskId);
         }, 120);
         void loadChats();
       }
@@ -1257,6 +1645,19 @@ function App() {
   useEffect(() => {
     if (!canOpenIde) setIdeMenuOpen(false);
   }, [canOpenIde]);
+
+  useEffect(() => {
+    if (!reviewOpen) return undefined;
+    const resizeReview = () => {
+      const nextSidebarWidth = sidebarOpen ? Math.min(sidebarWidth, compactSidebarWidth()) : 0;
+      if (sidebarOpen && nextSidebarWidth !== sidebarWidth) {
+        setSidebarWidth(nextSidebarWidth);
+      }
+      setReviewWidth(wideReviewWidth(nextSidebarWidth));
+    };
+    window.addEventListener("resize", resizeReview);
+    return () => window.removeEventListener("resize", resizeReview);
+  }, [reviewOpen, sidebarOpen, sidebarWidth]);
 
   useEffect(() => {
     const node = streamRef.current;
@@ -1381,6 +1782,14 @@ function App() {
     };
   }
 
+  function chatInputForProject(title: string, project: { name?: string; path?: string }) {
+    return {
+      title,
+      repositoryName: project.name,
+      repositoryPath: project.path,
+    };
+  }
+
   function toggleProjectGroup(projectKey: string) {
     setCollapsedProjectKeys((current) => {
       const next = new Set(current);
@@ -1427,7 +1836,7 @@ function App() {
         return new Set(Array.from(current).filter((filePath) => availablePaths.has(filePath)));
       });
       if (openWhenReady && nextTask.state === "review_ready") {
-        setReviewOpen(true);
+        openReviewPanel();
       }
       upsertChatFromTask(nextTask);
       void loadChats();
@@ -1435,6 +1844,17 @@ function App() {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
       reviewRefreshRef.current = false;
+    }
+  }
+
+  async function refreshModelMenu() {
+    setRefreshingModels(true);
+    setError(null);
+    try {
+      await refreshStatus();
+      setModelMenuOpen(true);
+    } finally {
+      setRefreshingModels(false);
     }
   }
 
@@ -1513,9 +1933,12 @@ function App() {
   }
 
   async function startTask() {
-    if (!repository) return;
     if (!selectedModel) {
-      setError("Start LM Studio or Ollama with at least one loaded model.");
+      setError("Start LM Studio with at least one loaded model.");
+      return;
+    }
+    if (closedChatNotice) {
+      setError(closedChatNotice);
       return;
     }
     const trimmedPrompt = prompt.trim();
@@ -1529,6 +1952,8 @@ function App() {
       setAssistantText("");
       setApprovalChecks([]);
       setExpandedCommandId(null);
+      setExpandedReasoningIds(new Set());
+      setAutoExpandedReasoningIds(new Set());
       setExpandedReviewPaths(new Set());
       setReviewOpen(false);
     }
@@ -1542,10 +1967,11 @@ function App() {
         setActiveChatId(chat.id);
       }
       const nextTask = await api.startTask({
-        repositoryId: repository.id,
+        repositoryId: repository?.id,
         prompt: trimmedPrompt,
         chatId,
         attachedFiles: attachedFiles.map(normalizeAttachment),
+        reasoningMode,
       });
       setTask(nextTask);
       setEvents((current) =>
@@ -1590,9 +2016,26 @@ function App() {
     }
   }
 
-  function copyText(value: string) {
-    const write = navigator.clipboard?.writeText(value);
-    if (write) void write.catch(() => undefined);
+  async function copyText(value: string) {
+    const text = value.trimEnd();
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      throw new Error("Clipboard API unavailable.");
+    } catch {
+      const node = document.createElement("textarea");
+      node.value = text;
+      node.setAttribute("readonly", "");
+      node.style.position = "fixed";
+      node.style.left = "-9999px";
+      document.body.appendChild(node);
+      node.select();
+      document.execCommand("copy");
+      document.body.removeChild(node);
+    }
   }
 
   async function openIde(ideId: string) {
@@ -1600,6 +2043,57 @@ function App() {
     setIdeMenuOpen(false);
     const result = await api.openTaskInIde({ taskId: task.id, ideId });
     if (!result.ok) setError(result.message);
+  }
+
+  function sidebarMaxAvailableWidth() {
+    return clamp(Math.round(window.innerWidth * sidebarMaxRatio), sidebarMinWidth, sidebarMaxWidth);
+  }
+
+  function compactSidebarWidth() {
+    return clamp(Math.round(window.innerWidth * compactSidebarRatio), sidebarMinWidth, Math.min(sidebarDefaultWidth, sidebarMaxAvailableWidth()));
+  }
+
+  function reviewAvailableWidth(sidebarWidthOverride = sidebarOpen ? sidebarWidth : 0) {
+    const sidebarSpace = sidebarOpen ? sidebarWidthOverride : 0;
+    return Math.max(reviewMinWidth + composerMinWidth, window.innerWidth - sidebarSpace);
+  }
+
+  function reviewMaxWidth(sidebarWidthOverride = sidebarOpen ? sidebarWidth : 0) {
+    return Math.max(reviewMinWidth, reviewAvailableWidth(sidebarWidthOverride) - composerMinWidth);
+  }
+
+  function wideReviewWidth(sidebarWidthOverride = sidebarOpen ? sidebarWidth : 0) {
+    const available = reviewAvailableWidth(sidebarWidthOverride);
+    return clamp(Math.round(available * reviewOpenRatio), reviewMinWidth, reviewMaxWidth(sidebarWidthOverride));
+  }
+
+  function toggleSidebarPanel() {
+    if (sidebarOpen) {
+      setSidebarOpen(false);
+      return;
+    }
+    setSidebarWidth(compactSidebarWidth());
+    setSidebarOpen(true);
+  }
+
+  function openReviewPanel(filePath?: string) {
+    const nextSidebarWidth = sidebarOpen ? Math.min(sidebarWidth, compactSidebarWidth()) : 0;
+    if (sidebarOpen && nextSidebarWidth !== sidebarWidth) {
+      setSidebarWidth(nextSidebarWidth);
+    }
+    setReviewWidth(wideReviewWidth(nextSidebarWidth));
+    setReviewOpen(true);
+    if (filePath) {
+      setExpandedReviewPaths((current) => new Set([...current, filePath]));
+    }
+  }
+
+  function toggleReviewPanel() {
+    if (reviewOpen) {
+      setReviewOpen(false);
+      return;
+    }
+    openReviewPanel();
   }
 
   async function openReviewFile(filePath: string) {
@@ -1619,6 +2113,10 @@ function App() {
       }
       return next;
     });
+  }
+
+  function openReviewReference(filePath: string) {
+    openReviewPanel(filePath);
   }
 
   async function approveMerge() {
@@ -1742,7 +2240,36 @@ function App() {
     setError(null);
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
-      const chat = await api.createChat(chatInputForCurrentProject("New chat"));
+      const chat = await api.createChat({ title: "New chat" });
+      mergeChat(chat);
+      suppressDraftSaveBriefly();
+      setActiveChatId(chat.id);
+      setRepository(null);
+      setTask(null);
+      setEvents([]);
+      setAssistantText("");
+      setApprovalChecks([]);
+      setExpandedCommandId(null);
+      setExpandedReasoningIds(new Set());
+      setAutoExpandedReasoningIds(new Set());
+      setPendingPermission(null);
+      setExpandedReviewPaths(new Set());
+      setReviewOpen(false);
+      setAttachedFiles([]);
+      setMention(null);
+      setFileMatches([]);
+      setPrompt(initialPrompt);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function newChatForProject(project: { name: string; path?: string }) {
+    if (!project.path) return;
+    setError(null);
+    try {
+      if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
+      const chat = await api.createChat(chatInputForProject("New chat", project));
       mergeChat(chat);
       suppressDraftSaveBriefly();
       setActiveChatId(chat.id);
@@ -1751,6 +2278,8 @@ function App() {
       setAssistantText("");
       setApprovalChecks([]);
       setExpandedCommandId(null);
+      setExpandedReasoningIds(new Set());
+      setAutoExpandedReasoningIds(new Set());
       setPendingPermission(null);
       setExpandedReviewPaths(new Set());
       setReviewOpen(false);
@@ -1758,6 +2287,7 @@ function App() {
       setMention(null);
       setFileMatches([]);
       setPrompt(initialPrompt);
+      await restoreChatRepository(chat);
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -1775,6 +2305,8 @@ function App() {
     setAssistantText("");
     setApprovalChecks([]);
     setExpandedCommandId(null);
+    setExpandedReasoningIds(new Set());
+    setAutoExpandedReasoningIds(new Set());
     setPendingPermission(null);
     setError(null);
     setExpandedReviewPaths(new Set());
@@ -1794,14 +2326,14 @@ function App() {
         return;
       }
       setTask(nextTask);
-      setEvents(nextTask?.events ?? []);
+      setReasoningMode(nextTask?.reasoningMode ?? "reasoning");
+      setEvents(compactBackendEvents(nextTask?.events ?? [], 500));
       const draftPrompt = chat.draftPrompt ?? "";
       const sentDraft = nextTask ? draftMatchesTaskPrompt(draftPrompt, nextTask.prompt) : false;
       setPrompt(sentDraft ? "" : draftPrompt);
       setAttachedFiles(!draftPrompt || sentDraft ? [] : (chat.attachedFiles ?? []));
       if (sentDraft) void persistDraft(chat.id, "", []);
       setExpandedReviewPaths(new Set());
-      if (nextTask?.reviewFiles.length) setReviewOpen(true);
     } catch (cause) {
       setTask(null);
       setError(String(cause instanceof Error ? cause.message : cause));
@@ -1823,6 +2355,8 @@ function App() {
         setAssistantText("");
         setApprovalChecks([]);
         setExpandedCommandId(null);
+        setExpandedReasoningIds(new Set());
+        setAutoExpandedReasoningIds(new Set());
         setPendingPermission(null);
         setExpandedReviewPaths(new Set());
         setReviewOpen(false);
@@ -1840,11 +2374,19 @@ function App() {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = sidebarWidth;
+    let closeAfterDrag = false;
     document.body.classList.add("isResizing");
     const move = (moveEvent: PointerEvent) => {
-      setSidebarWidth(clamp(startWidth + moveEvent.clientX - startX, 220, 430));
+      const nextWidth = startWidth + moveEvent.clientX - startX;
+      closeAfterDrag = nextWidth < sidebarCloseThreshold;
+      setSidebarWidth(clamp(nextWidth, sidebarMinWidth, sidebarMaxAvailableWidth()));
     };
     const stop = () => {
+      if (closeAfterDrag) {
+        setSidebarOpen(false);
+      } else {
+        setSidebarOpen(true);
+      }
       document.body.classList.remove("isResizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
@@ -1857,7 +2399,8 @@ function App() {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = reviewWidth;
-    let closedByDrag = false;
+    const maxWidth = reviewMaxWidth();
+    let closeAfterDrag = false;
     document.body.classList.add("isResizing");
     const finish = () => {
       document.body.classList.remove("isResizing");
@@ -1865,17 +2408,16 @@ function App() {
       window.removeEventListener("pointerup", stop);
     };
     const move = (moveEvent: PointerEvent) => {
-      if (closedByDrag) return;
       const nextWidth = startWidth - (moveEvent.clientX - startX);
-      if (nextWidth < 150) {
-        closedByDrag = true;
-        setReviewOpen(false);
-        finish();
-        return;
-      }
-      setReviewWidth(clamp(nextWidth, 365, 780));
+      closeAfterDrag = nextWidth < reviewCloseThreshold;
+      setReviewWidth(clamp(nextWidth, reviewMinWidth, maxWidth));
     };
     const stop = () => {
+      if (closeAfterDrag) {
+        setReviewOpen(false);
+      } else {
+        setReviewOpen(true);
+      }
       finish();
     };
     window.addEventListener("pointermove", move);
@@ -1891,7 +2433,7 @@ function App() {
         <button
           className={`chromeButton ${sidebarOpen ? "isActive" : ""}`}
           type="button"
-          onClick={() => setSidebarOpen((open) => !open)}
+          onClick={toggleSidebarPanel}
           aria-pressed={sidebarOpen}
           title="Toggle sidebar"
         >
@@ -1912,19 +2454,11 @@ function App() {
           <ShieldCheck size={15} />
           <span>Aegis</span>
         </div>
-        <div className="topbarContext">
-          {repository ? (
-            <>
-              {repository.kind === "git" ? <GitBranch size={13} /> : <FolderOpen size={13} />}
-              <span>{repository.name}</span>
-            </>
-          ) : null}
-        </div>
         <div className="topbarSpacer" />
         <button
           className={`chromeButton ${reviewOpen ? "isActive" : ""}`}
           type="button"
-          onClick={() => setReviewOpen((open) => !open)}
+          onClick={toggleReviewPanel}
           aria-pressed={reviewOpen}
           title="Toggle review"
         >
@@ -1950,24 +2484,38 @@ function App() {
                   const collapsed = collapsedProjectKeys.has(group.key);
                   return (
                     <section className="chatProject" key={group.key}>
-                      <button
-                        className="chatProjectToggle"
-                        type="button"
-                        onClick={() => toggleProjectGroup(group.key)}
-                        aria-expanded={!collapsed}
-                        title={group.path ?? group.name}
-                      >
-                        <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
-                        <span>
-                          <strong>{group.name}</strong>
-                          {group.path ? <em>{group.path}</em> : <em>Drafts without a folder</em>}
-                        </span>
-                      </button>
+                      <div className="chatProjectHeader">
+                        <button
+                          className="chatProjectToggle"
+                          type="button"
+                          onClick={() => toggleProjectGroup(group.key)}
+                          aria-expanded={!collapsed}
+                          title={group.path ?? group.name}
+                        >
+                          <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
+                          <span>
+                            <strong>{group.name}</strong>
+                            {group.path ? <em>{group.path}</em> : <em>Drafts without a folder</em>}
+                          </span>
+                        </button>
+                        {group.path ? (
+                          <button
+                            className="chatProjectNewButton"
+                            type="button"
+                            onClick={() => void newChatForProject({ name: group.name, path: group.path })}
+                            title={`Start a new chat in "${group.name}"`}
+                          >
+                            <SquarePen size={14} />
+                          </button>
+                        ) : null}
+                      </div>
                       {!collapsed ? (
                         <div className="chatProjectChats">
                           {group.chats.map((chat) => (
                             <div
-                              className={`chatRow ${activeChatId === chat.id ? "active" : ""}`}
+                              className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
+                                closedChatMessage(chat.taskState) ? "closed" : ""
+                              }`}
                               key={chat.id}
                             >
                               <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
@@ -2012,23 +2560,6 @@ function App() {
       </aside>
 
       <main className="workspace">
-        {task?.state === "awaiting_worktree_approval" ? (
-          <section className="actionBand warn">
-            <div>
-              <strong>Create isolated worktree?</strong>
-              <span>{task.agentBranch} at {task.worktreePath}</span>
-            </div>
-            <button className="secondaryAction" type="button" onClick={() => approveWorktree(false)}>
-              <X size={15} />
-              Decline
-            </button>
-            <button className="primaryAction" type="button" onClick={() => approveWorktree(true)}>
-              <Play size={15} />
-              Create
-            </button>
-          </section>
-        ) : null}
-
         <section className="workArea">
           <section className="composerPanel">
             <div className="composerBody" ref={streamRef}>
@@ -2037,18 +2568,25 @@ function App() {
                   {composerItems.map((item) =>
                     item.type === "user" ? (
                       <article className="timelineMessage userMessage" key={item.id}>
-                        <MarkdownContent content={item.text} />
+                        <div className="userMessageBubble">
+                          <MarkdownContent content={item.text} />
+                        </div>
                         <div className="messageActions">
-                          <button className="messageAction" type="button" onClick={() => copyText(item.text)} title="Copy prompt">
+                          <button className="messageAction" type="button" onClick={() => void copyText(item.text)} title="Copy prompt">
                             <Copy size={14} />
                           </button>
                         </div>
                       </article>
                     ) : item.type === "assistant" ? (
                       <article className="timelineMessage assistantMessage" key={item.id}>
-                        <MarkdownContent content={item.text} />
+                        <MarkdownContent content={item.text} onReviewFileClick={openReviewReference} reviewFiles={reviewFiles} />
                         <div className="messageActions">
-                          <button className="messageAction" type="button" onClick={() => copyText(item.text)} title="Copy response">
+                          <button
+                            className="messageAction"
+                            type="button"
+                            onClick={() => void copyText(assistantCopyText || item.text)}
+                            title="Copy response"
+                          >
                             <Copy size={14} />
                           </button>
                           <button className="messageAction" type="button" title="Good response">
@@ -2059,6 +2597,48 @@ function App() {
                           </button>
                         </div>
                       </article>
+                    ) : item.type === "reasoning" ? (
+                      (() => {
+                        const expanded = !item.finished || autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
+                        return (
+                          <article
+                            className={`timelineReasoning ${item.finished ? "isFinished" : "isThinking"} ${
+                              expanded ? "isExpanded" : ""
+                            }`}
+                            key={item.id}
+                          >
+                            <button
+                              className="reasoningHeader"
+                              type="button"
+                              onClick={() => {
+                                setAutoExpandedReasoningIds((current) => {
+                                  if (!current.has(item.id)) return current;
+                                  const next = new Set(current);
+                                  next.delete(item.id);
+                                  return next;
+                                });
+                                setExpandedReasoningIds((current) => {
+                                  const next = new Set(current);
+                                  if (expanded) {
+                                    next.delete(item.id);
+                                  } else {
+                                    next.add(item.id);
+                                  }
+                                  return next;
+                                });
+                              }}
+                              aria-expanded={expanded}
+                            >
+                              <Brain size={13} />
+                              <span>{thoughtSummary(item)}</span>
+                              {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                            </button>
+                            <div className={`reasoningBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
+                              <pre>{item.text.trim()}</pre>
+                            </div>
+                          </article>
+                        );
+                      })()
                     ) : (
                       <article className={`timelineCommand commandCard ${item.run.status}`} key={item.id}>
                         <button
@@ -2077,7 +2657,7 @@ function App() {
                           <div className="commandDetails">
                             <div className="shellBlock">
                               <div className="shellHeader">
-                                <span>Shell</span>
+                                <span>{commandDetailLabel(item.run)}</span>
                                 <span className={`shellResult ${item.run.status}`}>
                                   {item.run.status === "running" ? (
                                     <Loader2 className="spin" size={13} />
@@ -2102,16 +2682,45 @@ function App() {
                       </article>
                     ),
                   )}
+                  {reviewFiles.length &&
+                  (task?.state === "review_ready" ||
+                    task?.state === "approving" ||
+                    task?.state === "merged" ||
+                    task?.state === "rejected") ? (
+                    <ReviewSummaryCard
+                      diffs={reviewDiffs}
+                      expandedPaths={expandedReviewPaths}
+                      files={reviewFiles}
+                      onOpenReview={() => openReviewPanel()}
+                      onToggleFile={toggleReviewFile}
+                      totals={reviewTotals}
+                    />
+                  ) : null}
                   {task?.state === "running" ? <span className="streamCaret" /> : null}
                 </div>
               ) : (
-                <Empty label="Waiting for task output" />
+                <ComposerGreeting label={todayPromptLabel} />
               )}
             </div>
           </section>
         </section>
 
-        {pendingPermission ? (
+        {task?.state === "awaiting_worktree_approval" ? (
+          <section className="floatingApproval">
+            <div>
+              <strong>Create isolated worktree?</strong>
+              <span>{task.agentBranch} at {task.worktreePath}</span>
+            </div>
+            <button className="secondaryAction" type="button" onClick={() => approveWorktree(false)}>
+              <X size={15} />
+              Decline
+            </button>
+            <button className="primaryAction" type="button" onClick={() => approveWorktree(true)}>
+              <Play size={15} />
+              Create
+            </button>
+          </section>
+        ) : pendingPermission ? (
           <section className="floatingApproval">
             <div>
               <strong>{pendingPermission.kind} permission</strong>
@@ -2134,8 +2743,20 @@ function App() {
               <span className="controlIcon">{repository?.kind === "git" ? <GitBranch size={16} /> : <FolderOpen size={16} />}</span>
               <span>
                 <strong>{repository ? repository.name : "Select folder"}</strong>
-                <em>{repository ? repository.rootPath : "Choose where the task runs"}</em>
+                <em>{repository ? repository.rootPath : "Optional project context"}</em>
               </span>
+            </button>
+
+            <button
+              className={`reasoningToggle ${reasoningMode === "reasoning" ? "active" : ""}`}
+              type="button"
+              onClick={() => setReasoningMode((mode) => (mode === "reasoning" ? "fast" : "reasoning"))}
+              disabled={busy}
+              aria-pressed={reasoningMode === "reasoning"}
+              title={reasoningMode === "reasoning" ? "Think mode on" : "Think mode off"}
+            >
+              <Brain size={16} />
+              <span>Think</span>
             </button>
 
             <div className="permissionControl">
@@ -2160,12 +2781,19 @@ function App() {
               <button className="modelMenuButton" type="button" onClick={() => setModelMenuOpen((open) => !open)}>
                 <span>
                   <strong>{selectedModel?.modelId ?? "No local model"}</strong>
-                  <em>{selectedModel ? selectedModel.providerName : "LM Studio / Ollama"}</em>
+                  <em>{selectedModel ? selectedModel.providerName : "LM Studio"}</em>
                 </span>
                 <ChevronDown size={15} />
               </button>
               {modelMenuOpen ? (
                 <div className="modelMenu" role="menu">
+                  <div className="modelMenuHeader">
+                    <span>Models</span>
+                    <button className="modelRefreshButton" type="button" onClick={refreshModelMenu} disabled={refreshingModels}>
+                      {refreshingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+                      <span>Refresh</span>
+                    </button>
+                  </div>
                   {backend?.models.length ? (
                     backend.models.map((model) => {
                       const active = selectedModel?.providerId === model.providerId && selectedModel.modelId === model.modelId;
@@ -2180,14 +2808,20 @@ function App() {
                       );
                     })
                   ) : (
-                    <div className="modelMenuEmpty">No LM Studio or Ollama models found</div>
+                    <div className="modelMenuEmpty">No LM Studio models found</div>
                   )}
                 </div>
               ) : null}
             </div>
           </div>
+          {closedChatNotice ? (
+            <div className="closedChatNotice">
+              <CheckCircle2 size={15} />
+              <span>{closedChatNotice}</span>
+            </div>
+          ) : null}
           <div className="composer">
-            {attachmentMenuOpen ? (
+            {attachmentMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
                   <AtSign size={14} />
@@ -2233,8 +2867,10 @@ function App() {
                 onClick={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
                 onSelect={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
                 onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
-                disabled={busy}
-                placeholder="Ask Aegis to change something... Use @ to attach files."
+                disabled={busy || !!closedChatNotice}
+                placeholder={
+                  closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
+                }
               />
             </div>
             <button className="sendButton" type="button" onClick={startTask} disabled={!canStart}>
@@ -2312,11 +2948,22 @@ function App() {
               <div className="changedFiles">
                 {reviewFiles.map((file) => {
                   const stats = reviewDiffs.get(file.path) ?? emptyParsedDiff;
-                  const displayStatus = displayReviewStatus(file);
                   const expanded = expandedReviewPaths.has(file.path);
                   return (
                     <article className={`reviewFile ${expanded ? "expanded" : ""}`} key={file.path}>
                       <div className={`reviewFileHeader ${expanded ? "active" : ""}`}>
+                        <button
+                          className="reviewFileToggle"
+                          type="button"
+                          onClick={() => toggleReviewFile(file.path)}
+                          aria-expanded={expanded}
+                        >
+                          <span className="changedFilePath">{file.path}</span>
+                          <span className="changeStats" aria-label={formatDiffStats(stats)}>
+                            <span className="additions">+{stats.additions}</span>
+                            <span className="deletions">-{stats.deletions}</span>
+                          </span>
+                        </button>
                         <button
                           className="openReviewFileButton"
                           type="button"
@@ -2331,17 +2978,12 @@ function App() {
                           <ExternalLink size={14} />
                         </button>
                         <button
-                          className="reviewFileToggle"
+                          className="reviewFileChevronButton"
                           type="button"
                           onClick={() => toggleReviewFile(file.path)}
                           aria-expanded={expanded}
+                          title={expanded ? "Collapse diff" : "Expand diff"}
                         >
-                          <span className={`fileBadge ${displayStatus}`}>{statusLetter(displayStatus)}</span>
-                          <span className="changedFilePath">{file.path}</span>
-                          <span className="changeStats" aria-label={formatDiffStats(stats)}>
-                            <span className="additions">+{stats.additions}</span>
-                            <span className="deletions">-{stats.deletions}</span>
-                          </span>
                           <ChevronDown className="reviewFileChevron" size={15} />
                         </button>
                       </div>
@@ -2465,6 +3107,17 @@ function Empty({ label }: { label: string }) {
   return (
     <div className="emptyState">
       <CircleDashed size={18} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ComposerGreeting({ label }: { label: string }) {
+  return (
+    <div className="composerGreeting">
+      <span className="composerGreetingIcon">
+        <Sparkles size={20} />
+      </span>
       <span>{label}</span>
     </div>
   );

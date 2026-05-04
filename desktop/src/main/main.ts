@@ -11,235 +11,71 @@ import {
   session,
 } from "electron";
 import { execFile, spawn } from "node:child_process";
-import crypto = require("node:crypto");
-import fs = require("node:fs");
-import net = require("node:net");
-import os = require("node:os");
-import path = require("node:path");
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
-type ServiceStatus = "ready" | "degraded" | "unavailable";
-type PermissionMode = "normal" | "bypass";
-type WorkspaceKind = "git" | "folder";
-type LocalProviderId = "local-ollama" | "local-lmstudio";
-type TaskState =
-  | "awaiting_worktree_approval"
-  | "running"
-  | "completed"
-  | "review_ready"
-  | "approving"
-  | "merged"
-  | "rejected"
-  | "failed";
-
-type RepositoryInfo = {
-  id: string;
-  name: string;
-  rootPath: string;
-  kind: WorkspaceKind;
-  originalBranch: string;
-  baseCommit: string;
-  dirty: boolean;
-  statusSummary: string;
-};
-
-type BackendStatus = {
-  opencode: ServiceStatus;
-  ollama: ServiceStatus;
-  lmstudio: ServiceStatus;
-  model: LocalModelInfo | null;
-  models: LocalModelInfo[];
-  providers: LocalModelProvider[];
-  permissionMode: PermissionMode;
-  privacy: {
-    share: "disabled";
-    enabledProviders: LocalProviderId[];
-    disabledProviders: string[];
-    webTools: "disabled";
-  };
-  message?: string;
-};
-
-type LocalModelInfo = {
-  providerId: LocalProviderId;
-  providerName: string;
-  modelId: string;
-  displayName: string;
-  baseUrl: string;
-};
-
-type LocalModelProvider = {
-  providerId: LocalProviderId;
-  providerName: string;
-  baseUrl: string;
-  status: ServiceStatus;
-  models: LocalModelInfo[];
-  message?: string;
-};
-
-type TestResult = {
-  command: string;
-  output: string;
-  passed: boolean;
-  exitCode: number | null;
-  completedAt: string;
-};
-
-type ReviewFile = {
-  path: string;
-  status: "added" | "modified" | "deleted";
-  diff: string;
-};
-
-type ChatAttachment = {
-  path: string;
-  name: string;
-};
-
-type FileSearchResult = ChatAttachment & {
-  match: "path" | "content";
-};
-
-type TaskInfo = {
-  id: string;
-  chatId?: string;
-  repositoryId: string;
-  prompt: string;
-  workspaceKind: WorkspaceKind;
-  state: TaskState;
-  originalBranch: string;
-  baseCommit: string;
-  agentBranch: string;
-  worktreePath: string;
-  permissionMode: PermissionMode;
-  createdAt: string;
-  changedFiles: string[];
-  reviewFiles: ReviewFile[];
-  events: BackendUiEvent[];
-  latestTest?: TestResult;
-  patchHash?: string;
-  error?: string;
-};
-
-type ChatRecord = {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  repositoryName?: string;
-  repositoryPath?: string;
-  taskId?: string;
-  taskState?: TaskState;
-  changedFiles?: number;
-  draftPrompt?: string;
-  attachedFiles?: ChatAttachment[];
-};
-
-type TaskRecord = TaskInfo & {
-  originalRepoPath: string;
-  originalWasDirty: boolean;
-  baselineFiles?: Record<string, string>;
-  model?: LocalModelInfo;
-  openCodeSessionId?: string;
-  pendingPrompt?: string;
-  metadataPath?: string;
-  mergedAt?: string;
-  rejectedAt?: string;
-};
-
-type PermissionRequest = {
-  id: string;
-  kind: "edit" | "bash";
-  summary: string;
-  command: string;
-  cwd: string;
-};
-
-type BackendUiEvent =
-  | { type: "user.message"; taskId: string; text: string }
-  | { type: "assistant.delta"; taskId: string; text: string }
-  | { type: "assistant.done"; taskId: string }
-  | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
-  | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string }
-  | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
-  | { type: "permission.requested"; taskId: string; request: PermissionRequest }
-  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
-  | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
-  | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
-  | { type: "task.error"; taskId: string; message: string };
-
-type ApproveResult =
-  | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }
-  | { ok: false; message: string };
-
-type IdeOpenResult = { ok: true } | { ok: false; message: string };
-
-type IdeInfo = {
-  id: string;
-  label: string;
-  icon: "vscode" | "visualstudio" | "explorer" | "finder" | "files";
-};
-
-type CommandOutput = {
-  stdout: string;
-  stderr: string;
-};
-
-type CommandResult = CommandOutput & {
-  exitCode: number | null;
-  success: boolean;
-};
-
-type OpenCodeRun = {
-  taskId: string;
-  url: string;
-  password: string;
-  directory: string;
-  child: ReturnType<typeof spawn>;
-  abortController: AbortController;
-  sessionId?: string;
-};
-
-type PendingPermission = {
-  taskId: string;
-  onAllow: () => Promise<void> | void;
-  onDeny: () => Promise<void> | void;
-};
+import {
+  defaultDisabledProviders,
+  localProviderCatalog,
+  preferredModelHints,
+  pythonRuntimeSystemPrompt,
+  reasoningSystemPrompt,
+  taskStatesThatCanOpen,
+} from "./config";
+import {
+  beginOpenCodeEventStream,
+  eventSessionId,
+  openCodeErrorMessage,
+  openCodePermissionSummary,
+  openCodePermissionType,
+  openCodeRequest,
+  openCodeToolCommand,
+  opencodeBinaryPath,
+  replyOpenCodePermission,
+  startOpenCodeServer,
+  stopOpenCodeRun,
+} from "./opencodeHarness";
+import {
+  readChats,
+  readProjects,
+  readSettings,
+  readTasks,
+  writeChats,
+  writeJsonFile,
+  writeProjects,
+  writeSelectedModel,
+  writeTasks,
+} from "./storage";
+import type {
+  ApproveResult,
+  BackendStatus,
+  BackendUiEvent,
+  ChatAttachment,
+  ChatRecord,
+  CommandOutput,
+  CommandResult,
+  FileSearchResult,
+  IdeInfo,
+  IdeOpenResult,
+  LocalModelInfo,
+  LocalModelProvider,
+  OpenCodeRun,
+  PendingPermission,
+  PermissionMode,
+  PermissionRequest,
+  ReasoningMode,
+  RepositoryInfo,
+  ReviewFile,
+  TaskInfo,
+  TaskRecord,
+  TaskState,
+  WorkspaceKind,
+} from "./types";
+import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 
 const isDev = !app.isPackaged;
-const defaultOllamaBaseUrl = process.env.AEGIS_OLLAMA_BASE_URL || process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434/v1";
-const defaultLmStudioBaseUrl =
-  process.env.AEGIS_LMSTUDIO_BASE_URL || process.env.LMSTUDIO_BASE_URL || "http://127.0.0.1:1234/v1";
-const preferredModelHints = ["gemma4", "gemma-4", "gemma"];
-const localProviderCatalog: Array<{
-  providerId: LocalProviderId;
-  providerName: string;
-  baseUrl: string;
-  apiKey: string;
-}> = [
-  { providerId: "local-lmstudio", providerName: "LM Studio", baseUrl: defaultLmStudioBaseUrl, apiKey: "lm-studio" },
-  { providerId: "local-ollama", providerName: "Ollama", baseUrl: defaultOllamaBaseUrl, apiKey: "ollama" },
-];
-const disabledProviders = [
-  "opencode",
-  "openai",
-  "anthropic",
-  "google",
-  "gemini",
-  "openrouter",
-  "xai",
-  "azure",
-  "amazon-bedrock",
-  "groq",
-  "mistral",
-  "cohere",
-  "together",
-  "perplexity",
-];
-const defaultDisabledProviders = [...disabledProviders];
-const taskStatesThatCanOpen = new Set<TaskState>(["running", "review_ready", "approving", "failed"]);
 const activeOpenCodeRuns = new Map<string, OpenCodeRun>();
 
 function clearPendingPermissionsForTask(taskIdValue: string) {
@@ -266,114 +102,45 @@ let mainWindow: BrowserWindow | null = null;
 let permissionMode: PermissionMode = "normal";
 const pendingPermissions = new Map<string, PendingPermission>();
 
-function dataFile(name: string): string {
-  return path.join(app.getPath("userData"), name);
-}
-
-function projectsPath(): string {
-  return dataFile("projects.json");
-}
-
-function tasksPath(): string {
-  return dataFile("tasks.json");
-}
-
-function chatsPath(): string {
-  return dataFile("chats.json");
-}
-
-function settingsPath(): string {
-  return dataFile("settings.json");
-}
-
-function readJsonFile<T>(filePath: string, fallback: T): T {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJsonFile(filePath: string, value: unknown) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function readProjects(): RepositoryInfo[] {
-  return readJsonFile<RepositoryInfo[]>(projectsPath(), []).filter(
-    (project) =>
-      project &&
-      typeof project.id === "string" &&
-      typeof project.rootPath === "string" &&
-      (project.kind === "git" || project.kind === "folder" || project.kind === undefined) &&
-      fs.existsSync(project.rootPath),
-  ).map((project) => ({ ...project, kind: project.kind ?? "git" }));
-}
-
-function writeProjects(projects: RepositoryInfo[]) {
-  writeJsonFile(projectsPath(), projects);
-}
-
-function readTasks(): TaskRecord[] {
-  return readJsonFile<TaskRecord[]>(tasksPath(), []).filter(
-    (task) =>
-      task &&
-      typeof task.id === "string" &&
-      typeof task.originalRepoPath === "string" &&
-      typeof task.worktreePath === "string",
-  ).map((task) => ({
-    ...task,
-    workspaceKind: task.workspaceKind ?? "git",
-    reviewFiles: Array.isArray(task.reviewFiles) ? task.reviewFiles : [],
-    events: Array.isArray(task.events) ? task.events : [],
-  }));
-}
-
-function writeTasks(tasks: TaskRecord[]) {
-  writeJsonFile(tasksPath(), tasks);
-}
-
-function readChats(): ChatRecord[] {
-  return readJsonFile<ChatRecord[]>(chatsPath(), [])
-    .filter(
-      (chat) =>
-        chat &&
-        typeof chat.id === "string" &&
-        typeof chat.title === "string" &&
-        typeof chat.createdAt === "string" &&
-        typeof chat.updatedAt === "string",
-    )
-    .map((chat) => ({
-      ...chat,
-      draftPrompt: typeof chat.draftPrompt === "string" ? chat.draftPrompt : "",
-      attachedFiles: Array.isArray(chat.attachedFiles)
-        ? chat.attachedFiles.filter(
-            (file) => file && typeof file.path === "string" && typeof file.name === "string",
-          )
-        : [],
-    }))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-}
-
-function writeChats(chats: ChatRecord[]) {
-  writeJsonFile(chatsPath(), chats);
-}
-
-function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string } } {
-  const settings = readJsonFile<{ selectedModel?: { providerId?: string; modelId?: string } }>(settingsPath(), {});
-  const providerId = settings.selectedModel?.providerId;
-  const modelId = settings.selectedModel?.modelId;
-  if ((providerId === "local-ollama" || providerId === "local-lmstudio") && typeof modelId === "string" && modelId.trim()) {
-    return { selectedModel: { providerId, modelId: modelId.trim() } };
-  }
-  return {};
-}
-
-function writeSelectedModel(model: LocalModelInfo) {
-  writeJsonFile(settingsPath(), {
-    ...readSettings(),
-    selectedModel: { providerId: model.providerId, modelId: model.modelId },
+function finishInterruptedRunningTasks() {
+  const now = new Date().toISOString();
+  const tasks = readTasks();
+  let changed = false;
+  const repaired = tasks.map((task) => {
+    if (task.state !== "running") return task;
+    const events = Array.isArray(task.events) ? [...task.events] : [];
+    const started = events.filter((event) => event.type === "command.started");
+    const finished = new Set(events.filter((event) => event.type === "command.finished").map((event) => event.id));
+    for (const event of started) {
+      if (finished.has(event.id)) continue;
+      events.push({ type: "command.finished", taskId: task.id, id: event.id, exitCode: null });
+      changed = true;
+    }
+    changed = true;
+    return {
+      ...task,
+      state: "failed" as const,
+      error: "Task was interrupted before OpenCode finished.",
+      events: [
+        ...events,
+        {
+          type: "task.error" as const,
+          taskId: task.id,
+          message: "Task was interrupted before OpenCode finished.",
+        },
+      ].slice(-500),
+      latestTest: task.latestTest ?? {
+        command: "opencode session",
+        output: "Task was interrupted before OpenCode finished.",
+        passed: false,
+        exitCode: null,
+        completedAt: now,
+      },
+    };
   });
+  if (changed) {
+    writeTasks(repaired);
+  }
 }
 
 function saveChat(chat: ChatRecord) {
@@ -381,11 +148,61 @@ function saveChat(chat: ChatRecord) {
   writeChats(chats);
 }
 
+function isReviewReadyAssistantEvent(event: BackendUiEvent): boolean {
+  return event.type === "assistant.delta" && event.text.trim() === "Ready for review.";
+}
+
+function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
+  return events.filter((event) => !isReviewReadyAssistantEvent(event));
+}
+
+function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {
+  const existing = visibleTaskEvents(events);
+  const last = existing.at(-1);
+  if (
+    last &&
+    (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") &&
+    last.type === event.type &&
+    last.taskId === event.taskId
+  ) {
+    return [
+      ...existing.slice(0, -1),
+      {
+        ...last,
+        text: `${last.text}${event.text}`,
+        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
+      },
+    ].slice(-limit);
+  }
+  if (
+    last &&
+    event.type === "command.output" &&
+    last.type === "command.output" &&
+    last.taskId === event.taskId &&
+    last.id === event.id &&
+    last.stream === event.stream
+  ) {
+    return [
+      ...existing.slice(0, -1),
+      {
+        ...last,
+        text: `${last.text}${event.text}`,
+        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
+      },
+    ].slice(-limit);
+  }
+  return [...existing, event].slice(-limit);
+}
+
+function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
+  return events.reduce<BackendUiEvent[]>((current, event) => appendTaskEvent(current, event, limit), []);
+}
+
 function saveTask(task: TaskRecord) {
   const existingTasks = readTasks();
   const existing = existingTasks.find((row) => row.id === task.id);
-  const taskEvents = Array.isArray(task.events) ? task.events : [];
-  const existingEvents = Array.isArray(existing?.events) ? existing.events : [];
+  const taskEvents = compactTaskEvents(Array.isArray(task.events) ? task.events : [], 500);
+  const existingEvents = compactTaskEvents(Array.isArray(existing?.events) ? existing.events : [], 500);
   const nextTask = {
     ...task,
     events: existingEvents.length >= taskEvents.length ? existingEvents : taskEvents,
@@ -408,6 +225,7 @@ function publicTask(task: TaskRecord): TaskInfo {
     agentBranch,
     worktreePath,
     permissionMode: mode,
+    reasoningMode,
     createdAt,
     changedFiles,
     reviewFiles,
@@ -428,10 +246,11 @@ function publicTask(task: TaskRecord): TaskInfo {
     agentBranch,
     worktreePath,
     permissionMode: mode,
+    reasoningMode,
     createdAt,
     changedFiles,
     reviewFiles,
-    events,
+    events: compactTaskEvents(events, 500),
     latestTest,
     patchHash,
     error,
@@ -457,6 +276,25 @@ function publicTaskById(input: unknown): TaskInfo | null {
 
 function stableRepositoryId(rootPath: string): string {
   return crypto.createHash("sha256").update(path.resolve(rootPath).toLowerCase()).digest("hex").slice(0, 16);
+}
+
+function hiddenChatWorkspacePath(chatIdValue: string): string {
+  return path.join(os.homedir(), ".aegis", "chats", chatIdValue);
+}
+
+function hiddenChatRepository(chatIdValue: string): RepositoryInfo {
+  const root = hiddenChatWorkspacePath(chatIdValue);
+  fs.mkdirSync(root, { recursive: true });
+  return {
+    id: `hidden-${chatIdValue}`,
+    name: "Unattached chat",
+    rootPath: root,
+    kind: "folder",
+    originalBranch: "folder",
+    baseCommit: crypto.createHash("sha256").update(`${root}:${Date.now()}`).digest("hex"),
+    dirty: false,
+    statusSummary: "hidden workspace",
+  };
 }
 
 function taskId(): string {
@@ -501,12 +339,20 @@ const titleStopWords = new Set([
 const mutatingPromptPattern =
   /\b(add|build|change|create|delete|edit|fix|generate|implement|make|modify|patch|refactor|remove|rename|replace|scaffold|update|write)\b/i;
 const codeTargetPattern =
-  /\b(file|code|component|function|class|module|page|screen|route|api|test|bug|readme|docs?|script|style|css|html|tsx?|jsx?|py|json|yaml|yml|toml|md)\b/i;
+  /\b(file|code|component|function|class|module|page|screen|route|api|test|bug|readme|docs?|scripts?|scrip|python|style|css|html|tsx?|jsx?|py|json|yaml|yml|toml|md)\b/i;
 
 function promptLooksLikeFileChange(prompt: string): boolean {
   const text = prompt.split(/\n\s*\nAttached files:/i)[0].trim();
   if (!text) return false;
   return mutatingPromptPattern.test(text) && codeTargetPattern.test(text);
+}
+
+function promptLooksLikePythonTask(prompt: string): boolean {
+  return /\b(python|\.py|pyproject|uv|venv)\b/i.test(prompt);
+}
+
+function parseReasoningMode(value: unknown): ReasoningMode {
+  return value === "fast" ? "fast" : "reasoning";
 }
 
 function titleWord(word: string): string {
@@ -603,7 +449,7 @@ function updateChatFromTask(task: TaskRecord) {
   }
   const chats = readChats();
   const existing = chats.find((chat) => chat.id === task.chatId);
-  const repository = readProjects().find((project) => project.id === task.repositoryId);
+  const repository = task.hiddenWorkspace ? undefined : readProjects().find((project) => project.id === task.repositoryId);
   const next: ChatRecord = {
     id: task.chatId,
     title: chatTitleFromPrompt(task.prompt),
@@ -611,26 +457,13 @@ function updateChatFromTask(task: TaskRecord) {
     updatedAt: new Date().toISOString(),
     taskId: task.id,
     taskState: task.state,
-    repositoryName: repository?.name,
-    repositoryPath: repository?.rootPath,
+    repositoryName: repository?.name ?? existing?.repositoryName,
+    repositoryPath: repository?.rootPath ?? existing?.repositoryPath,
     changedFiles: task.changedFiles.length,
     draftPrompt: existing?.draftPrompt ?? "",
     attachedFiles: existing?.attachedFiles ?? [],
   };
   writeChats([next, ...chats.filter((chat) => chat.id !== task.chatId)]);
-}
-
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  return slug || "change";
-}
-
-function normalizeRelativePath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/^\.\/+/, "");
 }
 
 const ignoredSnapshotDirectories = new Set([
@@ -826,6 +659,14 @@ function openCodePromptForTask(task: TaskRecord, userPrompt: string, attachments
       lines.push(`\n### ${file.path}`, "```", file.text, "```");
     }
   }
+  if (promptLooksLikePythonTask(userPrompt)) {
+    lines.push(
+      "",
+      "Python runtime policy for this request:",
+      pythonRuntimeSystemPrompt,
+      "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
+    );
+  }
   lines.push(...attachmentContext(rootPath, attachments));
   lines.push(
     "",
@@ -833,6 +674,7 @@ function openCodePromptForTask(task: TaskRecord, userPrompt: string, attachments
     userPrompt,
     "",
     "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
+    "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Aegis can open them in Review.",
   );
   return lines.join("\n");
 }
@@ -900,32 +742,60 @@ function buildTextDiff(filePath: string, before: string | null, after: string | 
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Invalid ${field}.`);
-  }
-  return value.trim();
-}
-
-function quoteCommandArg(arg: string): string {
-  return /\s|"/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
-}
-
-function commandText(command: string, args: string[]): string {
-  return [command, ...args].map(quoteCommandArg).join(" ");
-}
-
-function pathInside(parent: string, child: string): boolean {
-  const relative = path.relative(path.resolve(parent), path.resolve(child));
-  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function worktreeRootForRepo(repoRoot: string): string {
-  return path.join(path.dirname(repoRoot), ".aegis-worktrees", path.basename(repoRoot));
+  const resolved = path.resolve(repoRoot);
+  return path.join(os.homedir(), ".aegis", "worktrees", `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
+}
+
+function aegisWorktreesRoot(): string {
+  return path.join(os.homedir(), ".aegis", "worktrees");
+}
+
+function directoryIsEmpty(directory: string): boolean {
+  try {
+    return fs.readdirSync(directory).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function removeEmptyDirectory(directory: string): boolean {
+  try {
+    fs.rmdirSync(directory);
+    return !fs.existsSync(directory);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST") return false;
+    return false;
+  }
+}
+
+function cleanupEmptyAegisWorktreeDirectories(task: TaskRecord) {
+  const worktreesRoot = aegisWorktreesRoot();
+  const repoWorktreeRoot = worktreeRootForRepo(task.originalRepoPath);
+  if (!pathInside(worktreesRoot, repoWorktreeRoot) || !pathInside(repoWorktreeRoot, task.worktreePath)) return;
+  if (fs.existsSync(task.worktreePath) && directoryIsEmpty(task.worktreePath)) {
+    removeEmptyDirectory(task.worktreePath);
+  }
+  removeEmptyDirectory(repoWorktreeRoot);
+}
+
+async function removeGitWorktree(task: TaskRecord) {
+  const repoWorktreeRoot = worktreeRootForRepo(task.originalRepoPath);
+  if (!pathInside(repoWorktreeRoot, task.worktreePath)) {
+    throw new Error("Worktree path is outside Aegis control.");
+  }
+  if (fs.existsSync(task.worktreePath)) {
+    const result = await gitResult(task.originalRepoPath, ["worktree", "remove", "--force", task.worktreePath]);
+    if (!result.success) {
+      if (!directoryIsEmpty(task.worktreePath)) {
+        const message = (result.stderr || result.stdout || "Failed to remove worktree.").trim();
+        throw new Error(message);
+      }
+      removeEmptyDirectory(task.worktreePath);
+    }
+  }
+  cleanupEmptyAegisWorktreeDirectories(task);
 }
 
 function taskMetadataPath(task: TaskRecord): string {
@@ -933,16 +803,18 @@ function taskMetadataPath(task: TaskRecord): string {
 }
 
 function recordTaskEvent(event: BackendUiEvent) {
+  if (isReviewReadyAssistantEvent(event)) return;
   const tasks = readTasks();
   const task = tasks.find((row) => row.id === event.taskId);
   if (!task) return;
-  task.events = [...task.events, event].slice(-500);
+  task.events = appendTaskEvent(task.events, event, 500);
   writeTasks([task, ...tasks.filter((row) => row.id !== task.id)]);
 }
 
 function emit(event: BackendUiEvent) {
-  recordTaskEvent(event);
-  mainWindow?.webContents.send("aegis:backend-event", event);
+  const stampedEvent = { ...event, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
+  recordTaskEvent(stampedEvent);
+  mainWindow?.webContents.send("aegis:backend-event", stampedEvent);
 }
 
 function failTask(task: TaskRecord, message: string) {
@@ -1265,49 +1137,6 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
   return { providers, models, selected };
 }
 
-function opencodeBinaryPath(): string | null {
-  const binary = process.platform === "win32" ? "opencode.exe" : "opencode";
-  const platform = process.platform === "win32" ? "windows" : process.platform;
-  const arch = process.arch;
-  const packageNames =
-    platform === "windows" && arch === "x64"
-      ? ["opencode-windows-x64", "opencode-windows-x64-baseline"]
-      : platform === "windows" && arch === "arm64"
-        ? ["opencode-windows-arm64"]
-        : platform === "darwin" && arch === "arm64"
-          ? ["opencode-darwin-arm64"]
-          : platform === "darwin" && arch === "x64"
-            ? ["opencode-darwin-x64", "opencode-darwin-x64-baseline"]
-            : platform === "linux" && arch === "arm64"
-              ? ["opencode-linux-arm64", "opencode-linux-arm64-musl"]
-              : platform === "linux" && arch === "x64"
-                ? [
-                    "opencode-linux-x64",
-                    "opencode-linux-x64-baseline",
-                    "opencode-linux-x64-musl",
-                    "opencode-linux-x64-baseline-musl",
-                  ]
-                : [];
-
-  for (const packageName of packageNames) {
-    try {
-      return require.resolve(`${packageName}/bin/${binary}`);
-    } catch {
-      const candidate = path.resolve(__dirname, "../../../node_modules", packageName, "bin", binary);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  try {
-    return require.resolve("opencode-ai/bin/opencode");
-  } catch {
-    const candidate = path.resolve(__dirname, "../../../node_modules/opencode-ai/bin/opencode");
-    return fs.existsSync(candidate) ? candidate : null;
-  }
-}
-
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
   const providerMessages = providers
@@ -1315,16 +1144,14 @@ async function getBackendStatus(): Promise<BackendStatus> {
     .map((provider) => provider.message as string);
   const messages = [
     opencodeBinaryPath() ? undefined : "OpenCode is not installed in the app bundle.",
-    selected ? undefined : "No Ollama or LM Studio models are currently available.",
+    selected ? undefined : "No LM Studio models are currently available.",
     ...providerMessages,
   ].filter((message): message is string => !!message);
-  const ollama = providers.find((provider) => provider.providerId === "local-ollama")?.status ?? "unavailable";
   const lmstudio = providers.find((provider) => provider.providerId === "local-lmstudio")?.status ?? "unavailable";
 
   return {
     opencode: opencodeBinaryPath() ? "ready" : "unavailable",
     lmstudio,
-    ollama,
     model: selected,
     models,
     providers,
@@ -1408,65 +1235,6 @@ async function getRepository(input: unknown): Promise<RepositoryInfo | null> {
   return inspectRepository(targetPath);
 }
 
-function buildOpenCodeConfig(mode: PermissionMode, selectedModel: LocalModelInfo, availableModels: LocalModelInfo[]): Record<string, unknown> {
-  const toolPermission =
-    mode === "bypass"
-      ? { webfetch: "deny", websearch: "deny", external_directory: "ask", edit: "allow", bash: "allow" }
-      : { webfetch: "deny", websearch: "deny", external_directory: "ask", edit: "ask", bash: "ask" };
-  const providerCatalog = new Map(localProviderCatalog.map((provider) => [provider.providerId, provider]));
-  const modelsForSelectedProvider = availableModels.filter((model) => model.providerId === selectedModel.providerId);
-  const modelEntries = Object.fromEntries(
-    (modelsForSelectedProvider.length ? modelsForSelectedProvider : [selectedModel]).map((model) => [
-      model.modelId,
-      { name: model.displayName },
-    ]),
-  );
-  const catalogProvider = providerCatalog.get(selectedModel.providerId);
-  const enabledProviderIds = Array.from(new Set([selectedModel.providerId]));
-  return {
-    $schema: "https://opencode.ai/config.json",
-    share: "disabled",
-    autoupdate: false,
-    model: `${selectedModel.providerId}/${selectedModel.modelId}`,
-    small_model: `${selectedModel.providerId}/${selectedModel.modelId}`,
-    enabled_providers: enabledProviderIds,
-    disabled_providers: defaultDisabledProviders,
-    provider: {
-      [selectedModel.providerId]: {
-        npm: "@ai-sdk/openai-compatible",
-        name: `Local ${selectedModel.providerName}`,
-        options: {
-          baseURL: selectedModel.baseUrl,
-          apiKey: catalogProvider?.apiKey ?? "local",
-        },
-        models: modelEntries,
-      },
-    },
-    server: {
-      hostname: "127.0.0.1",
-      mdns: false,
-      cors: [],
-    },
-    mcp: {},
-    plugin: [],
-    instructions: [],
-    permission: toolPermission,
-  };
-}
-
-function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
-  const runtimeRoot = path.join(worktreePath, ".aegis", "runtime");
-  return {
-    ...process.env,
-    UV_INSTALL_DIR: path.join(runtimeRoot, "uv"),
-    UV_UNMANAGED_INSTALL: path.join(runtimeRoot, "uv"),
-    UV_NO_MODIFY_PATH: "1",
-    UV_PYTHON_INSTALL_DIR: path.join(runtimeRoot, "python"),
-    UV_PYTHON_BIN_DIR: path.join(runtimeRoot, "python-bin"),
-    UV_CACHE_DIR: path.join(runtimeRoot, "uv-cache"),
-  };
-}
-
 async function askPermission(task: TaskRecord, request: Omit<PermissionRequest, "id">): Promise<void> {
   const id = `perm-${crypto.randomBytes(6).toString("hex")}`;
   const fullRequest: PermissionRequest = { id, ...request };
@@ -1517,7 +1285,7 @@ async function runCommandForTask(
     cwd: options.cwd,
   });
   const id = `cmd-${crypto.randomBytes(6).toString("hex")}`;
-  emit({ type: "command.started", taskId: task.id, id, command: commandText(command, args), cwd: options.cwd });
+  emit({ type: "command.started", taskId: task.id, id, command: commandText(command, args), cwd: options.cwd, kind: "bash" });
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -1648,249 +1416,10 @@ async function refreshTaskReview(input: unknown): Promise<TaskInfo | null> {
   return publicTask(task);
 }
 
-async function freeLocalPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Unable to allocate an OpenCode port.")));
-        return;
-      }
-      const port = address.port;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function stopOpenCodeRun(run: OpenCodeRun) {
-  run.abortController.abort();
-  if (!run.child.killed) {
-    run.child.kill();
-  }
-}
-
-function openCodeAuthHeader(run: OpenCodeRun): string {
-  return `Basic ${Buffer.from(`opencode:${run.password}`).toString("base64")}`;
-}
-
-function openCodeUrl(run: OpenCodeRun, route: string): URL {
-  const url = new URL(route, run.url);
-  url.searchParams.set("directory", run.directory);
-  return url;
-}
-
-async function openCodeRequest<T>(
-  run: OpenCodeRun,
-  route: string,
-  init: Omit<RequestInit, "body"> & { body?: unknown } = {},
-): Promise<T> {
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", openCodeAuthHeader(run));
-  if (init.body !== undefined) {
-    headers.set("Content-Type", "application/json");
-  }
-  const response = await fetch(openCodeUrl(run, route), {
-    ...init,
-    headers,
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    signal: init.signal ?? run.abortController.signal,
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`OpenCode ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`);
-  }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return response.json() as Promise<T>;
-}
-
-async function startOpenCodeServer(task: TaskRecord, model: LocalModelInfo, models: LocalModelInfo[]): Promise<OpenCodeRun> {
-  const binary = opencodeBinaryPath();
-  if (!binary) {
-    throw new Error("OpenCode is not installed in the app bundle.");
-  }
-  const port = await freeLocalPort();
-  const password = crypto.randomBytes(18).toString("base64url");
-  const config = buildOpenCodeConfig(task.permissionMode, model, models);
-  const child = spawn(binary, ["serve", "--pure", "--hostname=127.0.0.1", `--port=${port}`], {
-    cwd: task.worktreePath,
-    env: {
-      ...runtimeEnv(task.worktreePath),
-      OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-      OPENCODE_SERVER_PASSWORD: password,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
-
-  let output = "";
-  const url = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      stopOpenCodeRun({
-        taskId: task.id,
-        url: `http://127.0.0.1:${port}`,
-        password,
-        directory: task.worktreePath,
-        child,
-        abortController: new AbortController(),
-      });
-      reject(new Error(`Timed out waiting for OpenCode to start.${output.trim() ? `\n${output.trim()}` : ""}`));
-    }, 15000);
-    let settled = false;
-    const cleanup = () => {
-      clearTimeout(timer);
-      child.stdout?.off("data", onData);
-      child.stderr?.off("data", onData);
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      const match = output.match(/opencode server listening on\s+(https?:\/\/[^\s]+)/);
-      if (!match || settled) return;
-      settled = true;
-      cleanup();
-      resolve(match[1]);
-    };
-    const onError = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error(`OpenCode exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.once("error", onError);
-    child.once("exit", onExit);
-  });
-
-  return {
-    taskId: task.id,
-    url,
-    password,
-    directory: task.worktreePath,
-    child,
-    abortController: new AbortController(),
-  };
-}
-
-function eventSessionId(event: Record<string, unknown>): string | undefined {
-  const properties = isRecord(event.properties) ? event.properties : {};
-  const direct = typeof properties.sessionID === "string" ? properties.sessionID : undefined;
-  if (direct) return direct;
-  const info = isRecord(properties.info) ? properties.info : undefined;
-  if (typeof info?.sessionID === "string") return info.sessionID;
-  const part = isRecord(properties.part) ? properties.part : undefined;
-  if (typeof part?.sessionID === "string") return part.sessionID;
-  return undefined;
-}
-
-function openCodeErrorMessage(error: unknown): string {
-  if (!isRecord(error)) return String(error || "OpenCode failed.");
-  const data = isRecord(error.data) ? error.data : {};
-  if (typeof data.message === "string") return data.message;
-  if (typeof error.name === "string") return error.name;
-  return "OpenCode failed.";
-}
-
-type SseStream = {
-  ready: Promise<void>;
-  done: Promise<void>;
-};
-
-function parseSseBlock(block: string): unknown | null {
-  const data = block
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n")
-    .trim();
-  if (!data) return null;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return null;
-  }
-}
-
-function beginOpenCodeEventStream(run: OpenCodeRun, onEvent: (event: Record<string, unknown>) => void): SseStream {
-  let markReady!: () => void;
-  let failReady!: (error: unknown) => void;
-  const ready = new Promise<void>((resolve, reject) => {
-    markReady = resolve;
-    failReady = reject;
-  });
-  const done = (async () => {
-    try {
-      const headers = new Headers();
-      headers.set("Authorization", openCodeAuthHeader(run));
-      headers.set("Accept", "text/event-stream");
-      const response = await fetch(openCodeUrl(run, "/event"), {
-        headers,
-        signal: run.abortController.signal,
-      });
-      if (!response.ok || !response.body) {
-        throw new Error(`OpenCode event stream failed with ${response.status} ${response.statusText}.`);
-      }
-      markReady();
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, { stream: true });
-        let boundary = buffer.search(/\r?\n\r?\n/);
-        while (boundary >= 0) {
-          const block = buffer.slice(0, boundary);
-          const delimiterLength = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0].length ?? 2;
-          buffer = buffer.slice(boundary + delimiterLength);
-          const event = parseSseBlock(block);
-          if (isRecord(event)) onEvent(event);
-          boundary = buffer.search(/\r?\n\r?\n/);
-        }
-      }
-    } catch (error) {
-      if (run.abortController.signal.aborted) return;
-      failReady(error);
-      throw error;
-    }
-  })();
-  return { ready, done };
-}
-
-function openCodeToolCommand(part: Record<string, unknown>): { kind: PermissionRequest["kind"]; command: string } {
-  const tool = typeof part.tool === "string" ? part.tool : "tool";
-  const state = isRecord(part.state) ? part.state : {};
-  const input = isRecord(state.input) ? state.input : {};
-  const title = typeof state.title === "string" && state.title.trim() ? state.title.trim() : tool;
-  const command =
-    (typeof input.command === "string" && input.command.trim()) ||
-    (typeof input.cmd === "string" && input.cmd.trim()) ||
-    (typeof input.filePath === "string" && input.filePath.trim()) ||
-    (typeof input.path === "string" && input.path.trim()) ||
-    title;
-  return {
-    kind: tool.toLowerCase().includes("bash") || typeof input.command === "string" ? "bash" : "edit",
-    command,
-  };
-}
-
-async function replyOpenCodePermission(run: OpenCodeRun, permissionId: string, allow: boolean) {
-  if (!run.sessionId) return;
-  await openCodeRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/permissions/${encodeURIComponent(permissionId)}`, {
-    method: "POST",
-    body: { response: allow ? "once" : "reject" },
-  });
+function isBarePythonCommand(command: string): boolean {
+  const normalized = command.trim().replace(/^run\s+/i, "");
+  const first = normalized.split(/\s+/)[0]?.replace(/^["']|["']$/g, "").toLowerCase();
+  return first === "python" || first === "python3" || first === "py";
 }
 
 async function handleOpenCodePermission(
@@ -1902,8 +1431,14 @@ async function handleOpenCodePermission(
 ): Promise<"pending" | "resolved" | "worktree_requested"> {
   const id = typeof permission.id === "string" ? permission.id : "";
   if (!id || pendingPermissions.has(id)) return "pending";
-  const type = typeof permission.type === "string" ? permission.type : "tool";
-  const title = typeof permission.title === "string" && permission.title.trim() ? permission.title.trim() : type;
+  const type = openCodePermissionType(permission);
+  const title = openCodePermissionSummary(permission);
+
+  if (type === "bash" && isBarePythonCommand(title)) {
+    emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
+    await replyOpenCodePermission(run, id, false);
+    return "resolved";
+  }
 
   if (task.workspaceKind === "git" && !task.agentBranch && type === "edit") {
     task.agentBranch = `aegis/${task.id}-${slugify(intentPrompt)}`;
@@ -1965,7 +1500,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
   try {
     const { models, selected } = await resolveSelectedModel();
     if (!selected) {
-      failTask(task, "No local Ollama or LM Studio model is available.");
+      failTask(task, "No local LM Studio model is available.");
       return;
     }
     task.model = selected;
@@ -1973,10 +1508,14 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     run = await startOpenCodeServer(task, selected, models);
     activeOpenCodeRuns.set(task.id, run);
 
-    const toolRuns = new Map<string, { commandId: string; outputLength: number; finished: boolean }>();
+    const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; outputLength: number; finished: boolean }>();
     const textPartLengths = new Map<string, number>();
+    const reasoningPartLengths = new Map<string, number>();
+    const partKinds = new Map<string, string>();
+    const partMessageIds = new Map<string, string>();
     const messageRoles = new Map<string, "user" | "assistant">();
     const pendingTextParts = new Map<string, { messageId: string; text: string }>();
+    const pendingReasoningParts = new Map<string, { messageId: string; text: string }>();
     let delegatedToWorktree = false;
     let completed = false;
     let resolveCompletion!: () => void;
@@ -1992,10 +1531,28 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       resolveCompletion();
     };
 
+    const finishOpenToolRuns = () => {
+      for (const current of toolRuns.values()) {
+        if (current.finished) continue;
+        current.finished = true;
+        emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode: 0 });
+      }
+    };
+
     const fail = (message: string) => {
       if (completed) return;
       completed = true;
       rejectCompletion(new Error(message));
+    };
+
+    const emitAssistantText = (text: string) => {
+      if (!text || text.trim() === "Ready for review.") return;
+      emit({ type: "assistant.delta", taskId: task.id, text });
+    };
+
+    const emitReasoningText = (text: string) => {
+      if (!text) return;
+      emit({ type: "assistant.reasoning.delta", taskId: task.id, text });
     };
 
     const onEvent = (event: Record<string, unknown>) => {
@@ -2015,13 +1572,20 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
               if (pending.messageId !== messageId) continue;
               pendingTextParts.delete(partId);
               textPartLengths.set(partId, pending.text.length);
-              if (pending.text) {
-                emit({ type: "assistant.delta", taskId: task.id, text: pending.text });
-              }
+              emitAssistantText(pending.text);
+            }
+            for (const [partId, pending] of Array.from(pendingReasoningParts.entries())) {
+              if (pending.messageId !== messageId) continue;
+              pendingReasoningParts.delete(partId);
+              reasoningPartLengths.set(partId, pending.text.length);
+              emitReasoningText(pending.text);
             }
           } else {
             for (const [partId, pending] of Array.from(pendingTextParts.entries())) {
               if (pending.messageId === messageId) pendingTextParts.delete(partId);
+            }
+            for (const [partId, pending] of Array.from(pendingReasoningParts.entries())) {
+              if (pending.messageId === messageId) pendingReasoningParts.delete(partId);
             }
           }
         }
@@ -2035,6 +1599,10 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
         const partType = typeof part.type === "string" ? part.type : "";
         const messageId = typeof part.messageID === "string" ? part.messageID : "";
         const role = messageId ? messageRoles.get(messageId) : undefined;
+        if (typeof part.id === "string") {
+          partKinds.set(part.id, partType);
+          if (messageId) partMessageIds.set(part.id, messageId);
+        }
         if (partType === "text" && typeof part.id === "string" && typeof part.text === "string") {
           if (!role) {
             pendingTextParts.set(part.id, { messageId, text: part.text });
@@ -2043,11 +1611,21 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
           if (role !== "assistant") {
             return;
           }
-          const delta = typeof properties.delta === "string" ? properties.delta : part.text.slice(textPartLengths.get(part.id) ?? 0);
+          const delta = part.text.slice(textPartLengths.get(part.id) ?? 0);
           textPartLengths.set(part.id, part.text.length);
-          if (delta) {
-            emit({ type: "assistant.delta", taskId: task.id, text: delta });
+          emitAssistantText(delta);
+        }
+        if (partType === "reasoning" && typeof part.id === "string" && typeof part.text === "string") {
+          if (!role) {
+            pendingReasoningParts.set(part.id, { messageId, text: part.text });
+            return;
           }
+          if (role !== "assistant") {
+            return;
+          }
+          const delta = part.text.slice(reasoningPartLengths.get(part.id) ?? 0);
+          reasoningPartLengths.set(part.id, part.text.length);
+          emitReasoningText(delta);
         }
         if (partType === "tool" && typeof part.id === "string") {
           const state = isRecord(part.state) ? part.state : {};
@@ -2056,8 +1634,12 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
           const tool = openCodeToolCommand(part);
           const commandId = existing?.commandId ?? `oc-${part.id}`;
           if (!existing) {
-            toolRuns.set(part.id, { commandId, outputLength: 0, finished: false });
-            emit({ type: "command.started", taskId: task.id, id: commandId, command: tool.command, cwd: task.worktreePath });
+            toolRuns.set(part.id, { commandId, command: tool.command, kind: tool.kind, outputLength: 0, finished: false });
+            emit({ type: "command.started", taskId: task.id, id: commandId, command: tool.command, cwd: task.worktreePath, kind: tool.kind });
+          } else if ((tool.command !== existing.command || tool.kind !== existing.kind) && tool.command !== existing.command.split(/\s+/)[0]) {
+            existing.command = tool.command;
+            existing.kind = tool.kind;
+            emit({ type: "command.started", taskId: task.id, id: commandId, command: tool.command, cwd: task.worktreePath, kind: tool.kind });
           }
           const current = toolRuns.get(part.id);
           if (!current || current.finished) return;
@@ -2084,7 +1666,41 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
         }
       }
 
-      if (type === "permission.updated" && isRecord(properties)) {
+      if (type === "message.part.delta") {
+        const partId = typeof properties.partID === "string" ? properties.partID : "";
+        const field = typeof properties.field === "string" ? properties.field : "";
+        const delta = typeof properties.delta === "string" ? properties.delta : "";
+        const messageId =
+          typeof properties.messageID === "string"
+            ? properties.messageID
+            : partId
+              ? partMessageIds.get(partId) ?? ""
+              : "";
+        const role = messageId ? messageRoles.get(messageId) : undefined;
+        const partType = partId ? partKinds.get(partId) : undefined;
+        if (field !== "text" || !partId || !delta) {
+          return;
+        }
+        if (role !== "assistant") {
+          if (!role && messageId && partType === "reasoning") {
+            const pending = pendingReasoningParts.get(partId);
+            pendingReasoningParts.set(partId, { messageId, text: `${pending?.text ?? ""}${delta}` });
+          } else if (!role && messageId && partType === "text") {
+            const pending = pendingTextParts.get(partId);
+            pendingTextParts.set(partId, { messageId, text: `${pending?.text ?? ""}${delta}` });
+          }
+          return;
+        }
+        if (partType === "reasoning") {
+          reasoningPartLengths.set(partId, (reasoningPartLengths.get(partId) ?? 0) + delta.length);
+          emitReasoningText(delta);
+        } else if (partType === "text") {
+          textPartLengths.set(partId, (textPartLengths.get(partId) ?? 0) + delta.length);
+          emitAssistantText(delta);
+        }
+      }
+
+      if ((type === "permission.updated" || type === "permission.asked") && isRecord(properties)) {
         void handleOpenCodePermission(task, run as OpenCodeRun, properties, prompt, intent)
           .then((result) => {
             if (result === "worktree_requested") {
@@ -2100,10 +1716,12 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       }
 
       if (type === "session.idle") {
+        finishOpenToolRuns();
         finish();
       }
 
       if (type === "session.status" && isRecord(properties.status) && properties.status.type === "idle") {
+        finishOpenToolRuns();
         finish();
       }
     };
@@ -2129,8 +1747,11 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       body: {
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
-        system:
-          "You are running under Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real OpenCode tools when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing.",
+        system: [
+          "You are running under Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real OpenCode tools when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
+          reasoningSystemPrompt(task.reasoningMode ?? "fast"),
+          pythonRuntimeSystemPrompt,
+        ].join(" "),
         parts: [{ type: "text", text: prompt }],
       },
     });
@@ -2164,7 +1785,6 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     }
     task.state = "review_ready";
     saveTask(task);
-    emit({ type: "assistant.delta", taskId: task.id, text: "Ready for review.\n" });
     emit({ type: "assistant.done", taskId: task.id });
     emit({ type: "review.ready", taskId: task.id, changedFiles: task.changedFiles, reviewFiles, latestTest: task.latestTest });
     run.abortController.abort();
@@ -2199,31 +1819,53 @@ async function createWorktreeAndRun(task: TaskRecord, promptForRun?: string) {
   }
 }
 
+function closedTaskMessage(task: TaskRecord): string | undefined {
+  if (task.state === "merged") {
+    return "This chat was closed after its approved merge. Start a new chat for more changes.";
+  }
+  if (task.state === "rejected") {
+    return "This chat was closed after its changes were undone. Start a new chat for more changes.";
+  }
+  return undefined;
+}
+
 async function startTask(input: unknown): Promise<TaskInfo> {
   if (!isRecord(input)) {
     throw new Error("Invalid task input.");
   }
-  const repositoryId = requiredString(input.repositoryId, "repositoryId");
+  const requestedRepositoryId =
+    typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
   const prompt = requiredString(input.prompt, "prompt");
+  const reasoningMode = parseReasoningMode(input.reasoningMode);
   const requestedChatId = typeof input.chatId === "string" && input.chatId.trim() ? input.chatId.trim() : undefined;
   const chat =
     (requestedChatId ? readChats().find((row) => row.id === requestedChatId) : undefined) ??
     createChat({ title: chatTitleFromPrompt(prompt) });
-  const repository = readProjects().find((project) => project.id === repositoryId);
+  const hiddenWorkspace = !requestedRepositoryId;
+  const repository = hiddenWorkspace ? hiddenChatRepository(chat.id) : readProjects().find((project) => project.id === requestedRepositoryId);
   if (!repository) {
     throw new Error("Repository has not been selected.");
   }
-  const refreshed = await inspectRepository(repository.rootPath);
+  const refreshed = hiddenWorkspace ? repository : await inspectRepository(repository.rootPath);
+  const repositoryId = refreshed.id;
   const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath);
-  const existingTask =
-    chat?.taskId && readTasks().find((row) => row.id === chat.taskId && row.repositoryId === repositoryId && row.state !== "merged" && row.state !== "rejected");
+  const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
   const wantsFileChange = promptLooksLikeFileChange(prompt);
 
   if (existingTask) {
+    if (existingTask.repositoryId !== repositoryId) {
+      throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
+    }
+    const closedMessage = closedTaskMessage(existingTask);
+    if (closedMessage) {
+      throw new Error(closedMessage);
+    }
     if (activeOpenCodeRuns.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
     }
     existingTask.permissionMode = permissionMode;
+    existingTask.reasoningMode = reasoningMode;
+    existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && wantsFileChange && !existingTask.agentBranch) {
       const openCodePrompt = openCodePromptForTask(existingTask, prompt, attachments);
@@ -2275,12 +1917,14 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     repositoryId,
     prompt,
     workspaceKind: refreshed.kind,
+    hiddenWorkspace,
     state: shouldCreateWorktree && permissionMode !== "bypass" ? "awaiting_worktree_approval" : "running",
     originalBranch: refreshed.originalBranch,
     baseCommit: refreshed.baseCommit,
     agentBranch: branch,
     worktreePath,
     permissionMode,
+    reasoningMode,
     createdAt: new Date().toISOString(),
     changedFiles: [],
     reviewFiles: [],
@@ -2593,7 +2237,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       return task.metadataPath;
     });
     await approvalCheck(task, "cleanup worktree", async () => {
-      await execFileOutput("git", ["worktree", "remove", "--force", task.worktreePath], { cwd: task.originalRepoPath });
+      await removeGitWorktree(task);
       await gitResult(task.originalRepoPath, ["branch", "-d", task.agentBranch]);
       return "removed";
     });
@@ -2619,8 +2263,8 @@ async function rejectTask(input: unknown): Promise<void> {
   }
   clearPendingPermissionsForTask(task.id);
   const cleanup = input.cleanup === true;
-  if (task.workspaceKind === "git" && cleanup && taskStatesThatCanOpen.has(task.state) && fs.existsSync(task.worktreePath)) {
-    await execFileOutput("git", ["worktree", "remove", "--force", task.worktreePath], { cwd: task.originalRepoPath });
+  if (task.workspaceKind === "git" && cleanup && taskStatesThatCanOpen.has(task.state)) {
+    await removeGitWorktree(task);
     await gitResult(task.originalRepoPath, ["branch", "-D", task.agentBranch]);
     task.changedFiles = [];
     task.reviewFiles = [];
@@ -2844,7 +2488,7 @@ async function setSelectedModel(input: unknown): Promise<BackendStatus> {
   }
   const providerId = requiredString(input.providerId, "providerId");
   const modelId = requiredString(input.modelId, "modelId");
-  if (providerId !== "local-ollama" && providerId !== "local-lmstudio") {
+  if (providerId !== "local-lmstudio") {
     throw new Error("Unsupported local provider.");
   }
   const { models } = await resolveSelectedModel();
@@ -2969,6 +2613,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  finishInterruptedRunningTasks();
   handleIpc("aegis:list-chats", () => readChats());
   handleIpc("aegis:create-chat", (input) => createChat(input));
   handleIpc("aegis:update-chat-draft", (input) => updateChatDraft(input));

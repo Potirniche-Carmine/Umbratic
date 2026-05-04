@@ -1,9 +1,10 @@
 /// <reference types="vite/client" />
 
 type AegisPermissionMode = "normal" | "bypass";
+type AegisReasoningMode = "fast" | "reasoning";
 type AegisServiceStatus = "ready" | "degraded" | "unavailable";
 type AegisWorkspaceKind = "git" | "folder";
-type AegisLocalProviderId = "local-ollama" | "local-lmstudio";
+type AegisLocalProviderId = "local-lmstudio";
 
 type AegisRepositoryInfo = {
   id: string;
@@ -18,7 +19,6 @@ type AegisRepositoryInfo = {
 
 type AegisBackendStatus = {
   opencode: AegisServiceStatus;
-  ollama: AegisServiceStatus;
   lmstudio: AegisServiceStatus;
   model: AegisLocalModelInfo | null;
   models: AegisLocalModelInfo[];
@@ -81,13 +81,16 @@ type AegisPermissionRequest = {
   cwd: string;
 };
 
-type AegisBackendUiEvent =
+type AegisBackendEventMeta = { at?: string; endedAt?: string };
+type AegisBackendUiEvent = AegisBackendEventMeta &
+(
   | { type: "user.message"; taskId: string; text: string }
   | { type: "assistant.delta"; taskId: string; text: string }
+  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: AegisPermissionRequest["kind"] }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
   | { type: "permission.requested"; taskId: string; request: AegisPermissionRequest }
@@ -95,7 +98,8 @@ type AegisBackendUiEvent =
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: AegisReviewFile[]; latestTest?: AegisTestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
-  | { type: "task.error"; taskId: string; message: string };
+  | { type: "task.error"; taskId: string; message: string }
+);
 
 type AegisChatRecord = {
   id: string;
@@ -123,6 +127,7 @@ type AegisTaskInfo = {
   agentBranch: string;
   worktreePath: string;
   permissionMode: AegisPermissionMode;
+  reasoningMode?: AegisReasoningMode;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: AegisReviewFile[];
@@ -166,10 +171,11 @@ declare global {
       setSelectedModel(input: { providerId: string; modelId: string }): Promise<AegisBackendStatus>;
       listAvailableIdes(): Promise<AegisIdeInfo[]>;
       startTask(input: {
-        repositoryId: string;
+        repositoryId?: string;
         prompt: string;
         chatId?: string;
         attachedFiles?: AegisChatAttachment[];
+        reasoningMode?: AegisReasoningMode;
       }): Promise<AegisTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: AegisPermissionDecision): Promise<void>;

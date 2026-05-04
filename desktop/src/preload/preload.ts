@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
 type PermissionMode = "normal" | "bypass";
+type ReasoningMode = "fast" | "reasoning";
 type BackendUiEvent = Record<string, unknown>;
 type ChatInput = { title?: string; repositoryName?: string; repositoryPath?: string };
 type ChatAttachment = { path: string; name: string };
@@ -20,7 +21,13 @@ contextBridge.exposeInMainWorld("aegis", {
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("aegis:set-permission-mode", mode),
   setSelectedModel: (input: { providerId: string; modelId: string }) => ipcRenderer.invoke("aegis:set-selected-model", input),
   listAvailableIdes: () => ipcRenderer.invoke("aegis:list-available-ides"),
-  startTask: (input: { repositoryId: string; prompt: string; chatId?: string; attachedFiles?: ChatAttachment[] }) =>
+  startTask: (input: {
+    repositoryId?: string;
+    prompt: string;
+    chatId?: string;
+    attachedFiles?: ChatAttachment[];
+    reasoningMode?: ReasoningMode;
+  }) =>
     ipcRenderer.invoke("aegis:start-task", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>
     ipcRenderer.invoke("aegis:approve-worktree-creation", input),
