@@ -6,6 +6,7 @@ import {
   IpcMainInvokeEvent,
   Menu,
   MenuItemConstructorOptions,
+  nativeImage,
   OpenDialogOptions,
   shell,
   session,
@@ -77,6 +78,15 @@ import { commandText, isRecord, normalizeRelativePath, pathInside, requiredStrin
 
 const isDev = !app.isPackaged;
 const activeOpenCodeRuns = new Map<string, OpenCodeRun>();
+const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_runtime.png");
+const windowsAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_white.ico");
+
+function appIcon() {
+  const iconPath = process.platform === "win32" ? windowsAppIconPath : runtimeAppIconPath;
+  if (!fs.existsSync(iconPath)) return undefined;
+  const icon = nativeImage.createFromPath(iconPath);
+  return icon.isEmpty() ? undefined : icon;
+}
 
 function clearPendingPermissionsForTask(taskIdValue: string) {
   for (const [id, pending] of Array.from(pendingPermissions.entries())) {
@@ -2572,6 +2582,11 @@ function allowedAppUrl(rawUrl: string): boolean {
 async function createWindow() {
   const isMac = process.platform === "darwin";
   const isWin = process.platform === "win32";
+  const icon = appIcon();
+
+  if (isMac && app.dock && icon) {
+    app.dock.setIcon(icon);
+  }
 
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
@@ -2587,6 +2602,7 @@ async function createWindow() {
     minWidth: 980,
     minHeight: 680,
     backgroundColor: "#101112",
+    icon,
     title: "Aegis",
     titleBarStyle: isMac ? "hiddenInset" : isWin ? "hidden" : "default",
     titleBarOverlay: isWin

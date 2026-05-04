@@ -170,8 +170,13 @@ pre {
   font-weight: 700;
 }
 
-.topbarTitle svg {
-  color: var(--green);
+.topbarLogo {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: #ffffff;
+  mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
+  -webkit-mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
 }
 
 .topbarSpacer {
@@ -2388,6 +2393,15 @@ pre {
   border-radius: 8px;
   color: #9fcbff;
   background: rgba(87, 157, 255, 0.08);
+}
+
+.composerGreetingLogo {
+  display: block;
+  width: 23px;
+  height: 23px;
+  background: #9fcbff;
+  mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
+  -webkit-mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
 }
 
 .composerGreeting span:last-child {

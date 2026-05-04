@@ -24,7 +24,6 @@ import {
   Settings,
   ShieldAlert,
   ShieldCheck,
-  Sparkles,
   SquarePen,
   TerminalSquare,
   ThumbsDown,
@@ -2451,7 +2450,7 @@ function App() {
           <ArrowLeft size={15} />
         </button>
         <div className="topbarTitle">
-          <ShieldCheck size={15} />
+          <span className="topbarLogo" aria-hidden="true" />
           <span>Aegis</span>
         </div>
         <div className="topbarSpacer" />
@@ -3116,7 +3115,7 @@ function ComposerGreeting({ label }: { label: string }) {
   return (
     <div className="composerGreeting">
       <span className="composerGreetingIcon">
-        <Sparkles size={20} />
+        <span className="composerGreetingLogo" aria-hidden="true" />
       </span>
       <span>{label}</span>
     </div>
