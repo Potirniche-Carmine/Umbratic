@@ -1829,6 +1829,33 @@ function closedTaskMessage(task: TaskRecord): string | undefined {
   return undefined;
 }
 
+function taskUsesHiddenChatWorkspace(task: TaskRecord, chat: ChatRecord): boolean {
+  return (
+    task.hiddenWorkspace === true ||
+    (task.repositoryId === `hidden-${chat.id}` && path.resolve(task.originalRepoPath) === hiddenChatWorkspacePath(chat.id))
+  );
+}
+
+function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryInfo) {
+  task.repositoryId = repository.id;
+  task.workspaceKind = repository.kind;
+  task.hiddenWorkspace = false;
+  task.originalBranch = repository.originalBranch;
+  task.baseCommit = repository.baseCommit;
+  task.agentBranch = "";
+  task.worktreePath = repository.rootPath;
+  task.originalRepoPath = repository.rootPath;
+  task.originalWasDirty = repository.dirty;
+  task.baselineFiles = repository.kind === "folder" ? snapshotFolder(repository.rootPath) : undefined;
+  task.openCodeSessionId = undefined;
+  task.pendingPrompt = undefined;
+  task.changedFiles = [];
+  task.reviewFiles = [];
+  task.latestTest = undefined;
+  task.patchHash = undefined;
+  task.metadataPath = undefined;
+}
+
 async function startTask(input: unknown): Promise<TaskInfo> {
   if (!isRecord(input)) {
     throw new Error("Invalid task input.");
@@ -1853,15 +1880,19 @@ async function startTask(input: unknown): Promise<TaskInfo> {
   const wantsFileChange = promptLooksLikeFileChange(prompt);
 
   if (existingTask) {
-    if (existingTask.repositoryId !== repositoryId) {
-      throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
-    }
     const closedMessage = closedTaskMessage(existingTask);
     if (closedMessage) {
       throw new Error(closedMessage);
     }
     if (activeOpenCodeRuns.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
+    }
+    if (existingTask.repositoryId !== repositoryId) {
+      if (!hiddenWorkspace && taskUsesHiddenChatWorkspace(existingTask, chat)) {
+        attachHiddenTaskToRepository(existingTask, refreshed);
+      } else {
+        throw new Error("This chat belongs to a different folder. Start a new chat for this folder.");
+      }
     }
     existingTask.permissionMode = permissionMode;
     existingTask.reasoningMode = reasoningMode;
