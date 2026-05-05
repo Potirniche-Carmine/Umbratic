@@ -200,6 +200,7 @@ type TaskInfo = {
   reviewFiles: ReviewFile[];
   events: BackendUiEvent[];
   latestTest?: TestResult;
+  reviewPatchHash?: string;
   patchHash?: string;
   error?: string;
 };
@@ -242,8 +243,11 @@ type BackendUiEvent = BackendEventMeta &
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
+  | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
+  | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
+  | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
 );
@@ -853,10 +857,16 @@ function eventTitle(event: BackendUiEvent): string {
       return `permission ${event.decision}`;
     case "review.ready":
       return "review ready";
+    case "review.changed_since_ready":
+      return "review changed";
     case "approval.check":
       return `check ${event.status}`;
+    case "merge.approval":
+      return event.decision === "approved" ? "merge approved" : "merge rejected";
     case "merge.completed":
       return "approved";
+    case "ide.opened":
+      return event.result === "success" ? "opened editor" : "editor open failed";
     case "response.feedback":
       return event.rating === "good" ? "liked response" : "disliked response";
     case "task.error":
@@ -890,10 +900,16 @@ function eventDetail(event: BackendUiEvent): string {
       return event.id;
     case "review.ready":
       return `${event.changedFiles.length} changed file${event.changedFiles.length === 1 ? "" : "s"}`;
+    case "review.changed_since_ready":
+      return `${event.changedFileCount} file${event.changedFileCount === 1 ? "" : "s"} changed after review became ready`;
     case "approval.check":
       return event.detail ?? event.name;
+    case "merge.approval":
+      return event.reason ?? (event.cleanup === undefined ? event.decision : `${event.decision}, cleanup ${event.cleanup ? "on" : "off"}`);
     case "merge.completed":
       return `${event.targetBranch} ${shortHash(event.commit)}`;
+    case "ide.opened":
+      return [event.ideId, event.target, event.filePath, event.message].filter(Boolean).join(" - ");
     case "response.feedback":
       return event.messageId;
     case "task.error":
@@ -3211,11 +3227,12 @@ function App() {
             </header>
 
             <div className="settingsSections">
-              <section className="settingsSection">
+              <section className="settingsSection settingsSectionWide">
                 <h3>Account</h3>
                 <div className="settingsRows">
-                  <div><span>Mode</span><strong>Local profile</strong></div>
-                  <div><span>Sign-in</span><strong>Optional</strong></div>
+                  <div><span>Profile</span><strong>Local developer</strong></div>
+                  <div><span>Identity</span><strong>Not required for local runs</strong></div>
+                  <div><span>Policy source</span><strong>Local settings</strong></div>
                 </div>
               </section>
 
@@ -3226,6 +3243,7 @@ function App() {
                   <div><span>Provider</span><strong>{selectedModel?.providerName ?? "LM Studio"}</strong></div>
                   <div><span>Status</span><strong>{backend?.lmstudio ?? "unavailable"}</strong></div>
                   <div><span>Base URL</span><strong>{selectedModel?.baseUrl ?? backend?.providers[0]?.baseUrl ?? "http://127.0.0.1:1234/v1"}</strong></div>
+                  <div><span>Available</span><strong>{backend?.models.length ?? 0} local model{(backend?.models.length ?? 0) === 1 ? "" : "s"}</strong></div>
                 </div>
               </section>
 
@@ -3233,31 +3251,34 @@ function App() {
                 <h3>Permissions</h3>
                 <div className="settingsRows">
                   <div><span>Mode</span><strong>{permissionMode}</strong></div>
+                  <div><span>Edits</span><strong>{permissionMode === "bypass" ? "Allowed during run" : "Ask first"}</strong></div>
+                  <div><span>Shell</span><strong>{permissionMode === "bypass" ? "Allowed by policy" : "Ask first"}</strong></div>
                   <div><span>Web tools</span><strong>{backend?.privacy.webTools ?? "disabled"}</strong></div>
                   <div><span>Final approval</span><strong>Manual</strong></div>
-                  <div><span>Classifier</span><strong>{backend?.diagnostics.commandClassifier ?? "enabled"}</strong></div>
                 </div>
               </section>
 
               <section className="settingsSection">
                 <h3>Runtimes</h3>
                 <div className="settingsRows">
-                  <div><span>Python</span><strong>{backend?.diagnostics.runtimes.python.profileVersion ?? "python-uv-venv-1"}</strong></div>
-                  <div><span>Bare Python</span><strong>{backend?.diagnostics.runtimes.python.barePythonVerification ?? "denied"}</strong></div>
+                  <div><span>Python</span><strong>{backend?.diagnostics.runtimes.python.barePythonVerification === "denied" ? "uv/.venv policy" : "checking"}</strong></div>
+                  <div><span>Generated paths</span><strong>{backend?.diagnostics.runtimes.python.generatedPaths.join(", ") ?? ".venv, .aegis/runtime"}</strong></div>
                   <div><span>CMake</span><strong>{backend?.diagnostics.runtimes.cmake.buildDir ?? ".aegis/build"}</strong></div>
-                  <div><span>Shell</span><strong>{backend?.diagnostics.runtimes.shell.preferred ?? "posix"}</strong></div>
+                  <div><span>Shell</span><strong>{backend?.diagnostics.runtimes.shell.preferred ?? "posix"} non-interactive</strong></div>
                 </div>
               </section>
 
-              <section className="settingsSection">
-                <h3>Privacy</h3>
+              <section className="settingsSection settingsSectionWide">
+                <h3>Telemetry</h3>
                 <div className="settingsRows">
-                  <div><span>Telemetry</span><strong>{backend?.diagnostics.telemetry.localEnabled ? "Local only" : "Off"}</strong></div>
-                  <div><span>Sync</span><strong>{backend?.diagnostics.telemetry.syncEnabled ? "On" : "Disabled"}</strong></div>
+                  <div><span>Mode</span><strong>{backend?.diagnostics.telemetry.localEnabled ? "Local event ledger" : "Off"}</strong></div>
+                  <div><span>Captures</span><strong>feedback, approvals, IDE opens, command outcomes, review changes</strong></div>
+                  <div><span>Excludes</span><strong>raw prompts, full diffs, full command output, source contents</strong></div>
                   <div><span>Retention</span><strong>{backend?.diagnostics.telemetry.retentionDays ?? 30} days</strong></div>
+                  <div><span>Sync</span><strong>{backend?.diagnostics.telemetry.syncEnabled ? "On" : "Disabled for MVP"}</strong></div>
                   <div><span>Export</span><button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
                     {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
-                    <span>Bundle</span>
+                    <span>Redacted JSON</span>
                   </button></div>
                 </div>
                 {settingsMessage ? <p className="settingsMessage">{settingsMessage}</p> : null}
@@ -3268,14 +3289,16 @@ function App() {
                 <div className="settingsRows">
                   <div><span>Selected</span><strong>{selectedIde.label}</strong></div>
                   <div><span>Available</span><strong>{availableIdes.map((ide) => ide.label).join(", ")}</strong></div>
+                  <div><span>Review open</span><strong>Workspace or changed file</strong></div>
                 </div>
               </section>
 
               <section className="settingsSection">
                 <h3>Diagnostics</h3>
                 <div className="settingsRows">
-                  <div><span>OpenCode</span><strong>{backend?.diagnostics.opencodeBinary ?? "missing"}</strong></div>
                   <div><span>Runner</span><strong>{backend?.diagnostics.runnerName ?? "OpenCodeRunner"}</strong></div>
+                  <div><span>OpenCode</span><strong>{backend?.diagnostics.opencodeBinary ?? "missing"}</strong></div>
+                  <div><span>Contract</span><strong>{backend?.diagnostics.runnerContractVersion ?? "aegis-runner-1"}</strong></div>
                   <div><span>Policy</span><strong>{backend?.diagnostics.policyVersion ?? "aegis-local-mvp-1"}</strong></div>
                   <div><span>Config checks</span><strong>{backend?.diagnostics.configAssertions ?? "enabled"}</strong></div>
                   <div><span>Public providers</span><strong>{backend?.privacy.disabledProviders.length ?? 0} disabled</strong></div>

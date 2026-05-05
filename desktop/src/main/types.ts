@@ -164,6 +164,7 @@ export type TaskInfo = {
   reviewFiles: ReviewFile[];
   events: BackendUiEvent[];
   latestTest?: TestResult;
+  reviewPatchHash?: string;
   patchHash?: string;
   error?: string;
 };
@@ -223,8 +224,11 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
+  | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
+  | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
+  | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
 );

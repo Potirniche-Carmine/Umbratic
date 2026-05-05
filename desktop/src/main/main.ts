@@ -1508,6 +1508,29 @@ async function refreshReview(task: TaskRecord): Promise<ReviewFile[]> {
   return reviewFiles;
 }
 
+function reviewPatchHash(reviewFiles: ReviewFile[]): string {
+  const normalized = reviewFiles
+    .map((file) => `${file.path}\0${file.status}\0${file.diff}`)
+    .sort()
+    .join("\0");
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+}
+
+function emitReviewChangedSinceReady(task: TaskRecord, reviewFiles: ReviewFile[]) {
+  const currentPatchHash = reviewPatchHash(reviewFiles);
+  if (!task.reviewPatchHash || task.reviewPatchHash === currentPatchHash) {
+    return currentPatchHash;
+  }
+  emit({
+    type: "review.changed_since_ready",
+    taskId: task.id,
+    previousPatchHash: task.reviewPatchHash,
+    currentPatchHash,
+    changedFileCount: reviewFiles.length,
+  });
+  return currentPatchHash;
+}
+
 async function refreshTaskReview(input: unknown): Promise<TaskInfo | null> {
   if (!isRecord(input)) {
     throw new Error("Invalid review refresh input.");
@@ -1910,6 +1933,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       return;
     }
     task.state = "review_ready";
+    task.reviewPatchHash = reviewPatchHash(reviewFiles);
     saveTask(task);
     emit({ type: "assistant.done", taskId: task.id });
     emit({ type: "review.ready", taskId: task.id, changedFiles: task.changedFiles, reviewFiles, latestTest: task.latestTest });
@@ -2173,6 +2197,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     throw new Error("Invalid approval input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
+  emit({ type: "merge.approval", taskId: task.id, decision: "approved" });
   task.state = "approving";
   saveTask(task);
   try {
@@ -2188,6 +2213,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       });
       await approvalCheck(task, "blocked files", async () => {
         const reviewFiles = await refreshReview(task);
+        emitReviewChangedSinceReady(task, reviewFiles);
         const dangerous = reviewFiles.map((file) => file.path).filter((file) => isBlockedPath(file));
         if (dangerous.length > 0) {
           throw new Error(`Blocked path changed: ${dangerous.join(", ")}`);
@@ -2287,6 +2313,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     });
     await approvalCheck(task, "blocked files", async () => {
       const reviewFiles = await refreshReview(task);
+      emitReviewChangedSinceReady(task, reviewFiles);
       const changed = reviewFiles.map((file) => file.path);
       const dangerous = changed.filter((file) => isBlockedPath(file));
       if (dangerous.length > 0) {
@@ -2404,6 +2431,7 @@ async function rejectTask(input: unknown): Promise<void> {
   }
   clearPendingPermissionsForTask(task.id);
   const cleanup = input.cleanup === true;
+  emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
   if (task.workspaceKind === "git" && cleanup && taskStatesThatCanOpen.has(task.state)) {
     await removeGitWorktree(task);
     await gitResult(task.originalRepoPath, ["branch", "-D", task.agentBranch]);
@@ -2605,34 +2633,48 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
   if (!fs.existsSync(targetPath)) {
     return { ok: false, message: relativeFilePath ? "Changed file no longer exists." : "Review folder no longer exists." };
   }
+  const withTelemetry = (result: IdeOpenResult): IdeOpenResult => {
+    emit({
+      type: "ide.opened",
+      taskId: task.id,
+      ideId,
+      target: relativeFilePath ? "file" : "workspace",
+      filePath: relativeFilePath,
+      result: result.ok ? "success" : "failed",
+      message: result.ok ? undefined : result.message,
+    });
+    return result;
+  };
   if (ideId === "explorer") {
     if (relativeFilePath) {
       shell.showItemInFolder(targetPath);
-      return { ok: true };
+      return withTelemetry({ ok: true });
     }
     const error = await shell.openPath(targetPath);
-    return error ? { ok: false, message: error } : { ok: true };
+    return withTelemetry(error ? { ok: false, message: error } : { ok: true });
   }
   if (ideId === "visualstudio") {
     const command = await visualStudioExecutable();
     if (command) {
-      return launchCommand(command, [targetPath]);
+      return withTelemetry(await launchCommand(command, [targetPath]));
     }
   }
   const command = await firstAvailableCommand(commandCandidatesByIde[ideId] ?? []);
   if (command) {
-    return launchCommand(command, relativeFilePath ? [targetPath] : ["--new-window", targetPath]);
+    return withTelemetry(await launchCommand(command, relativeFilePath ? [targetPath] : ["--new-window", targetPath]));
   }
   if (ideId === "code" && macApplicationExists("Visual Studio Code")) {
-    return launchCommand(
-      "open",
-      relativeFilePath
-        ? ["-a", "Visual Studio Code", targetPath]
-        : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath],
+    return withTelemetry(
+      await launchCommand(
+        "open",
+        relativeFilePath
+          ? ["-a", "Visual Studio Code", targetPath]
+          : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath],
+      ),
     );
   }
   const error = await shell.openPath(targetPath);
-  return error ? { ok: false, message: error } : { ok: true };
+  return withTelemetry(error ? { ok: false, message: error } : { ok: true });
 }
 
 function setPermissionMode(input: unknown): Promise<BackendStatus> {

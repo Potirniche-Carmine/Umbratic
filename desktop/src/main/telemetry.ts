@@ -123,8 +123,28 @@ function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
       },
     };
   }
+  if (event.type === "review.changed_since_ready") {
+    return {
+      ...base,
+      data: {
+        previousPatchHash: event.previousPatchHash,
+        currentPatchHash: event.currentPatchHash,
+        changedFileCount: event.changedFileCount,
+      },
+    };
+  }
   if (event.type === "approval.check") {
     return { ...base, data: { name: event.name, status: event.status, detail: event.detail ? redactText(event.detail, 320) : undefined } };
+  }
+  if (event.type === "merge.approval") {
+    return {
+      ...base,
+      data: {
+        decision: event.decision,
+        cleanup: event.cleanup,
+        reason: event.reason ? redactText(event.reason, 320) : undefined,
+      },
+    };
   }
   if (event.type === "merge.completed") {
     return {
@@ -133,6 +153,18 @@ function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
         targetBranch: event.targetBranch,
         commit: event.commit.slice(0, 16),
         patchHash: event.patchHash,
+      },
+    };
+  }
+  if (event.type === "ide.opened") {
+    return {
+      ...base,
+      data: {
+        ideId: event.ideId,
+        target: event.target,
+        filePath: event.filePath,
+        result: event.result,
+        message: event.message ? redactText(event.message, 320) : undefined,
       },
     };
   }
@@ -192,6 +224,7 @@ export function buildRedactedTelemetryBundle(tasks: TaskRecord[], projects: Repo
       completedAt: task.mergedAt ?? task.rejectedAt,
       errorMessage: task.error ? redactText(task.error, 320) : undefined,
       changedFiles: task.changedFiles,
+      reviewPatchHash: task.reviewPatchHash,
       patchHash: task.patchHash,
       review: reviewSummary(task.reviewFiles ?? []),
       events: (task.events ?? []).map(redactEvent),
