@@ -1,0 +1,17 @@
+{
+  "name": "@aegis/runner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "aegis-runner": "bin/aegis-runner"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.8.1"
+  }
+}

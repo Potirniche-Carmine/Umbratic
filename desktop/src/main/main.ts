@@ -26,18 +26,18 @@ import {
   taskStatesThatCanOpen,
 } from "./config";
 import {
-  beginOpenCodeEventStream,
+  beginRunnerEventStream,
   eventSessionId,
-  openCodeErrorMessage,
-  openCodePermissionSummary,
-  openCodePermissionType,
-  openCodeRequest,
-  openCodeToolCommand,
-  opencodeBinaryPath,
-  replyOpenCodePermission,
-  startOpenCodeServer,
-  stopOpenCodeRun,
-} from "./opencodeHarness";
+  runnerErrorMessage,
+  runnerPermissionSummary,
+  runnerPermissionType,
+  runnerRequest,
+  runnerToolCommand,
+  runnerBinaryPath,
+  replyRunnerPermission,
+  startPackageRunnerServer,
+  stopRunnerProcess,
+} from "./runnerAdapter";
 import {
   aegisPolicyVersion,
   aegisRunnerContractVersion,
@@ -80,7 +80,7 @@ import type {
   IdeOpenResult,
   LocalModelInfo,
   LocalModelProvider,
-  OpenCodeRun,
+  RunnerProcess,
   PendingPermission,
   PermissionMode,
   PermissionRequest,
@@ -95,7 +95,7 @@ import type {
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 
 const isDev = !app.isPackaged;
-const activeOpenCodeRuns = new Map<string, OpenCodeRun>();
+const activeRunnerProcesss = new Map<string, RunnerProcess>();
 const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_runtime.png");
 const windowsAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_white.ico");
 
@@ -148,18 +148,18 @@ function finishInterruptedRunningTasks() {
     return {
       ...task,
       state: "failed" as const,
-      error: "Task was interrupted before OpenCode finished.",
+      error: "Task was interrupted before Aegis runner finished.",
       events: [
         ...events,
         {
           type: "task.error" as const,
           taskId: task.id,
-          message: "Task was interrupted before OpenCode finished.",
+          message: "Task was interrupted before Aegis runner finished.",
         },
       ].slice(-500),
       latestTest: task.latestTest ?? {
-        command: "opencode session",
-        output: "Task was interrupted before OpenCode finished.",
+        command: "aegis runner session",
+        output: "Task was interrupted before Aegis runner finished.",
         passed: false,
         exitCode: null,
         completedAt: now,
@@ -686,7 +686,7 @@ function attachmentContext(rootPath: string, attachments: ChatAttachment[]): str
   return lines;
 }
 
-function openCodePromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): string {
+function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): string {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const tree = repositoryTreePreview(rootPath);
@@ -1187,19 +1187,19 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
 
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
-  const opencodePath = opencodeBinaryPath();
+  const runnerPath = runnerBinaryPath();
   const providerMessages = providers
     .filter((provider) => provider.status !== "ready" && provider.message)
     .map((provider) => provider.message as string);
   const messages = [
-    opencodePath ? undefined : "OpenCode is not installed in the app bundle.",
+    runnerPath ? undefined : "Aegis runner is not installed in the app bundle.",
     selected ? undefined : "No LM Studio models are currently available.",
     ...providerMessages,
   ].filter((message): message is string => !!message);
   const lmstudio = providers.find((provider) => provider.providerId === "local-lmstudio")?.status ?? "unavailable";
 
   return {
-    opencode: opencodePath ? "ready" : "unavailable",
+    runner: runnerPath ? "ready" : "unavailable",
     lmstudio,
     model: selected,
     models,
@@ -1216,7 +1216,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       runnerVersion: aegisRunnerVersion,
       runnerContractVersion: aegisRunnerContractVersion,
       policyVersion: aegisPolicyVersion,
-      opencodeBinary: opencodePath ? "present" : "missing",
+      runnerBinary: runnerPath ? "present" : "missing",
       configAssertions: "enabled",
       providerAllowlist: allowedLocalProviderIds,
       localhostOnlyModels: models.every((model) => isLocalhostUrl(model.baseUrl)),
@@ -1547,37 +1547,37 @@ async function refreshTaskReview(input: unknown): Promise<TaskInfo | null> {
   return publicTask(task);
 }
 
-async function handleOpenCodePermission(
+async function handleRunnerPermission(
   task: TaskRecord,
-  run: OpenCodeRun,
+  run: RunnerProcess,
   permission: Record<string, unknown>,
   promptForRun: string,
   intentPrompt: string,
 ): Promise<"pending" | "resolved" | "worktree_requested"> {
   const id = typeof permission.id === "string" ? permission.id : "";
   if (!id || pendingPermissions.has(id)) return "pending";
-  const type = openCodePermissionType(permission);
-  const title = openCodePermissionSummary(permission);
+  const type = runnerPermissionType(permission);
+  const title = runnerPermissionSummary(permission);
   const classification = type.includes("edit")
     ? ({ commandClass: "edit" as const, risky: false })
     : classifyCommandText(title, task.worktreePath);
 
   if (type === "bash" && isBarePythonCommand(title)) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
-    await replyOpenCodePermission(run, id, false);
+    await replyRunnerPermission(run, id, false);
     return "resolved";
   }
 
   if (task.workspaceKind === "git" && !task.agentBranch && type === "edit") {
     task.agentBranch = `aegis/${task.id}-${slugify(intentPrompt)}`;
     task.worktreePath = path.join(worktreeRootForRepo(task.originalRepoPath), task.id);
-    task.openCodeSessionId = undefined;
+    task.runnerSessionId = undefined;
     task.pendingPrompt = promptForRun;
     task.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
     saveTask(task);
-    await replyOpenCodePermission(run, id, false).catch(() => undefined);
+    await replyRunnerPermission(run, id, false).catch(() => undefined);
     if (permissionMode === "bypass") {
-      void createWorktreeAndRun(task, promptForRun);
+      void createWorktreeAndRunRunner(task, promptForRun);
     } else {
       emit({
         type: "worktree.requested",
@@ -1602,27 +1602,27 @@ async function handleOpenCodePermission(
 
   if (type === "webfetch" || type === "websearch") {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
-    await replyOpenCodePermission(run, id, false);
+    await replyRunnerPermission(run, id, false);
     return "resolved";
   }
 
   if (task.permissionMode === "bypass" && (type === "edit" || type === "bash") && !requiresBypassToolApproval(classification)) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
-    await replyOpenCodePermission(run, id, true);
+    await replyRunnerPermission(run, id, true);
     return "resolved";
   }
 
   pendingPermissions.set(id, {
     taskId: task.id,
-    onAllow: () => replyOpenCodePermission(run, id, true),
-    onDeny: () => replyOpenCodePermission(run, id, false),
+    onAllow: () => replyRunnerPermission(run, id, true),
+    onDeny: () => replyRunnerPermission(run, id, false),
   });
   return "pending";
 }
 
-async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, intentPrompt?: string) {
+async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentPrompt?: string) {
   const task = getTask(taskIdValue);
-  let run: OpenCodeRun | null = null;
+  let run: RunnerProcess | null = null;
   const prompt = promptForRun ?? task.prompt;
   const intent = intentPrompt ?? task.prompt;
   const expectsFileChanges = promptLooksLikeFileChange(intent);
@@ -1635,8 +1635,8 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     task.model = selected;
     applyTaskPolicyMetadata(task, intent);
     saveTask(task);
-    run = await startOpenCodeServer(task, selected, models);
-    activeOpenCodeRuns.set(task.id, run);
+    run = await startPackageRunnerServer(task, selected, models);
+    activeRunnerProcesss.set(task.id, run);
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; outputLength: number; finished: boolean }>();
     const textPartLengths = new Map<string, number>();
@@ -1720,7 +1720,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
           }
         }
         if (info.role === "assistant" && info.error) {
-          fail(openCodeErrorMessage(info.error));
+          fail(runnerErrorMessage(info.error));
         }
       }
 
@@ -1761,7 +1761,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
           const state = isRecord(part.state) ? part.state : {};
           const status = typeof state.status === "string" ? state.status : "pending";
           const existing = toolRuns.get(part.id);
-          const tool = openCodeToolCommand(part);
+          const tool = runnerToolCommand(part);
           const classification = tool.kind === "edit"
             ? ({ commandClass: "edit" as const, risky: false })
             : classifyCommandText(tool.command, task.worktreePath);
@@ -1850,7 +1850,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       }
 
       if ((type === "permission.updated" || type === "permission.asked") && isRecord(properties)) {
-        void handleOpenCodePermission(task, run as OpenCodeRun, properties, prompt, intent)
+        void handleRunnerPermission(task, run as RunnerProcess, properties, prompt, intent)
           .then((result) => {
             if (result === "worktree_requested") {
               delegatedToWorktree = true;
@@ -1861,7 +1861,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       }
 
       if (type === "session.error") {
-        fail(openCodeErrorMessage(properties.error));
+        fail(runnerErrorMessage(properties.error));
       }
 
       if (type === "session.idle") {
@@ -1875,29 +1875,29 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
       }
     };
 
-    const stream = beginOpenCodeEventStream(run, onEvent);
+    const stream = beginRunnerEventStream(run, onEvent);
     void stream.done.catch((error) => {
       if (!run?.abortController.signal.aborted) {
         fail(String(error instanceof Error ? error.message : error));
       }
     });
     await stream.ready;
-    const session = task.openCodeSessionId
-      ? { id: task.openCodeSessionId }
-      : await openCodeRequest<{ id: string }>(run, "/session", {
+    const session = task.runnerSessionId
+      ? { id: task.runnerSessionId }
+      : await runnerRequest<{ id: string }>(run, "/session", {
           method: "POST",
           body: { title: chatTitleFromPrompt(intent) },
         });
     run.sessionId = session.id;
-    task.openCodeSessionId = session.id;
+    task.runnerSessionId = session.id;
     saveTask(task);
-    await openCodeRequest<void>(run, `/session/${encodeURIComponent(session.id)}/prompt_async`, {
+    await runnerRequest<void>(run, `/session/${encodeURIComponent(session.id)}/prompt_async`, {
       method: "POST",
       body: {
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
         system: [
-          "Identity: you are Aegis, a local-first desktop coding agent. If the user asks who you are, answer as Aegis. Never identify yourself as OpenCode, opencode, a CLI, or an underlying runner; those are implementation details hidden behind Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Aegis tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
+          "Identity: you are Aegis, a local-first desktop coding agent. If the user asks who you are, answer as Aegis. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Aegis tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
           pythonRuntimeSystemPrompt,
         ].join(" "),
@@ -1907,7 +1907,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
 
     await Promise.race([
       completion,
-      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("OpenCode task timed out.")), 45 * 60 * 1000)),
+      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Aegis runner task timed out.")), 45 * 60 * 1000)),
     ]);
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
@@ -1915,8 +1915,8 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     }
 
     task.latestTest = {
-      command: `opencode session ${session.id}`,
-      output: "OpenCode session completed",
+      command: `aegis runner session ${session.id}`,
+      output: "Aegis runner session completed",
       passed: true,
       exitCode: 0,
       completedAt: new Date().toISOString(),
@@ -1924,7 +1924,7 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     const reviewFiles = await refreshReview(task);
     if (reviewFiles.length === 0) {
       if (expectsFileChanges) {
-        failTask(task, "OpenCode finished without file changes.");
+        failTask(task, "Aegis runner finished without file changes.");
         return;
       }
       task.state = "completed";
@@ -1943,14 +1943,14 @@ async function runOpenCodeTask(taskIdValue: string, promptForRun?: string, inten
     failTask(task, String(error instanceof Error ? error.message : error));
   } finally {
     clearPendingPermissionsForTask(task.id);
-    activeOpenCodeRuns.delete(task.id);
+    activeRunnerProcesss.delete(task.id);
     if (run) {
-      stopOpenCodeRun(run);
+      stopRunnerProcess(run);
     }
   }
 }
 
-async function createWorktreeAndRun(task: TaskRecord, promptForRun?: string) {
+async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: string) {
   try {
     fs.mkdirSync(path.dirname(task.worktreePath), { recursive: true });
     await execFileOutput("git", ["worktree", "add", "-b", task.agentBranch, task.worktreePath, task.baseCommit], {
@@ -1963,7 +1963,7 @@ async function createWorktreeAndRun(task: TaskRecord, promptForRun?: string) {
     }
     saveTask(task);
     emit({ type: "worktree.created", taskId: task.id, branch: task.agentBranch, path: task.worktreePath });
-    void runOpenCodeTask(task.id, promptForRun);
+    void runRunnerTask(task.id, promptForRun);
   } catch (error) {
     failTask(task, String(error instanceof Error ? error.message : error));
   }
@@ -2001,7 +2001,7 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.runnerVersion = aegisRunnerVersion;
   task.policyVersion = aegisPolicyVersion;
   task.runtimeProfile = runtimeProfileForPrompt(task.prompt);
-  task.openCodeSessionId = undefined;
+  task.runnerSessionId = undefined;
   task.pendingPrompt = undefined;
   task.changedFiles = [];
   task.reviewFiles = [];
@@ -2038,7 +2038,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     if (closedMessage) {
       throw new Error(closedMessage);
     }
-    if (activeOpenCodeRuns.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
+    if (activeRunnerProcesss.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
     }
     if (existingTask.repositoryId !== repositoryId) {
@@ -2057,21 +2057,21 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && wantsFileChange && !existingTask.agentBranch) {
-      const openCodePrompt = openCodePromptForTask(existingTask, prompt, attachments);
+      const runnerPrompt = runnerPromptForTask(existingTask, prompt, attachments);
       existingTask.originalBranch = refreshed.originalBranch;
       existingTask.baseCommit = refreshed.baseCommit;
       existingTask.agentBranch = `aegis/${existingTask.id}-${slugify(prompt)}`;
       existingTask.worktreePath = path.join(worktreeRootForRepo(refreshed.rootPath), existingTask.id);
       existingTask.originalRepoPath = refreshed.rootPath;
       existingTask.originalWasDirty = refreshed.dirty;
-      existingTask.openCodeSessionId = undefined;
-      existingTask.pendingPrompt = openCodePrompt;
+      existingTask.runnerSessionId = undefined;
+      existingTask.pendingPrompt = runnerPrompt;
       existingTask.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
       saveTask(existingTask);
       emit({ type: "user.message", taskId: existingTask.id, text: prompt });
       if (permissionMode === "bypass") {
         existingTask.pendingPrompt = undefined;
-        await createWorktreeAndRun(existingTask, openCodePrompt);
+        await createWorktreeAndRunRunner(existingTask, runnerPrompt);
       } else {
         emit({
           type: "worktree.requested",
@@ -2092,7 +2092,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.originalWasDirty = refreshed.dirty;
     saveTask(existingTask);
     emit({ type: "user.message", taskId: existingTask.id, text: prompt });
-    void runOpenCodeTask(existingTask.id, openCodePromptForTask(existingTask, prompt, attachments), prompt);
+    void runRunnerTask(existingTask.id, runnerPromptForTask(existingTask, prompt, attachments), prompt);
     return publicTask(existingTask);
   }
 
@@ -2128,13 +2128,13 @@ async function startTask(input: unknown): Promise<TaskInfo> {
   };
   saveTask(task);
   emit({ type: "user.message", taskId: task.id, text: prompt });
-  const openCodePrompt = openCodePromptForTask(task, prompt, attachments);
+  const runnerPrompt = runnerPromptForTask(task, prompt, attachments);
   if (!shouldCreateWorktree) {
-    void runOpenCodeTask(task.id, openCodePrompt, prompt);
+    void runRunnerTask(task.id, runnerPrompt, prompt);
   } else if (permissionMode === "bypass") {
-    await createWorktreeAndRun(task, openCodePrompt);
+    await createWorktreeAndRunRunner(task, runnerPrompt);
   } else {
-    task.pendingPrompt = openCodePrompt;
+    task.pendingPrompt = runnerPrompt;
     saveTask(task);
     emit({ type: "worktree.requested", taskId: task.id, branch, path: worktreePath, baseCommit: refreshed.baseCommit });
   }
@@ -2161,7 +2161,7 @@ async function approveWorktreeCreation(input: unknown): Promise<void> {
   const promptForRun = task.pendingPrompt ?? task.prompt;
   task.pendingPrompt = undefined;
   saveTask(task);
-  await createWorktreeAndRun(task, promptForRun);
+  await createWorktreeAndRunRunner(task, promptForRun);
 }
 
 function secretScanText(text: string): string | null {
@@ -2207,7 +2207,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     if (task.workspaceKind === "folder") {
       await approvalCheck(task, "agent run completed", async () => {
         if (!task.latestTest?.passed) {
-          throw new Error("OpenCode has not completed successfully for this task.");
+          throw new Error("Aegis runner has not completed successfully for this task.");
         }
         return task.latestTest.command;
       });
@@ -2290,7 +2290,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       await execFileOutput("git", ["show-ref", "--verify", `refs/heads/${task.agentBranch}`], { cwd: task.originalRepoPath });
       const current = await gitOutput(task.worktreePath, ["rev-parse", task.agentBranch]);
       if (current !== task.baseCommit) {
-        throw new Error("OpenCode created commits before approval.");
+        throw new Error("Aegis runner created commits before approval.");
       }
       return task.agentBranch;
     });
@@ -2307,7 +2307,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     });
     await approvalCheck(task, "agent run completed", async () => {
       if (!task.latestTest?.passed) {
-        throw new Error("OpenCode has not completed successfully for this task.");
+        throw new Error("Aegis runner has not completed successfully for this task.");
       }
       return task.latestTest.command;
     });
@@ -2424,10 +2424,10 @@ async function rejectTask(input: unknown): Promise<void> {
     throw new Error("Invalid reject input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  const run = activeOpenCodeRuns.get(task.id);
+  const run = activeRunnerProcesss.get(task.id);
   if (run) {
-    activeOpenCodeRuns.delete(task.id);
-    stopOpenCodeRun(run);
+    activeRunnerProcesss.delete(task.id);
+    stopRunnerProcess(run);
   }
   clearPendingPermissionsForTask(task.id);
   const cleanup = input.cleanup === true;
@@ -2483,15 +2483,15 @@ async function cancelTask(input: unknown): Promise<void> {
     throw new Error("Invalid cancel input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  const run = activeOpenCodeRuns.get(task.id);
+  const run = activeRunnerProcesss.get(task.id);
   if (run) {
-    activeOpenCodeRuns.delete(task.id);
+    activeRunnerProcesss.delete(task.id);
     if (run.sessionId) {
-      await openCodeRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(
+      await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(
         () => undefined,
       );
     }
-    stopOpenCodeRun(run);
+    stopRunnerProcess(run);
   }
   clearPendingPermissionsForTask(task.id);
   task.state = "failed";
@@ -2859,9 +2859,9 @@ app.on("before-quit", () => {
     pendingPermissions.delete(id);
     void pending.onDeny();
   }
-  for (const [taskId, run] of activeOpenCodeRuns) {
-    activeOpenCodeRuns.delete(taskId);
-    stopOpenCodeRun(run);
+  for (const [taskId, run] of activeRunnerProcesss) {
+    activeRunnerProcesss.delete(taskId);
+    stopRunnerProcess(run);
   }
 });
 

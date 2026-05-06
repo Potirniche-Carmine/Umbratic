@@ -4,3 +4,4 @@ node_modules/
 target/
 desktop/dist/
 desktop/dist-electron/
+desktop/runner/dist/

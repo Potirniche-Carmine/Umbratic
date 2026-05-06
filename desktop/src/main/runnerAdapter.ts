@@ -7,13 +7,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { defaultDisabledProviders, localProviderCatalog, permissionRulesForMode, pythonRuntimeSystemPrompt } from "./config";
-import { assertOpenCodeConfig, openCodeHardeningEnvironment } from "./policy";
-import type { LocalModelInfo, OpenCodeRun, PermissionMode, PermissionRequest, ReasoningMode, SseStream, TaskRecord } from "./types";
+import { assertPackageRunnerConfig, packageRunnerHardeningEnvironment } from "./policy";
+import type { LocalModelInfo, RunnerProcess, PermissionMode, PermissionRequest, ReasoningMode, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
 const nodeRequire = createRequire(__filename);
 
-export function buildOpenCodeConfig(
+export function buildPackageRunnerConfig(
   mode: PermissionMode,
   selectedModel: LocalModelInfo,
   availableModels: LocalModelInfo[],
@@ -87,7 +87,7 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   };
 }
 
-export function opencodeBinaryPath(): string | null {
+export function runnerBinaryPath(): string | null {
   const binary = process.platform === "win32" ? "opencode.exe" : "opencode";
   const platform = process.platform === "win32" ? "windows" : process.platform;
   const arch = process.arch;
@@ -137,7 +137,7 @@ async function freeLocalPort(): Promise<number> {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Unable to allocate an OpenCode port.")));
+        server.close(() => reject(new Error("Unable to allocate an Aegis runner port.")));
         return;
       }
       const port = address.port;
@@ -146,34 +146,34 @@ async function freeLocalPort(): Promise<number> {
   });
 }
 
-export function stopOpenCodeRun(run: OpenCodeRun) {
+export function stopRunnerProcess(run: RunnerProcess) {
   run.abortController.abort();
   if (!run.child.killed) {
     run.child.kill();
   }
 }
 
-function openCodeAuthHeader(run: OpenCodeRun): string {
+function packageRunnerAuthHeader(run: RunnerProcess): string {
   return `Basic ${Buffer.from(`opencode:${run.password}`).toString("base64")}`;
 }
 
-function openCodeUrl(run: OpenCodeRun, route: string): URL {
+function packageRunnerUrl(run: RunnerProcess, route: string): URL {
   const url = new URL(route, run.url);
   url.searchParams.set("directory", run.directory);
   return url;
 }
 
-export async function openCodeRequest<T>(
-  run: OpenCodeRun,
+export async function runnerRequest<T>(
+  run: RunnerProcess,
   route: string,
   init: Omit<RequestInit, "body"> & { body?: unknown } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", openCodeAuthHeader(run));
+  headers.set("Authorization", packageRunnerAuthHeader(run));
   if (init.body !== undefined) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(openCodeUrl(run, route), {
+  const response = await fetch(packageRunnerUrl(run, route), {
     ...init,
     headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -181,7 +181,7 @@ export async function openCodeRequest<T>(
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`OpenCode ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`);
+    throw new Error(`Aegis runner ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -189,24 +189,24 @@ export async function openCodeRequest<T>(
   return response.json() as Promise<T>;
 }
 
-export async function startOpenCodeServer(
+export async function startPackageRunnerServer(
   task: TaskRecord,
   model: LocalModelInfo,
   models: LocalModelInfo[],
-): Promise<OpenCodeRun> {
-  const binary = opencodeBinaryPath();
+): Promise<RunnerProcess> {
+  const binary = runnerBinaryPath();
   if (!binary) {
-    throw new Error("OpenCode is not installed in the app bundle.");
+    throw new Error("Aegis runner is not installed in the app bundle.");
   }
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
-  const config = buildOpenCodeConfig(task.permissionMode, model, models, task.reasoningMode ?? "fast");
-  assertOpenCodeConfig(config, model);
+  const config = buildPackageRunnerConfig(task.permissionMode, model, models, task.reasoningMode ?? "fast");
+  assertPackageRunnerConfig(config, model);
   const child = spawn(binary, ["serve", "--pure", "--hostname=127.0.0.1", `--port=${port}`], {
     cwd: task.worktreePath,
     env: {
       ...runtimeEnv(task.worktreePath),
-      ...openCodeHardeningEnvironment(),
+      ...packageRunnerHardeningEnvironment(),
       OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       OPENCODE_SERVER_PASSWORD: password,
     },
@@ -217,7 +217,7 @@ export async function startOpenCodeServer(
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
-      stopOpenCodeRun({
+      stopRunnerProcess({
         taskId: task.id,
         url: `http://127.0.0.1:${port}`,
         password,
@@ -225,7 +225,7 @@ export async function startOpenCodeServer(
         child,
         abortController: new AbortController(),
       });
-      reject(new Error(`Timed out waiting for OpenCode to start.${output.trim() ? `\n${output.trim()}` : ""}`));
+      reject(new Error(`Timed out waiting for Aegis runner to start.${output.trim() ? `\n${output.trim()}` : ""}`));
     }, 15000);
     let settled = false;
     const cleanup = () => {
@@ -253,7 +253,7 @@ export async function startOpenCodeServer(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error(`OpenCode exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
+      reject(new Error(`Aegis runner exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
@@ -282,12 +282,12 @@ export function eventSessionId(event: Record<string, unknown>): string | undefin
   return undefined;
 }
 
-export function openCodeErrorMessage(error: unknown): string {
-  if (!isRecord(error)) return String(error || "OpenCode failed.");
+export function runnerErrorMessage(error: unknown): string {
+  if (!isRecord(error)) return String(error || "Aegis runner failed.");
   const data = isRecord(error.data) ? error.data : {};
   if (typeof data.message === "string") return data.message;
   if (typeof error.name === "string") return error.name;
-  return "OpenCode failed.";
+  return "Aegis runner failed.";
 }
 
 function parseSseBlock(block: string): unknown | null {
@@ -305,7 +305,7 @@ function parseSseBlock(block: string): unknown | null {
   }
 }
 
-export function beginOpenCodeEventStream(run: OpenCodeRun, onEvent: (event: Record<string, unknown>) => void): SseStream {
+export function beginRunnerEventStream(run: RunnerProcess, onEvent: (event: Record<string, unknown>) => void): SseStream {
   let markReady!: () => void;
   let failReady!: (error: unknown) => void;
   const ready = new Promise<void>((resolve, reject) => {
@@ -315,14 +315,14 @@ export function beginOpenCodeEventStream(run: OpenCodeRun, onEvent: (event: Reco
   const done = (async () => {
     try {
       const headers = new Headers();
-      headers.set("Authorization", openCodeAuthHeader(run));
+      headers.set("Authorization", packageRunnerAuthHeader(run));
       headers.set("Accept", "text/event-stream");
-      const response = await fetch(openCodeUrl(run, "/event"), {
+      const response = await fetch(packageRunnerUrl(run, "/event"), {
         headers,
         signal: run.abortController.signal,
       });
       if (!response.ok || !response.body) {
-        throw new Error(`OpenCode event stream failed with ${response.status} ${response.statusText}.`);
+        throw new Error(`Aegis runner event stream failed with ${response.status} ${response.statusText}.`);
       }
       markReady();
       const reader = response.body.getReader();
@@ -399,7 +399,7 @@ function toolDisplayName(value: string): string {
   return value.split(".").pop()?.toLowerCase() || value.toLowerCase() || "tool";
 }
 
-export function openCodeToolCommand(part: Record<string, unknown>): { kind: PermissionRequest["kind"]; command: string } {
+export function runnerToolCommand(part: Record<string, unknown>): { kind: PermissionRequest["kind"]; command: string } {
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const state = isRecord(part.state) ? part.state : {};
   const inputCandidates = [state.input, part.input, state.args, part.args, state.params, part.params]
@@ -435,32 +435,32 @@ export function openCodeToolCommand(part: Record<string, unknown>): { kind: Perm
   };
 }
 
-export async function replyOpenCodePermission(run: OpenCodeRun, permissionId: string, allow: boolean) {
+export async function replyRunnerPermission(run: RunnerProcess, permissionId: string, allow: boolean) {
   if (!run.sessionId) return;
   const reply = allow ? "once" : "reject";
   try {
-    await openCodeRequest<boolean>(run, `/permission/${encodeURIComponent(permissionId)}/reply`, {
+    await runnerRequest<boolean>(run, `/permission/${encodeURIComponent(permissionId)}/reply`, {
       method: "POST",
       body: { reply },
     });
     return;
   } catch {
-    await openCodeRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/permissions/${encodeURIComponent(permissionId)}`, {
+    await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/permissions/${encodeURIComponent(permissionId)}`, {
       method: "POST",
       body: { response: reply },
     });
   }
 }
 
-export function openCodePermissionType(permission: Record<string, unknown>): string {
+export function runnerPermissionType(permission: Record<string, unknown>): string {
   const direct = typeof permission.type === "string" ? permission.type : "";
   const named = typeof permission.permission === "string" ? permission.permission : "";
   return direct || named || "tool";
 }
 
-export function openCodePermissionSummary(permission: Record<string, unknown>): string {
+export function runnerPermissionSummary(permission: Record<string, unknown>): string {
   const title = typeof permission.title === "string" && permission.title.trim() ? permission.title.trim() : "";
-  const type = openCodePermissionType(permission);
+  const type = runnerPermissionType(permission);
   const patterns = Array.isArray(permission.patterns)
     ? permission.patterns.filter((pattern): pattern is string => typeof pattern === "string" && !!pattern.trim())
     : Array.isArray(permission.pattern)

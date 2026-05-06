@@ -5,8 +5,8 @@ import type { CommandClass, LocalModelInfo, LocalProviderId, RuntimeDiagnostics,
 import { normalizeRelativePath, pathInside } from "./utils";
 
 export const aegisPolicyVersion = "aegis-local-mvp-1";
-export const aegisRunnerName = "OpenCodeRunner";
-export const aegisRunnerVersion = "opencode-package-adapter";
+export const aegisRunnerName = "AegisRunner";
+export const aegisRunnerVersion = "package-adapter-1";
 export const aegisRunnerContractVersion = "aegis-runner-1";
 export const allowedLocalProviderIds: LocalProviderId[] = ["local-lmstudio"];
 export const pythonRuntimeProfileVersion = "python-uv-venv-1";
@@ -242,7 +242,7 @@ export function isLocalhostUrl(value: string): boolean {
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
-    throw new Error(`OpenCode hardening assertion failed: ${message}`);
+    throw new Error(`Aegis runner hardening assertion failed: ${message}`);
   }
 }
 
@@ -250,7 +250,7 @@ function keysOfRecord(value: unknown): string[] {
   return value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
 }
 
-export function assertOpenCodeConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
+export function assertPackageRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
   assert(config.share === "disabled", "sharing must stay disabled");
   assert(config.autoupdate === false, "auto-update must stay disabled");
   assert(config.model === `${selectedModel.providerId}/${selectedModel.modelId}`, "model must match selected local provider");
@@ -276,7 +276,7 @@ export function assertOpenCodeConfig(config: Record<string, unknown>, selectedMo
   assert(permissions?.websearch === "deny", "web search must be denied");
 }
 
-export function openCodeHardeningEnvironment(): NodeJS.ProcessEnv {
+export function packageRunnerHardeningEnvironment(): NodeJS.ProcessEnv {
   return {
     OPENCODE_DISABLE_AUTOUPDATE: "1",
     OPENCODE_DISABLE_SHARE: "1",

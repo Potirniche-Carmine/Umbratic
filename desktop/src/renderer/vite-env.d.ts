@@ -34,7 +34,7 @@ type AegisRepositoryInfo = {
 };
 
 type AegisBackendStatus = {
-  opencode: AegisServiceStatus;
+  runner: AegisServiceStatus;
   lmstudio: AegisServiceStatus;
   model: AegisLocalModelInfo | null;
   models: AegisLocalModelInfo[];
@@ -55,7 +55,7 @@ type AegisBackendDiagnostics = {
   runnerVersion: string;
   runnerContractVersion: string;
   policyVersion: string;
-  opencodeBinary: "present" | "missing";
+  runnerBinary: "present" | "missing";
   configAssertions: "enabled";
   providerAllowlist: AegisLocalProviderId[];
   localhostOnlyModels: boolean;

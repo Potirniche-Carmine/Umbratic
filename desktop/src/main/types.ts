@@ -43,7 +43,7 @@ export type RepositoryInfo = {
 };
 
 export type BackendStatus = {
-  opencode: ServiceStatus;
+  runner: ServiceStatus;
   lmstudio: ServiceStatus;
   model: LocalModelInfo | null;
   models: LocalModelInfo[];
@@ -64,7 +64,7 @@ export type BackendDiagnostics = {
   runnerVersion: string;
   runnerContractVersion: string;
   policyVersion: string;
-  opencodeBinary: "present" | "missing";
+  runnerBinary: "present" | "missing";
   configAssertions: "enabled";
   providerAllowlist: LocalProviderId[];
   localhostOnlyModels: boolean;
@@ -192,7 +192,7 @@ export type TaskRecord = TaskInfo & {
   providerId?: LocalProviderId;
   modelId?: string;
   modelBaseUrlHost?: string;
-  openCodeSessionId?: string;
+  runnerSessionId?: string;
   pendingPrompt?: string;
   metadataPath?: string;
   mergedAt?: string;
@@ -255,7 +255,7 @@ export type CommandResult = CommandOutput & {
   success: boolean;
 };
 
-export type OpenCodeRun = {
+export type RunnerProcess = {
   taskId: string;
   url: string;
   password: string;

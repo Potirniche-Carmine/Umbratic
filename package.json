@@ -3,7 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "desktop"
+    "desktop",
+    "desktop/runner"
   ],
   "scripts": {
     "desktop:dev": "npm --workspace desktop run dev",

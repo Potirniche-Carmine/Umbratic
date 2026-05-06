@@ -77,7 +77,7 @@ type RepositoryInfo = {
 };
 
 type BackendStatus = {
-  opencode: ServiceStatus;
+  runner: ServiceStatus;
   lmstudio: ServiceStatus;
   model: LocalModelInfo | null;
   models: LocalModelInfo[];
@@ -98,7 +98,7 @@ type BackendDiagnostics = {
   runnerVersion: string;
   runnerContractVersion: string;
   policyVersion: string;
-  opencodeBinary: "present" | "missing";
+  runnerBinary: "present" | "missing";
   configAssertions: "enabled";
   providerAllowlist: LocalProviderId[];
   localhostOnlyModels: boolean;
@@ -409,7 +409,7 @@ const fallbackApi: DesktopApi = {
         }
       : null,
   getBackendStatus: async () => ({
-    opencode: "unavailable",
+    runner: "unavailable",
     lmstudio: "unavailable",
     model: null,
     models: [],
@@ -422,11 +422,11 @@ const fallbackApi: DesktopApi = {
       webTools: "disabled",
     },
     diagnostics: {
-      runnerName: "OpenCodeRunner",
-      runnerVersion: "opencode-package-adapter",
+      runnerName: "AegisRunner",
+      runnerVersion: "package-adapter-1",
       runnerContractVersion: "aegis-runner-1",
       policyVersion: "aegis-local-mvp-1",
-      opencodeBinary: "missing",
+      runnerBinary: "missing",
       configAssertions: "enabled",
       providerAllowlist: ["local-lmstudio"],
       localhostOnlyModels: true,
@@ -3296,8 +3296,8 @@ function App() {
               <section className="settingsSection">
                 <h3>Diagnostics</h3>
                 <div className="settingsRows">
-                  <div><span>Runner</span><strong>{backend?.diagnostics.runnerName ?? "OpenCodeRunner"}</strong></div>
-                  <div><span>OpenCode</span><strong>{backend?.diagnostics.opencodeBinary ?? "missing"}</strong></div>
+                <div><span>Runner</span><strong>{backend?.diagnostics.runnerName ?? "AegisRunner"}</strong></div>
+                  <div><span>Aegis runner</span><strong>{backend?.diagnostics.runnerBinary ?? "missing"}</strong></div>
                   <div><span>Contract</span><strong>{backend?.diagnostics.runnerContractVersion ?? "aegis-runner-1"}</strong></div>
                   <div><span>Policy</span><strong>{backend?.diagnostics.policyVersion ?? "aegis-local-mvp-1"}</strong></div>
                   <div><span>Config checks</span><strong>{backend?.diagnostics.configAssertions ?? "enabled"}</strong></div>

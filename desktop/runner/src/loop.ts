@@ -1,0 +1,145 @@
+import { nowIso, type AegisRunnerEvent } from "./events.js";
+import type { ChatMessage, Session } from "./session.js";
+import { redactText } from "./policy.js";
+import { runTool, toolSpecs } from "./tools/index.js";
+import type { ToolContext } from "./tools/common.js";
+
+type ToolCall = {
+  id: string;
+  name: string;
+  arguments: string;
+};
+
+type StreamAccumulator = {
+  content: string;
+  reasoning: string;
+  toolCalls: Map<number, ToolCall>;
+};
+
+function chatCompletionsUrl(baseURL: string): string {
+  const base = baseURL.replace(/\/+$/, "");
+  return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
+}
+
+function parseSseLine(line: string): unknown | null {
+  if (!line.startsWith("data:")) return null;
+  const data = line.slice(5).trim();
+  if (!data || data === "[DONE]") return null;
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function choiceDelta(value: unknown): Record<string, unknown> {
+  const obj = isRecord(value) ? value : {};
+  const choices = Array.isArray(obj.choices) ? obj.choices : [];
+  const first = isRecord(choices[0]) ? choices[0] : {};
+  return isRecord(first.delta) ? first.delta : {};
+}
+
+function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>) {
+  const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+  for (const raw of toolCalls) {
+    if (!isRecord(raw)) continue;
+    const index = typeof raw.index === "number" ? raw.index : 0;
+    const fn = isRecord(raw.function) ? raw.function : {};
+    const existing = acc.toolCalls.get(index) ?? { id: "", name: "", arguments: "" };
+    acc.toolCalls.set(index, {
+      id: typeof raw.id === "string" ? raw.id : existing.id || `tool-${index}`,
+      name: typeof fn.name === "string" ? fn.name : existing.name,
+      arguments: existing.arguments + (typeof fn.arguments === "string" ? fn.arguments : ""),
+    });
+  }
+}
+
+async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => void): Promise<StreamAccumulator> {
+  const response = await fetch(chatCompletionsUrl(session.config.provider.baseURL), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.config.provider.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: session.config.provider.modelId,
+      messages: session.messages,
+      stream: true,
+      tools: toolSpecs,
+      tool_choice: "auto",
+    }),
+    signal: session.abortController.signal,
+  });
+  if (!response.ok || !response.body) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`model request failed: ${response.status} ${response.statusText}${body ? ` ${body.slice(0, 400)}` : ""}`);
+  }
+
+  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map() };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trimEnd();
+      buffer = buffer.slice(newline + 1);
+      const parsed = parseSseLine(line);
+      const delta = choiceDelta(parsed);
+      const text = typeof delta.content === "string" ? delta.content : "";
+      const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+      if (text) {
+        acc.content += text;
+        emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
+      }
+      if (reasoning) {
+        acc.reasoning += reasoning;
+        emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() });
+      }
+      appendToolDelta(acc, delta);
+      newline = buffer.indexOf("\n");
+    }
+  }
+  return acc;
+}
+
+export async function runTurn(session: Session, prompt: string, emit: (event: AegisRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
+  session.messages.push({ role: "user", content: prompt });
+  for (let turn = 0; turn < 8; turn++) {
+    const acc = await streamModel(session, emit);
+    const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
+    session.messages.push({
+      role: "assistant",
+      content: acc.content || null,
+      tool_calls: toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })),
+    });
+    if (toolCalls.length === 0) return;
+
+    const ctx: ToolContext = {
+      taskId: session.taskId,
+      cwd: session.config.cwd,
+      permissionMode: session.config.permissionMode,
+      askPermission: replyPermission,
+      emitToolOutput(toolCallId, stream, text) {
+        emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
+      },
+    };
+    for (const toolCall of toolCalls) {
+      try {
+        const result = await runTool(ctx, emit, toolCall);
+        session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: result.output });
+      } catch (error) {
+        emit({ type: "tool.finished", taskId: session.taskId, toolCallId: toolCall.id, exitCode: 1, at: nowIso() });
+        session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: `Tool failed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+  }
+  throw new Error("model exceeded maximum tool turns");
+}
