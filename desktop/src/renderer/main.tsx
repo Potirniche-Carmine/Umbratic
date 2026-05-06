@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import {
   ArrowLeft,
   AtSign,
+  BarChart3,
   Brain,
+  Check,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
@@ -15,6 +17,7 @@ import {
   FolderOpen,
   GitBranch,
   Loader2,
+  Minus,
   PanelLeft,
   PanelRight,
   Play,
@@ -24,6 +27,7 @@ import {
   Settings,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   SquarePen,
   TerminalSquare,
   ThumbsDown,
@@ -31,6 +35,7 @@ import {
   Trash2,
   TriangleAlert,
   Undo2,
+  User,
   X,
 } from "lucide-react";
 
@@ -276,6 +281,8 @@ type ComposerTimelineItem =
   | { type: "assistant"; id: string; text: string }
   | { type: "command"; id: string; run: CommandRun };
 
+type SkillInfo = { id: string; name: string; description: string };
+
 type DesktopApi = {
   listChats(): Promise<ChatRecord[]>;
   createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<ChatRecord>;
@@ -288,6 +295,12 @@ type DesktopApi = {
   getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
   getBackendStatus(): Promise<BackendStatus>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+  listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
+  openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
+  createSkill(input: { name: string }): Promise<
+    | { ok: true; skill: SkillInfo; directory: string }
+    | { ok: false; message: string }
+  >;
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
   setSelectedModel(input: { providerId: string; modelId: string }): Promise<BackendStatus>;
   listAvailableIdes(): Promise<IdeChoice[]>;
@@ -453,6 +466,9 @@ const fallbackApi: DesktopApi = {
     message: "Electron preload is not available in this browser preview.",
   }),
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
+  listSkills: async () => ({ skills: [], directory: "~/.aegis/skills" }),
+  openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
+  createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
     previewPermissionMode = mode;
     return fallbackApi.getBackendStatus();
@@ -1542,8 +1558,25 @@ function App() {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [settingsTab, setSettingsTab] = useState<"account" | "tools" | "skills" | "telemetry">("account");
+  const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
   const [exportingTelemetry, setExportingTelemetry] = useState(false);
+  const [toolsEnabled, setToolsEnabled] = useState<Record<string, boolean>>({
+    read: true,
+    write: true,
+    edit: true,
+    search: true,
+    command: true,
+  });
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.aegis/skills");
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
+  const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
+  const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
+  const [newSkillName, setNewSkillName] = useState("");
+  const [creatingSkill, setCreatingSkill] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
@@ -1951,14 +1984,69 @@ function App() {
 
   async function exportTelemetry() {
     setExportingTelemetry(true);
-    setSettingsMessage(null);
+    setTelemetryMessage(null);
     try {
       const result = await api.exportTelemetry();
-      setSettingsMessage(result.ok ? `Exported to ${result.path}` : result.message);
+      setTelemetryMessage(result.ok ? `Exported to ${result.path}` : result.message);
     } catch (cause) {
-      setSettingsMessage(String(cause instanceof Error ? cause.message : cause));
+      setTelemetryMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
       setExportingTelemetry(false);
+    }
+  }
+
+  async function loadSkills() {
+    setSkillsLoading(true);
+    try {
+      const result = await api.listSkills();
+      setSkills(result.skills);
+      setSkillsDirectory(result.directory);
+      setSkillsEnabled((prev) => {
+        const next: Record<string, boolean> = {};
+        for (const skill of result.skills) {
+          next[skill.id] = prev[skill.id] ?? true;
+        }
+        return next;
+      });
+    } catch (cause) {
+      setSkills([]);
+      console.warn("Failed to list skills", cause);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }
+
+  async function openSkillsFolder() {
+    setSkillsMessage(null);
+    try {
+      const result = await api.openSkillsFolder();
+      if (!result.ok) {
+        setSkillsMessage(result.message);
+      } else {
+        setSkillsDirectory(result.directory);
+      }
+    } catch (cause) {
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function submitCreateSkill() {
+    if (creatingSkill) return;
+    setSkillsMessage(null);
+    setCreatingSkill(true);
+    try {
+      const result = await api.createSkill({ name: newSkillName });
+      if (!result.ok) {
+        setSkillsMessage(result.message);
+        return;
+      }
+      setNewSkillName("");
+      setNewSkillFormOpen(false);
+      await loadSkills();
+    } catch (cause) {
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setCreatingSkill(false);
     }
   }
 
@@ -2716,13 +2804,14 @@ function App() {
           type="button"
           onClick={() => {
             setSettingsOpen(true);
-            setSettingsMessage(null);
+            setAccountMessage(null);
+            setTelemetryMessage(null);
             void refreshStatus();
+            void loadSkills();
           }}
         >
           <Settings size={16} />
           <span>Settings</span>
-          <em>{backend?.diagnostics.policyVersion ?? "local"}</em>
         </button>
       </aside>
 
@@ -3226,89 +3315,290 @@ function App() {
               </button>
             </header>
 
-            <div className="settingsSections">
-              <section className="settingsSection settingsSectionWide">
-                <h3>Account</h3>
-                <div className="settingsRows">
-                  <div><span>Profile</span><strong>Local developer</strong></div>
-                  <div><span>Identity</span><strong>Not required for local runs</strong></div>
-                  <div><span>Policy source</span><strong>Local settings</strong></div>
-                </div>
-              </section>
-
-              <section className="settingsSection">
-                <h3>Models</h3>
-                <div className="settingsRows">
-                  <div><span>Selected</span><strong>{selectedModel?.modelId ?? "None"}</strong></div>
-                  <div><span>Provider</span><strong>{selectedModel?.providerName ?? "LM Studio"}</strong></div>
-                  <div><span>Status</span><strong>{backend?.lmstudio ?? "unavailable"}</strong></div>
-                  <div><span>Base URL</span><strong>{selectedModel?.baseUrl ?? backend?.providers[0]?.baseUrl ?? "http://127.0.0.1:1234/v1"}</strong></div>
-                  <div><span>Available</span><strong>{backend?.models.length ?? 0} local model{(backend?.models.length ?? 0) === 1 ? "" : "s"}</strong></div>
-                </div>
-              </section>
-
-              <section className="settingsSection">
-                <h3>Permissions</h3>
-                <div className="settingsRows">
-                  <div><span>Mode</span><strong>{permissionMode}</strong></div>
-                  <div><span>Edits</span><strong>{permissionMode === "bypass" ? "Allowed during run" : "Ask first"}</strong></div>
-                  <div><span>Shell</span><strong>{permissionMode === "bypass" ? "Allowed by policy" : "Ask first"}</strong></div>
-                  <div><span>Web tools</span><strong>{backend?.privacy.webTools ?? "disabled"}</strong></div>
-                  <div><span>Final approval</span><strong>Manual</strong></div>
-                </div>
-              </section>
-
-              <section className="settingsSection">
-                <h3>Runtimes</h3>
-                <div className="settingsRows">
-                  <div><span>Python</span><strong>{backend?.diagnostics.runtimes.python.barePythonVerification === "denied" ? "uv/.venv policy" : "checking"}</strong></div>
-                  <div><span>Generated paths</span><strong>{backend?.diagnostics.runtimes.python.generatedPaths.join(", ") ?? ".venv, .aegis/runtime"}</strong></div>
-                  <div><span>CMake</span><strong>{backend?.diagnostics.runtimes.cmake.buildDir ?? ".aegis/build"}</strong></div>
-                  <div><span>Shell</span><strong>{backend?.diagnostics.runtimes.shell.preferred ?? "posix"} non-interactive</strong></div>
-                </div>
-              </section>
-
-              <section className="settingsSection settingsSectionWide">
-                <h3>Telemetry</h3>
-                <div className="settingsRows">
-                  <div><span>Mode</span><strong>{backend?.diagnostics.telemetry.localEnabled ? "Local event ledger" : "Off"}</strong></div>
-                  <div><span>Captures</span><strong>feedback, approvals, IDE opens, command outcomes, review changes</strong></div>
-                  <div><span>Excludes</span><strong>raw prompts, full diffs, full command output, source contents</strong></div>
-                  <div><span>Retention</span><strong>{backend?.diagnostics.telemetry.retentionDays ?? 30} days</strong></div>
-                  <div><span>Sync</span><strong>{backend?.diagnostics.telemetry.syncEnabled ? "On" : "Disabled for MVP"}</strong></div>
-                  <div><span>Export</span><button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
-                    {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
-                    <span>Redacted JSON</span>
-                  </button></div>
-                </div>
-                {settingsMessage ? <p className="settingsMessage">{settingsMessage}</p> : null}
-              </section>
-
-              <section className="settingsSection">
-                <h3>Editors</h3>
-                <div className="settingsRows">
-                  <div><span>Selected</span><strong>{selectedIde.label}</strong></div>
-                  <div><span>Available</span><strong>{availableIdes.map((ide) => ide.label).join(", ")}</strong></div>
-                  <div><span>Review open</span><strong>Workspace or changed file</strong></div>
-                </div>
-              </section>
-
-              <section className="settingsSection">
-                <h3>Diagnostics</h3>
-                <div className="settingsRows">
-                <div><span>Runner</span><strong>{backend?.diagnostics.runnerName ?? "AegisRunner"}</strong></div>
-                  <div><span>Aegis runner</span><strong>{backend?.diagnostics.runnerBinary ?? "missing"}</strong></div>
-                  <div><span>Contract</span><strong>{backend?.diagnostics.runnerContractVersion ?? "aegis-runner-1"}</strong></div>
-                  <div><span>Policy</span><strong>{backend?.diagnostics.policyVersion ?? "aegis-local-mvp-1"}</strong></div>
-                  <div><span>Config checks</span><strong>{backend?.diagnostics.configAssertions ?? "enabled"}</strong></div>
-                  <div><span>Public providers</span><strong>{backend?.privacy.disabledProviders.length ?? 0} disabled</strong></div>
-                  <div><span>Localhost only</span><strong>{backend?.diagnostics.localhostOnlyModels ? "Yes" : "Check models"}</strong></div>
-                </div>
-                <button className="settingsRefreshButton" type="button" onClick={() => void refreshStatus()}>
-                  <RefreshCw size={13} />
-                  <span>Refresh</span>
+            <div className="settingsLayout">
+              <nav className="settingsNav" aria-label="Settings sections">
+                <button
+                  type="button"
+                  className={`settingsNavItem ${settingsTab === "account" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("account")}
+                >
+                  <User size={15} />
+                  <span>Account</span>
                 </button>
-              </section>
+                <button
+                  type="button"
+                  className={`settingsNavItem ${settingsTab === "tools" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("tools")}
+                >
+                  <TerminalSquare size={15} />
+                  <span>Tools</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settingsNavItem ${settingsTab === "skills" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("skills")}
+                >
+                  <Sparkles size={15} />
+                  <span>Skills</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settingsNavItem ${settingsTab === "telemetry" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("telemetry")}
+                >
+                  <BarChart3 size={15} />
+                  <span>Telemetry</span>
+                </button>
+              </nav>
+
+              <div className="settingsContent">
+                {settingsTab === "account" ? (
+                  <div className="settingsPanel">
+                    <div className="settingsPanelHead">
+                      <h3>Account</h3>
+                      <p>Sign in to sync settings across devices. Aegis runs locally either way.</p>
+                    </div>
+
+                    <div className="accountCard">
+                      <div className="accountAvatar" aria-hidden="true">
+                        <User size={22} />
+                      </div>
+                      <div className="accountIdentity">
+                        <strong>Local developer</strong>
+                        <em>Not signed in</em>
+                      </div>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Sign in with</h4>
+                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Aegis will keep working in local mode.")}>
+                        <GoogleMark />
+                        <span>Continue with Google</span>
+                      </button>
+                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Aegis will keep working in local mode.")}>
+                        <MicrosoftMark />
+                        <span>Continue with Microsoft</span>
+                      </button>
+                      {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {settingsTab === "tools" ? (
+                  <div className="settingsPanel">
+                    <div className="settingsPanelHead">
+                      <h3>Tools</h3>
+                      <p>Capabilities the model can call during a run. Disable any tool to keep it out of new turns.</p>
+                    </div>
+
+                    <div className="settingsNotice">
+                      <TriangleAlert size={14} />
+                      <span>UI only for now. Toggles do not yet enforce in runs — needs to be wired into the runner.</span>
+                    </div>
+
+                    <ul className="skillList">
+                      {[
+                        { id: "read", name: "read", description: "Read a workspace file or list a directory." },
+                        { id: "search", name: "search", description: "Search workspace file paths and small text files." },
+                        { id: "edit", name: "edit", description: "Replace exact text in a workspace file. Requires permission." },
+                        { id: "write", name: "write", description: "Write a workspace file. Requires permission." },
+                        { id: "command", name: "command", description: "Run a local shell command after policy and permission checks." },
+                      ].map((tool) => (
+                        <li key={tool.id} className="skillRow">
+                          <div className="skillRowText">
+                            <strong className="toolName">{tool.name}</strong>
+                            <em>{tool.description}</em>
+                          </div>
+                          <button
+                            type="button"
+                            className={`toggle ${toolsEnabled[tool.id] ? "isOn" : ""}`}
+                            role="switch"
+                            aria-checked={!!toolsEnabled[tool.id]}
+                            aria-label={`Toggle ${tool.name}`}
+                            onClick={() => setToolsEnabled((prev) => ({ ...prev, [tool.id]: !prev[tool.id] }))}
+                          >
+                            <span className="toggleKnob" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {settingsTab === "skills" ? (
+                  <div className="settingsPanel">
+                    <div className="settingsPanelHead">
+                      <h3>Skills</h3>
+                      <p>
+                        Skills are global guidance Aegis includes in <strong>every chat</strong>. Use them for things like a personal style guide or rules every task should follow.
+                      </p>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <div className="skillSectionHeader">
+                        <h4>Managed</h4>
+                        <span className="skillSectionTag">Company</span>
+                      </div>
+                      <p className="skillSectionHint">
+                        Maintained by your organization and baked into the model. Always on — these can't be disabled here.
+                      </p>
+                      <div className="settingsEmpty">
+                        <ShieldCheck size={16} />
+                        <span>No managed skills yet. They'll appear here once your team publishes them from the server.</span>
+                      </div>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <div className="skillSectionHeader">
+                        <h4>Your skills</h4>
+                        <div className="skillSectionActions">
+                          <button className="settingsInlineButton" type="button" onClick={() => void openSkillsFolder()}>
+                            <FolderOpen size={13} />
+                            <span>Open folder</span>
+                          </button>
+                          <button
+                            className="settingsInlineButton"
+                            type="button"
+                            onClick={() => {
+                              setNewSkillFormOpen((open) => !open);
+                              setSkillsMessage(null);
+                            }}
+                          >
+                            <Plus size={13} />
+                            <span>New skill</span>
+                          </button>
+                        </div>
+                      </div>
+                      <p className="skillSectionHint">
+                        Loaded from <code className="settingsCode">{skillsDirectory}</code>. Each subfolder with a <code className="settingsCode">SKILL.md</code> becomes a skill.
+                      </p>
+
+                      {newSkillFormOpen ? (
+                        <form
+                          className="skillCreateForm"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void submitCreateSkill();
+                          }}
+                        >
+                          <input
+                            type="text"
+                            placeholder="Skill name (e.g. Personal style guide)"
+                            value={newSkillName}
+                            onChange={(event) => setNewSkillName(event.target.value)}
+                            autoFocus
+                            disabled={creatingSkill}
+                          />
+                          <button type="submit" className="settingsInlineButton" disabled={creatingSkill || !newSkillName.trim()}>
+                            {creatingSkill ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                            <span>Create</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="chromeButton"
+                            onClick={() => {
+                              setNewSkillFormOpen(false);
+                              setNewSkillName("");
+                            }}
+                            disabled={creatingSkill}
+                          >
+                            <X size={13} />
+                          </button>
+                        </form>
+                      ) : null}
+
+                      {skillsLoading ? (
+                        <div className="settingsEmpty">
+                          <Loader2 className="spin" size={16} />
+                          <span>Loading skills…</span>
+                        </div>
+                      ) : skills.length === 0 ? (
+                        <div className="settingsEmpty">
+                          <Sparkles size={16} />
+                          <span>No skills yet. Use New skill to scaffold one, or drop a folder with a SKILL.md into the directory above.</span>
+                        </div>
+                      ) : (
+                        <ul className="skillList">
+                          {skills.map((skill) => (
+                            <li key={skill.id} className="skillRow">
+                              <div className="skillRowText">
+                                <strong>{skill.name}</strong>
+                                {skill.description ? <em>{skill.description}</em> : null}
+                              </div>
+                              <button
+                                type="button"
+                                className={`toggle ${skillsEnabled[skill.id] ? "isOn" : ""}`}
+                                role="switch"
+                                aria-checked={!!skillsEnabled[skill.id]}
+                                aria-label={`Toggle ${skill.name}`}
+                                onClick={() => setSkillsEnabled((prev) => ({ ...prev, [skill.id]: !prev[skill.id] }))}
+                              >
+                                <span className="toggleKnob" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      {skillsMessage ? <p className="settingsMessage">{skillsMessage}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {settingsTab === "telemetry" ? (
+                  <div className="settingsPanel">
+                    <div className="settingsPanelHead">
+                      <h3>Telemetry</h3>
+                      <p>What Aegis records on this device. Nothing leaves the machine without an explicit export.</p>
+                    </div>
+
+                    <div className="settingsList">
+                      <div className="settingsListRow">
+                        <span>Mode</span>
+                        <strong>{backend?.diagnostics.telemetry.localEnabled ? "Local event ledger" : "Off"}</strong>
+                      </div>
+                      <div className="settingsListRow">
+                        <span>Retention</span>
+                        <strong>{backend?.diagnostics.telemetry.retentionDays ?? 30} days</strong>
+                      </div>
+                      <div className="settingsListRow">
+                        <span>Sync</span>
+                        <strong>{backend?.diagnostics.telemetry.syncEnabled ? "On" : "Off"}</strong>
+                      </div>
+                    </div>
+
+                    <div className="telemetryColumns">
+                      <div className="telemetryColumn">
+                        <h4>Collected</h4>
+                        <ul>
+                          <li><Check size={13} /> Feedback (thumbs up / down)</li>
+                          <li><Check size={13} /> Approval decisions</li>
+                          <li><Check size={13} /> IDE opens</li>
+                          <li><Check size={13} /> Command outcomes</li>
+                          <li><Check size={13} /> Review changes</li>
+                        </ul>
+                      </div>
+                      <div className="telemetryColumn">
+                        <h4>Excluded</h4>
+                        <ul>
+                          <li><Minus size={13} /> Raw prompts</li>
+                          <li><Minus size={13} /> Full diffs</li>
+                          <li><Minus size={13} /> Full command output</li>
+                          <li><Minus size={13} /> Source file contents</li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="settingsActions">
+                      <button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
+                        {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
+                        <span>Export redacted JSON</span>
+                      </button>
+                      {telemetryMessage ? <p className="settingsMessage">{telemetryMessage}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </section>
         </div>
@@ -3393,6 +3683,28 @@ function ComposerGreeting({ label }: { label: string }) {
       </span>
       <span>{label}</span>
     </div>
+  );
+}
+
+function GoogleMark() {
+  return (
+    <svg className="ssoMark" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+      <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.49h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.63z" />
+      <path fill="#34A853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.32A8.99 8.99 0 0 0 9 18z" />
+      <path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.96H.96A8.99 8.99 0 0 0 0 9c0 1.45.35 2.82.96 4.04l3.01-2.32z" />
+      <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A8.99 8.99 0 0 0 .96 4.96L3.97 7.28C4.68 5.16 6.66 3.58 9 3.58z" />
+    </svg>
+  );
+}
+
+function MicrosoftMark() {
+  return (
+    <svg className="ssoMark" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+      <rect x="1" y="1" width="7.5" height="7.5" fill="#F25022" />
+      <rect x="9.5" y="1" width="7.5" height="7.5" fill="#7FBA00" />
+      <rect x="1" y="9.5" width="7.5" height="7.5" fill="#00A4EF" />
+      <rect x="9.5" y="9.5" width="7.5" height="7.5" fill="#FFB900" />
+    </svg>
   );
 }
 

@@ -230,6 +230,12 @@ declare global {
       getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
       getBackendStatus(): Promise<AegisBackendStatus>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+      listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string }>; directory: string }>;
+      openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
+      createSkill(input: { name: string }): Promise<
+        | { ok: true; skill: { id: string; name: string; description: string }; directory: string }
+        | { ok: false; message: string }
+      >;
       setPermissionMode(mode: AegisPermissionMode): Promise<AegisBackendStatus>;
       setSelectedModel(input: { providerId: string; modelId: string }): Promise<AegisBackendStatus>;
       listAvailableIdes(): Promise<AegisIdeInfo[]>;

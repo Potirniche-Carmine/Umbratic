@@ -1228,6 +1228,120 @@ async function getBackendStatus(): Promise<BackendStatus> {
   };
 }
 
+type SkillInfo = { id: string; name: string; description: string };
+
+function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return {};
+  const out: { name?: string; description?: string } = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const kv = line.match(/^(\w+):\s*(.+)$/);
+    if (!kv) continue;
+    const value = kv[2].trim().replace(/^['"]|['"]$/g, "");
+    if (kv[1] === "name") out.name = value;
+    if (kv[1] === "description") out.description = value;
+  }
+  return out;
+}
+
+function skillsDirectoryPath(): string {
+  return path.join(os.homedir(), ".aegis", "skills");
+}
+
+async function listSkills(): Promise<{ skills: SkillInfo[]; directory: string }> {
+  const directory = skillsDirectoryPath();
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(directory, { withFileTypes: true });
+  } catch {
+    return { skills: [], directory };
+  }
+
+  const skills: SkillInfo[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+
+    if (entry.isDirectory()) {
+      const skillFile = path.join(directory, entry.name, "SKILL.md");
+      let name = entry.name;
+      let description = "";
+      try {
+        const content = await fs.promises.readFile(skillFile, "utf8");
+        const meta = parseSkillFrontmatter(content);
+        if (meta.name) name = meta.name;
+        if (meta.description) description = meta.description;
+      } catch {
+        // SKILL.md missing — fall back to folder name
+      }
+      skills.push({ id: entry.name, name, description });
+      continue;
+    }
+
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      const id = entry.name.replace(/\.md$/, "");
+      let name = id;
+      let description = "";
+      try {
+        const content = await fs.promises.readFile(path.join(directory, entry.name), "utf8");
+        const meta = parseSkillFrontmatter(content);
+        if (meta.name) name = meta.name;
+        if (meta.description) description = meta.description;
+      } catch {
+        // unreadable — keep defaults
+      }
+      skills.push({ id, name, description });
+    }
+  }
+
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return { skills, directory };
+}
+
+async function openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }> {
+  const directory = skillsDirectoryPath();
+  try {
+    await fs.promises.mkdir(directory, { recursive: true });
+    const failure = await shell.openPath(directory);
+    if (failure) {
+      return { ok: false, message: failure };
+    }
+    return { ok: true, directory };
+  } catch (cause) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+async function createSkill(input: { name?: string }): Promise<
+  | { ok: true; skill: SkillInfo; directory: string }
+  | { ok: false; message: string }
+> {
+  const rawName = (input?.name ?? "").trim();
+  if (!rawName) {
+    return { ok: false, message: "Enter a name for the skill." };
+  }
+  const id = rawName.toLowerCase().replace(/[^a-z0-9-_]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!id) {
+    return { ok: false, message: "Use letters, numbers, hyphens, or underscores in the name." };
+  }
+  const root = skillsDirectoryPath();
+  const skillDir = path.join(root, id);
+  try {
+    await fs.promises.mkdir(skillDir, { recursive: false });
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "EEXIST") {
+      return { ok: false, message: `A skill named "${id}" already exists.` };
+    }
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
+  }
+  const template = `---\nname: ${rawName}\ndescription: Briefly describe what this skill teaches Aegis to do in every chat.\n---\n\n# ${rawName}\n\nReplace this with the guidance you want every chat to follow.\n`;
+  await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), template, "utf8");
+  return {
+    ok: true,
+    skill: { id, name: rawName, description: "Briefly describe what this skill teaches Aegis to do in every chat." },
+    directory: root,
+  };
+}
+
 async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const result = mainWindow
@@ -2831,6 +2945,9 @@ app.whenReady().then(async () => {
   handleIpc("aegis:get-repository", (input) => getRepository(input));
   handleIpc("aegis:get-backend-status", () => getBackendStatus());
   handleIpc("aegis:export-telemetry", () => exportTelemetryBundle());
+  handleIpc("aegis:list-skills", () => listSkills());
+  handleIpc("aegis:open-skills-folder", () => openSkillsFolder());
+  handleIpc("aegis:create-skill", (input) => createSkill(input as { name?: string }));
   handleIpc("aegis:set-permission-mode", (mode) => setPermissionMode(mode));
   handleIpc("aegis:set-selected-model", (input) => setSelectedModel(input));
   handleIpc("aegis:list-available-ides", () => listAvailableIdes());

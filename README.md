@@ -44,3 +44,20 @@ npm run desktop:dev
 Use the Electron app for real task flows. The Vite browser preview can show the
 UI, but it cannot use the preload bridge, pick folders, run commands, or talk to
 the local agent backend.
+
+## Known UI Stubs
+
+These settings surfaces are wired up visually but are not yet enforced at
+runtime. They need to be implemented:
+
+- **Settings → Tools** — toggling `read`, `write`, `edit`, `search`, or
+  `command` does not yet filter the runner's `toolSpecs`. The runner still
+  exposes every tool to the model; the UI toggles are local React state only.
+- **Settings → Account → Continue with Google / Microsoft** — SSO buttons are
+  UI placeholders. Aegis runs entirely in local mode today.
+- **Settings → Skills (Managed section)** — server/company-managed skills are
+  not yet delivered from a remote source; the section currently shows an empty
+  state describing the planned behavior.
+- **Settings → Skills (Your skills toggles)** — per-skill enable toggles are
+  local React state. Loading skills from `~/.aegis/skills/`, the **Open folder**
+  button, and **New skill** scaffolding are all real.
