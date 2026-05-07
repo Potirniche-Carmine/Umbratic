@@ -16,6 +16,7 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  Hand,
   Loader2,
   Minus,
   PanelLeft,
@@ -949,7 +950,7 @@ const sidebarMaxWidth = 360;
 const sidebarCloseThreshold = 150;
 const reviewMinWidth = 365;
 const reviewCloseThreshold = 260;
-const composerMinWidth = 120;
+const composerMinWidth = 480;
 const reviewOpenRatio = 0.7;
 const compactSidebarRatio = 0.18;
 const sidebarMaxRatio = 0.28;
@@ -1578,6 +1579,7 @@ function App() {
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState(false);
+  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
   const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
@@ -2697,30 +2699,18 @@ function App() {
         >
           <ArrowLeft size={15} />
         </button>
-        <div className="topbarTitle">
-          <span className="topbarLogo" aria-hidden="true" />
-          <span>Aegis</span>
-        </div>
         <div className="topbarSpacer" />
-        <button
-          className={`chromeButton ${reviewOpen ? "isActive" : ""}`}
-          type="button"
-          onClick={toggleReviewPanel}
-          aria-pressed={reviewOpen}
-          title="Toggle review"
-        >
-          <PanelRight size={15} />
-        </button>
       </header>
 
       <aside className="sidebar">
         <div className="sidebarResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginSidebarResize} />
-        <div className="sidebarStack">
+        <div className="sidebarHeader">
           <button className="newChatButton" type="button" onClick={newChat}>
             <Plus size={16} />
             <span>New chat</span>
           </button>
-
+        </div>
+        <div className="sidebarStack">
           <section className="chatArchive">
             <div className="sideHeader">
               <h2>Chats</h2>
@@ -2742,7 +2732,6 @@ function App() {
                           <ChevronDown className={collapsed ? "collapsed" : ""} size={14} />
                           <span>
                             <strong>{group.name}</strong>
-                            {group.path ? <em>{group.path}</em> : <em>Drafts without a folder</em>}
                           </span>
                         </button>
                         {group.path ? (
@@ -2799,6 +2788,10 @@ function App() {
           </section>
         </div>
 
+        <div className="sidebarBrand" aria-hidden="true">
+          <span className="sidebarBrandLogo" />
+          <span className="confidentialMark">Private and Confidential</span>
+        </div>
         <button
           className="settingsPlaceholder"
           type="button"
@@ -2818,6 +2811,17 @@ function App() {
       <main className="workspace">
         <section className="workArea">
           <section className="composerPanel">
+            <div className="composerTopbar">
+              <button
+                className={`chromeButton composerReviewToggle ${reviewOpen ? "isActive" : ""}`}
+                type="button"
+                onClick={toggleReviewPanel}
+                aria-pressed={reviewOpen}
+                title="Toggle review"
+              >
+                <PanelRight size={15} />
+              </button>
+            </div>
             <div className="composerBody" ref={streamRef}>
               {composerItems.length ? (
                 <div className="timeline">
@@ -3016,33 +3020,57 @@ function App() {
               <span className="controlIcon">{repository?.kind === "git" ? <GitBranch size={16} /> : <FolderOpen size={16} />}</span>
               <span>
                 <strong>{repository ? repository.name : "Select folder"}</strong>
-                <em>{repository ? repository.rootPath : "Optional project context"}</em>
               </span>
             </button>
 
-            <div className="permissionControl">
+            <div className={`permissionControl ${permissionMode === "bypass" ? "isBypass" : ""}`}>
               <button
-                className={permissionMode === "normal" ? "active" : ""}
+                className="permissionTrigger"
                 type="button"
-                onClick={() => updatePermissionMode("normal")}
+                onClick={() => setPermissionMenuOpen((open) => !open)}
+                aria-expanded={permissionMenuOpen}
+                aria-haspopup="menu"
+                title={permissionMode === "bypass" ? "Bypass mode" : "Normal mode"}
               >
-                Normal
+                {permissionMode === "bypass" ? (
+                  <ShieldAlert className="bypassIcon" size={15} />
+                ) : (
+                  <Hand size={15} />
+                )}
+                <ChevronDown size={13} />
               </button>
-              <button
-                className={permissionMode === "bypass" ? "active dangerActive" : ""}
-                type="button"
-                onClick={() => updatePermissionMode("bypass")}
-              >
-                <ShieldAlert className="bypassIcon" size={14} />
-                Bypass
-              </button>
+              {permissionMenuOpen ? (
+                <div className="permissionMenu" role="menu">
+                  <button
+                    className={permissionMode === "normal" ? "active" : ""}
+                    type="button"
+                    onClick={() => {
+                      setPermissionMenuOpen(false);
+                      void updatePermissionMode("normal");
+                    }}
+                  >
+                    <Hand size={15} />
+                    <span>Normal</span>
+                  </button>
+                  <button
+                    className={permissionMode === "bypass" ? "active" : ""}
+                    type="button"
+                    onClick={() => {
+                      setPermissionMenuOpen(false);
+                      void updatePermissionMode("bypass");
+                    }}
+                  >
+                    <ShieldAlert className="bypassIcon" size={15} />
+                    <span>Bypass</span>
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             <div className="modelMenuHost">
               <button className="modelMenuButton" type="button" onClick={() => setModelMenuOpen((open) => !open)}>
                 <span>
                   <strong>{selectedModel?.modelId ?? "No local model"}</strong>
-                  <em>{selectedModel ? selectedModel.providerName : "LM Studio"}</em>
                 </span>
                 <ChevronDown size={15} />
               </button>
@@ -3678,9 +3706,6 @@ function Empty({ label }: { label: string }) {
 function ComposerGreeting({ label }: { label: string }) {
   return (
     <div className="composerGreeting">
-      <span className="composerGreetingIcon">
-        <span className="composerGreetingLogo" aria-hidden="true" />
-      </span>
       <span>{label}</span>
     </div>
   );
