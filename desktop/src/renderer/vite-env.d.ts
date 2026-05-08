@@ -4,7 +4,7 @@ type AegisPermissionMode = "normal" | "bypass";
 type AegisReasoningMode = "fast" | "reasoning";
 type AegisServiceStatus = "ready" | "degraded" | "unavailable";
 type AegisWorkspaceKind = "git" | "folder";
-type AegisLocalProviderId = "local-lmstudio";
+type AegisLocalProviderId = "local-lmstudio" | "local-vllm";
 type AegisCommandClass =
   | "read"
   | "edit"
@@ -228,6 +228,12 @@ declare global {
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<AegisFileSearchResult[]>;
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
       getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
+      listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
+        { ok: true; current: string; branches: string[] } | { ok: false; message: string }
+      >;
+      checkoutRepositoryBranch(input: { repositoryId?: string; repositoryPath?: string; branch: string }): Promise<
+        { ok: true; repository: AegisRepositoryInfo } | { ok: false; message: string }
+      >;
       getBackendStatus(): Promise<AegisBackendStatus>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
       listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string }>; directory: string }>;

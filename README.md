@@ -7,7 +7,7 @@ controlled workspace. The intended product flow is:
 2. Ask for a code change in chat.
 3. Aegis creates an isolated task workspace.
 4. OpenCode runs the agent harness and tool calls.
-5. LM Studio serves the local LLM through an OpenAI-compatible endpoint.
+5. LM Studio or vLLM serves the local LLM through an OpenAI-compatible endpoint.
 6. The user reviews the result and explicitly approves the merge or keeps the
    worktree.
 

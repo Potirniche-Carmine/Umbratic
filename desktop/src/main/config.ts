@@ -2,6 +2,8 @@ import type { LocalProviderId, PermissionMode, ReasoningMode, TaskState } from "
 
 export const defaultLmStudioBaseUrl =
   process.env.AEGIS_LMSTUDIO_BASE_URL || process.env.LMSTUDIO_BASE_URL || "http://127.0.0.1:1234/v1";
+export const defaultVllmBaseUrl =
+  process.env.AEGIS_VLLM_BASE_URL || process.env.VLLM_BASE_URL || "http://127.0.0.1:8000/v1";
 
 export const preferredModelHints = ["gemma4", "gemma-4", "gemma"];
 
@@ -19,7 +21,10 @@ export const localProviderCatalog: Array<{
   providerName: string;
   baseUrl: string;
   apiKey: string;
-}> = [{ providerId: "local-lmstudio", providerName: "LM Studio", baseUrl: defaultLmStudioBaseUrl, apiKey: "lm-studio" }];
+}> = [
+  { providerId: "local-vllm", providerName: "vLLM", baseUrl: defaultVllmBaseUrl, apiKey: process.env.AEGIS_VLLM_API_KEY || process.env.VLLM_API_KEY || "aegis-local-vllm" },
+  { providerId: "local-lmstudio", providerName: "LM Studio", baseUrl: defaultLmStudioBaseUrl, apiKey: "lm-studio" },
+];
 
 export const defaultDisabledProviders = [
   "opencode",

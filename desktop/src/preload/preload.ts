@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld("aegis", {
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("aegis:search-files", input),
   pickRepository: () => ipcRenderer.invoke("aegis:pick-repository"),
   getRepository: (input: { repositoryId?: string; repositoryPath?: string }) => ipcRenderer.invoke("aegis:get-repository", input),
+  listRepositoryBranches: (input: { repositoryId?: string; repositoryPath?: string }) =>
+    ipcRenderer.invoke("aegis:list-repository-branches", input),
+  checkoutRepositoryBranch: (input: { repositoryId?: string; repositoryPath?: string; branch: string }) =>
+    ipcRenderer.invoke("aegis:checkout-repository-branch", input),
   getBackendStatus: () => ipcRenderer.invoke("aegis:get-backend-status"),
   exportTelemetry: () => ipcRenderer.invoke("aegis:export-telemetry"),
   listSkills: () => ipcRenderer.invoke("aegis:list-skills"),

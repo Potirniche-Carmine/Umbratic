@@ -1,5 +1,5 @@
 export type AegisProviderConfig = {
-  id: "local-lmstudio" | "company-model";
+  id: "local-lmstudio" | "local-vllm" | "company-model";
   name: string;
   baseURL: string;
   apiKey: string;

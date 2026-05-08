@@ -128,7 +128,7 @@ export function readSettings(): { selectedModel?: { providerId: LocalProviderId;
   const settings = readJsonFile<{ selectedModel?: { providerId?: string; modelId?: string } }>(settingsPath(), {});
   const providerId = settings.selectedModel?.providerId;
   const modelId = settings.selectedModel?.modelId;
-  if (providerId === "local-lmstudio" && typeof modelId === "string" && modelId.trim()) {
+  if ((providerId === "local-lmstudio" || providerId === "local-vllm") && typeof modelId === "string" && modelId.trim()) {
     return { selectedModel: { providerId, modelId: modelId.trim() } };
   }
   return {};

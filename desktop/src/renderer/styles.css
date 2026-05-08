@@ -67,10 +67,10 @@ select {
 
 h2 {
   margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -313,10 +313,8 @@ pre {
 }
 
 .sidebarHeader {
-  margin: -13px -13px 0;
-  padding: 13px;
-  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
+  padding-bottom: 4px;
 }
 
 .sidebarStack {
@@ -331,32 +329,53 @@ pre {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 7px;
   width: 100%;
-  height: 34px;
-  border: 1px solid rgba(87, 157, 255, 0.26);
+  height: 32px;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  color: #d8eaff;
-  background: rgba(87, 157, 255, 0.1);
-  font-weight: 750;
+  color: var(--text);
+  background: transparent;
+  font-weight: 500;
+  font-size: 12.5px;
+  letter-spacing: -0.005em;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.newChatButton svg {
+  color: var(--muted);
+  transition: color 120ms ease;
 }
 
 .newChatButton:hover {
-  background: rgba(87, 157, 255, 0.16);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.newChatButton:hover svg {
+  color: var(--text);
 }
 
 .chatArchive {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   min-height: 0;
+}
+
+.chatArchive .sideHeader {
+  padding: 2px 4px;
+  min-height: 22px;
 }
 
 .chatList {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 6px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -364,25 +383,26 @@ pre {
 
 .chatProject {
   display: grid;
-  gap: 6px;
+  gap: 3px;
   min-width: 0;
 }
 
 .chatProjectHeader {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 26px;
+  grid-template-columns: minmax(0, 1fr) 24px;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
 .chatProjectToggle {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   gap: 6px;
-  min-height: 34px;
-  padding: 4px 7px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: 6px;
   color: var(--muted);
   text-align: left;
 }
@@ -430,7 +450,9 @@ pre {
 
 .chatProjectToggle strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 
 .chatProjectToggle em {
@@ -442,9 +464,9 @@ pre {
 .chatProjectChats {
   position: relative;
   display: grid;
-  gap: 7px;
-  margin-left: 21px;
-  padding-left: 10px;
+  gap: 2px;
+  margin-left: 19px;
+  padding-left: 9px;
 }
 
 .chatProjectChats::before {
@@ -463,10 +485,14 @@ pre {
   align-items: stretch;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--muted);
   background: transparent;
   overflow: hidden;
+  transition:
+    border-color 100ms ease,
+    background 100ms ease,
+    color 100ms ease;
 }
 
 .chatRowMain {
@@ -474,21 +500,19 @@ pre {
   gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 36px;
-  padding: 7px 34px 7px 10px;
+  min-height: 30px;
+  padding: 5px 30px 5px 9px;
   text-align: left;
 }
 
-.chatRow.active,
 .chatRow:hover {
   color: var(--text);
-  border-color: var(--line);
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .chatRow.active {
-  background: rgba(87, 157, 255, 0.1);
-  border-color: rgba(87, 157, 255, 0.22);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .chatRow.closed {
@@ -501,15 +525,16 @@ pre {
 
 .chatDeleteButton {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 5px;
+  right: 5px;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
   color: var(--faint);
   opacity: 0;
+  transition: opacity 100ms ease;
 }
 
 .chatRow:hover .chatDeleteButton,
@@ -537,6 +562,12 @@ pre {
   white-space: nowrap;
 }
 
+.chatRowMain strong {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
 .chatRowMain em {
   color: var(--faint);
   font-style: normal;
@@ -556,21 +587,29 @@ pre {
 
 .settingsPlaceholder {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
-  min-height: 36px;
-  padding: 0 10px;
+  min-height: 32px;
+  padding: 0 11px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.03);
+  background: transparent;
   text-align: left;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .settingsPlaceholder:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .sideSection {
@@ -1412,12 +1451,14 @@ pre {
 }
 
 .promptControls {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) auto minmax(110px, 180px);
-  gap: 10px;
-  align-items: stretch;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
   width: min(100%, 980px);
   min-width: 0;
+  min-height: 28px;
+  padding: 0 2px;
 }
 
 .closedChatNotice {
@@ -1445,50 +1486,233 @@ pre {
   white-space: nowrap;
 }
 
+.workspaceCluster {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 280px;
+  background: transparent;
+}
+
 .workspaceControl,
 .modelMenuButton {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  gap: 9px;
+  display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-width: 0;
-  min-height: 42px;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.22);
+  background: transparent;
   text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: -0.005em;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.workspaceControl {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.modelMenuButton {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
 }
 
 .workspaceControl:hover,
 .modelMenuButton:hover {
-  border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .controlIcon {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  color: var(--green);
-  background: rgba(73, 211, 138, 0.09);
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  background: transparent;
 }
 
-.workspaceControl span:last-child,
-.modelMenuButton span,
+.workspaceControl:hover .controlIcon {
+  color: var(--text);
+}
+
+.branchControl {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-left: 2px;
+  padding-left: 6px;
+}
+
+.branchControl::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--line);
+}
+
+.branchTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 140px;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.branchTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.branchTrigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchTrigger svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.branchMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 60;
+  display: grid;
+  gap: 1px;
+  min-width: 220px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: rgba(28, 30, 35, 0.98);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.34);
+}
+
+.branchMenuHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 6px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.branchRefreshButton {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.branchRefreshButton:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.branchMenu button {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.branchMenu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.branchMenu button.active {
+  color: var(--text);
+}
+
+.branchMenu button svg {
+  color: var(--text);
+}
+
+.branchSpacer {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.branchMenu button span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchMenuEmpty,
+.branchMenuError {
+  padding: 8px 8px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.branchMenuError {
+  color: #ffb4bb;
+}
+
+.workspaceControl > span:not(.controlIcon),
+.modelMenuButton > span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .modelMenu button span {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
 .workspaceControl strong,
-.workspaceControl em,
 .modelMenuButton strong,
-.modelMenuButton em,
 .modelMenu strong,
 .modelMenu em {
   overflow: hidden;
@@ -1496,47 +1720,83 @@ pre {
   white-space: nowrap;
 }
 
-.workspaceControl em,
-.modelMenuButton em,
+.workspaceControl strong,
+.modelMenuButton strong {
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: -0.005em;
+}
+
 .modelMenu em {
-  color: var(--muted);
+  color: var(--faint);
   font-style: normal;
-  font-size: 11.5px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .permissionControl {
   position: relative;
   display: flex;
-  align-items: stretch;
-  min-height: 42px;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .permissionTrigger {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  width: 100%;
-  min-width: 64px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.22);
-  font-weight: 700;
+  background: transparent;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: -0.005em;
+  text-align: left;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .permissionTrigger:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.permissionTrigger svg:last-child {
+.permissionTrigger svg:first-child {
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
+.permissionTrigger:hover svg:first-child {
+  color: var(--text);
+}
+
+.permissionTrigger svg:last-child {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.permissionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .permissionControl.isBypass .permissionTrigger {
-  border-color: rgba(255, 157, 166, 0.42);
-  background: rgba(255, 111, 122, 0.12);
+  color: #ffb4bb;
+  background: transparent;
+}
+
+.permissionControl.isBypass .permissionTrigger:hover {
+  background: rgba(255, 111, 122, 0.08);
+}
+
+.permissionControl.isBypass .permissionTrigger svg:first-child {
+  color: #ffb4bb;
 }
 
 .bypassIcon {
@@ -1598,20 +1858,17 @@ pre {
 .modelMenuHost {
   position: relative;
   display: flex;
+  flex: 0 1 auto;
   min-width: 0;
-  min-height: 38px;
-}
-
-.modelMenuButton {
-  width: 100%;
-  height: 100%;
-  min-height: 38px;
-  grid-template-columns: minmax(0, 1fr) 14px;
-  padding: 4px 10px;
-  align-self: stretch;
+  margin-left: auto;
 }
 
 .modelMenuButton svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.modelMenuButton:hover svg {
   color: var(--muted);
 }
 
@@ -1696,69 +1953,75 @@ pre {
   max-width: 780px;
 }
 
-@container workspace (max-width: 720px) {
-  .promptControls {
-    grid-template-columns: minmax(120px, 1fr) auto minmax(80px, 140px);
-    gap: 8px;
+@container workspace (max-width: 760px) {
+  .branchTrigger {
+    max-width: 100px;
   }
 
-  .modelMenuButton em {
-    display: none;
-  }
-
+  .workspaceControl,
   .modelMenuButton {
-    padding: 4px 8px;
+    max-width: 200px;
+  }
+}
+
+@container workspace (max-width: 600px) {
+  .branchTrigger {
+    max-width: 80px;
+    padding: 0 7px;
   }
 
-  .modelMenuHost {
-    min-width: 0;
-  }
-
-  .permissionTrigger {
-    min-width: 0;
+  .workspaceControl,
+  .modelMenuButton {
     padding: 0 8px;
-  }
-
-  .permissionControl {
-    min-width: 0;
+    max-width: 160px;
   }
 }
 
-@container workspace (max-width: 540px) {
-  .promptControls {
-    grid-template-columns: minmax(96px, 1fr) auto minmax(60px, 100px);
-    gap: 6px;
-  }
-
-  .modelMenuButton {
-    padding: 4px 6px;
-  }
-
-  .modelMenuButton strong {
-    font-size: 11.5px;
-  }
-
-  .permissionTrigger {
-    padding: 0 6px;
-  }
-}
-
-@container workspace (max-width: 420px) {
-  .promptControls {
-    grid-template-columns: minmax(80px, 1fr) auto minmax(50px, 80px);
-    gap: 6px;
-  }
-
-  .workspaceControl em {
+@container workspace (max-width: 460px) {
+  .permissionLabel {
     display: none;
   }
 
-  .modelMenuButton {
-    padding: 4px 5px;
+  .permissionTrigger {
+    padding: 0 7px;
+    gap: 4px;
   }
 
+  .branchTrigger {
+    max-width: 70px;
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .workspaceControl,
+  .modelMenuButton {
+    padding: 0 7px;
+    max-width: 130px;
+  }
+
+  .workspaceControl strong,
   .modelMenuButton strong {
     font-size: 11px;
+  }
+}
+
+@container workspace (max-width: 340px) {
+  .workspaceCluster .branchControl {
+    display: none;
+  }
+
+  .modelMenuButton > span {
+    display: none;
+  }
+}
+
+@container workspace (max-width: 260px) {
+  .workspaceControl > span:not(.controlIcon) {
+    display: none;
+  }
+
+  .workspaceControl {
+    padding: 0 6px;
   }
 }
 
@@ -3163,27 +3426,32 @@ pre {
 @media (max-width: 1120px) {
   .appShell {
     grid-template-areas:
-      "top top"
-      "side main";
-    grid-template-columns: auto minmax(0, 1fr);
+      "top top top"
+      "side main review";
+    grid-template-columns: auto minmax(220px, 1fr) minmax(0, min(var(--review-width, 60vw), calc(100vw - 240px)));
+  }
+
+  .appShell.reviewClosed {
+    grid-template-columns: auto minmax(220px, 1fr) 0;
   }
 
   .reviewSidebar {
-    position: fixed;
-    top: 36px;
-    right: 0;
-    bottom: 0;
-    z-index: 20;
-    width: min(var(--review-width, 70vw), calc(100vw - 42px));
-    min-width: min(365px, calc(100vw - 42px));
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    width: auto;
+    min-width: 0;
     max-width: none;
-    box-shadow: -20px 0 40px rgba(0, 0, 0, 0.32);
+    box-shadow: none;
   }
 
   .reviewClosed .reviewSidebar {
-    width: min(var(--review-width, 70vw), calc(100vw - 42px));
-    min-width: min(365px, calc(100vw - 42px));
-    transform: translateX(100%);
+    width: 0;
+    min-width: 0;
+    max-width: 0;
+    transform: none;
   }
 }
 
@@ -3208,8 +3476,15 @@ pre {
 
   .appShell {
     grid-template-areas:
-      "top"
-      "main";
-    grid-template-columns: minmax(0, 1fr);
+      "top top"
+      "main review";
+    grid-template-columns: minmax(180px, 1fr) minmax(0, min(var(--review-width, 60vw), calc(100vw - 200px)));
+  }
+
+  .appShell.reviewClosed {
+    grid-template-areas:
+      "top top"
+      "main main";
+    grid-template-columns: minmax(0, 1fr) 0;
   }
 }

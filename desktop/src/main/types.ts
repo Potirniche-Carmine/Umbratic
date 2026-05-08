@@ -4,7 +4,7 @@ export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
-export type LocalProviderId = "local-lmstudio";
+export type LocalProviderId = "local-lmstudio" | "local-vllm";
 export type CommandClass =
   | "read"
   | "edit"

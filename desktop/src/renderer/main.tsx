@@ -44,7 +44,7 @@ type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type WorkspaceKind = "git" | "folder";
-type LocalProviderId = "local-lmstudio";
+type LocalProviderId = "local-lmstudio" | "local-vllm";
 type CommandClass =
   | "read"
   | "edit"
@@ -294,6 +294,12 @@ type DesktopApi = {
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
   getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
+  listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
+    { ok: true; current: string; branches: string[] } | { ok: false; message: string }
+  >;
+  checkoutRepositoryBranch(input: { repositoryId?: string; repositoryPath?: string; branch: string }): Promise<
+    { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
+  >;
   getBackendStatus(): Promise<BackendStatus>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
@@ -422,6 +428,8 @@ const fallbackApi: DesktopApi = {
           statusSummary: "preview",
         }
       : null,
+  listRepositoryBranches: async () => ({ ok: true, current: "main", branches: ["main", "develop"] }),
+  checkoutRepositoryBranch: async () => ({ ok: false, message: "Open the Electron app to switch branches." }),
   getBackendStatus: async () => ({
     runner: "unavailable",
     lmstudio: "unavailable",
@@ -442,7 +450,7 @@ const fallbackApi: DesktopApi = {
       policyVersion: "aegis-local-mvp-1",
       runnerBinary: "missing",
       configAssertions: "enabled",
-      providerAllowlist: ["local-lmstudio"],
+      providerAllowlist: ["local-lmstudio", "local-vllm"],
       localhostOnlyModels: true,
       commandClassifier: "enabled",
       telemetry: {
@@ -1558,6 +1566,11 @@ function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const [checkoutPending, setCheckoutPending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"account" | "tools" | "skills" | "telemetry">("account");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
@@ -2108,11 +2121,69 @@ function App() {
     setBusy(true);
     try {
       const result = await api.pickRepository();
-      if (!result.canceled) setRepository(result.repository);
+      if (!result.canceled) {
+        setRepository(result.repository);
+        setBranches([]);
+        setBranchError(null);
+      }
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function refreshBranches() {
+    if (!repository || repository.kind !== "git") return;
+    setBranchesLoading(true);
+    setBranchError(null);
+    try {
+      const result = await api.listRepositoryBranches({ repositoryId: repository.id, repositoryPath: repository.rootPath });
+      if (result.ok) {
+        setBranches(result.branches);
+      } else {
+        setBranchError(result.message);
+        setBranches([]);
+      }
+    } catch (cause) {
+      setBranchError(String(cause instanceof Error ? cause.message : cause));
+      setBranches([]);
+    } finally {
+      setBranchesLoading(false);
+    }
+  }
+
+  async function toggleBranchMenu() {
+    if (!repository || repository.kind !== "git") return;
+    const next = !branchMenuOpen;
+    setBranchMenuOpen(next);
+    if (next) await refreshBranches();
+  }
+
+  async function selectBranch(branch: string) {
+    if (!repository || repository.kind !== "git") return;
+    if (branch === repository.originalBranch) {
+      setBranchMenuOpen(false);
+      return;
+    }
+    setCheckoutPending(true);
+    setBranchError(null);
+    try {
+      const result = await api.checkoutRepositoryBranch({
+        repositoryId: repository.id,
+        repositoryPath: repository.rootPath,
+        branch,
+      });
+      if (result.ok) {
+        setRepository(result.repository);
+        setBranchMenuOpen(false);
+      } else {
+        setBranchError(result.message);
+      }
+    } catch (cause) {
+      setBranchError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setCheckoutPending(false);
     }
   }
 
@@ -2174,7 +2245,7 @@ function App() {
 
   async function startTask() {
     if (!selectedModel) {
-      setError("Start LM Studio with at least one loaded model.");
+      setError("Start LM Studio or vLLM with at least one loaded model.");
       return;
     }
     if (closedChatNotice) {
@@ -3016,12 +3087,65 @@ function App() {
 
         <section className="promptDock">
           <div className="promptControls">
-            <button className="workspaceControl" type="button" onClick={pickRepository} disabled={busy}>
-              <span className="controlIcon">{repository?.kind === "git" ? <GitBranch size={16} /> : <FolderOpen size={16} />}</span>
-              <span>
-                <strong>{repository ? repository.name : "Select folder"}</strong>
-              </span>
-            </button>
+            <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
+              <button className="workspaceControl" type="button" onClick={pickRepository} disabled={busy}>
+                <span className="controlIcon">{repository?.kind === "git" ? <GitBranch size={14} /> : <FolderOpen size={14} />}</span>
+                <span>
+                  <strong>{repository ? repository.name : "Select folder"}</strong>
+                </span>
+              </button>
+              {repository?.kind === "git" ? (
+                <div className="branchControl">
+                  <button
+                    className="branchTrigger"
+                    type="button"
+                    onClick={() => void toggleBranchMenu()}
+                    aria-expanded={branchMenuOpen}
+                    aria-haspopup="menu"
+                    disabled={busy || checkoutPending}
+                    title={`Branch: ${repository.originalBranch}`}
+                  >
+                    <span>{repository.originalBranch}</span>
+                    <ChevronDown size={12} />
+                  </button>
+                  {branchMenuOpen ? (
+                    <div className="branchMenu" role="menu">
+                      <div className="branchMenuHeader">
+                        <span>Branches</span>
+                        <button
+                          className="branchRefreshButton"
+                          type="button"
+                          onClick={() => void refreshBranches()}
+                          disabled={branchesLoading}
+                        >
+                          {branchesLoading ? <Loader2 className="spin" size={12} /> : <RefreshCw size={12} />}
+                        </button>
+                      </div>
+                      {branchError ? <div className="branchMenuError">{branchError}</div> : null}
+                      {branches.length ? (
+                        branches.map((branch) => {
+                          const active = branch === repository.originalBranch;
+                          return (
+                            <button
+                              key={branch}
+                              type="button"
+                              className={active ? "active" : ""}
+                              onClick={() => void selectBranch(branch)}
+                              disabled={checkoutPending}
+                            >
+                              {active ? <Check size={13} /> : <span className="branchSpacer" />}
+                              <span>{branch}</span>
+                            </button>
+                          );
+                        })
+                      ) : !branchesLoading && !branchError ? (
+                        <div className="branchMenuEmpty">No branches found</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
 
             <div className={`permissionControl ${permissionMode === "bypass" ? "isBypass" : ""}`}>
               <button
@@ -3033,11 +3157,12 @@ function App() {
                 title={permissionMode === "bypass" ? "Bypass mode" : "Normal mode"}
               >
                 {permissionMode === "bypass" ? (
-                  <ShieldAlert className="bypassIcon" size={15} />
+                  <ShieldAlert className="bypassIcon" size={14} />
                 ) : (
-                  <Hand size={15} />
+                  <Hand size={14} />
                 )}
-                <ChevronDown size={13} />
+                <span className="permissionLabel">{permissionMode === "bypass" ? "Bypass" : "Normal"}</span>
+                <ChevronDown size={12} />
               </button>
               {permissionMenuOpen ? (
                 <div className="permissionMenu" role="menu">
@@ -3049,7 +3174,7 @@ function App() {
                       void updatePermissionMode("normal");
                     }}
                   >
-                    <Hand size={15} />
+                    <Hand size={14} />
                     <span>Normal</span>
                   </button>
                   <button
@@ -3060,7 +3185,7 @@ function App() {
                       void updatePermissionMode("bypass");
                     }}
                   >
-                    <ShieldAlert className="bypassIcon" size={15} />
+                    <ShieldAlert className="bypassIcon" size={14} />
                     <span>Bypass</span>
                   </button>
                 </div>
@@ -3097,7 +3222,7 @@ function App() {
                       );
                     })
                   ) : (
-                    <div className="modelMenuEmpty">No LM Studio models found</div>
+                    <div className="modelMenuEmpty">No local models found</div>
                   )}
                 </div>
               ) : null}

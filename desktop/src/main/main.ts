@@ -80,6 +80,7 @@ import type {
   IdeOpenResult,
   LocalModelInfo,
   LocalModelProvider,
+  LocalProviderId,
   RunnerProcess,
   PendingPermission,
   PermissionMode,
@@ -1193,7 +1194,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
     .map((provider) => provider.message as string);
   const messages = [
     runnerPath ? undefined : "Aegis runner is not installed in the app bundle.",
-    selected ? undefined : "No LM Studio models are currently available.",
+    selected ? undefined : "No local LM Studio or vLLM models are currently available.",
     ...providerMessages,
   ].filter((message): message is string => !!message);
   const lmstudio = providers.find((provider) => provider.providerId === "local-lmstudio")?.status ?? "unavailable";
@@ -1430,6 +1431,71 @@ async function getRepository(input: unknown): Promise<RepositoryInfo | null> {
     return existing ?? null;
   }
   return inspectRepository(targetPath);
+}
+
+async function resolveRepositoryPath(input: unknown): Promise<string | null> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid repository lookup input.");
+  }
+  const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
+  const repositoryPath =
+    typeof input.repositoryPath === "string" && input.repositoryPath.trim() ? path.resolve(input.repositoryPath.trim()) : "";
+  const existing =
+    (repositoryId ? readProjects().find((project) => project.id === repositoryId) : undefined) ??
+    (repositoryPath ? readProjects().find((project) => path.resolve(project.rootPath) === repositoryPath) : undefined);
+  const targetPath = existing?.rootPath ?? repositoryPath;
+  if (!targetPath || !fs.existsSync(targetPath)) {
+    return null;
+  }
+  return targetPath;
+}
+
+async function listRepositoryBranches(
+  input: unknown,
+): Promise<{ ok: true; current: string; branches: string[] } | { ok: false; message: string }> {
+  const targetPath = await resolveRepositoryPath(input);
+  if (!targetPath) return { ok: false, message: "Repository not found." };
+  try {
+    const root = path.resolve(await gitOutput(targetPath, ["rev-parse", "--show-toplevel"]));
+    const current = (await gitOutput(root, ["branch", "--show-current"]).catch(() => "")) || "HEAD";
+    const raw = await gitOutput(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]);
+    const branches = Array.from(
+      new Set(
+        raw
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    return { ok: true, current, branches };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Failed to list branches." };
+  }
+}
+
+async function checkoutRepositoryBranch(
+  input: unknown,
+): Promise<{ ok: true; repository: RepositoryInfo } | { ok: false; message: string }> {
+  if (!isRecord(input)) {
+    return { ok: false, message: "Invalid checkout input." };
+  }
+  const branch = typeof input.branch === "string" ? input.branch.trim() : "";
+  if (!branch) {
+    return { ok: false, message: "Branch name is required." };
+  }
+  const targetPath = await resolveRepositoryPath(input);
+  if (!targetPath) return { ok: false, message: "Repository not found." };
+  try {
+    const root = path.resolve(await gitOutput(targetPath, ["rev-parse", "--show-toplevel"]));
+    const result = await gitResult(root, ["checkout", branch]);
+    if (!result.success) {
+      const detail = (result.stderr || result.stdout || "").trim();
+      return { ok: false, message: detail || `Failed to checkout ${branch}.` };
+    }
+    return { ok: true, repository: await inspectRepository(root) };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Failed to checkout branch." };
+  }
 }
 
 function requiresBypassToolApproval(classification: ReturnType<typeof classifyCommandText>): boolean {
@@ -1743,7 +1809,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentP
   try {
     const { models, selected } = await resolveSelectedModel();
     if (!selected) {
-      failTask(task, "No local LM Studio model is available.");
+      failTask(task, "No local LM Studio or vLLM model is available.");
       return;
     }
     task.model = selected;
@@ -2802,7 +2868,7 @@ async function setSelectedModel(input: unknown): Promise<BackendStatus> {
   }
   const providerId = requiredString(input.providerId, "providerId");
   const modelId = requiredString(input.modelId, "modelId");
-  if (providerId !== "local-lmstudio") {
+  if (!allowedLocalProviderIds.includes(providerId as LocalProviderId)) {
     throw new Error("Unsupported local provider.");
   }
   const { models } = await resolveSelectedModel();
@@ -2943,6 +3009,8 @@ app.whenReady().then(async () => {
   handleIpc("aegis:search-files", (input) => searchRepositoryFiles(input));
   handleIpc("aegis:pick-repository", () => pickRepository());
   handleIpc("aegis:get-repository", (input) => getRepository(input));
+  handleIpc("aegis:list-repository-branches", (input) => listRepositoryBranches(input));
+  handleIpc("aegis:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
   handleIpc("aegis:get-backend-status", () => getBackendStatus());
   handleIpc("aegis:export-telemetry", () => exportTelemetryBundle());
   handleIpc("aegis:list-skills", () => listSkills());

@@ -8,7 +8,7 @@ export const aegisPolicyVersion = "aegis-local-mvp-1";
 export const aegisRunnerName = "AegisRunner";
 export const aegisRunnerVersion = "package-adapter-1";
 export const aegisRunnerContractVersion = "aegis-runner-1";
-export const allowedLocalProviderIds: LocalProviderId[] = ["local-lmstudio"];
+export const allowedLocalProviderIds: LocalProviderId[] = ["local-lmstudio", "local-vllm"];
 export const pythonRuntimeProfileVersion = "python-uv-venv-1";
 export const cmakeRuntimeProfileVersion = "cmake-aegis-build-1";
 
