@@ -3,9 +3,14 @@ import { loadRunnerConfig, type RunnerConfig } from "./config.js";
 import type { AegisRunnerEvent } from "./events.js";
 import { PermissionBroker } from "./permission.js";
 
+export type InputPart = { type: "text"; text: string } | { type: "image"; data_url: string };
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
-  content?: string | null;
+  content?: string | ChatContentPart[] | null;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;

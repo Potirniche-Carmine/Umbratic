@@ -6,8 +6,8 @@ controlled workspace. The intended product flow is:
 1. Pick a repository or folder.
 2. Ask for a code change in chat.
 3. Aegis creates an isolated task workspace.
-4. OpenCode runs the agent harness and tool calls.
-5. LM Studio or vLLM serves the local LLM through an OpenAI-compatible endpoint.
+4. The bundled Aegis runner runs the agent harness and tool calls.
+5. A configured OpenAI-compatible endpoint serves the model.
 6. The user reviews the result and explicitly approves the merge or keeps the
    worktree.
 
@@ -15,8 +15,8 @@ controlled workspace. The intended product flow is:
 ## Security Model
 
 The security goal is to keep the renderer UI untrusted and make the Electron
-main process the only place that can touch the filesystem, shell, Git, OpenCode,
-or IDE handoff.
+main process, plus its spawned local runner, the only trusted pieces that can
+touch the filesystem, shell, Git, or IDE handoff.
 
 Current protections:
 

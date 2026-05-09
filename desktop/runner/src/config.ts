@@ -33,7 +33,7 @@ export function loadRunnerConfig(): RunnerConfig {
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     system: typeof config.system === "string" ? config.system : undefined,
     provider: assertAllowedProvider({
-      id: provider.id === "company-model" ? "company-model" : provider.id === "local-vllm" ? "local-vllm" : "local-lmstudio",
+      id: provider.id === "company-model" ? "company-model" : "local-endpoint",
       name: stringValue(provider.name, "provider.name"),
       baseURL: stringValue(provider.baseURL, "provider.baseURL").replace(/\/+$/, ""),
       apiKey: typeof provider.apiKey === "string" ? provider.apiKey : "local",

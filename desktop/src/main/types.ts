@@ -4,7 +4,7 @@ export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
-export type LocalProviderId = "local-lmstudio" | "local-vllm";
+export type LocalProviderId = "local-endpoint";
 export type CommandClass =
   | "read"
   | "edit"
@@ -44,7 +44,7 @@ export type RepositoryInfo = {
 
 export type BackendStatus = {
   runner: ServiceStatus;
-  lmstudio: ServiceStatus;
+  endpoint: ServiceStatus;
   model: LocalModelInfo | null;
   models: LocalModelInfo[];
   providers: LocalModelProvider[];
@@ -136,6 +136,9 @@ export type ReviewFile = {
 export type ChatAttachment = {
   path: string;
   name: string;
+  source?: "workspace" | "chat";
+  storedPath?: string;
+  originalPath?: string;
 };
 
 export type FileSearchResult = ChatAttachment & {

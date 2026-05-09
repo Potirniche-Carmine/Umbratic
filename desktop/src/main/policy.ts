@@ -6,9 +6,9 @@ import { normalizeRelativePath, pathInside } from "./utils";
 
 export const aegisPolicyVersion = "aegis-local-mvp-1";
 export const aegisRunnerName = "AegisRunner";
-export const aegisRunnerVersion = "package-adapter-1";
+export const aegisRunnerVersion = "fork-1";
 export const aegisRunnerContractVersion = "aegis-runner-1";
-export const allowedLocalProviderIds: LocalProviderId[] = ["local-lmstudio", "local-vllm"];
+export const allowedLocalProviderIds: LocalProviderId[] = ["local-endpoint"];
 export const pythonRuntimeProfileVersion = "python-uv-venv-1";
 export const cmakeRuntimeProfileVersion = "cmake-aegis-build-1";
 
@@ -246,42 +246,21 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-function keysOfRecord(value: unknown): string[] {
-  return value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
-}
-
-export function assertPackageRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
-  assert(config.share === "disabled", "sharing must stay disabled");
-  assert(config.autoupdate === false, "auto-update must stay disabled");
-  assert(config.model === `${selectedModel.providerId}/${selectedModel.modelId}`, "model must match selected local provider");
-  assert(config.small_model === `${selectedModel.providerId}/${selectedModel.modelId}`, "small model must match selected local provider");
-  assert(Array.isArray(config.enabled_providers), "enabled providers must be explicit");
-  assert(config.enabled_providers.length === 1 && config.enabled_providers[0] === selectedModel.providerId, "only the selected local provider may be enabled");
+export function assertAegisRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
+  assert(typeof config.taskId === "string" && config.taskId.length > 0, "task id must be set");
+  assert(typeof config.cwd === "string" && config.cwd.length > 0, "cwd must be set");
+  assert(config.permissionMode === "normal", "permissions must be mediated by the desktop app");
   assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Aegis local allowlist");
   assert(isLocalhostUrl(selectedModel.baseUrl), "model base URL must be localhost");
 
-  const providerKeys = keysOfRecord(config.provider);
-  assert(providerKeys.length === 1 && providerKeys[0] === selectedModel.providerId, "provider config must contain only the selected provider");
-
-  const server = config.server as Record<string, unknown> | undefined;
-  assert(server?.hostname === "127.0.0.1", "server must bind to 127.0.0.1");
-  assert(server?.mdns === false, "mDNS must stay disabled");
-  assert(Array.isArray(server?.cors) && server.cors.length === 0, "CORS must stay empty");
-  assert(keysOfRecord(config.mcp).length === 0, "MCP must stay empty");
-  assert(Array.isArray(config.plugin) && config.plugin.length === 0, "plugins must stay empty");
-  assert(Array.isArray(config.instructions) && config.instructions.length === 0, "extra instructions must stay empty");
-
-  const permissions = config.permission as Record<string, unknown> | undefined;
-  assert(permissions?.webfetch === "deny", "web fetch must be denied");
-  assert(permissions?.websearch === "deny", "web search must be denied");
+  const provider = config.provider as Record<string, unknown> | undefined;
+  assert(provider?.id === selectedModel.providerId, "provider id must match the selected local provider");
+  assert(provider?.modelId === selectedModel.modelId, "model must match the configured endpoint model");
+  assert(provider?.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
 }
 
-export function packageRunnerHardeningEnvironment(): NodeJS.ProcessEnv {
+export function aegisRunnerHardeningEnvironment(): NodeJS.ProcessEnv {
   return {
-    OPENCODE_DISABLE_AUTOUPDATE: "1",
-    OPENCODE_DISABLE_SHARE: "1",
-    OPENCODE_DISABLE_TELEMETRY: "1",
-    OPENCODE_DISABLE_WEB: "1",
     NO_PROXY: "127.0.0.1,localhost,::1",
     no_proxy: "127.0.0.1,localhost,::1",
   };

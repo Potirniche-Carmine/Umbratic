@@ -1,5 +1,5 @@
 import { nowIso, type AegisRunnerEvent } from "./events.js";
-import type { ChatMessage, Session } from "./session.js";
+import type { ChatContentPart, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
 import { runTool, toolSpecs } from "./tools/index.js";
 import type { ToolContext } from "./tools/common.js";
@@ -41,6 +41,29 @@ function choiceDelta(value: unknown): Record<string, unknown> {
   const choices = Array.isArray(obj.choices) ? obj.choices : [];
   const first = isRecord(choices[0]) ? choices[0] : {};
   return isRecord(first.delta) ? first.delta : {};
+}
+
+function textContent(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!isRecord(part)) return "";
+      return typeof part.text === "string" ? part.text : "";
+    })
+    .join("");
+}
+
+function messageContentFromParts(parts: InputPart[]): string | ChatContentPart[] {
+  if (parts.every((part) => part.type === "text")) {
+    return parts.map((part) => (part.type === "text" ? part.text : "")).join("\n\n");
+  }
+  return parts.map((part) =>
+    part.type === "image"
+      ? { type: "image_url", image_url: { url: part.data_url } }
+      : { type: "text", text: part.text },
+  );
 }
 
 function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>) {
@@ -93,8 +116,8 @@ async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => 
       buffer = buffer.slice(newline + 1);
       const parsed = parseSseLine(line);
       const delta = choiceDelta(parsed);
-      const text = typeof delta.content === "string" ? delta.content : "";
-      const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+      const text = textContent(delta.content);
+      const reasoning = textContent(delta.reasoning_content) || textContent(delta.reasoning);
       if (text) {
         acc.content += text;
         emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
@@ -110,8 +133,8 @@ async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => 
   return acc;
 }
 
-export async function runTurn(session: Session, prompt: string, emit: (event: AegisRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
-  session.messages.push({ role: "user", content: prompt });
+export async function runTurn(session: Session, parts: InputPart[], emit: (event: AegisRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
+  session.messages.push({ role: "user", content: messageContentFromParts(parts) });
   for (let turn = 0; turn < 8; turn++) {
     const acc = await streamModel(session, emit);
     const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);

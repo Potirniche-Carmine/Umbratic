@@ -18,24 +18,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  defaultEndpointModelId,
   defaultDisabledProviders,
   localProviderCatalog,
-  preferredModelHints,
   pythonRuntimeSystemPrompt,
   reasoningSystemPrompt,
   taskStatesThatCanOpen,
 } from "./config";
 import {
   beginRunnerEventStream,
-  eventSessionId,
-  runnerErrorMessage,
-  runnerPermissionSummary,
-  runnerPermissionType,
   runnerRequest,
-  runnerToolCommand,
   runnerBinaryPath,
   replyRunnerPermission,
-  startPackageRunnerServer,
+  startAegisRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
 import {
@@ -63,7 +58,6 @@ import {
   writeChats,
   writeJsonFile,
   writeProjects,
-  writeSelectedModel,
   writeTasks,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
@@ -73,6 +67,7 @@ import type {
   BackendUiEvent,
   ChatAttachment,
   ChatRecord,
+  CommandClass,
   CommandOutput,
   CommandResult,
   FileSearchResult,
@@ -80,7 +75,6 @@ import type {
   IdeOpenResult,
   LocalModelInfo,
   LocalModelProvider,
-  LocalProviderId,
   RunnerProcess,
   PendingPermission,
   PermissionMode,
@@ -96,9 +90,22 @@ import type {
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 
 const isDev = !app.isPackaged;
+type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
+type RunnerPrompt = string | RunnerPromptPart[];
+type PdfImageDocument = { length: number; getPage(pageNumber: number): Promise<Buffer> };
+type PdfToImageModule = { pdf(input: string | Buffer | Uint8Array, options?: { scale?: number }): Promise<PdfImageDocument> };
+const importEsm = new Function("specifier", "return import(specifier)") as <T>(specifier: string) => Promise<T>;
+
 const activeRunnerProcesss = new Map<string, RunnerProcess>();
+const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
 const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_runtime.png");
 const windowsAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_white.ico");
+const textAttachmentByteLimit = 512 * 1024;
+const imageAttachmentByteLimit = 10 * 1024 * 1024;
+const pdfAttachmentByteLimit = 25 * 1024 * 1024;
+const pdfImagePageLimit = 12;
+const pdfImageScale = 1.4;
+let pdfToImageModule: Promise<PdfToImageModule> | null = null;
 
 function appIcon() {
   const iconPath = process.platform === "win32" ? windowsAppIconPath : runtimeAppIconPath;
@@ -357,6 +364,48 @@ function chatId(): string {
   return `chat-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
+function chatAttachmentRoot(): string {
+  return path.join(app.getPath("userData"), "chat-attachments");
+}
+
+function safeChatId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 96) || "chat";
+}
+
+function chatAttachmentDirectory(chatIdValue: string): string {
+  return path.join(chatAttachmentRoot(), safeChatId(chatIdValue));
+}
+
+function safeAttachmentFileName(value: string): string {
+  const ext = path.extname(value).replace(/[^A-Za-z0-9.]/g, "").slice(0, 18);
+  const stem = path
+    .basename(value, path.extname(value))
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return `${stem || "attachment"}${ext}`;
+}
+
+function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdValue: string): ChatAttachment | null {
+  const rawPath = typeof file.path === "string" ? file.path.trim() : "";
+  const rawName = typeof file.name === "string" && file.name.trim() ? file.name.trim().slice(0, 120) : "";
+  const rawStoredPath = typeof file.storedPath === "string" ? file.storedPath.trim() : "";
+  if (file.source !== "chat" || !rawStoredPath) return null;
+  const storedPath = path.resolve(rawStoredPath);
+  if (!pathInside(chatAttachmentDirectory(chatIdValue), storedPath) || !fs.existsSync(storedPath)) return null;
+  const originalPath =
+    typeof file.originalPath === "string" && file.originalPath.trim() ? file.originalPath.trim().slice(0, 500) : undefined;
+  const name = rawName || path.basename(storedPath);
+  return {
+    path: rawPath || `attachments/${path.basename(storedPath)}`,
+    name,
+    source: "chat",
+    storedPath,
+    originalPath,
+  };
+}
+
 const titleStopWords = new Set([
   "a",
   "an",
@@ -465,10 +514,15 @@ function updateChatDraft(input: unknown): ChatRecord {
   const attachedFiles = Array.isArray(input.attachedFiles)
     ? input.attachedFiles
         .filter((file): file is Record<string, unknown> => isRecord(file))
-        .map((file) => ({
-          path: typeof file.path === "string" ? normalizeRelativePath(file.path).slice(0, 260) : "",
-          name: typeof file.name === "string" ? file.name.slice(0, 120) : "",
-        }))
+        .map((file) => {
+          const chatAttachment = chatAttachmentFromRecord(file, id);
+          if (chatAttachment) return chatAttachment;
+          return {
+            path: typeof file.path === "string" ? normalizeRelativePath(file.path).slice(0, 260) : "",
+            name: typeof file.name === "string" ? file.name.slice(0, 120) : "",
+            source: file.source === "workspace" ? "workspace" as const : undefined,
+          };
+        })
         .filter((file) => file.path && file.name)
         .slice(0, 16)
     : existing.attachedFiles ?? [];
@@ -542,7 +596,7 @@ function textLines(value: string): string[] {
 function readTextFileIfSafe(filePath: string): string | null {
   try {
     const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > 512 * 1024) {
+    if (!stat.isFile() || stat.size > textAttachmentByteLimit) {
       return null;
     }
     const buffer = fs.readFileSync(filePath);
@@ -550,6 +604,66 @@ function readTextFileIfSafe(filePath: string): string | null {
       return null;
     }
     return buffer.toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function isPdfFile(filePath: string): boolean {
+  return path.extname(filePath).toLowerCase() === ".pdf";
+}
+
+function imageMimeType(filePath: string): string | null {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    default:
+      return null;
+  }
+}
+
+function imageDataUrlIfSafe(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath);
+    const mimeType = imageMimeType(filePath);
+    if (!mimeType || !stat.isFile() || stat.size > imageAttachmentByteLimit) {
+      return null;
+    }
+    const buffer = fs.readFileSync(filePath);
+    return `data:${mimeType};base64,${buffer.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+async function loadPdfToImageModule(): Promise<PdfToImageModule> {
+  pdfToImageModule ??= importEsm<PdfToImageModule>("pdf-to-img");
+  return pdfToImageModule;
+}
+
+async function pdfAttachmentImageParts(filePath: string): Promise<{ pageCount: number; rendered: number; parts: RunnerPromptPart[] } | null> {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > pdfAttachmentByteLimit) {
+      return null;
+    }
+    const { pdf } = await loadPdfToImageModule();
+    const document = await pdf(filePath, { scale: pdfImageScale });
+    const rendered = Math.min(document.length, pdfImagePageLimit);
+    const parts: RunnerPromptPart[] = [];
+    for (let pageNumber = 1; pageNumber <= rendered; pageNumber += 1) {
+      const png = await document.getPage(pageNumber);
+      parts.push({ type: "text", text: `PDF page ${pageNumber}:` });
+      parts.push({ type: "image", data_url: `data:image/png;base64,${png.toString("base64")}` });
+    }
+    return { pageCount: document.length, rendered, parts };
   } catch {
     return null;
   }
@@ -591,13 +705,23 @@ function snapshotFolder(rootPath: string): Record<string, string> {
   return snapshot;
 }
 
-function sanitizeAttachments(input: unknown, rootPath: string): ChatAttachment[] {
+function sanitizeAttachments(input: unknown, rootPath: string, chatIdValue: string): ChatAttachment[] {
   if (!Array.isArray(input)) return [];
   const root = path.resolve(rootPath);
   const seen = new Set<string>();
   const files: ChatAttachment[] = [];
   for (const item of input) {
     if (!isRecord(item)) continue;
+    const chatAttachment = chatAttachmentFromRecord(item, chatIdValue);
+    if (chatAttachment) {
+      const key = `chat:${chatAttachment.storedPath}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        files.push(chatAttachment);
+      }
+      if (files.length >= 16) break;
+      continue;
+    }
     const rawPath = typeof item.path === "string" ? item.path.trim() : "";
     if (!rawPath) continue;
     const absolute = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(root, normalizeRelativePath(rawPath));
@@ -607,7 +731,7 @@ function sanitizeAttachments(input: unknown, rootPath: string): ChatAttachment[]
     const name =
       typeof item.name === "string" && item.name.trim() ? item.name.trim().slice(0, 120) : path.basename(relative);
     seen.add(relative);
-    files.push({ path: relative, name });
+    files.push({ path: relative, name, source: "workspace" });
     if (files.length >= 16) break;
   }
   return files;
@@ -660,18 +784,57 @@ function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string
   return snippets;
 }
 
-function attachmentContext(rootPath: string, attachments: ChatAttachment[]): string[] {
+function pushPromptText(parts: RunnerPromptPart[], lines: string[]) {
+  const text = lines.join("\n").trim();
+  if (text && text !== "Attached file contents:") {
+    parts.push({ type: "text", text });
+  }
+  lines.length = 0;
+}
+
+async function attachmentPromptParts(rootPath: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
   if (!attachments.length) return [];
+  const parts: RunnerPromptPart[] = [];
   const lines = ["Attached file contents:"];
   let remaining = 30000;
   for (const file of attachments) {
-    if (remaining <= 0) break;
-    const absolute = path.resolve(rootPath, file.path);
-    lines.push(`\n### ${file.path}`);
-    if (!pathInside(rootPath, absolute) || !fs.existsSync(absolute)) {
+    const isChatAttachment = file.source === "chat" && typeof file.storedPath === "string";
+    const absolute = isChatAttachment ? path.resolve(file.storedPath as string) : path.resolve(rootPath, file.path);
+    const label = isChatAttachment ? `${file.name} (chat attachment)` : file.path;
+    lines.push(`\n### ${label}`);
+    if (isChatAttachment && file.originalPath) {
+      lines.push(`Original path: ${file.originalPath}`);
+    }
+    const allowed = isChatAttachment ? pathInside(chatAttachmentRoot(), absolute) : pathInside(rootPath, absolute);
+    if (!allowed || !fs.existsSync(absolute)) {
       lines.push("(file is no longer available)");
       continue;
     }
+    if (isPdfFile(absolute)) {
+      const rendered = await pdfAttachmentImageParts(absolute);
+      if (!rendered) {
+        lines.push("(PDF pages could not be rendered for image input; the file may be encrypted, too large, or unsupported)");
+        continue;
+      }
+      lines.push(
+        rendered.rendered < rendered.pageCount
+          ? `PDF rendered as images for the vision model: first ${rendered.rendered} of ${rendered.pageCount} pages.`
+          : `PDF rendered as images for the vision model: ${rendered.pageCount} page${rendered.pageCount === 1 ? "" : "s"}.`,
+      );
+      pushPromptText(parts, lines);
+      parts.push(...rendered.parts);
+      lines.push("Attached file contents:");
+      continue;
+    }
+    const imageDataUrl = imageDataUrlIfSafe(absolute);
+    if (imageDataUrl) {
+      lines.push("Image included below for the vision model.");
+      pushPromptText(parts, lines);
+      parts.push({ type: "image", data_url: imageDataUrl });
+      lines.push("Attached file contents:");
+      continue;
+    }
+    if (remaining <= 0) continue;
     const text = readTextFileIfSafe(absolute);
     if (text === null) {
       lines.push("(binary, too large, or unreadable text file)");
@@ -684,10 +847,11 @@ function attachmentContext(rootPath: string, attachments: ChatAttachment[]): str
     lines.push(text.length > snippet.length ? "\n...(truncated)" : "");
     lines.push("```");
   }
-  return lines;
+  pushPromptText(parts, lines);
+  return parts;
 }
 
-function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): string {
+async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const tree = repositoryTreePreview(rootPath);
@@ -716,16 +880,32 @@ function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: 
       "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
     );
   }
-  lines.push(...attachmentContext(rootPath, attachments));
-  lines.push(
-    "",
-    "User request:",
-    userPrompt,
-    "",
-    "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
-    "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Aegis can open them in Review.",
-  );
-  return lines.join("\n");
+  const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
+  parts.push(...(await attachmentPromptParts(rootPath, attachments)));
+  parts.push({
+    type: "text",
+    text: [
+      "User request:",
+      userPrompt,
+      "",
+      "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
+      "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Aegis can open them in Review.",
+    ].join("\n"),
+  });
+  return parts;
+}
+
+function runnerPromptParts(prompt: RunnerPrompt): RunnerPromptPart[] {
+  return typeof prompt === "string" ? [{ type: "text", text: prompt }] : prompt;
+}
+
+function runnerPromptText(prompt: RunnerPrompt): string {
+  return typeof prompt === "string"
+    ? prompt
+    : prompt
+        .filter((part): part is { type: "text"; text: string } => part.type === "text")
+        .map((part) => part.text)
+        .join("\n\n");
 }
 
 function diffHeader(filePath: string, status: ReviewFile["status"]): string[] {
@@ -1084,15 +1264,6 @@ async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]
   return rankedSearchResults(results.values(), query, limit);
 }
 
-async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`${response.status} ${response.statusText}${body ? `: ${body.slice(0, 240)}` : ""}`);
-  }
-  return response.json() as Promise<T>;
-}
-
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
@@ -1106,102 +1277,48 @@ function modelDisplayName(providerName: string, modelId: string): string {
   return `${modelId} via ${providerName}`;
 }
 
-async function probeLocalProvider(provider: (typeof localProviderCatalog)[number]): Promise<LocalModelProvider> {
-  const baseUrl = normalizeOpenAiBaseUrl(provider.baseUrl);
-  try {
-    const lmStudioRoot = baseUrl.replace(/\/v\d+$/i, "");
-    const lmStudioModels =
-      provider.providerId === "local-lmstudio"
-        ? await fetchJson<{ data?: Array<{ id?: string; name?: string; type?: string; state?: string }> }>(
-            `${lmStudioRoot}/api/v0/models`,
-            { signal: AbortSignal.timeout(1800) },
-          ).catch(() => null)
-        : null;
-    const response =
-      lmStudioModels ??
-      (await fetchJson<{ data?: Array<{ id?: string; name?: string; type?: string; state?: string }> }>(`${baseUrl}/models`, {
-        signal: AbortSignal.timeout(1800),
-      }));
-    const seen = new Set<string>();
-    const models = (response.data ?? [])
-      .filter((model) => model.type !== "embeddings" && model.state !== "not-loaded")
-      .map((model) => (typeof model.id === "string" && model.id.trim() ? model.id : model.name))
-      .filter((modelId): modelId is string => typeof modelId === "string" && !!modelId.trim())
-      .map((modelId) => modelId.trim())
-      .filter((modelId) => {
-        const key = modelId.toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((left, right) => left.localeCompare(right))
-      .map<LocalModelInfo>((modelId) => ({
-        providerId: provider.providerId,
-        providerName: provider.providerName,
-        modelId,
-        displayName: modelDisplayName(provider.providerName, modelId),
-        baseUrl,
-      }));
-    return {
-      providerId: provider.providerId,
-      providerName: provider.providerName,
-      baseUrl,
-      status: models.length > 0 ? "ready" : "degraded",
-      models,
-      message: models.length > 0 ? undefined : `${provider.providerName} is reachable but did not list any models.`,
-    };
-  } catch {
-    return {
-      providerId: provider.providerId,
-      providerName: provider.providerName,
-      baseUrl,
-      status: "unavailable",
-      models: [],
-      message: `${provider.providerName} is not reachable at ${baseUrl}.`,
-    };
-  }
+function endpointProvider(): (typeof localProviderCatalog)[number] & { baseUrl: string } {
+  const provider = localProviderCatalog[0];
+  return { ...provider, baseUrl: normalizeOpenAiBaseUrl(provider.baseUrl) };
 }
 
-async function probeLocalProviders(): Promise<LocalModelProvider[]> {
-  return Promise.all(localProviderCatalog.map((provider) => probeLocalProvider(provider)));
-}
-
-function chooseSelectedModel(models: LocalModelInfo[]): LocalModelInfo | null {
-  if (models.length === 0) {
-    return null;
-  }
+function configuredEndpointModel(): LocalModelInfo {
+  const provider = endpointProvider();
   const selected = readSettings().selectedModel;
-  if (selected) {
-    const exact = models.find((model) => model.providerId === selected.providerId && model.modelId === selected.modelId);
-    if (exact) return exact;
-  }
-  const hinted = models.find((model) => preferredModelHints.some((hint) => model.modelId.toLowerCase().includes(hint)));
-  return hinted ?? models[0];
+  const modelId = selected?.modelId || defaultEndpointModelId;
+  return {
+    providerId: provider.providerId,
+    providerName: provider.providerName,
+    modelId,
+    displayName: modelDisplayName(provider.providerName, modelId),
+    baseUrl: provider.baseUrl,
+  };
 }
 
 async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
-  const providers = await probeLocalProviders();
-  const models = providers.flatMap((provider) => provider.models);
-  const selected = chooseSelectedModel(models);
-  return { providers, models, selected };
+  const selected = configuredEndpointModel();
+  const provider: LocalModelProvider = {
+    providerId: selected.providerId,
+    providerName: selected.providerName,
+    baseUrl: selected.baseUrl,
+    status: "ready",
+    models: [selected],
+  };
+  return { providers: [provider], models: [selected], selected };
 }
 
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
   const runnerPath = runnerBinaryPath();
-  const providerMessages = providers
-    .filter((provider) => provider.status !== "ready" && provider.message)
-    .map((provider) => provider.message as string);
   const messages = [
-    runnerPath ? undefined : "Aegis runner is not installed in the app bundle.",
-    selected ? undefined : "No local LM Studio or vLLM models are currently available.",
-    ...providerMessages,
+    runnerPath ? undefined : "Aegis runner is not built in the app bundle.",
+    selected ? undefined : "No model id is configured for the OpenAI-compatible endpoint.",
   ].filter((message): message is string => !!message);
-  const lmstudio = providers.find((provider) => provider.providerId === "local-lmstudio")?.status ?? "unavailable";
+  const endpointStatus = selected ? "ready" : "unavailable";
 
   return {
     runner: runnerPath ? "ready" : "unavailable",
-    lmstudio,
+    endpoint: endpointStatus,
     model: selected,
     models,
     providers,
@@ -1411,6 +1528,59 @@ async function pickRepository(): Promise<{ canceled: true } | { canceled: false;
     return { canceled: true };
   }
   return { canceled: false, repository: await inspectRepository(result.filePaths[0]) };
+}
+
+async function pickAttachmentFiles(input: unknown): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid attachment input.");
+  }
+  const chatIdValue = requiredString(input.chatId, "chatId");
+  const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
+  const repository = repositoryId ? readProjects().find((project) => project.id === repositoryId) : undefined;
+  const defaultPath = repository?.rootPath && fs.existsSync(repository.rootPath)
+    ? path.resolve(repository.rootPath)
+    : app.getPath("documents") || os.homedir();
+  const options: OpenDialogOptions = {
+    title: "Attach Files",
+    defaultPath,
+    properties: ["openFile", "multiSelections"],
+  };
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const files: ChatAttachment[] = [];
+  const seen = new Set<string>();
+  const targetDirectory = chatAttachmentDirectory(chatIdValue);
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  for (const filePath of result.filePaths) {
+    const absolute = path.resolve(filePath);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(absolute);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || stat.size > 25 * 1024 * 1024 || seen.has(absolute.toLowerCase())) continue;
+    seen.add(absolute.toLowerCase());
+    const originalName = path.basename(absolute);
+    const storedName = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}-${safeAttachmentFileName(originalName)}`;
+    const storedPath = path.join(targetDirectory, storedName);
+    fs.copyFileSync(absolute, storedPath);
+    files.push({
+      path: `attachments/${storedName}`,
+      name: originalName.slice(0, 120),
+      source: "chat",
+      storedPath,
+      originalPath: absolute,
+    });
+    if (files.length >= 16) break;
+  }
+  if (!files.length) {
+    throw new Error("No attachable files were selected.");
+  }
+  return { canceled: false, files };
 }
 
 async function getRepository(input: unknown): Promise<RepositoryInfo | null> {
@@ -1731,13 +1901,20 @@ async function handleRunnerPermission(
   task: TaskRecord,
   run: RunnerProcess,
   permission: Record<string, unknown>,
-  promptForRun: string,
+  promptForRun: RunnerPrompt,
   intentPrompt: string,
 ): Promise<"pending" | "resolved" | "worktree_requested"> {
   const id = typeof permission.id === "string" ? permission.id : "";
   if (!id || pendingPermissions.has(id)) return "pending";
-  const type = runnerPermissionType(permission);
-  const title = runnerPermissionSummary(permission);
+  const type =
+    (typeof permission.type === "string" && permission.type) ||
+    (typeof permission.permission === "string" && permission.permission) ||
+    (typeof permission.permissionKind === "string" && permission.permissionKind) ||
+    "tool";
+  const title =
+    (typeof permission.title === "string" && permission.title.trim()) ||
+    (typeof permission.summary === "string" && permission.summary.trim()) ||
+    type;
   const classification = type.includes("edit")
     ? ({ commandClass: "edit" as const, risky: false })
     : classifyCommandText(title, task.worktreePath);
@@ -1752,7 +1929,8 @@ async function handleRunnerPermission(
     task.agentBranch = `aegis/${task.id}-${slugify(intentPrompt)}`;
     task.worktreePath = path.join(worktreeRootForRepo(task.originalRepoPath), task.id);
     task.runnerSessionId = undefined;
-    task.pendingPrompt = promptForRun;
+    task.pendingPrompt = runnerPromptText(promptForRun);
+    pendingRunnerPrompts.set(task.id, runnerPromptParts(promptForRun));
     task.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
     saveTask(task);
     await replyRunnerPermission(run, id, false).catch(() => undefined);
@@ -1800,32 +1978,26 @@ async function handleRunnerPermission(
   return "pending";
 }
 
-async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentPrompt?: string) {
+async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, intentPrompt?: string) {
   const task = getTask(taskIdValue);
   let run: RunnerProcess | null = null;
-  const prompt = promptForRun ?? task.prompt;
+  const prompt = promptForRun ?? (await runnerPromptForTask(task, task.prompt, []));
+  const promptParts = runnerPromptParts(prompt);
   const intent = intentPrompt ?? task.prompt;
   const expectsFileChanges = promptLooksLikeFileChange(intent);
   try {
-    const { models, selected } = await resolveSelectedModel();
+    const { selected } = await resolveSelectedModel();
     if (!selected) {
-      failTask(task, "No local LM Studio or vLLM model is available.");
+      failTask(task, "No model id is configured for the OpenAI-compatible endpoint.");
       return;
     }
     task.model = selected;
     applyTaskPolicyMetadata(task, intent);
     saveTask(task);
-    run = await startPackageRunnerServer(task, selected, models);
+    run = await startAegisRunnerServer(task, selected);
     activeRunnerProcesss.set(task.id, run);
 
-    const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; outputLength: number; finished: boolean }>();
-    const textPartLengths = new Map<string, number>();
-    const reasoningPartLengths = new Map<string, number>();
-    const partKinds = new Map<string, string>();
-    const partMessageIds = new Map<string, string>();
-    const messageRoles = new Map<string, "user" | "assistant">();
-    const pendingTextParts = new Map<string, { messageId: string; text: string }>();
-    const pendingReasoningParts = new Map<string, { messageId: string; text: string }>();
+    const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; finished: boolean }>();
     let delegatedToWorktree = false;
     let completed = false;
     let resolveCompletion!: () => void;
@@ -1865,172 +2037,85 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentP
       emit({ type: "assistant.reasoning.delta", taskId: task.id, text });
     };
 
+    const ensureToolRun = (
+      toolCallId: string,
+      command: string,
+      kind: PermissionRequest["kind"],
+      commandClass: CommandClass,
+    ) => {
+      const existing = toolRuns.get(toolCallId);
+      if (existing) return existing;
+      const current = { commandId: `ar-${toolCallId}`, command, kind, finished: false };
+      toolRuns.set(toolCallId, current);
+      emit({
+        type: "command.started",
+        taskId: task.id,
+        id: current.commandId,
+        command,
+        cwd: task.worktreePath,
+        kind,
+        commandClass,
+      });
+      return current;
+    };
+
     const onEvent = (event: Record<string, unknown>) => {
       const type = typeof event.type === "string" ? event.type : "";
-      const sessionID = eventSessionId(event);
-      if (sessionID && (!run?.sessionId || sessionID !== run.sessionId)) return;
-      const properties = isRecord(event.properties) ? event.properties : {};
+      const eventTaskId = typeof event.taskId === "string" ? event.taskId : task.id;
+      if (eventTaskId !== task.id) return;
 
-      if (type === "message.updated") {
-        const info = isRecord(properties.info) ? properties.info : {};
-        const messageId = typeof info.id === "string" ? info.id : "";
-        const role = info.role === "assistant" ? "assistant" : info.role === "user" ? "user" : undefined;
-        if (messageId && role) {
-          messageRoles.set(messageId, role);
-          if (role === "assistant") {
-            for (const [partId, pending] of Array.from(pendingTextParts.entries())) {
-              if (pending.messageId !== messageId) continue;
-              pendingTextParts.delete(partId);
-              textPartLengths.set(partId, pending.text.length);
-              emitAssistantText(pending.text);
-            }
-            for (const [partId, pending] of Array.from(pendingReasoningParts.entries())) {
-              if (pending.messageId !== messageId) continue;
-              pendingReasoningParts.delete(partId);
-              reasoningPartLengths.set(partId, pending.text.length);
-              emitReasoningText(pending.text);
-            }
-          } else {
-            for (const [partId, pending] of Array.from(pendingTextParts.entries())) {
-              if (pending.messageId === messageId) pendingTextParts.delete(partId);
-            }
-            for (const [partId, pending] of Array.from(pendingReasoningParts.entries())) {
-              if (pending.messageId === messageId) pendingReasoningParts.delete(partId);
-            }
-          }
-        }
-        if (info.role === "assistant" && info.error) {
-          fail(runnerErrorMessage(info.error));
-        }
+      if (type === "assistant.delta" && typeof event.text === "string") {
+        emitAssistantText(event.text);
+        return;
       }
 
-      if (type === "message.part.updated") {
-        const part = isRecord(properties.part) ? properties.part : {};
-        const partType = typeof part.type === "string" ? part.type : "";
-        const messageId = typeof part.messageID === "string" ? part.messageID : "";
-        const role = messageId ? messageRoles.get(messageId) : undefined;
-        if (typeof part.id === "string") {
-          partKinds.set(part.id, partType);
-          if (messageId) partMessageIds.set(part.id, messageId);
-        }
-        if (partType === "text" && typeof part.id === "string" && typeof part.text === "string") {
-          if (!role) {
-            pendingTextParts.set(part.id, { messageId, text: part.text });
-            return;
-          }
-          if (role !== "assistant") {
-            return;
-          }
-          const delta = part.text.slice(textPartLengths.get(part.id) ?? 0);
-          textPartLengths.set(part.id, part.text.length);
-          emitAssistantText(delta);
-        }
-        if (partType === "reasoning" && typeof part.id === "string" && typeof part.text === "string") {
-          if (!role) {
-            pendingReasoningParts.set(part.id, { messageId, text: part.text });
-            return;
-          }
-          if (role !== "assistant") {
-            return;
-          }
-          const delta = part.text.slice(reasoningPartLengths.get(part.id) ?? 0);
-          reasoningPartLengths.set(part.id, part.text.length);
-          emitReasoningText(delta);
-        }
-        if (partType === "tool" && typeof part.id === "string") {
-          const state = isRecord(part.state) ? part.state : {};
-          const status = typeof state.status === "string" ? state.status : "pending";
-          const existing = toolRuns.get(part.id);
-          const tool = runnerToolCommand(part);
-          const classification = tool.kind === "edit"
-            ? ({ commandClass: "edit" as const, risky: false })
-            : classifyCommandText(tool.command, task.worktreePath);
-          const commandId = existing?.commandId ?? `oc-${part.id}`;
-          if (!existing) {
-            toolRuns.set(part.id, { commandId, command: tool.command, kind: tool.kind, outputLength: 0, finished: false });
-            emit({
-              type: "command.started",
-              taskId: task.id,
-              id: commandId,
-              command: tool.command,
-              cwd: task.worktreePath,
-              kind: tool.kind,
-              commandClass: classification.commandClass,
-            });
-          } else if ((tool.command !== existing.command || tool.kind !== existing.kind) && tool.command !== existing.command.split(/\s+/)[0]) {
-            existing.command = tool.command;
-            existing.kind = tool.kind;
-            emit({
-              type: "command.started",
-              taskId: task.id,
-              id: commandId,
-              command: tool.command,
-              cwd: task.worktreePath,
-              kind: tool.kind,
-              commandClass: classification.commandClass,
-            });
-          }
-          const current = toolRuns.get(part.id);
-          if (!current || current.finished) return;
-          const output =
-            status === "completed" && typeof state.output === "string"
-              ? state.output
-              : status === "error" && typeof state.error === "string"
-                ? state.error
-                : "";
-          if (output.length > current.outputLength) {
-            emit({
-              type: "command.output",
-              taskId: task.id,
-              id: current.commandId,
-              stream: status === "error" ? "stderr" : "stdout",
-              text: output.slice(current.outputLength, current.outputLength + 12000),
-            });
-            current.outputLength = output.length;
-          }
-          if (status === "completed" || status === "error") {
-            current.finished = true;
-            emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode: status === "completed" ? 0 : 1 });
-          }
-        }
+      if (type === "assistant.reasoning.delta" && typeof event.text === "string") {
+        emitReasoningText(event.text);
+        return;
       }
 
-      if (type === "message.part.delta") {
-        const partId = typeof properties.partID === "string" ? properties.partID : "";
-        const field = typeof properties.field === "string" ? properties.field : "";
-        const delta = typeof properties.delta === "string" ? properties.delta : "";
-        const messageId =
-          typeof properties.messageID === "string"
-            ? properties.messageID
-            : partId
-              ? partMessageIds.get(partId) ?? ""
-              : "";
-        const role = messageId ? messageRoles.get(messageId) : undefined;
-        const partType = partId ? partKinds.get(partId) : undefined;
-        if (field !== "text" || !partId || !delta) {
-          return;
-        }
-        if (role !== "assistant") {
-          if (!role && messageId && partType === "reasoning") {
-            const pending = pendingReasoningParts.get(partId);
-            pendingReasoningParts.set(partId, { messageId, text: `${pending?.text ?? ""}${delta}` });
-          } else if (!role && messageId && partType === "text") {
-            const pending = pendingTextParts.get(partId);
-            pendingTextParts.set(partId, { messageId, text: `${pending?.text ?? ""}${delta}` });
-          }
-          return;
-        }
-        if (partType === "reasoning") {
-          reasoningPartLengths.set(partId, (reasoningPartLengths.get(partId) ?? 0) + delta.length);
-          emitReasoningText(delta);
-        } else if (partType === "text") {
-          textPartLengths.set(partId, (textPartLengths.get(partId) ?? 0) + delta.length);
-          emitAssistantText(delta);
-        }
+      if (type === "tool.requested") {
+        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : `tool-${toolRuns.size + 1}`;
+        const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
+        const command = typeof event.summary === "string" && event.summary.trim() ? event.summary.trim() : toolKind;
+        const kind: PermissionRequest["kind"] = toolKind === "command" ? "bash" : "edit";
+        const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : "edit";
+        const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
+        ensureToolRun(toolCallId, command, kind, commandClass);
+        return;
       }
 
-      if ((type === "permission.updated" || type === "permission.asked") && isRecord(properties)) {
-        void handleRunnerPermission(task, run as RunnerProcess, properties, prompt, intent)
+      if (type === "tool.output") {
+        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
+        if (!toolCallId) return;
+        const stream = event.stream === "stderr" ? "stderr" : "stdout";
+        const text = typeof event.text === "string" ? event.text : "";
+        const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
+        if (text) {
+          emit({ type: "command.output", taskId: task.id, id: current.commandId, stream, text: text.slice(0, 12000) });
+        }
+        return;
+      }
+
+      if (type === "tool.finished") {
+        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
+        if (!toolCallId) return;
+        const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
+        if (!current.finished) {
+          current.finished = true;
+          const exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
+          emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode });
+        }
+        return;
+      }
+
+      if (type === "permission.requested") {
+        const permission = {
+          id: typeof event.permissionId === "string" ? event.permissionId : "",
+          type: typeof event.permissionKind === "string" ? event.permissionKind : "tool",
+          title: typeof event.summary === "string" ? event.summary : "",
+        };
+        void handleRunnerPermission(task, run as RunnerProcess, permission, prompt, intent)
           .then((result) => {
             if (result === "worktree_requested") {
               delegatedToWorktree = true;
@@ -2038,18 +2123,16 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentP
             }
           })
           .catch((error) => fail(String(error instanceof Error ? error.message : error)));
+        return;
       }
 
-      if (type === "session.error") {
-        fail(runnerErrorMessage(properties.error));
+      if (type === "runner.error") {
+        const message = typeof event.message === "string" && event.message.trim() ? event.message : "Aegis runner failed.";
+        fail(message);
+        return;
       }
 
       if (type === "session.idle") {
-        finishOpenToolRuns();
-        finish();
-      }
-
-      if (type === "session.status" && isRecord(properties.status) && properties.status.type === "idle") {
         finishOpenToolRuns();
         finish();
       }
@@ -2081,7 +2164,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentP
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
           pythonRuntimeSystemPrompt,
         ].join(" "),
-        parts: [{ type: "text", text: prompt }],
+        parts: promptParts,
       },
     });
 
@@ -2130,7 +2213,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: string, intentP
   }
 }
 
-async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: string) {
+async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: RunnerPrompt) {
   try {
     fs.mkdirSync(path.dirname(task.worktreePath), { recursive: true });
     await execFileOutput("git", ["worktree", "add", "-b", task.agentBranch, task.worktreePath, task.baseCommit], {
@@ -2138,9 +2221,10 @@ async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: strin
       timeout: 120000,
     });
     task.state = "running";
-    if (promptForRun && task.pendingPrompt === promptForRun) {
+    if (promptForRun && task.pendingPrompt === runnerPromptText(promptForRun)) {
       task.pendingPrompt = undefined;
     }
+    pendingRunnerPrompts.delete(task.id);
     saveTask(task);
     emit({ type: "worktree.created", taskId: task.id, branch: task.agentBranch, path: task.worktreePath });
     void runRunnerTask(task.id, promptForRun);
@@ -2209,7 +2293,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
   }
   const refreshed = hiddenWorkspace ? repository : await inspectRepository(repository.rootPath);
   const repositoryId = refreshed.id;
-  const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath);
+  const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
   const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
   const wantsFileChange = promptLooksLikeFileChange(prompt);
 
@@ -2237,7 +2321,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && wantsFileChange && !existingTask.agentBranch) {
-      const runnerPrompt = runnerPromptForTask(existingTask, prompt, attachments);
+      const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
       existingTask.originalBranch = refreshed.originalBranch;
       existingTask.baseCommit = refreshed.baseCommit;
       existingTask.agentBranch = `aegis/${existingTask.id}-${slugify(prompt)}`;
@@ -2245,12 +2329,14 @@ async function startTask(input: unknown): Promise<TaskInfo> {
       existingTask.originalRepoPath = refreshed.rootPath;
       existingTask.originalWasDirty = refreshed.dirty;
       existingTask.runnerSessionId = undefined;
-      existingTask.pendingPrompt = runnerPrompt;
+      existingTask.pendingPrompt = runnerPromptText(runnerPrompt);
+      pendingRunnerPrompts.set(existingTask.id, runnerPrompt);
       existingTask.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
       saveTask(existingTask);
       emit({ type: "user.message", taskId: existingTask.id, text: prompt });
       if (permissionMode === "bypass") {
         existingTask.pendingPrompt = undefined;
+        pendingRunnerPrompts.delete(existingTask.id);
         await createWorktreeAndRunRunner(existingTask, runnerPrompt);
       } else {
         emit({
@@ -2266,13 +2352,15 @@ async function startTask(input: unknown): Promise<TaskInfo> {
 
     existingTask.state = "running";
     existingTask.pendingPrompt = undefined;
+    pendingRunnerPrompts.delete(existingTask.id);
     existingTask.originalBranch = existingTask.agentBranch ? existingTask.originalBranch : refreshed.originalBranch;
     existingTask.baseCommit = existingTask.agentBranch ? existingTask.baseCommit : refreshed.baseCommit;
     existingTask.originalRepoPath = refreshed.rootPath;
     existingTask.originalWasDirty = refreshed.dirty;
     saveTask(existingTask);
     emit({ type: "user.message", taskId: existingTask.id, text: prompt });
-    void runRunnerTask(existingTask.id, runnerPromptForTask(existingTask, prompt, attachments), prompt);
+    const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
+    void runRunnerTask(existingTask.id, runnerPrompt, prompt);
     return publicTask(existingTask);
   }
 
@@ -2308,13 +2396,14 @@ async function startTask(input: unknown): Promise<TaskInfo> {
   };
   saveTask(task);
   emit({ type: "user.message", taskId: task.id, text: prompt });
-  const runnerPrompt = runnerPromptForTask(task, prompt, attachments);
+  const runnerPrompt = await runnerPromptForTask(task, prompt, attachments);
   if (!shouldCreateWorktree) {
     void runRunnerTask(task.id, runnerPrompt, prompt);
   } else if (permissionMode === "bypass") {
     await createWorktreeAndRunRunner(task, runnerPrompt);
   } else {
-    task.pendingPrompt = runnerPrompt;
+    task.pendingPrompt = runnerPromptText(runnerPrompt);
+    pendingRunnerPrompts.set(task.id, runnerPrompt);
     saveTask(task);
     emit({ type: "worktree.requested", taskId: task.id, branch, path: worktreePath, baseCommit: refreshed.baseCommit });
   }
@@ -2333,13 +2422,15 @@ async function approveWorktreeCreation(input: unknown): Promise<void> {
   if (!approved) {
     task.state = "rejected";
     task.pendingPrompt = undefined;
+    pendingRunnerPrompts.delete(task.id);
     task.rejectedAt = new Date().toISOString();
     saveTask(task);
     emit({ type: "task.error", taskId: task.id, message: "Worktree creation was declined." });
     return;
   }
-  const promptForRun = task.pendingPrompt ?? task.prompt;
+  const promptForRun = pendingRunnerPrompts.get(task.id) ?? task.pendingPrompt ?? task.prompt;
   task.pendingPrompt = undefined;
+  pendingRunnerPrompts.delete(task.id);
   saveTask(task);
   await createWorktreeAndRunRunner(task, promptForRun);
 }
@@ -2609,6 +2700,7 @@ async function rejectTask(input: unknown): Promise<void> {
     activeRunnerProcesss.delete(task.id);
     stopRunnerProcess(run);
   }
+  pendingRunnerPrompts.delete(task.id);
   clearPendingPermissionsForTask(task.id);
   const cleanup = input.cleanup === true;
   emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
@@ -2673,6 +2765,7 @@ async function cancelTask(input: unknown): Promise<void> {
     }
     stopRunnerProcess(run);
   }
+  pendingRunnerPrompts.delete(task.id);
   clearPendingPermissionsForTask(task.id);
   task.state = "failed";
   task.error = "Task was cancelled.";
@@ -2862,24 +2955,6 @@ function setPermissionMode(input: unknown): Promise<BackendStatus> {
   return getBackendStatus();
 }
 
-async function setSelectedModel(input: unknown): Promise<BackendStatus> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid model selection.");
-  }
-  const providerId = requiredString(input.providerId, "providerId");
-  const modelId = requiredString(input.modelId, "modelId");
-  if (!allowedLocalProviderIds.includes(providerId as LocalProviderId)) {
-    throw new Error("Unsupported local provider.");
-  }
-  const { models } = await resolveSelectedModel();
-  const model = models.find((candidate) => candidate.providerId === providerId && candidate.modelId === modelId);
-  if (!model) {
-    throw new Error("That local model is not currently available.");
-  }
-  writeSelectedModel(model);
-  return getBackendStatus();
-}
-
 function trustedSender(event: IpcMainInvokeEvent): boolean {
   const rawUrl = event.senderFrame?.url || event.sender.getURL();
   try {
@@ -3008,6 +3083,7 @@ app.whenReady().then(async () => {
   handleIpc("aegis:refresh-task-review", (input) => refreshTaskReview(input));
   handleIpc("aegis:search-files", (input) => searchRepositoryFiles(input));
   handleIpc("aegis:pick-repository", () => pickRepository());
+  handleIpc("aegis:pick-attachment-files", (input) => pickAttachmentFiles(input));
   handleIpc("aegis:get-repository", (input) => getRepository(input));
   handleIpc("aegis:list-repository-branches", (input) => listRepositoryBranches(input));
   handleIpc("aegis:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
@@ -3017,7 +3093,6 @@ app.whenReady().then(async () => {
   handleIpc("aegis:open-skills-folder", () => openSkillsFolder());
   handleIpc("aegis:create-skill", (input) => createSkill(input as { name?: string }));
   handleIpc("aegis:set-permission-mode", (mode) => setPermissionMode(mode));
-  handleIpc("aegis:set-selected-model", (input) => setSelectedModel(input));
   handleIpc("aegis:list-available-ides", () => listAvailableIdes());
   handleIpc("aegis:start-task", (input) => startTask(input));
   handleIpc("aegis:approve-worktree-creation", (input) => approveWorktreeCreation(input));

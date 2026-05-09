@@ -2,6 +2,7 @@ import * as http from "node:http";
 import { URL } from "node:url";
 import { nowIso, type AegisRunnerEvent } from "./events.js";
 import { runTurn } from "./loop.js";
+import type { InputPart } from "./session.js";
 import { SessionStore } from "./session.js";
 
 const localProtocol = "http";
@@ -31,6 +32,27 @@ function isAuthorized(request: http.IncomingMessage, password: string): boolean 
   return decoded === `aegis-runner:${password}`;
 }
 
+function inputPartsFromBody(body: Record<string, unknown>): InputPart[] {
+  const rawParts = Array.isArray(body.parts) ? body.parts : [];
+  const parts: InputPart[] = [];
+  for (const part of rawParts) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+    const record = part as Record<string, unknown>;
+    if (record.type === "image" && typeof record.data_url === "string" && record.data_url.startsWith("data:image/")) {
+      parts.push({ type: "image", data_url: record.data_url });
+      continue;
+    }
+    const text = typeof record.text === "string" ? record.text : typeof record.content === "string" ? record.content : "";
+    if (text) {
+      parts.push({ type: "text", text });
+    }
+  }
+  if (parts.length === 0 && typeof body.prompt === "string" && body.prompt.trim()) {
+    parts.push({ type: "text", text: body.prompt.trim() });
+  }
+  return parts.length ? parts : [{ type: "text", text: "" }];
+}
+
 function writeSse(response: http.ServerResponse, event: AegisRunnerEvent) {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
@@ -57,8 +79,16 @@ export async function listen(opts: { hostname: string; port: number; password: s
           "Cache-Control": "no-cache",
           Connection: "keep-alive",
         });
+        response.flushHeaders?.();
+        response.write(": connected\n\n");
+        const heartbeat = setInterval(() => {
+          response.write(": heartbeat\n\n");
+        }, 15000);
         streams.add(response);
-        request.on("close", () => streams.delete(response));
+        request.on("close", () => {
+          clearInterval(heartbeat);
+          streams.delete(response);
+        });
         return;
       }
 
@@ -72,23 +102,26 @@ export async function listen(opts: { hostname: string; port: number; password: s
       if (request.method === "POST" && promptMatch) {
         const session = store.get(decodeURIComponent(promptMatch[1]));
         const body = await readJson(request);
-        const parts = Array.isArray(body.parts) ? body.parts : [];
-        const prompt = parts.map((part) => typeof part?.text === "string" ? part.text : "").join("\n").trim();
+        const parts = inputPartsFromBody(body);
         const system = typeof body.system === "string" ? body.system : "";
         if (system && !session.messages.some((message) => message.role === "system")) {
           session.messages.unshift({ role: "system", content: system });
         }
-        void runTurn(session, prompt, (event) => store.emit(event), (input) =>
+        void runTurn(session, parts, (event) => store.emit(event), (input) =>
           store.permissions.request({ taskId: session.taskId, ...input }),
-        ).catch((error) => {
-          store.emit({
-            type: "runner.error",
-            taskId: session.taskId,
-            category: "loop",
-            message: error instanceof Error ? error.message : String(error),
-            at: nowIso(),
+        )
+          .then(() => {
+            store.emit({ type: "session.idle", taskId: session.taskId, sessionId: session.id, at: nowIso() });
+          })
+          .catch((error) => {
+            store.emit({
+              type: "runner.error",
+              taskId: session.taskId,
+              category: "loop",
+              message: error instanceof Error ? error.message : String(error),
+              at: nowIso(),
+            });
           });
-        });
         sendNoContent(response);
         return;
       }

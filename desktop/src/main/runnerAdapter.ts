@@ -6,61 +6,26 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { defaultDisabledProviders, localProviderCatalog, permissionRulesForMode, pythonRuntimeSystemPrompt } from "./config";
-import { assertPackageRunnerConfig, packageRunnerHardeningEnvironment } from "./policy";
-import type { LocalModelInfo, RunnerProcess, PermissionMode, PermissionRequest, ReasoningMode, SseStream, TaskRecord } from "./types";
+import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
+import { aegisRunnerHardeningEnvironment, assertAegisRunnerConfig } from "./policy";
+import type { LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
 const nodeRequire = createRequire(__filename);
 
-export function buildPackageRunnerConfig(
-  mode: PermissionMode,
-  selectedModel: LocalModelInfo,
-  availableModels: LocalModelInfo[],
-  reasoningMode: ReasoningMode,
-): Record<string, unknown> {
-  const providerCatalog = new Map(localProviderCatalog.map((provider) => [provider.providerId, provider]));
-  const modelsForSelectedProvider = availableModels.filter((model) => model.providerId === selectedModel.providerId);
-  const modelBehavior =
-    reasoningMode === "reasoning"
-      ? { reasoning: true, interleaved: { field: "reasoning_content" as const } }
-      : { reasoning: false };
-  const modelEntries = Object.fromEntries(
-    (modelsForSelectedProvider.length ? modelsForSelectedProvider : [selectedModel]).map((model) => [
-      model.modelId,
-      { name: model.displayName, ...modelBehavior },
-    ]),
-  );
-  const catalogProvider = providerCatalog.get(selectedModel.providerId);
-  const enabledProviderIds = Array.from(new Set([selectedModel.providerId]));
+export function buildAegisRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
+  const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   return {
-    $schema: "https://opencode.ai/config.json",
-    share: "disabled",
-    autoupdate: false,
-    model: `${selectedModel.providerId}/${selectedModel.modelId}`,
-    small_model: `${selectedModel.providerId}/${selectedModel.modelId}`,
-    enabled_providers: enabledProviderIds,
-    disabled_providers: defaultDisabledProviders,
+    taskId: task.id,
+    cwd: task.worktreePath,
+    permissionMode: "normal",
     provider: {
-      [selectedModel.providerId]: {
-        npm: "@ai-sdk/openai-compatible",
-        name: `Local ${selectedModel.providerName}`,
-        options: {
-          baseURL: selectedModel.baseUrl,
-          apiKey: catalogProvider?.apiKey ?? "local",
-        },
-        models: modelEntries,
-      },
+      id: selectedModel.providerId,
+      name: selectedModel.providerName,
+      baseURL: selectedModel.baseUrl,
+      apiKey: catalogProvider?.apiKey ?? "local",
+      modelId: selectedModel.modelId,
     },
-    server: {
-      hostname: "127.0.0.1",
-      mdns: false,
-      cors: [],
-    },
-    mcp: {},
-    plugin: [],
-    instructions: [],
-    permission: permissionRulesForMode(mode),
   };
 }
 
@@ -87,47 +52,25 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   };
 }
 
-export function runnerBinaryPath(): string | null {
-  const binary = process.platform === "win32" ? "opencode.exe" : "opencode";
-  const platform = process.platform === "win32" ? "windows" : process.platform;
-  const arch = process.arch;
-  const packageNames =
-    platform === "windows" && arch === "x64"
-      ? ["opencode-windows-x64", "opencode-windows-x64-baseline"]
-      : platform === "windows" && arch === "arm64"
-        ? ["opencode-windows-arm64"]
-        : platform === "darwin" && arch === "arm64"
-          ? ["opencode-darwin-arm64"]
-          : platform === "darwin" && arch === "x64"
-            ? ["opencode-darwin-x64", "opencode-darwin-x64-baseline"]
-            : platform === "linux" && arch === "arm64"
-              ? ["opencode-linux-arm64", "opencode-linux-arm64-musl"]
-              : platform === "linux" && arch === "x64"
-                ? [
-                    "opencode-linux-x64",
-                    "opencode-linux-x64-baseline",
-                    "opencode-linux-x64-musl",
-                    "opencode-linux-x64-baseline-musl",
-                  ]
-                : [];
+function existingRunnerCliPath(candidate: string): string | null {
+  return fs.existsSync(candidate) ? candidate : null;
+}
 
-  for (const packageName of packageNames) {
-    try {
-      return nodeRequire.resolve(`${packageName}/bin/${binary}`);
-    } catch {
-      const candidate = path.resolve(__dirname, "../../../node_modules", packageName, "bin", binary);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
+export function runnerBinaryPath(): string | null {
+  const candidates: string[] = [];
+  try {
+    candidates.push(nodeRequire.resolve("@aegis/runner/bin/aegis-runner.cjs"));
+  } catch {
+    /* The direct workspace fallback below covers source-tree runs. */
+  }
+  candidates.push(path.resolve(__dirname, "../../runner/bin/aegis-runner.cjs"));
+  for (const candidate of candidates) {
+    const resolved = existingRunnerCliPath(candidate);
+    if (resolved && fs.existsSync(path.resolve(path.dirname(resolved), "../dist/cli.js"))) {
+      return resolved;
     }
   }
-
-  try {
-    return nodeRequire.resolve("opencode-ai/bin/opencode");
-  } catch {
-    const candidate = path.resolve(__dirname, "../../../node_modules/opencode-ai/bin/opencode");
-    return fs.existsSync(candidate) ? candidate : null;
-  }
+  return null;
 }
 
 async function freeLocalPort(): Promise<number> {
@@ -153,14 +96,12 @@ export function stopRunnerProcess(run: RunnerProcess) {
   }
 }
 
-function packageRunnerAuthHeader(run: RunnerProcess): string {
-  return `Basic ${Buffer.from(`opencode:${run.password}`).toString("base64")}`;
+function runnerAuthHeader(run: RunnerProcess): string {
+  return `Basic ${Buffer.from(`aegis-runner:${run.password}`).toString("base64")}`;
 }
 
-function packageRunnerUrl(run: RunnerProcess, route: string): URL {
-  const url = new URL(route, run.url);
-  url.searchParams.set("directory", run.directory);
-  return url;
+function runnerUrl(run: RunnerProcess, route: string): URL {
+  return new URL(route, run.url);
 }
 
 export async function runnerRequest<T>(
@@ -169,11 +110,11 @@ export async function runnerRequest<T>(
   init: Omit<RequestInit, "body"> & { body?: unknown } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", packageRunnerAuthHeader(run));
+  headers.set("Authorization", runnerAuthHeader(run));
   if (init.body !== undefined) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(packageRunnerUrl(run, route), {
+  const response = await fetch(runnerUrl(run, route), {
     ...init,
     headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
@@ -189,27 +130,29 @@ export async function runnerRequest<T>(
   return response.json() as Promise<T>;
 }
 
-export async function startPackageRunnerServer(
+export async function startAegisRunnerServer(
   task: TaskRecord,
   model: LocalModelInfo,
-  models: LocalModelInfo[],
 ): Promise<RunnerProcess> {
-  const binary = runnerBinaryPath();
-  if (!binary) {
-    throw new Error("Aegis runner is not installed in the app bundle.");
+  const cliPath = runnerBinaryPath();
+  if (!cliPath) {
+    throw new Error("Aegis runner is not built in the app bundle.");
   }
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
-  const config = buildPackageRunnerConfig(task.permissionMode, model, models, task.reasoningMode ?? "fast");
-  assertPackageRunnerConfig(config, model);
-  const child = spawn(binary, ["serve", "--pure", "--hostname=127.0.0.1", `--port=${port}`], {
+  const config = buildAegisRunnerConfig(task, model);
+  assertAegisRunnerConfig(config, model);
+  const env: NodeJS.ProcessEnv = {
+    ...runtimeEnv(task.worktreePath),
+    ...aegisRunnerHardeningEnvironment(),
+    AEGIS_RUNNER_CONFIG: JSON.stringify(config),
+  };
+  if ((process.versions as NodeJS.ProcessVersions & { electron?: string }).electron) {
+    env.ELECTRON_RUN_AS_NODE = "1";
+  }
+  const child = spawn(process.execPath, [cliPath, "serve", "--hostname=127.0.0.1", `--port=${port}`, `--password=${password}`], {
     cwd: task.worktreePath,
-    env: {
-      ...runtimeEnv(task.worktreePath),
-      ...packageRunnerHardeningEnvironment(),
-      OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-      OPENCODE_SERVER_PASSWORD: password,
-    },
+    env,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -237,7 +180,7 @@ export async function startPackageRunnerServer(
     };
     const onData = (chunk: Buffer) => {
       output += chunk.toString("utf8");
-      const match = output.match(/opencode server listening on\s+(https?:\/\/[^\s]+)/);
+      const match = output.match(/aegis runner listening on\s+(https?:\/\/[^\s]+)/);
       if (!match || settled) return;
       settled = true;
       cleanup();
@@ -271,25 +214,6 @@ export async function startPackageRunnerServer(
   };
 }
 
-export function eventSessionId(event: Record<string, unknown>): string | undefined {
-  const properties = isRecord(event.properties) ? event.properties : {};
-  const direct = typeof properties.sessionID === "string" ? properties.sessionID : undefined;
-  if (direct) return direct;
-  const info = isRecord(properties.info) ? properties.info : undefined;
-  if (typeof info?.sessionID === "string") return info.sessionID;
-  const part = isRecord(properties.part) ? properties.part : undefined;
-  if (typeof part?.sessionID === "string") return part.sessionID;
-  return undefined;
-}
-
-export function runnerErrorMessage(error: unknown): string {
-  if (!isRecord(error)) return String(error || "Aegis runner failed.");
-  const data = isRecord(error.data) ? error.data : {};
-  if (typeof data.message === "string") return data.message;
-  if (typeof error.name === "string") return error.name;
-  return "Aegis runner failed.";
-}
-
 function parseSseBlock(block: string): unknown | null {
   const data = block
     .split(/\r?\n/)
@@ -315,9 +239,9 @@ export function beginRunnerEventStream(run: RunnerProcess, onEvent: (event: Reco
   const done = (async () => {
     try {
       const headers = new Headers();
-      headers.set("Authorization", packageRunnerAuthHeader(run));
+      headers.set("Authorization", runnerAuthHeader(run));
       headers.set("Accept", "text/event-stream");
-      const response = await fetch(packageRunnerUrl(run, "/event"), {
+      const response = await fetch(runnerUrl(run, "/event"), {
         headers,
         signal: run.abortController.signal,
       });
@@ -351,122 +275,10 @@ export function beginRunnerEventStream(run: RunnerProcess, onEvent: (event: Reco
   return { ready, done };
 }
 
-function findStringByKey(value: unknown, keys: Set<string>, depth = 0): string {
-  if (depth > 8 || !value) return "";
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return "";
-    try {
-      return findStringByKey(JSON.parse(trimmed) as unknown, keys, depth + 1);
-    } catch {
-      return "";
-    }
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findStringByKey(item, keys, depth + 1);
-      if (found) return found;
-    }
-    return "";
-  }
-  if (!isRecord(value)) return "";
-  for (const [key, child] of Object.entries(value)) {
-    if (keys.has(key.toLowerCase()) && typeof child === "string" && child.trim()) {
-      return child.trim();
-    }
-  }
-  for (const child of Object.values(value)) {
-    const found = findStringByKey(child, keys, depth + 1);
-    if (found) return found;
-  }
-  return "";
-}
-
-function asInputRecord(value: unknown): Record<string, unknown> | null {
-  if (isRecord(value)) return value;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{")) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function toolDisplayName(value: string): string {
-  return value.split(".").pop()?.toLowerCase() || value.toLowerCase() || "tool";
-}
-
-export function runnerToolCommand(part: Record<string, unknown>): { kind: PermissionRequest["kind"]; command: string } {
-  const tool = typeof part.tool === "string" ? part.tool : "tool";
-  const state = isRecord(part.state) ? part.state : {};
-  const inputCandidates = [state.input, part.input, state.args, part.args, state.params, part.params]
-    .map(asInputRecord)
-    .filter((input): input is Record<string, unknown> => !!input);
-  const commandInput = inputCandidates.find(
-    (input) => typeof input.command === "string" || typeof input.cmd === "string",
-  );
-  const pathInput = inputCandidates.find(
-    (input) => typeof input.filePath === "string" || typeof input.path === "string",
-  );
-  const title = typeof state.title === "string" && state.title.trim() ? state.title.trim() : tool;
-  const commandValue =
-    (commandInput
-      ? (typeof commandInput.command === "string" && commandInput.command.trim()) ||
-        (typeof commandInput.cmd === "string" && commandInput.cmd.trim())
-      : "") ||
-    findStringByKey(part, new Set(["command", "cmd", "shell", "script"]));
-  const pathValue =
-    (pathInput
-      ? (typeof pathInput.filePath === "string" && pathInput.filePath.trim()) ||
-        (typeof pathInput.path === "string" && pathInput.path.trim())
-      : "") ||
-    findStringByKey(part, new Set(["filepath", "file_path", "path", "filename"]));
-  const toolName = toolDisplayName(tool);
-  const command =
-    commandValue ||
-    (pathValue ? `${toolName} ${pathValue}` : "") ||
-    title;
-  return {
-    kind: tool.toLowerCase().includes("bash") || !!commandValue ? "bash" : "edit",
-    command,
-  };
-}
-
 export async function replyRunnerPermission(run: RunnerProcess, permissionId: string, allow: boolean) {
-  if (!run.sessionId) return;
   const reply = allow ? "once" : "reject";
-  try {
-    await runnerRequest<boolean>(run, `/permission/${encodeURIComponent(permissionId)}/reply`, {
-      method: "POST",
-      body: { reply },
-    });
-    return;
-  } catch {
-    await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/permissions/${encodeURIComponent(permissionId)}`, {
-      method: "POST",
-      body: { response: reply },
-    });
-  }
-}
-
-export function runnerPermissionType(permission: Record<string, unknown>): string {
-  const direct = typeof permission.type === "string" ? permission.type : "";
-  const named = typeof permission.permission === "string" ? permission.permission : "";
-  return direct || named || "tool";
-}
-
-export function runnerPermissionSummary(permission: Record<string, unknown>): string {
-  const title = typeof permission.title === "string" && permission.title.trim() ? permission.title.trim() : "";
-  const type = runnerPermissionType(permission);
-  const patterns = Array.isArray(permission.patterns)
-    ? permission.patterns.filter((pattern): pattern is string => typeof pattern === "string" && !!pattern.trim())
-    : Array.isArray(permission.pattern)
-      ? permission.pattern.filter((pattern): pattern is string => typeof pattern === "string" && !!pattern.trim())
-      : typeof permission.pattern === "string" && permission.pattern.trim()
-        ? [permission.pattern.trim()]
-        : [];
-  return title || patterns.join(", ") || type;
+  await runnerRequest<boolean>(run, `/permission/${encodeURIComponent(permissionId)}/reply`, {
+    method: "POST",
+    body: { reply },
+  });
 }

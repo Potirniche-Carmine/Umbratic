@@ -18,6 +18,7 @@
   --red: #ff6f7a;
   --radius: 8px;
   --timeline-card-width: 760px;
+  --prompt-width: min(100%, 588px);
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
@@ -1443,9 +1444,9 @@ pre {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
-  padding: 12px 20px 14px;
+  padding: 10px 20px 12px;
   border-top: 1px solid var(--line);
   background: transparent;
 }
@@ -1454,8 +1455,9 @@ pre {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 2px;
-  width: min(100%, 980px);
+  justify-content: center;
+  gap: 4px;
+  width: var(--prompt-width);
   min-width: 0;
   min-height: 28px;
   padding: 0 2px;
@@ -1465,7 +1467,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(100%, 980px);
+  width: var(--prompt-width);
   min-height: 34px;
   padding: 8px 10px;
   border: 1px solid rgba(87, 157, 255, 0.24);
@@ -1495,8 +1497,7 @@ pre {
   background: transparent;
 }
 
-.workspaceControl,
-.modelMenuButton {
+.workspaceControl {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1521,14 +1522,7 @@ pre {
   min-width: 0;
 }
 
-.modelMenuButton {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 200px;
-}
-
-.workspaceControl:hover,
-.modelMenuButton:hover {
+.workspaceControl:hover {
   background: rgba(255, 255, 255, 0.05);
 }
 
@@ -1697,41 +1691,24 @@ pre {
   color: #ffb4bb;
 }
 
-.workspaceControl > span:not(.controlIcon),
-.modelMenuButton > span {
+.workspaceControl > span:not(.controlIcon) {
   display: inline-flex;
   align-items: center;
   min-width: 0;
   overflow: hidden;
 }
 
-.modelMenu button span {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
 .workspaceControl strong,
-.modelMenuButton strong,
-.modelMenu strong,
-.modelMenu em {
+.workspaceControl em {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspaceControl strong,
-.modelMenuButton strong {
+.workspaceControl strong {
   font-weight: 500;
   font-size: 12px;
   letter-spacing: -0.005em;
-}
-
-.modelMenu em {
-  color: var(--faint);
-  font-style: normal;
-  font-size: 11px;
-  font-weight: 500;
 }
 
 .permissionControl {
@@ -1855,98 +1832,57 @@ pre {
   line-height: 1;
 }
 
-.modelMenuHost {
-  position: relative;
+.attachmentControl {
   display: flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-left: auto;
-}
-
-.modelMenuButton svg {
+  align-items: center;
   flex: 0 0 auto;
-  color: var(--faint);
+  min-width: 0;
 }
 
-.modelMenuButton:hover svg {
-  color: var(--muted);
-}
-
-.modelMenu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 7px);
-  z-index: 30;
-  width: min(340px, 62vw);
-  max-height: 280px;
-  overflow: auto;
-  padding: 5px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: rgba(28, 30, 35, 0.98);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.34);
-}
-
-.modelMenuHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 5px 5px 7px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 800;
-}
-
-.modelMenuHeader .modelRefreshButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: auto;
-  min-height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
+.attachmentTrigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
-  color: var(--text);
-  font-size: 11.5px;
-  font-weight: 800;
+  color: var(--muted);
+  background: transparent;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
-.modelMenuHeader .modelRefreshButton:hover {
-  border-color: rgba(87, 157, 255, 0.42);
+.attachmentTrigger:hover:not(:disabled),
+.attachmentTrigger.isActive {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.attachmentTrigger.isActive {
   color: #9fcbff;
   background: rgba(87, 157, 255, 0.12);
 }
 
-.modelMenuHeader .modelRefreshButton:disabled {
-  opacity: 0.72;
-  cursor: default;
+.attachmentTrigger:disabled {
+  opacity: 0.42;
 }
 
-.modelMenu button {
+.attachmentCount {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 7px;
-  border-radius: 6px;
-  color: var(--text);
-  text-align: left;
-}
-
-.modelMenu button:hover {
-  background: rgba(255, 255, 255, 0.065);
-}
-
-.modelMenuEmpty {
-  padding: 10px 8px;
-  color: var(--muted);
-  font-size: 11.5px;
+  place-items: center;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  color: #061426;
+  background: var(--blue);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .promptRisk {
@@ -1958,8 +1894,7 @@ pre {
     max-width: 100px;
   }
 
-  .workspaceControl,
-  .modelMenuButton {
+  .workspaceControl {
     max-width: 200px;
   }
 }
@@ -1970,8 +1905,7 @@ pre {
     padding: 0 7px;
   }
 
-  .workspaceControl,
-  .modelMenuButton {
+  .workspaceControl {
     padding: 0 8px;
     max-width: 160px;
   }
@@ -1993,24 +1927,18 @@ pre {
     gap: 4px;
   }
 
-  .workspaceControl,
-  .modelMenuButton {
+  .workspaceControl {
     padding: 0 7px;
     max-width: 130px;
   }
 
-  .workspaceControl strong,
-  .modelMenuButton strong {
+  .workspaceControl strong {
     font-size: 11px;
   }
 }
 
 @container workspace (max-width: 340px) {
   .workspaceCluster .branchControl {
-    display: none;
-  }
-
-  .modelMenuButton > span {
     display: none;
   }
 }
@@ -2027,7 +1955,7 @@ pre {
 
 .composer {
   position: relative;
-  width: min(100%, 980px);
+  width: var(--prompt-width);
   min-width: 0;
 }
 
@@ -2116,16 +2044,16 @@ pre {
 
 .promptInputShell {
   position: relative;
-  min-height: 74px;
+  min-height: 48px;
 }
 
 .promptHighlight {
   position: absolute;
   inset: 0;
   z-index: 0;
-  min-height: 74px;
-  max-height: 180px;
-  padding: 12px 54px 12px 13px;
+  min-height: 48px;
+  max-height: 108px;
+  padding: 10px 48px 10px 12px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   overflow: hidden;
@@ -2149,10 +2077,10 @@ pre {
   position: relative;
   z-index: 1;
   width: 100%;
-  min-height: 74px;
-  max-height: 180px;
+  min-height: 48px;
+  max-height: 108px;
   resize: none;
-  padding: 12px 54px 12px 13px;
+  padding: 10px 48px 10px 12px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   outline: 0;
@@ -2185,12 +2113,12 @@ pre {
 .sendButton {
   position: absolute;
   z-index: 2;
-  right: 9px;
-  bottom: 9px;
+  right: 8px;
+  bottom: 8px;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: var(--blue);
   color: #07111e;
@@ -2231,7 +2159,7 @@ pre {
 .floatingApproval {
   position: absolute;
   left: 50%;
-  bottom: 132px;
+  bottom: 108px;
   z-index: 25;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

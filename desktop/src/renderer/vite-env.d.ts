@@ -4,7 +4,7 @@ type AegisPermissionMode = "normal" | "bypass";
 type AegisReasoningMode = "fast" | "reasoning";
 type AegisServiceStatus = "ready" | "degraded" | "unavailable";
 type AegisWorkspaceKind = "git" | "folder";
-type AegisLocalProviderId = "local-lmstudio" | "local-vllm";
+type AegisLocalProviderId = "local-endpoint";
 type AegisCommandClass =
   | "read"
   | "edit"
@@ -35,7 +35,7 @@ type AegisRepositoryInfo = {
 
 type AegisBackendStatus = {
   runner: AegisServiceStatus;
-  lmstudio: AegisServiceStatus;
+  endpoint: AegisServiceStatus;
   model: AegisLocalModelInfo | null;
   models: AegisLocalModelInfo[];
   providers: AegisLocalModelProvider[];
@@ -123,6 +123,9 @@ type AegisReviewFile = {
 type AegisChatAttachment = {
   path: string;
   name: string;
+  source?: "workspace" | "chat";
+  storedPath?: string;
+  originalPath?: string;
 };
 
 type AegisFileSearchResult = AegisChatAttachment & {
@@ -227,6 +230,7 @@ declare global {
       refreshTaskReview(input: { taskId: string }): Promise<AegisTaskInfo | null>;
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<AegisFileSearchResult[]>;
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
+      pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: AegisChatAttachment[] }>;
       getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
       listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
         { ok: true; current: string; branches: string[] } | { ok: false; message: string }
@@ -243,7 +247,6 @@ declare global {
         | { ok: false; message: string }
       >;
       setPermissionMode(mode: AegisPermissionMode): Promise<AegisBackendStatus>;
-      setSelectedModel(input: { providerId: string; modelId: string }): Promise<AegisBackendStatus>;
       listAvailableIdes(): Promise<AegisIdeInfo[]>;
       startTask(input: {
         repositoryId?: string;

@@ -4,7 +4,13 @@ type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type BackendUiEvent = Record<string, unknown>;
 type ChatInput = { title?: string; repositoryName?: string; repositoryPath?: string };
-type ChatAttachment = { path: string; name: string };
+type ChatAttachment = {
+  path: string;
+  name: string;
+  source?: "workspace" | "chat";
+  storedPath?: string;
+  originalPath?: string;
+};
 
 contextBridge.exposeInMainWorld("aegis", {
   listChats: () => ipcRenderer.invoke("aegis:list-chats"),
@@ -16,6 +22,7 @@ contextBridge.exposeInMainWorld("aegis", {
   refreshTaskReview: (input: { taskId: string }) => ipcRenderer.invoke("aegis:refresh-task-review", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("aegis:search-files", input),
   pickRepository: () => ipcRenderer.invoke("aegis:pick-repository"),
+  pickAttachmentFiles: (input: { chatId: string; repositoryId?: string }) => ipcRenderer.invoke("aegis:pick-attachment-files", input),
   getRepository: (input: { repositoryId?: string; repositoryPath?: string }) => ipcRenderer.invoke("aegis:get-repository", input),
   listRepositoryBranches: (input: { repositoryId?: string; repositoryPath?: string }) =>
     ipcRenderer.invoke("aegis:list-repository-branches", input),
@@ -27,7 +34,6 @@ contextBridge.exposeInMainWorld("aegis", {
   openSkillsFolder: () => ipcRenderer.invoke("aegis:open-skills-folder"),
   createSkill: (input: { name: string }) => ipcRenderer.invoke("aegis:create-skill", input),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("aegis:set-permission-mode", mode),
-  setSelectedModel: (input: { providerId: string; modelId: string }) => ipcRenderer.invoke("aegis:set-selected-model", input),
   listAvailableIdes: () => ipcRenderer.invoke("aegis:list-available-ides"),
   startTask: (input: {
     repositoryId?: string;

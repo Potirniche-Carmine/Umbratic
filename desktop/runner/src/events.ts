@@ -38,6 +38,7 @@ export type AegisRunnerEvent =
       decision: "allow" | "deny";
       at: string;
     }
+  | { type: "session.idle"; taskId: string; sessionId: string; at: string }
   | { type: "runner.error"; taskId: string; category: string; message: string; at: string };
 
 export function nowIso(): string {

@@ -21,6 +21,7 @@ import {
   Minus,
   PanelLeft,
   PanelRight,
+  Paperclip,
   Play,
   Plus,
   RefreshCw,
@@ -44,7 +45,7 @@ type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type WorkspaceKind = "git" | "folder";
-type LocalProviderId = "local-lmstudio" | "local-vllm";
+type LocalProviderId = "local-endpoint";
 type CommandClass =
   | "read"
   | "edit"
@@ -84,7 +85,7 @@ type RepositoryInfo = {
 
 type BackendStatus = {
   runner: ServiceStatus;
-  lmstudio: ServiceStatus;
+  endpoint: ServiceStatus;
   model: LocalModelInfo | null;
   models: LocalModelInfo[];
   providers: LocalModelProvider[];
@@ -178,6 +179,9 @@ type IdeChoice = {
 type ChatAttachment = {
   path: string;
   name: string;
+  source?: "workspace" | "chat";
+  storedPath?: string;
+  originalPath?: string;
 };
 
 type FileSearchResult = ChatAttachment & {
@@ -293,6 +297,7 @@ type DesktopApi = {
   refreshTaskReview(input: { taskId: string }): Promise<TaskInfo | null>;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
+  pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }>;
   getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
   listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
     { ok: true; current: string; branches: string[] } | { ok: false; message: string }
@@ -309,7 +314,6 @@ type DesktopApi = {
     | { ok: false; message: string }
   >;
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
-  setSelectedModel(input: { providerId: string; modelId: string }): Promise<BackendStatus>;
   listAvailableIdes(): Promise<IdeChoice[]>;
   startTask(input: {
     repositoryId?: string;
@@ -349,7 +353,11 @@ function writePreviewChats(chats: ChatRecord[]) {
 }
 
 function normalizeAttachment(file: ChatAttachment): ChatAttachment {
-  return { path: file.path, name: file.name || file.path.split(/[\\/]/).pop() || file.path };
+  const normalized: ChatAttachment = { path: file.path, name: file.name || file.path.split(/[\\/]/).pop() || file.path };
+  if (file.source === "chat" || file.source === "workspace") normalized.source = file.source;
+  if (file.storedPath) normalized.storedPath = file.storedPath;
+  if (file.originalPath) normalized.originalPath = file.originalPath;
+  return normalized;
 }
 
 const initialPrompt = "";
@@ -415,6 +423,10 @@ const fallbackApi: DesktopApi = {
       statusSummary: "preview",
     },
   }),
+  pickAttachmentFiles: async () => ({
+    canceled: false,
+    files: [{ path: "desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" }],
+  }),
   getRepository: async (input) =>
     input.repositoryPath
       ? {
@@ -432,7 +444,7 @@ const fallbackApi: DesktopApi = {
   checkoutRepositoryBranch: async () => ({ ok: false, message: "Open the Electron app to switch branches." }),
   getBackendStatus: async () => ({
     runner: "unavailable",
-    lmstudio: "unavailable",
+    endpoint: "unavailable",
     model: null,
     models: [],
     providers: [],
@@ -450,7 +462,7 @@ const fallbackApi: DesktopApi = {
       policyVersion: "aegis-local-mvp-1",
       runnerBinary: "missing",
       configAssertions: "enabled",
-      providerAllowlist: ["local-lmstudio", "local-vllm"],
+      providerAllowlist: ["local-endpoint"],
       localhostOnlyModels: true,
       commandClassifier: "enabled",
       telemetry: {
@@ -482,7 +494,6 @@ const fallbackApi: DesktopApi = {
     previewPermissionMode = mode;
     return fallbackApi.getBackendStatus();
   },
-  setSelectedModel: async () => fallbackApi.getBackendStatus(),
   listAvailableIdes: async () => defaultIdeChoices,
   startTask: async () => {
     throw new Error("Open the Electron app to run a task.");
@@ -1564,8 +1575,6 @@ function App() {
   const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [refreshingModels, setRefreshingModels] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -1648,6 +1657,8 @@ function App() {
       ? "No file changes found"
       : stateLabel(task.state);
   const attachmentMenuOpen = !!mention;
+  const attachmentSearchQuery = mention?.query ?? "";
+  const canAttachFiles = !busy && !closedChatNotice;
   const visibleEvents = events;
   const responseFeedback = useMemo(() => {
     const ratings = new Map<string, "good" | "bad">();
@@ -1864,7 +1875,7 @@ function App() {
   }, [activeChatId, prompt, attachedFiles]);
 
   useEffect(() => {
-    if (!mention || !repository) {
+    if (!attachmentMenuOpen || !repository) {
       setFileMatches([]);
       setSelectedFileIndex(0);
       return undefined;
@@ -1872,7 +1883,7 @@ function App() {
     let canceled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const matches = await api.searchFiles({ repositoryId: repository.id, query: mention.query, limit: 10 });
+        const matches = await api.searchFiles({ repositoryId: repository.id, query: attachmentSearchQuery, limit: 10 });
         if (!canceled) {
           setFileMatches(matches);
           setSelectedFileIndex(0);
@@ -1889,7 +1900,7 @@ function App() {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [mention?.query, repository?.id]);
+  }, [attachmentMenuOpen, attachmentSearchQuery, repository?.id]);
 
   useEffect(() => {
     const menu = attachmentMenuRef.current;
@@ -2100,17 +2111,6 @@ function App() {
     }
   }
 
-  async function refreshModelMenu() {
-    setRefreshingModels(true);
-    setError(null);
-    try {
-      await refreshStatus();
-      setModelMenuOpen(true);
-    } finally {
-      setRefreshingModels(false);
-    }
-  }
-
   async function refreshActiveReview() {
     if (!task || busy || task.state !== "review_ready") return;
     await refreshTaskReviewById(task.id);
@@ -2231,21 +2231,9 @@ function App() {
     }
   }
 
-  async function selectModel(model: LocalModelInfo) {
-    setError(null);
-    setModelMenuOpen(false);
-    try {
-      const status = await api.setSelectedModel({ providerId: model.providerId, modelId: model.modelId });
-      setBackend(status);
-      setPermissionModeState(status.permissionMode);
-    } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
   async function startTask() {
     if (!selectedModel) {
-      setError("Start LM Studio or vLLM with at least one loaded model.");
+      setError("Configure an OpenAI-compatible endpoint and model id.");
       return;
     }
     if (closedChatNotice) {
@@ -2505,11 +2493,45 @@ function App() {
     updateMention(nextPrompt, event.target.selectionStart);
   }
 
+  function mergeAttachments(current: ChatAttachment[], files: ChatAttachment[]): ChatAttachment[] {
+    const next = [...current];
+    for (const file of files.map(normalizeAttachment)) {
+      if (!next.some((attached) => attached.path === file.path)) {
+        next.push(file);
+      }
+      if (next.length >= 16) break;
+    }
+    return next;
+  }
+
+  function insertAttachmentMentions(files: ChatAttachment[]) {
+    const normalized = files.map(normalizeAttachment);
+    if (!normalized.length) return;
+    const node = textareaRef.current;
+    const cursor = node?.selectionStart ?? prompt.length;
+    const before = prompt.slice(0, cursor);
+    const after = prompt.slice(cursor);
+    const leading = before && !/\s$/.test(before) ? " " : "";
+    const trailing = after && !/^\s/.test(after) ? " " : "";
+    const mentionText = normalized.map(attachmentMention).join(" ");
+    const insertion = `${leading}${mentionText} ${trailing}`;
+    const nextPrompt = `${before}${insertion}${after}`;
+    const caret = cursor + insertion.length;
+    setPrompt(nextPrompt);
+    setMention(null);
+    setFileMatches([]);
+    setSelectedFileIndex(0);
+    window.setTimeout(() => {
+      const current = textareaRef.current;
+      if (!current) return;
+      current.focus();
+      current.setSelectionRange(caret, caret);
+    }, 0);
+  }
+
   function addAttachment(file: ChatAttachment) {
     const normalized = normalizeAttachment(file);
-    setAttachedFiles((current) =>
-      current.some((attached) => attached.path === normalized.path) ? current : [...current, normalized].slice(0, 16),
-    );
+    setAttachedFiles((current) => mergeAttachments(current, [normalized]));
     if (mention) {
       const mentionText = `${attachmentMention(normalized)} `;
       const nextPrompt = `${prompt.slice(0, mention.start)}${mentionText}${prompt.slice(mention.end)}`;
@@ -2524,11 +2546,36 @@ function App() {
         node.focus();
         node.setSelectionRange(caret, caret);
       }, 0);
+      return;
+    }
+
+    insertAttachmentMentions([normalized]);
+  }
+
+  async function pickAttachment() {
+    if (busy || closedChatNotice) return;
+    setError(null);
+    try {
+      let chatId = activeChatId;
+      if (!chatId) {
+        const chat = await api.createChat(chatInputForCurrentProject(prompt.trim() ? titleFromPrompt(prompt) : "New chat"));
+        mergeChat(chat);
+        suppressDraftSaveBriefly();
+        setActiveChatId(chat.id);
+        chatId = chat.id;
+      }
+      const result = await api.pickAttachmentFiles({ chatId, repositoryId: repository?.id });
+      if (result.canceled) return;
+      const files = result.files.map(normalizeAttachment);
+      setAttachedFiles((current) => mergeAttachments(current, files));
+      insertAttachmentMentions(files);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
 
   function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (mention) {
+    if (attachmentMenuOpen) {
       if (event.key === "Escape") {
         event.preventDefault();
         setMention(null);
@@ -3192,40 +3239,17 @@ function App() {
               ) : null}
             </div>
 
-            <div className="modelMenuHost">
-              <button className="modelMenuButton" type="button" onClick={() => setModelMenuOpen((open) => !open)}>
-                <span>
-                  <strong>{selectedModel?.modelId ?? "No local model"}</strong>
-                </span>
-                <ChevronDown size={15} />
+            <div className="attachmentControl">
+              <button
+                className="attachmentTrigger"
+                type="button"
+                onClick={() => void pickAttachment()}
+                disabled={!canAttachFiles}
+                title="Attach file"
+              >
+                <Paperclip size={14} />
+                {attachedFiles.length ? <span className="attachmentCount">{attachedFiles.length}</span> : null}
               </button>
-              {modelMenuOpen ? (
-                <div className="modelMenu" role="menu">
-                  <div className="modelMenuHeader">
-                    <span>Models</span>
-                    <button className="modelRefreshButton" type="button" onClick={refreshModelMenu} disabled={refreshingModels}>
-                      {refreshingModels ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
-                      <span>Refresh</span>
-                    </button>
-                  </div>
-                  {backend?.models.length ? (
-                    backend.models.map((model) => {
-                      const active = selectedModel?.providerId === model.providerId && selectedModel.modelId === model.modelId;
-                      return (
-                        <button key={`${model.providerId}:${model.modelId}`} type="button" onClick={() => selectModel(model)}>
-                          {active ? <CheckCircle2 size={15} /> : <CircleDashed size={15} />}
-                          <span>
-                            <strong>{model.modelId}</strong>
-                            <em>{model.providerName}</em>
-                          </span>
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <div className="modelMenuEmpty">No local models found</div>
-                  )}
-                </div>
-              ) : null}
             </div>
           </div>
           {closedChatNotice ? (
@@ -3238,8 +3262,8 @@ function App() {
             {attachmentMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
-                  <AtSign size={14} />
-                  <span>{repository ? `Search ${repository.name}` : "Select a folder first"}</span>
+                  {mention ? <AtSign size={14} /> : <Paperclip size={14} />}
+                  <span>{repository ? `Attach from ${repository.name}` : "Search files after selecting a folder"}</span>
                 </div>
                 {repository ? (
                   fileMatches.length ? (

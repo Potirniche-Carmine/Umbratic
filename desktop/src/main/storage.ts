@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { aegisPolicyVersion, aegisRunnerName, aegisRunnerVersion, runtimeProfileForPrompt } from "./policy";
-import type { ChatRecord, LocalModelInfo, LocalProviderId, RepositoryInfo, TaskRecord } from "./types";
+import type { ChatRecord, LocalProviderId, RepositoryInfo, TaskRecord } from "./types";
 
 function dataFile(name: string): string {
   return path.join(app.getPath("userData"), name);
@@ -126,17 +126,9 @@ export function writeChats(chats: ChatRecord[]) {
 
 export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string } } {
   const settings = readJsonFile<{ selectedModel?: { providerId?: string; modelId?: string } }>(settingsPath(), {});
-  const providerId = settings.selectedModel?.providerId;
   const modelId = settings.selectedModel?.modelId;
-  if ((providerId === "local-lmstudio" || providerId === "local-vllm") && typeof modelId === "string" && modelId.trim()) {
-    return { selectedModel: { providerId, modelId: modelId.trim() } };
+  if (typeof modelId === "string" && modelId.trim()) {
+    return { selectedModel: { providerId: "local-endpoint", modelId: modelId.trim() } };
   }
   return {};
-}
-
-export function writeSelectedModel(model: LocalModelInfo) {
-  writeJsonFile(settingsPath(), {
-    ...readSettings(),
-    selectedModel: { providerId: model.providerId, modelId: model.modelId },
-  });
 }
