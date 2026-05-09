@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("aegis", {
   updateChatDraft: (input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }) =>
     ipcRenderer.invoke("aegis:update-chat-draft", input),
   deleteChat: (input: { chatId: string }) => ipcRenderer.invoke("aegis:delete-chat", input),
+  getNotes: () => ipcRenderer.invoke("aegis:get-notes"),
+  updateNotes: (input: { content: string }) => ipcRenderer.invoke("aegis:update-notes", input),
   getTask: (input: { taskId: string }) => ipcRenderer.invoke("aegis:get-task", input),
   refreshTaskReview: (input: { taskId: string }) => ipcRenderer.invoke("aegis:refresh-task-review", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("aegis:search-files", input),

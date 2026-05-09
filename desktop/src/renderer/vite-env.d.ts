@@ -176,6 +176,11 @@ type AegisChatRecord = {
   attachedFiles?: AegisChatAttachment[];
 };
 
+type AegisUserNotes = {
+  content: string;
+  updatedAt: string;
+};
+
 type AegisTaskInfo = {
   id: string;
   chatId?: string;
@@ -226,6 +231,8 @@ declare global {
       createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<AegisChatRecord>;
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: AegisChatAttachment[] }): Promise<AegisChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
+      getNotes(): Promise<AegisUserNotes>;
+      updateNotes(input: { content: string }): Promise<AegisUserNotes>;
       getTask(input: { taskId: string }): Promise<AegisTaskInfo | null>;
       refreshTaskReview(input: { taskId: string }): Promise<AegisTaskInfo | null>;
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<AegisFileSearchResult[]>;

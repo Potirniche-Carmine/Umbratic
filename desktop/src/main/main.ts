@@ -52,11 +52,13 @@ import {
 } from "./policy";
 import {
   readChats,
+  readNotes,
   readProjects,
   readSettings,
   readTasks,
   writeChats,
   writeJsonFile,
+  writeNotes,
   writeProjects,
   writeTasks,
 } from "./storage";
@@ -82,9 +84,11 @@ import type {
   ReasoningMode,
   RepositoryInfo,
   ReviewFile,
+  ServiceStatus,
   TaskInfo,
   TaskRecord,
   TaskState,
+  UserNotes,
   WorkspaceKind,
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
@@ -544,6 +548,18 @@ function deleteChat(input: unknown): { ok: true } {
   const id = requiredString(input.chatId, "chatId");
   writeChats(readChats().filter((chat) => chat.id !== id));
   return { ok: true };
+}
+
+function getNotes(): UserNotes {
+  return readNotes();
+}
+
+function updateNotes(input: unknown): UserNotes {
+  if (!isRecord(input)) {
+    throw new Error("Invalid notes input.");
+  }
+  const content = typeof input.content === "string" ? input.content.slice(0, 50000) : "";
+  return writeNotes(content);
 }
 
 function updateChatFromTask(task: TaskRecord) {
@@ -1295,26 +1311,115 @@ function configuredEndpointModel(): LocalModelInfo {
   };
 }
 
+function endpointRoute(baseUrl: string, route: string): string {
+  return new URL(route.replace(/^\/+/, ""), `${normalizeOpenAiBaseUrl(baseUrl)}/`).toString();
+}
+
+function localEndpointModelInfo(modelId: string, provider: ReturnType<typeof endpointProvider>): LocalModelInfo {
+  return {
+    providerId: provider.providerId,
+    providerName: provider.providerName,
+    modelId,
+    displayName: modelDisplayName(provider.providerName, modelId),
+    baseUrl: provider.baseUrl,
+  };
+}
+
+function modelIdsFromPayload(payload: unknown): string[] {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) return [];
+  const ids = payload.data
+    .map((row) => (isRecord(row) && typeof row.id === "string" ? row.id.trim() : ""))
+    .filter((id) => id.length > 0);
+  return Array.from(new Set(ids));
+}
+
+async function fetchEndpointModels(
+  provider: ReturnType<typeof endpointProvider>,
+  configuredModelId: string,
+): Promise<{ status: ServiceStatus; models: LocalModelInfo[]; message?: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const headers = new Headers();
+    headers.set("Accept", "application/json");
+    if (provider.apiKey) {
+      headers.set("Authorization", `Bearer ${provider.apiKey}`);
+    }
+    const response = await fetch(endpointRoute(provider.baseUrl, "models"), {
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      return {
+        status: "unavailable",
+        models: [],
+        message: `Healthcheck failed at /models with ${response.status} ${response.statusText}${
+          body.trim() ? `: ${body.trim().slice(0, 160)}` : ""
+        }`,
+      };
+    }
+    const payload = await response.json().catch(() => null);
+    const modelIds = modelIdsFromPayload(payload);
+    if (!modelIds.length) {
+      return {
+        status: "degraded",
+        models: [],
+        message: "Connected to /models, but no model ids were returned.",
+      };
+    }
+    const models = modelIds.map((modelId) => localEndpointModelInfo(modelId, provider));
+    if (!modelIds.includes(configuredModelId)) {
+      return {
+        status: "degraded",
+        models,
+        message: `Connected, but configured model "${configuredModelId}" was not returned by /models.`,
+      };
+    }
+    return { status: "ready", models, message: "Healthcheck passed at /models." };
+  } catch (error) {
+    const message =
+      error instanceof Error && error.name === "AbortError"
+        ? "Healthcheck timed out while connecting to /models."
+        : `Healthcheck failed: ${error instanceof Error ? error.message : String(error)}`;
+    return { status: "unavailable", models: [], message };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
-  const selected = configuredEndpointModel();
+  const configured = configuredEndpointModel();
+  const providerConfig = endpointProvider();
+  const health = await fetchEndpointModels(providerConfig, configured.modelId);
+  const models = health.models.some((model) => model.modelId === configured.modelId)
+    ? health.models
+    : [configured, ...health.models];
+  const selected = models.find((model) => model.modelId === configured.modelId) ?? configured;
   const provider: LocalModelProvider = {
     providerId: selected.providerId,
     providerName: selected.providerName,
     baseUrl: selected.baseUrl,
-    status: "ready",
-    models: [selected],
+    status: health.status,
+    models,
+    message: health.message,
   };
-  return { providers: [provider], models: [selected], selected };
+  return { providers: [provider], models, selected };
 }
 
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
   const runnerPath = runnerBinaryPath();
+  const endpointStatus = providers.some((provider) => provider.status === "ready")
+    ? "ready"
+    : providers.some((provider) => provider.status === "degraded")
+      ? "degraded"
+      : "unavailable";
   const messages = [
     runnerPath ? undefined : "Aegis runner is not built in the app bundle.",
     selected ? undefined : "No model id is configured for the OpenAI-compatible endpoint.",
+    ...providers.map((provider) => provider.message).filter((message): message is string => !!message),
   ].filter((message): message is string => !!message);
-  const endpointStatus = selected ? "ready" : "unavailable";
 
   return {
     runner: runnerPath ? "ready" : "unavailable",
@@ -3079,6 +3184,8 @@ app.whenReady().then(async () => {
   handleIpc("aegis:create-chat", (input) => createChat(input));
   handleIpc("aegis:update-chat-draft", (input) => updateChatDraft(input));
   handleIpc("aegis:delete-chat", (input) => deleteChat(input));
+  handleIpc("aegis:get-notes", () => getNotes());
+  handleIpc("aegis:update-notes", (input) => updateNotes(input));
   handleIpc("aegis:get-task", (input) => publicTaskById(input));
   handleIpc("aegis:refresh-task-review", (input) => refreshTaskReview(input));
   handleIpc("aegis:search-files", (input) => searchRepositoryFiles(input));

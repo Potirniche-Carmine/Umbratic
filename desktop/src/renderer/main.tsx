@@ -229,6 +229,11 @@ type ChatRecord = {
   attachedFiles?: ChatAttachment[];
 };
 
+type UserNotes = {
+  content: string;
+  updatedAt: string;
+};
+
 type PermissionRequest = {
   id: string;
   kind: "edit" | "bash";
@@ -293,6 +298,8 @@ type DesktopApi = {
   createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<ChatRecord>;
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
+  getNotes(): Promise<UserNotes>;
+  updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
   refreshTaskReview(input: { taskId: string }): Promise<TaskInfo | null>;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
@@ -337,6 +344,8 @@ type DesktopApi = {
 };
 
 const previewChatsKey = "aegis-preview-chats";
+const previewNotesKey = "aegis-preview-notes";
+const serverSettingsKey = "aegis-ui-server-settings";
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 
@@ -350,6 +359,41 @@ function readPreviewChats(): ChatRecord[] {
 
 function writePreviewChats(chats: ChatRecord[]) {
   window.localStorage.setItem(previewChatsKey, JSON.stringify(chats));
+}
+
+function readPreviewNotes(): UserNotes {
+  try {
+    const notes = JSON.parse(window.localStorage.getItem(previewNotesKey) ?? "{}") as Partial<UserNotes>;
+    return {
+      content: typeof notes.content === "string" ? notes.content : "",
+      updatedAt: typeof notes.updatedAt === "string" ? notes.updatedAt : "",
+    };
+  } catch {
+    return { content: "", updatedAt: "" };
+  }
+}
+
+function writePreviewNotes(content: string): UserNotes {
+  const notes = { content, updatedAt: new Date().toISOString() };
+  window.localStorage.setItem(previewNotesKey, JSON.stringify(notes));
+  return notes;
+}
+
+function readUiServerSettings(): { baseUrl: string; modelId: string; secret: string } {
+  try {
+    const settings = JSON.parse(window.localStorage.getItem(serverSettingsKey) ?? "{}") as Record<string, unknown>;
+    return {
+      baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : "",
+      modelId: typeof settings.modelId === "string" ? settings.modelId : "",
+      secret: typeof settings.secret === "string" ? settings.secret : "",
+    };
+  } catch {
+    return { baseUrl: "", modelId: "", secret: "" };
+  }
+}
+
+function writeUiServerSettings(settings: { baseUrl: string; modelId: string; secret: string }) {
+  window.localStorage.setItem(serverSettingsKey, JSON.stringify(settings));
 }
 
 function normalizeAttachment(file: ChatAttachment): ChatAttachment {
@@ -402,6 +446,8 @@ const fallbackApi: DesktopApi = {
     writePreviewChats(readPreviewChats().filter((chat) => chat.id !== input.chatId));
     return { ok: true };
   },
+  getNotes: async () => readPreviewNotes(),
+  updateNotes: async (input) => writePreviewNotes(input.content),
   getTask: async () => null,
   refreshTaskReview: async () => null,
   searchFiles: async (input) =>
@@ -1581,8 +1627,10 @@ function App() {
   const [branchError, setBranchError] = useState<string | null>(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"account" | "tools" | "skills" | "telemetry">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "server" | "tools" | "skills" | "telemetry">("account");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const [serverSettings, setServerSettings] = useState(() => readUiServerSettings());
+  const [serverSettingsMessage, setServerSettingsMessage] = useState<string | null>(null);
   const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
   const [exportingTelemetry, setExportingTelemetry] = useState(false);
   const [toolsEnabled, setToolsEnabled] = useState<Record<string, boolean>>({
@@ -1609,10 +1657,15 @@ function App() {
   const [showBypassDialog, setShowBypassDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [todoNotes, setTodoNotes] = useState("");
+  const [todoEditing, setTodoEditing] = useState(false);
+  const [todoSaving, setTodoSaving] = useState(false);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
+  const notesSaveRef = useRef<number | null>(null);
+  const notesLoadedRef = useRef(false);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
@@ -1647,7 +1700,7 @@ function App() {
   const selectedModel = backend?.model ?? null;
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
-  const canStart = !!selectedModel && prompt.trim().length > 0 && !busy && !closedChatNotice;
+  const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
@@ -1730,9 +1783,11 @@ function App() {
 
   useEffect(() => {
     void refreshStatus();
+    void loadNotes();
     void loadAvailableIdes();
     void loadChats();
-    return api.onBackendEvent((rawEvent) => {
+    const statusTimer = window.setInterval(() => void refreshStatus(), 30000);
+    const unsubscribe = api.onBackendEvent((rawEvent) => {
       const event = asBackendEvent(rawEvent);
       if (!event) return;
       if (event.type === "assistant.delta" && isReviewReadyText(event.text)) return;
@@ -1804,7 +1859,32 @@ function App() {
         void loadChats();
       }
     });
+    return () => {
+      window.clearInterval(statusTimer);
+      unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!backend?.model) return;
+    setServerSettings((current) => ({
+      baseUrl: current.baseUrl || backend.model?.baseUrl || "",
+      modelId: current.modelId || backend.model?.modelId || "",
+      secret: current.secret,
+    }));
+  }, [backend?.model?.baseUrl, backend?.model?.modelId]);
+
+  useEffect(() => {
+    if (!notesLoadedRef.current) return undefined;
+    if (notesSaveRef.current) window.clearTimeout(notesSaveRef.current);
+    const content = todoNotes;
+    notesSaveRef.current = window.setTimeout(() => {
+      void persistNotes(content);
+    }, 450);
+    return () => {
+      if (notesSaveRef.current) window.clearTimeout(notesSaveRef.current);
+    };
+  }, [todoNotes]);
 
   useEffect(() => {
     const markBlurred = () => {
@@ -1970,6 +2050,73 @@ function App() {
     }
   }
 
+  async function loadNotes() {
+    try {
+      const notes = await api.getNotes();
+      notesLoadedRef.current = true;
+      setTodoNotes(notes.content);
+    } catch (cause) {
+      notesLoadedRef.current = true;
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function persistNotes(content: string) {
+    setTodoSaving(true);
+    try {
+      await api.updateNotes({ content });
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setTodoSaving(false);
+    }
+  }
+
+  function saveServerSettings() {
+    const next = {
+      baseUrl: serverSettings.baseUrl.trim(),
+      modelId: serverSettings.modelId.trim(),
+      secret: serverSettings.secret,
+    };
+    writeUiServerSettings(next);
+    setServerSettings(next);
+    setServerSettingsMessage("Saved in this UI. Runner wiring still uses the configured environment for now.");
+  }
+
+  async function showConnectionErrorInChat(userText: string, status: BackendStatus | null) {
+    let chatId = activeChatId;
+    if (!chatId) {
+      const chat = await api.createChat(chatInputForCurrentProject(titleFromPrompt(userText)));
+      mergeChat(chat);
+      suppressDraftSaveBriefly();
+      setActiveChatId(chat.id);
+      chatId = chat.id;
+    }
+    const detail = status?.providers[0]?.message || status?.message;
+    const model = status?.model?.modelId ? `\n\nConfigured model: \`${status.model.modelId}\`.` : "";
+    const message = [
+      "I can't reach the LLM server yet, so I didn't start this run.",
+      "",
+      "Check **Settings > Server** and confirm the server URL/IP, model ID, and secret, then try again.",
+      model,
+      detail ? `\nConnection detail: ${detail}` : "",
+    ].join("\n");
+    const taskId = `local-connection-${Date.now().toString(36)}`;
+    const at = new Date().toISOString();
+    const nextEvents: BackendUiEvent[] = [
+      { type: "user.message", taskId, text: userText, at },
+      { type: "assistant.delta", taskId, text: message, at },
+      { type: "assistant.done", taskId, at },
+    ];
+    setTask(null);
+    setReviewOpen(false);
+    setPendingPermission(null);
+    setApprovalChecks([]);
+    setAssistantText(message);
+    setEvents((current) => nextEvents.reduce((events, event) => appendBackendEvent(events, event), current));
+    await persistDraft(chatId, prompt, attachedFiles);
+  }
+
   function chatInputForCurrentProject(title: string) {
     return {
       title,
@@ -1998,13 +2145,15 @@ function App() {
     });
   }
 
-  async function refreshStatus() {
+  async function refreshStatus(): Promise<BackendStatus | null> {
     try {
       const status = await api.getBackendStatus();
       setBackend(status);
       setPermissionModeState(status.permissionMode);
+      return status;
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
+      return null;
     }
   }
 
@@ -2232,16 +2381,21 @@ function App() {
   }
 
   async function startTask() {
-    if (!selectedModel) {
-      setError("Configure an OpenAI-compatible endpoint and model id.");
-      return;
-    }
     if (closedChatNotice) {
       setError(closedChatNotice);
       return;
     }
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) return;
+    const status = selectedModel && backend?.endpoint === "ready" ? backend : await refreshStatus();
+    if (!status?.model || status.endpoint !== "ready") {
+      try {
+        await showConnectionErrorInChat(trimmedPrompt, status);
+      } catch (cause) {
+        setError(String(cause instanceof Error ? cause.message : cause));
+      }
+      return;
+    }
     const isContinuingChat = !!task && task.chatId === activeChatId;
     const preservedEvents = isContinuingChat ? events : [];
     setError(null);
@@ -2906,24 +3060,59 @@ function App() {
           </section>
         </div>
 
-        <div className="sidebarBrand" aria-hidden="true">
-          <span className="sidebarBrandLogo" />
-          <span className="confidentialMark">Private and Confidential</span>
+        <div className="sidebarFooter">
+          <section className={`todoPanel ${todoEditing ? "isEditing" : ""}`}>
+            <div className="todoHeader">
+              <h2>To Do</h2>
+              <span className="todoSaveState">{todoSaving ? "Saving" : ""}</span>
+              <button
+                className="todoEditButton"
+                type="button"
+                onClick={() => setTodoEditing((editing) => !editing)}
+                title={todoEditing ? "Preview notes" : "Edit notes"}
+                aria-pressed={todoEditing}
+              >
+                {todoEditing ? <Check size={13} /> : <SquarePen size={13} />}
+              </button>
+            </div>
+            {todoEditing ? (
+              <textarea
+                className="todoTextarea"
+                value={todoNotes}
+                onChange={(event) => setTodoNotes(event.target.value)}
+                placeholder="- Ship the thing"
+              />
+            ) : todoNotes.trim() ? (
+              <div className="todoPreview">
+                <MarkdownContent content={todoNotes} />
+              </div>
+            ) : (
+              <button className="todoEmpty" type="button" onClick={() => setTodoEditing(true)}>
+                <SquarePen size={14} />
+                <span>No notes yet</span>
+              </button>
+            )}
+          </section>
+          <div className="sidebarBrand" aria-hidden="true">
+            <span className="sidebarBrandLogo" />
+            <span className="confidentialMark">Private and Confidential</span>
+          </div>
+          <button
+            className="settingsPlaceholder"
+            type="button"
+            onClick={() => {
+              setSettingsOpen(true);
+              setAccountMessage(null);
+              setServerSettingsMessage(null);
+              setTelemetryMessage(null);
+              void refreshStatus();
+              void loadSkills();
+            }}
+          >
+            <Settings size={16} />
+            <span>Settings</span>
+          </button>
         </div>
-        <button
-          className="settingsPlaceholder"
-          type="button"
-          onClick={() => {
-            setSettingsOpen(true);
-            setAccountMessage(null);
-            setTelemetryMessage(null);
-            void refreshStatus();
-            void loadSkills();
-          }}
-        >
-          <Settings size={16} />
-          <span>Settings</span>
-        </button>
       </aside>
 
       <main className="workspace">
@@ -3504,6 +3693,14 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className={`settingsNavItem ${settingsTab === "server" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("server")}
+                >
+                  <Brain size={15} />
+                  <span>Server</span>
+                </button>
+                <button
+                  type="button"
                   className={`settingsNavItem ${settingsTab === "tools" ? "isActive" : ""}`}
                   onClick={() => setSettingsTab("tools")}
                 >
@@ -3559,6 +3756,95 @@ function App() {
                       {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
                     </div>
                   </div>
+                ) : null}
+
+                {settingsTab === "server" ? (
+                  <form
+                    className="settingsPanel"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      saveServerSettings();
+                    }}
+                  >
+                    <div className="settingsPanelHead">
+                      <h3>Server</h3>
+                      <p>OpenAI-compatible endpoint details for a local or private LLM server.</p>
+                    </div>
+
+                    <div className="settingsNotice">
+                      <TriangleAlert size={14} />
+                      <span>UI only for now. These values are saved here but are not wired into runner launches yet.</span>
+                    </div>
+
+                    <div className="settingsList">
+                      <div className="settingsListRow">
+                        <span>Health</span>
+                        <strong className={`serverHealthText ${backend?.endpoint ?? "checking"}`}>
+                          <span className="serverStatusDot" aria-hidden="true" />
+                          {backend?.endpoint === "ready"
+                            ? "Connected"
+                            : backend?.endpoint === "degraded"
+                              ? "Warning"
+                              : backend
+                                ? "Unavailable"
+                                : "Checking"}
+                        </strong>
+                      </div>
+                      <div className="settingsListRow">
+                        <span>Active model</span>
+                        <strong>{backend?.model?.modelId ?? "Unknown"}</strong>
+                      </div>
+                      <div className="settingsListRow">
+                        <span>Active endpoint</span>
+                        <strong>{backend?.model?.baseUrl ?? backend?.providers[0]?.baseUrl ?? "Unknown"}</strong>
+                      </div>
+                    </div>
+
+                    <label className="settingsField">
+                      <span>Server URL or IP</span>
+                      <input
+                        type="text"
+                        value={serverSettings.baseUrl}
+                        onChange={(event) =>
+                          setServerSettings((current) => ({ ...current, baseUrl: event.target.value }))
+                        }
+                        placeholder="http://127.0.0.1:1234/v1"
+                      />
+                    </label>
+
+                    <label className="settingsField">
+                      <span>Model ID</span>
+                      <input
+                        type="text"
+                        value={serverSettings.modelId}
+                        onChange={(event) =>
+                          setServerSettings((current) => ({ ...current, modelId: event.target.value }))
+                        }
+                        placeholder="google/gemma-4-e2b"
+                      />
+                    </label>
+
+                    <label className="settingsField">
+                      <span>Secret</span>
+                      <input
+                        type="password"
+                        value={serverSettings.secret}
+                        onChange={(event) =>
+                          setServerSettings((current) => ({ ...current, secret: event.target.value }))
+                        }
+                        placeholder="API key or shared secret"
+                        autoComplete="off"
+                      />
+                    </label>
+
+                    <div className="settingsActions">
+                      <button className="settingsInlineButton" type="submit">
+                        <Check size={13} />
+                        <span>Save</span>
+                      </button>
+                      {serverSettingsMessage ? <p className="settingsMessage">{serverSettingsMessage}</p> : null}
+                    </div>
+                  </form>
                 ) : null}
 
                 {settingsTab === "tools" ? (

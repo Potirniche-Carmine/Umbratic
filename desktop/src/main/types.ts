@@ -119,6 +119,11 @@ export type LocalModelProvider = {
   message?: string;
 };
 
+export type UserNotes = {
+  content: string;
+  updatedAt: string;
+};
+
 export type TestResult = {
   command: string;
   output: string;

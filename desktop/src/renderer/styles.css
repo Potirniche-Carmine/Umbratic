@@ -189,7 +189,7 @@ pre {
   position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   width: var(--sidebar-width, 248px);
   min-width: 196px;
@@ -324,6 +324,15 @@ pre {
   flex-direction: column;
   gap: 13px;
   min-height: 0;
+  overflow: hidden;
+}
+
+.sidebarFooter {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
 }
 
 .newChatButton {
@@ -366,6 +375,7 @@ pre {
   flex-direction: column;
   gap: 6px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chatArchive .sideHeader {
@@ -610,6 +620,119 @@ pre {
 .settingsPlaceholder:hover {
   color: var(--text);
   border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.todoPanel {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: min(280px, 42vh);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.todoHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 24px;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.todoSaveState {
+  min-width: 42px;
+  color: var(--faint);
+  font-size: 10.5px;
+  text-align: right;
+}
+
+.todoEditButton {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.todoEditButton:hover,
+.todoEditButton[aria-pressed="true"] {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.todoTextarea {
+  width: 100%;
+  min-height: 106px;
+  max-height: 212px;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: 0;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.22);
+  line-height: 1.45;
+}
+
+.todoTextarea:focus {
+  border-color: rgba(87, 157, 255, 0.55);
+}
+
+.todoPreview {
+  min-height: 34px;
+  max-height: 212px;
+  overflow: auto;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.todoPreview .markdownContent {
+  max-width: none;
+  font-size: 12px;
+}
+
+.todoPreview .markdownContent p,
+.todoPreview .markdownContent ul,
+.todoPreview .markdownContent h3,
+.todoPreview .markdownContent h4,
+.todoPreview .markdownContent h5 {
+  margin-bottom: 7px;
+}
+
+.todoPreview .markdownContent h3,
+.todoPreview .markdownContent h4,
+.todoPreview .markdownContent h5 {
+  font-size: 12.5px;
+}
+
+.todoPreview .markdownContent ul {
+  padding-left: 17px;
+}
+
+.todoPreview .markdownContent code {
+  font-size: 11px;
+}
+
+.todoEmpty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  color: var(--faint);
+  text-align: left;
+}
+
+.todoEmpty:hover {
+  color: var(--text);
   background: rgba(255, 255, 255, 0.035);
 }
 
@@ -2654,7 +2777,7 @@ pre {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.58);
 }
 
 .settingsDialog {
@@ -2666,7 +2789,7 @@ pre {
   padding: 0;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: rgba(29, 30, 34, 0.98);
+  background: #1d1e22;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -2704,7 +2827,7 @@ pre {
   gap: 2px;
   padding: 14px 10px;
   border-right: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.015);
+  background: #202126;
   overflow: auto;
 }
 
@@ -2739,6 +2862,7 @@ pre {
   min-height: 0;
   overflow: auto;
   padding: 22px 24px;
+  background: #1d1e22;
 }
 
 .settingsPanel {
@@ -2816,6 +2940,76 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+.serverHealthText {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.serverStatusDot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--faint);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+}
+
+.serverHealthText.ready {
+  color: var(--green);
+}
+
+.serverHealthText.ready .serverStatusDot {
+  background: var(--green);
+}
+
+.serverHealthText.degraded {
+  color: var(--amber);
+}
+
+.serverHealthText.degraded .serverStatusDot {
+  background: var(--amber);
+}
+
+.serverHealthText.unavailable {
+  color: var(--red);
+}
+
+.serverHealthText.unavailable .serverStatusDot {
+  background: var(--red);
+}
+
+.settingsField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settingsField span {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settingsField input {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: 0;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12.5px;
+}
+
+.settingsField input:focus {
+  border-color: rgba(87, 157, 255, 0.55);
 }
 
 .toolName {

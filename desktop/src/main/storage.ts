@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { aegisPolicyVersion, aegisRunnerName, aegisRunnerVersion, runtimeProfileForPrompt } from "./policy";
-import type { ChatRecord, LocalProviderId, RepositoryInfo, TaskRecord } from "./types";
+import type { ChatRecord, LocalProviderId, RepositoryInfo, TaskRecord, UserNotes } from "./types";
 
 function dataFile(name: string): string {
   return path.join(app.getPath("userData"), name);
@@ -23,6 +23,10 @@ function chatsPath(): string {
 
 function settingsPath(): string {
   return dataFile("settings.json");
+}
+
+function notesPath(): string {
+  return dataFile("notes.json");
 }
 
 function readJsonFile<T>(filePath: string, fallback: T): T {
@@ -131,4 +135,21 @@ export function readSettings(): { selectedModel?: { providerId: LocalProviderId;
     return { selectedModel: { providerId: "local-endpoint", modelId: modelId.trim() } };
   }
   return {};
+}
+
+export function readNotes(): UserNotes {
+  const notes = readJsonFile<{ content?: unknown; updatedAt?: unknown }>(notesPath(), {});
+  return {
+    content: typeof notes.content === "string" ? notes.content : "",
+    updatedAt: typeof notes.updatedAt === "string" ? notes.updatedAt : "",
+  };
+}
+
+export function writeNotes(content: string): UserNotes {
+  const notes = {
+    content,
+    updatedAt: new Date().toISOString(),
+  };
+  writeJsonFile(notesPath(), notes);
+  return notes;
 }
