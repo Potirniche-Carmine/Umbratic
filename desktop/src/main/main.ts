@@ -18,12 +18,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  cCmakeRuntimeSystemPrompt,
   defaultEndpointModelId,
   defaultDisabledProviders,
+  debuggerRuntimeSystemPrompt,
   localProviderCatalog,
+  markdownRuntimeSystemPrompt,
   pythonRuntimeSystemPrompt,
   reasoningSystemPrompt,
+  runtimeHarnessSystemPrompt,
   taskStatesThatCanOpen,
+  workspaceToolchainSystemPrompt,
 } from "./config";
 import {
   beginRunnerEventStream,
@@ -45,6 +50,9 @@ import {
   isBlockedPath,
   isGeneratedRuntimePath,
   isLocalhostUrl,
+  promptLooksLikeCmakeTask,
+  promptLooksLikeDebugTask,
+  promptLooksLikeMarkdownTask,
   promptLooksLikePythonTask,
   runtimeDiagnostics,
   runtimeProfileForPrompt,
@@ -81,6 +89,7 @@ import type {
   PendingPermission,
   PermissionMode,
   PermissionRequest,
+  PastedAttachmentInput,
   ReasoningMode,
   RepositoryInfo,
   ReviewFile,
@@ -90,6 +99,7 @@ import type {
   TaskState,
   UserNotes,
   WorkspaceKind,
+  WorkspaceMode,
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 
@@ -141,6 +151,8 @@ try {
 let mainWindow: BrowserWindow | null = null;
 let permissionMode: PermissionMode = "normal";
 const pendingPermissions = new Map<string, PendingPermission>();
+const pendingTaskEvents = new Map<string, BackendUiEvent[]>();
+let pendingTaskEventFlushTimer: NodeJS.Timeout | null = null;
 
 function finishInterruptedRunningTasks() {
   const now = new Date().toISOString();
@@ -238,6 +250,27 @@ function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEv
   return events.reduce<BackendUiEvent[]>((current, event) => appendTaskEvent(current, event, limit), []);
 }
 
+function taskEventSignature(event: BackendUiEvent): string {
+  return JSON.stringify(event);
+}
+
+function mergeTaskEvents(...groups: BackendUiEvent[][]): BackendUiEvent[] {
+  const merged: BackendUiEvent[] = [];
+  const mergedCounts = new Map<string, number>();
+  for (const group of groups) {
+    const groupCounts = new Map<string, number>();
+    for (const event of group) {
+      const signature = taskEventSignature(event);
+      const groupCount = (groupCounts.get(signature) ?? 0) + 1;
+      groupCounts.set(signature, groupCount);
+      if (groupCount <= (mergedCounts.get(signature) ?? 0)) continue;
+      mergedCounts.set(signature, groupCount);
+      merged.push(event);
+    }
+  }
+  return compactTaskEvents(merged, 500);
+}
+
 function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
   task.runnerName = task.runnerName || aegisRunnerName;
   task.runnerVersion = task.runnerVersion || aegisRunnerVersion;
@@ -252,15 +285,58 @@ function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
   }
 }
 
+function takePendingTaskEvents(taskIdValue: string): BackendUiEvent[] {
+  const events = pendingTaskEvents.get(taskIdValue) ?? [];
+  pendingTaskEvents.delete(taskIdValue);
+  return events;
+}
+
+function taskWithAppendedEvents(task: TaskRecord, events: BackendUiEvent[]): TaskRecord {
+  if (events.length === 0) return task;
+  return {
+    ...task,
+    events: events.reduce<BackendUiEvent[]>((current, event) => appendTaskEvent(current, event, 500), task.events ?? []),
+  };
+}
+
+function flushPendingTaskEvents() {
+  if (pendingTaskEventFlushTimer) {
+    clearTimeout(pendingTaskEventFlushTimer);
+    pendingTaskEventFlushTimer = null;
+  }
+  if (pendingTaskEvents.size === 0) return;
+  const queued = Array.from(pendingTaskEvents.entries());
+  pendingTaskEvents.clear();
+  const tasks = readTasks();
+  let changed = false;
+  const nextTasks = tasks.map((task) => {
+    const events = queued.find(([taskIdValue]) => taskIdValue === task.id)?.[1] ?? [];
+    if (events.length === 0) return task;
+    changed = true;
+    return taskWithAppendedEvents(task, events);
+  });
+  if (changed) {
+    writeTasks(nextTasks);
+  }
+}
+
+function scheduleTaskEventFlush() {
+  if (pendingTaskEventFlushTimer) return;
+  pendingTaskEventFlushTimer = setTimeout(flushPendingTaskEvents, 250);
+}
+
 function saveTask(task: TaskRecord) {
   applyTaskPolicyMetadata(task);
+  const queuedEvents = takePendingTaskEvents(task.id);
+  const taskWithQueuedEvents = taskWithAppendedEvents(task, queuedEvents);
   const existingTasks = readTasks();
   const existing = existingTasks.find((row) => row.id === task.id);
-  const taskEvents = compactTaskEvents(Array.isArray(task.events) ? task.events : [], 500);
+  const taskEvents = compactTaskEvents(Array.isArray(taskWithQueuedEvents.events) ? taskWithQueuedEvents.events : [], 500);
   const existingEvents = compactTaskEvents(Array.isArray(existing?.events) ? existing.events : [], 500);
+  const events = mergeTaskEvents(existingEvents, taskEvents);
   const nextTask = {
-    ...task,
-    events: existingEvents.length >= taskEvents.length ? existingEvents : taskEvents,
+    ...taskWithQueuedEvents,
+    events,
   };
   const tasks = [nextTask, ...existingTasks.filter((row) => row.id !== task.id)];
   writeTasks(tasks);
@@ -274,6 +350,7 @@ function publicTask(task: TaskRecord): TaskInfo {
     repositoryId,
     prompt,
     workspaceKind,
+    workspaceMode,
     state,
     originalBranch,
     baseCommit,
@@ -299,6 +376,7 @@ function publicTask(task: TaskRecord): TaskInfo {
     repositoryId,
     prompt,
     workspaceKind,
+    workspaceMode,
     state,
     originalBranch,
     baseCommit,
@@ -326,6 +404,17 @@ function getTask(taskId: string): TaskRecord {
     throw new Error("Task was not found.");
   }
   return task;
+}
+
+function taskUsesIsolatedWorktree(task: TaskRecord): boolean {
+  return task.workspaceKind === "git" && task.workspaceMode === "worktree" && !!task.agentBranch;
+}
+
+function workspaceModeSystemPrompt(task: TaskRecord): string {
+  if (taskUsesIsolatedWorktree(task)) {
+    return "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path.";
+  }
+  return "Workspace mode: local repository/folder. Do not ask to create a Git worktree or switch to one; work directly in the provided current working directory.";
 }
 
 function publicTaskById(input: unknown): TaskInfo | null {
@@ -391,6 +480,42 @@ function safeAttachmentFileName(value: string): string {
   return `${stem || "attachment"}${ext}`;
 }
 
+function extensionForMimeType(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    case "application/pdf":
+      return ".pdf";
+    case "text/plain":
+      return ".txt";
+    case "text/markdown":
+      return ".md";
+    default:
+      return "";
+  }
+}
+
+function parseAttachmentDataUrl(value: string): { mimeType: string; buffer: Buffer } | null {
+  const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) return null;
+  const mimeType = (match[1] || "application/octet-stream").trim().toLowerCase();
+  const payload = match[3] || "";
+  try {
+    const buffer = match[2]
+      ? Buffer.from(payload, "base64")
+      : Buffer.from(decodeURIComponent(payload), "utf8");
+    return { mimeType, buffer };
+  } catch {
+    return null;
+  }
+}
+
 function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdValue: string): ChatAttachment | null {
   const rawPath = typeof file.path === "string" ? file.path.trim() : "";
   const rawName = typeof file.name === "string" && file.name.trim() ? file.name.trim().slice(0, 120) : "";
@@ -401,12 +526,17 @@ function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdValue: st
   const originalPath =
     typeof file.originalPath === "string" && file.originalPath.trim() ? file.originalPath.trim().slice(0, 500) : undefined;
   const name = rawName || path.basename(storedPath);
+  const previewDataUrl =
+    typeof file.previewDataUrl === "string" && file.previewDataUrl.startsWith("data:image/")
+      ? file.previewDataUrl
+      : imagePreviewDataUrl(storedPath);
   return {
     path: rawPath || `attachments/${path.basename(storedPath)}`,
     name,
     source: "chat",
     storedPath,
     originalPath,
+    previewDataUrl,
   };
 }
 
@@ -525,6 +655,10 @@ function updateChatDraft(input: unknown): ChatRecord {
             path: typeof file.path === "string" ? normalizeRelativePath(file.path).slice(0, 260) : "",
             name: typeof file.name === "string" ? file.name.slice(0, 120) : "",
             source: file.source === "workspace" ? "workspace" as const : undefined,
+            previewDataUrl:
+              typeof file.previewDataUrl === "string" && file.previewDataUrl.startsWith("data:image/")
+                ? file.previewDataUrl
+                : undefined,
           };
         })
         .filter((file) => file.path && file.name)
@@ -659,6 +793,26 @@ function imageDataUrlIfSafe(filePath: string): string | null {
   }
 }
 
+function imagePreviewDataUrl(filePath: string): string | undefined {
+  try {
+    if (!imageMimeType(filePath)) return undefined;
+    const image = nativeImage.createFromPath(filePath);
+    if (image.isEmpty()) return undefined;
+    const size = image.getSize();
+    const longestSide = Math.max(size.width, size.height);
+    const thumbnail = longestSide > 220
+      ? image.resize({
+          width: size.width >= size.height ? 220 : undefined,
+          height: size.height > size.width ? 220 : undefined,
+          quality: "good",
+        })
+      : image;
+    return thumbnail.toDataURL();
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadPdfToImageModule(): Promise<PdfToImageModule> {
   pdfToImageModule ??= importEsm<PdfToImageModule>("pdf-to-img");
   return pdfToImageModule;
@@ -747,7 +901,7 @@ function sanitizeAttachments(input: unknown, rootPath: string, chatIdValue: stri
     const name =
       typeof item.name === "string" && item.name.trim() ? item.name.trim().slice(0, 120) : path.basename(relative);
     seen.add(relative);
-    files.push({ path: relative, name, source: "workspace" });
+    files.push({ path: relative, name, source: "workspace", previewDataUrl: imagePreviewDataUrl(absolute) });
     if (files.length >= 16) break;
   }
   return files;
@@ -798,6 +952,68 @@ function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string
     if (remaining <= 0) break;
   }
   return snippets;
+}
+
+function compactHistoryText(value: string, limit: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 16)).trimEnd()} ...(truncated)`;
+}
+
+function historyLineForEvent(event: BackendUiEvent): string | null {
+  switch (event.type) {
+    case "user.message":
+      return `User: ${compactHistoryText(event.text, 1800)}`;
+    case "assistant.delta":
+      return `Aegis: ${compactHistoryText(event.text, 2400)}`;
+    case "command.started":
+      return `Tool started: ${compactHistoryText(event.command, 500)}`;
+    case "command.output":
+      return `Tool ${event.stream}: ${compactHistoryText(event.text, 900)}`;
+    case "command.finished":
+      return `Tool finished: exit code ${event.exitCode === null ? "unknown" : event.exitCode}`;
+    case "permission.requested":
+      return `Permission requested: ${compactHistoryText(event.request.summary, 500)}`;
+    case "permission.resolved":
+      return `Permission ${event.decision}.`;
+    case "review.ready":
+      return `Review ready: ${event.changedFiles.length} changed file${event.changedFiles.length === 1 ? "" : "s"}.`;
+    case "review.changed_since_ready":
+      return `Review changed since ready: ${event.changedFileCount} changed file${event.changedFileCount === 1 ? "" : "s"}.`;
+    case "approval.check":
+      return `Approval check ${event.status}: ${event.name}${event.detail ? ` (${compactHistoryText(event.detail, 300)})` : ""}`;
+    case "merge.approval":
+      return `Merge ${event.decision}.`;
+    case "merge.completed":
+      return `Merge completed into ${event.targetBranch}.`;
+    case "ide.opened":
+      return `IDE open ${event.result}: ${event.filePath ?? event.target}.`;
+    case "task.error":
+      return `Task error: ${compactHistoryText(event.message, 900)}`;
+    case "assistant.done":
+    case "assistant.reasoning.delta":
+    case "response.feedback":
+    case "worktree.requested":
+    case "worktree.created":
+      return null;
+  }
+}
+
+function priorChatContext(events: BackendUiEvent[]): string {
+  const lines = visibleTaskEvents(events)
+    .map(historyLineForEvent)
+    .filter((line): line is string => !!line);
+  if (lines.length === 0) return "";
+  const selected = lines.slice(-60);
+  let remaining = 14000;
+  const compacted: string[] = [];
+  for (const line of selected) {
+    if (remaining <= 0) break;
+    const next = line.slice(0, remaining);
+    compacted.push(next);
+    remaining -= next.length + 1;
+  }
+  return compacted.join("\n");
 }
 
 function pushPromptText(parts: RunnerPromptPart[], lines: string[]) {
@@ -888,6 +1104,20 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       lines.push(`\n### ${file.path}`, "```", file.text, "```");
     }
   }
+  const history = priorChatContext(task.events ?? []);
+  if (history) {
+    lines.push(
+      "",
+      "Previous chat context:",
+      history,
+      "",
+      "Continue from the previous chat context above. Do not repeat earlier checklists or re-answer earlier messages unless the new user request asks for it.",
+    );
+  }
+  lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
+  if (promptLooksLikeCmakeTask(userPrompt)) {
+    lines.push("", "C/CMake runtime policy for this request:", cCmakeRuntimeSystemPrompt);
+  }
   if (promptLooksLikePythonTask(userPrompt)) {
     lines.push(
       "",
@@ -895,6 +1125,12 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       pythonRuntimeSystemPrompt,
       "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
     );
+  }
+  if (promptLooksLikeMarkdownTask(userPrompt)) {
+    lines.push("", "Markdown runtime policy for this request:", markdownRuntimeSystemPrompt);
+  }
+  if (promptLooksLikeDebugTask(userPrompt)) {
+    lines.push("", "Debugger policy for this request:", debuggerRuntimeSystemPrompt);
   }
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
   parts.push(...(await attachmentPromptParts(rootPath, attachments)));
@@ -1026,6 +1262,9 @@ function cleanupEmptyAegisWorktreeDirectories(task: TaskRecord) {
 }
 
 async function removeGitWorktree(task: TaskRecord) {
+  if (!taskUsesIsolatedWorktree(task)) {
+    return;
+  }
   const repoWorktreeRoot = worktreeRootForRepo(task.originalRepoPath);
   if (!pathInside(repoWorktreeRoot, task.worktreePath)) {
     throw new Error("Worktree path is outside Aegis control.");
@@ -1049,11 +1288,9 @@ function taskMetadataPath(task: TaskRecord): string {
 
 function recordTaskEvent(event: BackendUiEvent) {
   if (isReviewReadyAssistantEvent(event)) return;
-  const tasks = readTasks();
-  const task = tasks.find((row) => row.id === event.taskId);
-  if (!task) return;
-  task.events = appendTaskEvent(task.events, event, 500);
-  writeTasks([task, ...tasks.filter((row) => row.id !== task.id)]);
+  const events = pendingTaskEvents.get(event.taskId) ?? [];
+  pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
+  scheduleTaskEventFlush();
 }
 
 function emit(event: BackendUiEvent) {
@@ -1679,6 +1916,7 @@ async function pickAttachmentFiles(input: unknown): Promise<{ canceled: true } |
       source: "chat",
       storedPath,
       originalPath: absolute,
+      previewDataUrl: imagePreviewDataUrl(storedPath),
     });
     if (files.length >= 16) break;
   }
@@ -1686,6 +1924,47 @@ async function pickAttachmentFiles(input: unknown): Promise<{ canceled: true } |
     throw new Error("No attachable files were selected.");
   }
   return { canceled: false, files };
+}
+
+function savePastedAttachments(input: unknown): { files: ChatAttachment[] } {
+  if (!isRecord(input)) {
+    throw new Error("Invalid pasted attachment input.");
+  }
+  const chatIdValue = requiredString(input.chatId, "chatId");
+  const rawFiles = Array.isArray(input.files) ? input.files : [];
+  const targetDirectory = chatAttachmentDirectory(chatIdValue);
+  fs.mkdirSync(targetDirectory, { recursive: true });
+
+  const files: ChatAttachment[] = [];
+  for (const item of rawFiles) {
+    if (!isRecord(item)) continue;
+    const dataUrl = typeof item.dataUrl === "string" ? item.dataUrl : "";
+    const parsed = parseAttachmentDataUrl(dataUrl);
+    if (!parsed || parsed.buffer.length === 0 || parsed.buffer.length > 25 * 1024 * 1024) continue;
+    const typed = item as PastedAttachmentInput;
+    const rawName =
+      typeof typed.name === "string" && typed.name.trim()
+        ? typed.name.trim()
+        : `pasted-${new Date().toISOString().replace(/[:.]/g, "-")}${extensionForMimeType(typed.mimeType || parsed.mimeType)}`;
+    const ext = path.extname(rawName) ? "" : extensionForMimeType(typed.mimeType || parsed.mimeType);
+    const originalName = `${rawName}${ext}`.slice(0, 160);
+    const storedName = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}-${safeAttachmentFileName(originalName)}`;
+    const storedPath = path.join(targetDirectory, storedName);
+    fs.writeFileSync(storedPath, parsed.buffer);
+    files.push({
+      path: `attachments/${storedName}`,
+      name: originalName.slice(0, 120),
+      source: "chat",
+      storedPath,
+      originalPath: "clipboard",
+      previewDataUrl: imagePreviewDataUrl(storedPath),
+    });
+    if (files.length >= 16) break;
+  }
+  if (!files.length) {
+    throw new Error("No pasteable files were found.");
+  }
+  return { files };
 }
 
 async function getRepository(input: unknown): Promise<RepositoryInfo | null> {
@@ -1915,8 +2194,8 @@ function folderReviewFiles(task: TaskRecord): ReviewFile[] {
 }
 
 async function gitReviewFiles(task: TaskRecord): Promise<ReviewFile[]> {
-  if (!task.agentBranch) {
-    return [];
+  if (!taskUsesIsolatedWorktree(task)) {
+    return folderReviewFiles(task);
   }
   const changed = (await getChangedFiles(task.worktreePath, task.baseCommit))
     .filter((file) => !isGeneratedRuntimePath(file))
@@ -2030,7 +2309,7 @@ async function handleRunnerPermission(
     return "resolved";
   }
 
-  if (task.workspaceKind === "git" && !task.agentBranch && type === "edit") {
+  if (task.workspaceKind === "git" && task.workspaceMode === "worktree" && !task.agentBranch && type === "edit") {
     task.agentBranch = `aegis/${task.id}-${slugify(intentPrompt)}`;
     task.worktreePath = path.join(worktreeRootForRepo(task.originalRepoPath), task.id);
     task.runnerSessionId = undefined;
@@ -2183,7 +2462,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : `tool-${toolRuns.size + 1}`;
         const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
         const command = typeof event.summary === "string" && event.summary.trim() ? event.summary.trim() : toolKind;
-        const kind: PermissionRequest["kind"] = toolKind === "command" ? "bash" : "edit";
+        const kind: PermissionRequest["kind"] = toolKind === "command" || toolKind === "debugger" ? "bash" : "edit";
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : "edit";
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
         ensureToolRun(toolCallId, command, kind, commandClass);
@@ -2250,12 +2529,13 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
       }
     });
     await stream.ready;
-    const session = task.runnerSessionId
-      ? { id: task.runnerSessionId }
-      : await runnerRequest<{ id: string }>(run, "/session", {
-          method: "POST",
-          body: { title: chatTitleFromPrompt(intent) },
-        });
+    // Runner sessions live only inside the runner process started above.
+    // Because Aegis starts a fresh process for each task run, a persisted
+    // runnerSessionId from an earlier process is stale and cannot be reused.
+    const session = await runnerRequest<{ id: string }>(run, "/session", {
+      method: "POST",
+      body: { title: chatTitleFromPrompt(intent) },
+    });
     run.sessionId = session.id;
     task.runnerSessionId = session.id;
     saveTask(task);
@@ -2266,8 +2546,9 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         agent: "build",
         system: [
           "Identity: you are Aegis, a local-first desktop coding agent. If the user asks who you are, answer as Aegis. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Aegis tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
+          workspaceModeSystemPrompt(task),
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
-          pythonRuntimeSystemPrompt,
+          runtimeHarnessSystemPrompt,
         ].join(" "),
         parts: promptParts,
       },
@@ -2340,7 +2621,9 @@ async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: Runne
 
 function closedTaskMessage(task: TaskRecord): string | undefined {
   if (task.state === "merged") {
-    return "This chat was closed after its approved merge. Start a new chat for more changes.";
+    return taskUsesIsolatedWorktree(task)
+      ? "This chat was closed after its approved merge. Start a new chat for more changes."
+      : "This chat was closed after its local changes were approved. Start a new chat for more changes.";
   }
   if (task.state === "rejected") {
     return "This chat was closed after its changes were undone. Start a new chat for more changes.";
@@ -2358,6 +2641,7 @@ function taskUsesHiddenChatWorkspace(task: TaskRecord, chat: ChatRecord): boolea
 function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryInfo) {
   task.repositoryId = repository.id;
   task.workspaceKind = repository.kind;
+  task.workspaceMode = "local";
   task.hiddenWorkspace = false;
   task.originalBranch = repository.originalBranch;
   task.baseCommit = repository.baseCommit;
@@ -2365,7 +2649,7 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.worktreePath = repository.rootPath;
   task.originalRepoPath = repository.rootPath;
   task.originalWasDirty = repository.dirty;
-  task.baselineFiles = repository.kind === "folder" ? snapshotFolder(repository.rootPath) : undefined;
+  task.baselineFiles = snapshotFolder(repository.rootPath);
   task.runnerName = aegisRunnerName;
   task.runnerVersion = aegisRunnerVersion;
   task.policyVersion = aegisPolicyVersion;
@@ -2400,7 +2684,8 @@ async function startTask(input: unknown): Promise<TaskInfo> {
   const repositoryId = refreshed.id;
   const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
   const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
-  const wantsFileChange = promptLooksLikeFileChange(prompt);
+  const requestedWorkspaceMode: WorkspaceMode =
+    !hiddenWorkspace && refreshed.kind === "git" && input.useWorktree === true ? "worktree" : "local";
 
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
@@ -2425,37 +2710,31 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.runtimeProfile = runtimeProfileForPrompt(prompt);
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
-    if (existingTask.workspaceKind === "git" && wantsFileChange && !existingTask.agentBranch) {
+    if (existingTask.workspaceKind === "git" && requestedWorkspaceMode === "worktree" && !existingTask.agentBranch) {
       const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
       existingTask.originalBranch = refreshed.originalBranch;
       existingTask.baseCommit = refreshed.baseCommit;
       existingTask.agentBranch = `aegis/${existingTask.id}-${slugify(prompt)}`;
       existingTask.worktreePath = path.join(worktreeRootForRepo(refreshed.rootPath), existingTask.id);
+      existingTask.workspaceMode = "worktree";
       existingTask.originalRepoPath = refreshed.rootPath;
       existingTask.originalWasDirty = refreshed.dirty;
       existingTask.runnerSessionId = undefined;
-      existingTask.pendingPrompt = runnerPromptText(runnerPrompt);
-      pendingRunnerPrompts.set(existingTask.id, runnerPrompt);
-      existingTask.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
+      existingTask.pendingPrompt = undefined;
+      pendingRunnerPrompts.delete(existingTask.id);
+      existingTask.state = "running";
       saveTask(existingTask);
-      emit({ type: "user.message", taskId: existingTask.id, text: prompt });
-      if (permissionMode === "bypass") {
-        existingTask.pendingPrompt = undefined;
-        pendingRunnerPrompts.delete(existingTask.id);
-        await createWorktreeAndRunRunner(existingTask, runnerPrompt);
-      } else {
-        emit({
-          type: "worktree.requested",
-          taskId: existingTask.id,
-          branch: existingTask.agentBranch,
-          path: existingTask.worktreePath,
-          baseCommit: refreshed.baseCommit,
-        });
-      }
+      emit({ type: "user.message", taskId: existingTask.id, text: prompt, attachedFiles: attachments });
+      await createWorktreeAndRunRunner(existingTask, runnerPrompt);
       return publicTask(existingTask);
     }
 
     existingTask.state = "running";
+    if (!existingTask.agentBranch) {
+      existingTask.workspaceMode = "local";
+      existingTask.worktreePath = refreshed.rootPath;
+      existingTask.baselineFiles = snapshotFolder(refreshed.rootPath);
+    }
     existingTask.pendingPrompt = undefined;
     pendingRunnerPrompts.delete(existingTask.id);
     existingTask.originalBranch = existingTask.agentBranch ? existingTask.originalBranch : refreshed.originalBranch;
@@ -2463,14 +2742,14 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.originalRepoPath = refreshed.rootPath;
     existingTask.originalWasDirty = refreshed.dirty;
     saveTask(existingTask);
-    emit({ type: "user.message", taskId: existingTask.id, text: prompt });
+    emit({ type: "user.message", taskId: existingTask.id, text: prompt, attachedFiles: attachments });
     const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
     void runRunnerTask(existingTask.id, runnerPrompt, prompt);
     return publicTask(existingTask);
   }
 
   const id = taskId();
-  const shouldCreateWorktree = refreshed.kind === "git" && wantsFileChange;
+  const shouldCreateWorktree = requestedWorkspaceMode === "worktree";
   const branch = shouldCreateWorktree ? `aegis/${id}-${slugify(prompt)}` : "";
   const worktreePath = shouldCreateWorktree ? path.join(worktreeRootForRepo(refreshed.rootPath), id) : refreshed.rootPath;
   const task: TaskRecord = {
@@ -2479,8 +2758,9 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     repositoryId,
     prompt,
     workspaceKind: refreshed.kind,
+    workspaceMode: shouldCreateWorktree ? "worktree" : "local",
     hiddenWorkspace,
-    state: shouldCreateWorktree && permissionMode !== "bypass" ? "awaiting_worktree_approval" : "running",
+    state: "running",
     originalBranch: refreshed.originalBranch,
     baseCommit: refreshed.baseCommit,
     agentBranch: branch,
@@ -2497,20 +2777,15 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     events: [],
     originalRepoPath: refreshed.rootPath,
     originalWasDirty: refreshed.dirty,
-    baselineFiles: refreshed.kind === "folder" ? snapshotFolder(refreshed.rootPath) : undefined,
+    baselineFiles: shouldCreateWorktree ? undefined : snapshotFolder(refreshed.rootPath),
   };
   saveTask(task);
-  emit({ type: "user.message", taskId: task.id, text: prompt });
+  emit({ type: "user.message", taskId: task.id, text: prompt, attachedFiles: attachments });
   const runnerPrompt = await runnerPromptForTask(task, prompt, attachments);
-  if (!shouldCreateWorktree) {
-    void runRunnerTask(task.id, runnerPrompt, prompt);
-  } else if (permissionMode === "bypass") {
+  if (shouldCreateWorktree) {
     await createWorktreeAndRunRunner(task, runnerPrompt);
   } else {
-    task.pendingPrompt = runnerPromptText(runnerPrompt);
-    pendingRunnerPrompts.set(task.id, runnerPrompt);
-    saveTask(task);
-    emit({ type: "worktree.requested", taskId: task.id, branch, path: worktreePath, baseCommit: refreshed.baseCommit });
+    void runRunnerTask(task.id, runnerPrompt, prompt);
   }
   return publicTask(task);
 }
@@ -2580,7 +2855,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     let allowedFiles: string[] = [];
     let patchHash = "";
 
-    if (task.workspaceKind === "folder") {
+    if (!taskUsesIsolatedWorktree(task)) {
       await approvalCheck(task, "agent run completed", async () => {
         if (!task.latestTest?.passed) {
           throw new Error("Aegis runner has not completed successfully for this task.");
@@ -2628,6 +2903,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
         writeJsonFile(task.metadataPath, {
           id: task.id,
           workspaceKind: task.workspaceKind,
+          workspaceMode: task.workspaceMode,
           folderPath: task.originalRepoPath,
           changedFiles: task.changedFiles,
           latestTest: task.latestTest,
@@ -2637,8 +2913,9 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
         saveTask(task);
         return patchHash.slice(0, 12);
       });
-      emit({ type: "merge.completed", taskId: task.id, targetBranch: "folder", commit: patchHash, patchHash });
-      return { ok: true, targetBranch: "folder", commit: patchHash, patchHash, metadataPath: task.metadataPath ?? "" };
+      const targetBranch = task.workspaceKind === "git" ? task.originalBranch : "folder";
+      emit({ type: "merge.completed", taskId: task.id, targetBranch, commit: patchHash, patchHash });
+      return { ok: true, targetBranch, commit: patchHash, patchHash, metadataPath: task.metadataPath ?? "" };
     }
 
     await approvalCheck(task, "original branch exists", async () => {
@@ -2809,13 +3086,13 @@ async function rejectTask(input: unknown): Promise<void> {
   clearPendingPermissionsForTask(task.id);
   const cleanup = input.cleanup === true;
   emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
-  if (task.workspaceKind === "git" && cleanup && taskStatesThatCanOpen.has(task.state)) {
+  if (taskUsesIsolatedWorktree(task) && cleanup && taskStatesThatCanOpen.has(task.state)) {
     await removeGitWorktree(task);
     await gitResult(task.originalRepoPath, ["branch", "-D", task.agentBranch]);
     task.changedFiles = [];
     task.reviewFiles = [];
   }
-  if (task.workspaceKind === "folder" && cleanup) {
+  if (!taskUsesIsolatedWorktree(task) && cleanup) {
     const reviewFiles = await refreshReview(task);
     restoreFolderTaskChanges(task, reviewFiles);
     task.changedFiles = [];
@@ -2852,7 +3129,11 @@ async function keepWorktree(input: unknown): Promise<void> {
     throw new Error("Invalid keep-worktree input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  emit({ type: "task.error", taskId: task.id, message: `${task.workspaceKind === "folder" ? "Folder" : "Worktree"} retained at ${task.worktreePath}` });
+  emit({
+    type: "task.error",
+    taskId: task.id,
+    message: `${taskUsesIsolatedWorktree(task) ? "Worktree" : "Folder"} retained at ${task.worktreePath}`,
+  });
 }
 
 async function cancelTask(input: unknown): Promise<void> {
@@ -2998,7 +3279,7 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
   if (!fs.existsSync(task.worktreePath)) {
     return { ok: false, message: "Task folder no longer exists." };
   }
-  if (task.workspaceKind === "git" && !pathInside(worktreeRootForRepo(task.originalRepoPath), task.worktreePath)) {
+  if (taskUsesIsolatedWorktree(task) && !pathInside(worktreeRootForRepo(task.originalRepoPath), task.worktreePath)) {
     return { ok: false, message: "Worktree path is outside Aegis control." };
   }
   if (relativeFilePath && path.isAbsolute(relativeFilePath)) {
@@ -3084,6 +3365,16 @@ function handleIpc<T>(channel: string, handler: (input: unknown, event: IpcMainI
     assertTrustedSender(event);
     return handler(input, event);
   });
+}
+
+function setWindowChromeTheme(theme: "dark" | "light") {
+  if (process.platform !== "win32" || !mainWindow) return { ok: true };
+  mainWindow.setTitleBarOverlay({
+    color: theme === "light" ? "#ffffff" : "#1b1d22",
+    symbolColor: theme === "light" ? "#111827" : "#d7dce2",
+    height: 35,
+  });
+  return { ok: true };
 }
 
 function allowedAppUrl(rawUrl: string): boolean {
@@ -3191,6 +3482,7 @@ app.whenReady().then(async () => {
   handleIpc("aegis:search-files", (input) => searchRepositoryFiles(input));
   handleIpc("aegis:pick-repository", () => pickRepository());
   handleIpc("aegis:pick-attachment-files", (input) => pickAttachmentFiles(input));
+  handleIpc("aegis:save-pasted-attachments", (input) => savePastedAttachments(input));
   handleIpc("aegis:get-repository", (input) => getRepository(input));
   handleIpc("aegis:list-repository-branches", (input) => listRepositoryBranches(input));
   handleIpc("aegis:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
@@ -3210,6 +3502,10 @@ app.whenReady().then(async () => {
   handleIpc("aegis:keep-worktree", (input) => keepWorktree(input));
   handleIpc("aegis:cancel-task", (input) => cancelTask(input));
   handleIpc("aegis:set-response-feedback", (input) => setResponseFeedback(input));
+  handleIpc("aegis:set-window-chrome-theme", (input) => {
+    const theme = input === "light" ? "light" : "dark";
+    return setWindowChromeTheme(theme);
+  });
   Menu.setApplicationMenu(null);
   await createWindow();
   void getBackendStatus();
@@ -3222,6 +3518,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  flushPendingTaskEvents();
   for (const [id, pending] of pendingPermissions) {
     pendingPermissions.delete(id);
     void pending.onDeny();

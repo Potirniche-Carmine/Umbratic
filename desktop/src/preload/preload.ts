@@ -10,6 +10,12 @@ type ChatAttachment = {
   source?: "workspace" | "chat";
   storedPath?: string;
   originalPath?: string;
+  previewDataUrl?: string;
+};
+type PastedAttachmentInput = {
+  name?: string;
+  mimeType?: string;
+  dataUrl: string;
 };
 
 contextBridge.exposeInMainWorld("aegis", {
@@ -25,6 +31,8 @@ contextBridge.exposeInMainWorld("aegis", {
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("aegis:search-files", input),
   pickRepository: () => ipcRenderer.invoke("aegis:pick-repository"),
   pickAttachmentFiles: (input: { chatId: string; repositoryId?: string }) => ipcRenderer.invoke("aegis:pick-attachment-files", input),
+  savePastedAttachments: (input: { chatId: string; files: PastedAttachmentInput[] }) =>
+    ipcRenderer.invoke("aegis:save-pasted-attachments", input),
   getRepository: (input: { repositoryId?: string; repositoryPath?: string }) => ipcRenderer.invoke("aegis:get-repository", input),
   listRepositoryBranches: (input: { repositoryId?: string; repositoryPath?: string }) =>
     ipcRenderer.invoke("aegis:list-repository-branches", input),
@@ -43,6 +51,7 @@ contextBridge.exposeInMainWorld("aegis", {
     chatId?: string;
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
+    useWorktree?: boolean;
   }) =>
     ipcRenderer.invoke("aegis:start-task", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>
@@ -57,6 +66,7 @@ contextBridge.exposeInMainWorld("aegis", {
   cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("aegis:cancel-task", input),
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" }) =>
     ipcRenderer.invoke("aegis:set-response-feedback", input),
+  setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("aegis:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
     const listener = (_event: IpcRendererEvent, event: BackendUiEvent) => callback(event);
     ipcRenderer.on("aegis:backend-event", listener);

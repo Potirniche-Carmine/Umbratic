@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 
-export const aegisPolicyVersion = "aegis-local-mvp-1";
+export const aegisPolicyVersion = "aegis-local-mvp-2";
 export const aegisRunnerName = "AegisRunner";
 export const aegisRunnerVersion = "fork-1";
 export const aegisRunnerContractVersion = "aegis-runner-1";
@@ -14,6 +14,7 @@ export type CommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
+  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -144,6 +145,7 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
     return { commandClass: "python-runtime", risky: isBarePythonCommand(trimmed), reason: isBarePythonCommand(trimmed) ? "bare python" : undefined };
   }
   if (/\bgit\b/i.test(trimmed)) return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
+  if (/\b(gdb|lldb|cdb|windbg|vsdbg|valgrind|drmemory)\b/i.test(trimmed)) return { commandClass: "debugger", risky: false };
   if (/\b(cmake|ctest|ninja|make|msbuild)\b/i.test(trimmed)) return { commandClass: "cmake-build", risky: false };
   if (/\b(cl|clang|clang\+\+|gcc|g\+\+)\b/i.test(trimmed)) return { commandClass: "compiler", risky: false };
   if (/\b(npm|pnpm|yarn|bun|cargo|go|dotnet)\b/i.test(trimmed)) {

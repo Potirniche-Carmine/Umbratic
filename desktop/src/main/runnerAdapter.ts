@@ -18,6 +18,7 @@ export function buildAegisRunnerConfig(task: TaskRecord, selectedModel: LocalMod
   return {
     taskId: task.id,
     cwd: task.worktreePath,
+    workspaceMode: task.workspaceMode,
     permissionMode: "normal",
     provider: {
       id: selectedModel.providerId,

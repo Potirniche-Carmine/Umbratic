@@ -41,6 +41,14 @@ npm install
 npm run desktop:dev
 ```
 
+The desktop UI does not require a host toolchain just to render or run in
+development. The backend knows to prefer helper tools such as `rg`,
+`fd`/`fdfind`, `tree-sitter`, and `bat`/`batcat` when they are available, and to
+fall back cleanly when they are not. `jq`, `yq`, `cmake`, C compilers, build
+backends, and native debuggers are optional capabilities the harness can use
+when present. A future packaged installer can bundle these helpers or offer to
+install them for the user.
+
 Use the Electron app for real task flows. The Vite browser preview can show the
 UI, but it cannot use the preload bridge, pick folders, run commands, or talk to
 the local agent backend.
@@ -50,8 +58,8 @@ the local agent backend.
 These settings surfaces are wired up visually but are not yet enforced at
 runtime. They need to be implemented:
 
-- **Settings → Tools** — toggling `read`, `write`, `edit`, `search`, or
-  `command` does not yet filter the runner's `toolSpecs`. The runner still
+- **Settings → Tools** — toggling `read`, `write`, `edit`, `search`,
+  `command`, or `debugger` does not yet filter the runner's `toolSpecs`. The runner still
   exposes every tool to the model; the UI toggles are local React state only.
 - **Settings → Account → Continue with Google / Microsoft** — SSO buttons are
   UI placeholders. Aegis runs entirely in local mode today.

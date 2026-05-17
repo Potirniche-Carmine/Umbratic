@@ -15,6 +15,11 @@ npm install
 npm run desktop:dev
 ```
 
+Helper tools such as `rg`, `fd`/`fdfind`, `tree-sitter`, `bat`/`batcat`, `jq`,
+`yq`, `cmake`, C compilers, build backends, and native debuggers are optional
+capabilities. The harness uses them when present and falls back when they are
+not. A future installer can bundle these helpers or offer to install them.
+
 The Electron main process owns folder selection, optional Git worktree creation, task metadata, IDE handoff, and approval checks. The first workflow is intentionally narrow: regular folders run in place with a baseline snapshot, while Git repositories can still use an isolated worktree. Aegis runs the hello-world verification loop with visible command events and renders an in-app unified diff review before approval.
 
 `http://127.0.0.1:5173` is only the Vite web preview. It can render the UI, but it cannot use the Electron preload bridge, open folders, or talk to the spawned Aegis runner. Use `npm run desktop:dev` for the actual app.
@@ -32,6 +37,8 @@ Bypass mode does not bypass IPC validation, provider lockdown, worktree boundari
 - OpenAI-compatible endpoint configuration, using the selected model id directly.
 - Worktree lifecycle for the hello-world proof: prompt, worktree, command stream, permission prompts, verification, IDE handoff, explicit approval, checks, merge, metadata, cleanup.
 - Approval checks for clean original branch, expected base commit, agent branch base, controlled worktree, latest passing verification, blocked files, secret scan, patch hash, commit, and fast-forward merge.
+- C/CMake-first runtime harness guidance with cross-platform install commands, CMake configure/build/test loops, compiler diagnostic repair, and sanitizer/debugger expectations.
+- Lightweight non-interactive debugger tool for workspace executables using gdb, lldb, or cdb.
 
 ## Next Phase
 

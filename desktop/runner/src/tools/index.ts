@@ -1,11 +1,41 @@
 import { nowIso, type AegisRunnerEvent } from "../events.js";
 import { classifyCommandText, redactText } from "../policy.js";
 import { commandTool } from "./command.js";
+import { debuggerTool } from "./debugger.js";
 import { editTool } from "./edit.js";
 import { readTool } from "./read.js";
 import { searchTool } from "./search.js";
 import { writeTool } from "./write.js";
 import type { ToolContext, ToolResult } from "./common.js";
+
+function quoteToolArg(value: string): string {
+  return /\s|["']/.test(value) ? JSON.stringify(value) : value;
+}
+
+function toolInvocationSummary(name: string, input: Record<string, unknown>): string {
+  if (name === "read") {
+    const filePath = typeof input.filePath === "string" ? input.filePath : typeof input.path === "string" ? input.path : "";
+    const offset = typeof input.offset === "number" ? ` --offset ${Math.floor(input.offset)}` : "";
+    const limit = typeof input.limit === "number" ? ` --limit ${Math.floor(input.limit)}` : "";
+    return `read ${quoteToolArg(filePath)}${offset}${limit}`.trim();
+  }
+  if (name === "search") {
+    const query = typeof input.query === "string" ? quoteToolArg(input.query) : "";
+    const limit = typeof input.limit === "number" ? ` --limit ${Math.floor(input.limit)}` : "";
+    return `search ${query}${limit}`.trim();
+  }
+  if (name === "write" || name === "edit") {
+    const filePath = typeof input.filePath === "string" ? input.filePath : "";
+    return `${name} ${quoteToolArg(filePath)}`.trim();
+  }
+  return name;
+}
+
+function toolCommandClass(name: string): ReturnType<typeof classifyCommandText>["commandClass"] {
+  if (name === "read" || name === "search") return "read";
+  if (name === "write" || name === "edit") return "edit";
+  return "unknown";
+}
 
 export const toolSpecs = [
   {
@@ -48,6 +78,23 @@ export const toolSpecs = [
       parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "debugger",
+      description: "Run a non-interactive debugger pass against a workspace-built executable for crash, memory, pointer, and security analysis.",
+      parameters: {
+        type: "object",
+        properties: {
+          executablePath: { type: "string" },
+          args: { type: "array", items: { type: "string" } },
+          debugger: { type: "string", enum: ["auto", "gdb", "lldb", "cdb"] },
+          timeoutMs: { type: "number" },
+        },
+        required: ["executablePath"],
+      },
+    },
+  },
 ];
 
 function parseArguments(value: unknown): Record<string, unknown> {
@@ -64,8 +111,14 @@ function parseArguments(value: unknown): Record<string, unknown> {
 
 export async function runTool(ctx: ToolContext, emit: (event: AegisRunnerEvent) => void, toolCall: { id: string; name: string; arguments: unknown }): Promise<ToolResult> {
   const input = parseArguments(toolCall.arguments);
-  const commandSummary = toolCall.name === "command" && typeof input.command === "string" ? input.command : toolCall.name;
-  const classification = toolCall.name === "command" && typeof input.command === "string" ? classifyCommandText(input.command, ctx.cwd) : { commandClass: "edit" as const, risky: false };
+  const commandSummary =
+    toolCall.name === "command" && typeof input.command === "string" ? input.command :
+    toolCall.name === "debugger" && typeof input.executablePath === "string" ? `debugger ${input.executablePath}` :
+    toolInvocationSummary(toolCall.name, input);
+  const classification =
+    toolCall.name === "command" && typeof input.command === "string" ? classifyCommandText(input.command, ctx.cwd) :
+    toolCall.name === "debugger" ? { commandClass: "debugger" as const, risky: false } :
+    { commandClass: toolCommandClass(toolCall.name), risky: false };
   emit({
     type: "tool.requested",
     taskId: ctx.taskId,
@@ -82,7 +135,11 @@ export async function runTool(ctx: ToolContext, emit: (event: AegisRunnerEvent) 
     toolCall.name === "edit" ? await editTool(ctx, input) :
     toolCall.name === "search" ? await searchTool(ctx, input) :
     toolCall.name === "command" ? await commandTool(ctx, input, toolCall.id) :
+    toolCall.name === "debugger" ? await debuggerTool(ctx, input, toolCall.id) :
     (() => { throw new Error(`Unknown tool: ${toolCall.name}`); })();
-  emit({ type: "tool.finished", taskId: ctx.taskId, toolCallId: toolCall.id, exitCode: 0, at: nowIso() });
+  if (toolCall.name !== "command" && result.output) {
+    ctx.emitToolOutput(toolCall.id, "stdout", `${result.output}\n`);
+  }
+  emit({ type: "tool.finished", taskId: ctx.taskId, toolCallId: toolCall.id, exitCode: result.exitCode ?? 0, at: nowIso() });
   return result;
 }

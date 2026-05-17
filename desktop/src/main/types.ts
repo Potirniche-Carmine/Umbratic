@@ -4,6 +4,7 @@ export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
+export type WorkspaceMode = "local" | "worktree";
 export type LocalProviderId = "local-endpoint";
 export type CommandClass =
   | "read"
@@ -13,6 +14,7 @@ export type CommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
+  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -95,6 +97,15 @@ export type RuntimeDiagnostics = {
     profileVersion: string;
     buildDir: ".aegis/build";
   };
+  debugger: {
+    supported: Array<"gdb" | "lldb" | "cdb">;
+    toolName: "debugger";
+    nonInteractive: boolean;
+  };
+  toolchain: {
+    bundledHelperCommands: string[];
+    optionalCapabilityCommands: string[];
+  };
   shell: {
     platform: NodeJS.Platform;
     preferred: "pwsh" | "powershell" | "posix";
@@ -144,6 +155,13 @@ export type ChatAttachment = {
   source?: "workspace" | "chat";
   storedPath?: string;
   originalPath?: string;
+  previewDataUrl?: string;
+};
+
+export type PastedAttachmentInput = {
+  name?: string;
+  mimeType?: string;
+  dataUrl: string;
 };
 
 export type FileSearchResult = ChatAttachment & {
@@ -156,6 +174,7 @@ export type TaskInfo = {
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
+  workspaceMode: WorkspaceMode;
   state: TaskState;
   originalBranch: string;
   baseCommit: string;
@@ -192,6 +211,7 @@ export type ChatRecord = {
 };
 
 export type TaskRecord = TaskInfo & {
+  workspaceMode: WorkspaceMode;
   originalRepoPath: string;
   originalWasDirty: boolean;
   hiddenWorkspace?: boolean;
@@ -220,7 +240,7 @@ export type BackendEventMeta = { at?: string; endedAt?: string };
 
 export type BackendUiEvent = BackendEventMeta &
 (
-  | { type: "user.message"; taskId: string; text: string }
+  | { type: "user.message"; taskId: string; text: string; attachedFiles?: ChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }

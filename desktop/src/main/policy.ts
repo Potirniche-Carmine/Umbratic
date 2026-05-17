@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { CommandClass, LocalModelInfo, LocalProviderId, RuntimeDiagnostics, RuntimeProfileId, TelemetryPolicyInfo } from "./types";
 import { normalizeRelativePath, pathInside } from "./utils";
 
-export const aegisPolicyVersion = "aegis-local-mvp-1";
+export const aegisPolicyVersion = "aegis-local-mvp-2";
 export const aegisRunnerName = "AegisRunner";
 export const aegisRunnerVersion = "fork-1";
 export const aegisRunnerContractVersion = "aegis-runner-1";
@@ -97,12 +97,19 @@ export function promptLooksLikeMarkdownTask(prompt: string): boolean {
 }
 
 export function promptLooksLikeCmakeTask(prompt: string): boolean {
-  return /\b(cmake|c\+\+|cpp|\.cc|\.cpp|\.cxx|\.h|\.hpp|ctest|ninja|clang|gcc|msvc)\b/i.test(prompt);
+  return (
+    /\b(cmake|cmakelists\.txt|c code|c project|c harness|c toolchain|c\+\+|cpp|ctest|ninja|clang|gcc|msvc|makefile|asan|ubsan|segfault|buffer overflow|pointer|malloc|free)\b/i.test(prompt) ||
+    /(?:^|[\s\\/])[^.\s\\/]+\.(?:c|h|cc|cpp|cxx|hpp)\b/i.test(prompt)
+  );
+}
+
+export function promptLooksLikeDebugTask(prompt: string): boolean {
+  return /\b(debugger|debugging|gdb|lldb|cdb|windbg|backtrace|registers?|stack trace|segfault|crash|memory|pointer|invalid free|use-after-free|buffer overflow|security audit|audit)\b/i.test(prompt);
 }
 
 export function runtimeProfileForPrompt(prompt: string): RuntimeProfileId {
-  if (promptLooksLikePythonTask(prompt)) return "python";
   if (promptLooksLikeCmakeTask(prompt)) return "cmake";
+  if (promptLooksLikePythonTask(prompt)) return "python";
   if (promptLooksLikeMarkdownTask(prompt)) return "markdown";
   return "none";
 }
@@ -180,6 +187,7 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
   if (/\bgit\b/i.test(trimmed)) {
     return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
   }
+  if (/\b(gdb|lldb|cdb|windbg|vsdbg|valgrind|drmemory)\b/i.test(trimmed)) return { commandClass: "debugger", risky: false };
   if (/\b(cmake|ctest|ninja|make|msbuild)\b/i.test(trimmed)) return { commandClass: "cmake-build", risky: false };
   if (/\b(cl|clang|clang\+\+|gcc|g\+\+)\b/i.test(trimmed)) return { commandClass: "compiler", risky: false };
   if (/\b(npm|pnpm|yarn|bun|cargo|go|dotnet)\b/i.test(trimmed)) {
@@ -279,6 +287,15 @@ export function runtimeDiagnostics(): RuntimeDiagnostics {
     cmake: {
       profileVersion: cmakeRuntimeProfileVersion,
       buildDir: ".aegis/build",
+    },
+    debugger: {
+      supported: ["gdb", "lldb", "cdb"],
+      toolName: "debugger",
+      nonInteractive: true,
+    },
+    toolchain: {
+      bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
+      optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend", "debugger"],
     },
     shell: {
       platform: process.platform,

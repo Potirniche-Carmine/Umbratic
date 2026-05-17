@@ -13,6 +13,7 @@ export type ToolContext = {
 export type ToolResult = {
   title: string;
   output: string;
+  exitCode?: number | null;
 };
 
 export function normalizeRelativePath(filePath: string): string {

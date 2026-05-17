@@ -5,6 +5,7 @@ export type PermissionMode = "normal" | "bypass";
 export type RunnerConfig = {
   taskId?: string;
   cwd: string;
+  workspaceMode?: "local" | "worktree";
   permissionMode: PermissionMode;
   provider: AegisProviderConfig;
   system?: string;
@@ -30,6 +31,7 @@ export function loadRunnerConfig(): RunnerConfig {
   return {
     taskId: typeof config.taskId === "string" && config.taskId.trim() ? config.taskId.trim() : undefined,
     cwd: stringValue(config.cwd, "cwd"),
+    workspaceMode: config.workspaceMode === "worktree" ? "worktree" : "local",
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     system: typeof config.system === "string" ? config.system : undefined,
     provider: assertAllowedProvider({

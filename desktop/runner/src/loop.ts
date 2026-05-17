@@ -14,6 +14,8 @@ type StreamAccumulator = {
   content: string;
   reasoning: string;
   toolCalls: Map<number, ToolCall>;
+  emittedContent: boolean;
+  emittedReasoning: boolean;
 };
 
 function chatCompletionsUrl(baseURL: string): string {
@@ -81,7 +83,7 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
   }
 }
 
-async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => void): Promise<StreamAccumulator> {
+async function streamModel(session: Session, emit?: (event: AegisRunnerEvent) => void): Promise<StreamAccumulator> {
   const response = await fetch(chatCompletionsUrl(session.config.provider.baseURL), {
     method: "POST",
     headers: {
@@ -102,7 +104,7 @@ async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => 
     throw new Error(`model request failed: ${response.status} ${response.statusText}${body ? ` ${body.slice(0, 400)}` : ""}`);
   }
 
-  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map() };
+  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false };
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -120,11 +122,17 @@ async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => 
       const reasoning = textContent(delta.reasoning_content) || textContent(delta.reasoning);
       if (text) {
         acc.content += text;
-        emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
+        if (emit) {
+          acc.emittedContent = true;
+          emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
+        }
       }
       if (reasoning) {
         acc.reasoning += reasoning;
-        emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() });
+        if (emit) {
+          acc.emittedReasoning = true;
+          emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() });
+        }
       }
       appendToolDelta(acc, delta);
       newline = buffer.indexOf("\n");
@@ -135,15 +143,25 @@ async function streamModel(session: Session, emit: (event: AegisRunnerEvent) => 
 
 export async function runTurn(session: Session, parts: InputPart[], emit: (event: AegisRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
   session.messages.push({ role: "user", content: messageContentFromParts(parts) });
-  for (let turn = 0; turn < 8; turn++) {
-    const acc = await streamModel(session, emit);
+  let hasCompletedToolRound = false;
+  for (let turn = 0; turn < 12; turn++) {
+    const acc = await streamModel(session, hasCompletedToolRound ? emit : undefined);
     const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
     session.messages.push({
       role: "assistant",
       content: acc.content || null,
       tool_calls: toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })),
     });
-    if (toolCalls.length === 0) return;
+    if (toolCalls.length === 0) {
+      if (acc.reasoning && !acc.emittedReasoning) {
+        emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: acc.reasoning, at: nowIso() });
+      }
+      if (acc.content && !acc.emittedContent) {
+        emit({ type: "assistant.delta", taskId: session.taskId, text: acc.content, at: nowIso() });
+      }
+      return;
+    }
+    hasCompletedToolRound = true;
 
     const ctx: ToolContext = {
       taskId: session.taskId,
@@ -159,8 +177,10 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         const result = await runTool(ctx, emit, toolCall);
         session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: result.output });
       } catch (error) {
+        const message = `Tool failed: ${error instanceof Error ? error.message : String(error)}`;
+        emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
         emit({ type: "tool.finished", taskId: session.taskId, toolCallId: toolCall.id, exitCode: 1, at: nowIso() });
-        session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: `Tool failed: ${error instanceof Error ? error.message : String(error)}` });
+        session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: message });
       }
     }
   }

@@ -4,6 +4,7 @@ type AegisPermissionMode = "normal" | "bypass";
 type AegisReasoningMode = "fast" | "reasoning";
 type AegisServiceStatus = "ready" | "degraded" | "unavailable";
 type AegisWorkspaceKind = "git" | "folder";
+type AegisWorkspaceMode = "local" | "worktree";
 type AegisLocalProviderId = "local-endpoint";
 type AegisCommandClass =
   | "read"
@@ -13,6 +14,7 @@ type AegisCommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
+  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -81,6 +83,15 @@ type AegisBackendDiagnostics = {
       profileVersion: string;
       buildDir: ".aegis/build";
     };
+    debugger: {
+      supported: Array<"gdb" | "lldb" | "cdb">;
+      toolName: "debugger";
+      nonInteractive: boolean;
+    };
+    toolchain: {
+      bundledHelperCommands: string[];
+      optionalCapabilityCommands: string[];
+    };
     shell: {
       platform: string;
       preferred: "pwsh" | "powershell" | "posix";
@@ -126,6 +137,13 @@ type AegisChatAttachment = {
   source?: "workspace" | "chat";
   storedPath?: string;
   originalPath?: string;
+  previewDataUrl?: string;
+};
+
+type AegisPastedAttachmentInput = {
+  name?: string;
+  mimeType?: string;
+  dataUrl: string;
 };
 
 type AegisFileSearchResult = AegisChatAttachment & {
@@ -144,7 +162,7 @@ type AegisPermissionRequest = {
 type AegisBackendEventMeta = { at?: string; endedAt?: string };
 type AegisBackendUiEvent = AegisBackendEventMeta &
 (
-  | { type: "user.message"; taskId: string; text: string }
+  | { type: "user.message"; taskId: string; text: string; attachedFiles?: AegisChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
@@ -187,6 +205,7 @@ type AegisTaskInfo = {
   repositoryId: string;
   prompt: string;
   workspaceKind: AegisWorkspaceKind;
+  workspaceMode: AegisWorkspaceMode;
   state: "awaiting_worktree_approval" | "running" | "completed" | "review_ready" | "approving" | "merged" | "rejected" | "failed";
   originalBranch: string;
   baseCommit: string;
@@ -238,6 +257,7 @@ declare global {
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<AegisFileSearchResult[]>;
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
       pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: AegisChatAttachment[] }>;
+      savePastedAttachments(input: { chatId: string; files: AegisPastedAttachmentInput[] }): Promise<{ files: AegisChatAttachment[] }>;
       getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
       listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
         { ok: true; current: string; branches: string[] } | { ok: false; message: string }
@@ -261,6 +281,7 @@ declare global {
         chatId?: string;
         attachedFiles?: AegisChatAttachment[];
         reasoningMode?: AegisReasoningMode;
+        useWorktree?: boolean;
       }): Promise<AegisTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: AegisPermissionDecision): Promise<void>;
@@ -270,6 +291,7 @@ declare global {
       keepWorktree(input: { taskId: string }): Promise<void>;
       cancelTask(input: { taskId: string }): Promise<void>;
       setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
+      setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
       onBackendEvent(callback: (event: unknown) => void): () => void;
     };
   }

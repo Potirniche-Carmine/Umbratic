@@ -81,6 +81,7 @@ export function readTasks(): TaskRecord[] {
     .map((task) => ({
       ...task,
       workspaceKind: task.workspaceKind ?? "git",
+      workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
       reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
       runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : aegisRunnerName,
       runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : aegisRunnerVersion,

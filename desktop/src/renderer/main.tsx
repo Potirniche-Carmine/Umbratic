@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowLeft,
@@ -19,6 +19,8 @@ import {
   Hand,
   Loader2,
   Minus,
+  Monitor,
+  Moon,
   PanelLeft,
   PanelRight,
   Paperclip,
@@ -31,11 +33,13 @@ import {
   ShieldCheck,
   Sparkles,
   SquarePen,
+  Sun,
   TerminalSquare,
   ThumbsDown,
   ThumbsUp,
   Trash2,
   TriangleAlert,
+  Type,
   Undo2,
   User,
   X,
@@ -44,7 +48,9 @@ import {
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
+type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
+type WorkspaceMode = "local" | "worktree";
 type LocalProviderId = "local-endpoint";
 type CommandClass =
   | "read"
@@ -54,6 +60,7 @@ type CommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
+  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -131,6 +138,15 @@ type BackendDiagnostics = {
       profileVersion: string;
       buildDir: ".aegis/build";
     };
+    debugger: {
+      supported: Array<"gdb" | "lldb" | "cdb">;
+      toolName: "debugger";
+      nonInteractive: boolean;
+    };
+    toolchain: {
+      bundledHelperCommands: string[];
+      optionalCapabilityCommands: string[];
+    };
     shell: {
       platform: string;
       preferred: "pwsh" | "powershell" | "posix";
@@ -182,6 +198,13 @@ type ChatAttachment = {
   source?: "workspace" | "chat";
   storedPath?: string;
   originalPath?: string;
+  previewDataUrl?: string;
+};
+
+type PastedAttachmentInput = {
+  name?: string;
+  mimeType?: string;
+  dataUrl: string;
 };
 
 type FileSearchResult = ChatAttachment & {
@@ -194,6 +217,7 @@ type TaskInfo = {
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
+  workspaceMode: WorkspaceMode;
   state: TaskState;
   originalBranch: string;
   baseCommit: string;
@@ -234,6 +258,12 @@ type UserNotes = {
   updatedAt: string;
 };
 
+type AppearanceSettings = {
+  theme: AppearanceTheme;
+  uiFont: string;
+  monoFont: string;
+};
+
 type PermissionRequest = {
   id: string;
   kind: "edit" | "bash";
@@ -246,7 +276,7 @@ type PermissionRequest = {
 type BackendEventMeta = { at?: string; endedAt?: string };
 type BackendUiEvent = BackendEventMeta &
 (
-  | { type: "user.message"; taskId: string; text: string }
+  | { type: "user.message"; taskId: string; text: string; attachedFiles?: ChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
@@ -286,7 +316,7 @@ type CommandRun = {
 };
 
 type ComposerTimelineItem =
-  | { type: "user"; id: string; text: string }
+  | { type: "user"; id: string; text: string; attachedFiles: ChatAttachment[] }
   | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
   | { type: "assistant"; id: string; text: string }
   | { type: "command"; id: string; run: CommandRun };
@@ -305,6 +335,7 @@ type DesktopApi = {
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
   pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }>;
+  savePastedAttachments(input: { chatId: string; files: PastedAttachmentInput[] }): Promise<{ files: ChatAttachment[] }>;
   getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
   listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
     { ok: true; current: string; branches: string[] } | { ok: false; message: string }
@@ -328,6 +359,7 @@ type DesktopApi = {
     chatId?: string;
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
+    useWorktree?: boolean;
   }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
@@ -340,14 +372,56 @@ type DesktopApi = {
   keepWorktree(input: { taskId: string }): Promise<void>;
   cancelTask(input: { taskId: string }): Promise<void>;
   setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
+  setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
   onBackendEvent(callback: (event: unknown) => void): () => void;
 };
 
 const previewChatsKey = "aegis-preview-chats";
 const previewNotesKey = "aegis-preview-notes";
 const serverSettingsKey = "aegis-ui-server-settings";
+const appearanceSettingsKey = "aegis-ui-appearance";
+const workspaceModeKey = "aegis-ui-workspace-mode";
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
+const defaultAppearanceSettings: AppearanceSettings = {
+  theme: "system",
+  uiFont: "System UI",
+  monoFont: isMacLike ? "SF Mono" : "Cascadia Code",
+};
+const defaultUiFontChoices = [
+  "System UI",
+  "Segoe UI",
+  "SF Pro Text",
+  "Inter",
+  "Arial",
+  "Roboto",
+  "Helvetica Neue",
+  "Verdana",
+];
+const defaultMonoFontChoices = [
+  "Cascadia Code",
+  "SF Mono",
+  "Consolas",
+  "Menlo",
+  "Monaco",
+  "JetBrains Mono",
+  "Fira Code",
+  "Source Code Pro",
+  "ui-monospace",
+];
+
+type LocalFontDescriptor = {
+  family?: string;
+  fullName?: string;
+};
+
+type LocalFontWindow = Window & {
+  queryLocalFonts?: () => Promise<LocalFontDescriptor[]>;
+};
+
+function isAppearanceTheme(value: unknown): value is AppearanceTheme {
+  return value === "system" || value === "light" || value === "dark";
+}
 
 function readPreviewChats(): ChatRecord[] {
   try {
@@ -396,11 +470,53 @@ function writeUiServerSettings(settings: { baseUrl: string; modelId: string; sec
   window.localStorage.setItem(serverSettingsKey, JSON.stringify(settings));
 }
 
+function readAppearanceSettings(): AppearanceSettings {
+  try {
+    const settings = JSON.parse(window.localStorage.getItem(appearanceSettingsKey) ?? "{}") as Partial<AppearanceSettings>;
+    return {
+      theme: isAppearanceTheme(settings.theme) ? settings.theme : defaultAppearanceSettings.theme,
+      uiFont: typeof settings.uiFont === "string" && settings.uiFont.trim() ? settings.uiFont : defaultAppearanceSettings.uiFont,
+      monoFont: typeof settings.monoFont === "string" && settings.monoFont.trim() ? settings.monoFont : defaultAppearanceSettings.monoFont,
+    };
+  } catch {
+    return defaultAppearanceSettings;
+  }
+}
+
+function writeAppearanceSettings(settings: AppearanceSettings) {
+  window.localStorage.setItem(appearanceSettingsKey, JSON.stringify(settings));
+}
+
+function readWorkspaceMode(): WorkspaceMode {
+  return window.localStorage.getItem(workspaceModeKey) === "worktree" ? "worktree" : "local";
+}
+
+function writeWorkspaceMode(mode: WorkspaceMode) {
+  window.localStorage.setItem(workspaceModeKey, mode);
+}
+
+function uniqueFonts(fonts: string[]): string[] {
+  return Array.from(new Set(fonts.map((font) => font.trim()).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" }),
+  );
+}
+
+function cssFontValue(font: string, fallback: string): string {
+  if (font === "System UI") return `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  if (/^(system-ui|ui-monospace|serif|sans-serif|monospace)$/i.test(font)) return `${font}, ${fallback}`;
+  return `"${font.replace(/"/g, "")}", ${fallback}`;
+}
+
+function localFontAccessAvailable(): boolean {
+  return typeof (window as LocalFontWindow).queryLocalFonts === "function";
+}
+
 function normalizeAttachment(file: ChatAttachment): ChatAttachment {
   const normalized: ChatAttachment = { path: file.path, name: file.name || file.path.split(/[\\/]/).pop() || file.path };
   if (file.source === "chat" || file.source === "workspace") normalized.source = file.source;
   if (file.storedPath) normalized.storedPath = file.storedPath;
   if (file.originalPath) normalized.originalPath = file.originalPath;
+  if (file.previewDataUrl?.startsWith("data:image/")) normalized.previewDataUrl = file.previewDataUrl;
   return normalized;
 }
 
@@ -473,6 +589,17 @@ const fallbackApi: DesktopApi = {
     canceled: false,
     files: [{ path: "desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" }],
   }),
+  savePastedAttachments: async (input) => ({
+    files: input.files.map((file, index) =>
+      normalizeAttachment({
+        path: `attachments/preview-${index}-${file.name || "pasted-file"}`,
+        name: file.name || "pasted-file",
+        source: "chat",
+        originalPath: "clipboard",
+        previewDataUrl: file.dataUrl.startsWith("data:image/") ? file.dataUrl : undefined,
+      }),
+    ),
+  }),
   getRepository: async (input) =>
     input.repositoryPath
       ? {
@@ -527,6 +654,11 @@ const fallbackApi: DesktopApi = {
         },
         markdown: { docsOnlyClassification: "enabled" },
         cmake: { profileVersion: "cmake-aegis-build-1", buildDir: ".aegis/build" },
+        debugger: { supported: ["gdb", "lldb", "cdb"], toolName: "debugger", nonInteractive: true },
+        toolchain: {
+          bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
+          optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend", "debugger"],
+        },
         shell: { platform: navigator.platform, preferred: "posix", nonInteractive: true },
       },
     },
@@ -552,6 +684,7 @@ const fallbackApi: DesktopApi = {
   keepWorktree: async () => undefined,
   cancelTask: async () => undefined,
   setResponseFeedback: async () => undefined,
+  setWindowChromeTheme: async () => ({ ok: true }),
   onBackendEvent: () => () => undefined,
 };
 
@@ -807,8 +940,21 @@ function attachmentName(pathValue: string): string {
   return pathValue.split(/[\\/]/).filter(Boolean).pop() ?? pathValue;
 }
 
+function attachmentLabel(file: ChatAttachment): string {
+  return file.name || attachmentName(file.path);
+}
+
+function attachmentDetail(file: ChatAttachment): string {
+  if (file.source === "workspace") return "Workspace file";
+  return "Attached file";
+}
+
+function isImageAttachment(file: ChatAttachment): boolean {
+  return !!file.previewDataUrl || /\.(png|jpe?g|webp|gif)$/i.test(file.name || file.path);
+}
+
 function attachmentMention(file: ChatAttachment): string {
-  return `@${file.name || attachmentName(file.path)}`;
+  return `@${attachmentLabel(file)}`;
 }
 
 function mentionAtCursor(value: string, cursor: number): { query: string; start: number; end: number } | null {
@@ -1079,6 +1225,109 @@ function formatDiffStats(stats: ParsedDiff): string {
   return `+${stats.additions} -${stats.deletions}`;
 }
 
+function AttachmentPreviewList({
+  files,
+  mode,
+  onRemove,
+}: {
+  files: ChatAttachment[];
+  mode: "composer" | "message";
+  onRemove?: (file: ChatAttachment) => void;
+}) {
+  if (!files.length) return null;
+  return (
+    <div className={`attachmentPreviewList ${mode === "composer" ? "composerAttachmentList" : "messageAttachmentList"}`}>
+      {files.map((file) => {
+        const key = file.storedPath || file.path;
+        const label = attachmentLabel(file);
+        const image = isImageAttachment(file) && file.previewDataUrl;
+        return (
+          <div className={`attachmentPreview ${image ? "imageAttachment" : "fileAttachment"}`} key={key} title={label}>
+            {image ? (
+              <img alt={label} src={file.previewDataUrl} />
+            ) : (
+              <>
+                <span className="attachmentPreviewFileIcon">
+                  <File size={14} />
+                </span>
+                <span className="attachmentPreviewFileName">{label}</span>
+              </>
+            )}
+            {onRemove ? (
+              <button className="attachmentPreviewRemove" type="button" onClick={() => onRemove(file)} title={`Remove ${label}`}>
+                <X size={13} />
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+async function copyPlainText(value: string) {
+  const text = value.trimEnd();
+  if (!text) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    throw new Error("Clipboard API unavailable.");
+  } catch {
+    const node = document.createElement("textarea");
+    node.value = text;
+    node.setAttribute("readonly", "");
+    node.style.position = "fixed";
+    node.style.left = "-9999px";
+    document.body.appendChild(node);
+    node.select();
+    document.execCommand("copy");
+    document.body.removeChild(node);
+  }
+}
+
+function codeBlockLabel(language: string, content: string): string {
+  const normalized = language.trim().toLowerCase();
+  if (/^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(normalized)) return normalized || "command";
+  if (!normalized && looksLikeCommandBlock(content)) return "command";
+  return normalized || "code";
+}
+
+function looksLikeCommandBlock(content: string): boolean {
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  return lines.every((line) =>
+    /^[$>]/.test(line) ||
+    /^(npm|pnpm|yarn|bun|node|git|cmake|ctest|make|ninja|python|uv|cargo|go|dotnet|winget|brew|sudo|apt-get|dnf|pacman|rg|fd|tree-sitter)\b/i.test(line),
+  );
+}
+
+function MarkdownCodeBlock({ language, content }: { language: string; content: string }) {
+  const [copied, setCopied] = useState(false);
+  const label = codeBlockLabel(language, content);
+  const isCommand = label === "command" || /^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(label);
+  async function copyBlock() {
+    await copyPlainText(content);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  }
+  return (
+    <figure className={`markdownCodeBlock ${isCommand ? "isCommand" : ""}`}>
+      <figcaption>
+        <span>{label}</span>
+        <button type="button" onClick={() => void copyBlock()} title="Copy code">
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </figcaption>
+      <pre className="markdownCode">
+        <code>{content}</code>
+      </pre>
+    </figure>
+  );
+}
+
 function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
   if (status === "passed") return <CheckCircle2 size={15} />;
   if (status === "failed") return <TriangleAlert size={15} />;
@@ -1086,7 +1335,7 @@ function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
 }
 
 function commandLabel(command: string): string {
-  return isShellLikeCommand(command) ? "Ran command" : `Ran ${command.split(/\s+/)[0] || "tool"}`;
+  return command.trim() || "tool";
 }
 
 function stripAnsi(value: string): string {
@@ -1099,8 +1348,12 @@ function isShellLikeCommand(command: string): boolean {
 
 function commandSummary(run: CommandRun): string {
   if (run.status === "running") return "running";
-  if (run.status === "failed") return `failed${run.exitCode === null ? "" : `, exit ${run.exitCode}`}`;
   const output = stripAnsi(run.stdout || run.stderr).trim();
+  const lastLine = output.split(/\r?\n/).filter(Boolean).slice(-1)[0];
+  if (run.status === "failed") {
+    const exit = `exit ${run.exitCode ?? "unknown"}`;
+    return lastLine ? `${exit}: ${lastLine}` : exit;
+  }
   return output ? output.split(/\r?\n/).filter(Boolean).slice(-1)[0] : `exit ${run.exitCode ?? 0}`;
 }
 
@@ -1119,7 +1372,7 @@ function commandDetailLabel(run: CommandRun): string {
 function taskStatusTitle(task: TaskInfo): string {
   if (task.state === "completed") return "Answered";
   if (task.state === "review_ready") return "Ready to review";
-  if (task.state === "merged") return task.workspaceKind === "git" ? "Merged" : "Approved";
+  if (task.state === "merged") return task.workspaceMode === "worktree" ? "Merged" : "Approved";
   if (task.state === "approving") return "Running approval checks";
   if (task.state === "running") return "Working";
   if (task.state === "failed") return "Needs attention";
@@ -1133,13 +1386,17 @@ function taskStatusDetail(task: TaskInfo): string {
     const changed = task.changedFiles.length;
     return `${changed} changed file${changed === 1 ? "" : "s"} ready in Review.`;
   }
-  if (task.state === "merged") return "This chat was closed after its approved merge.";
+  if (task.state === "merged") {
+    return task.workspaceMode === "worktree"
+      ? "This chat was closed after its approved merge."
+      : "This chat was closed after its local changes were approved.";
+  }
   if (task.state === "completed") return "No file changes for this turn.";
   if (task.state === "rejected") return "Changes were undone.";
   if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
   if (task.error) return task.error;
   if (task.state === "running") return "Aegis is working.";
-  return task.workspaceKind === "git" ? task.agentBranch : task.worktreePath;
+  return task.workspaceMode === "worktree" ? task.agentBranch : task.worktreePath;
 }
 
 function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
@@ -1263,7 +1520,7 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
   const hasUserMessages = events.some((event) => event.type === "user.message");
 
   if (prompt && !hasUserMessages) {
-    items.push({ type: "user", id: "user-prompt", text: prompt });
+    items.push({ type: "user", id: "user-prompt", text: prompt, attachedFiles: [] });
   }
 
   const flushAssistant = () => {
@@ -1300,7 +1557,12 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
     if (event.type === "user.message") {
       flushReasoning();
       flushAssistant();
-      items.push({ type: "user", id: `user-${items.length}-${event.text.length}`, text: event.text });
+      items.push({
+        type: "user",
+        id: `user-${items.length}-${event.text.length}`,
+        text: event.text,
+        attachedFiles: (event.attachedFiles ?? []).map(normalizeAttachment),
+      });
       continue;
     }
     if (event.type === "assistant.delta") {
@@ -1405,7 +1667,7 @@ function parseMarkdown(content: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let paragraph: string[] = [];
   let list: string[] = [];
-  let code: { language: string; lines: string[] } | null = null;
+  let code: { language: string; lines: string[]; indent: string } | null = null;
 
   const flushParagraph = () => {
     if (paragraph.length) {
@@ -1421,7 +1683,7 @@ function parseMarkdown(content: string): MarkdownBlock[] {
   };
 
   for (const line of lines) {
-    const fence = line.match(/^```(\w+)?\s*$/);
+    const fence = line.match(/^(\s*)```\s*([A-Za-z0-9_+.#-]+)?\s*$/);
     if (fence) {
       if (code) {
         blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
@@ -1429,12 +1691,12 @@ function parseMarkdown(content: string): MarkdownBlock[] {
       } else {
         flushParagraph();
         flushList();
-        code = { language: fence[1] ?? "", lines: [] };
+        code = { language: fence[2] ?? "", lines: [], indent: fence[1] ?? "" };
       }
       continue;
     }
     if (code) {
-      code.lines.push(line);
+      code.lines.push(code.indent && line.startsWith(code.indent) ? line.slice(code.indent.length) : line);
       continue;
     }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
@@ -1488,12 +1750,7 @@ function MarkdownContent({ content, onReviewFileClick, reviewFiles }: { content:
     <div className="markdownContent">
       {blocks.map((block, index) => {
         if (block.type === "code") {
-          return (
-            <pre className="markdownCode" key={index}>
-              {block.language ? <span>{block.language}</span> : null}
-              <code>{block.content}</code>
-            </pre>
-          );
+          return <MarkdownCodeBlock content={block.content} key={index} language={block.language} />;
         }
         if (block.type === "heading") {
           if (block.level === 1) return <h3 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h3>;
@@ -1595,10 +1852,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function scrollElementToBottom(node: HTMLElement) {
+  node.scrollTop = node.scrollHeight;
+  window.requestAnimationFrame(() => {
+    node.scrollTop = node.scrollHeight;
+  });
+}
+
 function App() {
   const [backend, setBackend] = useState<BackendStatus | null>(null);
   const [repository, setRepository] = useState<RepositoryInfo | null>(null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
   const reasoningMode: ReasoningMode = "reasoning";
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -1626,11 +1891,19 @@ function App() {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
+  const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"account" | "server" | "tools" | "skills" | "telemetry">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "appearance" | "server" | "tools" | "skills" | "telemetry">("account");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [serverSettings, setServerSettings] = useState(() => readUiServerSettings());
   const [serverSettingsMessage, setServerSettingsMessage] = useState<string | null>(null);
+  const [appearanceSettings, setAppearanceSettings] = useState(() => readAppearanceSettings());
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
+  const [availableFontFamilies, setAvailableFontFamilies] = useState<string[]>(() =>
+    uniqueFonts([...defaultUiFontChoices, ...defaultMonoFontChoices]),
+  );
+  const [fontScanMessage, setFontScanMessage] = useState<string | null>(null);
+  const [fontScanPending, setFontScanPending] = useState(false);
   const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
   const [exportingTelemetry, setExportingTelemetry] = useState(false);
   const [toolsEnabled, setToolsEnabled] = useState<Record<string, boolean>>({
@@ -1639,6 +1912,7 @@ function App() {
     edit: true,
     search: true,
     command: true,
+    debugger: true,
   });
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.aegis/skills");
@@ -1669,6 +1943,7 @@ function App() {
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
+  const followComposerScrollRef = useRef(true);
 
   const latestTaskId = task?.id;
   const rawReviewFiles = task?.reviewFiles ?? emptyReviewFiles;
@@ -1704,6 +1979,7 @@ function App() {
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
+  const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
     ? "No active review"
     : task.state === "review_ready"
@@ -1712,6 +1988,10 @@ function App() {
   const attachmentMenuOpen = !!mention;
   const attachmentSearchQuery = mention?.query ?? "";
   const canAttachFiles = !busy && !closedChatNotice;
+  const canUseWorktreeMode = repository?.kind === "git";
+  const activeTaskWorkspaceMode = task?.chatId === activeChatId ? task.workspaceMode : undefined;
+  const workspaceModeLocked = activeTaskWorkspaceMode === "worktree";
+  const useWorktreeForNextRun = canUseWorktreeMode && (workspaceModeLocked || workspaceMode === "worktree");
   const visibleEvents = events;
   const responseFeedback = useMemo(() => {
     const ratings = new Map<string, "good" | "bad">();
@@ -1759,6 +2039,39 @@ function App() {
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
+  const effectiveTheme = appearanceSettings.theme === "system" ? (systemPrefersDark ? "dark" : "light") : appearanceSettings.theme;
+  const uiFontOptions = useMemo(
+    () => uniqueFonts([...defaultUiFontChoices, appearanceSettings.uiFont, ...availableFontFamilies]),
+    [appearanceSettings.uiFont, availableFontFamilies],
+  );
+  const monoFontOptions = useMemo(
+    () => uniqueFonts([...defaultMonoFontChoices, appearanceSettings.monoFont, ...availableFontFamilies]),
+    [appearanceSettings.monoFont, availableFontFamilies],
+  );
+
+  useEffect(() => {
+    writeAppearanceSettings(appearanceSettings);
+    document.documentElement.dataset.theme = effectiveTheme;
+    document.documentElement.style.colorScheme = effectiveTheme;
+    document.documentElement.style.setProperty(
+      "--app-font",
+      cssFontValue(appearanceSettings.uiFont, "system-ui, sans-serif"),
+    );
+    document.documentElement.style.setProperty(
+      "--mono-font",
+      cssFontValue(appearanceSettings.monoFont, "ui-monospace, SFMono-Regular, Consolas, monospace"),
+    );
+    void api.setWindowChromeTheme(effectiveTheme);
+  }, [appearanceSettings, effectiveTheme]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!media) return;
+    const sync = () => setSystemPrefersDark(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
 
   useEffect(() => {
     const reasoningItems = composerItems.filter(
@@ -1787,80 +2100,102 @@ function App() {
     void loadAvailableIdes();
     void loadChats();
     const statusTimer = window.setInterval(() => void refreshStatus(), 30000);
+    const pendingBackendEvents: BackendUiEvent[] = [];
+    let backendEventFlushTimer: number | null = null;
+    const flushBackendEvents = () => {
+      backendEventFlushTimer = null;
+      const batch = pendingBackendEvents.splice(0);
+      if (batch.length === 0) return;
+      const visibleBatch = batch.filter((event) => !(event.type === "assistant.delta" && isReviewReadyText(event.text)));
+      if (visibleBatch.length) {
+        setEvents((current) => visibleBatch.reduce((next, event) => appendBackendEvent(next, event, 500), current));
+      }
+      const assistantDelta = visibleBatch
+        .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
+        .map((event) => event.text)
+        .join("");
+      if (assistantDelta) {
+        setAssistantText((current) => `${current}${assistantDelta}`);
+      }
+      for (const event of visibleBatch) {
+        if (event.type === "assistant.done") {
+          setTask((current) =>
+            current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
+          );
+          void loadChats();
+        }
+        if (event.type === "permission.requested") setPendingPermission(event.request);
+        if (event.type === "permission.resolved") {
+          setPendingPermission((current) => (current?.id === event.id ? null : current));
+        }
+        if (event.type === "worktree.requested") {
+          setTask((current) =>
+            current && current.id === event.taskId
+              ? { ...current, state: "awaiting_worktree_approval", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
+              : current,
+          );
+          void loadChats();
+        }
+        if (event.type === "worktree.created") {
+          setTask((current) =>
+            current && current.id === event.taskId
+              ? { ...current, state: "running", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
+              : current,
+          );
+        }
+        if (event.type === "review.ready") {
+          setTask((current) =>
+            current && current.id === event.taskId
+              ? {
+                  ...current,
+                  state: "review_ready",
+                  changedFiles: event.changedFiles,
+                  reviewFiles: event.reviewFiles,
+                  latestTest: event.latestTest,
+              }
+              : current,
+          );
+          setExpandedReviewPaths(new Set());
+          window.setTimeout(() => {
+            void refreshTaskReviewById(event.taskId);
+          }, 120);
+          void loadChats();
+        }
+        if (event.type === "approval.check") {
+          setApprovalChecks((current) => {
+            const next = current.filter((check) => check.name !== event.name);
+            next.push({ name: event.name, status: event.status, detail: event.detail });
+            return next;
+          });
+        }
+        if (event.type === "merge.completed") {
+          setTask((current) =>
+            current && current.id === event.taskId ? { ...current, state: "merged", patchHash: event.patchHash } : current,
+          );
+          void loadChats();
+        }
+        if (event.type === "task.error") {
+          setError(event.message);
+          setTask((current) =>
+            current && current.id === event.taskId ? { ...current, state: "failed", error: event.message } : current,
+          );
+          void loadChats();
+        }
+      }
+    };
     const unsubscribe = api.onBackendEvent((rawEvent) => {
       const event = asBackendEvent(rawEvent);
       if (!event) return;
-      if (event.type === "assistant.delta" && isReviewReadyText(event.text)) return;
-      setEvents((current) => appendBackendEvent(current, event, 500));
-      if (event.type === "assistant.delta") {
-        setAssistantText((current) => `${current}${event.text}`);
-      }
-      if (event.type === "assistant.done") {
-        setTask((current) =>
-          current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
-        );
-        void loadChats();
-      }
-      if (event.type === "permission.requested") setPendingPermission(event.request);
-      if (event.type === "permission.resolved") {
-        setPendingPermission((current) => (current?.id === event.id ? null : current));
-      }
-      if (event.type === "worktree.requested") {
-        setTask((current) =>
-          current && current.id === event.taskId
-            ? { ...current, state: "awaiting_worktree_approval", worktreePath: event.path, agentBranch: event.branch }
-            : current,
-        );
-        void loadChats();
-      }
-      if (event.type === "worktree.created") {
-        setTask((current) =>
-          current && current.id === event.taskId
-            ? { ...current, state: "running", worktreePath: event.path, agentBranch: event.branch }
-            : current,
-        );
-      }
-      if (event.type === "review.ready") {
-        setTask((current) =>
-          current && current.id === event.taskId
-            ? {
-                ...current,
-                state: "review_ready",
-                changedFiles: event.changedFiles,
-                reviewFiles: event.reviewFiles,
-                latestTest: event.latestTest,
-            }
-            : current,
-        );
-        setExpandedReviewPaths(new Set());
-        window.setTimeout(() => {
-          void refreshTaskReviewById(event.taskId);
-        }, 120);
-        void loadChats();
-      }
-      if (event.type === "approval.check") {
-        setApprovalChecks((current) => {
-          const next = current.filter((check) => check.name !== event.name);
-          next.push({ name: event.name, status: event.status, detail: event.detail });
-          return next;
-        });
-      }
-      if (event.type === "merge.completed") {
-        setTask((current) =>
-          current && current.id === event.taskId ? { ...current, state: "merged", patchHash: event.patchHash } : current,
-        );
-        void loadChats();
-      }
-      if (event.type === "task.error") {
-        setError(event.message);
-        setTask((current) =>
-          current && current.id === event.taskId ? { ...current, state: "failed", error: event.message } : current,
-        );
-        void loadChats();
-      }
+      pendingBackendEvents.push(event);
+      if (backendEventFlushTimer) return;
+      backendEventFlushTimer = window.setTimeout(flushBackendEvents, 50);
     });
     return () => {
       window.clearInterval(statusTimer);
+      if (backendEventFlushTimer) {
+        window.clearTimeout(backendEventFlushTimer);
+        flushBackendEvents();
+      }
       unsubscribe();
     };
   }, []);
@@ -1935,10 +2270,34 @@ function App() {
     return () => window.removeEventListener("resize", resizeReview);
   }, [reviewOpen, sidebarOpen, sidebarWidth]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = streamRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [events.length, assistantText]);
+    if (node && followComposerScrollRef.current) scrollElementToBottom(node);
+  }, [composerItems, task?.state, reviewFiles.length]);
+
+  useEffect(() => {
+    const closeMenus = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      if (!target.closest(".branchControl")) setBranchMenuOpen(false);
+      if (!target.closest(".workspaceModeControl")) setWorkspaceModeMenuOpen(false);
+      if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
+      if (!target.closest(".idePicker")) setIdeMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setBranchMenuOpen(false);
+      setWorkspaceModeMenuOpen(false);
+      setPermissionMenuOpen(false);
+      setIdeMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeMenus);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenus);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeChatId || suppressDraftSaveRef.current) return undefined;
@@ -2081,6 +2440,35 @@ function App() {
     writeUiServerSettings(next);
     setServerSettings(next);
     setServerSettingsMessage("Saved in this UI. Runner wiring still uses the configured environment for now.");
+  }
+
+  function updateAppearanceSettings(patch: Partial<AppearanceSettings>) {
+    setAppearanceSettings((current) => ({ ...current, ...patch }));
+    setFontScanMessage(null);
+  }
+
+  async function scanSystemFonts() {
+    setFontScanPending(true);
+    setFontScanMessage(null);
+    try {
+      const queryLocalFonts = (window as LocalFontWindow).queryLocalFonts;
+      if (!queryLocalFonts) {
+        setFontScanMessage("System font scanning is not available in this runtime. The curated font list will still work.");
+        return;
+      }
+      const fonts = await queryLocalFonts();
+      const families = uniqueFonts(fonts.map((font) => font.family || font.fullName || ""));
+      if (!families.length) {
+        setFontScanMessage("No system fonts were returned.");
+        return;
+      }
+      setAvailableFontFamilies((current) => uniqueFonts([...current, ...families]));
+      setFontScanMessage(`Found ${families.length} font famil${families.length === 1 ? "y" : "ies"}.`);
+    } catch (cause) {
+      setFontScanMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setFontScanPending(false);
+    }
   }
 
   async function showConnectionErrorInChat(userText: string, status: BackendStatus | null) {
@@ -2305,6 +2693,10 @@ function App() {
   async function toggleBranchMenu() {
     if (!repository || repository.kind !== "git") return;
     const next = !branchMenuOpen;
+    if (next) {
+      setWorkspaceModeMenuOpen(false);
+      setPermissionMenuOpen(false);
+    }
     setBranchMenuOpen(next);
     if (next) await refreshBranches();
   }
@@ -2352,6 +2744,7 @@ function App() {
   }
 
   async function updatePermissionMode(mode: PermissionMode) {
+    setPermissionMenuOpen(false);
     if (mode === "bypass" && permissionMode !== "bypass") {
       setShowBypassDialog(true);
       return;
@@ -2380,6 +2773,29 @@ function App() {
     }
   }
 
+  function toggleWorkspaceMode() {
+    setWorkspaceModeMenuOpen((open) => {
+      const next = !open;
+      if (next) {
+        setBranchMenuOpen(false);
+        setPermissionMenuOpen(false);
+      }
+      return next;
+    });
+  }
+
+  function selectWorkspaceMode(mode: WorkspaceMode) {
+    setWorkspaceMode(mode);
+    writeWorkspaceMode(mode);
+    setWorkspaceModeMenuOpen(false);
+  }
+
+  function handleComposerScroll(event: React.UIEvent<HTMLDivElement>) {
+    const node = event.currentTarget;
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    followComposerScrollRef.current = distanceFromBottom < 72;
+  }
+
   async function startTask() {
     if (closedChatNotice) {
       setError(closedChatNotice);
@@ -2400,6 +2816,7 @@ function App() {
     const preservedEvents = isContinuingChat ? events : [];
     setError(null);
     setBusy(true);
+    followComposerScrollRef.current = true;
     if (!isContinuingChat) {
       setEvents([]);
       setAssistantText("");
@@ -2425,6 +2842,7 @@ function App() {
         chatId,
         attachedFiles: attachedFiles.map(normalizeAttachment),
         reasoningMode,
+        useWorktree: useWorktreeForNextRun,
       });
       setTask(nextTask);
       setEvents((current) =>
@@ -2470,25 +2888,7 @@ function App() {
   }
 
   async function copyText(value: string) {
-    const text = value.trimEnd();
-    if (!text) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return;
-      }
-      throw new Error("Clipboard API unavailable.");
-    } catch {
-      const node = document.createElement("textarea");
-      node.value = text;
-      node.setAttribute("readonly", "");
-      node.style.position = "fixed";
-      node.style.left = "-9999px";
-      document.body.appendChild(node);
-      node.select();
-      document.execCommand("copy");
-      document.body.removeChild(node);
-    }
+    await copyPlainText(value);
   }
 
   async function rateResponse(messageId: string, rating: "good" | "bad") {
@@ -2643,19 +3043,24 @@ function App() {
   function handlePromptChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
     const nextPrompt = event.target.value;
     setPrompt(nextPrompt);
-    setAttachedFiles((current) => current.filter((file) => nextPrompt.includes(attachmentMention(normalizeAttachment(file)))));
     updateMention(nextPrompt, event.target.selectionStart);
   }
 
   function mergeAttachments(current: ChatAttachment[], files: ChatAttachment[]): ChatAttachment[] {
     const next = [...current];
     for (const file of files.map(normalizeAttachment)) {
-      if (!next.some((attached) => attached.path === file.path)) {
+      const key = file.storedPath || file.path;
+      if (!next.some((attached) => (attached.storedPath || attached.path) === key)) {
         next.push(file);
       }
       if (next.length >= 16) break;
     }
     return next;
+  }
+
+  function removeAttachment(file: ChatAttachment) {
+    const key = file.storedPath || file.path;
+    setAttachedFiles((current) => current.filter((attached) => (attached.storedPath || attached.path) !== key));
   }
 
   function insertAttachmentMentions(files: ChatAttachment[]) {
@@ -2722,9 +3127,69 @@ function App() {
       if (result.canceled) return;
       const files = result.files.map(normalizeAttachment);
       setAttachedFiles((current) => mergeAttachments(current, files));
-      insertAttachmentMentions(files);
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function ensureChatForAttachments(): Promise<string> {
+    if (activeChatId) return activeChatId;
+    const chat = await api.createChat(chatInputForCurrentProject(prompt.trim() ? titleFromPrompt(prompt) : "New chat"));
+    mergeChat(chat);
+    suppressDraftSaveBriefly();
+    setActiveChatId(chat.id);
+    return chat.id;
+  }
+
+  function fileToPastedAttachment(file: File): Promise<PastedAttachmentInput> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== "string") {
+          reject(new Error("Could not read pasted file."));
+          return;
+        }
+        resolve({
+          name: file.name || (file.type.startsWith("image/") ? "pasted-image.png" : "pasted-file"),
+          mimeType: file.type || undefined,
+          dataUrl: reader.result,
+        });
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read pasted file."));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function attachPastedFiles(files: File[]) {
+    if (!files.length || !canAttachFiles) return;
+    setError(null);
+    try {
+      const chatId = await ensureChatForAttachments();
+      const payload = await Promise.all(files.slice(0, 16).map(fileToPastedAttachment));
+      const result = await api.savePastedAttachments({ chatId, files: payload });
+      setAttachedFiles((current) => mergeAttachments(current, result.files.map(normalizeAttachment)));
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files).filter((file) => file.size > 0);
+    if (!files.length) return;
+    event.preventDefault();
+    void attachPastedFiles(files);
+  }
+
+  function handleComposerDrop(event: React.DragEvent<HTMLDivElement>) {
+    const files = Array.from(event.dataTransfer.files).filter((file) => file.size > 0);
+    if (!files.length) return;
+    event.preventDefault();
+    void attachPastedFiles(files);
+  }
+
+  function handleComposerDragOver(event: React.DragEvent<HTMLDivElement>) {
+    if (event.dataTransfer.types.includes("Files")) {
+      event.preventDefault();
     }
   }
 
@@ -3105,6 +3570,7 @@ function App() {
               setAccountMessage(null);
               setServerSettingsMessage(null);
               setTelemetryMessage(null);
+              setFontScanMessage(null);
               void refreshStatus();
               void loadSkills();
             }}
@@ -3115,7 +3581,7 @@ function App() {
         </div>
       </aside>
 
-      <main className="workspace">
+      <main className={`workspace ${approvalPending ? "approvalPending" : ""}`}>
         <section className="workArea">
           <section className="composerPanel">
             <div className="composerTopbar">
@@ -3129,13 +3595,14 @@ function App() {
                 <PanelRight size={15} />
               </button>
             </div>
-            <div className="composerBody" ref={streamRef}>
+            <div className="composerBody" ref={streamRef} onScroll={handleComposerScroll}>
               {composerItems.length ? (
                 <div className="timeline">
                   {composerItems.map((item) =>
                     item.type === "user" ? (
                       <article className="timelineMessage userMessage" key={item.id}>
                         <div className="userMessageBubble">
+                          <AttachmentPreviewList files={item.attachedFiles} mode="message" />
                           <MarkdownContent content={item.text} />
                         </div>
                         <div className="messageActions">
@@ -3232,8 +3699,8 @@ function App() {
                         >
                           <TerminalSquare size={15} />
                           <span className="commandStatus" />
-                          <span>
-                            <strong>{commandLabel(item.run.command)}</strong>
+                          <span className="commandSummaryText">
+                            <strong title={item.run.command}>{commandLabel(item.run.command)}</strong>
                             <em>{commandSummary(item.run)}</em>
                           </span>
                         </button>
@@ -3290,7 +3757,7 @@ function App() {
         </section>
 
         {task?.state === "awaiting_worktree_approval" ? (
-          <section className="floatingApproval">
+          <section className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Create isolated worktree">
             <div>
               <strong>Create isolated worktree?</strong>
               <span>{task.agentBranch} at {task.worktreePath}</span>
@@ -3305,7 +3772,7 @@ function App() {
             </button>
           </section>
         ) : pendingPermission ? (
-          <section className="floatingApproval">
+          <section className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Command permission request">
             <div>
               <strong>{pendingPermission.kind} permission</strong>
               <span>{pendingPermission.command}</span>
@@ -3383,11 +3850,64 @@ function App() {
               ) : null}
             </div>
 
+            {canUseWorktreeMode ? (
+              <div className={`workspaceModeControl ${useWorktreeForNextRun ? "isWorktree" : ""}`}>
+                <button
+                  className="workspaceModeTrigger"
+                  type="button"
+                  onClick={toggleWorkspaceMode}
+                  disabled={busy || workspaceModeLocked}
+                  aria-expanded={workspaceModeMenuOpen}
+                  aria-haspopup="menu"
+                  title={
+                    workspaceModeLocked
+                      ? "This chat is already running in an isolated worktree"
+                      : useWorktreeForNextRun
+                        ? "Run this chat in an isolated worktree"
+                        : "Run this chat in the selected repository"
+                  }
+                >
+                  {useWorktreeForNextRun ? <GitBranch size={14} /> : <FolderOpen size={14} />}
+                  <span>{useWorktreeForNextRun ? "Worktree" : "Local"}</span>
+                  <ChevronDown size={12} />
+                </button>
+                {workspaceModeMenuOpen ? (
+                  <div className="workspaceModeMenu" role="menu">
+                    <button
+                      className={workspaceMode === "local" ? "active" : ""}
+                      type="button"
+                      onClick={() => selectWorkspaceMode("local")}
+                    >
+                      <FolderOpen size={14} />
+                      <span>Local</span>
+                    </button>
+                    <button
+                      className={workspaceMode === "worktree" ? "active" : ""}
+                      type="button"
+                      onClick={() => selectWorkspaceMode("worktree")}
+                    >
+                      <GitBranch size={14} />
+                      <span>Worktree</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className={`permissionControl ${permissionMode === "bypass" ? "isBypass" : ""}`}>
               <button
                 className="permissionTrigger"
                 type="button"
-                onClick={() => setPermissionMenuOpen((open) => !open)}
+                onClick={() => {
+                  setPermissionMenuOpen((open) => {
+                    const next = !open;
+                    if (next) {
+                      setBranchMenuOpen(false);
+                      setWorkspaceModeMenuOpen(false);
+                    }
+                    return next;
+                  });
+                }}
                 aria-expanded={permissionMenuOpen}
                 aria-haspopup="menu"
                 title={permissionMode === "bypass" ? "Bypass mode" : "Normal mode"}
@@ -3447,7 +3967,7 @@ function App() {
               <span>{closedChatNotice}</span>
             </div>
           ) : null}
-          <div className="composer">
+          <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
             {attachmentMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
@@ -3479,6 +3999,7 @@ function App() {
                 ) : null}
               </div>
             ) : null}
+            <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
             <div className="promptInputShell">
               <div className="promptHighlight" aria-hidden="true">
                 <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
@@ -3490,6 +4011,7 @@ function App() {
                 value={prompt}
                 onChange={handlePromptChange}
                 onKeyDown={handlePromptKeyDown}
+                onPaste={handleComposerPaste}
                 onKeyUp={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
                 onClick={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
                 onSelect={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
@@ -3540,7 +4062,17 @@ function App() {
                 <button
                   className="idePickerToggle"
                   type="button"
-                  onClick={() => setIdeMenuOpen((open) => !open)}
+                  onClick={() => {
+                    setIdeMenuOpen((open) => {
+                      const next = !open;
+                      if (next) {
+                        setBranchMenuOpen(false);
+                        setWorkspaceModeMenuOpen(false);
+                        setPermissionMenuOpen(false);
+                      }
+                      return next;
+                    });
+                  }}
                   disabled={!canOpenIde}
                   aria-expanded={ideMenuOpen && canOpenIde}
                   aria-haspopup="menu"
@@ -3693,6 +4225,14 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className={`settingsNavItem ${settingsTab === "appearance" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("appearance")}
+                >
+                  <Type size={15} />
+                  <span>Appearance</span>
+                </button>
+                <button
+                  type="button"
                   className={`settingsNavItem ${settingsTab === "server" ? "isActive" : ""}`}
                   onClick={() => setSettingsTab("server")}
                 >
@@ -3754,6 +4294,92 @@ function App() {
                         <span>Continue with Microsoft</span>
                       </button>
                       {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {settingsTab === "appearance" ? (
+                  <div className="settingsPanel">
+                    <div className="settingsPanelHead">
+                      <h3>Appearance</h3>
+                      <p>Theme and typography used throughout Aegis.</p>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Theme</h4>
+                      <div className="appearanceOptionGrid">
+                        {[
+                          { id: "system" as const, label: "System", icon: <Monitor size={15} /> },
+                          { id: "light" as const, label: "Light", icon: <Sun size={15} /> },
+                          { id: "dark" as const, label: "Dark", icon: <Moon size={15} /> },
+                        ].map((option) => (
+                          <button
+                            className={appearanceSettings.theme === option.id ? "isActive" : ""}
+                            key={option.id}
+                            type="button"
+                            aria-pressed={appearanceSettings.theme === option.id}
+                            onClick={() => updateAppearanceSettings({ theme: option.id })}
+                          >
+                            {option.icon}
+                            <span>{option.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="settingsMessage">
+                        Current: {effectiveTheme}. System preference: {systemPrefersDark ? "dark" : "light"}.
+                      </p>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Fonts</h4>
+                      <label className="settingsField">
+                        <span>Interface</span>
+                        <select
+                          value={appearanceSettings.uiFont}
+                          onChange={(event) => updateAppearanceSettings({ uiFont: event.target.value })}
+                        >
+                          {uiFontOptions.map((font) => (
+                            <option key={font} value={font}>
+                              {font}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="settingsField">
+                        <span>Code</span>
+                        <select
+                          value={appearanceSettings.monoFont}
+                          onChange={(event) => updateAppearanceSettings({ monoFont: event.target.value })}
+                        >
+                          {monoFontOptions.map((font) => (
+                            <option key={font} value={font}>
+                              {font}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="settingsActions">
+                        <button
+                          className="settingsInlineButton"
+                          type="button"
+                          onClick={() => void scanSystemFonts()}
+                          disabled={fontScanPending || !localFontAccessAvailable()}
+                          title={localFontAccessAvailable() ? "Scan installed fonts" : "System font scanning is unavailable here"}
+                        >
+                          {fontScanPending ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                          <span>Scan system fonts</span>
+                        </button>
+                        {!localFontAccessAvailable() ? (
+                          <p className="settingsMessage">System font scanning is unavailable here, so Aegis is showing common system font choices.</p>
+                        ) : null}
+                        {fontScanMessage ? <p className="settingsMessage">{fontScanMessage}</p> : null}
+                      </div>
+                    </div>
+
+                    <div className="appearancePreview">
+                      <strong>Preview</strong>
+                      <p>The quick brown fox jumps over a careful build log.</p>
+                      <code>cmake --build .aegis/build --parallel</code>
                     </div>
                   </div>
                 ) : null}
@@ -3866,6 +4492,7 @@ function App() {
                         { id: "edit", name: "edit", description: "Replace exact text in a workspace file. Requires permission." },
                         { id: "write", name: "write", description: "Write a workspace file. Requires permission." },
                         { id: "command", name: "command", description: "Run a local shell command after policy and permission checks." },
+                        { id: "debugger", name: "debugger", description: "Inspect a workspace executable with gdb, lldb, or cdb. Requires permission." },
                       ].map((tool) => (
                         <li key={tool.id} className="skillRow">
                           <div className="skillRowText">

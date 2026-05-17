@@ -6,7 +6,7 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
   const command = typeof input.command === "string" ? input.command.trim() : "";
   if (!command) throw new Error("command requires command");
   const classification = classifyCommandText(command, ctx.cwd);
-  if (classification.commandClass === "network" || classification.commandClass === "external-directory" || classification.commandClass === "destructive-file") {
+  if (classification.commandClass === "network" || classification.commandClass === "external-directory") {
     throw new Error(`Command blocked by policy: ${classification.reason ?? classification.commandClass}`);
   }
   if (classification.commandClass === "python-runtime" && classification.risky) {
@@ -38,6 +38,7 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
       resolve({
         title: redactCommandText(command),
         output: [`exitCode=${code ?? "unknown"}`, stdout.trim(), stderr.trim()].filter(Boolean).join("\n"),
+        exitCode: code,
       });
     });
   });
