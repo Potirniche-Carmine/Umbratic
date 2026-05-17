@@ -4,6 +4,17 @@ export type AegisProviderConfig = {
   baseURL: string;
   apiKey: string;
   modelId: string;
+  mtls?: AegisProviderMtlsConfig;
+};
+
+export type AegisProviderMtlsConfig = {
+  caPath?: string;
+  certPath?: string;
+  keyPath?: string;
+  pfxPath?: string;
+  passphrase?: string;
+  serverName?: string;
+  pinnedServerCertificateSha256?: string;
 };
 
 export function assertAllowedProvider(config: AegisProviderConfig): AegisProviderConfig {

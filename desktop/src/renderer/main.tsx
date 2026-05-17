@@ -381,6 +381,8 @@ const previewNotesKey = "aegis-preview-notes";
 const serverSettingsKey = "aegis-ui-server-settings";
 const appearanceSettingsKey = "aegis-ui-appearance";
 const workspaceModeKey = "aegis-ui-workspace-mode";
+const markdownPreviewCharacterLimit = 60000;
+const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultAppearanceSettings: AppearanceSettings = {
@@ -1342,13 +1344,19 @@ function stripAnsi(value: string): string {
   return value.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+function previewTail(value: string, limit: number): { text: string; truncated: boolean } {
+  if (value.length <= limit) return { text: value, truncated: false };
+  return { text: value.slice(-limit), truncated: true };
+}
+
 function isShellLikeCommand(command: string): boolean {
   return !/^(read|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
 }
 
 function commandSummary(run: CommandRun): string {
   if (run.status === "running") return "running";
-  const output = stripAnsi(run.stdout || run.stderr).trim();
+  const outputPreview = previewTail(run.stdout || run.stderr, commandOutputPreviewCharacterLimit);
+  const output = stripAnsi(outputPreview.text).trim();
   const lastLine = output.split(/\r?\n/).filter(Boolean).slice(-1)[0];
   if (run.status === "failed") {
     const exit = `exit ${run.exitCode ?? "unknown"}`;
@@ -1359,7 +1367,11 @@ function commandSummary(run: CommandRun): string {
 
 function commandShellText(run: CommandRun): string {
   const parts = [run.kind === "edit" && !isShellLikeCommand(run.command) ? `tool ${run.command}` : `$ ${run.command}`];
-  const output = stripAnsi([run.stdout, run.stderr].filter(Boolean).join("\n")).trimEnd();
+  const outputPreview = previewTail([run.stdout, run.stderr].filter(Boolean).join("\n"), commandOutputPreviewCharacterLimit);
+  const output = stripAnsi(outputPreview.text).trimEnd();
+  if (outputPreview.truncated) {
+    parts.push(`[Showing the last ${commandOutputPreviewCharacterLimit.toLocaleString()} characters of command output.]`);
+  }
   if (output) parts.push(output);
   return parts.join("\n\n");
 }
@@ -1660,7 +1672,44 @@ type MarkdownBlock =
   | { type: "code"; language: string; content: string }
   | { type: "heading"; level: number; text: string }
   | { type: "list"; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "paragraph"; text: string };
+
+function splitMarkdownTableRow(line: string): string[] {
+  let source = line.trim();
+  if (source.startsWith("|")) source = source.slice(1);
+  if (source.endsWith("|")) source = source.slice(0, -1);
+
+  const cells: string[] = [];
+  let cell = "";
+  let inCode = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const escaped = index > 0 && source[index - 1] === "\\";
+    if (char === "`" && !escaped) inCode = !inCode;
+    if (char === "|" && !inCode && !escaped) {
+      cells.push(cell.replace(/\\\|/g, "|").trim());
+      cell = "";
+      continue;
+    }
+    cell += char;
+  }
+  cells.push(cell.replace(/\\\|/g, "|").trim());
+  return cells;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return line.includes("|") && splitMarkdownTableRow(line).length > 1;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
+}
+
+function normalizeMarkdownTableRow(cells: string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, index) => cells[index] ?? "");
+}
 
 function parseMarkdown(content: string): MarkdownBlock[] {
   const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
@@ -1682,7 +1731,8 @@ function parseMarkdown(content: string): MarkdownBlock[] {
     }
   };
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     const fence = line.match(/^(\s*)```\s*([A-Za-z0-9_+.#-]+)?\s*$/);
     if (fence) {
       if (code) {
@@ -1697,6 +1747,21 @@ function parseMarkdown(content: string): MarkdownBlock[] {
     }
     if (code) {
       code.lines.push(code.indent && line.startsWith(code.indent) ? line.slice(code.indent.length) : line);
+      continue;
+    }
+    if (isMarkdownTableRow(line) && isMarkdownTableSeparator(lines[lineIndex + 1] ?? "")) {
+      flushParagraph();
+      flushList();
+
+      const headers = splitMarkdownTableRow(line);
+      const rows: string[][] = [];
+      let rowIndex = lineIndex + 2;
+      while (rowIndex < lines.length && isMarkdownTableRow(lines[rowIndex]) && !isMarkdownTableSeparator(lines[rowIndex])) {
+        rows.push(normalizeMarkdownTableRow(splitMarkdownTableRow(lines[rowIndex]), headers.length));
+        rowIndex += 1;
+      }
+      blocks.push({ type: "table", headers, rows });
+      lineIndex = rowIndex - 1;
       continue;
     }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
@@ -1766,9 +1831,67 @@ function MarkdownContent({ content, onReviewFileClick, reviewFiles }: { content:
             </ul>
           );
         }
+        if (block.type === "table") {
+          return (
+            <div className="markdownTableWrapper" key={index}>
+              <table>
+                <thead>
+                  <tr>
+                    {block.headers.map((header, headerIndex) => (
+                      <th key={headerIndex}>{renderInlineMarkdown(header, referenceOptions)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {row.map((cell, cellIndex) => (
+                        <td key={cellIndex}>{renderInlineMarkdown(cell, referenceOptions)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
         return <p key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</p>;
       })}
     </div>
+  );
+}
+
+function markdownPreview(content: string): { text: string; truncated: boolean } {
+  if (content.length <= markdownPreviewCharacterLimit) return { text: content, truncated: false };
+  const paragraphBreak = content.lastIndexOf("\n\n", markdownPreviewCharacterLimit);
+  const sentenceBreak = content.lastIndexOf(". ", markdownPreviewCharacterLimit);
+  const cutoff =
+    paragraphBreak > markdownPreviewCharacterLimit * 0.55
+      ? paragraphBreak
+      : sentenceBreak > markdownPreviewCharacterLimit * 0.55
+        ? sentenceBreak + 1
+        : markdownPreviewCharacterLimit;
+  return { text: content.slice(0, cutoff).trimEnd(), truncated: true };
+}
+
+function LongMarkdownContent({ content, onReviewFileClick, reviewFiles }: { content: string } & ReviewReferenceOptions) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = useMemo(() => markdownPreview(content), [content]);
+  const displayContent = expanded || !preview.truncated ? content : preview.text;
+  return (
+    <>
+      <MarkdownContent content={displayContent} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />
+      {preview.truncated ? (
+        <div className="messageOverflowNotice">
+          <span>
+            Showing a preview of a long response ({content.length.toLocaleString()} characters).
+          </span>
+          <button type="button" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? "Show preview" : "Show full response"}
+          </button>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -1943,6 +2066,7 @@ function App() {
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
+  const focusRefreshTimerRef = useRef<number | null>(null);
   const followComposerScrollRef = useRef(true);
 
   const latestTaskId = task?.id;
@@ -2228,7 +2352,16 @@ function App() {
     const refreshOnFocus = () => {
       if (!appBlurredRef.current) return;
       appBlurredRef.current = false;
-      void refreshActiveReview();
+      if (!reviewOpen || busy || task?.state !== "review_ready") return;
+      if (focusRefreshTimerRef.current) {
+        window.clearTimeout(focusRefreshTimerRef.current);
+      }
+      focusRefreshTimerRef.current = window.setTimeout(() => {
+        focusRefreshTimerRef.current = null;
+        window.requestAnimationFrame(() => {
+          void refreshActiveReview();
+        });
+      }, 450);
     };
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
@@ -2241,11 +2374,15 @@ function App() {
     window.addEventListener("focus", refreshOnFocus);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
+      if (focusRefreshTimerRef.current) {
+        window.clearTimeout(focusRefreshTimerRef.current);
+        focusRefreshTimerRef.current = null;
+      }
       window.removeEventListener("blur", markBlurred);
       window.removeEventListener("focus", refreshOnFocus);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [task?.id, task?.state, busy]);
+  }, [task?.id, task?.state, busy, reviewOpen]);
 
   useEffect(() => {
     if (availableIdes.length > 0 && !availableIdes.some((ide) => ide.id === selectedIdeId)) {
@@ -2649,7 +2786,7 @@ function App() {
   }
 
   async function refreshActiveReview() {
-    if (!task || busy || task.state !== "review_ready") return;
+    if (!reviewOpen || !task || busy || task.state !== "review_ready") return;
     await refreshTaskReviewById(task.id);
   }
 
@@ -3302,7 +3439,7 @@ function App() {
     setFileMatches([]);
     try {
       let nextTask = chat.taskId ? await api.getTask({ taskId: chat.taskId }) : null;
-      if (nextTask?.state === "review_ready") {
+      if (reviewOpen && nextTask?.state === "review_ready") {
         nextTask = (await api.refreshTaskReview({ taskId: nextTask.id })) ?? nextTask;
       }
       await restoreChatRepository(chat, nextTask?.repositoryId);
@@ -3616,7 +3753,7 @@ function App() {
                         const rating = responseFeedback.get(item.id);
                         return (
                           <article className="timelineMessage assistantMessage" key={item.id}>
-                            <MarkdownContent content={item.text} onReviewFileClick={openReviewReference} reviewFiles={reviewFiles} />
+                            <LongMarkdownContent content={item.text} onReviewFileClick={openReviewReference} reviewFiles={reviewFiles} />
                             <div className="messageActions">
                               <button
                                 className="messageAction"

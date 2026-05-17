@@ -2,6 +2,16 @@ import { env } from "node:process";
 
 import type { LocalProviderId, ReasoningMode, TaskState } from "./types";
 
+export type EndpointMtlsConfig = {
+  caPath?: string;
+  certPath?: string;
+  keyPath?: string;
+  pfxPath?: string;
+  passphrase?: string;
+  serverName?: string;
+  pinnedServerCertificateSha256?: string;
+};
+
 export const defaultEndpointBaseUrl =
   env.AEGIS_MODEL_BASE_URL ||
   env.OPENAI_BASE_URL ||
@@ -12,6 +22,24 @@ export const defaultEndpointApiKey =
   env.AEGIS_MODEL_API_KEY || env.OPENAI_API_KEY || env.LMSTUDIO_API_KEY || "local";
 export const defaultEndpointModelId =
   env.AEGIS_MODEL_ID || env.OPENAI_MODEL || env.LMSTUDIO_MODEL || "google/gemma-4-e2b";
+
+function optionalEnv(name: string): string | undefined {
+  const value = env[name];
+  return value && value.trim() ? value.trim() : undefined;
+}
+
+export const defaultEndpointMtlsConfig: EndpointMtlsConfig | undefined = (() => {
+  const mtls: EndpointMtlsConfig = {
+    caPath: optionalEnv("AEGIS_MODEL_MTLS_CA_PATH"),
+    certPath: optionalEnv("AEGIS_MODEL_MTLS_CERT_PATH"),
+    keyPath: optionalEnv("AEGIS_MODEL_MTLS_KEY_PATH"),
+    pfxPath: optionalEnv("AEGIS_MODEL_MTLS_PFX_PATH"),
+    passphrase: optionalEnv("AEGIS_MODEL_MTLS_PASSPHRASE"),
+    serverName: optionalEnv("AEGIS_MODEL_TLS_SERVER_NAME"),
+    pinnedServerCertificateSha256: optionalEnv("AEGIS_MODEL_TLS_PIN_SHA256"),
+  };
+  return Object.values(mtls).some(Boolean) ? mtls : undefined;
+})();
 
 export const workspaceToolchainSystemPrompt = [
   "Aegis workspace tool policy: use fast local tools when available. Prefer `rg` for text search, `fd`/`fdfind` for path discovery, `tree-sitter` for syntax-aware structure when a grammar is available, `bat`/`batcat` for readable previews, `jq` for JSON, and `yq` for YAML. These are capability accelerators, not universal prerequisites. If a tool is missing, use the next available fallback and mention the exact command only when the missing capability prevents the requested verification.",
@@ -58,12 +86,14 @@ export const localProviderCatalog: Array<{
   providerName: string;
   baseUrl: string;
   apiKey: string;
+  mtls?: EndpointMtlsConfig;
 }> = [
   {
     providerId: "local-endpoint",
     providerName: "OpenAI-compatible endpoint",
     baseUrl: defaultEndpointBaseUrl,
     apiKey: defaultEndpointApiKey,
+    mtls: defaultEndpointMtlsConfig,
   },
 ];
 

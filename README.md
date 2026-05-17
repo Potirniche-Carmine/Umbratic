@@ -53,6 +53,65 @@ Use the Electron app for real task flows. The Vite browser preview can show the
 UI, but it cannot use the preload bridge, pick folders, run commands, or talk to
 the local agent backend.
 
+## mTLS Direct Endpoint Plan
+
+`Comm_Option_mTLS_Direct.md` can be implemented in two phases. The local phase
+proves that Aegis can talk to an OpenAI-compatible endpoint over mutually
+authenticated TLS. The server phase swaps the disposable local certs and mock
+endpoint for production PKI material and the internal model host.
+
+Needed for production:
+
+- Private CA with an offline root and online intermediate.
+- Server certificate for the internal model hostname, such as
+  `ai.company.internal`.
+- Client certificate issued to the Aegis device or user.
+- Reverse proxy in front of the model endpoint that requires client certs.
+- Revocation story: short-lived client certs plus a server-side kill list or
+  CRL/OCSP.
+- Aegis credential storage: PFX/file config for local testing, then OS
+  keychain or TPM/Secure Enclave-backed keys for production.
+- Optional server certificate pin via `AEGIS_MODEL_TLS_PIN_SHA256`.
+
+What is already supported locally:
+
+- Main-process `/models` healthcheck over HTTPS with client certs.
+- Runner chat-completion streaming over HTTPS with client certs.
+- Local cert generation and an mTLS OpenAI-compatible mock endpoint.
+- Future internal endpoint allowlist for `https://ai.*.internal` when mTLS
+  config is present.
+
+When the real server is available, keep the same environment variable shape and
+replace only the local values: `AEGIS_MODEL_BASE_URL`, CA path, client
+credential path, passphrase or keychain-backed credential, optional server name,
+and optional pin.
+
+## Local mTLS Endpoint Smoke Test
+
+The OpenAI-compatible endpoint can be reached over HTTPS with a client
+certificate. This is the local stand-in for `Comm_Option_mTLS_Direct.md`; it
+uses disposable test certs under `.aegis/`.
+
+```powershell
+npm run mtls:certs
+npm run mtls:mock
+```
+
+In another shell, start Aegis against the mock endpoint:
+
+```powershell
+$env:AEGIS_MODEL_BASE_URL='https://localhost:9443/v1'
+$env:AEGIS_MODEL_ID='aegis-mtls-local'
+$env:AEGIS_MODEL_MTLS_CA_PATH='C:\path\to\Aegis\desktop\.aegis\mtls-local\ca.pem'
+$env:AEGIS_MODEL_MTLS_PFX_PATH='C:\path\to\Aegis\desktop\.aegis\mtls-local\client.pfx'
+$env:AEGIS_MODEL_MTLS_PASSPHRASE='aegis-local-mtls'
+npm run desktop:dev
+```
+
+For a real server later, keep the same variables but replace the base URL, CA,
+client credential, and optional `AEGIS_MODEL_TLS_SERVER_NAME` /
+`AEGIS_MODEL_TLS_PIN_SHA256` values with the issued production material.
+
 ## Known UI Stubs
 
 These settings surfaces are wired up visually but are not yet enforced at

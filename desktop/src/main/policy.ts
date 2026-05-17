@@ -248,6 +248,16 @@ export function isLocalhostUrl(value: string): boolean {
   }
 }
 
+export function isMtlsInternalModelUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return url.protocol === "https:" && /^ai\.[a-z0-9.-]+\.internal$/.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(`Aegis runner hardening assertion failed: ${message}`);
@@ -259,9 +269,14 @@ export function assertAegisRunnerConfig(config: Record<string, unknown>, selecte
   assert(typeof config.cwd === "string" && config.cwd.length > 0, "cwd must be set");
   assert(config.permissionMode === "normal", "permissions must be mediated by the desktop app");
   assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Aegis local allowlist");
-  assert(isLocalhostUrl(selectedModel.baseUrl), "model base URL must be localhost");
 
   const provider = config.provider as Record<string, unknown> | undefined;
+  const providerMtls = provider?.mtls;
+  const hasMtlsConfig = !!providerMtls && typeof providerMtls === "object" && !Array.isArray(providerMtls);
+  assert(
+    isLocalhostUrl(selectedModel.baseUrl) || (isMtlsInternalModelUrl(selectedModel.baseUrl) && hasMtlsConfig),
+    "model base URL must be localhost, or an mTLS-configured ai.*.internal HTTPS endpoint",
+  );
   assert(provider?.id === selectedModel.providerId, "provider id must match the selected local provider");
   assert(provider?.modelId === selectedModel.modelId, "model must match the configured endpoint model");
   assert(provider?.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");

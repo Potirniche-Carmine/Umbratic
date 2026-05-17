@@ -9,6 +9,8 @@
     "build": "npm run build:runner && tsc -p tsconfig.main.json && vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build:runner": "npm --prefix runner run build",
+    "mtls:certs": "powershell -ExecutionPolicy Bypass -File scripts/new-local-mtls-certs.ps1",
+    "mtls:mock": "node scripts/mtls-openai-mock.mjs",
     "typecheck": "npm --prefix runner run typecheck && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {

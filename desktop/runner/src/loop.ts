@@ -3,6 +3,7 @@ import type { ChatContentPart, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
 import { runTool, toolSpecs } from "./tools/index.js";
 import type { ToolContext } from "./tools/common.js";
+import { modelHttpRequest, readBodyText } from "./provider/http.js";
 
 type ToolCall = {
   id: string;
@@ -84,7 +85,7 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
 }
 
 async function streamModel(session: Session, emit?: (event: AegisRunnerEvent) => void): Promise<StreamAccumulator> {
-  const response = await fetch(chatCompletionsUrl(session.config.provider.baseURL), {
+  const response = await modelHttpRequest(chatCompletionsUrl(session.config.provider.baseURL), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${session.config.provider.apiKey}`,
@@ -97,21 +98,20 @@ async function streamModel(session: Session, emit?: (event: AegisRunnerEvent) =>
       tools: toolSpecs,
       tool_choice: "auto",
     }),
+    mtls: session.config.provider.mtls,
     signal: session.abortController.signal,
   });
-  if (!response.ok || !response.body) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`model request failed: ${response.status} ${response.statusText}${body ? ` ${body.slice(0, 400)}` : ""}`);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    const body = await readBodyText(response.body, 4096).catch(() => "");
+    throw new Error(
+      `model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`,
+    );
   }
 
   const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false };
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    buffer += decoder.decode(chunk.value, { stream: true });
+  for await (const chunk of response.body) {
+    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : Buffer.from(chunk).toString("utf8");
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).trimEnd();

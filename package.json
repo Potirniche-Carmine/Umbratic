@@ -7,7 +7,9 @@
     "desktop/runner"
   ],
   "scripts": {
-    "desktop:dev": "npm --workspace desktop run dev",
-    "desktop:build": "npm --workspace desktop run build"
+    "desktop:dev": "npm --workspace @aegis/desktop run dev",
+    "desktop:build": "npm --workspace @aegis/desktop run build",
+    "mtls:certs": "npm --workspace @aegis/desktop run mtls:certs",
+    "mtls:mock": "npm --workspace @aegis/desktop run mtls:mock"
   }
 }

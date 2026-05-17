@@ -58,6 +58,7 @@ import {
   runtimeProfileForPrompt,
   telemetryPolicyInfo,
 } from "./policy";
+import { getProviderJson } from "./providerClient";
 import {
   readChats,
   readNotes,
@@ -195,6 +196,31 @@ function finishInterruptedRunningTasks() {
   }
 }
 
+function pruneClosedTaskInternalSnapshots(task: TaskRecord): TaskRecord {
+  if (
+    task.baselineFiles &&
+    (task.state === "completed" || task.state === "merged" || task.state === "rejected")
+  ) {
+    const { baselineFiles: _baselineFiles, ...nextTask } = task;
+    void _baselineFiles;
+    return nextTask;
+  }
+  return task;
+}
+
+function compactClosedTaskStorage() {
+  const tasks = readTasks();
+  let changed = false;
+  const compacted = tasks.map((task) => {
+    const nextTask = pruneClosedTaskInternalSnapshots(task);
+    if (nextTask !== task) changed = true;
+    return nextTask;
+  });
+  if (changed) {
+    writeTasks(compacted);
+  }
+}
+
 function saveChat(chat: ChatRecord) {
   const chats = [chat, ...readChats().filter((row) => row.id !== chat.id)];
   writeChats(chats);
@@ -328,7 +354,7 @@ function scheduleTaskEventFlush() {
 function saveTask(task: TaskRecord) {
   applyTaskPolicyMetadata(task);
   const queuedEvents = takePendingTaskEvents(task.id);
-  const taskWithQueuedEvents = taskWithAppendedEvents(task, queuedEvents);
+  const taskWithQueuedEvents = pruneClosedTaskInternalSnapshots(taskWithAppendedEvents(task, queuedEvents));
   const existingTasks = readTasks();
   const existing = existingTasks.find((row) => row.id === task.id);
   const taskEvents = compactTaskEvents(Array.isArray(taskWithQueuedEvents.events) ? taskWithQueuedEvents.events : [], 500);
@@ -1577,26 +1603,26 @@ async function fetchEndpointModels(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
-    const headers = new Headers();
-    headers.set("Accept", "application/json");
+    const headers: Record<string, string> = { Accept: "application/json" };
     if (provider.apiKey) {
-      headers.set("Authorization", `Bearer ${provider.apiKey}`);
+      headers.Authorization = `Bearer ${provider.apiKey}`;
     }
-    const response = await fetch(endpointRoute(provider.baseUrl, "models"), {
+    const response = await getProviderJson(endpointRoute(provider.baseUrl, "models"), {
       headers,
+      mtls: provider.mtls,
       signal: controller.signal,
     });
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      const body = response.text;
       return {
         status: "unavailable",
         models: [],
-        message: `Healthcheck failed at /models with ${response.status} ${response.statusText}${
+        message: `Healthcheck failed at /models with ${response.statusCode} ${response.statusMessage}${
           body.trim() ? `: ${body.trim().slice(0, 160)}` : ""
         }`,
       };
     }
-    const payload = await response.json().catch(() => null);
+    const payload = response.json;
     const modelIds = modelIdsFromPayload(payload);
     if (!modelIds.length) {
       return {
@@ -3431,6 +3457,7 @@ async function createWindow() {
       allowRunningInsecureContent: false,
       experimentalFeatures: false,
       webviewTag: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -3471,6 +3498,7 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   finishInterruptedRunningTasks();
+  compactClosedTaskStorage();
   handleIpc("aegis:list-chats", () => readChats());
   handleIpc("aegis:create-chat", (input) => createChat(input));
   handleIpc("aegis:update-chat-draft", (input) => updateChatDraft(input));

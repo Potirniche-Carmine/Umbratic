@@ -26,6 +26,7 @@ export function buildAegisRunnerConfig(task: TaskRecord, selectedModel: LocalMod
       baseURL: selectedModel.baseUrl,
       apiKey: catalogProvider?.apiKey ?? "local",
       modelId: selectedModel.modelId,
+      mtls: catalogProvider?.mtls,
     },
   };
 }

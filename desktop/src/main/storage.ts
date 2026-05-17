@@ -5,6 +5,14 @@ import * as path from "node:path";
 import { aegisPolicyVersion, aegisRunnerName, aegisRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import type { ChatRecord, LocalProviderId, RepositoryInfo, TaskRecord, UserNotes } from "./types";
 
+type JsonCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  value: unknown;
+};
+
+const jsonFileCache = new Map<string, JsonCacheEntry>();
+
 function dataFile(name: string): string {
   return path.join(app.getPath("userData"), name);
 }
@@ -29,10 +37,29 @@ function notesPath(): string {
   return dataFile("notes.json");
 }
 
+function cloneJsonValue<T>(value: T): T {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function readJsonFile<T>(filePath: string, fallback: T): T {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+    const stats = fs.statSync(filePath);
+    const cached = jsonFileCache.get(filePath);
+    if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+      return cloneJsonValue(cached.value as T);
+    }
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+    jsonFileCache.set(filePath, {
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
+      value: cloneJsonValue(parsed),
+    });
+    return parsed;
   } catch {
+    jsonFileCache.delete(filePath);
     return fallback;
   }
 }
@@ -46,7 +73,14 @@ export function writeJsonFile(filePath: string, value: unknown) {
   try {
     fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`);
     fs.renameSync(temporaryPath, filePath);
+    const stats = fs.statSync(filePath);
+    jsonFileCache.set(filePath, {
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
+      value: cloneJsonValue(value),
+    });
   } catch (error) {
+    jsonFileCache.delete(filePath);
     fs.rmSync(temporaryPath, { force: true });
     throw error;
   }
