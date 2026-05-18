@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld("aegis", {
   pickAttachmentFiles: (input: { chatId: string; repositoryId?: string }) => ipcRenderer.invoke("aegis:pick-attachment-files", input),
   savePastedAttachments: (input: { chatId: string; files: PastedAttachmentInput[] }) =>
     ipcRenderer.invoke("aegis:save-pasted-attachments", input),
+  openChatAttachment: (input: { attachment: ChatAttachment; repositoryId?: string }) =>
+    ipcRenderer.invoke("aegis:open-chat-attachment", input),
   getRepository: (input: { repositoryId?: string; repositoryPath?: string }) => ipcRenderer.invoke("aegis:get-repository", input),
   listRepositoryBranches: (input: { repositoryId?: string; repositoryPath?: string }) =>
     ipcRenderer.invoke("aegis:list-repository-branches", input),

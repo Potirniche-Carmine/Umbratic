@@ -258,6 +258,7 @@ declare global {
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
       pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: AegisChatAttachment[] }>;
       savePastedAttachments(input: { chatId: string; files: AegisPastedAttachmentInput[] }): Promise<{ files: AegisChatAttachment[] }>;
+      openChatAttachment(input: { attachment: AegisChatAttachment; repositoryId?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
       getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
       listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
         { ok: true; current: string; branches: string[] } | { ok: false; message: string }

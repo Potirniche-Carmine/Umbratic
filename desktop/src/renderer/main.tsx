@@ -336,6 +336,7 @@ type DesktopApi = {
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
   pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }>;
   savePastedAttachments(input: { chatId: string; files: PastedAttachmentInput[] }): Promise<{ files: ChatAttachment[] }>;
+  openChatAttachment(input: { attachment: ChatAttachment; repositoryId?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
   listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
     { ok: true; current: string; branches: string[] } | { ok: false; message: string }
@@ -602,6 +603,7 @@ const fallbackApi: DesktopApi = {
       }),
     ),
   }),
+  openChatAttachment: async () => ({ ok: false, message: "Electron preload is not available." }),
   getRepository: async (input) =>
     input.repositoryPath
       ? {
@@ -1231,10 +1233,12 @@ function AttachmentPreviewList({
   files,
   mode,
   onRemove,
+  onOpen,
 }: {
   files: ChatAttachment[];
   mode: "composer" | "message";
   onRemove?: (file: ChatAttachment) => void;
+  onOpen?: (file: ChatAttachment) => void;
 }) {
   if (!files.length) return null;
   return (
@@ -1243,24 +1247,37 @@ function AttachmentPreviewList({
         const key = file.storedPath || file.path;
         const label = attachmentLabel(file);
         const image = isImageAttachment(file) && file.previewDataUrl;
+        const interactive = !!onOpen && !onRemove;
+        const previewContent = image ? (
+          <img alt={label} src={file.previewDataUrl} />
+        ) : (
+          <>
+            <span className="attachmentPreviewFileIcon">
+              <File size={14} />
+            </span>
+            <span className="attachmentPreviewFileName">{label}</span>
+          </>
+        );
+        const className = `attachmentPreview ${image ? "imageAttachment" : "fileAttachment"} ${
+          interactive ? "interactiveAttachment" : ""
+        }`;
         return (
-          <div className={`attachmentPreview ${image ? "imageAttachment" : "fileAttachment"}`} key={key} title={label}>
-            {image ? (
-              <img alt={label} src={file.previewDataUrl} />
-            ) : (
-              <>
-                <span className="attachmentPreviewFileIcon">
-                  <File size={14} />
-                </span>
-                <span className="attachmentPreviewFileName">{label}</span>
-              </>
-            )}
-            {onRemove ? (
-              <button className="attachmentPreviewRemove" type="button" onClick={() => onRemove(file)} title={`Remove ${label}`}>
-                <X size={13} />
+          <React.Fragment key={key}>
+            {interactive ? (
+              <button className={className} type="button" onClick={() => onOpen(file)} title={label}>
+                {previewContent}
               </button>
-            ) : null}
-          </div>
+            ) : (
+              <div className={className} title={label}>
+                {previewContent}
+                {onRemove ? (
+                  <button className="attachmentPreviewRemove" type="button" onClick={() => onRemove(file)} title={`Remove ${label}`}>
+                    <X size={13} />
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </React.Fragment>
         );
       })}
     </div>
@@ -1993,6 +2010,7 @@ function App() {
   const [task, setTask] = useState<TaskInfo | null>(null);
   const [prompt, setPrompt] = useState(initialPrompt);
   const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>([]);
+  const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
@@ -3200,6 +3218,17 @@ function App() {
     setAttachedFiles((current) => current.filter((attached) => (attached.storedPath || attached.path) !== key));
   }
 
+  async function openMessageAttachment(file: ChatAttachment) {
+    if (isImageAttachment(file) && file.previewDataUrl) {
+      setPreviewAttachment(file);
+      return;
+    }
+    const result = await api.openChatAttachment({ attachment: file, repositoryId: repository?.id });
+    if (!result.ok) {
+      setError(result.message);
+    }
+  }
+
   function insertAttachmentMentions(files: ChatAttachment[]) {
     const normalized = files.map(normalizeAttachment);
     if (!normalized.length) return;
@@ -3738,8 +3767,8 @@ function App() {
                   {composerItems.map((item) =>
                     item.type === "user" ? (
                       <article className="timelineMessage userMessage" key={item.id}>
+                        <AttachmentPreviewList files={item.attachedFiles} mode="message" onOpen={openMessageAttachment} />
                         <div className="userMessageBubble">
-                          <AttachmentPreviewList files={item.attachedFiles} mode="message" />
                           <MarkdownContent content={item.text} />
                         </div>
                         <div className="messageActions">
@@ -4826,6 +4855,28 @@ function App() {
                   </div>
                 ) : null}
               </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {previewAttachment?.previewDataUrl ? (
+        <div className="modalScrim imagePreviewScrim" role="presentation" onClick={() => setPreviewAttachment(null)}>
+          <section
+            className="imagePreviewDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={attachmentLabel(previewAttachment)}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="imagePreviewHeader">
+              <strong>{attachmentLabel(previewAttachment)}</strong>
+              <button className="messageAction" type="button" onClick={() => setPreviewAttachment(null)} title="Close preview">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="imagePreviewCanvas">
+              <img alt={attachmentLabel(previewAttachment)} src={previewAttachment.previewDataUrl} />
             </div>
           </section>
         </div>

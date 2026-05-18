@@ -1993,6 +1993,43 @@ function savePastedAttachments(input: unknown): { files: ChatAttachment[] } {
   return { files };
 }
 
+async function openChatAttachment(input: unknown): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!isRecord(input) || !isRecord(input.attachment)) {
+    return { ok: false, message: "Invalid attachment." };
+  }
+  const attachment = input.attachment as Partial<ChatAttachment>;
+  const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
+  let targetPath = "";
+
+  if (attachment.source === "chat" && typeof attachment.storedPath === "string" && attachment.storedPath.trim()) {
+    const storedPath = path.resolve(attachment.storedPath);
+    if (!pathInside(chatAttachmentRoot(), storedPath)) {
+      return { ok: false, message: "Attachment is outside Aegis storage." };
+    }
+    targetPath = storedPath;
+  } else if (attachment.source === "workspace" && typeof attachment.path === "string" && attachment.path.trim() && repositoryId) {
+    const repository = readProjects().find((project) => project.id === repositoryId);
+    if (!repository) {
+      return { ok: false, message: "Repository was not found." };
+    }
+    const workspacePath = path.resolve(repository.rootPath, normalizeRelativePath(attachment.path));
+    if (!pathInside(repository.rootPath, workspacePath)) {
+      return { ok: false, message: "Attachment is outside the repository." };
+    }
+    targetPath = workspacePath;
+  }
+
+  if (!targetPath) {
+    return { ok: false, message: "Attachment cannot be opened." };
+  }
+  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+    return { ok: false, message: "Attachment file no longer exists." };
+  }
+
+  const error = await shell.openPath(targetPath);
+  return error ? { ok: false, message: error } : { ok: true };
+}
+
 async function getRepository(input: unknown): Promise<RepositoryInfo | null> {
   if (!isRecord(input)) {
     throw new Error("Invalid repository lookup input.");
@@ -3511,6 +3548,7 @@ app.whenReady().then(async () => {
   handleIpc("aegis:pick-repository", () => pickRepository());
   handleIpc("aegis:pick-attachment-files", (input) => pickAttachmentFiles(input));
   handleIpc("aegis:save-pasted-attachments", (input) => savePastedAttachments(input));
+  handleIpc("aegis:open-chat-attachment", (input) => openChatAttachment(input));
   handleIpc("aegis:get-repository", (input) => getRepository(input));
   handleIpc("aegis:list-repository-branches", (input) => listRepositoryBranches(input));
   handleIpc("aegis:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));

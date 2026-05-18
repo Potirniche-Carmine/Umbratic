@@ -143,9 +143,8 @@ async function streamModel(session: Session, emit?: (event: AegisRunnerEvent) =>
 
 export async function runTurn(session: Session, parts: InputPart[], emit: (event: AegisRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
   session.messages.push({ role: "user", content: messageContentFromParts(parts) });
-  let hasCompletedToolRound = false;
   for (let turn = 0; turn < 12; turn++) {
-    const acc = await streamModel(session, hasCompletedToolRound ? emit : undefined);
+    const acc = await streamModel(session, emit);
     const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
     session.messages.push({
       role: "assistant",
@@ -161,8 +160,6 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
       }
       return;
     }
-    hasCompletedToolRound = true;
-
     const ctx: ToolContext = {
       taskId: session.taskId,
       cwd: session.config.cwd,
