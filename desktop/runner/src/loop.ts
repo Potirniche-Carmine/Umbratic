@@ -1,4 +1,4 @@
-import { nowIso, type AegisRunnerEvent } from "./events.js";
+import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
 import { runTool, toolSpecs } from "./tools/index.js";
@@ -84,7 +84,7 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
   }
 }
 
-async function streamModel(session: Session, emit?: (event: AegisRunnerEvent) => void): Promise<StreamAccumulator> {
+async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent) => void): Promise<StreamAccumulator> {
   const response = await modelHttpRequest(chatCompletionsUrl(session.config.provider.baseURL), {
     method: "POST",
     headers: {
@@ -141,7 +141,7 @@ async function streamModel(session: Session, emit?: (event: AegisRunnerEvent) =>
   return acc;
 }
 
-export async function runTurn(session: Session, parts: InputPart[], emit: (event: AegisRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
+export async function runTurn(session: Session, parts: InputPart[], emit: (event: UmbraticRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
   session.messages.push({ role: "user", content: messageContentFromParts(parts) });
   for (let turn = 0; turn < 12; turn++) {
     const acc = await streamModel(session, emit);

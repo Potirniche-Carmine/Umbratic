@@ -1,12 +1,12 @@
 param(
-  [string]$OutDir = ".aegis\mtls-local",
-  [string]$Passphrase = "aegis-local-mtls"
+  [string]$OutDir = ".umbratic\mtls-local",
+  [string]$Passphrase = "umbratic-local-mtls"
 )
 
 $ErrorActionPreference = "Stop"
 $resolvedOutDir = Resolve-Path -LiteralPath (New-Item -ItemType Directory -Force -Path $OutDir)
 
-function New-AegisSecureString {
+function New-UmbraticSecureString {
   param([string]$Text)
   $secure = New-Object System.Security.SecureString
   foreach ($char in $Text.ToCharArray()) {
@@ -63,11 +63,11 @@ function Add-EnhancedKeyUsage {
   )
 }
 
-$password = New-AegisSecureString -Text $Passphrase
+$password = New-UmbraticSecureString -Text $Passphrase
 $now = [System.DateTimeOffset]::UtcNow.AddMinutes(-5)
 
 $rootKey = [System.Security.Cryptography.RSA]::Create(2048)
-$rootRequest = New-CertificateRequest -Subject "CN=Aegis Local Test Root CA" -Key $rootKey
+$rootRequest = New-CertificateRequest -Subject "CN=Umbratic AI Local Test Root CA" -Key $rootKey
 $rootRequest.CertificateExtensions.Add(
   [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true)
 )
@@ -91,7 +91,7 @@ $serverPublic = $serverRequest.Create($root, $now, $now.AddDays(30), (New-Serial
 $server = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($serverPublic, $serverKey)
 
 $clientKey = [System.Security.Cryptography.RSA]::Create(2048)
-$clientRequest = New-CertificateRequest -Subject "CN=aegis-local-client" -Key $clientKey
+$clientRequest = New-CertificateRequest -Subject "CN=umbratic-local-client" -Key $clientKey
 Add-EnhancedKeyUsage -Request $clientRequest -Oid "1.3.6.1.5.5.7.3.2"
 $clientPublic = $clientRequest.Create($root, $now, $now.AddDays(30), (New-SerialNumber))
 $client = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($clientPublic, $clientKey)
@@ -112,9 +112,9 @@ $server.Dispose()
 $client.Dispose()
 
 Write-Host "Created local mTLS files in $resolvedOutDir"
-Write-Host "Set these environment variables before starting Aegis:"
-Write-Host "  `$env:AEGIS_MODEL_BASE_URL='https://localhost:9443/v1'"
-Write-Host "  `$env:AEGIS_MODEL_ID='aegis-mtls-local'"
-Write-Host "  `$env:AEGIS_MODEL_MTLS_CA_PATH='$caPem'"
-Write-Host "  `$env:AEGIS_MODEL_MTLS_PFX_PATH='$clientPfx'"
-Write-Host "  `$env:AEGIS_MODEL_MTLS_PASSPHRASE='$Passphrase'"
+Write-Host "Set these environment variables before starting Umbratic AI:"
+Write-Host "  `$env:UMBRATIC_MODEL_BASE_URL='https://localhost:9443/v1'"
+Write-Host "  `$env:UMBRATIC_MODEL_ID='umbratic-mtls-local'"
+Write-Host "  `$env:UMBRATIC_MODEL_MTLS_CA_PATH='$caPem'"
+Write-Host "  `$env:UMBRATIC_MODEL_MTLS_PFX_PATH='$clientPfx'"
+Write-Host "  `$env:UMBRATIC_MODEL_MTLS_PASSPHRASE='$Passphrase'"

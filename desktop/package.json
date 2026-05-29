@@ -1,5 +1,5 @@
 {
-  "name": "@aegis/desktop",
+  "name": "@umbratic/desktop",
   "private": true,
   "version": "0.1.0",
   "main": "dist-electron/main/main.js",
@@ -14,7 +14,7 @@
     "typecheck": "npm --prefix runner run typecheck && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {
-    "@aegis/runner": "file:runner",
+    "@umbratic/runner": "file:runner",
     "@vitejs/plugin-react": "^5.0.4",
     "concurrently": "^9.2.1",
     "electron": "^41.3.0",

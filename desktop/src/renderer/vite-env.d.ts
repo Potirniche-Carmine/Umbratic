@@ -1,12 +1,12 @@
 /// <reference types="vite/client" />
 
-type AegisPermissionMode = "normal" | "bypass";
-type AegisReasoningMode = "fast" | "reasoning";
-type AegisServiceStatus = "ready" | "degraded" | "unavailable";
-type AegisWorkspaceKind = "git" | "folder";
-type AegisWorkspaceMode = "local" | "worktree";
-type AegisLocalProviderId = "local-endpoint";
-type AegisCommandClass =
+type UmbraticPermissionMode = "normal" | "bypass";
+type UmbraticReasoningMode = "fast" | "reasoning";
+type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
+type UmbraticWorkspaceKind = "git" | "folder";
+type UmbraticWorkspaceMode = "local" | "worktree";
+type UmbraticLocalProviderId = "company-endpoint";
+type UmbraticCommandClass =
   | "read"
   | "edit"
   | "shell"
@@ -22,53 +22,53 @@ type AegisCommandClass =
   | "network"
   | "external-directory"
   | "unknown";
-type AegisRuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
+type UmbraticRuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 
-type AegisRepositoryInfo = {
+type UmbraticRepositoryInfo = {
   id: string;
   name: string;
   rootPath: string;
-  kind: AegisWorkspaceKind;
+  kind: UmbraticWorkspaceKind;
   originalBranch: string;
   baseCommit: string;
   dirty: boolean;
   statusSummary: string;
 };
 
-type AegisBackendStatus = {
-  runner: AegisServiceStatus;
-  endpoint: AegisServiceStatus;
-  model: AegisLocalModelInfo | null;
-  models: AegisLocalModelInfo[];
-  providers: AegisLocalModelProvider[];
-  permissionMode: AegisPermissionMode;
+type UmbraticBackendStatus = {
+  runner: UmbraticServiceStatus;
+  endpoint: UmbraticServiceStatus;
+  model: UmbraticLocalModelInfo | null;
+  models: UmbraticLocalModelInfo[];
+  providers: UmbraticLocalModelProvider[];
+  permissionMode: UmbraticPermissionMode;
   privacy: {
     share: "disabled";
-    enabledProviders: AegisLocalProviderId[];
+    enabledProviders: UmbraticLocalProviderId[];
     disabledProviders: string[];
     webTools: "disabled";
   };
-  diagnostics: AegisBackendDiagnostics;
+  diagnostics: UmbraticBackendDiagnostics;
   message?: string;
 };
 
-type AegisBackendDiagnostics = {
+type UmbraticBackendDiagnostics = {
   runnerName: string;
   runnerVersion: string;
   runnerContractVersion: string;
   policyVersion: string;
   runnerBinary: "present" | "missing";
   configAssertions: "enabled";
-  providerAllowlist: AegisLocalProviderId[];
+  providerAllowlist: UmbraticLocalProviderId[];
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
   telemetry: {
     mode: "developer_toggle" | "managed_required" | "managed_disabled";
     localEnabled: boolean;
-    syncEnabled: false;
+    syncEnabled: boolean;
     retentionDays: number;
     exportFormat: "redacted-json";
-    storage: "task-event-snapshots";
+    storage: "company-managed-telemetry" | "task-event-snapshots";
   };
   runtimes: {
     python: {
@@ -81,7 +81,7 @@ type AegisBackendDiagnostics = {
     };
     cmake: {
       profileVersion: string;
-      buildDir: ".aegis/build";
+      buildDir: ".umbratic/build";
     };
     debugger: {
       supported: Array<"gdb" | "lldb" | "cdb">;
@@ -100,24 +100,24 @@ type AegisBackendDiagnostics = {
   };
 };
 
-type AegisLocalModelInfo = {
-  providerId: AegisLocalProviderId;
+type UmbraticLocalModelInfo = {
+  providerId: UmbraticLocalProviderId;
   providerName: string;
   modelId: string;
   displayName: string;
   baseUrl: string;
 };
 
-type AegisLocalModelProvider = {
-  providerId: AegisLocalProviderId;
+type UmbraticLocalModelProvider = {
+  providerId: UmbraticLocalProviderId;
   providerName: string;
   baseUrl: string;
-  status: AegisServiceStatus;
-  models: AegisLocalModelInfo[];
+  status: UmbraticServiceStatus;
+  models: UmbraticLocalModelInfo[];
   message?: string;
 };
 
-type AegisTestResult = {
+type UmbraticTestResult = {
   command: string;
   output: string;
   passed: boolean;
@@ -125,13 +125,13 @@ type AegisTestResult = {
   completedAt: string;
 };
 
-type AegisReviewFile = {
+type UmbraticReviewFile = {
   path: string;
   status: "added" | "modified" | "deleted";
   diff: string;
 };
 
-type AegisChatAttachment = {
+type UmbraticChatAttachment = {
   path: string;
   name: string;
   source?: "workspace" | "chat";
@@ -140,47 +140,47 @@ type AegisChatAttachment = {
   previewDataUrl?: string;
 };
 
-type AegisPastedAttachmentInput = {
+type UmbraticPastedAttachmentInput = {
   name?: string;
   mimeType?: string;
   dataUrl: string;
 };
 
-type AegisFileSearchResult = AegisChatAttachment & {
+type UmbraticFileSearchResult = UmbraticChatAttachment & {
   match: "path" | "content";
 };
 
-type AegisPermissionRequest = {
+type UmbraticPermissionRequest = {
   id: string;
   kind: "edit" | "bash";
   summary: string;
   command: string;
-  commandClass?: AegisCommandClass;
+  commandClass?: UmbraticCommandClass;
   cwd: string;
 };
 
-type AegisBackendEventMeta = { at?: string; endedAt?: string };
-type AegisBackendUiEvent = AegisBackendEventMeta &
+type UmbraticBackendEventMeta = { at?: string; endedAt?: string };
+type UmbraticBackendUiEvent = UmbraticBackendEventMeta &
 (
-  | { type: "user.message"; taskId: string; text: string; attachedFiles?: AegisChatAttachment[] }
+  | { type: "user.message"; taskId: string; text: string; attachedFiles?: UmbraticChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: AegisPermissionRequest["kind"]; commandClass?: AegisCommandClass }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: UmbraticPermissionRequest["kind"]; commandClass?: UmbraticCommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
-  | { type: "permission.requested"; taskId: string; request: AegisPermissionRequest }
+  | { type: "permission.requested"; taskId: string; request: UmbraticPermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: AegisReviewFile[]; latestTest?: AegisTestResult }
+  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: UmbraticReviewFile[]; latestTest?: UmbraticTestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
 );
 
-type AegisChatRecord = {
+type UmbraticChatRecord = {
   id: string;
   title: string;
   createdAt: string;
@@ -188,56 +188,56 @@ type AegisChatRecord = {
   repositoryName?: string;
   repositoryPath?: string;
   taskId?: string;
-  taskState?: AegisTaskInfo["state"];
+  taskState?: UmbraticTaskInfo["state"];
   changedFiles?: number;
   draftPrompt?: string;
-  attachedFiles?: AegisChatAttachment[];
+  attachedFiles?: UmbraticChatAttachment[];
 };
 
-type AegisUserNotes = {
+type UmbraticUserNotes = {
   content: string;
   updatedAt: string;
 };
 
-type AegisTaskInfo = {
+type UmbraticTaskInfo = {
   id: string;
   chatId?: string;
   repositoryId: string;
   prompt: string;
-  workspaceKind: AegisWorkspaceKind;
-  workspaceMode: AegisWorkspaceMode;
+  workspaceKind: UmbraticWorkspaceKind;
+  workspaceMode: UmbraticWorkspaceMode;
   state: "awaiting_worktree_approval" | "running" | "completed" | "review_ready" | "approving" | "merged" | "rejected" | "failed";
   originalBranch: string;
   baseCommit: string;
   agentBranch: string;
   worktreePath: string;
-  permissionMode: AegisPermissionMode;
-  reasoningMode?: AegisReasoningMode;
+  permissionMode: UmbraticPermissionMode;
+  reasoningMode?: UmbraticReasoningMode;
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
-  runtimeProfile?: AegisRuntimeProfileId;
+  runtimeProfile?: UmbraticRuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
-  reviewFiles: AegisReviewFile[];
-  events: AegisBackendUiEvent[];
-  latestTest?: AegisTestResult;
+  reviewFiles: UmbraticReviewFile[];
+  events: UmbraticBackendUiEvent[];
+  latestTest?: UmbraticTestResult;
   patchHash?: string;
   error?: string;
 };
 
-type AegisPermissionDecision = {
+type UmbraticPermissionDecision = {
   taskId: string;
   id: string;
   decision: "allow" | "deny";
 };
 
-type AegisIdeOpenResult = { ok: true } | { ok: false; message: string };
-type AegisApproveResult =
+type UmbraticIdeOpenResult = { ok: true } | { ok: false; message: string };
+type UmbraticApproveResult =
   | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }
   | { ok: false; message: string };
 
-type AegisIdeInfo = {
+type UmbraticIdeInfo = {
   id: string;
   label: string;
   icon: "vscode" | "visualstudio" | "explorer" | "finder" | "files";
@@ -245,28 +245,28 @@ type AegisIdeInfo = {
 
 declare global {
   interface Window {
-    aegis?: {
-      listChats(): Promise<AegisChatRecord[]>;
-      createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<AegisChatRecord>;
-      updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: AegisChatAttachment[] }): Promise<AegisChatRecord>;
+    umbratic?: {
+      listChats(): Promise<UmbraticChatRecord[]>;
+      createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<UmbraticChatRecord>;
+      updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: UmbraticChatAttachment[] }): Promise<UmbraticChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
-      getNotes(): Promise<AegisUserNotes>;
-      updateNotes(input: { content: string }): Promise<AegisUserNotes>;
-      getTask(input: { taskId: string }): Promise<AegisTaskInfo | null>;
-      refreshTaskReview(input: { taskId: string }): Promise<AegisTaskInfo | null>;
-      searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<AegisFileSearchResult[]>;
-      pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: AegisRepositoryInfo }>;
-      pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: AegisChatAttachment[] }>;
-      savePastedAttachments(input: { chatId: string; files: AegisPastedAttachmentInput[] }): Promise<{ files: AegisChatAttachment[] }>;
-      openChatAttachment(input: { attachment: AegisChatAttachment; repositoryId?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
-      getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<AegisRepositoryInfo | null>;
+      getNotes(): Promise<UmbraticUserNotes>;
+      updateNotes(input: { content: string }): Promise<UmbraticUserNotes>;
+      getTask(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
+      refreshTaskReview(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
+      searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<UmbraticFileSearchResult[]>;
+      pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: UmbraticRepositoryInfo }>;
+      pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: UmbraticChatAttachment[] }>;
+      savePastedAttachments(input: { chatId: string; files: UmbraticPastedAttachmentInput[] }): Promise<{ files: UmbraticChatAttachment[] }>;
+      openChatAttachment(input: { attachment: UmbraticChatAttachment; repositoryId?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+      getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<UmbraticRepositoryInfo | null>;
       listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
         { ok: true; current: string; branches: string[] } | { ok: false; message: string }
       >;
       checkoutRepositoryBranch(input: { repositoryId?: string; repositoryPath?: string; branch: string }): Promise<
-        { ok: true; repository: AegisRepositoryInfo } | { ok: false; message: string }
+        { ok: true; repository: UmbraticRepositoryInfo } | { ok: false; message: string }
       >;
-      getBackendStatus(): Promise<AegisBackendStatus>;
+      getBackendStatus(): Promise<UmbraticBackendStatus>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
       listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string }>; directory: string }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -274,20 +274,20 @@ declare global {
         | { ok: true; skill: { id: string; name: string; description: string }; directory: string }
         | { ok: false; message: string }
       >;
-      setPermissionMode(mode: AegisPermissionMode): Promise<AegisBackendStatus>;
-      listAvailableIdes(): Promise<AegisIdeInfo[]>;
+      setPermissionMode(mode: UmbraticPermissionMode): Promise<UmbraticBackendStatus>;
+      listAvailableIdes(): Promise<UmbraticIdeInfo[]>;
       startTask(input: {
         repositoryId?: string;
         prompt: string;
         chatId?: string;
-        attachedFiles?: AegisChatAttachment[];
-        reasoningMode?: AegisReasoningMode;
+        attachedFiles?: UmbraticChatAttachment[];
+        reasoningMode?: UmbraticReasoningMode;
         useWorktree?: boolean;
-      }): Promise<AegisTaskInfo>;
+      }): Promise<UmbraticTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
-      respondToToolPermission(input: AegisPermissionDecision): Promise<void>;
-      openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<AegisIdeOpenResult>;
-      approveTaskMerge(input: { taskId: string }): Promise<AegisApproveResult>;
+      respondToToolPermission(input: UmbraticPermissionDecision): Promise<void>;
+      openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<UmbraticIdeOpenResult>;
+      approveTaskMerge(input: { taskId: string }): Promise<UmbraticApproveResult>;
       rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
       keepWorktree(input: { taskId: string }): Promise<void>;
       cancelTask(input: { taskId: string }): Promise<void>;
@@ -295,6 +295,7 @@ declare global {
       setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
       onBackendEvent(callback: (event: unknown) => void): () => void;
     };
+    umbratic?: Window["umbratic"];
   }
 }
 

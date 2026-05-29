@@ -1,4 +1,4 @@
-import { nowIso, type AegisRunnerEvent } from "../events.js";
+import { nowIso, type UmbraticRunnerEvent } from "../events.js";
 import { classifyCommandText, redactText } from "../policy.js";
 import { commandTool } from "./command.js";
 import { debuggerTool } from "./debugger.js";
@@ -109,7 +109,7 @@ function parseArguments(value: unknown): Record<string, unknown> {
   }
 }
 
-export async function runTool(ctx: ToolContext, emit: (event: AegisRunnerEvent) => void, toolCall: { id: string; name: string; arguments: unknown }): Promise<ToolResult> {
+export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEvent) => void, toolCall: { id: string; name: string; arguments: unknown }): Promise<ToolResult> {
   const input = parseArguments(toolCall.arguments);
   const commandSummary =
     toolCall.name === "command" && typeof input.command === "string" ? input.command :

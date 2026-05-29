@@ -51,7 +51,7 @@ type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
-type LocalProviderId = "local-endpoint";
+type LocalProviderId = "company-endpoint";
 type CommandClass =
   | "read"
   | "edit"
@@ -120,10 +120,10 @@ type BackendDiagnostics = {
   telemetry: {
     mode: "developer_toggle" | "managed_required" | "managed_disabled";
     localEnabled: boolean;
-    syncEnabled: false;
+    syncEnabled: boolean;
     retentionDays: number;
     exportFormat: "redacted-json";
-    storage: "task-event-snapshots";
+    storage: "company-managed-telemetry" | "task-event-snapshots";
   };
   runtimes: {
     python: {
@@ -136,7 +136,7 @@ type BackendDiagnostics = {
     };
     cmake: {
       profileVersion: string;
-      buildDir: ".aegis/build";
+      buildDir: ".umbratic/build";
     };
     debugger: {
       supported: Array<"gdb" | "lldb" | "cdb">;
@@ -377,11 +377,11 @@ type DesktopApi = {
   onBackendEvent(callback: (event: unknown) => void): () => void;
 };
 
-const previewChatsKey = "aegis-preview-chats";
-const previewNotesKey = "aegis-preview-notes";
-const serverSettingsKey = "aegis-ui-server-settings";
-const appearanceSettingsKey = "aegis-ui-appearance";
-const workspaceModeKey = "aegis-ui-workspace-mode";
+const previewChatsKey = "umbratic-preview-chats";
+const previewNotesKey = "umbratic-preview-notes";
+const serverSettingsKey = "umbratic-ui-server-settings";
+const appearanceSettingsKey = "umbratic-ui-appearance";
+const workspaceModeKey = "umbratic-ui-workspace-mode";
 const markdownPreviewCharacterLimit = 60000;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
@@ -578,9 +578,9 @@ const fallbackApi: DesktopApi = {
   pickRepository: async () => ({
     canceled: false,
     repository: {
-      id: "preview-aegis",
-      name: "Aegis",
-      rootPath: "C:\\Users\\potir\\Documents\\Aegis",
+      id: "preview-umbratic",
+      name: "Umbratic AI",
+      rootPath: "C:\\Users\\potir\\Documents\\Umbratic",
       kind: "folder",
       originalBranch: "folder",
       baseCommit: "preview",
@@ -633,31 +633,31 @@ const fallbackApi: DesktopApi = {
       webTools: "disabled",
     },
     diagnostics: {
-      runnerName: "AegisRunner",
+      runnerName: "UmbraticRunner",
       runnerVersion: "package-adapter-1",
-      runnerContractVersion: "aegis-runner-1",
-      policyVersion: "aegis-local-mvp-1",
+      runnerContractVersion: "umbratic-runner-1",
+      policyVersion: "umbratic-enterprise-mvp-1",
       runnerBinary: "missing",
       configAssertions: "enabled",
-      providerAllowlist: ["local-endpoint"],
-      localhostOnlyModels: true,
+      providerAllowlist: ["company-endpoint"],
+      localhostOnlyModels: false,
       commandClassifier: "enabled",
       telemetry: {
-        mode: "developer_toggle",
-        localEnabled: true,
-        syncEnabled: false,
+        mode: "managed_required",
+        localEnabled: false,
+        syncEnabled: true,
         retentionDays: 30,
         exportFormat: "redacted-json",
-        storage: "task-event-snapshots",
+        storage: "company-managed-telemetry",
       },
       runtimes: {
         python: {
           profileVersion: "python-uv-venv-1",
           barePythonVerification: "denied",
-          generatedPaths: [".venv", "__pycache__", ".pyc", ".aegis/runtime"],
+          generatedPaths: [".venv", "__pycache__", ".pyc", ".umbratic/runtime"],
         },
         markdown: { docsOnlyClassification: "enabled" },
-        cmake: { profileVersion: "cmake-aegis-build-1", buildDir: ".aegis/build" },
+        cmake: { profileVersion: "cmake-umbratic-build-1", buildDir: ".umbratic/build" },
         debugger: { supported: ["gdb", "lldb", "cdb"], toolName: "debugger", nonInteractive: true },
         toolchain: {
           bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
@@ -669,7 +669,7 @@ const fallbackApi: DesktopApi = {
     message: "Electron preload is not available in this browser preview.",
   }),
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
-  listSkills: async () => ({ skills: [], directory: "~/.aegis/skills" }),
+  listSkills: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
   createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
@@ -692,7 +692,7 @@ const fallbackApi: DesktopApi = {
   onBackendEvent: () => () => undefined,
 };
 
-const api = window.aegis ?? fallbackApi;
+const api = window.umbratic ?? fallbackApi;
 
 function VsCodeLogo(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -1418,13 +1418,13 @@ function taskStatusDetail(task: TaskInfo): string {
   if (task.state === "merged") {
     return task.workspaceMode === "worktree"
       ? "This chat was closed after its approved merge."
-      : "This chat was closed after its local changes were approved.";
+      : "This chat was closed after its workspace changes were approved.";
   }
   if (task.state === "completed") return "No file changes for this turn.";
   if (task.state === "rejected") return "Changes were undone.";
   if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
   if (task.error) return task.error;
-  if (task.state === "running") return "Aegis is working.";
+  if (task.state === "running") return "Umbratic AI is working.";
   return task.workspaceMode === "worktree" ? task.agentBranch : task.worktreePath;
 }
 
@@ -2056,7 +2056,7 @@ function App() {
     debugger: true,
   });
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.aegis/skills");
+  const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.umbratic/skills");
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
   const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
@@ -4034,7 +4034,7 @@ function App() {
                   }
                 >
                   {useWorktreeForNextRun ? <GitBranch size={14} /> : <FolderOpen size={14} />}
-                  <span>{useWorktreeForNextRun ? "Worktree" : "Local"}</span>
+                  <span>{useWorktreeForNextRun ? "Worktree" : "Direct"}</span>
                   <ChevronDown size={12} />
                 </button>
                 {workspaceModeMenuOpen ? (
@@ -4045,7 +4045,7 @@ function App() {
                       onClick={() => selectWorkspaceMode("local")}
                     >
                       <FolderOpen size={14} />
-                      <span>Local</span>
+                      <span>Direct</span>
                     </button>
                     <button
                       className={workspaceMode === "worktree" ? "active" : ""}
@@ -4436,7 +4436,7 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Account</h3>
-                      <p>Sign in to sync settings across devices. Aegis runs locally either way.</p>
+                      <p>Sign in with your company account to connect Umbratic AI to your private enterprise environment.</p>
                     </div>
 
                     <div className="accountCard">
@@ -4444,18 +4444,18 @@ function App() {
                         <User size={22} />
                       </div>
                       <div className="accountIdentity">
-                        <strong>Local developer</strong>
+                        <strong>Company developer</strong>
                         <em>Not signed in</em>
                       </div>
                     </div>
 
                     <div className="settingsGroup">
                       <h4>Sign in with</h4>
-                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Aegis will keep working in local mode.")}>
+                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Your company endpoint can still be configured in Settings > Server.")}>
                         <GoogleMark />
                         <span>Continue with Google</span>
                       </button>
-                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Aegis will keep working in local mode.")}>
+                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Your company endpoint can still be configured in Settings > Server.")}>
                         <MicrosoftMark />
                         <span>Continue with Microsoft</span>
                       </button>
@@ -4468,7 +4468,7 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Appearance</h3>
-                      <p>Theme and typography used throughout Aegis.</p>
+                      <p>Theme and typography used throughout Umbratic AI.</p>
                     </div>
 
                     <div className="settingsGroup">
@@ -4536,7 +4536,7 @@ function App() {
                           <span>Scan system fonts</span>
                         </button>
                         {!localFontAccessAvailable() ? (
-                          <p className="settingsMessage">System font scanning is unavailable here, so Aegis is showing common system font choices.</p>
+                          <p className="settingsMessage">System font scanning is unavailable here, so Umbratic AI is showing common system font choices.</p>
                         ) : null}
                         {fontScanMessage ? <p className="settingsMessage">{fontScanMessage}</p> : null}
                       </div>
@@ -4545,7 +4545,7 @@ function App() {
                     <div className="appearancePreview">
                       <strong>Preview</strong>
                       <p>The quick brown fox jumps over a careful build log.</p>
-                      <code>cmake --build .aegis/build --parallel</code>
+                      <code>cmake --build .umbratic/build --parallel</code>
                     </div>
                   </div>
                 ) : null}
@@ -4560,7 +4560,7 @@ function App() {
                   >
                     <div className="settingsPanelHead">
                       <h3>Server</h3>
-                      <p>OpenAI-compatible endpoint details for a local or private LLM server.</p>
+                      <p>OpenAI-compatible endpoint details for your company's private AI server.</p>
                     </div>
 
                     <div className="settingsNotice">
@@ -4600,7 +4600,7 @@ function App() {
                         onChange={(event) =>
                           setServerSettings((current) => ({ ...current, baseUrl: event.target.value }))
                         }
-                        placeholder="http://127.0.0.1:1234/v1"
+                        placeholder="https://ai.company.internal/v1"
                       />
                     </label>
 
@@ -4657,7 +4657,7 @@ function App() {
                         { id: "search", name: "search", description: "Search workspace file paths and small text files." },
                         { id: "edit", name: "edit", description: "Replace exact text in a workspace file. Requires permission." },
                         { id: "write", name: "write", description: "Write a workspace file. Requires permission." },
-                        { id: "command", name: "command", description: "Run a local shell command after policy and permission checks." },
+                        { id: "command", name: "command", description: "Run a workspace shell command after policy and permission checks." },
                         { id: "debugger", name: "debugger", description: "Inspect a workspace executable with gdb, lldb, or cdb. Requires permission." },
                       ].map((tool) => (
                         <li key={tool.id} className="skillRow">
@@ -4686,7 +4686,7 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Skills</h3>
                       <p>
-                        Skills are global guidance Aegis includes in <strong>every chat</strong>. Use them for things like a personal style guide or rules every task should follow.
+                        Skills are global guidance Umbratic AI includes in <strong>every chat</strong>. Use them for things like a personal style guide or rules every task should follow.
                       </p>
                     </div>
 
@@ -4805,21 +4805,21 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
-                      <p>What Aegis records on this device. Nothing leaves the machine without an explicit export.</p>
+                      <p>Confidential task telemetry owned by your company and used to improve its private AI system.</p>
                     </div>
 
                     <div className="settingsList">
                       <div className="settingsListRow">
                         <span>Mode</span>
-                        <strong>{backend?.diagnostics.telemetry.localEnabled ? "Local event ledger" : "Off"}</strong>
+                        <strong>{backend?.diagnostics.telemetry.syncEnabled ? "Company-managed" : "Off"}</strong>
                       </div>
                       <div className="settingsListRow">
                         <span>Retention</span>
                         <strong>{backend?.diagnostics.telemetry.retentionDays ?? 30} days</strong>
                       </div>
                       <div className="settingsListRow">
-                        <span>Sync</span>
-                        <strong>{backend?.diagnostics.telemetry.syncEnabled ? "On" : "Off"}</strong>
+                        <span>Destination</span>
+                        <strong>{backend?.diagnostics.telemetry.syncEnabled ? "Company server" : "Disabled"}</strong>
                       </div>
                     </div>
 
@@ -4832,6 +4832,7 @@ function App() {
                           <li><Check size={13} /> IDE opens</li>
                           <li><Check size={13} /> Command outcomes</li>
                           <li><Check size={13} /> Review changes</li>
+                          <li><Check size={13} /> Fine-tuning signals</li>
                         </ul>
                       </div>
                       <div className="telemetryColumn">
@@ -4848,7 +4849,7 @@ function App() {
                     <div className="settingsActions">
                       <button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
                         {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
-                        <span>Export redacted JSON</span>
+                        <span>Export company telemetry sample</span>
                       </button>
                       {telemetryMessage ? <p className="settingsMessage">{telemetryMessage}</p> : null}
                     </div>
@@ -4914,7 +4915,7 @@ function App() {
             <div>
               <h3 id="bypass-title">Enable bypass mode?</h3>
               <p>
-                Aegis will run task commands without pausing for each approval. Commands still run inside the selected task
+                Umbratic AI will run task commands without pausing for each approval. Commands still run inside the selected task
                 workspace and sandboxed runtime, but they can change files there.
               </p>
             </div>
@@ -4984,9 +4985,9 @@ function MicrosoftMark() {
 }
 
 type RootElement = HTMLElement & {
-  aegisRoot?: ReturnType<typeof createRoot>;
+  umbraticRoot?: ReturnType<typeof createRoot>;
 };
 
 const rootElement = document.getElementById("root") as RootElement;
-rootElement.aegisRoot ??= createRoot(rootElement);
-rootElement.aegisRoot.render(<App />);
+rootElement.umbraticRoot ??= createRoot(rootElement);
+rootElement.umbraticRoot.render(<App />);

@@ -1,6 +1,6 @@
 import * as http from "node:http";
 import { URL } from "node:url";
-import { nowIso, type AegisRunnerEvent } from "./events.js";
+import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import { runTurn } from "./loop.js";
 import type { InputPart } from "./session.js";
 import { SessionStore } from "./session.js";
@@ -29,7 +29,7 @@ function isAuthorized(request: http.IncomingMessage, password: string): boolean 
   const header = request.headers.authorization;
   if (!header?.startsWith("Basic ")) return false;
   const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
-  return decoded === `aegis-runner:${password}`;
+  return decoded === `umbratic-runner:${password}`;
 }
 
 function inputPartsFromBody(body: Record<string, unknown>): InputPart[] {
@@ -53,7 +53,7 @@ function inputPartsFromBody(body: Record<string, unknown>): InputPart[] {
   return parts.length ? parts : [{ type: "text", text: "" }];
 }
 
-function writeSse(response: http.ServerResponse, event: AegisRunnerEvent) {
+function writeSse(response: http.ServerResponse, event: UmbraticRunnerEvent) {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 

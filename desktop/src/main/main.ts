@@ -35,14 +35,14 @@ import {
   runnerRequest,
   runnerBinaryPath,
   replyRunnerPermission,
-  startAegisRunnerServer,
+  startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
 import {
-  aegisPolicyVersion,
-  aegisRunnerContractVersion,
-  aegisRunnerName,
-  aegisRunnerVersion,
+  umbraticPolicyVersion,
+  umbraticRunnerContractVersion,
+  umbraticRunnerName,
+  umbraticRunnerVersion,
   allowedLocalProviderIds,
   baseUrlHost,
   classifyCommandText,
@@ -113,8 +113,8 @@ const importEsm = new Function("specifier", "return import(specifier)") as <T>(s
 
 const activeRunnerProcesss = new Map<string, RunnerProcess>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
-const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_runtime.png");
-const windowsAppIconPath = path.resolve(__dirname, "../../assets/brand/aegis_logo_white.ico");
+const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/umbratic_logo_runtime.png");
+const windowsAppIconPath = path.resolve(__dirname, "../../assets/brand/umbratic_logo_white.ico");
 const textAttachmentByteLimit = 512 * 1024;
 const imageAttachmentByteLimit = 10 * 1024 * 1024;
 const pdfAttachmentByteLimit = 25 * 1024 * 1024;
@@ -139,9 +139,9 @@ function clearPendingPermissionsForTask(taskIdValue: string) {
 }
 
 app.enableSandbox();
-app.setName("Aegis");
+app.setName("Umbratic AI");
 
-const cleanUserData = path.join(app.getPath("appData"), "Aegis");
+const cleanUserData = path.join(app.getPath("appData"), "Umbratic AI");
 try {
   fs.mkdirSync(cleanUserData, { recursive: true });
   app.setPath("userData", cleanUserData);
@@ -173,18 +173,18 @@ function finishInterruptedRunningTasks() {
     return {
       ...task,
       state: "failed" as const,
-      error: "Task was interrupted before Aegis runner finished.",
+      error: "Task was interrupted before Umbratic runner finished.",
       events: [
         ...events,
         {
           type: "task.error" as const,
           taskId: task.id,
-          message: "Task was interrupted before Aegis runner finished.",
+          message: "Task was interrupted before Umbratic runner finished.",
         },
       ].slice(-500),
       latestTest: task.latestTest ?? {
-        command: "aegis runner session",
-        output: "Task was interrupted before Aegis runner finished.",
+        command: "umbratic runner session",
+        output: "Task was interrupted before Umbratic runner finished.",
         passed: false,
         exitCode: null,
         completedAt: now,
@@ -298,9 +298,9 @@ function mergeTaskEvents(...groups: BackendUiEvent[][]): BackendUiEvent[] {
 }
 
 function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
-  task.runnerName = task.runnerName || aegisRunnerName;
-  task.runnerVersion = task.runnerVersion || aegisRunnerVersion;
-  task.policyVersion = task.policyVersion || aegisPolicyVersion;
+  task.runnerName = task.runnerName || umbraticRunnerName;
+  task.runnerVersion = task.runnerVersion || umbraticRunnerVersion;
+  task.policyVersion = task.policyVersion || umbraticPolicyVersion;
   if (!task.runtimeProfile || task.runtimeProfile === "none" || intentPrompt !== task.prompt) {
     task.runtimeProfile = runtimeProfileForPrompt(intentPrompt);
   }
@@ -440,7 +440,7 @@ function workspaceModeSystemPrompt(task: TaskRecord): string {
   if (taskUsesIsolatedWorktree(task)) {
     return "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path.";
   }
-  return "Workspace mode: local repository/folder. Do not ask to create a Git worktree or switch to one; work directly in the provided current working directory.";
+  return "Workspace mode: direct repository/folder. Do not ask to create a Git worktree or switch to one; work directly in the provided current working directory.";
 }
 
 function publicTaskById(input: unknown): TaskInfo | null {
@@ -457,7 +457,7 @@ function stableRepositoryId(rootPath: string): string {
 }
 
 function hiddenChatWorkspacePath(chatIdValue: string): string {
-  return path.join(os.homedir(), ".aegis", "chats", chatIdValue);
+  return path.join(os.homedir(), ".umbratic", "chats", chatIdValue);
 }
 
 function hiddenChatRepository(chatIdValue: string): RepositoryInfo {
@@ -747,7 +747,7 @@ function updateChatFromTask(task: TaskRecord) {
 
 const ignoredSnapshotDirectories = new Set([
   ".git",
-  ".aegis",
+  ".umbratic",
   ".venv",
   "venv",
   "node_modules",
@@ -991,7 +991,7 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
     case "user.message":
       return `User: ${compactHistoryText(event.text, 1800)}`;
     case "assistant.delta":
-      return `Aegis: ${compactHistoryText(event.text, 2400)}`;
+      return `Umbratic AI: ${compactHistoryText(event.text, 2400)}`;
     case "command.started":
       return `Tool started: ${compactHistoryText(event.command, 500)}`;
     case "command.output":
@@ -1115,7 +1115,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   const tree = repositoryTreePreview(rootPath);
   const keyFiles = keyWorkspaceFiles(rootPath);
   const lines = [
-    "Aegis workspace context:",
+    "Umbratic AI workspace context:",
     `- opened folder: ${rootPath}`,
     `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
     `- workspace kind: ${task.workspaceKind}`,
@@ -1167,7 +1167,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       userPrompt,
       "",
       "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
-      "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Aegis can open them in Review.",
+      "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
     ].join("\n"),
   });
   return parts;
@@ -1251,11 +1251,11 @@ function buildTextDiff(filePath: string, before: string | null, after: string | 
 
 function worktreeRootForRepo(repoRoot: string): string {
   const resolved = path.resolve(repoRoot);
-  return path.join(os.homedir(), ".aegis", "worktrees", `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
+  return path.join(os.homedir(), ".umbratic", "worktrees", `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
 }
 
-function aegisWorktreesRoot(): string {
-  return path.join(os.homedir(), ".aegis", "worktrees");
+function umbraticWorktreesRoot(): string {
+  return path.join(os.homedir(), ".umbratic", "worktrees");
 }
 
 function directoryIsEmpty(directory: string): boolean {
@@ -1277,8 +1277,8 @@ function removeEmptyDirectory(directory: string): boolean {
   }
 }
 
-function cleanupEmptyAegisWorktreeDirectories(task: TaskRecord) {
-  const worktreesRoot = aegisWorktreesRoot();
+function cleanupEmptyUmbraticWorktreeDirectories(task: TaskRecord) {
+  const worktreesRoot = umbraticWorktreesRoot();
   const repoWorktreeRoot = worktreeRootForRepo(task.originalRepoPath);
   if (!pathInside(worktreesRoot, repoWorktreeRoot) || !pathInside(repoWorktreeRoot, task.worktreePath)) return;
   if (fs.existsSync(task.worktreePath) && directoryIsEmpty(task.worktreePath)) {
@@ -1293,7 +1293,7 @@ async function removeGitWorktree(task: TaskRecord) {
   }
   const repoWorktreeRoot = worktreeRootForRepo(task.originalRepoPath);
   if (!pathInside(repoWorktreeRoot, task.worktreePath)) {
-    throw new Error("Worktree path is outside Aegis control.");
+    throw new Error("Worktree path is outside Umbratic AI control.");
   }
   if (fs.existsSync(task.worktreePath)) {
     const result = await gitResult(task.originalRepoPath, ["worktree", "remove", "--force", task.worktreePath]);
@@ -1305,7 +1305,7 @@ async function removeGitWorktree(task: TaskRecord) {
       removeEmptyDirectory(task.worktreePath);
     }
   }
-  cleanupEmptyAegisWorktreeDirectories(task);
+  cleanupEmptyUmbraticWorktreeDirectories(task);
 }
 
 function taskMetadataPath(task: TaskRecord): string {
@@ -1322,7 +1322,7 @@ function recordTaskEvent(event: BackendUiEvent) {
 function emit(event: BackendUiEvent) {
   const stampedEvent = { ...event, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
   recordTaskEvent(stampedEvent);
-  mainWindow?.webContents.send("aegis:backend-event", stampedEvent);
+  mainWindow?.webContents.send("umbratic:backend-event", stampedEvent);
 }
 
 function failTask(task: TaskRecord, message: string) {
@@ -1506,7 +1506,7 @@ async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]
     "-g",
     "!dist-electron",
     "-g",
-    "!.aegis",
+    "!.umbratic",
     "-g",
     "!.venv",
     "-g",
@@ -1679,7 +1679,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       ? "degraded"
       : "unavailable";
   const messages = [
-    runnerPath ? undefined : "Aegis runner is not built in the app bundle.",
+    runnerPath ? undefined : "Umbratic runner is not built in the app bundle.",
     selected ? undefined : "No model id is configured for the OpenAI-compatible endpoint.",
     ...providers.map((provider) => provider.message).filter((message): message is string => !!message),
   ].filter((message): message is string => !!message);
@@ -1698,10 +1698,10 @@ async function getBackendStatus(): Promise<BackendStatus> {
       webTools: "disabled",
     },
     diagnostics: {
-      runnerName: aegisRunnerName,
-      runnerVersion: aegisRunnerVersion,
-      runnerContractVersion: aegisRunnerContractVersion,
-      policyVersion: aegisPolicyVersion,
+      runnerName: umbraticRunnerName,
+      runnerVersion: umbraticRunnerVersion,
+      runnerContractVersion: umbraticRunnerContractVersion,
+      policyVersion: umbraticPolicyVersion,
       runnerBinary: runnerPath ? "present" : "missing",
       configAssertions: "enabled",
       providerAllowlist: allowedLocalProviderIds,
@@ -1731,7 +1731,7 @@ function parseSkillFrontmatter(content: string): { name?: string; description?: 
 }
 
 function skillsDirectoryPath(): string {
-  return path.join(os.homedir(), ".aegis", "skills");
+  return path.join(os.homedir(), ".umbratic", "skills");
 }
 
 async function listSkills(): Promise<{ skills: SkillInfo[]; directory: string }> {
@@ -1819,11 +1819,11 @@ async function createSkill(input: { name?: string }): Promise<
     }
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
-  const template = `---\nname: ${rawName}\ndescription: Briefly describe what this skill teaches Aegis to do in every chat.\n---\n\n# ${rawName}\n\nReplace this with the guidance you want every chat to follow.\n`;
+  const template = `---\nname: ${rawName}\ndescription: Briefly describe what this skill teaches Umbratic AI to do in every chat.\n---\n\n# ${rawName}\n\nReplace this with the guidance you want every chat to follow.\n`;
   await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), template, "utf8");
   return {
     ok: true,
-    skill: { id, name: rawName, description: "Briefly describe what this skill teaches Aegis to do in every chat." },
+    skill: { id, name: rawName, description: "Briefly describe what this skill teaches Umbratic AI to do in every chat." },
     directory: root,
   };
 }
@@ -1832,13 +1832,13 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const result = mainWindow
     ? await dialog.showSaveDialog(mainWindow, {
-        title: "Export Aegis Telemetry",
-        defaultPath: `aegis-telemetry-${timestamp}.json`,
+        title: "Export Umbratic AI Telemetry",
+        defaultPath: `umbratic-telemetry-${timestamp}.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       })
     : await dialog.showSaveDialog({
-        title: "Export Aegis Telemetry",
-        defaultPath: `aegis-telemetry-${timestamp}.json`,
+        title: "Export Umbratic AI Telemetry",
+        defaultPath: `umbratic-telemetry-${timestamp}.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
   if (result.canceled || !result.filePath) {
@@ -2004,7 +2004,7 @@ async function openChatAttachment(input: unknown): Promise<{ ok: true } | { ok: 
   if (attachment.source === "chat" && typeof attachment.storedPath === "string" && attachment.storedPath.trim()) {
     const storedPath = path.resolve(attachment.storedPath);
     if (!pathInside(chatAttachmentRoot(), storedPath)) {
-      return { ok: false, message: "Attachment is outside Aegis storage." };
+      return { ok: false, message: "Attachment is outside Umbratic AI storage." };
     }
     targetPath = storedPath;
   } else if (attachment.source === "workspace" && typeof attachment.path === "string" && attachment.path.trim() && repositoryId) {
@@ -2373,7 +2373,7 @@ async function handleRunnerPermission(
   }
 
   if (task.workspaceKind === "git" && task.workspaceMode === "worktree" && !task.agentBranch && type === "edit") {
-    task.agentBranch = `aegis/${task.id}-${slugify(intentPrompt)}`;
+    task.agentBranch = `umbratic/${task.id}-${slugify(intentPrompt)}`;
     task.worktreePath = path.join(worktreeRootForRepo(task.originalRepoPath), task.id);
     task.runnerSessionId = undefined;
     task.pendingPrompt = runnerPromptText(promptForRun);
@@ -2441,7 +2441,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     task.model = selected;
     applyTaskPolicyMetadata(task, intent);
     saveTask(task);
-    run = await startAegisRunnerServer(task, selected);
+    run = await startUmbraticRunnerServer(task, selected);
     activeRunnerProcesss.set(task.id, run);
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; finished: boolean }>();
@@ -2574,7 +2574,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
       }
 
       if (type === "runner.error") {
-        const message = typeof event.message === "string" && event.message.trim() ? event.message : "Aegis runner failed.";
+        const message = typeof event.message === "string" && event.message.trim() ? event.message : "Umbratic runner failed.";
         fail(message);
         return;
       }
@@ -2593,7 +2593,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     });
     await stream.ready;
     // Runner sessions live only inside the runner process started above.
-    // Because Aegis starts a fresh process for each task run, a persisted
+    // Because Umbratic AI starts a fresh process for each task run, a persisted
     // runnerSessionId from an earlier process is stale and cannot be reused.
     const session = await runnerRequest<{ id: string }>(run, "/session", {
       method: "POST",
@@ -2608,7 +2608,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
         system: [
-          "Identity: you are Aegis, a local-first desktop coding agent. If the user asks who you are, answer as Aegis. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Aegis. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Aegis tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Aegis will link those paths to the Review panel.",
+          "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Umbratic AI tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
           workspaceModeSystemPrompt(task),
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
           runtimeHarnessSystemPrompt,
@@ -2619,7 +2619,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
 
     await Promise.race([
       completion,
-      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Aegis runner task timed out.")), 45 * 60 * 1000)),
+      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Umbratic runner task timed out.")), 45 * 60 * 1000)),
     ]);
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
@@ -2627,8 +2627,8 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     }
 
     task.latestTest = {
-      command: `aegis runner session ${session.id}`,
-      output: "Aegis runner session completed",
+      command: `umbratic runner session ${session.id}`,
+      output: "Umbratic runner session completed",
       passed: true,
       exitCode: 0,
       completedAt: new Date().toISOString(),
@@ -2636,7 +2636,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     const reviewFiles = await refreshReview(task);
     if (reviewFiles.length === 0) {
       if (expectsFileChanges) {
-        failTask(task, "Aegis runner finished without file changes.");
+        failTask(task, "Umbratic runner finished without file changes.");
         return;
       }
       task.state = "completed";
@@ -2686,7 +2686,7 @@ function closedTaskMessage(task: TaskRecord): string | undefined {
   if (task.state === "merged") {
     return taskUsesIsolatedWorktree(task)
       ? "This chat was closed after its approved merge. Start a new chat for more changes."
-      : "This chat was closed after its local changes were approved. Start a new chat for more changes.";
+      : "This chat was closed after its workspace changes were approved. Start a new chat for more changes.";
   }
   if (task.state === "rejected") {
     return "This chat was closed after its changes were undone. Start a new chat for more changes.";
@@ -2713,9 +2713,9 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.originalRepoPath = repository.rootPath;
   task.originalWasDirty = repository.dirty;
   task.baselineFiles = snapshotFolder(repository.rootPath);
-  task.runnerName = aegisRunnerName;
-  task.runnerVersion = aegisRunnerVersion;
-  task.policyVersion = aegisPolicyVersion;
+  task.runnerName = umbraticRunnerName;
+  task.runnerVersion = umbraticRunnerVersion;
+  task.policyVersion = umbraticPolicyVersion;
   task.runtimeProfile = runtimeProfileForPrompt(task.prompt);
   task.runnerSessionId = undefined;
   task.pendingPrompt = undefined;
@@ -2767,9 +2767,9 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     }
     existingTask.permissionMode = permissionMode;
     existingTask.reasoningMode = reasoningMode;
-    existingTask.runnerName = aegisRunnerName;
-    existingTask.runnerVersion = aegisRunnerVersion;
-    existingTask.policyVersion = aegisPolicyVersion;
+    existingTask.runnerName = umbraticRunnerName;
+    existingTask.runnerVersion = umbraticRunnerVersion;
+    existingTask.policyVersion = umbraticPolicyVersion;
     existingTask.runtimeProfile = runtimeProfileForPrompt(prompt);
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
@@ -2777,7 +2777,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
       const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
       existingTask.originalBranch = refreshed.originalBranch;
       existingTask.baseCommit = refreshed.baseCommit;
-      existingTask.agentBranch = `aegis/${existingTask.id}-${slugify(prompt)}`;
+      existingTask.agentBranch = `umbratic/${existingTask.id}-${slugify(prompt)}`;
       existingTask.worktreePath = path.join(worktreeRootForRepo(refreshed.rootPath), existingTask.id);
       existingTask.workspaceMode = "worktree";
       existingTask.originalRepoPath = refreshed.rootPath;
@@ -2813,7 +2813,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
 
   const id = taskId();
   const shouldCreateWorktree = requestedWorkspaceMode === "worktree";
-  const branch = shouldCreateWorktree ? `aegis/${id}-${slugify(prompt)}` : "";
+  const branch = shouldCreateWorktree ? `umbratic/${id}-${slugify(prompt)}` : "";
   const worktreePath = shouldCreateWorktree ? path.join(worktreeRootForRepo(refreshed.rootPath), id) : refreshed.rootPath;
   const task: TaskRecord = {
     id,
@@ -2830,9 +2830,9 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     worktreePath,
     permissionMode,
     reasoningMode,
-    runnerName: aegisRunnerName,
-    runnerVersion: aegisRunnerVersion,
-    policyVersion: aegisPolicyVersion,
+    runnerName: umbraticRunnerName,
+    runnerVersion: umbraticRunnerVersion,
+    policyVersion: umbraticPolicyVersion,
     runtimeProfile: runtimeProfileForPrompt(prompt),
     createdAt: new Date().toISOString(),
     changedFiles: [],
@@ -2921,7 +2921,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     if (!taskUsesIsolatedWorktree(task)) {
       await approvalCheck(task, "agent run completed", async () => {
         if (!task.latestTest?.passed) {
-          throw new Error("Aegis runner has not completed successfully for this task.");
+          throw new Error("Umbratic runner has not completed successfully for this task.");
         }
         return task.latestTest.command;
       });
@@ -3006,14 +3006,14 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       await execFileOutput("git", ["show-ref", "--verify", `refs/heads/${task.agentBranch}`], { cwd: task.originalRepoPath });
       const current = await gitOutput(task.worktreePath, ["rev-parse", task.agentBranch]);
       if (current !== task.baseCommit) {
-        throw new Error("Aegis runner created commits before approval.");
+        throw new Error("Umbratic runner created commits before approval.");
       }
       return task.agentBranch;
     });
     await approvalCheck(task, "controlled worktree", async () => {
       const root = worktreeRootForRepo(task.originalRepoPath);
       if (!pathInside(root, task.worktreePath) || !fs.existsSync(task.worktreePath)) {
-        throw new Error("Worktree path is outside Aegis control.");
+        throw new Error("Worktree path is outside Umbratic AI control.");
       }
       const branch = await gitOutput(task.worktreePath, ["branch", "--show-current"]);
       if (branch !== task.agentBranch) {
@@ -3023,7 +3023,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     });
     await approvalCheck(task, "agent run completed", async () => {
       if (!task.latestTest?.passed) {
-        throw new Error("Aegis runner has not completed successfully for this task.");
+        throw new Error("Umbratic runner has not completed successfully for this task.");
       }
       return task.latestTest.command;
     });
@@ -3082,14 +3082,14 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     await approvalCheck(task, "create task commit", async () => {
       const env = {
         ...process.env,
-        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "Aegis",
-        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "aegis@local",
-        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || "Aegis",
-        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || "aegis@local",
+        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "Umbratic AI",
+        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "umbratic@local",
+        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || "Umbratic AI",
+        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || "umbratic@local",
       };
       await execFileOutput(
         "git",
-        ["commit", "-m", `Aegis task ${task.id}`, "-m", `Patch-Hash: ${patchHash}`],
+        ["commit", "-m", `Umbratic AI task ${task.id}`, "-m", `Patch-Hash: ${patchHash}`],
         { cwd: task.worktreePath, env },
       );
       return (await gitOutput(task.worktreePath, ["rev-parse", "HEAD"])).slice(0, 12);
@@ -3343,7 +3343,7 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
     return { ok: false, message: "Task folder no longer exists." };
   }
   if (taskUsesIsolatedWorktree(task) && !pathInside(worktreeRootForRepo(task.originalRepoPath), task.worktreePath)) {
-    return { ok: false, message: "Worktree path is outside Aegis control." };
+    return { ok: false, message: "Worktree path is outside Umbratic AI control." };
   }
   if (relativeFilePath && path.isAbsolute(relativeFilePath)) {
     return { ok: false, message: "File path must be relative to the review folder." };
@@ -3476,7 +3476,7 @@ async function createWindow() {
     minHeight: 680,
     backgroundColor: "#101112",
     icon,
-    title: "Aegis",
+    title: "Umbratic AI",
     titleBarStyle: isMac ? "hiddenInset" : isWin ? "hidden" : "default",
     titleBarOverlay: isWin
       ? {
@@ -3536,39 +3536,39 @@ async function createWindow() {
 app.whenReady().then(async () => {
   finishInterruptedRunningTasks();
   compactClosedTaskStorage();
-  handleIpc("aegis:list-chats", () => readChats());
-  handleIpc("aegis:create-chat", (input) => createChat(input));
-  handleIpc("aegis:update-chat-draft", (input) => updateChatDraft(input));
-  handleIpc("aegis:delete-chat", (input) => deleteChat(input));
-  handleIpc("aegis:get-notes", () => getNotes());
-  handleIpc("aegis:update-notes", (input) => updateNotes(input));
-  handleIpc("aegis:get-task", (input) => publicTaskById(input));
-  handleIpc("aegis:refresh-task-review", (input) => refreshTaskReview(input));
-  handleIpc("aegis:search-files", (input) => searchRepositoryFiles(input));
-  handleIpc("aegis:pick-repository", () => pickRepository());
-  handleIpc("aegis:pick-attachment-files", (input) => pickAttachmentFiles(input));
-  handleIpc("aegis:save-pasted-attachments", (input) => savePastedAttachments(input));
-  handleIpc("aegis:open-chat-attachment", (input) => openChatAttachment(input));
-  handleIpc("aegis:get-repository", (input) => getRepository(input));
-  handleIpc("aegis:list-repository-branches", (input) => listRepositoryBranches(input));
-  handleIpc("aegis:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
-  handleIpc("aegis:get-backend-status", () => getBackendStatus());
-  handleIpc("aegis:export-telemetry", () => exportTelemetryBundle());
-  handleIpc("aegis:list-skills", () => listSkills());
-  handleIpc("aegis:open-skills-folder", () => openSkillsFolder());
-  handleIpc("aegis:create-skill", (input) => createSkill(input as { name?: string }));
-  handleIpc("aegis:set-permission-mode", (mode) => setPermissionMode(mode));
-  handleIpc("aegis:list-available-ides", () => listAvailableIdes());
-  handleIpc("aegis:start-task", (input) => startTask(input));
-  handleIpc("aegis:approve-worktree-creation", (input) => approveWorktreeCreation(input));
-  handleIpc("aegis:respond-tool-permission", (input) => respondToToolPermission(input));
-  handleIpc("aegis:open-task-in-ide", (input) => openTaskInIde(input));
-  handleIpc("aegis:approve-task-merge", (input) => approveTaskMerge(input));
-  handleIpc("aegis:reject-task", (input) => rejectTask(input));
-  handleIpc("aegis:keep-worktree", (input) => keepWorktree(input));
-  handleIpc("aegis:cancel-task", (input) => cancelTask(input));
-  handleIpc("aegis:set-response-feedback", (input) => setResponseFeedback(input));
-  handleIpc("aegis:set-window-chrome-theme", (input) => {
+  handleIpc("umbratic:list-chats", () => readChats());
+  handleIpc("umbratic:create-chat", (input) => createChat(input));
+  handleIpc("umbratic:update-chat-draft", (input) => updateChatDraft(input));
+  handleIpc("umbratic:delete-chat", (input) => deleteChat(input));
+  handleIpc("umbratic:get-notes", () => getNotes());
+  handleIpc("umbratic:update-notes", (input) => updateNotes(input));
+  handleIpc("umbratic:get-task", (input) => publicTaskById(input));
+  handleIpc("umbratic:refresh-task-review", (input) => refreshTaskReview(input));
+  handleIpc("umbratic:search-files", (input) => searchRepositoryFiles(input));
+  handleIpc("umbratic:pick-repository", () => pickRepository());
+  handleIpc("umbratic:pick-attachment-files", (input) => pickAttachmentFiles(input));
+  handleIpc("umbratic:save-pasted-attachments", (input) => savePastedAttachments(input));
+  handleIpc("umbratic:open-chat-attachment", (input) => openChatAttachment(input));
+  handleIpc("umbratic:get-repository", (input) => getRepository(input));
+  handleIpc("umbratic:list-repository-branches", (input) => listRepositoryBranches(input));
+  handleIpc("umbratic:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
+  handleIpc("umbratic:get-backend-status", () => getBackendStatus());
+  handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
+  handleIpc("umbratic:list-skills", () => listSkills());
+  handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
+  handleIpc("umbratic:create-skill", (input) => createSkill(input as { name?: string }));
+  handleIpc("umbratic:set-permission-mode", (mode) => setPermissionMode(mode));
+  handleIpc("umbratic:list-available-ides", () => listAvailableIdes());
+  handleIpc("umbratic:start-task", (input) => startTask(input));
+  handleIpc("umbratic:approve-worktree-creation", (input) => approveWorktreeCreation(input));
+  handleIpc("umbratic:respond-tool-permission", (input) => respondToToolPermission(input));
+  handleIpc("umbratic:open-task-in-ide", (input) => openTaskInIde(input));
+  handleIpc("umbratic:approve-task-merge", (input) => approveTaskMerge(input));
+  handleIpc("umbratic:reject-task", (input) => rejectTask(input));
+  handleIpc("umbratic:keep-worktree", (input) => keepWorktree(input));
+  handleIpc("umbratic:cancel-task", (input) => cancelTask(input));
+  handleIpc("umbratic:set-response-feedback", (input) => setResponseFeedback(input));
+  handleIpc("umbratic:set-window-chrome-theme", (input) => {
     const theme = input === "light" ? "light" : "dark";
     return setWindowChromeTheme(theme);
   });

@@ -1,13 +1,13 @@
-export type AegisProviderConfig = {
-  id: "local-endpoint" | "company-model";
+export type UmbraticProviderConfig = {
+  id: "company-endpoint" | "company-model";
   name: string;
   baseURL: string;
   apiKey: string;
   modelId: string;
-  mtls?: AegisProviderMtlsConfig;
+  mtls?: UmbraticProviderMtlsConfig;
 };
 
-export type AegisProviderMtlsConfig = {
+export type UmbraticProviderMtlsConfig = {
   caPath?: string;
   certPath?: string;
   keyPath?: string;
@@ -17,7 +17,7 @@ export type AegisProviderMtlsConfig = {
   pinnedServerCertificateSha256?: string;
 };
 
-export function assertAllowedProvider(config: AegisProviderConfig): AegisProviderConfig {
+export function assertAllowedProvider(config: UmbraticProviderConfig): UmbraticProviderConfig {
   const url = new URL(config.baseURL);
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const allowed =
@@ -27,7 +27,7 @@ export function assertAllowedProvider(config: AegisProviderConfig): AegisProvide
       hostname.startsWith("127.") ||
       /^ai\.[a-z0-9.-]+\.internal$/.test(hostname));
   if (!allowed) {
-    throw new Error(`provider baseURL not on the Aegis allowlist: ${config.baseURL}`);
+    throw new Error(`provider baseURL not on the Umbratic AI allowlist: ${config.baseURL}`);
   }
   return config;
 }

@@ -235,8 +235,8 @@ pre {
   width: 18px;
   height: 18px;
   background: #ffffff;
-  mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
-  -webkit-mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
+  mask: url("../../assets/brand/umbratic_logo_transparent.png") center / contain no-repeat;
+  -webkit-mask: url("../../assets/brand/umbratic_logo_transparent.png") center / contain no-repeat;
 }
 
 .topbarSpacer {
@@ -4101,8 +4101,8 @@ button.attachmentPreview:focus-visible {
   height: 30px;
   background: var(--faint);
   opacity: 0.95;
-  mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
-  -webkit-mask: url("../../assets/brand/aegis_logo_transparent.png") center / contain no-repeat;
+  mask: url("../../assets/brand/umbratic_logo_transparent.png") center / contain no-repeat;
+  -webkit-mask: url("../../assets/brand/umbratic_logo_transparent.png") center / contain no-repeat;
 }
 
 .confidentialMark {

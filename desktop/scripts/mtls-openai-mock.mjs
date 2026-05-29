@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as https from "node:https";
 
-const host = process.env.AEGIS_MTLS_MOCK_HOST || "localhost";
-const port = Number(process.env.AEGIS_MTLS_MOCK_PORT || "9443");
-const certDir = process.env.AEGIS_MTLS_CERT_DIR || ".aegis/mtls-local";
-const passphrase = process.env.AEGIS_MTLS_PASSPHRASE || "aegis-local-mtls";
-const model = process.env.AEGIS_MTLS_MOCK_MODEL || "aegis-mtls-local";
+const host = process.env.UMBRATIC_MTLS_MOCK_HOST || "localhost";
+const port = Number(process.env.UMBRATIC_MTLS_MOCK_PORT || "9443");
+const certDir = process.env.UMBRATIC_MTLS_CERT_DIR || ".umbratic/mtls-local";
+const passphrase = process.env.UMBRATIC_MTLS_PASSPHRASE || "umbratic-local-mtls";
+const model = process.env.UMBRATIC_MTLS_MOCK_MODEL || "umbratic-mtls-local";
 
 const options = {
   pfx: fs.readFileSync(`${certDir}/server.pfx`),
@@ -58,5 +58,5 @@ const server = https.createServer(options, async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Aegis mTLS mock listening at https://${host}:${port}/v1`);
+  console.log(`Umbratic AI mTLS mock listening at https://${host}:${port}/v1`);
 });

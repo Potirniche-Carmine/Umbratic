@@ -1,10 +1,10 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 
-export const aegisPolicyVersion = "aegis-local-mvp-2";
-export const aegisRunnerName = "AegisRunner";
-export const aegisRunnerVersion = "fork-1";
-export const aegisRunnerContractVersion = "aegis-runner-1";
+export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
+export const umbraticRunnerName = "UmbraticRunner";
+export const umbraticRunnerVersion = "fork-1";
+export const umbraticRunnerContractVersion = "umbratic-runner-1";
 
 export type CommandClass =
   | "read"
@@ -39,9 +39,9 @@ function pathInside(root: string, candidate: string): boolean {
 }
 
 const generatedRuntimePrefixes = [
-  ".aegis/runtime/",
-  ".aegis/build/",
-  ".aegis/tmp/",
+  ".umbratic/runtime/",
+  ".umbratic/build/",
+  ".umbratic/tmp/",
   ".venv/",
   "venv/",
   "node_modules/",

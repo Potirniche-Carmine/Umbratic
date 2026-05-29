@@ -1,12 +1,10 @@
-# Aegis Desktop PoV
+# Umbratic AI Desktop
 
-This is the first runnable slice of `First_Implementation_Test.md`.
+This is the Electron desktop app for Umbratic AI.
 
-## Prerequisites
-
-- Node.js 24+
-- An OpenAI-compatible model endpoint. Defaults to `http://127.0.0.1:1234/v1` and `google/gemma-4-e2b`; override with `AEGIS_MODEL_BASE_URL`, `AEGIS_MODEL_API_KEY`, and `AEGIS_MODEL_ID`.
-- The bundled `@aegis/runner` workspace package
+Umbratic AI is an enterprise coding-agent workbench. The desktop shell owns the
+developer workspace, task lifecycle, permission prompts, IDE handoff, and review
+flow while communicating with a company-managed private AI endpoint.
 
 ## Run
 
@@ -15,33 +13,15 @@ npm install
 npm run desktop:dev
 ```
 
-Helper tools such as `rg`, `fd`/`fdfind`, `tree-sitter`, `bat`/`batcat`, `jq`,
-`yq`, `cmake`, C compilers, build backends, and native debuggers are optional
-capabilities. The harness uses them when present and falls back when they are
-not. A future installer can bundle these helpers or offer to install them.
+The app uses an OpenAI-compatible company endpoint. Configure it before launch:
 
-The Electron main process owns folder selection, optional Git worktree creation, task metadata, IDE handoff, and approval checks. The first workflow is intentionally narrow: regular folders run in place with a baseline snapshot, while Git repositories can still use an isolated worktree. Aegis runs the hello-world verification loop with visible command events and renders an in-app unified diff review before approval.
+```powershell
+$env:UMBRATIC_MODEL_BASE_URL='https://ai.company.internal/v1'
+$env:UMBRATIC_MODEL_API_KEY='your-company-issued-secret'
+$env:UMBRATIC_MODEL_ID='your-company-model-id'
+npm run desktop:dev
+```
 
-`http://127.0.0.1:5173` is only the Vite web preview. It can render the UI, but it cannot use the Electron preload bridge, open folders, or talk to the spawned Aegis runner. Use `npm run desktop:dev` for the actual app.
-
-## Permissions and Sandbox Safety
-
-Normal permissions ask before worktree creation and tool actions. Bypass permissions automatically create the worktree and allow local edit/bash steps for the task, but final merge approval is still manual.
-
-Bypass mode does not bypass IPC validation, provider lockdown, worktree boundaries, blocked-file checks, secret scanning, or final merge approval.
-
-## Implemented
-
-- Hardened Electron shell with sandboxing, context isolation, navigation blocking, window-open blocking, permission denial, strict CSP, and IPC sender validation.
-- Minimal typed preload bridge with named task/worktree/approval methods.
-- OpenAI-compatible endpoint configuration, using the selected model id directly.
-- Worktree lifecycle for the hello-world proof: prompt, worktree, command stream, permission prompts, verification, IDE handoff, explicit approval, checks, merge, metadata, cleanup.
-- Approval checks for clean original branch, expected base commit, agent branch base, controlled worktree, latest passing verification, blocked files, secret scan, patch hash, commit, and fast-forward merge.
-- C/CMake-first runtime harness guidance with cross-platform install commands, CMake configure/build/test loops, compiler diagnostic repair, and sanitizer/debugger expectations.
-- Lightweight non-interactive debugger tool for workspace executables using gdb, lldb, or cdb.
-
-## Next Phase
-
-- Expand the bundled runner contract with richer task and tool events.
-- Add richer IDE detection for Visual Studio and JetBrains products.
-- Add repository-specific test configuration after the hello-world proof passes.
+`http://127.0.0.1:5173` is only the Vite web preview. It can render the UI, but
+it cannot pick folders, use the Electron preload bridge, or run real tasks. Use
+`npm run desktop:dev` for the actual app.

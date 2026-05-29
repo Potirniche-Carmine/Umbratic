@@ -4,7 +4,7 @@ export type RunnerHandle = {
   taskId: string;
 };
 
-export type AegisRunnerEvent =
+export type UmbraticRunnerEvent =
   | { type: "assistant.delta"; taskId: string; text: string; at: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string; at: string }
   | {
@@ -45,10 +45,10 @@ export type AegisRunnerEvent =
   | { type: "session.idle"; taskId: string; sessionId: string; at: string }
   | { type: "runner.error"; taskId: string; category: string; message: string; at: string };
 
-export interface AegisRunner {
+export interface UmbraticRunner {
   start(task: TaskRecord, model: LocalModelInfo, models: LocalModelInfo[]): Promise<RunnerHandle>;
   sendPrompt(handle: RunnerHandle, prompt: string): Promise<void>;
   replyPermission(handle: RunnerHandle, permissionId: string, allow: boolean): Promise<void>;
   abort(handle: RunnerHandle): void;
-  events(handle: RunnerHandle): AsyncIterable<AegisRunnerEvent>;
+  events(handle: RunnerHandle): AsyncIterable<UmbraticRunnerEvent>;
 }

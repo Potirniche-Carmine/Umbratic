@@ -7,13 +7,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
-import { aegisRunnerHardeningEnvironment, assertAegisRunnerConfig } from "./policy";
+import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import type { LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
 const nodeRequire = createRequire(__filename);
 
-export function buildAegisRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
+export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   return {
     taskId: task.id,
@@ -32,7 +32,7 @@ export function buildAegisRunnerConfig(task: TaskRecord, selectedModel: LocalMod
 }
 
 export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
-  const runtimeRoot = path.join(worktreePath, ".aegis", "runtime");
+  const runtimeRoot = path.join(worktreePath, ".umbratic", "runtime");
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   const pathEntries = [
     path.join(os.homedir(), ".local", "bin"),
@@ -44,7 +44,7 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     [pathKey]: pathEntries.join(path.delimiter),
-    AEGIS_PYTHON_RUNTIME_GUIDE: pythonRuntimeSystemPrompt,
+    UMBRATIC_PYTHON_RUNTIME_GUIDE: pythonRuntimeSystemPrompt,
     UV_INSTALL_DIR: path.join(runtimeRoot, "uv"),
     UV_UNMANAGED_INSTALL: path.join(runtimeRoot, "uv"),
     UV_NO_MODIFY_PATH: "1",
@@ -61,11 +61,11 @@ function existingRunnerCliPath(candidate: string): string | null {
 export function runnerBinaryPath(): string | null {
   const candidates: string[] = [];
   try {
-    candidates.push(nodeRequire.resolve("@aegis/runner/bin/aegis-runner.cjs"));
+    candidates.push(nodeRequire.resolve("@umbratic/runner/bin/umbratic-runner.cjs"));
   } catch {
-    /* The direct workspace fallback below covers source-tree runs. */
+    /* The direct workspace fallback covers source-tree runs. */
   }
-  candidates.push(path.resolve(__dirname, "../../runner/bin/aegis-runner.cjs"));
+  candidates.push(path.resolve(__dirname, "../../runner/bin/umbratic-runner.cjs"));
   for (const candidate of candidates) {
     const resolved = existingRunnerCliPath(candidate);
     if (resolved && fs.existsSync(path.resolve(path.dirname(resolved), "../dist/cli.js"))) {
@@ -82,7 +82,7 @@ async function freeLocalPort(): Promise<number> {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Unable to allocate an Aegis runner port.")));
+        server.close(() => reject(new Error("Unable to allocate an Umbratic runner port.")));
         return;
       }
       const port = address.port;
@@ -99,7 +99,7 @@ export function stopRunnerProcess(run: RunnerProcess) {
 }
 
 function runnerAuthHeader(run: RunnerProcess): string {
-  return `Basic ${Buffer.from(`aegis-runner:${run.password}`).toString("base64")}`;
+  return `Basic ${Buffer.from(`umbratic-runner:${run.password}`).toString("base64")}`;
 }
 
 function runnerUrl(run: RunnerProcess, route: string): URL {
@@ -124,7 +124,7 @@ export async function runnerRequest<T>(
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Aegis runner ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`);
+    throw new Error(`Umbratic runner ${response.status} ${response.statusText}${body ? `: ${body.slice(0, 400)}` : ""}`);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -132,22 +132,22 @@ export async function runnerRequest<T>(
   return response.json() as Promise<T>;
 }
 
-export async function startAegisRunnerServer(
+export async function startUmbraticRunnerServer(
   task: TaskRecord,
   model: LocalModelInfo,
 ): Promise<RunnerProcess> {
   const cliPath = runnerBinaryPath();
   if (!cliPath) {
-    throw new Error("Aegis runner is not built in the app bundle.");
+    throw new Error("Umbratic runner is not built in the app bundle.");
   }
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
-  const config = buildAegisRunnerConfig(task, model);
-  assertAegisRunnerConfig(config, model);
+  const config = buildUmbraticRunnerConfig(task, model);
+  assertUmbraticRunnerConfig(config, model);
   const env: NodeJS.ProcessEnv = {
     ...runtimeEnv(task.worktreePath),
-    ...aegisRunnerHardeningEnvironment(),
-    AEGIS_RUNNER_CONFIG: JSON.stringify(config),
+    ...umbraticRunnerHardeningEnvironment(),
+    UMBRATIC_RUNNER_CONFIG: JSON.stringify(config),
   };
   if ((process.versions as NodeJS.ProcessVersions & { electron?: string }).electron) {
     env.ELECTRON_RUN_AS_NODE = "1";
@@ -170,7 +170,7 @@ export async function startAegisRunnerServer(
         child,
         abortController: new AbortController(),
       });
-      reject(new Error(`Timed out waiting for Aegis runner to start.${output.trim() ? `\n${output.trim()}` : ""}`));
+      reject(new Error(`Timed out waiting for Umbratic runner to start.${output.trim() ? `\n${output.trim()}` : ""}`));
     }, 15000);
     let settled = false;
     const cleanup = () => {
@@ -182,7 +182,7 @@ export async function startAegisRunnerServer(
     };
     const onData = (chunk: Buffer) => {
       output += chunk.toString("utf8");
-      const match = output.match(/aegis runner listening on\s+(https?:\/\/[^\s]+)/);
+      const match = output.match(/(?:umbratic|umbratic) runner listening on\s+(https?:\/\/[^\s]+)/i);
       if (!match || settled) return;
       settled = true;
       cleanup();
@@ -198,7 +198,7 @@ export async function startAegisRunnerServer(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error(`Aegis runner exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
+      reject(new Error(`Umbratic runner exited before startup with code ${code ?? "unknown"}.${output.trim() ? `\n${output.trim()}` : ""}`));
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
@@ -248,7 +248,7 @@ export function beginRunnerEventStream(run: RunnerProcess, onEvent: (event: Reco
         signal: run.abortController.signal,
       });
       if (!response.ok || !response.body) {
-        throw new Error(`Aegis runner event stream failed with ${response.status} ${response.statusText}.`);
+        throw new Error(`Umbratic runner event stream failed with ${response.status} ${response.statusText}.`);
       }
       markReady();
       const reader = response.body.getReader();

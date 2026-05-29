@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { loadRunnerConfig, type RunnerConfig } from "./config.js";
-import type { AegisRunnerEvent } from "./events.js";
+import type { UmbraticRunnerEvent } from "./events.js";
 import { PermissionBroker } from "./permission.js";
 
 export type InputPart = { type: "text"; text: string } | { type: "image"; data_url: string };
@@ -52,11 +52,11 @@ export class SessionStore {
     return session;
   }
 
-  emit(event: AegisRunnerEvent) {
+  emit(event: UmbraticRunnerEvent) {
     this.events.emit("event", event);
   }
 
-  subscribe(listener: (event: AegisRunnerEvent) => void): () => void {
+  subscribe(listener: (event: UmbraticRunnerEvent) => void): () => void {
     this.events.on("event", listener);
     return () => this.events.off("event", listener);
   }

@@ -1,10 +1,10 @@
 {
-  "name": "@aegis/runner",
+  "name": "@umbratic/runner",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "aegis-runner": "bin/aegis-runner.cjs"
+    "umbratic-runner": "bin/umbratic-runner.cjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

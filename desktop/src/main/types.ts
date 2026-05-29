@@ -5,7 +5,7 @@ export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
-export type LocalProviderId = "local-endpoint";
+export type LocalProviderId = "company-endpoint";
 export type CommandClass =
   | "read"
   | "edit"
@@ -78,10 +78,10 @@ export type BackendDiagnostics = {
 export type TelemetryPolicyInfo = {
   mode: "developer_toggle" | "managed_required" | "managed_disabled";
   localEnabled: boolean;
-  syncEnabled: false;
+  syncEnabled: boolean;
   retentionDays: number;
   exportFormat: "redacted-json";
-  storage: "task-event-snapshots";
+  storage: "company-managed-telemetry" | "task-event-snapshots";
 };
 
 export type RuntimeDiagnostics = {
@@ -95,7 +95,7 @@ export type RuntimeDiagnostics = {
   };
   cmake: {
     profileVersion: string;
-    buildDir: ".aegis/build";
+    buildDir: ".umbratic/build";
   };
   debugger: {
     supported: Array<"gdb" | "lldb" | "cdb">;

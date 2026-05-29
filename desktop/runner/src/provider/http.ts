@@ -4,13 +4,13 @@ import * as http from "node:http";
 import * as https from "node:https";
 import * as tls from "node:tls";
 
-import type { AegisProviderMtlsConfig } from "./local.js";
+import type { UmbraticProviderMtlsConfig } from "./local.js";
 
 type RequestOptions = {
   method: "GET" | "POST";
   headers?: Record<string, string>;
   body?: string;
-  mtls?: AegisProviderMtlsConfig;
+  mtls?: UmbraticProviderMtlsConfig;
   signal?: AbortSignal;
 };
 
@@ -35,7 +35,7 @@ function certificateSha256(cert: tls.PeerCertificate): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-function tlsOptions(url: URL, mtls?: AegisProviderMtlsConfig): https.RequestOptions {
+function tlsOptions(url: URL, mtls?: UmbraticProviderMtlsConfig): https.RequestOptions {
   if (!mtls) return {};
   const pinned = mtls.pinnedServerCertificateSha256?.trim();
   const options: https.RequestOptions = {

@@ -1,130 +1,135 @@
-# Aegis Project Status
+# Umbratic AI
 
-Aegis is a local-first Electron desktop app for running coding-agent tasks in a
-controlled workspace. The intended product flow is:
+Umbratic AI is a secure enterprise desktop app for AI-assisted software work.
 
-1. Pick a repository or folder.
-2. Ask for a code change in chat.
-3. Aegis creates an isolated task workspace.
-4. The bundled Aegis runner runs the agent harness and tool calls.
-5. A configured OpenAI-compatible endpoint serves the model.
-6. The user reviews the result and explicitly approves the merge or keeps the
-   worktree.
+It is designed for companies that want the leverage of coding agents without
+sending proprietary code, prompts, telemetry, or engineering context to public
+AI services. A business runs its own Umbratic AI server infrastructure, such as
+a private rack or internal model cluster, and the desktop app communicates with
+that company-controlled environment over a hardened private connection.
 
+The goal is not to replace developers. The goal is to give developers a better
+workbench: one that helps them inspect, change, test, and review code faster
+while keeping final judgment in human hands.
 
-## Security Model
+## What It Is
 
-The security goal is to keep the renderer UI untrusted and make the Electron
-main process, plus its spawned local runner, the only trusted pieces that can
-touch the filesystem, shell, Git, or IDE handoff.
+Umbratic AI is a private coding-agent platform for engineering teams.
 
-Current protections:
+Developers work in the desktop app. The company operates the server-side model
+and telemetry environment. The app sends task context only to the configured
+company endpoint, receives agent actions and model responses from that private
+infrastructure, and keeps the developer in control of what changes are accepted.
 
-- Electron runs with `contextIsolation`, `sandbox`, `nodeIntegration: false`,
-  `webSecurity: true`, no `<webview>`, and blocked permission requests.
-- Navigation is restricted to the local app origin, and new windows are denied.
-- The renderer gets a small named `window.aegis` preload API instead of direct
-  `ipcRenderer`, raw shell, raw filesystem, or generic native requests.
-- IPC calls are checked against the expected sender origin before main-process
-  work runs.
-- Git and process operations are centralized in the main process and use
-  allowlisted flows.
-- Normal mode asks before worktree/tool actions. Bypass mode reduces prompts but
-  still does not bypass sandboxing, provider lockdown, path checks, blocked-file
-  policy, secret scanning, or final approval.
-- Final merge is always manual.
+The workflow is built around visibility. A developer can choose a repository or
+folder, ask for a change, watch the task progress, inspect command results, and
+review the final diff before approving anything.
 
-## Run
+## Why It Exists
+
+Most AI coding tools force a bad tradeoff: productivity or confidentiality.
+Umbratic AI is meant to remove that tradeoff for businesses that need privacy,
+control, and auditability.
+
+The product is built around a few beliefs:
+
+- Developers should be empowered, not replaced.
+- Company code and telemetry should stay under company control.
+- The model endpoint should be private, explicit, and governed by the business.
+- Agent work should be reviewable before it becomes real work.
+- Telemetry should help the company improve its own workflows and models without
+  leaking engineering context outside the organization.
+
+## Enterprise Architecture
+
+Umbratic AI is intended to run as a company-owned system:
+
+- **Desktop app:** The developer-facing workspace for chats, tasks, review, and
+  approval.
+- **Private server endpoint:** The company-managed model gateway or internal AI
+  service that the app talks to.
+- **Secure transport:** A confidential channel between the app and the company
+  server, with support for hardened private endpoint configuration.
+- **Company telemetry store:** Task outcomes, approvals, feedback, and
+  operational signals live on the company's server.
+- **Periodic fine-tuning loop:** Every few months, the company can use its own
+  telemetry to adapt models or workflows to its engineering standards, codebase
+  patterns, and review expectations.
+
+## What Developers Can Do
+
+- Open a project or repository.
+- Start a coding task from a chat prompt.
+- Attach relevant files for context.
+- Let the agent inspect, edit, and test inside the selected workspace.
+- Watch task progress through visible events.
+- Review changed files in the app.
+- Open the task in an IDE for manual inspection.
+- Approve, reject, or keep the generated work.
+- Give feedback that helps the company improve future model behavior.
+
+## The Workflow
+
+1. A developer selects the project they are working on.
+2. They describe the change, fix, or investigation.
+3. Umbratic AI sends the task through the configured private company endpoint.
+4. The company-managed AI infrastructure performs the agent work.
+5. The developer reviews the resulting diff and task evidence.
+6. The developer decides whether to accept, revise, or discard the work.
+7. Company-owned telemetry records the outcome for audit, analytics, and future
+   improvement.
+
+## Secure, Confidential, Private
+
+Umbratic AI is designed for organizations that need strong boundaries around
+their engineering data.
+
+The desktop app should communicate only with the company's approved endpoint.
+Telemetry belongs to the company. Fine-tuning and evaluation should happen from
+that company's own data, according to that company's governance rules.
+
+This keeps the AI system close to the business: private code stays private,
+team-specific feedback becomes useful, and improvements compound around how the
+company actually builds software.
+
+## How To Run It
+
+Install dependencies:
 
 ```powershell
 npm install
+```
+
+Start the desktop app:
+
+```powershell
 npm run desktop:dev
 ```
 
-The desktop UI does not require a host toolchain just to render or run in
-development. The backend knows to prefer helper tools such as `rg`,
-`fd`/`fdfind`, `tree-sitter`, and `bat`/`batcat` when they are available, and to
-fall back cleanly when they are not. `jq`, `yq`, `cmake`, C compilers, build
-backends, and native debuggers are optional capabilities the harness can use
-when present. A future packaged installer can bundle these helpers or offer to
-install them for the user.
-
-Use the Electron app for real task flows. The Vite browser preview can show the
-UI, but it cannot use the preload bridge, pick folders, run commands, or talk to
-the local agent backend.
-
-## mTLS Direct Endpoint Plan
-
-`Comm_Option_mTLS_Direct.md` can be implemented in two phases. The local phase
-proves that Aegis can talk to an OpenAI-compatible endpoint over mutually
-authenticated TLS. The server phase swaps the disposable local certs and mock
-endpoint for production PKI material and the internal model host.
-
-Needed for production:
-
-- Private CA with an offline root and online intermediate.
-- Server certificate for the internal model hostname, such as
-  `ai.company.internal`.
-- Client certificate issued to the Aegis device or user.
-- Reverse proxy in front of the model endpoint that requires client certs.
-- Revocation story: short-lived client certs plus a server-side kill list or
-  CRL/OCSP.
-- Aegis credential storage: PFX/file config for local testing, then OS
-  keychain or TPM/Secure Enclave-backed keys for production.
-- Optional server certificate pin via `AEGIS_MODEL_TLS_PIN_SHA256`.
-
-What is already supported locally:
-
-- Main-process `/models` healthcheck over HTTPS with client certs.
-- Runner chat-completion streaming over HTTPS with client certs.
-- Local cert generation and an mTLS OpenAI-compatible mock endpoint.
-- Future internal endpoint allowlist for `https://ai.*.internal` when mTLS
-  config is present.
-
-When the real server is available, keep the same environment variable shape and
-replace only the local values: `AEGIS_MODEL_BASE_URL`, CA path, client
-credential path, passphrase or keychain-backed credential, optional server name,
-and optional pin.
-
-## Local mTLS Endpoint Smoke Test
-
-The OpenAI-compatible endpoint can be reached over HTTPS with a client
-certificate. This is the local stand-in for `Comm_Option_mTLS_Direct.md`; it
-uses disposable test certs under `.aegis/`.
+Configure the company endpoint before starting the app:
 
 ```powershell
-npm run mtls:certs
-npm run mtls:mock
-```
-
-In another shell, start Aegis against the mock endpoint:
-
-```powershell
-$env:AEGIS_MODEL_BASE_URL='https://localhost:9443/v1'
-$env:AEGIS_MODEL_ID='aegis-mtls-local'
-$env:AEGIS_MODEL_MTLS_CA_PATH='C:\path\to\Aegis\desktop\.aegis\mtls-local\ca.pem'
-$env:AEGIS_MODEL_MTLS_PFX_PATH='C:\path\to\Aegis\desktop\.aegis\mtls-local\client.pfx'
-$env:AEGIS_MODEL_MTLS_PASSPHRASE='aegis-local-mtls'
+$env:UMBRATIC_MODEL_BASE_URL='https://ai.company.internal/v1'
+$env:UMBRATIC_MODEL_API_KEY='your-company-issued-secret'
+$env:UMBRATIC_MODEL_ID='your-company-model-id'
 npm run desktop:dev
 ```
 
-For a real server later, keep the same variables but replace the base URL, CA,
-client credential, and optional `AEGIS_MODEL_TLS_SERVER_NAME` /
-`AEGIS_MODEL_TLS_PIN_SHA256` values with the issued production material.
+For private mTLS deployments, configure the issued CA and client credential:
 
-## Known UI Stubs
+```powershell
+$env:UMBRATIC_MODEL_MTLS_CA_PATH='C:\path\to\ca.pem'
+$env:UMBRATIC_MODEL_MTLS_PFX_PATH='C:\path\to\client.pfx'
+$env:UMBRATIC_MODEL_MTLS_PASSPHRASE='credential-passphrase'
+$env:UMBRATIC_MODEL_TLS_SERVER_NAME='ai.company.internal'
+```
 
-These settings surfaces are wired up visually but are not yet enforced at
-runtime. They need to be implemented:
+## Notes
 
-- **Settings → Tools** — toggling `read`, `write`, `edit`, `search`,
-  `command`, or `debugger` does not yet filter the runner's `toolSpecs`. The runner still
-  exposes every tool to the model; the UI toggles are local React state only.
-- **Settings → Account → Continue with Google / Microsoft** — SSO buttons are
-  UI placeholders. Aegis runs entirely in local mode today.
-- **Settings → Skills (Managed section)** — server/company-managed skills are
-  not yet delivered from a remote source; the section currently shows an empty
-  state describing the planned behavior.
-- **Settings → Skills (Your skills toggles)** — per-skill enable toggles are
-  local React state. Loading skills from `~/.aegis/skills/`, the **Open folder**
-  button, and **New skill** scaffolding are all real.
+Use `npm run desktop:dev` for the real app experience. The Vite browser preview
+can render the interface, but it cannot pick folders, use the Electron preload
+bridge, run tasks, or talk to the runner the same way the desktop app can.
+
+Umbratic AI is still early, but the direction is clear: secure company-owned AI
+infrastructure that makes developers more capable while keeping engineering data
+confidential and private.

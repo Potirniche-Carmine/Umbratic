@@ -1,4 +1,4 @@
-import { assertAllowedProvider, type AegisProviderConfig } from "./provider/local.js";
+import { assertAllowedProvider, type UmbraticProviderConfig } from "./provider/local.js";
 
 export type PermissionMode = "normal" | "bypass";
 
@@ -7,7 +7,7 @@ export type RunnerConfig = {
   cwd: string;
   workspaceMode?: "local" | "worktree";
   permissionMode: PermissionMode;
-  provider: AegisProviderConfig;
+  provider: UmbraticProviderConfig;
   system?: string;
 };
 
@@ -28,8 +28,8 @@ function optionalString(value: unknown): string | undefined {
 }
 
 export function loadRunnerConfig(): RunnerConfig {
-  const raw = process.env.AEGIS_RUNNER_CONFIG;
-  if (!raw) throw new Error("AEGIS_RUNNER_CONFIG is required");
+  const raw = process.env.UMBRATIC_RUNNER_CONFIG;
+  if (!raw) throw new Error("UMBRATIC_RUNNER_CONFIG is required");
   const config = asRecord(JSON.parse(raw) as unknown);
   const provider = asRecord(config.provider);
   const mtls = config.provider && "mtls" in provider && provider.mtls ? asRecord(provider.mtls) : undefined;
@@ -40,7 +40,7 @@ export function loadRunnerConfig(): RunnerConfig {
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     system: typeof config.system === "string" ? config.system : undefined,
     provider: assertAllowedProvider({
-      id: provider.id === "company-model" ? "company-model" : "local-endpoint",
+      id: provider.id === "company-model" ? "company-model" : "company-endpoint",
       name: stringValue(provider.name, "provider.name"),
       baseURL: stringValue(provider.baseURL, "provider.baseURL").replace(/\/+$/, ""),
       apiKey: typeof provider.apiKey === "string" ? provider.apiKey : "local",

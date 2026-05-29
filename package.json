@@ -1,5 +1,5 @@
 {
-  "name": "aegis-local-gemma-pov",
+  "name": "umbratic-ai",
   "private": true,
   "version": "0.1.0",
   "workspaces": [
@@ -7,9 +7,9 @@
     "desktop/runner"
   ],
   "scripts": {
-    "desktop:dev": "npm --workspace @aegis/desktop run dev",
-    "desktop:build": "npm --workspace @aegis/desktop run build",
-    "mtls:certs": "npm --workspace @aegis/desktop run mtls:certs",
-    "mtls:mock": "npm --workspace @aegis/desktop run mtls:mock"
+    "desktop:dev": "npm --workspace @umbratic/desktop run dev",
+    "desktop:build": "npm --workspace @umbratic/desktop run build",
+    "mtls:certs": "npm --workspace @umbratic/desktop run mtls:certs",
+    "mtls:mock": "npm --workspace @umbratic/desktop run mtls:mock"
   }
 }

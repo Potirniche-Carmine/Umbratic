@@ -1,6 +1,6 @@
 import type { CommandClass } from "./policy.js";
 
-export type AegisRunnerEvent =
+export type UmbraticRunnerEvent =
   | { type: "assistant.delta"; taskId: string; text: string; at: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string; at: string }
   | {

@@ -1,4 +1,4 @@
-import { nowIso, type AegisRunnerEvent } from "./events.js";
+import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 
 export type PermissionDecision = "allow" | "deny";
 
@@ -11,7 +11,7 @@ type PendingPermission = {
 export class PermissionBroker {
   private pending = new Map<string, PendingPermission>();
 
-  constructor(private readonly emit: (event: AegisRunnerEvent) => void) {}
+  constructor(private readonly emit: (event: UmbraticRunnerEvent) => void) {}
 
   request(input: {
     taskId: string;

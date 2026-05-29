@@ -4,27 +4,27 @@ import * as path from "node:path";
 import type { CommandClass, LocalModelInfo, LocalProviderId, RuntimeDiagnostics, RuntimeProfileId, TelemetryPolicyInfo } from "./types";
 import { normalizeRelativePath, pathInside } from "./utils";
 
-export const aegisPolicyVersion = "aegis-local-mvp-2";
-export const aegisRunnerName = "AegisRunner";
-export const aegisRunnerVersion = "fork-1";
-export const aegisRunnerContractVersion = "aegis-runner-1";
-export const allowedLocalProviderIds: LocalProviderId[] = ["local-endpoint"];
+export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
+export const umbraticRunnerName = "UmbraticRunner";
+export const umbraticRunnerVersion = "fork-1";
+export const umbraticRunnerContractVersion = "umbratic-runner-1";
+export const allowedLocalProviderIds: LocalProviderId[] = ["company-endpoint"];
 export const pythonRuntimeProfileVersion = "python-uv-venv-1";
-export const cmakeRuntimeProfileVersion = "cmake-aegis-build-1";
+export const cmakeRuntimeProfileVersion = "cmake-umbratic-build-1";
 
 export const telemetryPolicyInfo: TelemetryPolicyInfo = {
-  mode: "developer_toggle",
-  localEnabled: true,
-  syncEnabled: false,
+  mode: "managed_required",
+  localEnabled: false,
+  syncEnabled: true,
   retentionDays: 30,
   exportFormat: "redacted-json",
-  storage: "task-event-snapshots",
+  storage: "company-managed-telemetry",
 };
 
 const generatedRuntimePrefixes = [
-  ".aegis/runtime/",
-  ".aegis/build/",
-  ".aegis/tmp/",
+  ".umbratic/runtime/",
+  ".umbratic/build/",
+  ".umbratic/tmp/",
   ".venv/",
   "venv/",
   "node_modules/",
@@ -260,29 +260,29 @@ export function isMtlsInternalModelUrl(value: string): boolean {
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
-    throw new Error(`Aegis runner hardening assertion failed: ${message}`);
+    throw new Error(`Umbratic runner hardening assertion failed: ${message}`);
   }
 }
 
-export function assertAegisRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
+export function assertUmbraticRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
   assert(typeof config.taskId === "string" && config.taskId.length > 0, "task id must be set");
   assert(typeof config.cwd === "string" && config.cwd.length > 0, "cwd must be set");
   assert(config.permissionMode === "normal", "permissions must be mediated by the desktop app");
-  assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Aegis local allowlist");
+  assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic AI private endpoint allowlist");
 
   const provider = config.provider as Record<string, unknown> | undefined;
   const providerMtls = provider?.mtls;
   const hasMtlsConfig = !!providerMtls && typeof providerMtls === "object" && !Array.isArray(providerMtls);
   assert(
-    isLocalhostUrl(selectedModel.baseUrl) || (isMtlsInternalModelUrl(selectedModel.baseUrl) && hasMtlsConfig),
-    "model base URL must be localhost, or an mTLS-configured ai.*.internal HTTPS endpoint",
+    isMtlsInternalModelUrl(selectedModel.baseUrl) && hasMtlsConfig,
+    "model base URL must be an mTLS-configured ai.*.internal HTTPS endpoint",
   );
-  assert(provider?.id === selectedModel.providerId, "provider id must match the selected local provider");
+  assert(provider?.id === selectedModel.providerId, "provider id must match the selected private endpoint");
   assert(provider?.modelId === selectedModel.modelId, "model must match the configured endpoint model");
   assert(provider?.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
 }
 
-export function aegisRunnerHardeningEnvironment(): NodeJS.ProcessEnv {
+export function umbraticRunnerHardeningEnvironment(): NodeJS.ProcessEnv {
   return {
     NO_PROXY: "127.0.0.1,localhost,::1",
     no_proxy: "127.0.0.1,localhost,::1",
@@ -294,14 +294,14 @@ export function runtimeDiagnostics(): RuntimeDiagnostics {
     python: {
       profileVersion: pythonRuntimeProfileVersion,
       barePythonVerification: "denied",
-      generatedPaths: [".venv", "__pycache__", ".pyc", ".aegis/runtime"],
+      generatedPaths: [".venv", "__pycache__", ".pyc", ".umbratic/runtime"],
     },
     markdown: {
       docsOnlyClassification: "enabled",
     },
     cmake: {
       profileVersion: cmakeRuntimeProfileVersion,
-      buildDir: ".aegis/build",
+      buildDir: ".umbratic/build",
     },
     debugger: {
       supported: ["gdb", "lldb", "cdb"],

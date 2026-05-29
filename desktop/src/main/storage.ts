@@ -2,7 +2,7 @@ import { app } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { aegisPolicyVersion, aegisRunnerName, aegisRunnerVersion, runtimeProfileForPrompt } from "./policy";
+import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import type { ChatRecord, LocalProviderId, RepositoryInfo, TaskRecord, UserNotes } from "./types";
 
 type JsonCacheEntry = {
@@ -117,9 +117,9 @@ export function readTasks(): TaskRecord[] {
       workspaceKind: task.workspaceKind ?? "git",
       workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
       reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
-      runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : aegisRunnerName,
-      runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : aegisRunnerVersion,
-      policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : aegisPolicyVersion,
+      runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
+      runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
+      policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
       runtimeProfile:
         task.runtimeProfile === "python" ||
         task.runtimeProfile === "markdown" ||
@@ -167,7 +167,7 @@ export function readSettings(): { selectedModel?: { providerId: LocalProviderId;
   const settings = readJsonFile<{ selectedModel?: { providerId?: string; modelId?: string } }>(settingsPath(), {});
   const modelId = settings.selectedModel?.modelId;
   if (typeof modelId === "string" && modelId.trim()) {
-    return { selectedModel: { providerId: "local-endpoint", modelId: modelId.trim() } };
+    return { selectedModel: { providerId: "company-endpoint", modelId: modelId.trim() } };
   }
   return {};
 }

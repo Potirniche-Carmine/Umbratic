@@ -1,4 +1,4 @@
-import { aegisRunnerName, aegisRunnerVersion } from "./policy.js";
+import { umbraticRunnerName, umbraticRunnerVersion } from "./policy.js";
 import { listen } from "./server.js";
 
 function parseArgs(argv: string[]): { command?: string; port?: string; password?: string; hostname?: string } {
@@ -16,8 +16,8 @@ function parseArgs(argv: string[]): { command?: string; port?: string; password?
 const args = parseArgs(process.argv.slice(2));
 
 if (args.command !== "serve") {
-  console.error(`${aegisRunnerName} ${aegisRunnerVersion}`);
-  console.error("usage: aegis-runner serve --port=<port> --password=<password>");
+  console.error(`${umbraticRunnerName} ${umbraticRunnerVersion}`);
+  console.error("usage: umbratic-runner serve --port=<port> --password=<password>");
   process.exit(1);
 }
 
@@ -29,7 +29,7 @@ if (!args.password) {
 const port = args.port ? Number(args.port) : 0;
 const hostname = args.hostname || "127.0.0.1";
 const server = await listen({ hostname, port, password: args.password });
-console.error(`aegis runner listening on ${server.url}`);
+console.error(`umbratic runner listening on ${server.url}`);
 
 process.once("SIGINT", () => void server.close().finally(() => process.exit(0)));
 process.once("SIGTERM", () => void server.close().finally(() => process.exit(0)));
