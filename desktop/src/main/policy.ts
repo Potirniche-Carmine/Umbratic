@@ -258,6 +258,15 @@ export function isMtlsInternalModelUrl(value: string): boolean {
   }
 }
 
+export function isHttpModelUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(`Umbratic runner hardening assertion failed: ${message}`);
@@ -271,13 +280,8 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic AI private endpoint allowlist");
 
   const provider = config.provider as Record<string, unknown> | undefined;
-  const providerMtls = provider?.mtls;
-  const hasMtlsConfig = !!providerMtls && typeof providerMtls === "object" && !Array.isArray(providerMtls);
-  assert(
-    isMtlsInternalModelUrl(selectedModel.baseUrl) && hasMtlsConfig,
-    "model base URL must be an mTLS-configured ai.*.internal HTTPS endpoint",
-  );
-  assert(provider?.id === selectedModel.providerId, "provider id must match the selected private endpoint");
+  assert(isHttpModelUrl(selectedModel.baseUrl), "model base URL must be an HTTP(S) endpoint");
+  assert(provider?.id === selectedModel.providerId, "provider id must match the selected endpoint");
   assert(provider?.modelId === selectedModel.modelId, "model must match the configured endpoint model");
   assert(provider?.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
 }

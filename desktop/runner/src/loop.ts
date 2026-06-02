@@ -85,12 +85,15 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
 }
 
 async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent) => void): Promise<StreamAccumulator> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (session.config.provider.apiKey.trim()) {
+    headers.Authorization = `Bearer ${session.config.provider.apiKey}`;
+  }
   const response = await modelHttpRequest(chatCompletionsUrl(session.config.provider.baseURL), {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${session.config.provider.apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       model: session.config.provider.modelId,
       messages: session.messages,

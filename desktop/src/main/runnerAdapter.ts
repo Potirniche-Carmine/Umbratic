@@ -8,6 +8,7 @@ import * as path from "node:path";
 
 import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
+import { readModelEndpointSettings } from "./storage";
 import type { LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
@@ -15,6 +16,7 @@ const nodeRequire = createRequire(__filename);
 
 export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
+  const endpointSettings = readModelEndpointSettings();
   return {
     taskId: task.id,
     cwd: task.worktreePath,
@@ -24,9 +26,9 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
       id: selectedModel.providerId,
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
-      apiKey: catalogProvider?.apiKey ?? "local",
+      apiKey: endpointSettings.secret.trim(),
       modelId: selectedModel.modelId,
-      mtls: catalogProvider?.mtls,
+      mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
     },
   };
 }

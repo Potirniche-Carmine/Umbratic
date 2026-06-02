@@ -52,6 +52,13 @@ type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
 type LocalProviderId = "company-endpoint";
+type ModelEndpointMode = "local" | "server";
+type ModelEndpointSettings = {
+  mode: ModelEndpointMode;
+  baseUrl: string;
+  modelId: string;
+  secret: string;
+};
 type CommandClass =
   | "read"
   | "edit"
@@ -345,6 +352,8 @@ type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
+  getModelEndpointSettings(): Promise<ModelEndpointSettings>;
+  saveModelEndpointSettings(input: ModelEndpointSettings): Promise<{ settings: ModelEndpointSettings; status: BackendStatus }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -386,6 +395,12 @@ const markdownPreviewCharacterLimit = 60000;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
+const defaultLocalEndpointSettings: ModelEndpointSettings = {
+  mode: "local",
+  baseUrl: "http://127.0.0.1:11434/v1",
+  modelId: "gemma4:e4b",
+  secret: "",
+};
 const defaultAppearanceSettings: AppearanceSettings = {
   theme: "system",
   uiFont: "System UI",
@@ -456,20 +471,22 @@ function writePreviewNotes(content: string): UserNotes {
   return notes;
 }
 
-function readUiServerSettings(): { baseUrl: string; modelId: string; secret: string } {
+function readUiServerSettings(): ModelEndpointSettings {
   try {
     const settings = JSON.parse(window.localStorage.getItem(serverSettingsKey) ?? "{}") as Record<string, unknown>;
+    const mode = settings.mode === "server" ? "server" : "local";
     return {
-      baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : "",
-      modelId: typeof settings.modelId === "string" ? settings.modelId : "",
+      mode,
+      baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : defaultLocalEndpointSettings.baseUrl,
+      modelId: typeof settings.modelId === "string" ? settings.modelId : defaultLocalEndpointSettings.modelId,
       secret: typeof settings.secret === "string" ? settings.secret : "",
     };
   } catch {
-    return { baseUrl: "", modelId: "", secret: "" };
+    return defaultLocalEndpointSettings;
   }
 }
 
-function writeUiServerSettings(settings: { baseUrl: string; modelId: string; secret: string }) {
+function writeUiServerSettings(settings: ModelEndpointSettings) {
   window.localStorage.setItem(serverSettingsKey, JSON.stringify(settings));
 }
 
@@ -668,6 +685,11 @@ const fallbackApi: DesktopApi = {
     },
     message: "Electron preload is not available in this browser preview.",
   }),
+  getModelEndpointSettings: async () => readUiServerSettings(),
+  saveModelEndpointSettings: async (input) => {
+    writeUiServerSettings(input);
+    return { settings: input, status: await fallbackApi.getBackendStatus() };
+  },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   listSkills: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -2237,6 +2259,7 @@ function App() {
   }, [composerItems]);
 
   useEffect(() => {
+    void loadModelEndpointSettings();
     void refreshStatus();
     void loadNotes();
     void loadAvailableIdes();
@@ -2345,6 +2368,7 @@ function App() {
   useEffect(() => {
     if (!backend?.model) return;
     setServerSettings((current) => ({
+      mode: current.mode,
       baseUrl: current.baseUrl || backend.model?.baseUrl || "",
       modelId: current.modelId || backend.model?.modelId || "",
       secret: current.secret,
@@ -2586,15 +2610,56 @@ function App() {
     }
   }
 
-  function saveServerSettings() {
+  async function loadModelEndpointSettings() {
+    try {
+      setServerSettings(await api.getModelEndpointSettings());
+    } catch (cause) {
+      setServerSettingsMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  function updateServerMode(mode: ModelEndpointMode) {
+    setServerSettings((current) => ({
+      mode,
+      baseUrl:
+        current.mode === mode
+          ? current.baseUrl
+          : mode === "local"
+            ? defaultLocalEndpointSettings.baseUrl
+            : "",
+      modelId:
+        current.mode === mode
+          ? current.modelId
+          : mode === "local"
+            ? defaultLocalEndpointSettings.modelId
+            : "",
+      secret: current.mode === mode ? current.secret : mode === "local" ? "" : current.secret,
+    }));
+    setServerSettingsMessage(null);
+  }
+
+  async function saveServerSettings() {
     const next = {
+      mode: serverSettings.mode,
       baseUrl: serverSettings.baseUrl.trim(),
       modelId: serverSettings.modelId.trim(),
       secret: serverSettings.secret,
     };
-    writeUiServerSettings(next);
-    setServerSettings(next);
-    setServerSettingsMessage("Saved in this UI. Runner wiring still uses the configured environment for now.");
+    if (!next.baseUrl || !next.modelId) {
+      setServerSettingsMessage("Add a URL and model ID before saving.");
+      return;
+    }
+    setServerSettingsMessage("Saving...");
+    try {
+      const result = await api.saveModelEndpointSettings(next);
+      setServerSettings(result.settings);
+      setBackend(result.status);
+      setServerSettingsMessage(
+        result.status.endpoint === "ready" ? "Saved and connected." : result.status.providers[0]?.message ?? "Saved.",
+      );
+    } catch (cause) {
+      setServerSettingsMessage(String(cause instanceof Error ? cause.message : cause));
+    }
   }
 
   function updateAppearanceSettings(patch: Partial<AppearanceSettings>) {
@@ -2638,9 +2703,9 @@ function App() {
     const detail = status?.providers[0]?.message || status?.message;
     const model = status?.model?.modelId ? `\n\nConfigured model: \`${status.model.modelId}\`.` : "";
     const message = [
-      "I can't reach the LLM server yet, so I didn't start this run.",
+      "I can't reach the LLM endpoint yet, so I didn't start this run.",
       "",
-      "Check **Settings > Server** and confirm the server URL/IP, model ID, and secret, then try again.",
+      "Check **Settings > Server**, choose Local or Server, and confirm the URL and model ID.",
       model,
       detail ? `\nConnection detail: ${detail}` : "",
     ].join("\n");
@@ -2705,7 +2770,7 @@ function App() {
     setTelemetryMessage(null);
     try {
       const result = await api.exportTelemetry();
-      setTelemetryMessage(result.ok ? `Exported to ${result.path}` : result.message);
+      setTelemetryMessage(result.ok ? "Telemetry sample exported." : result.message);
     } catch (cause) {
       setTelemetryMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -3694,7 +3759,13 @@ function App() {
         <div className="sidebarFooter">
           <section className={`todoPanel ${todoEditing ? "isEditing" : ""}`}>
             <div className="todoHeader">
-              <h2>To Do</h2>
+              <div
+                className="todoTitle"
+                tabIndex={0}
+                aria-label="Notes. Local personal notes. Not tracked or shared."
+              >
+                <h2>Notes</h2>
+              </div>
               <span className="todoSaveState">{todoSaving ? "Saving" : ""}</span>
               <button
                 className="todoEditButton"
@@ -4436,7 +4507,7 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Account</h3>
-                      <p>Sign in with your company account to connect Umbratic AI to your private enterprise environment.</p>
+                      <p>Sign in is required to use Umbratic AI.</p>
                     </div>
 
                     <div className="accountCard">
@@ -4444,18 +4515,18 @@ function App() {
                         <User size={22} />
                       </div>
                       <div className="accountIdentity">
-                        <strong>Company developer</strong>
-                        <em>Not signed in</em>
+                        <strong>Developer</strong>
+                        <em>Sign in required</em>
                       </div>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Sign in with</h4>
-                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Your company endpoint can still be configured in Settings > Server.")}>
+                      <h4>Authentication</h4>
+                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
                         <GoogleMark />
                         <span>Continue with Google</span>
                       </button>
-                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("SSO is coming soon. Your company endpoint can still be configured in Settings > Server.")}>
+                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
                         <MicrosoftMark />
                         <span>Continue with Microsoft</span>
                       </button>
@@ -4555,17 +4626,30 @@ function App() {
                     className="settingsPanel"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      saveServerSettings();
+                      void saveServerSettings();
                     }}
                   >
                     <div className="settingsPanelHead">
                       <h3>Server</h3>
-                      <p>OpenAI-compatible endpoint details for your company's private AI server.</p>
+                      <p>Choose a local model runner or an OpenAI-compatible server endpoint.</p>
                     </div>
 
-                    <div className="settingsNotice">
-                      <TriangleAlert size={14} />
-                      <span>UI only for now. These values are saved here but are not wired into runner launches yet.</span>
+                    <div className="appearanceOptionGrid">
+                      {[
+                        { id: "local" as const, label: "Local", icon: <TerminalSquare size={15} /> },
+                        { id: "server" as const, label: "Server", icon: <PanelRight size={15} /> },
+                      ].map((option) => (
+                        <button
+                          className={serverSettings.mode === option.id ? "isActive" : ""}
+                          key={option.id}
+                          type="button"
+                          aria-pressed={serverSettings.mode === option.id}
+                          onClick={() => updateServerMode(option.id)}
+                        >
+                          {option.icon}
+                          <span>{option.label}</span>
+                        </button>
+                      ))}
                     </div>
 
                     <div className="settingsList">
@@ -4590,41 +4674,60 @@ function App() {
                         <span>Active endpoint</span>
                         <strong>{backend?.model?.baseUrl ?? backend?.providers[0]?.baseUrl ?? "Unknown"}</strong>
                       </div>
+                      <div className="settingsListRow">
+                        <span>Models found</span>
+                        <strong>{backend?.models.length ?? 0}</strong>
+                      </div>
                     </div>
 
                     <label className="settingsField">
-                      <span>Server URL or IP</span>
+                      <span>{serverSettings.mode === "local" ? "Local URL" : "Server URL or IP"}</span>
                       <input
                         type="text"
                         value={serverSettings.baseUrl}
                         onChange={(event) =>
                           setServerSettings((current) => ({ ...current, baseUrl: event.target.value }))
                         }
-                        placeholder="https://ai.company.internal/v1"
+                        placeholder={serverSettings.mode === "local" ? "http://127.0.0.1:11434/v1" : "https://your-endpoint.example/v1"}
                       />
                     </label>
 
                     <label className="settingsField">
                       <span>Model ID</span>
-                      <input
-                        type="text"
-                        value={serverSettings.modelId}
-                        onChange={(event) =>
-                          setServerSettings((current) => ({ ...current, modelId: event.target.value }))
-                        }
-                        placeholder="google/gemma-4-e2b"
-                      />
+                      {backend?.models.length ? (
+                        <select
+                          value={serverSettings.modelId}
+                          onChange={(event) =>
+                            setServerSettings((current) => ({ ...current, modelId: event.target.value }))
+                          }
+                        >
+                          {backend.models.map((model) => (
+                            <option key={`${model.baseUrl}:${model.modelId}`} value={model.modelId}>
+                              {model.modelId}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={serverSettings.modelId}
+                          onChange={(event) =>
+                            setServerSettings((current) => ({ ...current, modelId: event.target.value }))
+                          }
+                          placeholder={serverSettings.mode === "local" ? "gemma4:e4b" : "model-id"}
+                        />
+                      )}
                     </label>
 
                     <label className="settingsField">
-                      <span>Secret</span>
+                      <span>{serverSettings.mode === "local" ? "API key (optional)" : "Secret"}</span>
                       <input
                         type="password"
                         value={serverSettings.secret}
                         onChange={(event) =>
                           setServerSettings((current) => ({ ...current, secret: event.target.value }))
                         }
-                        placeholder="API key or shared secret"
+                        placeholder={serverSettings.mode === "local" ? "Usually blank for Ollama" : "API key or shared secret"}
                         autoComplete="off"
                       />
                     </label>
@@ -4805,22 +4908,10 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
-                      <p>Confidential task telemetry owned by your company and used to improve its private AI system.</p>
-                    </div>
-
-                    <div className="settingsList">
-                      <div className="settingsListRow">
-                        <span>Mode</span>
-                        <strong>{backend?.diagnostics.telemetry.syncEnabled ? "Company-managed" : "Off"}</strong>
-                      </div>
-                      <div className="settingsListRow">
-                        <span>Retention</span>
-                        <strong>{backend?.diagnostics.telemetry.retentionDays ?? 30} days</strong>
-                      </div>
-                      <div className="settingsListRow">
-                        <span>Destination</span>
-                        <strong>{backend?.diagnostics.telemetry.syncEnabled ? "Company server" : "Disabled"}</strong>
-                      </div>
+                      <p>
+                        Stored only on your company server. Umbratic does not have access unless your organization
+                        explicitly grants it.
+                      </p>
                     </div>
 
                     <div className="telemetryColumns">
@@ -4849,7 +4940,7 @@ function App() {
                     <div className="settingsActions">
                       <button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
                         {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
-                        <span>Export company telemetry sample</span>
+                        <span>Export telemetry sample</span>
                       </button>
                       {telemetryMessage ? <p className="settingsMessage">{telemetryMessage}</p> : null}
                     </div>

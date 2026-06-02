@@ -19,15 +19,9 @@ export type UmbraticProviderMtlsConfig = {
 
 export function assertAllowedProvider(config: UmbraticProviderConfig): UmbraticProviderConfig {
   const url = new URL(config.baseURL);
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  const allowed =
-    (url.protocol === "http:" || url.protocol === "https:") &&
-    (hostname === "localhost" ||
-      hostname === "::1" ||
-      hostname.startsWith("127.") ||
-      /^ai\.[a-z0-9.-]+\.internal$/.test(hostname));
+  const allowed = url.protocol === "http:" || url.protocol === "https:";
   if (!allowed) {
-    throw new Error(`provider baseURL not on the Umbratic AI allowlist: ${config.baseURL}`);
+    throw new Error(`provider baseURL must be an HTTP(S) endpoint: ${config.baseURL}`);
   }
   return config;
 }

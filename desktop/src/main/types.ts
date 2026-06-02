@@ -6,6 +6,13 @@ export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type LocalProviderId = "company-endpoint";
+export type ModelEndpointMode = "local" | "server";
+export type ModelEndpointSettings = {
+  mode: ModelEndpointMode;
+  baseUrl: string;
+  modelId: string;
+  secret: string;
+};
 export type CommandClass =
   | "read"
   | "edit"

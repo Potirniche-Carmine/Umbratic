@@ -11,5 +11,12 @@
     "desktop:build": "npm --workspace @umbratic/desktop run build",
     "mtls:certs": "npm --workspace @umbratic/desktop run mtls:certs",
     "mtls:mock": "npm --workspace @umbratic/desktop run mtls:mock"
+  },
+  "allowScripts": {
+    "electron@41.3.0": true,
+    "esbuild@0.27.7": true
+  },
+  "dependencies": {
+    "electron": "^41.3.0"
   }
 }

@@ -15,13 +15,14 @@ export type EndpointMtlsConfig = {
 export const defaultEndpointBaseUrl =
   env.UMBRATIC_MODEL_BASE_URL ||
   env.OPENAI_BASE_URL ||
+  env.OLLAMA_BASE_URL ||
   env.UMBRATIC_LMSTUDIO_BASE_URL ||
   env.LMSTUDIO_BASE_URL ||
-  "https://ai.company.internal/v1";
+  "http://127.0.0.1:11434/v1";
 export const defaultEndpointApiKey =
-  env.UMBRATIC_MODEL_API_KEY || env.OPENAI_API_KEY || env.LMSTUDIO_API_KEY || "company-issued-secret";
+  env.UMBRATIC_MODEL_API_KEY || env.OPENAI_API_KEY || env.OLLAMA_API_KEY || env.LMSTUDIO_API_KEY || "";
 export const defaultEndpointModelId =
-  env.UMBRATIC_MODEL_ID || env.OPENAI_MODEL || env.LMSTUDIO_MODEL || "company-model";
+  env.UMBRATIC_MODEL_ID || env.OPENAI_MODEL || env.OLLAMA_MODEL || env.LMSTUDIO_MODEL || "gemma4:e4b";
 
 function optionalEnv(name: string): string | undefined {
   const value = env[name];

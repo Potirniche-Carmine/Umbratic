@@ -61,10 +61,12 @@ import {
 import { getProviderJson } from "./providerClient";
 import {
   readChats,
+  readModelEndpointSettings,
   readNotes,
   readProjects,
   readSettings,
   readTasks,
+  writeModelEndpointSettings,
   writeChats,
   writeJsonFile,
   writeNotes,
@@ -1558,13 +1560,21 @@ function modelDisplayName(providerName: string, modelId: string): string {
 
 function endpointProvider(): (typeof localProviderCatalog)[number] & { baseUrl: string } {
   const provider = localProviderCatalog[0];
-  return { ...provider, baseUrl: normalizeOpenAiBaseUrl(provider.baseUrl) };
+  const settings = readModelEndpointSettings();
+  return {
+    ...provider,
+    providerName: settings.mode === "local" ? "Local LLM" : "Server endpoint",
+    baseUrl: normalizeOpenAiBaseUrl(settings.baseUrl),
+    apiKey: settings.secret.trim(),
+    mtls: settings.mode === "server" ? provider.mtls : undefined,
+  };
 }
 
 function configuredEndpointModel(): LocalModelInfo {
   const provider = endpointProvider();
   const selected = readSettings().selectedModel;
-  const modelId = selected?.modelId || defaultEndpointModelId;
+  const endpointSettings = readModelEndpointSettings();
+  const modelId = selected?.modelId || endpointSettings.modelId || defaultEndpointModelId;
   return {
     providerId: provider.providerId,
     providerName: provider.providerName,
@@ -1649,6 +1659,12 @@ async function fetchEndpointModels(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
+  const settings = writeModelEndpointSettings(input);
+  const status = await getBackendStatus();
+  return { settings, status };
 }
 
 async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
@@ -3553,6 +3569,10 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:list-repository-branches", (input) => listRepositoryBranches(input));
   handleIpc("umbratic:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
   handleIpc("umbratic:get-backend-status", () => getBackendStatus());
+  handleIpc("umbratic:get-model-endpoint-settings", () => readModelEndpointSettings());
+  handleIpc("umbratic:save-model-endpoint-settings", (input) =>
+    saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),
+  );
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
   handleIpc("umbratic:list-skills", () => listSkills());
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());

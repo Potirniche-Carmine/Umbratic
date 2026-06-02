@@ -2,8 +2,9 @@ import { app } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
-import type { ChatRecord, LocalProviderId, RepositoryInfo, TaskRecord, UserNotes } from "./types";
+import { defaultEndpointApiKey, defaultEndpointBaseUrl, defaultEndpointModelId } from "./config";
+import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
+import type { ChatRecord, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, TaskRecord, UserNotes } from "./types";
 
 type JsonCacheEntry = {
   mtimeMs: number;
@@ -163,13 +164,69 @@ export function writeChats(chats: ChatRecord[]) {
   writeJsonFile(chatsPath(), chats);
 }
 
-export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string } } {
-  const settings = readJsonFile<{ selectedModel?: { providerId?: string; modelId?: string } }>(settingsPath(), {});
+type RawSettings = {
+  selectedModel?: { providerId?: string; modelId?: string };
+  modelEndpoint?: Partial<ModelEndpointSettings>;
+};
+
+function defaultModelEndpointMode(): ModelEndpointMode {
+  return isLocalhostUrl(defaultEndpointBaseUrl) ? "local" : "server";
+}
+
+export function readModelEndpointSettings(): ModelEndpointSettings {
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const endpoint = settings.modelEndpoint ?? {};
+  const mode = endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode();
+  const hasSavedEndpoint = !!settings.modelEndpoint;
+  const rawSelectedModelId = typeof settings.selectedModel?.modelId === "string" ? settings.selectedModel.modelId.trim() : "";
+  const selectedModelId = !hasSavedEndpoint && rawSelectedModelId === "company-model" ? "" : rawSelectedModelId;
+  return {
+    mode,
+    baseUrl: typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : defaultEndpointBaseUrl,
+    modelId:
+      typeof endpoint.modelId === "string" && endpoint.modelId.trim()
+        ? endpoint.modelId.trim()
+        : selectedModelId || defaultEndpointModelId,
+    secret:
+      typeof endpoint.secret === "string"
+        ? endpoint.secret
+        : mode === "local"
+          ? ""
+          : defaultEndpointApiKey,
+  };
+}
+
+export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>): ModelEndpointSettings {
+  const current = readModelEndpointSettings();
+  const nextMode = input.mode === "local" || input.mode === "server" ? input.mode : current.mode;
+  const next: ModelEndpointSettings = {
+    mode: nextMode,
+    baseUrl:
+      typeof input.baseUrl === "string" && input.baseUrl.trim()
+        ? input.baseUrl.trim()
+        : nextMode === "local"
+          ? "http://127.0.0.1:11434/v1"
+          : defaultEndpointBaseUrl,
+    modelId: typeof input.modelId === "string" && input.modelId.trim() ? input.modelId.trim() : current.modelId,
+    secret: typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret,
+  };
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  writeJsonFile(settingsPath(), {
+    ...settings,
+    selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
+    modelEndpoint: next,
+  });
+  return next;
+}
+
+export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings } {
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
   const modelId = settings.selectedModel?.modelId;
-  if (typeof modelId === "string" && modelId.trim()) {
-    return { selectedModel: { providerId: "company-endpoint", modelId: modelId.trim() } };
+  const modelEndpoint = readModelEndpointSettings();
+  if (typeof modelId === "string" && modelId.trim() && (settings.modelEndpoint || modelId.trim() !== "company-model")) {
+    return { selectedModel: { providerId: "company-endpoint", modelId: modelId.trim() }, modelEndpoint };
   }
-  return {};
+  return { modelEndpoint };
 }
 
 export function readNotes(): UserNotes {

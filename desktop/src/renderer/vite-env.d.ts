@@ -6,6 +6,13 @@ type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
 type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
 type UmbraticLocalProviderId = "company-endpoint";
+type UmbraticModelEndpointMode = "local" | "server";
+type UmbraticModelEndpointSettings = {
+  mode: UmbraticModelEndpointMode;
+  baseUrl: string;
+  modelId: string;
+  secret: string;
+};
 type UmbraticCommandClass =
   | "read"
   | "edit"
@@ -267,6 +274,11 @@ declare global {
         { ok: true; repository: UmbraticRepositoryInfo } | { ok: false; message: string }
       >;
       getBackendStatus(): Promise<UmbraticBackendStatus>;
+      getModelEndpointSettings(): Promise<UmbraticModelEndpointSettings>;
+      saveModelEndpointSettings(input: UmbraticModelEndpointSettings): Promise<{
+        settings: UmbraticModelEndpointSettings;
+        status: UmbraticBackendStatus;
+      }>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
       listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string }>; directory: string }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
