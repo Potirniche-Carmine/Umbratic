@@ -7,8 +7,10 @@ export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
+export type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
 export type ModelEndpointSettings = {
   mode: ModelEndpointMode;
+  software: ModelEndpointSoftware;
   baseUrl: string;
   modelId: string;
   secret: string;
@@ -61,7 +63,6 @@ export type BackendStatus = {
   privacy: {
     share: "disabled";
     enabledProviders: LocalProviderId[];
-    disabledProviders: string[];
     webTools: "disabled";
   };
   diagnostics: BackendDiagnostics;

@@ -8,15 +8,13 @@
   ],
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
-    "desktop:build": "npm --workspace @umbratic/desktop run build",
-    "mtls:certs": "npm --workspace @umbratic/desktop run mtls:certs",
-    "mtls:mock": "npm --workspace @umbratic/desktop run mtls:mock"
+    "desktop:build": "npm --workspace @umbratic/desktop run build"
   },
   "allowScripts": {
-    "electron@41.3.0": true,
+    "electron@42.3.2": true,
     "esbuild@0.27.7": true
   },
   "dependencies": {
-    "electron": "^41.3.0"
+    "electron": "^42.3.2"
   }
 }

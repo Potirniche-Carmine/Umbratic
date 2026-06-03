@@ -2,7 +2,14 @@ import { app } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { defaultEndpointApiKey, defaultEndpointBaseUrl, defaultEndpointModelId } from "./config";
+import {
+  defaultEndpointApiKey,
+  defaultEndpointBaseUrl,
+  defaultEndpointBaseUrlForSoftware,
+  defaultEndpointModelId,
+  defaultEndpointSoftware,
+  isModelEndpointSoftware,
+} from "./config";
 import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import type { ChatRecord, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, TaskRecord, UserNotes } from "./types";
 
@@ -177,16 +184,18 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
   const settings = readJsonFile<RawSettings>(settingsPath(), {});
   const endpoint = settings.modelEndpoint ?? {};
   const mode = endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode();
-  const hasSavedEndpoint = !!settings.modelEndpoint;
-  const rawSelectedModelId = typeof settings.selectedModel?.modelId === "string" ? settings.selectedModel.modelId.trim() : "";
-  const selectedModelId = !hasSavedEndpoint && rawSelectedModelId === "company-model" ? "" : rawSelectedModelId;
+  const software = isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, endpoint.baseUrl);
   return {
     mode,
-    baseUrl: typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : defaultEndpointBaseUrl,
+    software,
+    baseUrl:
+      typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
+        ? endpoint.baseUrl.trim()
+        : defaultEndpointBaseUrlForSoftware(mode, software),
     modelId:
       typeof endpoint.modelId === "string" && endpoint.modelId.trim()
         ? endpoint.modelId.trim()
-        : selectedModelId || defaultEndpointModelId,
+        : defaultEndpointModelId,
     secret:
       typeof endpoint.secret === "string"
         ? endpoint.secret
@@ -199,15 +208,19 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
 export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>): ModelEndpointSettings {
   const current = readModelEndpointSettings();
   const nextMode = input.mode === "local" || input.mode === "server" ? input.mode : current.mode;
+  const nextSoftware = isModelEndpointSoftware(input.software)
+    ? input.software
+    : current.mode === nextMode
+      ? current.software
+      : defaultEndpointSoftware(nextMode);
   const next: ModelEndpointSettings = {
     mode: nextMode,
+    software: nextSoftware,
     baseUrl:
       typeof input.baseUrl === "string" && input.baseUrl.trim()
         ? input.baseUrl.trim()
-        : nextMode === "local"
-          ? "http://127.0.0.1:11434/v1"
-          : defaultEndpointBaseUrl,
-    modelId: typeof input.modelId === "string" && input.modelId.trim() ? input.modelId.trim() : current.modelId,
+        : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
+    modelId: typeof input.modelId === "string" ? input.modelId.trim() : current.modelId,
     secret: typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret,
   };
   const settings = readJsonFile<RawSettings>(settingsPath(), {});
@@ -220,11 +233,9 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
 }
 
 export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings } {
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
-  const modelId = settings.selectedModel?.modelId;
   const modelEndpoint = readModelEndpointSettings();
-  if (typeof modelId === "string" && modelId.trim() && (settings.modelEndpoint || modelId.trim() !== "company-model")) {
-    return { selectedModel: { providerId: "company-endpoint", modelId: modelId.trim() }, modelEndpoint };
+  if (modelEndpoint.modelId.trim()) {
+    return { selectedModel: { providerId: "company-endpoint", modelId: modelEndpoint.modelId.trim() }, modelEndpoint };
   }
   return { modelEndpoint };
 }

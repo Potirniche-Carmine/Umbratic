@@ -7,8 +7,10 @@ type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
 type UmbraticLocalProviderId = "company-endpoint";
 type UmbraticModelEndpointMode = "local" | "server";
+type UmbraticModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
 type UmbraticModelEndpointSettings = {
   mode: UmbraticModelEndpointMode;
+  software: UmbraticModelEndpointSoftware;
   baseUrl: string;
   modelId: string;
   secret: string;
@@ -52,7 +54,6 @@ type UmbraticBackendStatus = {
   privacy: {
     share: "disabled";
     enabledProviders: UmbraticLocalProviderId[];
-    disabledProviders: string[];
     webTools: "disabled";
   };
   diagnostics: UmbraticBackendDiagnostics;

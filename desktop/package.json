@@ -4,26 +4,22 @@
   "version": "0.1.0",
   "main": "dist-electron/main/main.js",
   "scripts": {
-    "dev": "npm run build:runner && npm run build:main && concurrently -k --success first \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
-    "dev:web": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --host 127.0.0.1 --port 5173",
     "build": "npm run build:runner && tsc -p tsconfig.main.json && vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build:runner": "npm --prefix runner run build",
-    "mtls:certs": "powershell -ExecutionPolicy Bypass -File scripts/new-local-mtls-certs.ps1",
-    "mtls:mock": "node scripts/mtls-openai-mock.mjs",
     "typecheck": "npm --prefix runner run typecheck && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {
     "@umbratic/runner": "file:runner",
     "@vitejs/plugin-react": "^5.0.4",
-    "concurrently": "^9.2.1",
-    "electron": "^41.3.0",
+    "electron": "^42.3.2",
     "lucide-react": "^0.468.0",
     "pdf-to-img": "^6.0.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "vite": "^7.1.12",
-    "wait-on": "^8.0.4"
+    "vite": "^7.1.12"
   },
   "devDependencies": {
     "@types/node": "^24.8.1",

@@ -53,8 +53,10 @@ type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
 type LocalProviderId = "company-endpoint";
 type ModelEndpointMode = "local" | "server";
+type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
 type ModelEndpointSettings = {
   mode: ModelEndpointMode;
+  software: ModelEndpointSoftware;
   baseUrl: string;
   modelId: string;
   secret: string;
@@ -107,7 +109,6 @@ type BackendStatus = {
   privacy: {
     share: "disabled";
     enabledProviders: LocalProviderId[];
-    disabledProviders: string[];
     webTools: "disabled";
   };
   diagnostics: BackendDiagnostics;
@@ -397,10 +398,47 @@ let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultLocalEndpointSettings: ModelEndpointSettings = {
   mode: "local",
-  baseUrl: "http://127.0.0.1:11434/v1",
-  modelId: "gemma4:e4b",
+  software: "ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  modelId: "",
   secret: "",
 };
+const endpointSoftwareOptions: Array<{ id: ModelEndpointSoftware; label: string; localUrl: string; serverUrl: string; modelPlaceholder: string }> = [
+  {
+    id: "ollama",
+    label: "Ollama",
+    localUrl: "http://127.0.0.1:11434",
+    serverUrl: "https://your-ollama-server.example",
+    modelPlaceholder: "Select a pulled model or type its name",
+  },
+  {
+    id: "lmstudio",
+    label: "LM Studio",
+    localUrl: "http://127.0.0.1:1234/v1",
+    serverUrl: "https://your-lm-studio-endpoint.example/v1",
+    modelPlaceholder: "Select a loaded model or type its ID",
+  },
+  {
+    id: "vllm",
+    label: "vLLM",
+    localUrl: "http://127.0.0.1:8000/v1",
+    serverUrl: "https://your-vllm-endpoint.example/v1",
+    modelPlaceholder: "Select a served model or type its ID",
+  },
+];
+
+function isModelEndpointSoftware(value: unknown): value is ModelEndpointSoftware {
+  return value === "ollama" || value === "lmstudio" || value === "vllm";
+}
+
+function endpointSoftwareOption(software: ModelEndpointSoftware) {
+  return endpointSoftwareOptions.find((option) => option.id === software) ?? endpointSoftwareOptions[0];
+}
+
+function defaultBaseUrlForEndpoint(mode: ModelEndpointMode, software: ModelEndpointSoftware) {
+  const option = endpointSoftwareOption(software);
+  return mode === "local" ? option.localUrl : option.serverUrl;
+}
 const defaultAppearanceSettings: AppearanceSettings = {
   theme: "system",
   uiFont: "System UI",
@@ -475,10 +513,12 @@ function readUiServerSettings(): ModelEndpointSettings {
   try {
     const settings = JSON.parse(window.localStorage.getItem(serverSettingsKey) ?? "{}") as Record<string, unknown>;
     const mode = settings.mode === "server" ? "server" : "local";
+    const software = isModelEndpointSoftware(settings.software) ? settings.software : mode === "local" ? "ollama" : "vllm";
     return {
       mode,
-      baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : defaultLocalEndpointSettings.baseUrl,
-      modelId: typeof settings.modelId === "string" ? settings.modelId : defaultLocalEndpointSettings.modelId,
+      software,
+      baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : defaultBaseUrlForEndpoint(mode, software),
+      modelId: typeof settings.modelId === "string" ? settings.modelId : "",
       secret: typeof settings.secret === "string" ? settings.secret : "",
     };
   } catch {
@@ -646,7 +686,6 @@ const fallbackApi: DesktopApi = {
     privacy: {
       share: "disabled",
       enabledProviders: [],
-      disabledProviders: [],
       webTools: "disabled",
     },
     diagnostics: {
@@ -2369,6 +2408,7 @@ function App() {
     if (!backend?.model) return;
     setServerSettings((current) => ({
       mode: current.mode,
+      software: current.software,
       baseUrl: current.baseUrl || backend.model?.baseUrl || "",
       modelId: current.modelId || backend.model?.modelId || "",
       secret: current.secret,
@@ -2621,19 +2661,26 @@ function App() {
   function updateServerMode(mode: ModelEndpointMode) {
     setServerSettings((current) => ({
       mode,
+      software: current.mode === mode ? current.software : mode === "local" ? "ollama" : "vllm",
       baseUrl:
         current.mode === mode
           ? current.baseUrl
-          : mode === "local"
-            ? defaultLocalEndpointSettings.baseUrl
-            : "",
-      modelId:
-        current.mode === mode
-          ? current.modelId
-          : mode === "local"
-            ? defaultLocalEndpointSettings.modelId
-            : "",
+          : defaultBaseUrlForEndpoint(mode, mode === "local" ? "ollama" : "vllm"),
+      modelId: current.mode === mode ? current.modelId : "",
       secret: current.mode === mode ? current.secret : mode === "local" ? "" : current.secret,
+    }));
+    setServerSettingsMessage(null);
+  }
+
+  function updateEndpointSoftware(software: ModelEndpointSoftware) {
+    setServerSettings((current) => ({
+      ...current,
+      software,
+      baseUrl:
+        !current.baseUrl.trim() || current.baseUrl === defaultBaseUrlForEndpoint(current.mode, current.software)
+          ? defaultBaseUrlForEndpoint(current.mode, software)
+          : current.baseUrl,
+      modelId: "",
     }));
     setServerSettingsMessage(null);
   }
@@ -2641,12 +2688,13 @@ function App() {
   async function saveServerSettings() {
     const next = {
       mode: serverSettings.mode,
+      software: serverSettings.software,
       baseUrl: serverSettings.baseUrl.trim(),
       modelId: serverSettings.modelId.trim(),
       secret: serverSettings.secret,
     };
-    if (!next.baseUrl || !next.modelId) {
-      setServerSettingsMessage("Add a URL and model ID before saving.");
+    if (!next.baseUrl) {
+      setServerSettingsMessage("Add a URL before saving.");
       return;
     }
     setServerSettingsMessage("Saving...");
@@ -4635,7 +4683,7 @@ function App() {
                   >
                     <div className="settingsPanelHead">
                       <h3>Server</h3>
-                      <p>Choose a local model runner or an OpenAI-compatible server endpoint.</p>
+                      <p>Choose Ollama, LM Studio, or vLLM locally. Server endpoints default to vLLM.</p>
                     </div>
 
                     <div className="appearanceOptionGrid">
@@ -4685,6 +4733,20 @@ function App() {
                     </div>
 
                     <label className="settingsField">
+                      <span>Software</span>
+                      <select
+                        value={serverSettings.software}
+                        onChange={(event) => updateEndpointSoftware(event.target.value as ModelEndpointSoftware)}
+                      >
+                        {endpointSoftwareOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="settingsField">
                       <span>{serverSettings.mode === "local" ? "Local URL" : "Server URL or IP"}</span>
                       <input
                         type="text"
@@ -4692,7 +4754,7 @@ function App() {
                         onChange={(event) =>
                           setServerSettings((current) => ({ ...current, baseUrl: event.target.value }))
                         }
-                        placeholder={serverSettings.mode === "local" ? "http://127.0.0.1:11434/v1" : "https://your-endpoint.example/v1"}
+                        placeholder={defaultBaseUrlForEndpoint(serverSettings.mode, serverSettings.software)}
                       />
                     </label>
 
@@ -4718,7 +4780,7 @@ function App() {
                           onChange={(event) =>
                             setServerSettings((current) => ({ ...current, modelId: event.target.value }))
                           }
-                          placeholder={serverSettings.mode === "local" ? "gemma4:e4b" : "model-id"}
+                          placeholder={endpointSoftwareOption(serverSettings.software).modelPlaceholder}
                         />
                       )}
                     </label>
@@ -4731,7 +4793,7 @@ function App() {
                         onChange={(event) =>
                           setServerSettings((current) => ({ ...current, secret: event.target.value }))
                         }
-                        placeholder={serverSettings.mode === "local" ? "Usually blank for Ollama" : "API key or shared secret"}
+                        placeholder={serverSettings.mode === "local" ? "Usually blank for local runners" : "API key or shared secret"}
                         autoComplete="off"
                       />
                     </label>

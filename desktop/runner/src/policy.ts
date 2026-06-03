@@ -103,8 +103,51 @@ function isBarePythonCommand(command: string): boolean {
   return first === "python" || first === "python3" || first === "py";
 }
 
+function commandContainsGit(command: string): boolean {
+  return /\bgit(?:\.exe)?\b/i.test(command);
+}
+
+function gitCommandPattern(subcommands: string, flags = "i"): RegExp {
+  return new RegExp(String.raw`\bgit(?:\.exe)?(?:\s+-C\s+(?:"[^"]+"|'[^']+'|\S+))*\s+(?:${subcommands})\b`, flags);
+}
+
 function gitCommandIsReadOnly(command: string): boolean {
-  return /\bgit\s+(status|diff|show|log|rev-parse|branch\s+--show-current|ls-files|cat-file|show-ref)\b/i.test(command);
+  const readOnly = [
+    "status",
+    "diff",
+    "show",
+    "log",
+    "reflog",
+    "rev-parse",
+    "ls-files",
+    "cat-file",
+    "show-ref",
+    "blame",
+    "grep",
+    "describe",
+    "merge-base",
+    "name-rev",
+    "for-each-ref",
+    "remote\\s+(?:-v|show)",
+    "worktree\\s+list",
+    "stash\\s+list",
+    "tag\\s+(?:--list|-l)",
+    "branch\\s+(?:--show-current|--list|-a|-r|-v|-vv|--contains|--merged|--no-merged)",
+    "config\\s+(?:--get|--get-regexp|--list|--show-origin)",
+    "submodule\\s+status",
+  ].join("|");
+  return gitCommandPattern(readOnly).test(command);
+}
+
+function gitCommandLooksDestructive(command: string): boolean {
+  const destructive = [
+    "reset\\s+--hard",
+    "clean\\s+-[^\\s]*f",
+    "branch\\s+--delete\\s+--force",
+    "worktree\\s+(?:remove|prune)",
+    "push\\s+(?:[^;&|]*\\s)?(?:--force|-f|--force-with-lease)",
+  ].join("|");
+  return gitCommandPattern(destructive).test(command) || gitCommandPattern("branch\\s+-D", "").test(command);
 }
 
 function commandHasNetworkIntent(command: string): boolean {
@@ -116,8 +159,7 @@ function commandLooksDestructive(command: string): boolean {
     /\brm\s+(-[^\s]*r[^\s]*f|-[^\s]*f[^\s]*r)\b/i.test(command) ||
     /\bRemove-Item\b/i.test(command) ||
     /\b(del|erase|rmdir)\b/i.test(command) ||
-    /\bgit\s+reset\s+--hard\b/i.test(command) ||
-    /\bgit\s+clean\s+-[^\s]*f/i.test(command)
+    gitCommandLooksDestructive(command)
   );
 }
 
@@ -139,12 +181,12 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
 
   if (!trimmed) return { commandClass: "unknown", risky: false };
   if (commandHasNetworkIntent(trimmed)) return { commandClass: "network", risky: true, reason: "network command" };
-  if (commandLooksDestructive(trimmed)) return { commandClass: "destructive-file", risky: true, reason: "destructive command" };
   if (commandTouchesExternalDirectory(trimmed, cwd)) return { commandClass: "external-directory", risky: true, reason: "external path" };
+  if (commandLooksDestructive(trimmed)) return { commandClass: "destructive-file", risky: true, reason: "destructive command" };
   if (isBarePythonCommand(trimmed) || /\b(uv|pytest|pip|pip3|\.venv[\\/](scripts[\\/])?python)\b/i.test(trimmed)) {
     return { commandClass: "python-runtime", risky: isBarePythonCommand(trimmed), reason: isBarePythonCommand(trimmed) ? "bare python" : undefined };
   }
-  if (/\bgit\b/i.test(trimmed)) return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
+  if (commandContainsGit(trimmed)) return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
   if (/\b(gdb|lldb|cdb|windbg|vsdbg|valgrind|drmemory)\b/i.test(trimmed)) return { commandClass: "debugger", risky: false };
   if (/\b(cmake|ctest|ninja|make|msbuild)\b/i.test(trimmed)) return { commandClass: "cmake-build", risky: false };
   if (/\b(cl|clang|clang\+\+|gcc|g\+\+)\b/i.test(trimmed)) return { commandClass: "compiler", risky: false };

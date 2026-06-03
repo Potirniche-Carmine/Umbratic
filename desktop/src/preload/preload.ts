@@ -42,7 +42,13 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:checkout-repository-branch", input),
   getBackendStatus: () => ipcRenderer.invoke("umbratic:get-backend-status"),
   getModelEndpointSettings: () => ipcRenderer.invoke("umbratic:get-model-endpoint-settings"),
-  saveModelEndpointSettings: (input: { mode: "local" | "server"; baseUrl: string; modelId: string; secret: string }) =>
+  saveModelEndpointSettings: (input: {
+    mode: "local" | "server";
+    software: "ollama" | "lmstudio" | "vllm";
+    baseUrl: string;
+    modelId: string;
+    secret: string;
+  }) =>
     ipcRenderer.invoke("umbratic:save-model-endpoint-settings", input),
   exportTelemetry: () => ipcRenderer.invoke("umbratic:export-telemetry"),
   listSkills: () => ipcRenderer.invoke("umbratic:list-skills"),

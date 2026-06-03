@@ -20,7 +20,6 @@ import * as path from "node:path";
 import {
   cCmakeRuntimeSystemPrompt,
   defaultEndpointModelId,
-  defaultDisabledProviders,
   debuggerRuntimeSystemPrompt,
   localProviderCatalog,
   markdownRuntimeSystemPrompt,
@@ -107,6 +106,7 @@ import type {
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 
 const isDev = !app.isPackaged;
+const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
 type RunnerPrompt = string | RunnerPromptPart[];
 type PdfImageDocument = { length: number; getPage(pageNumber: number): Promise<Buffer> };
@@ -473,6 +473,10 @@ function hiddenChatRepository(chatIdValue: string): RepositoryInfo {
     dirty: false,
     statusSummary: "hidden workspace",
   };
+}
+
+function isHiddenChatTask(task: TaskRecord): boolean {
+  return !!task.chatId && task.repositoryId === `hidden-${task.chatId}` && path.resolve(task.originalRepoPath) === hiddenChatWorkspacePath(task.chatId);
 }
 
 function taskId(): string {
@@ -1112,18 +1116,29 @@ async function attachmentPromptParts(rootPath: string, attachments: ChatAttachme
 async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  const hiddenChat = isHiddenChatTask(task);
   const tree = repositoryTreePreview(rootPath);
-  const keyFiles = keyWorkspaceFiles(rootPath);
-  const lines = [
-    "Umbratic AI workspace context:",
-    `- opened folder: ${rootPath}`,
-    `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
-    `- workspace kind: ${task.workspaceKind}`,
-    `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
-    "",
-    "Visible workspace files:",
-    tree.length ? tree.join("\n") : "- (no readable files found)",
-  ];
+  const keyFiles = hiddenChat ? [] : keyWorkspaceFiles(rootPath);
+  const lines = hiddenChat
+    ? [
+        "Umbratic AI chat context:",
+        "- no project folder is selected for this chat",
+        "- Umbratic AI created a private scratch workspace for attachments and any files produced during the conversation",
+        `- scratch workspace: ${rootPath}`,
+        "",
+        "Scratch workspace files:",
+        tree.length ? tree.join("\n") : "- (empty)",
+      ]
+    : [
+        "Umbratic AI workspace context:",
+        `- opened folder: ${rootPath}`,
+        `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
+        `- workspace kind: ${task.workspaceKind}`,
+        `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
+        "",
+        "Visible workspace files:",
+        tree.length ? tree.join("\n") : "- (no readable files found)",
+      ];
   if (keyFiles.length) {
     lines.push("", "Key workspace files:");
     for (const file of keyFiles) {
@@ -1166,7 +1181,9 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       "User request:",
       userPrompt,
       "",
-      "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
+      hiddenChat
+        ? "Answer as a normal chat unless the user asks you to create or inspect files. Treat the scratch workspace as private working storage, not as a meaningful project folder."
+        : "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
       "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
     ].join("\n"),
   });
@@ -1547,22 +1564,36 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function normalizeOpenAiBaseUrl(baseUrl: string): string {
+function normalizeV1EndpointBaseUrl(baseUrl: string): string {
   const normalized = normalizeBaseUrl(baseUrl);
   return /\/v\d+$/i.test(normalized) ? normalized : `${normalized}/v1`;
+}
+
+function normalizeEndpointRootUrl(baseUrl: string): string {
+  return normalizeBaseUrl(baseUrl).replace(/\/v\d+$/i, "");
 }
 
 function modelDisplayName(providerName: string, modelId: string): string {
   return `${modelId} via ${providerName}`;
 }
 
-function endpointProvider(): (typeof localProviderCatalog)[number] & { baseUrl: string } {
+function endpointProvider(): (typeof localProviderCatalog)[number] & { baseUrl: string; software: ReturnType<typeof readModelEndpointSettings>["software"] } {
   const provider = localProviderCatalog[0];
   const settings = readModelEndpointSettings();
   return {
     ...provider,
-    providerName: settings.mode === "local" ? "Local LLM" : "Server endpoint",
-    baseUrl: normalizeOpenAiBaseUrl(settings.baseUrl),
+    providerName:
+      settings.software === "ollama"
+        ? settings.mode === "local"
+          ? "Ollama"
+          : "Ollama server"
+        : settings.software === "lmstudio"
+          ? "LM Studio"
+          : settings.mode === "local"
+            ? "Local vLLM"
+            : "vLLM server",
+    software: settings.software,
+    baseUrl: settings.software === "ollama" ? normalizeBaseUrl(settings.baseUrl) : normalizeV1EndpointBaseUrl(settings.baseUrl),
     apiKey: settings.secret.trim(),
     mtls: settings.mode === "server" ? provider.mtls : undefined,
   };
@@ -1583,7 +1614,14 @@ function configuredEndpointModel(): LocalModelInfo {
 }
 
 function endpointRoute(baseUrl: string, route: string): string {
-  return new URL(route.replace(/^\/+/, ""), `${normalizeOpenAiBaseUrl(baseUrl)}/`).toString();
+  return new URL(route.replace(/^\/+/, ""), `${normalizeV1EndpointBaseUrl(baseUrl)}/`).toString();
+}
+
+function endpointModelsRoute(provider: ReturnType<typeof endpointProvider>): string {
+  if (provider.software === "ollama") {
+    return new URL("api/tags", `${normalizeEndpointRootUrl(provider.baseUrl)}/`).toString();
+  }
+  return endpointRoute(provider.baseUrl, "models");
 }
 
 function localEndpointModelInfo(modelId: string, provider: ReturnType<typeof endpointProvider>): LocalModelInfo {
@@ -1597,9 +1635,16 @@ function localEndpointModelInfo(modelId: string, provider: ReturnType<typeof end
 }
 
 function modelIdsFromPayload(payload: unknown): string[] {
-  if (!isRecord(payload) || !Array.isArray(payload.data)) return [];
-  const ids = payload.data
-    .map((row) => (isRecord(row) && typeof row.id === "string" ? row.id.trim() : ""))
+  if (!isRecord(payload)) return [];
+  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
+  const ids = rows
+    .map((row) => {
+      if (!isRecord(row)) return "";
+      if (typeof row.id === "string") return row.id.trim();
+      if (typeof row.name === "string") return row.name.trim();
+      if (typeof row.model === "string") return row.model.trim();
+      return "";
+    })
     .filter((id) => id.length > 0);
   return Array.from(new Set(ids));
 }
@@ -1615,7 +1660,8 @@ async function fetchEndpointModels(
     if (provider.apiKey) {
       headers.Authorization = `Bearer ${provider.apiKey}`;
     }
-    const response = await getProviderJson(endpointRoute(provider.baseUrl, "models"), {
+    const modelsRoute = endpointModelsRoute(provider);
+    const response = await getProviderJson(modelsRoute, {
       headers,
       mtls: provider.mtls,
       signal: controller.signal,
@@ -1625,7 +1671,7 @@ async function fetchEndpointModels(
       return {
         status: "unavailable",
         models: [],
-        message: `Healthcheck failed at /models with ${response.statusCode} ${response.statusMessage}${
+        message: `Model discovery failed at ${new URL(modelsRoute).pathname} with ${response.statusCode} ${response.statusMessage}${
           body.trim() ? `: ${body.trim().slice(0, 160)}` : ""
         }`,
       };
@@ -1636,22 +1682,22 @@ async function fetchEndpointModels(
       return {
         status: "degraded",
         models: [],
-        message: "Connected to /models, but no model ids were returned.",
+        message: `Connected to ${new URL(modelsRoute).pathname}, but no model ids were returned.`,
       };
     }
     const models = modelIds.map((modelId) => localEndpointModelInfo(modelId, provider));
-    if (!modelIds.includes(configuredModelId)) {
+    if (configuredModelId && !modelIds.includes(configuredModelId)) {
       return {
         status: "degraded",
         models,
-        message: `Connected, but configured model "${configuredModelId}" was not returned by /models.`,
+        message: `Connected, but configured model "${configuredModelId}" was not returned by ${new URL(modelsRoute).pathname}.`,
       };
     }
-    return { status: "ready", models, message: "Healthcheck passed at /models." };
+    return { status: "ready", models, message: `Model discovery passed at ${new URL(modelsRoute).pathname}.` };
   } catch (error) {
     const message =
       error instanceof Error && error.name === "AbortError"
-        ? "Healthcheck timed out while connecting to /models."
+        ? "Model discovery timed out."
         : `Healthcheck failed: ${error instanceof Error ? error.message : String(error)}`;
     return { status: "unavailable", models: [], message };
   } finally {
@@ -1669,14 +1715,19 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
   const configured = configuredEndpointModel();
   const providerConfig = endpointProvider();
   const health = await fetchEndpointModels(providerConfig, configured.modelId);
-  const models = health.models.some((model) => model.modelId === configured.modelId)
+  const discoveredDefault = configured.modelId ? configured : health.models[0];
+  const models = configured.modelId && health.models.some((model) => model.modelId === configured.modelId)
     ? health.models
-    : [configured, ...health.models];
-  const selected = models.find((model) => model.modelId === configured.modelId) ?? configured;
+    : discoveredDefault
+      ? [discoveredDefault, ...health.models.filter((model) => model.modelId !== discoveredDefault.modelId)]
+      : health.models;
+  const selected = configured.modelId
+    ? models.find((model) => model.modelId === configured.modelId) ?? configured
+    : models[0] ?? null;
   const provider: LocalModelProvider = {
-    providerId: selected.providerId,
-    providerName: selected.providerName,
-    baseUrl: selected.baseUrl,
+    providerId: selected?.providerId ?? configured.providerId,
+    providerName: selected?.providerName ?? configured.providerName,
+    baseUrl: selected?.baseUrl ?? configured.baseUrl,
     status: health.status,
     models,
     message: health.message,
@@ -1694,7 +1745,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       : "unavailable";
   const messages = [
     runnerPath ? undefined : "Umbratic runner is not built in the app bundle.",
-    selected ? undefined : "No model id is configured for the OpenAI-compatible endpoint.",
+    selected ? undefined : "No model id is configured for the selected model endpoint.",
     ...providers.map((provider) => provider.message).filter((message): message is string => !!message),
   ].filter((message): message is string => !!message);
 
@@ -1708,7 +1759,6 @@ async function getBackendStatus(): Promise<BackendStatus> {
     privacy: {
       share: "disabled",
       enabledProviders: providers.filter((provider) => provider.status === "ready").map((provider) => provider.providerId),
-      disabledProviders: defaultDisabledProviders,
       webTools: "disabled",
     },
     diagnostics: {
@@ -2130,12 +2180,7 @@ async function checkoutRepositoryBranch(
 }
 
 function requiresBypassToolApproval(classification: ReturnType<typeof classifyCommandText>): boolean {
-  return (
-    classification.commandClass === "network" ||
-    classification.commandClass === "external-directory" ||
-    classification.commandClass === "destructive-file" ||
-    (classification.commandClass === "package-manager" && classification.risky)
-  );
+  return classification.risky;
 }
 
 async function askPermission(
@@ -2449,7 +2494,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
   try {
     const { selected } = await resolveSelectedModel();
     if (!selected) {
-      failTask(task, "No model id is configured for the OpenAI-compatible endpoint.");
+      failTask(task, "No model id is configured for the selected model endpoint.");
       return;
     }
     task.model = selected;
@@ -3418,12 +3463,30 @@ function setPermissionMode(input: unknown): Promise<BackendStatus> {
   return getBackendStatus();
 }
 
+function devServerUrl(): URL {
+  const rawUrl = process.env.UMBRATIC_DEV_SERVER_URL || fallbackDevServerUrl;
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port) {
+      return url;
+    }
+  } catch {
+    /* Fall through to the default Vite URL. */
+  }
+  return new URL(fallbackDevServerUrl);
+}
+
+function isTrustedDevUrl(url: URL): boolean {
+  const trusted = devServerUrl();
+  return url.protocol === trusted.protocol && url.hostname === trusted.hostname && url.port === trusted.port;
+}
+
 function trustedSender(event: IpcMainInvokeEvent): boolean {
   const rawUrl = event.senderFrame?.url || event.sender.getURL();
   try {
     const url = new URL(rawUrl);
     if (isDev) {
-      return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port === "5173";
+      return isTrustedDevUrl(url);
     }
     return url.protocol === "file:";
   } catch {
@@ -3458,7 +3521,7 @@ function allowedAppUrl(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl);
     if (isDev) {
-      return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port === "5173";
+      return isTrustedDevUrl(url);
     }
     return url.protocol === "file:";
   } catch {
@@ -3471,7 +3534,9 @@ async function createWindow() {
   const isWin = process.platform === "win32";
   const icon = appIcon();
 
-  if (isMac && app.dock && icon) {
+  // Packaged macOS apps should use the bundle icon so Liquid Glass appearances
+  // can be applied by the system; this PNG override is only for dev runs.
+  if (isDev && isMac && app.dock && icon) {
     app.dock.setIcon(icon);
   }
 
@@ -3541,7 +3606,7 @@ async function createWindow() {
   });
 
   if (isDev) {
-    await mainWindow.loadURL("http://127.0.0.1:5173");
+    await mainWindow.loadURL(devServerUrl().toString());
   } else {
     await mainWindow.loadFile(path.resolve(__dirname, "../../dist/index.html"));
   }

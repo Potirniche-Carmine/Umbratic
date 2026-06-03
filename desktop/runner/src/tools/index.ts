@@ -74,7 +74,7 @@ export const toolSpecs = [
     type: "function",
     function: {
       name: "command",
-      description: "Run a local shell command in the workspace after policy and permission checks.",
+      description: "Run a local workspace shell command after policy and permission checks. Use it for tests, builds, and Git operations such as status, diff, branch, restore, reset, and worktree commands when the user asks.",
       parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
     },
   },

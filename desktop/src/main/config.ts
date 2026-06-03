@@ -1,6 +1,6 @@
 import { env } from "node:process";
 
-import type { LocalProviderId, ReasoningMode, TaskState } from "./types";
+import type { LocalProviderId, ModelEndpointMode, ModelEndpointSoftware, ReasoningMode, TaskState } from "./types";
 
 export type EndpointMtlsConfig = {
   caPath?: string;
@@ -12,17 +12,49 @@ export type EndpointMtlsConfig = {
   pinnedServerCertificateSha256?: string;
 };
 
-export const defaultEndpointBaseUrl =
+const configuredEndpointBaseUrl =
   env.UMBRATIC_MODEL_BASE_URL ||
-  env.OPENAI_BASE_URL ||
   env.OLLAMA_BASE_URL ||
   env.UMBRATIC_LMSTUDIO_BASE_URL ||
   env.LMSTUDIO_BASE_URL ||
-  "http://127.0.0.1:11434/v1";
+  env.UMBRATIC_VLLM_BASE_URL ||
+  env.VLLM_BASE_URL ||
+  "";
+
+export const defaultEndpointBaseUrl =
+  configuredEndpointBaseUrl ||
+  "http://127.0.0.1:11434";
 export const defaultEndpointApiKey =
-  env.UMBRATIC_MODEL_API_KEY || env.OPENAI_API_KEY || env.OLLAMA_API_KEY || env.LMSTUDIO_API_KEY || "";
+  env.UMBRATIC_MODEL_API_KEY || env.OLLAMA_API_KEY || env.LMSTUDIO_API_KEY || env.VLLM_API_KEY || "";
 export const defaultEndpointModelId =
-  env.UMBRATIC_MODEL_ID || env.OPENAI_MODEL || env.OLLAMA_MODEL || env.LMSTUDIO_MODEL || "gemma4:e4b";
+  env.UMBRATIC_MODEL_ID || env.OLLAMA_MODEL || env.LMSTUDIO_MODEL || env.VLLM_MODEL || "";
+
+export function isModelEndpointSoftware(value: unknown): value is ModelEndpointSoftware {
+  return value === "ollama" || value === "lmstudio" || value === "vllm";
+}
+
+export function defaultEndpointSoftware(mode: ModelEndpointMode, baseUrl = defaultEndpointBaseUrl): ModelEndpointSoftware {
+  const normalized = baseUrl.toLowerCase();
+  if (env.UMBRATIC_MODEL_SOFTWARE && isModelEndpointSoftware(env.UMBRATIC_MODEL_SOFTWARE)) {
+    return env.UMBRATIC_MODEL_SOFTWARE;
+  }
+  if (env.LMSTUDIO_BASE_URL || normalized.includes("lmstudio")) return "lmstudio";
+  if (env.OLLAMA_BASE_URL || normalized.includes("11434") || normalized.includes("ollama")) return "ollama";
+  if (env.UMBRATIC_VLLM_BASE_URL || env.VLLM_BASE_URL || normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
+  return mode === "local" ? "ollama" : "vllm";
+}
+
+export function defaultEndpointBaseUrlForSoftware(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
+  if (mode === "local") {
+    if (software === "lmstudio") return "http://127.0.0.1:1234/v1";
+    if (software === "vllm") return "http://127.0.0.1:8000/v1";
+    return "http://127.0.0.1:11434";
+  }
+  if (configuredEndpointBaseUrl) return configuredEndpointBaseUrl;
+  if (software === "ollama") return "https://your-ollama-server.example";
+  if (software === "lmstudio") return "https://your-lm-studio-endpoint.example/v1";
+  return "https://your-vllm-endpoint.example/v1";
+}
 
 function optionalEnv(name: string): string | undefined {
   const value = env[name];
@@ -68,8 +100,15 @@ export const debuggerRuntimeSystemPrompt = [
   "The debugger tool is intentionally non-interactive and only runs executables inside the workspace. It should collect backtraces, locals, registers, and stack memory through gdb, lldb, or cdb. If no supported debugger is installed, report the missing debugger and platform install commands instead of inventing results.",
 ].join(" ");
 
+export const gitRuntimeSystemPrompt = [
+  "Git harness policy: use Git confidently when the selected workspace is a Git repository. Prefer read-only inspection before changing anything: `git status --short --branch`, `git diff`, `git diff --staged`, `git log --oneline --decorate --graph -n 20`, `git show <rev>`, `git branch --show-current`, `git branch --list`, `git remote -v`, `git worktree list`, and `git blame -L <range> -- <file>`.",
+  "For user requests about branch cleanup, staging, restoring, worktrees, or history, use the precise Git command when it is safe to act and the permission prompt will mediate writes. Common write commands include `git switch <branch>`, `git switch -c <branch>`, `git branch -d <branch>`, `git branch -D <branch>`, `git restore --staged <path>`, `git restore --source <commit> -- <path>`, `git checkout <commit> -- <path>`, `git worktree add <path> <branch>`, and `git worktree remove <path>`.",
+  "Treat history rewriting and broad deletion as destructive. Before running commands like `git reset --hard`, `git clean -fd`, `git branch -D`, `git push --force`, `git rebase`, `git cherry-pick`, or `git revert`, explain the intended effect in plain language and rely on the permission flow. If the user only asks how, provide the command and what it does instead of executing it.",
+].join(" ");
+
 export const runtimeHarnessSystemPrompt = [
   workspaceToolchainSystemPrompt,
+  gitRuntimeSystemPrompt,
   cCmakeRuntimeSystemPrompt,
   pythonRuntimeSystemPrompt,
   markdownRuntimeSystemPrompt,
@@ -98,21 +137,4 @@ export const localProviderCatalog: Array<{
   },
 ];
 
-export const defaultDisabledProviders = [
-  "openai",
-  "anthropic",
-  "google",
-  "gemini",
-  "openrouter",
-  "xai",
-  "azure",
-  "amazon-bedrock",
-  "groq",
-  "mistral",
-  "cohere",
-  "together",
-  "perplexity",
-];
-
 export const taskStatesThatCanOpen = new Set<TaskState>(["running", "review_ready", "approving", "failed"]);
-

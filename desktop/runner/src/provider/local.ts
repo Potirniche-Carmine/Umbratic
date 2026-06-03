@@ -1,5 +1,5 @@
 export type UmbraticProviderConfig = {
-  id: "company-endpoint" | "company-model";
+  id: "company-endpoint";
   name: string;
   baseURL: string;
   apiKey: string;
