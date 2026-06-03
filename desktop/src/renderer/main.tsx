@@ -3667,6 +3667,10 @@ function App() {
         >
           <ArrowLeft size={15} />
         </button>
+        <div className="topbarTitle" aria-hidden="true">
+          <span className="topbarLogo" />
+          <span>Umbratic AI</span>
+        </div>
         <div className="topbarSpacer" />
       </header>
 

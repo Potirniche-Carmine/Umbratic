@@ -115,8 +115,7 @@ const importEsm = new Function("specifier", "return import(specifier)") as <T>(s
 
 const activeRunnerProcesss = new Map<string, RunnerProcess>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
-const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/umbratic_logo_runtime.png");
-const windowsAppIconPath = path.resolve(__dirname, "../../assets/brand/umbratic_logo_white.ico");
+const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
 const textAttachmentByteLimit = 512 * 1024;
 const imageAttachmentByteLimit = 10 * 1024 * 1024;
 const pdfAttachmentByteLimit = 25 * 1024 * 1024;
@@ -125,9 +124,8 @@ const pdfImageScale = 1.4;
 let pdfToImageModule: Promise<PdfToImageModule> | null = null;
 
 function appIcon() {
-  const iconPath = process.platform === "win32" ? windowsAppIconPath : runtimeAppIconPath;
-  if (!fs.existsSync(iconPath)) return undefined;
-  const icon = nativeImage.createFromPath(iconPath);
+  if (!fs.existsSync(runtimeAppIconPath)) return undefined;
+  const icon = nativeImage.createFromPath(runtimeAppIconPath);
   return icon.isEmpty() ? undefined : icon;
 }
 
