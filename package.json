@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
+    "desktop:dev:server": "npm --workspace @umbratic/desktop run dev -- --server",
     "desktop:build": "npm --workspace @umbratic/desktop run build"
   },
   "allowScripts": {

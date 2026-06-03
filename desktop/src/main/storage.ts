@@ -8,7 +8,10 @@ import {
   defaultEndpointBaseUrlForSoftware,
   defaultEndpointModelId,
   defaultEndpointSoftware,
+  endpointEditingAllowed,
+  isModelEndpointMode,
   isModelEndpointSoftware,
+  managedModelEndpointDefaults,
 } from "./config";
 import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import type { ChatRecord, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, TaskRecord, UserNotes } from "./types";
@@ -180,36 +183,43 @@ function defaultModelEndpointMode(): ModelEndpointMode {
   return isLocalhostUrl(defaultEndpointBaseUrl) ? "local" : "server";
 }
 
+export function hasStoredModelEndpointSettings(): boolean {
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  return !!settings.modelEndpoint;
+}
+
 export function readModelEndpointSettings(): ModelEndpointSettings {
   const settings = readJsonFile<RawSettings>(settingsPath(), {});
   const endpoint = settings.modelEndpoint ?? {};
-  const mode = endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode();
-  const software = isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, endpoint.baseUrl);
+  const managed = managedModelEndpointDefaults();
+  const mode =
+    managed?.mode ??
+    (endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode());
+  const managedBaseUrl = managed?.baseUrl;
+  const managedSoftware = managed?.software;
+  const storedBaseUrl = typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : undefined;
+  const storedModelId = typeof endpoint.modelId === "string" && endpoint.modelId.trim() ? endpoint.modelId.trim() : undefined;
+  const software =
+    managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
   return {
     mode,
     software,
-    baseUrl:
-      typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
-        ? endpoint.baseUrl.trim()
-        : defaultEndpointBaseUrlForSoftware(mode, software),
-    modelId:
-      typeof endpoint.modelId === "string" && endpoint.modelId.trim()
-        ? endpoint.modelId.trim()
-        : defaultEndpointModelId,
-    secret:
-      typeof endpoint.secret === "string"
-        ? endpoint.secret
-        : mode === "local"
-          ? ""
-          : defaultEndpointApiKey,
+    baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
+    modelId: managed?.modelId ?? storedModelId ?? defaultEndpointModelId,
+    secret: managed?.secret ?? (typeof endpoint.secret === "string" ? endpoint.secret : mode === "local" ? "" : defaultEndpointApiKey),
   };
 }
 
 export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>): ModelEndpointSettings {
   const current = readModelEndpointSettings();
-  const nextMode = input.mode === "local" || input.mode === "server" ? input.mode : current.mode;
+  const managed = managedModelEndpointDefaults();
+  const hasManagedEndpoint = !!(managed?.baseUrl || managed?.mode || managed?.software);
+  const canEditEndpoint = endpointEditingAllowed() && !hasManagedEndpoint;
+  const nextMode = canEditEndpoint && isModelEndpointMode(input.mode) ? input.mode : current.mode;
   const nextSoftware = isModelEndpointSoftware(input.software)
-    ? input.software
+    ? canEditEndpoint
+      ? input.software
+      : current.software
     : current.mode === nextMode
       ? current.software
       : defaultEndpointSoftware(nextMode);
@@ -217,11 +227,13 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
     mode: nextMode,
     software: nextSoftware,
     baseUrl:
-      typeof input.baseUrl === "string" && input.baseUrl.trim()
-        ? input.baseUrl.trim()
-        : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
-    modelId: typeof input.modelId === "string" ? input.modelId.trim() : current.modelId,
-    secret: typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret,
+      !canEditEndpoint
+        ? current.baseUrl
+        : typeof input.baseUrl === "string" && input.baseUrl.trim()
+          ? input.baseUrl.trim()
+          : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
+    modelId: managed?.modelId ?? (typeof input.modelId === "string" ? input.modelId.trim() : current.modelId),
+    secret: managed?.secret ?? (typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret),
   };
   const settings = readJsonFile<RawSettings>(settingsPath(), {});
   writeJsonFile(settingsPath(), {

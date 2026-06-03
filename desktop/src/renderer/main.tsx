@@ -52,15 +52,6 @@ type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
 type LocalProviderId = "company-endpoint";
-type ModelEndpointMode = "local" | "server";
-type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
-type ModelEndpointSettings = {
-  mode: ModelEndpointMode;
-  software: ModelEndpointSoftware;
-  baseUrl: string;
-  modelId: string;
-  secret: string;
-};
 type CommandClass =
   | "read"
   | "edit"
@@ -106,6 +97,10 @@ type BackendStatus = {
   models: LocalModelInfo[];
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
+  endpointConfig: {
+    source: "local-default" | "stored" | "managed";
+    endpointEditingAllowed: boolean;
+  };
   privacy: {
     share: "disabled";
     enabledProviders: LocalProviderId[];
@@ -353,8 +348,6 @@ type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
-  getModelEndpointSettings(): Promise<ModelEndpointSettings>;
-  saveModelEndpointSettings(input: ModelEndpointSettings): Promise<{ settings: ModelEndpointSettings; status: BackendStatus }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -389,56 +382,12 @@ type DesktopApi = {
 
 const previewChatsKey = "umbratic-preview-chats";
 const previewNotesKey = "umbratic-preview-notes";
-const serverSettingsKey = "umbratic-ui-server-settings";
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
 const markdownPreviewCharacterLimit = 60000;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
-const defaultLocalEndpointSettings: ModelEndpointSettings = {
-  mode: "local",
-  software: "ollama",
-  baseUrl: "http://127.0.0.1:11434",
-  modelId: "",
-  secret: "",
-};
-const endpointSoftwareOptions: Array<{ id: ModelEndpointSoftware; label: string; localUrl: string; serverUrl: string; modelPlaceholder: string }> = [
-  {
-    id: "ollama",
-    label: "Ollama",
-    localUrl: "http://127.0.0.1:11434",
-    serverUrl: "https://your-ollama-server.example",
-    modelPlaceholder: "Select a pulled model or type its name",
-  },
-  {
-    id: "lmstudio",
-    label: "LM Studio",
-    localUrl: "http://127.0.0.1:1234/v1",
-    serverUrl: "https://your-lm-studio-endpoint.example/v1",
-    modelPlaceholder: "Select a loaded model or type its ID",
-  },
-  {
-    id: "vllm",
-    label: "vLLM",
-    localUrl: "http://127.0.0.1:8000/v1",
-    serverUrl: "https://your-vllm-endpoint.example/v1",
-    modelPlaceholder: "Select a served model or type its ID",
-  },
-];
-
-function isModelEndpointSoftware(value: unknown): value is ModelEndpointSoftware {
-  return value === "ollama" || value === "lmstudio" || value === "vllm";
-}
-
-function endpointSoftwareOption(software: ModelEndpointSoftware) {
-  return endpointSoftwareOptions.find((option) => option.id === software) ?? endpointSoftwareOptions[0];
-}
-
-function defaultBaseUrlForEndpoint(mode: ModelEndpointMode, software: ModelEndpointSoftware) {
-  const option = endpointSoftwareOption(software);
-  return mode === "local" ? option.localUrl : option.serverUrl;
-}
 const defaultAppearanceSettings: AppearanceSettings = {
   theme: "system",
   uiFont: "System UI",
@@ -507,27 +456,6 @@ function writePreviewNotes(content: string): UserNotes {
   const notes = { content, updatedAt: new Date().toISOString() };
   window.localStorage.setItem(previewNotesKey, JSON.stringify(notes));
   return notes;
-}
-
-function readUiServerSettings(): ModelEndpointSettings {
-  try {
-    const settings = JSON.parse(window.localStorage.getItem(serverSettingsKey) ?? "{}") as Record<string, unknown>;
-    const mode = settings.mode === "server" ? "server" : "local";
-    const software = isModelEndpointSoftware(settings.software) ? settings.software : mode === "local" ? "ollama" : "vllm";
-    return {
-      mode,
-      software,
-      baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : defaultBaseUrlForEndpoint(mode, software),
-      modelId: typeof settings.modelId === "string" ? settings.modelId : "",
-      secret: typeof settings.secret === "string" ? settings.secret : "",
-    };
-  } catch {
-    return defaultLocalEndpointSettings;
-  }
-}
-
-function writeUiServerSettings(settings: ModelEndpointSettings) {
-  window.localStorage.setItem(serverSettingsKey, JSON.stringify(settings));
 }
 
 function readAppearanceSettings(): AppearanceSettings {
@@ -683,6 +611,10 @@ const fallbackApi: DesktopApi = {
     models: [],
     providers: [],
     permissionMode: previewPermissionMode,
+    endpointConfig: {
+      source: "local-default",
+      endpointEditingAllowed: true,
+    },
     privacy: {
       share: "disabled",
       enabledProviders: [],
@@ -724,11 +656,6 @@ const fallbackApi: DesktopApi = {
     },
     message: "Electron preload is not available in this browser preview.",
   }),
-  getModelEndpointSettings: async () => readUiServerSettings(),
-  saveModelEndpointSettings: async (input) => {
-    writeUiServerSettings(input);
-    return { settings: input, status: await fallbackApi.getBackendStatus() };
-  },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   listSkills: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -2095,10 +2022,8 @@ function App() {
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"account" | "appearance" | "server" | "tools" | "skills" | "telemetry">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "appearance" | "tools" | "skills" | "telemetry">("account");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
-  const [serverSettings, setServerSettings] = useState(() => readUiServerSettings());
-  const [serverSettingsMessage, setServerSettingsMessage] = useState<string | null>(null);
   const [appearanceSettings, setAppearanceSettings] = useState(() => readAppearanceSettings());
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
   const [availableFontFamilies, setAvailableFontFamilies] = useState<string[]>(() =>
@@ -2176,6 +2101,15 @@ function App() {
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
+  const connectionState = backend?.endpoint ?? "checking";
+  const connectionLabel =
+    backend?.endpoint === "ready"
+      ? "Connected"
+      : backend?.endpoint === "degraded"
+        ? "Warning"
+        : backend
+          ? "Unavailable"
+          : "Checking";
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
@@ -2298,7 +2232,6 @@ function App() {
   }, [composerItems]);
 
   useEffect(() => {
-    void loadModelEndpointSettings();
     void refreshStatus();
     void loadNotes();
     void loadAvailableIdes();
@@ -2403,17 +2336,6 @@ function App() {
       unsubscribe();
     };
   }, []);
-
-  useEffect(() => {
-    if (!backend?.model) return;
-    setServerSettings((current) => ({
-      mode: current.mode,
-      software: current.software,
-      baseUrl: current.baseUrl || backend.model?.baseUrl || "",
-      modelId: current.modelId || backend.model?.modelId || "",
-      secret: current.secret,
-    }));
-  }, [backend?.model?.baseUrl, backend?.model?.modelId]);
 
   useEffect(() => {
     if (!notesLoadedRef.current) return undefined;
@@ -2650,66 +2572,6 @@ function App() {
     }
   }
 
-  async function loadModelEndpointSettings() {
-    try {
-      setServerSettings(await api.getModelEndpointSettings());
-    } catch (cause) {
-      setServerSettingsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  function updateServerMode(mode: ModelEndpointMode) {
-    setServerSettings((current) => ({
-      mode,
-      software: current.mode === mode ? current.software : mode === "local" ? "ollama" : "vllm",
-      baseUrl:
-        current.mode === mode
-          ? current.baseUrl
-          : defaultBaseUrlForEndpoint(mode, mode === "local" ? "ollama" : "vllm"),
-      modelId: current.mode === mode ? current.modelId : "",
-      secret: current.mode === mode ? current.secret : mode === "local" ? "" : current.secret,
-    }));
-    setServerSettingsMessage(null);
-  }
-
-  function updateEndpointSoftware(software: ModelEndpointSoftware) {
-    setServerSettings((current) => ({
-      ...current,
-      software,
-      baseUrl:
-        !current.baseUrl.trim() || current.baseUrl === defaultBaseUrlForEndpoint(current.mode, current.software)
-          ? defaultBaseUrlForEndpoint(current.mode, software)
-          : current.baseUrl,
-      modelId: "",
-    }));
-    setServerSettingsMessage(null);
-  }
-
-  async function saveServerSettings() {
-    const next = {
-      mode: serverSettings.mode,
-      software: serverSettings.software,
-      baseUrl: serverSettings.baseUrl.trim(),
-      modelId: serverSettings.modelId.trim(),
-      secret: serverSettings.secret,
-    };
-    if (!next.baseUrl) {
-      setServerSettingsMessage("Add a URL before saving.");
-      return;
-    }
-    setServerSettingsMessage("Saving...");
-    try {
-      const result = await api.saveModelEndpointSettings(next);
-      setServerSettings(result.settings);
-      setBackend(result.status);
-      setServerSettingsMessage(
-        result.status.endpoint === "ready" ? "Saved and connected." : result.status.providers[0]?.message ?? "Saved.",
-      );
-    } catch (cause) {
-      setServerSettingsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
   function updateAppearanceSettings(patch: Partial<AppearanceSettings>) {
     setAppearanceSettings((current) => ({ ...current, ...patch }));
     setFontScanMessage(null);
@@ -2749,12 +2611,10 @@ function App() {
       chatId = chat.id;
     }
     const detail = status?.providers[0]?.message || status?.message;
-    const model = status?.model?.modelId ? `\n\nConfigured model: \`${status.model.modelId}\`.` : "";
     const message = [
       "I can't reach the LLM endpoint yet, so I didn't start this run.",
       "",
-      "Check **Settings > Server**, choose Local or Server, and confirm the URL and model ID.",
-      model,
+      "Check **Settings > Account** for the model server connection status.",
       detail ? `\nConnection detail: ${detail}` : "",
     ].join("\n");
     const taskId = `local-connection-${Date.now().toString(36)}`;
@@ -3857,7 +3717,6 @@ function App() {
             onClick={() => {
               setSettingsOpen(true);
               setAccountMessage(null);
-              setServerSettingsMessage(null);
               setTelemetryMessage(null);
               setFontScanMessage(null);
               void refreshStatus();
@@ -4522,14 +4381,6 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className={`settingsNavItem ${settingsTab === "server" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("server")}
-                >
-                  <Brain size={15} />
-                  <span>Server</span>
-                </button>
-                <button
-                  type="button"
                   className={`settingsNavItem ${settingsTab === "tools" ? "isActive" : ""}`}
                   onClick={() => setSettingsTab("tools")}
                 >
@@ -4570,6 +4421,22 @@ function App() {
                         <strong>Developer</strong>
                         <em>Sign in required</em>
                       </div>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Connection</h4>
+                      <div className="settingsList">
+                        <div className="settingsListRow">
+                          <span>Model server</span>
+                          <strong className={`serverHealthText ${connectionState}`}>
+                            <span className="serverStatusDot" aria-hidden="true" />
+                            {connectionLabel}
+                          </strong>
+                        </div>
+                      </div>
+                      {backend?.providers[0]?.message || backend?.message ? (
+                        <p className="settingsMessage">{backend.providers[0]?.message ?? backend.message}</p>
+                      ) : null}
                     </div>
 
                     <div className="settingsGroup">
@@ -4671,141 +4538,6 @@ function App() {
                       <code>cmake --build .umbratic/build --parallel</code>
                     </div>
                   </div>
-                ) : null}
-
-                {settingsTab === "server" ? (
-                  <form
-                    className="settingsPanel"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void saveServerSettings();
-                    }}
-                  >
-                    <div className="settingsPanelHead">
-                      <h3>Server</h3>
-                      <p>Choose Ollama, LM Studio, or vLLM locally. Server endpoints default to vLLM.</p>
-                    </div>
-
-                    <div className="appearanceOptionGrid">
-                      {[
-                        { id: "local" as const, label: "Local", icon: <TerminalSquare size={15} /> },
-                        { id: "server" as const, label: "Server", icon: <PanelRight size={15} /> },
-                      ].map((option) => (
-                        <button
-                          className={serverSettings.mode === option.id ? "isActive" : ""}
-                          key={option.id}
-                          type="button"
-                          aria-pressed={serverSettings.mode === option.id}
-                          onClick={() => updateServerMode(option.id)}
-                        >
-                          {option.icon}
-                          <span>{option.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="settingsList">
-                      <div className="settingsListRow">
-                        <span>Health</span>
-                        <strong className={`serverHealthText ${backend?.endpoint ?? "checking"}`}>
-                          <span className="serverStatusDot" aria-hidden="true" />
-                          {backend?.endpoint === "ready"
-                            ? "Connected"
-                            : backend?.endpoint === "degraded"
-                              ? "Warning"
-                              : backend
-                                ? "Unavailable"
-                                : "Checking"}
-                        </strong>
-                      </div>
-                      <div className="settingsListRow">
-                        <span>Active model</span>
-                        <strong>{backend?.model?.modelId ?? "Unknown"}</strong>
-                      </div>
-                      <div className="settingsListRow">
-                        <span>Active endpoint</span>
-                        <strong>{backend?.model?.baseUrl ?? backend?.providers[0]?.baseUrl ?? "Unknown"}</strong>
-                      </div>
-                      <div className="settingsListRow">
-                        <span>Models found</span>
-                        <strong>{backend?.models.length ?? 0}</strong>
-                      </div>
-                    </div>
-
-                    <label className="settingsField">
-                      <span>Software</span>
-                      <select
-                        value={serverSettings.software}
-                        onChange={(event) => updateEndpointSoftware(event.target.value as ModelEndpointSoftware)}
-                      >
-                        {endpointSoftwareOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="settingsField">
-                      <span>{serverSettings.mode === "local" ? "Local URL" : "Server URL or IP"}</span>
-                      <input
-                        type="text"
-                        value={serverSettings.baseUrl}
-                        onChange={(event) =>
-                          setServerSettings((current) => ({ ...current, baseUrl: event.target.value }))
-                        }
-                        placeholder={defaultBaseUrlForEndpoint(serverSettings.mode, serverSettings.software)}
-                      />
-                    </label>
-
-                    <label className="settingsField">
-                      <span>Model ID</span>
-                      {backend?.models.length ? (
-                        <select
-                          value={serverSettings.modelId}
-                          onChange={(event) =>
-                            setServerSettings((current) => ({ ...current, modelId: event.target.value }))
-                          }
-                        >
-                          {backend.models.map((model) => (
-                            <option key={`${model.baseUrl}:${model.modelId}`} value={model.modelId}>
-                              {model.modelId}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          type="text"
-                          value={serverSettings.modelId}
-                          onChange={(event) =>
-                            setServerSettings((current) => ({ ...current, modelId: event.target.value }))
-                          }
-                          placeholder={endpointSoftwareOption(serverSettings.software).modelPlaceholder}
-                        />
-                      )}
-                    </label>
-
-                    <label className="settingsField">
-                      <span>{serverSettings.mode === "local" ? "API key (optional)" : "Secret"}</span>
-                      <input
-                        type="password"
-                        value={serverSettings.secret}
-                        onChange={(event) =>
-                          setServerSettings((current) => ({ ...current, secret: event.target.value }))
-                        }
-                        placeholder={serverSettings.mode === "local" ? "Usually blank for local runners" : "API key or shared secret"}
-                        autoComplete="off"
-                      />
-                    </label>
-
-                    <div className="settingsActions">
-                      <button className="settingsInlineButton" type="submit">
-                        <Check size={13} />
-                        <span>Save</span>
-                      </button>
-                      {serverSettingsMessage ? <p className="settingsMessage">{serverSettingsMessage}</p> : null}
-                    </div>
-                  </form>
                 ) : null}
 
                 {settingsTab === "tools" ? (

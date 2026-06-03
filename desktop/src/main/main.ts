@@ -21,8 +21,10 @@ import {
   cCmakeRuntimeSystemPrompt,
   defaultEndpointModelId,
   debuggerRuntimeSystemPrompt,
+  endpointEditingAllowed,
   localProviderCatalog,
   markdownRuntimeSystemPrompt,
+  managedModelEndpointDefaults,
   pythonRuntimeSystemPrompt,
   reasoningSystemPrompt,
   runtimeHarnessSystemPrompt,
@@ -60,6 +62,7 @@ import {
 import { getProviderJson } from "./providerClient";
 import {
   readChats,
+  hasStoredModelEndpointSettings,
   readModelEndpointSettings,
   readNotes,
   readProjects,
@@ -1738,6 +1741,8 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
   const runnerPath = runnerBinaryPath();
+  const managedEndpoint = managedModelEndpointDefaults();
+  const hasManagedEndpoint = !!(managedEndpoint?.baseUrl || managedEndpoint?.mode || managedEndpoint?.software);
   const endpointStatus = providers.some((provider) => provider.status === "ready")
     ? "ready"
     : providers.some((provider) => provider.status === "degraded")
@@ -1756,6 +1761,10 @@ async function getBackendStatus(): Promise<BackendStatus> {
     models,
     providers,
     permissionMode,
+    endpointConfig: {
+      source: managedEndpoint ? "managed" : hasStoredModelEndpointSettings() ? "stored" : "local-default",
+      endpointEditingAllowed: endpointEditingAllowed() && !hasManagedEndpoint,
+    },
     privacy: {
       share: "disabled",
       enabledProviders: providers.filter((provider) => provider.status === "ready").map((provider) => provider.providerId),
