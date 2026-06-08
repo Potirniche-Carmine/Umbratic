@@ -127,7 +127,8 @@ async function main() {
   const electron = spawn(require("electron"), ["."], {
     cwd: desktopRoot,
     stdio: "inherit",
-    windowsHide: true,
+    // On Windows, hiding the spawned process can also hide Electron's app window.
+    windowsHide: false,
     env: {
       ...process.env,
       ...cliEnv,

@@ -7,6 +7,7 @@ import { readTool } from "./read.js";
 import { searchTool } from "./search.js";
 import { writeTool } from "./write.js";
 import type { ToolContext, ToolResult } from "./common.js";
+import { isRunnerToolName, type RunnerToolName } from "../config.js";
 
 function quoteToolArg(value: string): string {
   return /\s|["']/.test(value) ? JSON.stringify(value) : value;
@@ -97,6 +98,11 @@ export const toolSpecs = [
   },
 ];
 
+export function enabledToolSpecs(enabledTools: readonly RunnerToolName[]) {
+  const enabled = new Set(enabledTools);
+  return toolSpecs.filter((spec) => enabled.has(spec.function.name as RunnerToolName));
+}
+
 function parseArguments(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -129,6 +135,9 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
     cwd: ctx.cwd,
     at: nowIso(),
   });
+  if (!isRunnerToolName(toolCall.name) || !ctx.enabledTools.includes(toolCall.name)) {
+    throw new Error(`Tool "${toolCall.name}" is disabled by the current tool settings.`);
+  }
   const result =
     toolCall.name === "read" ? await readTool(ctx, input) :
     toolCall.name === "write" ? await writeTool(ctx, input) :

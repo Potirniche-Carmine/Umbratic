@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 
+import { isRunnerToolId } from "./toolSettings";
 import type { CommandClass, LocalModelInfo, LocalProviderId, RuntimeDiagnostics, RuntimeProfileId, TelemetryPolicyInfo } from "./types";
 import { normalizeRelativePath, pathInside } from "./utils";
 
@@ -319,6 +320,10 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(typeof config.taskId === "string" && config.taskId.length > 0, "task id must be set");
   assert(typeof config.cwd === "string" && config.cwd.length > 0, "cwd must be set");
   assert(config.permissionMode === "normal", "permissions must be mediated by the desktop app");
+  assert(
+    Array.isArray(config.enabledTools) && config.enabledTools.every((tool) => isRunnerToolId(tool)),
+    "enabled tools must be explicit valid runner tool ids",
+  );
   assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic AI private endpoint allowlist");
 
   const provider = config.provider as Record<string, unknown> | undefined;

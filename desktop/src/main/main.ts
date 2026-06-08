@@ -68,14 +68,17 @@ import {
   readProjects,
   readSettings,
   readTasks,
+  readToolSettings,
   writeModelEndpointSettings,
   writeChats,
   writeJsonFile,
   writeNotes,
   writeProjects,
   writeTasks,
+  writeToolSettings,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
+import { enabledToolsFromSettings, normalizeEnabledTools, runnerToolIds } from "./toolSettings";
 import type {
   ApproveResult,
   BackendStatus,
@@ -91,6 +94,7 @@ import type {
   LocalModelInfo,
   LocalModelProvider,
   RunnerProcess,
+  RunnerToolId,
   PendingPermission,
   PermissionMode,
   PermissionRequest,
@@ -124,6 +128,7 @@ const imageAttachmentByteLimit = 10 * 1024 * 1024;
 const pdfAttachmentByteLimit = 25 * 1024 * 1024;
 const pdfImagePageLimit = 12;
 const pdfImageScale = 1.4;
+const binarySnapshotPrefix = "__UMBRATIC_BINARY_FILE__:";
 let pdfToImageModule: Promise<PdfToImageModule> | null = null;
 
 function appIcon() {
@@ -439,11 +444,30 @@ function taskUsesIsolatedWorktree(task: TaskRecord): boolean {
   return task.workspaceKind === "git" && task.workspaceMode === "worktree" && !!task.agentBranch;
 }
 
+function taskEnabledTools(task: TaskRecord): RunnerToolId[] {
+  return normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings(readToolSettings()));
+}
+
+function taskCanCreateFiles(task: TaskRecord): boolean {
+  const enabled = new Set(taskEnabledTools(task));
+  return enabled.has("write") || enabled.has("edit") || enabled.has("command");
+}
+
 function workspaceModeSystemPrompt(task: TaskRecord): string {
   if (taskUsesIsolatedWorktree(task)) {
     return "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path.";
   }
-  return "Workspace mode: direct repository/folder. Do not ask to create a Git worktree or switch to one; work directly in the provided current working directory.";
+  return "Workspace mode: local repository/folder. Do not ask to create a Git worktree or switch to one; work directly in the provided current working directory.";
+}
+
+function toolAccessSystemPrompt(task: TaskRecord): string {
+  const enabled = new Set(taskEnabledTools(task));
+  const disabled = runnerToolIds.filter((id) => !enabled.has(id));
+  return [
+    `Enabled runner tools for this run: ${enabled.size ? Array.from(enabled).join(", ") : "none"}.`,
+    disabled.length ? `Disabled runner tools are not allowed: ${disabled.join(", ")}.` : "No runner tools are disabled.",
+    "Do not use web fetch, web search, public providers, or external directories.",
+  ].join(" ");
 }
 
 function publicTaskById(input: unknown): TaskInfo | null {
@@ -641,6 +665,11 @@ function chatTitleFromPrompt(prompt: string): string {
 }
 
 function createChat(input: unknown): ChatRecord {
+  const requestedId =
+    isRecord(input) && typeof input.id === "string" && /^chat-[A-Za-z0-9_-]+$/.test(input.id)
+      ? input.id
+      : undefined;
+  const shouldPersist = !isRecord(input) || input.persist !== false;
   const title =
     isRecord(input) && typeof input.title === "string" && input.title.trim()
       ? input.title.trim().slice(0, 72)
@@ -655,7 +684,7 @@ function createChat(input: unknown): ChatRecord {
       : undefined;
   const now = new Date().toISOString();
   const chat: ChatRecord = {
-    id: chatId(),
+    id: requestedId ?? chatId(),
     title,
     createdAt: now,
     updatedAt: now,
@@ -664,7 +693,9 @@ function createChat(input: unknown): ChatRecord {
     draftPrompt: "",
     attachedFiles: [],
   };
-  saveChat(chat);
+  if (shouldPersist) {
+    saveChat(chat);
+  }
   return chat;
 }
 
@@ -792,6 +823,14 @@ function readTextFileIfSafe(filePath: string): string | null {
   }
 }
 
+function binarySnapshotValue(stat: fs.Stats): string {
+  return `${binarySnapshotPrefix}${stat.size}:${Math.floor(stat.mtimeMs)}`;
+}
+
+function isBinarySnapshotValue(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(binarySnapshotPrefix);
+}
+
 function isPdfFile(filePath: string): boolean {
   return path.extname(filePath).toLowerCase() === ".pdf";
 }
@@ -902,6 +941,15 @@ function snapshotFolder(rootPath: string): Record<string, string> {
       const text = readTextFileIfSafe(absolute);
       if (text !== null) {
         snapshot[relative] = text;
+        continue;
+      }
+      try {
+        const stat = fs.statSync(absolute);
+        if (stat.isFile()) {
+          snapshot[relative] = binarySnapshotValue(stat);
+        }
+      } catch {
+        /* Ignore files that disappear while the snapshot is being collected. */
       }
     }
   }
@@ -1267,6 +1315,25 @@ function buildTextDiff(filePath: string, before: string | null, after: string | 
     status,
     diff: [...diffHeader(filePath, status), hunk, ...body].join("\n"),
   };
+}
+
+function buildBinaryDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
+  if (before === after) {
+    return null;
+  }
+  const status: ReviewFile["status"] = before === null ? "added" : after === null ? "deleted" : "modified";
+  return {
+    path: filePath,
+    status,
+    diff: [...diffHeader(filePath, status), `Binary file ${status}: ${filePath}`].join("\n"),
+  };
+}
+
+function buildSnapshotDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
+  if (isBinarySnapshotValue(before) || isBinarySnapshotValue(after)) {
+    return buildBinaryDiff(filePath, before, after);
+  }
+  return buildTextDiff(filePath, before, after);
 }
 
 function worktreeRootForRepo(repoRoot: string): string {
@@ -1710,6 +1777,15 @@ async function fetchEndpointModels(
 
 async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
   const settings = writeModelEndpointSettings(input);
+  const status = await getBackendStatus();
+  return { settings, status };
+}
+
+async function saveRunnerToolSettings(input: unknown) {
+  if (!isRecord(input)) {
+    throw new Error("Invalid tool settings.");
+  }
+  const settings = writeToolSettings(input as Partial<Record<RunnerToolId, boolean>>);
   const status = await getBackendStatus();
   return { settings, status };
 }
@@ -2320,7 +2396,7 @@ function folderReviewFiles(task: TaskRecord): ReviewFile[] {
     .filter((file) => !isGeneratedRuntimePath(file))
     .sort((a, b) => a.localeCompare(b));
   return paths
-    .map((file) => buildTextDiff(file, before[file] ?? null, after[file] ?? null))
+    .map((file) => buildSnapshotDiff(file, before[file] ?? null, after[file] ?? null))
     .filter((file): file is ReviewFile => !!file);
 }
 
@@ -2348,6 +2424,15 @@ async function gitReviewFiles(task: TaskRecord): Promise<ReviewFile[]> {
       if (review) {
         files.push(review);
       }
+      continue;
+    }
+    const review = buildBinaryDiff(
+      file,
+      status === "added" ? null : "before",
+      status === "deleted" ? null : "after",
+    );
+    if (review) {
+      files.push(review);
     }
   }
   return files;
@@ -2509,11 +2594,17 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     task.model = selected;
     applyTaskPolicyMetadata(task, intent);
     saveTask(task);
+    if (expectsFileChanges && !taskCanCreateFiles(task)) {
+      failTask(task, "File creation tools are disabled for this run. Enable write, edit, or command in Settings > Tools and try again.");
+      return;
+    }
     run = await startUmbraticRunnerServer(task, selected);
     activeRunnerProcesss.set(task.id, run);
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; finished: boolean }>();
     let delegatedToWorktree = false;
+    let fileCreationToolRequested = false;
+    let fileCreationToolSucceeded = false;
     let completed = false;
     let resolveCompletion!: () => void;
     let rejectCompletion!: (error: Error) => void;
@@ -2596,6 +2687,9 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         const kind: PermissionRequest["kind"] = toolKind === "command" || toolKind === "debugger" ? "bash" : "edit";
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : "edit";
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
+        if (toolKind === "write" || toolKind === "edit" || toolKind === "command") {
+          fileCreationToolRequested = true;
+        }
         ensureToolRun(toolCallId, command, kind, commandClass);
         return;
       }
@@ -2619,6 +2713,9 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         if (!current.finished) {
           current.finished = true;
           const exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
+          if ((current.kind === "edit" || current.command.startsWith("write ") || current.command.startsWith("edit ")) && exitCode === 0) {
+            fileCreationToolSucceeded = true;
+          }
           emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode });
         }
         return;
@@ -2676,8 +2773,9 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
         system: [
-          "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Do not use web fetch, web search, public providers, or external directories. Use real Umbratic AI tool results when you need repository context or file details. Do not narrate imagined tool use, and never say you ran a command or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
+          "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Use real Umbratic AI tool results when you need repository context, file details, or web results. Do not narrate imagined tool use, and never say you ran a command, searched the web, or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
           workspaceModeSystemPrompt(task),
+          toolAccessSystemPrompt(task),
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
           runtimeHarnessSystemPrompt,
         ].join(" "),
@@ -2704,7 +2802,12 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     const reviewFiles = await refreshReview(task);
     if (reviewFiles.length === 0) {
       if (expectsFileChanges) {
-        failTask(task, "Umbratic runner finished without file changes.");
+        const reason = !fileCreationToolRequested
+          ? "No file creation tool was called."
+          : !fileCreationToolSucceeded
+            ? "A file creation tool was attempted but did not succeed."
+            : "A file creation tool reported success, but no reviewable file changes were found.";
+        failTask(task, `Umbratic runner finished without file changes. ${reason}`);
         return;
       }
       task.state = "completed";
@@ -2803,20 +2906,30 @@ async function startTask(input: unknown): Promise<TaskInfo> {
   const prompt = requiredString(input.prompt, "prompt");
   const reasoningMode = parseReasoningMode(input.reasoningMode);
   const requestedChatId = typeof input.chatId === "string" && input.chatId.trim() ? input.chatId.trim() : undefined;
-  const chat =
-    (requestedChatId ? readChats().find((row) => row.id === requestedChatId) : undefined) ??
-    createChat({ title: chatTitleFromPrompt(prompt) });
   const hiddenWorkspace = !requestedRepositoryId;
-  const repository = hiddenWorkspace ? hiddenChatRepository(chat.id) : readProjects().find((project) => project.id === requestedRepositoryId);
-  if (!repository) {
+  const existingChat = requestedChatId ? readChats().find((row) => row.id === requestedChatId) : undefined;
+  const nextChatId = existingChat?.id ?? requestedChatId ?? chatId();
+  const repositoryForChat = hiddenWorkspace
+    ? hiddenChatRepository(nextChatId)
+    : readProjects().find((project) => project.id === requestedRepositoryId);
+  if (!repositoryForChat) {
     throw new Error("Repository has not been selected.");
   }
-  const refreshed = hiddenWorkspace ? repository : await inspectRepository(repository.rootPath);
+  const refreshed = hiddenWorkspace ? repositoryForChat : await inspectRepository(repositoryForChat.rootPath);
+  const chat =
+    existingChat ??
+    createChat({
+      id: nextChatId,
+      title: chatTitleFromPrompt(prompt),
+      repositoryName: refreshed.name,
+      repositoryPath: hiddenWorkspace ? undefined : refreshed.rootPath,
+    });
   const repositoryId = refreshed.id;
   const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
   const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
   const requestedWorkspaceMode: WorkspaceMode =
     !hiddenWorkspace && refreshed.kind === "git" && input.useWorktree === true ? "worktree" : "local";
+  const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings(readToolSettings()));
 
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
@@ -2839,6 +2952,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
     existingTask.runtimeProfile = runtimeProfileForPrompt(prompt);
+    existingTask.enabledTools = requestedEnabledTools;
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && requestedWorkspaceMode === "worktree" && !existingTask.agentBranch) {
@@ -2909,6 +3023,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     originalRepoPath: refreshed.rootPath,
     originalWasDirty: refreshed.dirty,
     baselineFiles: shouldCreateWorktree ? undefined : snapshotFolder(refreshed.rootPath),
+    enabledTools: requestedEnabledTools,
   };
   saveTask(task);
   emit({ type: "user.message", taskId: task.id, text: prompt, attachedFiles: attachments });
@@ -3645,6 +3760,8 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:save-model-endpoint-settings", (input) =>
     saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),
   );
+  handleIpc("umbratic:get-tool-settings", () => readToolSettings());
+  handleIpc("umbratic:save-tool-settings", (input) => saveRunnerToolSettings(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
   handleIpc("umbratic:list-skills", () => listSkills());
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());

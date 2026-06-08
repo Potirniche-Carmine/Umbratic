@@ -5,6 +5,7 @@ type UmbraticReasoningMode = "fast" | "reasoning";
 type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
 type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
+type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 type UmbraticLocalProviderId = "company-endpoint";
 type UmbraticModelEndpointMode = "local" | "server";
 type UmbraticModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
@@ -259,7 +260,7 @@ declare global {
   interface Window {
     umbratic?: {
       listChats(): Promise<UmbraticChatRecord[]>;
-      createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<UmbraticChatRecord>;
+      createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean }): Promise<UmbraticChatRecord>;
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: UmbraticChatAttachment[] }): Promise<UmbraticChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
       getNotes(): Promise<UmbraticUserNotes>;
@@ -279,6 +280,11 @@ declare global {
         { ok: true; repository: UmbraticRepositoryInfo } | { ok: false; message: string }
       >;
       getBackendStatus(): Promise<UmbraticBackendStatus>;
+      getToolSettings(): Promise<Record<UmbraticRunnerToolId, boolean>>;
+      saveToolSettings(input: Partial<Record<UmbraticRunnerToolId, boolean>>): Promise<{
+        settings: Record<UmbraticRunnerToolId, boolean>;
+        status: UmbraticBackendStatus;
+      }>;
       getModelEndpointSettings(): Promise<UmbraticModelEndpointSettings>;
       saveModelEndpointSettings(input: UmbraticModelEndpointSettings): Promise<{
         settings: UmbraticModelEndpointSettings;
@@ -300,6 +306,7 @@ declare global {
         attachedFiles?: UmbraticChatAttachment[];
         reasoningMode?: UmbraticReasoningMode;
         useWorktree?: boolean;
+        enabledTools?: UmbraticRunnerToolId[];
       }): Promise<UmbraticTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: UmbraticPermissionDecision): Promise<void>;

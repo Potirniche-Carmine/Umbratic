@@ -51,6 +51,7 @@ type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
+type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 type LocalProviderId = "company-endpoint";
 type CommandClass =
   | "read"
@@ -328,7 +329,7 @@ type SkillInfo = { id: string; name: string; description: string };
 
 type DesktopApi = {
   listChats(): Promise<ChatRecord[]>;
-  createChat(input?: { title?: string; repositoryName?: string; repositoryPath?: string }): Promise<ChatRecord>;
+  createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean }): Promise<ChatRecord>;
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
   getNotes(): Promise<UserNotes>;
@@ -348,6 +349,11 @@ type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
+  getToolSettings(): Promise<Record<RunnerToolId, boolean>>;
+  saveToolSettings(input: Partial<Record<RunnerToolId, boolean>>): Promise<{
+    settings: Record<RunnerToolId, boolean>;
+    status: BackendStatus;
+  }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -364,6 +370,7 @@ type DesktopApi = {
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
+    enabledTools?: RunnerToolId[];
   }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
@@ -384,6 +391,7 @@ const previewChatsKey = "umbratic-preview-chats";
 const previewNotesKey = "umbratic-preview-notes";
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
+const previewToolSettingsKey = "umbratic-preview-tool-settings";
 const markdownPreviewCharacterLimit = 60000;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
@@ -414,6 +422,15 @@ const defaultMonoFontChoices = [
   "Source Code Pro",
   "ui-monospace",
 ];
+const runnerTools: Array<{ id: RunnerToolId; name: string; description: string }> = [
+  { id: "read", name: "read", description: "Read a workspace file or list a directory." },
+  { id: "search", name: "search", description: "Search workspace file paths and small text files." },
+  { id: "edit", name: "edit", description: "Replace exact text in a workspace file. Requires permission." },
+  { id: "write", name: "write", description: "Write a workspace file. Requires permission." },
+  { id: "command", name: "command", description: "Run a workspace shell command after policy and permission checks." },
+  { id: "debugger", name: "debugger", description: "Inspect a workspace executable with gdb, lldb, or cdb. Requires permission." },
+];
+const defaultToolSettings = Object.fromEntries(runnerTools.map((tool) => [tool.id, true])) as Record<RunnerToolId, boolean>;
 
 type LocalFontDescriptor = {
   family?: string;
@@ -483,6 +500,37 @@ function writeWorkspaceMode(mode: WorkspaceMode) {
   window.localStorage.setItem(workspaceModeKey, mode);
 }
 
+function isRunnerToolId(value: unknown): value is RunnerToolId {
+  return typeof value === "string" && runnerTools.some((tool) => tool.id === value);
+}
+
+function normalizeToolSettings(value: unknown): Record<RunnerToolId, boolean> {
+  const next = { ...defaultToolSettings };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return next;
+  for (const [id, enabled] of Object.entries(value)) {
+    if (isRunnerToolId(id) && typeof enabled === "boolean") {
+      next[id] = enabled;
+    }
+  }
+  return next;
+}
+
+function readPreviewToolSettings(): Record<RunnerToolId, boolean> {
+  try {
+    return normalizeToolSettings(JSON.parse(window.localStorage.getItem(previewToolSettingsKey) ?? "{}"));
+  } catch {
+    return { ...defaultToolSettings };
+  }
+}
+
+function writePreviewToolSettings(settings: Record<RunnerToolId, boolean>) {
+  window.localStorage.setItem(previewToolSettingsKey, JSON.stringify(settings));
+}
+
+function enabledToolIds(settings: Record<RunnerToolId, boolean>): RunnerToolId[] {
+  return runnerTools.filter((tool) => settings[tool.id]).map((tool) => tool.id);
+}
+
 function uniqueFonts(fonts: string[]): string[] {
   return Array.from(new Set(fonts.map((font) => font.trim()).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" }),
@@ -521,7 +569,7 @@ const fallbackApi: DesktopApi = {
   createChat: async (input) => {
     const now = new Date().toISOString();
     const chat: ChatRecord = {
-      id: `preview-${Date.now().toString(36)}`,
+      id: input?.id ?? `preview-${Date.now().toString(36)}`,
       title: input?.title?.trim() || "New chat",
       createdAt: now,
       updatedAt: now,
@@ -530,7 +578,9 @@ const fallbackApi: DesktopApi = {
       draftPrompt: "",
       attachedFiles: [],
     };
-    writePreviewChats([chat, ...readPreviewChats().filter((row) => row.id !== chat.id)]);
+    if (input?.persist !== false) {
+      writePreviewChats([chat, ...readPreviewChats().filter((row) => row.id !== chat.id)]);
+    }
     return chat;
   },
   updateChatDraft: async (input) => {
@@ -656,6 +706,12 @@ const fallbackApi: DesktopApi = {
     },
     message: "Electron preload is not available in this browser preview.",
   }),
+  getToolSettings: async () => readPreviewToolSettings(),
+  saveToolSettings: async (input) => {
+    const settings = normalizeToolSettings({ ...readPreviewToolSettings(), ...input });
+    writePreviewToolSettings(settings);
+    return { settings, status: await fallbackApi.getBackendStatus() };
+  },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   listSkills: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -2033,14 +2089,8 @@ function App() {
   const [fontScanPending, setFontScanPending] = useState(false);
   const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
   const [exportingTelemetry, setExportingTelemetry] = useState(false);
-  const [toolsEnabled, setToolsEnabled] = useState<Record<string, boolean>>({
-    read: true,
-    write: true,
-    edit: true,
-    search: true,
-    command: true,
-    debugger: true,
-  });
+  const [toolsEnabled, setToolsEnabled] = useState<Record<RunnerToolId, boolean>>(() => ({ ...defaultToolSettings }));
+  const [toolsMessage, setToolsMessage] = useState<string | null>(null);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.umbratic/skills");
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -2233,6 +2283,7 @@ function App() {
 
   useEffect(() => {
     void refreshStatus();
+    void loadToolSettings();
     void loadNotes();
     void loadAvailableIdes();
     void loadChats();
@@ -2507,6 +2558,20 @@ function App() {
     setChats((current) => [chat, ...current.filter((row) => row.id !== chat.id)]);
   }
 
+  async function ensurePersistedChatForMessage(title: string): Promise<string> {
+    if (activeChatId && chats.some((chat) => chat.id === activeChatId)) {
+      return activeChatId;
+    }
+    const chat = await api.createChat({
+      ...chatInputForCurrentProject(title),
+      id: activeChatId ?? undefined,
+    });
+    mergeChat(chat);
+    suppressDraftSaveBriefly();
+    setActiveChatId(chat.id);
+    return chat.id;
+  }
+
   function upsertChatFromTask(nextTask: TaskInfo) {
     if (!nextTask.chatId) return;
     const now = new Date().toISOString();
@@ -2602,14 +2667,7 @@ function App() {
   }
 
   async function showConnectionErrorInChat(userText: string, status: BackendStatus | null) {
-    let chatId = activeChatId;
-    if (!chatId) {
-      const chat = await api.createChat(chatInputForCurrentProject(titleFromPrompt(userText)));
-      mergeChat(chat);
-      suppressDraftSaveBriefly();
-      setActiveChatId(chat.id);
-      chatId = chat.id;
-    }
+    const chatId = await ensurePersistedChatForMessage(titleFromPrompt(userText));
     const detail = status?.providers[0]?.message || status?.message;
     const message = [
       "I can't reach the LLM endpoint yet, so I didn't start this run.",
@@ -2661,6 +2719,25 @@ function App() {
     });
   }
 
+  function resetUnsavedChat() {
+    suppressDraftSaveBriefly();
+    setActiveChatId(null);
+    setTask(null);
+    setEvents([]);
+    setAssistantText("");
+    setApprovalChecks([]);
+    setExpandedCommandId(null);
+    setExpandedReasoningIds(new Set());
+    setAutoExpandedReasoningIds(new Set());
+    setPendingPermission(null);
+    setExpandedReviewPaths(new Set());
+    setReviewOpen(false);
+    setAttachedFiles([]);
+    setMention(null);
+    setFileMatches([]);
+    setPrompt(initialPrompt);
+  }
+
   async function refreshStatus(): Promise<BackendStatus | null> {
     try {
       const status = await api.getBackendStatus();
@@ -2670,6 +2747,32 @@ function App() {
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
       return null;
+    }
+  }
+
+  async function loadToolSettings() {
+    try {
+      const settings = await api.getToolSettings();
+      setToolsEnabled(normalizeToolSettings(settings));
+      setToolsMessage(null);
+    } catch (cause) {
+      setToolsMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function toggleToolSetting(toolId: RunnerToolId) {
+    const next = { ...toolsEnabled, [toolId]: !toolsEnabled[toolId] };
+    setToolsEnabled(next);
+    setToolsMessage(null);
+    try {
+      const result = await api.saveToolSettings(next);
+      setToolsEnabled(normalizeToolSettings(result.settings));
+      setBackend(result.status);
+      setPermissionModeState(result.status.permissionMode);
+      setToolsMessage("Saved.");
+    } catch (cause) {
+      setToolsEnabled(toolsEnabled);
+      setToolsMessage(String(cause instanceof Error ? cause.message : cause));
     }
   }
 
@@ -2971,6 +3074,7 @@ function App() {
         attachedFiles: attachedFiles.map(normalizeAttachment),
         reasoningMode,
         useWorktree: useWorktreeForNextRun,
+        enabledTools: enabledToolIds(toolsEnabled),
       });
       setTask(nextTask);
       setEvents((current) =>
@@ -3254,14 +3358,7 @@ function App() {
     if (busy || closedChatNotice) return;
     setError(null);
     try {
-      let chatId = activeChatId;
-      if (!chatId) {
-        const chat = await api.createChat(chatInputForCurrentProject(prompt.trim() ? titleFromPrompt(prompt) : "New chat"));
-        mergeChat(chat);
-        suppressDraftSaveBriefly();
-        setActiveChatId(chat.id);
-        chatId = chat.id;
-      }
+      const chatId = await ensureChatForAttachments();
       const result = await api.pickAttachmentFiles({ chatId, repositoryId: repository?.id });
       if (result.canceled) return;
       const files = result.files.map(normalizeAttachment);
@@ -3273,8 +3370,10 @@ function App() {
 
   async function ensureChatForAttachments(): Promise<string> {
     if (activeChatId) return activeChatId;
-    const chat = await api.createChat(chatInputForCurrentProject(prompt.trim() ? titleFromPrompt(prompt) : "New chat"));
-    mergeChat(chat);
+    const chat = await api.createChat({
+      ...chatInputForCurrentProject(prompt.trim() ? titleFromPrompt(prompt) : "New chat"),
+      persist: false,
+    });
     suppressDraftSaveBriefly();
     setActiveChatId(chat.id);
     return chat.id;
@@ -3366,25 +3465,8 @@ function App() {
     setError(null);
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
-      const chat = await api.createChat({ title: "New chat" });
-      mergeChat(chat);
-      suppressDraftSaveBriefly();
-      setActiveChatId(chat.id);
       setRepository(null);
-      setTask(null);
-      setEvents([]);
-      setAssistantText("");
-      setApprovalChecks([]);
-      setExpandedCommandId(null);
-      setExpandedReasoningIds(new Set());
-      setAutoExpandedReasoningIds(new Set());
-      setPendingPermission(null);
-      setExpandedReviewPaths(new Set());
-      setReviewOpen(false);
-      setAttachedFiles([]);
-      setMention(null);
-      setFileMatches([]);
-      setPrompt(initialPrompt);
+      resetUnsavedChat();
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -3395,25 +3477,11 @@ function App() {
     setError(null);
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
-      const chat = await api.createChat(chatInputForProject("New chat", project));
-      mergeChat(chat);
-      suppressDraftSaveBriefly();
-      setActiveChatId(chat.id);
-      setTask(null);
-      setEvents([]);
-      setAssistantText("");
-      setApprovalChecks([]);
-      setExpandedCommandId(null);
-      setExpandedReasoningIds(new Set());
-      setAutoExpandedReasoningIds(new Set());
-      setPendingPermission(null);
-      setExpandedReviewPaths(new Set());
-      setReviewOpen(false);
-      setAttachedFiles([]);
-      setMention(null);
-      setFileMatches([]);
-      setPrompt(initialPrompt);
-      await restoreChatRepository(chat);
+      resetUnsavedChat();
+      const nextRepository = await api.getRepository({ repositoryPath: project.path });
+      if (nextRepository) {
+        setRepository(nextRepository);
+      }
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -4016,7 +4084,7 @@ function App() {
                   }
                 >
                   {useWorktreeForNextRun ? <GitBranch size={14} /> : <FolderOpen size={14} />}
-                  <span>{useWorktreeForNextRun ? "Worktree" : "Direct"}</span>
+                  <span>{useWorktreeForNextRun ? "Worktree" : "Local"}</span>
                   <ChevronDown size={12} />
                 </button>
                 {workspaceModeMenuOpen ? (
@@ -4027,7 +4095,7 @@ function App() {
                       onClick={() => selectWorkspaceMode("local")}
                     >
                       <FolderOpen size={14} />
-                      <span>Direct</span>
+                      <span>Local</span>
                     </button>
                     <button
                       className={workspaceMode === "worktree" ? "active" : ""}
@@ -4548,19 +4616,13 @@ function App() {
                     </div>
 
                     <div className="settingsNotice">
-                      <TriangleAlert size={14} />
-                      <span>UI only for now. Toggles do not yet enforce in runs — needs to be wired into the runner.</span>
+                      <ShieldCheck size={14} />
+                      <span>Saved settings are enforced by the runner for new turns.</span>
                     </div>
+                    {toolsMessage ? <p className="settingsMessage">{toolsMessage}</p> : null}
 
                     <ul className="skillList">
-                      {[
-                        { id: "read", name: "read", description: "Read a workspace file or list a directory." },
-                        { id: "search", name: "search", description: "Search workspace file paths and small text files." },
-                        { id: "edit", name: "edit", description: "Replace exact text in a workspace file. Requires permission." },
-                        { id: "write", name: "write", description: "Write a workspace file. Requires permission." },
-                        { id: "command", name: "command", description: "Run a workspace shell command after policy and permission checks." },
-                        { id: "debugger", name: "debugger", description: "Inspect a workspace executable with gdb, lldb, or cdb. Requires permission." },
-                      ].map((tool) => (
+                      {runnerTools.map((tool) => (
                         <li key={tool.id} className="skillRow">
                           <div className="skillRowText">
                             <strong className="toolName">{tool.name}</strong>
@@ -4572,7 +4634,7 @@ function App() {
                             role="switch"
                             aria-checked={!!toolsEnabled[tool.id]}
                             aria-label={`Toggle ${tool.name}`}
-                            onClick={() => setToolsEnabled((prev) => ({ ...prev, [tool.id]: !prev[tool.id] }))}
+                            onClick={() => void toggleToolSetting(tool.id)}
                           >
                             <span className="toggleKnob" />
                           </button>

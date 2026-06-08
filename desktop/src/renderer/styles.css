@@ -630,10 +630,16 @@ pre {
   place-items: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   border-radius: 5px;
   color: var(--faint);
+  line-height: 0;
   opacity: 0;
   transition: opacity 100ms ease;
+}
+
+.chatDeleteButton svg {
+  display: block;
 }
 
 .chatRow:hover .chatDeleteButton,
@@ -4103,7 +4109,7 @@ button.attachmentPreview:focus-visible {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 24px;
   gap: 9px;
-  align-items: start;
+  align-items: center;
   width: min(560px, calc(100vw - 36px));
   padding: 11px 12px;
   border: 1px solid rgba(255, 111, 122, 0.42);
@@ -4111,6 +4117,10 @@ button.attachmentPreview:focus-visible {
   background: rgba(83, 24, 28, 0.96);
   color: #ffd3d6;
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+}
+
+.toast span {
+  line-height: 20px;
 }
 
 .toast button {

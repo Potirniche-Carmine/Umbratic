@@ -14,7 +14,8 @@ import {
   managedModelEndpointDefaults,
 } from "./config";
 import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
-import type { ChatRecord, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, TaskRecord, UserNotes } from "./types";
+import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
+import type { ChatRecord, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, RunnerToolId, TaskRecord, UserNotes } from "./types";
 
 type JsonCacheEntry = {
   mtimeMs: number;
@@ -114,6 +115,15 @@ export function writeProjects(projects: RepositoryInfo[]) {
   writeJsonFile(projectsPath(), projects);
 }
 
+function normalizeStoredEnabledTools(value: unknown): RunnerToolId[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<RunnerToolId>();
+  for (const item of value) {
+    if (isRunnerToolId(item)) seen.add(item);
+  }
+  return Array.from(seen);
+}
+
 export function readTasks(): TaskRecord[] {
   return readJsonFile<TaskRecord[]>(tasksPath(), [])
     .filter(
@@ -141,6 +151,7 @@ export function readTasks(): TaskRecord[] {
         task.runtimeProfile === "none"
           ? task.runtimeProfile
           : runtimeProfileForPrompt(task.prompt ?? ""),
+      enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
       reviewFiles: Array.isArray(task.reviewFiles) ? task.reviewFiles : [],
       events: Array.isArray(task.events) ? task.events : [],
     }));
@@ -177,6 +188,7 @@ export function writeChats(chats: ChatRecord[]) {
 type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
   modelEndpoint?: Partial<ModelEndpointSettings>;
+  tools?: Partial<Record<RunnerToolId, boolean>>;
 };
 
 function defaultModelEndpointMode(): ModelEndpointMode {
@@ -240,6 +252,37 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
     ...settings,
     selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
     modelEndpoint: next,
+  });
+  return next;
+}
+
+export function readToolSettings(): Record<RunnerToolId, boolean> {
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const rawTools = settings.tools && typeof settings.tools === "object" ? settings.tools : {};
+  return {
+    ...defaultToolSettings(),
+    ...Object.fromEntries(
+      Object.entries(rawTools).filter(([id, value]) => isRunnerToolId(id) && typeof value === "boolean"),
+    ),
+  } as Record<RunnerToolId, boolean>;
+}
+
+export function writeToolSettings(input: Partial<Record<RunnerToolId, boolean>>): Record<RunnerToolId, boolean> {
+  const current = readToolSettings();
+  const sanitized: Partial<Record<RunnerToolId, boolean>> = {};
+  for (const [id, value] of Object.entries(input)) {
+    if (isRunnerToolId(id) && typeof value === "boolean") {
+      sanitized[id] = value;
+    }
+  }
+  const next = {
+    ...current,
+    ...sanitized,
+  };
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  writeJsonFile(settingsPath(), {
+    ...settings,
+    tools: toolSettingsFromEnabledTools(enabledToolsFromSettings(next)),
   });
   return next;
 }

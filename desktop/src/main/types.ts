@@ -5,6 +5,7 @@ export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
+export type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
 export type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
@@ -232,6 +233,7 @@ export type TaskRecord = TaskInfo & {
   providerId?: LocalProviderId;
   modelId?: string;
   modelBaseUrlHost?: string;
+  enabledTools?: RunnerToolId[];
   runnerSessionId?: string;
   pendingPrompt?: string;
   metadataPath?: string;

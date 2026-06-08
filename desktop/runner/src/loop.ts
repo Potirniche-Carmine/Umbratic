@@ -1,7 +1,7 @@
 import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
-import { runTool, toolSpecs } from "./tools/index.js";
+import { enabledToolSpecs, runTool } from "./tools/index.js";
 import type { ToolContext } from "./tools/common.js";
 import { modelHttpRequest, readBodyText } from "./provider/http.js";
 
@@ -85,6 +85,7 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
 }
 
 async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent) => void): Promise<StreamAccumulator> {
+  const tools = enabledToolSpecs(session.config.enabledTools);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -98,8 +99,7 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
       model: session.config.provider.modelId,
       messages: session.messages,
       stream: true,
-      tools: toolSpecs,
-      tool_choice: "auto",
+      ...(tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
     mtls: session.config.provider.mtls,
     signal: session.abortController.signal,
@@ -167,6 +167,7 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
       taskId: session.taskId,
       cwd: session.config.cwd,
       permissionMode: session.config.permissionMode,
+      enabledTools: session.config.enabledTools,
       askPermission: replyPermission,
       emitToolOutput(toolCallId, stream, text) {
         emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });

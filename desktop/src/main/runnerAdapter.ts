@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { readModelEndpointSettings } from "./storage";
+import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type { LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
@@ -22,6 +23,7 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     cwd: task.worktreePath,
     workspaceMode: task.workspaceMode,
     permissionMode: "normal",
+    enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
     provider: {
       id: selectedModel.providerId,
       name: selectedModel.providerName,

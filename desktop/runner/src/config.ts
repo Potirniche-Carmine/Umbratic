@@ -1,12 +1,15 @@
 import { assertAllowedProvider, type UmbraticProviderConfig } from "./provider/local.js";
 
 export type PermissionMode = "normal" | "bypass";
+export const runnerToolNames = ["read", "write", "edit", "search", "command", "debugger"] as const;
+export type RunnerToolName = (typeof runnerToolNames)[number];
 
 export type RunnerConfig = {
   taskId?: string;
   cwd: string;
   workspaceMode?: "local" | "worktree";
   permissionMode: PermissionMode;
+  enabledTools: RunnerToolName[];
   provider: UmbraticProviderConfig;
   system?: string;
 };
@@ -27,6 +30,19 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+export function isRunnerToolName(value: unknown): value is RunnerToolName {
+  return typeof value === "string" && (runnerToolNames as readonly string[]).includes(value);
+}
+
+function enabledToolsValue(value: unknown): RunnerToolName[] {
+  if (!Array.isArray(value)) return [...runnerToolNames];
+  const seen = new Set<RunnerToolName>();
+  for (const item of value) {
+    if (isRunnerToolName(item)) seen.add(item);
+  }
+  return runnerToolNames.filter((name) => seen.has(name));
+}
+
 export function loadRunnerConfig(): RunnerConfig {
   const raw = process.env.UMBRATIC_RUNNER_CONFIG;
   if (!raw) throw new Error("UMBRATIC_RUNNER_CONFIG is required");
@@ -38,6 +54,7 @@ export function loadRunnerConfig(): RunnerConfig {
     cwd: stringValue(config.cwd, "cwd"),
     workspaceMode: config.workspaceMode === "worktree" ? "worktree" : "local",
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
+    enabledTools: enabledToolsValue(config.enabledTools),
     system: typeof config.system === "string" ? config.system : undefined,
     provider: assertAllowedProvider({
       id: "company-endpoint",

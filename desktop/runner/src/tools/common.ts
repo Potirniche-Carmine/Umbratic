@@ -1,11 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBlockedPath, isGeneratedRuntimePath } from "../policy.js";
+import type { RunnerToolName } from "../config.js";
 
 export type ToolContext = {
   taskId: string;
   cwd: string;
   permissionMode: "normal" | "bypass";
+  enabledTools: readonly RunnerToolName[];
   askPermission(input: { permissionKind: string; summary: string; autoAllow: boolean }): Promise<"allow" | "deny">;
   emitToolOutput(toolCallId: string, stream: "stdout" | "stderr", text: string): void;
 };
