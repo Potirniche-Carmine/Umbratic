@@ -146,6 +146,15 @@ function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
       },
     };
   }
+  if (event.type === "approval.completed") {
+    return {
+      ...base,
+      data: {
+        target: event.target,
+        patchHash: event.patchHash,
+      },
+    };
+  }
   if (event.type === "merge.completed") {
     return {
       ...base,
@@ -221,7 +230,7 @@ export function buildRedactedTelemetryBundle(tasks: TaskRecord[], projects: Repo
       reasoningMode: task.reasoningMode,
       status: task.state,
       startedAt: task.createdAt,
-      completedAt: task.mergedAt ?? task.rejectedAt,
+      completedAt: task.approvedAt ?? task.mergedAt ?? task.rejectedAt,
       errorMessage: task.error ? redactText(task.error, 320) : undefined,
       changedFiles: task.changedFiles,
       reviewPatchHash: task.reviewPatchHash,

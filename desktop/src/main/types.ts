@@ -6,6 +6,7 @@ export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
+export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
 export type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
@@ -39,6 +40,7 @@ export type TaskState =
   | "completed"
   | "review_ready"
   | "approving"
+  | "approved"
   | "merged"
   | "rejected"
   | "failed";
@@ -237,6 +239,7 @@ export type TaskRecord = TaskInfo & {
   runnerSessionId?: string;
   pendingPrompt?: string;
   metadataPath?: string;
+  approvedAt?: string;
   mergedAt?: string;
   rejectedAt?: string;
 };
@@ -269,6 +272,7 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
+  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }

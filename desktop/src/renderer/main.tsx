@@ -52,6 +52,7 @@ type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
 type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
+type HarnessProfileId = "marketing" | "sales" | "engineering";
 type LocalProviderId = "company-endpoint";
 type CommandClass =
   | "read"
@@ -76,6 +77,7 @@ type TaskState =
   | "completed"
   | "review_ready"
   | "approving"
+  | "approved"
   | "merged"
   | "rejected"
   | "failed";
@@ -295,6 +297,7 @@ type BackendUiEvent = BackendEventMeta &
   | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
+  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
@@ -354,6 +357,11 @@ type DesktopApi = {
     settings: Record<RunnerToolId, boolean>;
     status: BackendStatus;
   }>;
+  getHarnessProfile(): Promise<HarnessProfileId>;
+  saveHarnessProfile(input: HarnessProfileId): Promise<{
+    settings: HarnessProfileId;
+    status: BackendStatus;
+  }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -392,6 +400,7 @@ const previewNotesKey = "umbratic-preview-notes";
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
 const previewToolSettingsKey = "umbratic-preview-tool-settings";
+const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const markdownPreviewCharacterLimit = 60000;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
@@ -431,6 +440,24 @@ const runnerTools: Array<{ id: RunnerToolId; name: string; description: string }
   { id: "debugger", name: "debugger", description: "Inspect a workspace executable with gdb, lldb, or cdb. Requires permission." },
 ];
 const defaultToolSettings = Object.fromEntries(runnerTools.map((tool) => [tool.id, true])) as Record<RunnerToolId, boolean>;
+const defaultHarnessProfileId: HarnessProfileId = "engineering";
+const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
+  {
+    id: "marketing",
+    name: "Marketing",
+    description: "Campaigns, content, positioning, launch work, site copy, brand context, and lightweight implementation support.",
+  },
+  {
+    id: "sales",
+    name: "Sales",
+    description: "Customer-facing workflows, enablement, proposals, demos, objections, CRM-style notes, and pipeline support.",
+  },
+  {
+    id: "engineering",
+    name: "Engineering",
+    description: "Codebase inspection, implementation, debugging, tests, verification, and precise repository changes.",
+  },
+];
 
 type LocalFontDescriptor = {
   family?: string;
@@ -504,6 +531,10 @@ function isRunnerToolId(value: unknown): value is RunnerToolId {
   return typeof value === "string" && runnerTools.some((tool) => tool.id === value);
 }
 
+function isHarnessProfileId(value: unknown): value is HarnessProfileId {
+  return value === "marketing" || value === "sales" || value === "engineering";
+}
+
 function normalizeToolSettings(value: unknown): Record<RunnerToolId, boolean> {
   const next = { ...defaultToolSettings };
   if (!value || typeof value !== "object" || Array.isArray(value)) return next;
@@ -529,6 +560,15 @@ function writePreviewToolSettings(settings: Record<RunnerToolId, boolean>) {
 
 function enabledToolIds(settings: Record<RunnerToolId, boolean>): RunnerToolId[] {
   return runnerTools.filter((tool) => settings[tool.id]).map((tool) => tool.id);
+}
+
+function readPreviewHarnessProfile(): HarnessProfileId {
+  const profileId = window.localStorage.getItem(previewHarnessProfileKey);
+  return isHarnessProfileId(profileId) ? profileId : defaultHarnessProfileId;
+}
+
+function writePreviewHarnessProfile(profileId: HarnessProfileId) {
+  window.localStorage.setItem(previewHarnessProfileKey, profileId);
 }
 
 function uniqueFonts(fonts: string[]): string[] {
@@ -710,6 +750,12 @@ const fallbackApi: DesktopApi = {
   saveToolSettings: async (input) => {
     const settings = normalizeToolSettings({ ...readPreviewToolSettings(), ...input });
     writePreviewToolSettings(settings);
+    return { settings, status: await fallbackApi.getBackendStatus() };
+  },
+  getHarnessProfile: async () => readPreviewHarnessProfile(),
+  saveHarnessProfile: async (input) => {
+    const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
+    writePreviewHarnessProfile(settings);
     return { settings, status: await fallbackApi.getBackendStatus() };
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -960,6 +1006,7 @@ function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolea
 }
 
 function chatSubline(chat: ChatRecord): string {
+  if (chat.taskState === "approved") return "Changes accepted";
   if (chat.taskState === "merged") return "Closed after approved merge";
   if (chat.taskState === "rejected") return "Closed after undo";
   return chat.updatedAt ? new Date(chat.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
@@ -1138,9 +1185,11 @@ function eventTitle(event: BackendUiEvent): string {
     case "approval.check":
       return `check ${event.status}`;
     case "merge.approval":
-      return event.decision === "approved" ? "merge approved" : "merge rejected";
-    case "merge.completed":
+      return event.decision === "approved" ? "accepted" : "rejected";
+    case "approval.completed":
       return "approved";
+    case "merge.completed":
+      return "merged";
     case "ide.opened":
       return event.result === "success" ? "opened editor" : "editor open failed";
     case "response.feedback":
@@ -1182,6 +1231,8 @@ function eventDetail(event: BackendUiEvent): string {
       return event.detail ?? event.name;
     case "merge.approval":
       return event.reason ?? (event.cleanup === undefined ? event.decision : `${event.decision}, cleanup ${event.cleanup ? "on" : "off"}`);
+    case "approval.completed":
+      return `${event.target} ${shortHash(event.patchHash)}`;
     case "merge.completed":
       return `${event.targetBranch} ${shortHash(event.commit)}`;
     case "ide.opened":
@@ -1445,6 +1496,7 @@ function commandDetailLabel(run: CommandRun): string {
 function taskStatusTitle(task: TaskInfo): string {
   if (task.state === "completed") return "Answered";
   if (task.state === "review_ready") return "Ready to review";
+  if (task.state === "approved") return "Approved";
   if (task.state === "merged") return task.workspaceMode === "worktree" ? "Merged" : "Approved";
   if (task.state === "approving") return "Running approval checks";
   if (task.state === "running") return "Working";
@@ -1464,6 +1516,7 @@ function taskStatusDetail(task: TaskInfo): string {
       ? "This chat was closed after its approved merge."
       : "This chat was closed after its workspace changes were approved.";
   }
+  if (task.state === "approved") return "Changes are saved on disk.";
   if (task.state === "completed") return "No file changes for this turn.";
   if (task.state === "rejected") return "Changes were undone.";
   if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
@@ -1869,25 +1922,40 @@ function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): R
   });
 }
 
-function MarkdownContent({ content, onReviewFileClick, reviewFiles }: { content: string } & ReviewReferenceOptions) {
+function MarkdownContent({
+  content,
+  onReviewFileClick,
+  reviewFiles,
+  trailingInline,
+}: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
   return (
     <div className="markdownContent">
       {blocks.map((block, index) => {
+        const isLast = index === blocks.length - 1;
         if (block.type === "code") {
           return <MarkdownCodeBlock content={block.content} key={index} language={block.language} />;
         }
         if (block.type === "heading") {
-          if (block.level === 1) return <h3 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h3>;
-          if (block.level === 2) return <h4 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h4>;
-          return <h5 key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</h5>;
+          const headingContent = (
+            <>
+              {renderInlineMarkdown(block.text, referenceOptions)}
+              {isLast ? trailingInline : null}
+            </>
+          );
+          if (block.level === 1) return <h3 key={index}>{headingContent}</h3>;
+          if (block.level === 2) return <h4 key={index}>{headingContent}</h4>;
+          return <h5 key={index}>{headingContent}</h5>;
         }
         if (block.type === "list") {
           return (
             <ul key={index}>
               {block.items.map((item, itemIndex) => (
-                <li key={itemIndex}>{renderInlineMarkdown(item, referenceOptions)}</li>
+                <li key={itemIndex}>
+                  {renderInlineMarkdown(item, referenceOptions)}
+                  {isLast && itemIndex === block.items.length - 1 ? trailingInline : null}
+                </li>
               ))}
             </ul>
           );
@@ -1916,7 +1984,12 @@ function MarkdownContent({ content, onReviewFileClick, reviewFiles }: { content:
             </div>
           );
         }
-        return <p key={index}>{renderInlineMarkdown(block.text, referenceOptions)}</p>;
+        return (
+          <p key={index}>
+            {renderInlineMarkdown(block.text, referenceOptions)}
+            {isLast ? trailingInline : null}
+          </p>
+        );
       })}
     </div>
   );
@@ -1935,13 +2008,18 @@ function markdownPreview(content: string): { text: string; truncated: boolean } 
   return { text: content.slice(0, cutoff).trimEnd(), truncated: true };
 }
 
-function LongMarkdownContent({ content, onReviewFileClick, reviewFiles }: { content: string } & ReviewReferenceOptions) {
+function LongMarkdownContent({
+  content,
+  onReviewFileClick,
+  reviewFiles,
+  trailingInline,
+}: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
   const [expanded, setExpanded] = useState(false);
   const preview = useMemo(() => markdownPreview(content), [content]);
   const displayContent = expanded || !preview.truncated ? content : preview.text;
   return (
     <>
-      <MarkdownContent content={displayContent} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />
+      <MarkdownContent content={displayContent} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} trailingInline={trailingInline} />
       {preview.truncated ? (
         <div className="messageOverflowNotice">
           <span>
@@ -2011,14 +2089,16 @@ function ReviewSummaryCard({
               <div className={`reviewSummaryFileBody ${expanded ? "open" : ""}`}>
                 <div className="diffRows compactDiffRows">
                   {previewRows.length ? (
-                    previewRows.map((row, index) => (
-                      <div className={`diffRow ${row.kind}`} key={`${file.path}-${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
-                        <span className="diffLineNumber">{row.oldLine ?? ""}</span>
-                        <span className="diffLineNumber">{row.newLine ?? ""}</span>
-                        <span className="diffMarker">{row.marker}</span>
-                        <code>{row.content || " "}</code>
-                      </div>
-                    ))
+                    <div className="diffRowsInner">
+                      {previewRows.map((row, index) => (
+                        <div className={`diffRow ${row.kind}`} key={`${file.path}-${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
+                          <span className="diffLineNumber">{row.oldLine ?? ""}</span>
+                          <span className="diffLineNumber">{row.newLine ?? ""}</span>
+                          <span className="diffMarker">{row.marker}</span>
+                          <code>{row.content || " "}</code>
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     <Empty label="No text diff available" />
                   )}
@@ -2078,8 +2158,12 @@ function App() {
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"account" | "appearance" | "tools" | "skills" | "telemetry">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "tools" | "skills" | "telemetry">("account");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
+  const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
+  const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
+  const [harnessSaving, setHarnessSaving] = useState(false);
   const [appearanceSettings, setAppearanceSettings] = useState(() => readAppearanceSettings());
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
   const [availableFontFamilies, setAvailableFontFamilies] = useState<string[]>(() =>
@@ -2117,6 +2201,7 @@ function App() {
   const draftSaveRef = useRef<number | null>(null);
   const notesSaveRef = useRef<number | null>(null);
   const notesLoadedRef = useRef(false);
+  const toolsSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
@@ -2164,7 +2249,8 @@ function App() {
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
-  const canUndo = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
+  const canUndo =
+    !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
   const reviewEmptyLabel = !task
@@ -2193,6 +2279,14 @@ function App() {
     () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
     [task?.prompt, task?.state, visibleEvents],
   );
+  const streamingAssistantItemId = useMemo(() => {
+    if (task?.state !== "running") return null;
+    for (let index = composerItems.length - 1; index >= 0; index -= 1) {
+      const item = composerItems[index];
+      if (item.type === "assistant") return item.id;
+    }
+    return null;
+  }, [composerItems, task?.state]);
   const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
     const groups = new Map<
@@ -2284,6 +2378,7 @@ function App() {
   useEffect(() => {
     void refreshStatus();
     void loadToolSettings();
+    void loadHarnessProfile();
     void loadNotes();
     void loadAvailableIdes();
     void loadChats();
@@ -2355,6 +2450,12 @@ function App() {
             next.push({ name: event.name, status: event.status, detail: event.detail });
             return next;
           });
+        }
+        if (event.type === "approval.completed") {
+          setTask((current) =>
+            current && current.id === event.taskId ? { ...current, state: "approved", patchHash: event.patchHash } : current,
+          );
+          void loadChats();
         }
         if (event.type === "merge.completed") {
           setTask((current) =>
@@ -2465,7 +2566,7 @@ function App() {
   useLayoutEffect(() => {
     const node = streamRef.current;
     if (node && followComposerScrollRef.current) scrollElementToBottom(node);
-  }, [composerItems, task?.state, reviewFiles.length]);
+  }, [composerItems, task?.state, reviewFiles.length, expandedReviewPaths, reviewOpen]);
 
   useEffect(() => {
     const closeMenus = (event: PointerEvent) => {
@@ -2760,18 +2861,66 @@ function App() {
     }
   }
 
+  async function loadHarnessProfile() {
+    try {
+      const profileId = await api.getHarnessProfile();
+      const normalized = isHarnessProfileId(profileId) ? profileId : defaultHarnessProfileId;
+      setHarnessProfile(normalized);
+      setHarnessDraftProfile(normalized);
+      setHarnessMessage(null);
+    } catch (cause) {
+      setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  function selectHarnessProfile(profileId: HarnessProfileId) {
+    setHarnessDraftProfile(profileId);
+    setHarnessMessage(null);
+  }
+
+  async function saveHarnessProfile() {
+    if (harnessDraftProfile === harnessProfile || harnessSaving) return;
+    const previous = harnessProfile;
+    setHarnessProfile(harnessDraftProfile);
+    setHarnessMessage(null);
+    setHarnessSaving(true);
+    try {
+      const result = await api.saveHarnessProfile(harnessDraftProfile);
+      const normalized = isHarnessProfileId(result.settings) ? result.settings : defaultHarnessProfileId;
+      setHarnessProfile(normalized);
+      setHarnessDraftProfile(normalized);
+      setBackend(result.status);
+      setPermissionModeState(result.status.permissionMode);
+      setHarnessMessage("Harness profile saved. New runs will use it.");
+    } catch (cause) {
+      setHarnessProfile(previous);
+      setHarnessDraftProfile(previous);
+      setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setHarnessSaving(false);
+    }
+  }
+
   async function toggleToolSetting(toolId: RunnerToolId) {
-    const next = { ...toolsEnabled, [toolId]: !toolsEnabled[toolId] };
-    setToolsEnabled(next);
+    let previous = toolsEnabled;
+    let next = toolsEnabled;
+    setToolsEnabled((current) => {
+      previous = current;
+      next = { ...current, [toolId]: !current[toolId] };
+      return next;
+    });
     setToolsMessage(null);
+    const requestId = toolsSaveSequenceRef.current + 1;
+    toolsSaveSequenceRef.current = requestId;
     try {
       const result = await api.saveToolSettings(next);
+      if (requestId !== toolsSaveSequenceRef.current) return;
       setToolsEnabled(normalizeToolSettings(result.settings));
       setBackend(result.status);
       setPermissionModeState(result.status.permissionMode);
-      setToolsMessage("Saved.");
     } catch (cause) {
-      setToolsEnabled(toolsEnabled);
+      if (requestId !== toolsSaveSequenceRef.current) return;
+      setToolsEnabled(previous);
       setToolsMessage(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -3226,7 +3375,7 @@ function App() {
         return;
       }
       setTask((current) => {
-        const next = current ? { ...current, state: "merged" as const, patchHash: result.patchHash } : current;
+        const next = current ? { ...current, state: "approved" as const, patchHash: result.patchHash } : current;
         if (next) upsertChatFromTask(next);
         return next;
       });
@@ -3832,7 +3981,12 @@ function App() {
                         const rating = responseFeedback.get(item.id);
                         return (
                           <article className="timelineMessage assistantMessage" key={item.id}>
-                            <LongMarkdownContent content={item.text} onReviewFileClick={openReviewReference} reviewFiles={reviewFiles} />
+                            <LongMarkdownContent
+                              content={item.text}
+                              onReviewFileClick={openReviewReference}
+                              reviewFiles={reviewFiles}
+                              trailingInline={item.id === streamingAssistantItemId ? <span className="streamCaret" /> : undefined}
+                            />
                             <div className="messageActions">
                               <button
                                 className="messageAction"
@@ -3952,6 +4106,7 @@ function App() {
                   {reviewFiles.length &&
                   (task?.state === "review_ready" ||
                     task?.state === "approving" ||
+                    task?.state === "approved" ||
                     task?.state === "merged" ||
                     task?.state === "rejected") ? (
                     <ReviewSummaryCard
@@ -3963,7 +4118,6 @@ function App() {
                       totals={reviewTotals}
                     />
                   ) : null}
-                  {task?.state === "running" ? <span className="streamCaret" /> : null}
                 </div>
               ) : (
                 <ComposerGreeting label={todayPromptLabel} />
@@ -4366,14 +4520,16 @@ function App() {
                         <div className="reviewFileDiff">
                           <div className="diffRows">
                             {stats.rows.length ? (
-                              stats.rows.map((row, index) => (
-                                <div className={`diffRow ${row.kind}`} key={`${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
-                                  <span className="diffLineNumber">{row.oldLine ?? ""}</span>
-                                  <span className="diffLineNumber">{row.newLine ?? ""}</span>
-                                  <span className="diffMarker">{row.marker}</span>
-                                  <code>{row.content || " "}</code>
-                                </div>
-                              ))
+                              <div className="diffRowsInner">
+                                {stats.rows.map((row, index) => (
+                                  <div className={`diffRow ${row.kind}`} key={`${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
+                                    <span className="diffLineNumber">{row.oldLine ?? ""}</span>
+                                    <span className="diffLineNumber">{row.newLine ?? ""}</span>
+                                    <span className="diffMarker">{row.marker}</span>
+                                    <code>{row.content || " "}</code>
+                                  </div>
+                                ))}
+                              </div>
                             ) : (
                               <Empty label="No text diff available" />
                             )}
@@ -4392,9 +4548,13 @@ function App() {
           {task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged" ? (
             <div className="reviewFooter">
               <div className="approvalActions">
+                <button className="rejectAction" type="button" disabled={!canUndo} onClick={undoTask}>
+                  <X size={15} />
+                  Reject changes
+                </button>
                 <button className="primaryAction" type="button" disabled={!canApprove} onClick={approveMerge}>
-                  <GitBranch size={15} />
-                  Accept + merge
+                  <Check size={15} />
+                  Accept
                 </button>
               </div>
             </div>
@@ -4438,6 +4598,14 @@ function App() {
                 >
                   <User size={15} />
                   <span>Account</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settingsNavItem ${settingsTab === "harness" ? "isActive" : ""}`}
+                  onClick={() => setSettingsTab("harness")}
+                >
+                  <Brain size={15} />
+                  <span>Harness</span>
                 </button>
                 <button
                   type="button"
@@ -4518,6 +4686,52 @@ function App() {
                         <span>Continue with Microsoft</span>
                       </button>
                       {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {settingsTab === "harness" ? (
+                  <div className="settingsPanel">
+                    <div className="settingsPanelHead">
+                      <h3>Harness</h3>
+                      <p>Choose the working profile Umbratic AI uses when it starts a new run.</p>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Profile</h4>
+                      <div className="harnessOptionGrid">
+                        {harnessProfiles.map((profile) => (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            className={`harnessOption ${harnessDraftProfile === profile.id ? "isActive" : ""}`}
+                            aria-pressed={harnessDraftProfile === profile.id}
+                            onClick={() => selectHarnessProfile(profile.id)}
+                          >
+                            <span className="harnessOptionHead">
+                              <strong>{profile.name}</strong>
+                              {harnessDraftProfile === profile.id ? <Check size={14} /> : null}
+                            </span>
+                            <em>{profile.description}</em>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="settingsMessage">
+                        The profile adjusts which context the harness emphasizes. The Tools tab still controls exact runner tool access.
+                      </p>
+                      <div className="settingsActions">
+                        <button
+                          className="settingsInlineButton"
+                          type="button"
+                          onClick={() => void saveHarnessProfile()}
+                          disabled={harnessSaving || harnessDraftProfile === harnessProfile}
+                        >
+                          {harnessSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                          <span>Save profile</span>
+                        </button>
+                        {harnessDraftProfile !== harnessProfile ? <p className="settingsMessage">Unsaved profile change.</p> : null}
+                      </div>
+                      {harnessMessage ? <p className="settingsMessage">{harnessMessage}</p> : null}
                     </div>
                   </div>
                 ) : null}
@@ -4615,16 +4829,12 @@ function App() {
                       <p>Capabilities the model can call during a run. Disable any tool to keep it out of new turns.</p>
                     </div>
 
-                    <div className="settingsNotice">
-                      <ShieldCheck size={14} />
-                      <span>Saved settings are enforced by the runner for new turns.</span>
-                    </div>
                     {toolsMessage ? <p className="settingsMessage">{toolsMessage}</p> : null}
 
-                    <ul className="skillList">
+                    <ul className="toolList">
                       {runnerTools.map((tool) => (
-                        <li key={tool.id} className="skillRow">
-                          <div className="skillRowText">
+                        <li key={tool.id} className="toolRow">
+                          <div className="toolRowText">
                             <strong className="toolName">{tool.name}</strong>
                             <em>{tool.description}</em>
                           </div>

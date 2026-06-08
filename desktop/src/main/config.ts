@@ -1,6 +1,6 @@
 import { env } from "node:process";
 
-import type { LocalProviderId, ModelEndpointMode, ModelEndpointSoftware, ReasoningMode, TaskState } from "./types";
+import type { HarnessProfileId, LocalProviderId, ModelEndpointMode, ModelEndpointSoftware, ReasoningMode, TaskState } from "./types";
 
 export type EndpointMtlsConfig = {
   caPath?: string;
@@ -81,6 +81,12 @@ export function endpointEditingAllowed(): boolean {
   return value === "1" || value === "true" || value === "yes";
 }
 
+export const defaultHarnessProfileId: HarnessProfileId = "engineering";
+
+export function isHarnessProfileId(value: unknown): value is HarnessProfileId {
+  return value === "marketing" || value === "sales" || value === "engineering";
+}
+
 export function defaultEndpointBaseUrlForSoftware(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
   if (mode === "local") {
     if (software === "lmstudio") return "http://127.0.0.1:1234/v1";
@@ -151,6 +157,30 @@ export const runtimeHarnessSystemPrompt = [
   markdownRuntimeSystemPrompt,
   debuggerRuntimeSystemPrompt,
 ].join(" ");
+
+export function harnessProfileSystemPrompt(profileId: HarnessProfileId): string {
+  if (profileId === "marketing") {
+    return [
+      "Harness profile: Marketing.",
+      "Favor clear campaign, positioning, launch, copy, content, audience, and brand-context work.",
+      "Use repository tools only when they help inspect or change relevant assets, docs, site copy, analytics wiring, or content workflows.",
+      "Keep technical detail practical and avoid pulling in unrelated engineering harness guidance unless the task asks for implementation.",
+    ].join(" ");
+  }
+  if (profileId === "sales") {
+    return [
+      "Harness profile: Sales.",
+      "Favor customer-facing context: account research notes, CRM-style workflows, enablement material, demos, proposals, objection handling, and pipeline support.",
+      "Use repository tools only when they help inspect or change relevant docs, app surfaces, integrations, or sales operations assets.",
+      "Keep responses action-oriented and avoid unnecessary implementation depth unless the task needs it.",
+    ].join(" ");
+  }
+  return [
+    "Harness profile: Engineering.",
+    "Favor codebase inspection, implementation, verification, debugging, tests, and precise repository changes.",
+    "Use available runner tools to understand the workspace before making claims, and keep product or go-to-market assumptions lightweight unless requested.",
+  ].join(" ");
+}
 
 export function reasoningSystemPrompt(mode: ReasoningMode): string {
   return mode === "reasoning"

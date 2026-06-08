@@ -22,6 +22,7 @@ import {
   defaultEndpointModelId,
   debuggerRuntimeSystemPrompt,
   endpointEditingAllowed,
+  harnessProfileSystemPrompt,
   localProviderCatalog,
   markdownRuntimeSystemPrompt,
   managedModelEndpointDefaults,
@@ -63,12 +64,14 @@ import { getProviderJson } from "./providerClient";
 import {
   readChats,
   hasStoredModelEndpointSettings,
+  readHarnessProfileSetting,
   readModelEndpointSettings,
   readNotes,
   readProjects,
   readSettings,
   readTasks,
   readToolSettings,
+  writeHarnessProfileSetting,
   writeModelEndpointSettings,
   writeChats,
   writeJsonFile,
@@ -89,6 +92,7 @@ import type {
   CommandOutput,
   CommandResult,
   FileSearchResult,
+  HarnessProfileId,
   IdeInfo,
   IdeOpenResult,
   LocalModelInfo,
@@ -207,7 +211,7 @@ function finishInterruptedRunningTasks() {
 function pruneClosedTaskInternalSnapshots(task: TaskRecord): TaskRecord {
   if (
     task.baselineFiles &&
-    (task.state === "completed" || task.state === "merged" || task.state === "rejected")
+    (task.state === "completed" || task.state === "approved" || task.state === "merged" || task.state === "rejected")
   ) {
     const { baselineFiles: _baselineFiles, ...nextTask } = task;
     void _baselineFiles;
@@ -455,9 +459,9 @@ function taskCanCreateFiles(task: TaskRecord): boolean {
 
 function workspaceModeSystemPrompt(task: TaskRecord): string {
   if (taskUsesIsolatedWorktree(task)) {
-    return "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path.";
+    return "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path. Do not merge this worktree back to the original branch unless the user explicitly asks for a merge while this chat is still using the worktree. When a turn produces file changes in the worktree, ask the user whether they want a separate merge back to the original branch.";
   }
-  return "Workspace mode: local repository/folder. Do not ask to create a Git worktree or switch to one; work directly in the provided current working directory.";
+  return "Workspace mode: local repository/folder. Do not ask to create, switch to, verify, or merge a Git worktree; work directly in the provided current working directory.";
 }
 
 function toolAccessSystemPrompt(task: TaskRecord): string {
@@ -1064,7 +1068,9 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
     case "approval.check":
       return `Approval check ${event.status}: ${event.name}${event.detail ? ` (${compactHistoryText(event.detail, 300)})` : ""}`;
     case "merge.approval":
-      return `Merge ${event.decision}.`;
+      return `Changes ${event.decision === "approved" ? "accepted" : "rejected"}.`;
+    case "approval.completed":
+      return `Approval completed for ${event.target}.`;
     case "merge.completed":
       return `Merge completed into ${event.targetBranch}.`;
     case "ide.opened":
@@ -1235,6 +1241,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       hiddenChat
         ? "Answer as a normal chat unless the user asks you to create or inspect files. Treat the scratch workspace as private working storage, not as a meaningful project folder."
         : "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
+      "If the user asks you to create, write, edit, update, or otherwise change a file, you must call a workspace file-changing tool before saying the file was created or changed.",
       "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
     ].join("\n"),
   });
@@ -1786,6 +1793,12 @@ async function saveRunnerToolSettings(input: unknown) {
     throw new Error("Invalid tool settings.");
   }
   const settings = writeToolSettings(input as Partial<Record<RunnerToolId, boolean>>);
+  const status = await getBackendStatus();
+  return { settings, status };
+}
+
+async function saveHarnessProfileSetting(input: unknown) {
+  const settings = writeHarnessProfileSetting(input as HarnessProfileId);
   const status = await getBackendStatus();
   return { settings, status };
 }
@@ -2486,7 +2499,7 @@ async function refreshTaskReview(input: unknown): Promise<TaskInfo | null> {
     throw new Error("Invalid review refresh input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  if (task.state === "merged" || task.state === "rejected") {
+  if (task.state === "approved" || task.state === "merged" || task.state === "rejected") {
     return publicTask(task);
   }
   if (!fs.existsSync(task.worktreePath)) {
@@ -2605,13 +2618,19 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
     let delegatedToWorktree = false;
     let fileCreationToolRequested = false;
     let fileCreationToolSucceeded = false;
+    let assistantTextForCurrentAttempt = "";
     let completed = false;
     let resolveCompletion!: () => void;
     let rejectCompletion!: (error: Error) => void;
-    const completion = new Promise<void>((resolve, reject) => {
-      resolveCompletion = resolve;
-      rejectCompletion = reject;
-    });
+    let completion: Promise<void>;
+    const armCompletion = () => {
+      completed = false;
+      completion = new Promise<void>((resolve, reject) => {
+        resolveCompletion = resolve;
+        rejectCompletion = reject;
+      });
+    };
+    armCompletion();
 
     const finish = () => {
       if (completed) return;
@@ -2635,6 +2654,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
 
     const emitAssistantText = (text: string) => {
       if (!text || text.trim() === "Ready for review.") return;
+      assistantTextForCurrentAttempt += text;
       emit({ type: "assistant.delta", taskId: task.id, text });
     };
 
@@ -2776,6 +2796,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
           "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Use real Umbratic AI tool results when you need repository context, file details, or web results. Do not narrate imagined tool use, and never say you ran a command, searched the web, or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
           workspaceModeSystemPrompt(task),
           toolAccessSystemPrompt(task),
+          harnessProfileSystemPrompt(readHarnessProfileSetting()),
           reasoningSystemPrompt(task.reasoningMode ?? "fast"),
           runtimeHarnessSystemPrompt,
         ].join(" "),
@@ -2783,13 +2804,59 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
       },
     });
 
-    await Promise.race([
-      completion,
-      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Umbratic runner task timed out.")), 45 * 60 * 1000)),
-    ]);
+    const waitForCompletion = () =>
+      Promise.race([
+        completion,
+        new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("Umbratic runner task timed out.")), 45 * 60 * 1000)),
+      ]);
+
+    await waitForCompletion();
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
       return;
+    }
+
+    if (expectsFileChanges && !fileCreationToolRequested) {
+      const previousAssistantText = compactHistoryText(assistantTextForCurrentAttempt.trim(), 1800);
+      assistantTextForCurrentAttempt = "";
+      armCompletion();
+      await runnerRequest<void>(run, `/session/${encodeURIComponent(session.id)}/prompt_async`, {
+        method: "POST",
+        body: {
+          parts: [
+            {
+              type: "text",
+              text: [
+                "Harness check failed: the user asked for file changes, but your previous turn ended without any file-changing tool call.",
+                previousAssistantText ? `Your previous answer was:\n${previousAssistantText}` : "Your previous answer did not include a usable explanation.",
+                `Enabled tools for this run: ${taskEnabledTools(task).join(", ") || "none"}.`,
+                "Choose exactly one path now:",
+                "1. Create or modify the requested file by calling `write`, `edit`, or an approved workspace `command`, then reply briefly with the changed file path.",
+                "2. If you genuinely cannot create or modify the file, reply with `CANNOT_CREATE_FILE:` followed by the specific blocker. Do not claim the file was created.",
+              ].join(" "),
+            },
+          ],
+        },
+      });
+      await waitForCompletion();
+
+      if (delegatedToWorktree) {
+        return;
+      }
+
+      if (!fileCreationToolRequested && assistantTextForCurrentAttempt.trim().startsWith("CANNOT_CREATE_FILE:")) {
+        task.latestTest = {
+          command: `umbratic runner session ${session.id}`,
+          output: "Umbratic runner explained why no file changes were made",
+          passed: true,
+          exitCode: 0,
+          completedAt: new Date().toISOString(),
+        };
+        task.state = "completed";
+        saveTask(task);
+        emit({ type: "assistant.done", taskId: task.id });
+        return;
+      }
     }
 
     task.latestTest = {
@@ -3101,109 +3168,6 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     let allowedFiles: string[] = [];
     let patchHash = "";
 
-    if (!taskUsesIsolatedWorktree(task)) {
-      await approvalCheck(task, "agent run completed", async () => {
-        if (!task.latestTest?.passed) {
-          throw new Error("Umbratic runner has not completed successfully for this task.");
-        }
-        return task.latestTest.command;
-      });
-      await approvalCheck(task, "blocked files", async () => {
-        const reviewFiles = await refreshReview(task);
-        emitReviewChangedSinceReady(task, reviewFiles);
-        const dangerous = reviewFiles.map((file) => file.path).filter((file) => isBlockedPath(file));
-        if (dangerous.length > 0) {
-          throw new Error(`Blocked path changed: ${dangerous.join(", ")}`);
-        }
-        allowedFiles = reviewFiles.map((file) => file.path).filter((file) => !isGeneratedRuntimePath(file));
-        if (allowedFiles.length === 0) {
-          throw new Error("No allowed file changes to approve.");
-        }
-        return `${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}`;
-      });
-      await approvalCheck(task, "secret scan", async () => {
-        const patch = task.reviewFiles.map((file) => file.diff).join("\n");
-        const diffHit = secretScanText(patch);
-        if (diffHit) {
-          throw new Error(`Potential ${diffHit} in patch.`);
-        }
-        for (const file of allowedFiles) {
-          const absolute = path.join(task.worktreePath, file);
-          const text = readTextFileIfSafe(absolute);
-          if (text) {
-            const hit = secretScanText(text);
-            if (hit) {
-              throw new Error(`Potential ${hit} in ${file}.`);
-            }
-          }
-        }
-        return "passed";
-      });
-      await approvalCheck(task, "record metadata", async () => {
-        const patch = task.reviewFiles.map((file) => file.diff).join("\n");
-        patchHash = crypto.createHash("sha256").update(patch).digest("hex");
-        task.state = "merged";
-        task.mergedAt = new Date().toISOString();
-        task.patchHash = patchHash;
-        task.metadataPath = taskMetadataPath(task);
-        writeJsonFile(task.metadataPath, {
-          id: task.id,
-          workspaceKind: task.workspaceKind,
-          workspaceMode: task.workspaceMode,
-          folderPath: task.originalRepoPath,
-          changedFiles: task.changedFiles,
-          latestTest: task.latestTest,
-          patchHash,
-          approvedAt: task.mergedAt,
-        });
-        saveTask(task);
-        return patchHash.slice(0, 12);
-      });
-      const targetBranch = task.workspaceKind === "git" ? task.originalBranch : "folder";
-      emit({ type: "merge.completed", taskId: task.id, targetBranch, commit: patchHash, patchHash });
-      return { ok: true, targetBranch, commit: patchHash, patchHash, metadataPath: task.metadataPath ?? "" };
-    }
-
-    await approvalCheck(task, "original branch exists", async () => {
-      await execFileOutput("git", ["show-ref", "--verify", `refs/heads/${task.originalBranch}`], { cwd: task.originalRepoPath });
-      return task.originalBranch;
-    });
-    await approvalCheck(task, "original branch clean", async () => {
-      if (task.originalWasDirty) {
-        throw new Error("Repository had uncommitted changes when the task started.");
-      }
-      const status = await gitOutput(task.originalRepoPath, ["status", "--porcelain"]);
-      if (status.trim()) {
-        throw new Error(status);
-      }
-      return "clean";
-    });
-    await approvalCheck(task, "original branch base", async () => {
-      const current = await gitOutput(task.originalRepoPath, ["rev-parse", task.originalBranch]);
-      if (current !== task.baseCommit) {
-        throw new Error(`Expected ${task.baseCommit}, found ${current}.`);
-      }
-      return task.baseCommit.slice(0, 12);
-    });
-    await approvalCheck(task, "agent branch base", async () => {
-      await execFileOutput("git", ["show-ref", "--verify", `refs/heads/${task.agentBranch}`], { cwd: task.originalRepoPath });
-      const current = await gitOutput(task.worktreePath, ["rev-parse", task.agentBranch]);
-      if (current !== task.baseCommit) {
-        throw new Error("Umbratic runner created commits before approval.");
-      }
-      return task.agentBranch;
-    });
-    await approvalCheck(task, "controlled worktree", async () => {
-      const root = worktreeRootForRepo(task.originalRepoPath);
-      if (!pathInside(root, task.worktreePath) || !fs.existsSync(task.worktreePath)) {
-        throw new Error("Worktree path is outside Umbratic AI control.");
-      }
-      const branch = await gitOutput(task.worktreePath, ["branch", "--show-current"]);
-      if (branch !== task.agentBranch) {
-        throw new Error(`Expected ${task.agentBranch}, found ${branch}.`);
-      }
-      return task.worktreePath;
-    });
     await approvalCheck(task, "agent run completed", async () => {
       if (!task.latestTest?.passed) {
         throw new Error("Umbratic runner has not completed successfully for this task.");
@@ -3213,12 +3177,11 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     await approvalCheck(task, "blocked files", async () => {
       const reviewFiles = await refreshReview(task);
       emitReviewChangedSinceReady(task, reviewFiles);
-      const changed = reviewFiles.map((file) => file.path);
-      const dangerous = changed.filter((file) => isBlockedPath(file));
+      const dangerous = reviewFiles.map((file) => file.path).filter((file) => isBlockedPath(file));
       if (dangerous.length > 0) {
         throw new Error(`Blocked path changed: ${dangerous.join(", ")}`);
       }
-      allowedFiles = changed.filter((file) => !isGeneratedRuntimePath(file));
+      allowedFiles = reviewFiles.map((file) => file.path).filter((file) => !isGeneratedRuntimePath(file));
       if (allowedFiles.length === 0) {
         throw new Error("No allowed file changes to approve.");
       }
@@ -3226,91 +3189,54 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       return `${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}`;
     });
     await approvalCheck(task, "secret scan", async () => {
-      const diff = await gitOutput(task.worktreePath, ["diff", "--binary", task.baseCommit, "--", ...allowedFiles]);
-      const diffHit = secretScanText(diff);
+      const patch = task.reviewFiles.map((file) => file.diff).join("\n");
+      const diffHit = secretScanText(patch);
       if (diffHit) {
         throw new Error(`Potential ${diffHit} in patch.`);
       }
       for (const file of allowedFiles) {
         const absolute = path.join(task.worktreePath, file);
-        if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
-          continue;
-        }
-        const buffer = fs.readFileSync(absolute);
-        if (buffer.includes(0) || buffer.length > 1024 * 1024) {
-          continue;
-        }
-        const hit = secretScanText(buffer.toString("utf8"));
-        if (hit) {
-          throw new Error(`Potential ${hit} in ${file}.`);
+        const text = readTextFileIfSafe(absolute);
+        if (text) {
+          const hit = secretScanText(text);
+          if (hit) {
+            throw new Error(`Potential ${hit} in ${file}.`);
+          }
         }
       }
       return "passed";
     });
-    await approvalCheck(task, "stage final patch", async () => {
-      const staged = await gitOutput(task.worktreePath, ["diff", "--cached", "--name-only"]);
-      if (staged.trim()) {
-        throw new Error(`Unexpected staged changes: ${staged}`);
-      }
-      await execFileOutput("git", ["add", "--", ...allowedFiles], { cwd: task.worktreePath });
-      const patch = await gitOutput(task.worktreePath, ["diff", "--cached", "--binary"]);
-      if (!patch.trim()) {
-        throw new Error("Final patch is empty.");
-      }
-      patchHash = crypto.createHash("sha256").update(patch).digest("hex");
-      task.patchHash = patchHash;
-      saveTask(task);
-      return patchHash.slice(0, 12);
-    });
-    await approvalCheck(task, "create task commit", async () => {
-      const env = {
-        ...process.env,
-        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "Umbratic AI",
-        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "umbratic@local",
-        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || "Umbratic AI",
-        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || "umbratic@local",
-      };
-      await execFileOutput(
-        "git",
-        ["commit", "-m", `Umbratic AI task ${task.id}`, "-m", `Patch-Hash: ${patchHash}`],
-        { cwd: task.worktreePath, env },
-      );
-      return (await gitOutput(task.worktreePath, ["rev-parse", "HEAD"])).slice(0, 12);
-    });
-    await approvalCheck(task, "fast-forward merge", async () => {
-      await execFileOutput("git", ["checkout", task.originalBranch], { cwd: task.originalRepoPath });
-      await execFileOutput("git", ["merge", "--ff-only", task.agentBranch], { cwd: task.originalRepoPath });
-      return task.originalBranch;
-    });
-    const mergedCommit = await gitOutput(task.originalRepoPath, ["rev-parse", task.originalBranch]);
     await approvalCheck(task, "record metadata", async () => {
-      task.state = "merged";
-      task.mergedAt = new Date().toISOString();
+      const patch = task.reviewFiles.map((file) => file.diff).join("\n");
+      patchHash = crypto.createHash("sha256").update(patch).digest("hex");
+      task.state = "approved";
+      task.approvedAt = new Date().toISOString();
       task.patchHash = patchHash;
       task.metadataPath = taskMetadataPath(task);
       writeJsonFile(task.metadataPath, {
         id: task.id,
+        workspaceKind: task.workspaceKind,
+        workspaceMode: task.workspaceMode,
         originalRepoPath: task.originalRepoPath,
         originalBranch: task.originalBranch,
         baseCommit: task.baseCommit,
-        mergedCommit,
         agentBranch: task.agentBranch,
+        worktreePath: task.worktreePath,
         changedFiles: task.changedFiles,
         latestTest: task.latestTest,
         patchHash,
-        mergedAt: task.mergedAt,
+        approvedAt: task.approvedAt,
       });
       saveTask(task);
-      return task.metadataPath;
+      return patchHash.slice(0, 12);
     });
-    await approvalCheck(task, "cleanup worktree", async () => {
-      await removeGitWorktree(task);
-      await gitResult(task.originalRepoPath, ["branch", "-d", task.agentBranch]);
-      return "removed";
-    });
-
-    emit({ type: "merge.completed", taskId: task.id, targetBranch: task.originalBranch, commit: mergedCommit, patchHash });
-    return { ok: true, targetBranch: task.originalBranch, commit: mergedCommit, patchHash, metadataPath: task.metadataPath ?? "" };
+    const target = taskUsesIsolatedWorktree(task)
+      ? task.agentBranch || task.worktreePath
+      : task.workspaceKind === "git"
+        ? task.originalBranch
+        : "folder";
+    emit({ type: "approval.completed", taskId: task.id, target, patchHash });
+    return { ok: true, targetBranch: target, commit: patchHash, patchHash, metadataPath: task.metadataPath ?? "" };
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error);
     failTask(task, message);
@@ -3762,6 +3688,8 @@ app.whenReady().then(async () => {
   );
   handleIpc("umbratic:get-tool-settings", () => readToolSettings());
   handleIpc("umbratic:save-tool-settings", (input) => saveRunnerToolSettings(input));
+  handleIpc("umbratic:get-harness-profile", () => readHarnessProfileSetting());
+  handleIpc("umbratic:save-harness-profile", (input) => saveHarnessProfileSetting(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
   handleIpc("umbratic:list-skills", () => listSkills());
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());

@@ -6,6 +6,7 @@ type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
 type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
 type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
+type UmbraticHarnessProfileId = "marketing" | "sales" | "engineering";
 type UmbraticLocalProviderId = "company-endpoint";
 type UmbraticModelEndpointMode = "local" | "server";
 type UmbraticModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
@@ -188,6 +189,7 @@ type UmbraticBackendUiEvent = UmbraticBackendEventMeta &
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: UmbraticReviewFile[]; latestTest?: UmbraticTestResult }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
+  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
   | { type: "task.error"; taskId: string; message: string }
@@ -219,7 +221,7 @@ type UmbraticTaskInfo = {
   prompt: string;
   workspaceKind: UmbraticWorkspaceKind;
   workspaceMode: UmbraticWorkspaceMode;
-  state: "awaiting_worktree_approval" | "running" | "completed" | "review_ready" | "approving" | "merged" | "rejected" | "failed";
+  state: "awaiting_worktree_approval" | "running" | "completed" | "review_ready" | "approving" | "approved" | "merged" | "rejected" | "failed";
   originalBranch: string;
   baseCommit: string;
   agentBranch: string;
@@ -283,6 +285,11 @@ declare global {
       getToolSettings(): Promise<Record<UmbraticRunnerToolId, boolean>>;
       saveToolSettings(input: Partial<Record<UmbraticRunnerToolId, boolean>>): Promise<{
         settings: Record<UmbraticRunnerToolId, boolean>;
+        status: UmbraticBackendStatus;
+      }>;
+      getHarnessProfile(): Promise<UmbraticHarnessProfileId>;
+      saveHarnessProfile(input: UmbraticHarnessProfileId): Promise<{
+        settings: UmbraticHarnessProfileId;
         status: UmbraticBackendStatus;
       }>;
       getModelEndpointSettings(): Promise<UmbraticModelEndpointSettings>;

@@ -8,14 +8,16 @@ import {
   defaultEndpointBaseUrlForSoftware,
   defaultEndpointModelId,
   defaultEndpointSoftware,
+  defaultHarnessProfileId,
   endpointEditingAllowed,
+  isHarnessProfileId,
   isModelEndpointMode,
   isModelEndpointSoftware,
   managedModelEndpointDefaults,
 } from "./config";
 import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
-import type { ChatRecord, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, RunnerToolId, TaskRecord, UserNotes } from "./types";
+import type { ChatRecord, HarnessProfileId, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, RunnerToolId, TaskRecord, UserNotes } from "./types";
 
 type JsonCacheEntry = {
   mtimeMs: number;
@@ -189,6 +191,7 @@ type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
   modelEndpoint?: Partial<ModelEndpointSettings>;
   tools?: Partial<Record<RunnerToolId, boolean>>;
+  harnessProfile?: unknown;
 };
 
 function defaultModelEndpointMode(): ModelEndpointMode {
@@ -287,12 +290,28 @@ export function writeToolSettings(input: Partial<Record<RunnerToolId, boolean>>)
   return next;
 }
 
-export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings } {
+export function readHarnessProfileSetting(): HarnessProfileId {
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  return isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId;
+}
+
+export function writeHarnessProfileSetting(profileId: HarnessProfileId): HarnessProfileId {
+  const next = isHarnessProfileId(profileId) ? profileId : defaultHarnessProfileId;
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  writeJsonFile(settingsPath(), {
+    ...settings,
+    harnessProfile: next,
+  });
+  return next;
+}
+
+export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings; harnessProfile: HarnessProfileId } {
   const modelEndpoint = readModelEndpointSettings();
+  const harnessProfile = readHarnessProfileSetting();
   if (modelEndpoint.modelId.trim()) {
-    return { selectedModel: { providerId: "company-endpoint", modelId: modelEndpoint.modelId.trim() }, modelEndpoint };
+    return { selectedModel: { providerId: "company-endpoint", modelId: modelEndpoint.modelId.trim() }, modelEndpoint, harnessProfile };
   }
-  return { modelEndpoint };
+  return { modelEndpoint, harnessProfile };
 }
 
 export function readNotes(): UserNotes {

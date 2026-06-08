@@ -758,9 +758,26 @@ pre {
 }
 
 .todoPanel:hover::after {
-  opacity: 1;
-  transform: translate(-50%, 0);
-  transition-delay: 1250ms;
+  animation: todoHintLifecycle 3000ms ease forwards;
+  animation-delay: 625ms;
+}
+
+@keyframes todoHintLifecycle {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 3px);
+  }
+
+  8%,
+  78% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -2px);
+  }
 }
 
 .todoHeader {
@@ -909,6 +926,7 @@ pre {
 
 .wideButton,
 .primaryAction,
+.rejectAction,
 .secondaryAction {
   display: inline-flex;
   align-items: center;
@@ -937,6 +955,12 @@ pre {
   color: #07111e;
 }
 
+.rejectAction {
+  border: 1px solid rgba(255, 111, 122, 0.34);
+  color: #ffc4c9;
+  background: rgba(255, 111, 122, 0.12);
+}
+
 .iconButton:hover,
 .wideButton:hover,
 .secondaryAction:hover {
@@ -945,6 +969,11 @@ pre {
 
 .primaryAction:hover:not(:disabled) {
   background: #79b4ff;
+}
+
+.rejectAction:hover:not(:disabled) {
+  border-color: rgba(255, 111, 122, 0.52);
+  background: rgba(255, 111, 122, 0.18);
 }
 
 .workspaceCard,
@@ -1709,11 +1738,12 @@ pre {
 
 .streamCaret {
   display: inline-block;
-  width: 7px;
-  height: 16px;
-  margin-left: 2px;
+  width: 3px;
+  height: 1.05em;
+  margin-left: 4px;
   border-radius: 2px;
   background: var(--green);
+  vertical-align: -0.16em;
   animation: blink 1s steps(2, start) infinite;
 }
 
@@ -2002,9 +2032,12 @@ pre {
   z-index: 90;
   display: grid;
   gap: 1px;
-  min-width: 220px;
+  width: max-content;
+  min-width: 132px;
+  max-width: min(320px, calc(100vw - 24px));
   max-height: 300px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -2044,10 +2077,11 @@ pre {
 
 .branchMenu button {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, max-content);
   align-items: center;
   gap: 8px;
   width: 100%;
+  max-width: 100%;
   min-height: 28px;
   padding: 4px 8px;
   border-radius: 6px;
@@ -3054,8 +3088,6 @@ button.attachmentPreview:focus-visible {
 }
 
 .diffRows {
-  display: flex;
-  flex-direction: column;
   min-height: 0;
   overflow-x: auto;
   font-family: var(--mono-font);
@@ -3063,12 +3095,18 @@ button.attachmentPreview:focus-visible {
   line-height: 1.45;
 }
 
-.diffRow {
+.diffRowsInner {
   display: grid;
-  grid-template-columns: 48px 48px 20px max-content;
-  align-items: stretch;
+  align-content: start;
   width: max-content;
   min-width: 100%;
+}
+
+.diffRow {
+  display: grid;
+  grid-template-columns: 48px 48px 20px minmax(max-content, 1fr);
+  align-items: stretch;
+  width: 100%;
   min-height: 18px;
   color: #d7dde5;
 }
@@ -3100,12 +3138,12 @@ button.attachmentPreview:focus-visible {
 
 .diffRow.add {
   color: #b9f4d2;
-  background: rgba(73, 211, 138, 0.15);
+  background: #173329;
 }
 
 .diffRow.remove {
   color: #ffc4c9;
-  background: rgba(255, 111, 122, 0.15);
+  background: #351f24;
 }
 
 .reviewFooter {
@@ -3864,6 +3902,110 @@ button.attachmentPreview:focus-visible {
   border-bottom: none;
 }
 
+.harnessOptionGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.harnessOption {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-height: 76px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.harnessOption:hover,
+.harnessOption:focus-visible {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.harnessOption.isActive {
+  color: var(--text);
+  border-color: rgba(87, 157, 255, 0.55);
+  background: rgba(87, 157, 255, 0.12);
+}
+
+.harnessOptionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.harnessOptionHead strong {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harnessOptionHead svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+
+.harnessOption em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.toolList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.toolRow:hover,
+.toolRow:focus-within {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.toolRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolRowText em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .skillRowText {
   display: flex;
   flex-direction: column;
@@ -3896,6 +4038,11 @@ button.attachmentPreview:focus-visible {
   cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease;
   padding: 0;
+}
+
+.toggle:hover,
+.toggle:focus-visible {
+  border-color: rgba(87, 157, 255, 0.55);
 }
 
 .toggle .toggleKnob {
