@@ -3,12 +3,12 @@
   font-family: var(--app-font, system-ui, sans-serif);
   --app-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono-font: "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
-  --bg: #111214;
-  --chrome: #1b1d22;
-  --sidebar: #151619;
-  --surface: #181a1e;
-  --surface-2: #202329;
-  --surface-3: #282c33;
+  --bg: #0b0c0f;
+  --chrome: #15161a;
+  --sidebar: #111216;
+  --surface: #17191e;
+  --surface-2: #1f2228;
+  --surface-3: #292e36;
   --text: #eceff3;
   --muted: #a4abb5;
   --faint: #6f7782;
@@ -23,24 +23,26 @@
   --code-header-bg: #191d24;
   --inline-code-bg: rgba(255, 255, 255, 0.08);
   --inline-code-text: #dfe6ee;
-  --reference-token-bg: rgba(87, 157, 255, 0.12);
-  --reference-token-border: rgba(87, 157, 255, 0.2);
-  --reference-token-inset: rgba(87, 157, 255, 0.16);
-  --reference-token-text: #9fcbff;
-  --reference-token-hover-bg: rgba(87, 157, 255, 0.2);
-  --reference-token-hover-text: #dcecff;
-  --reasoning-text: #9fcbff;
-  --reasoning-border: rgba(143, 169, 204, 0.18);
-  --reasoning-hover-border: rgba(87, 157, 255, 0.28);
-  --reasoning-hover-bg: rgba(87, 157, 255, 0.08);
+  --reference-token-text: #b5c4d8;
+  --reference-token-hover-text: #d0dbea;
+  --reasoning-text: #c3c9d1;
+  --reasoning-border: rgba(178, 186, 197, 0.14);
+  --reasoning-hover-border: rgba(178, 186, 197, 0.2);
+  --reasoning-hover-bg: rgba(178, 186, 197, 0.045);
   --shadow-color: rgba(0, 0, 0, 0.42);
+  --glass: rgba(255, 255, 255, 0.045);
+  --glass-strong: rgba(255, 255, 255, 0.072);
+  --composer-glow: rgba(178, 186, 197, 0.16);
+  --accent: #b7bec8;
+  --accent-2: #8f9aaa;
+  --accent-warm: #d6c9aa;
   --blue: #579dff;
   --green: #49d38a;
   --amber: #e7b84f;
   --red: #ff6f7a;
   --radius: 8px;
-  --timeline-card-width: 760px;
-  --prompt-width: min(100%, 720px);
+  --timeline-card-width: 900px;
+  --prompt-width: min(100%, 860px);
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
@@ -69,21 +71,153 @@
   --code-header-bg: #eef2f7;
   --inline-code-bg: rgba(14, 31, 51, 0.08);
   --inline-code-text: #1f354d;
-  --reference-token-bg: rgba(31, 111, 235, 0.13);
-  --reference-token-border: rgba(31, 111, 235, 0.34);
-  --reference-token-inset: rgba(31, 111, 235, 0.2);
-  --reference-token-text: #0b57c2;
-  --reference-token-hover-bg: rgba(31, 111, 235, 0.2);
-  --reference-token-hover-text: #073f8f;
-  --reasoning-text: #0b57c2;
-  --reasoning-border: rgba(31, 111, 235, 0.26);
-  --reasoning-hover-border: rgba(31, 111, 235, 0.42);
-  --reasoning-hover-bg: rgba(31, 111, 235, 0.12);
+  --reference-token-text: #385674;
+  --reference-token-hover-text: #243e5c;
+  --reasoning-text: #4c5562;
+  --reasoning-border: rgba(92, 101, 113, 0.16);
+  --reasoning-hover-border: rgba(92, 101, 113, 0.24);
+  --reasoning-hover-bg: rgba(92, 101, 113, 0.08);
   --shadow-color: rgba(20, 35, 55, 0.18);
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --composer-glow: rgba(92, 101, 113, 0.14);
+  --accent: #5c6571;
+  --accent-2: #758092;
+  --accent-warm: #9a6700;
   --blue: #1f6feb;
   --green: #168a53;
   --amber: #9a6700;
   --red: #d1242f;
+}
+
+:root[data-theme="light"] .workspace {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), transparent 24%),
+    linear-gradient(90deg, rgba(92, 101, 113, 0.055), transparent 30%, transparent 72%, rgba(31, 111, 235, 0.045)),
+    var(--bg);
+}
+
+:root[data-theme="light"] .promptDock {
+  background:
+    linear-gradient(180deg, transparent, rgba(245, 247, 250, 0.72) 28%, rgba(245, 247, 250, 0.92)),
+    linear-gradient(90deg, transparent, rgba(92, 101, 113, 0.04), transparent);
+}
+
+:root[data-theme="light"] .promptInputShell,
+:root[data-theme="light"] .userMessageBubble {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.68)),
+    rgba(255, 255, 255, 0.9);
+}
+
+:root[data-theme="light"] .sidebar,
+:root[data-theme="light"] .reviewSidebar {
+  border-color: rgba(40, 48, 58, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), transparent 34%),
+    var(--sidebar);
+}
+
+:root[data-theme="light"] .chatRow.active,
+:root[data-theme="light"] .workspaceCard,
+:root[data-theme="light"] .taskCard,
+:root[data-theme="light"] .changedFiles {
+  border-color: rgba(40, 48, 58, 0.08);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+:root[data-theme="light"] .attachmentPreview,
+:root[data-theme="light"] .userMessageBubble {
+  box-shadow:
+    0 3px 10px rgba(40, 48, 58, 0.035),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .attachmentPreviewFileIcon {
+  color: #385674;
+  background: rgba(56, 86, 116, 0.08);
+}
+
+:root[data-theme="light"] .attachmentPreviewFileName {
+  color: #385674;
+}
+
+:root[data-theme="light"] .todoPanel {
+  border-color: rgba(40, 48, 58, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+:root[data-theme="light"] .todoTextarea {
+  color: var(--text);
+  border-color: rgba(40, 48, 58, 0.16);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+:root[data-theme="light"] .todoTextarea::placeholder {
+  color: rgba(82, 96, 113, 0.68);
+}
+
+:root[data-theme="light"] .composerReviewToggle {
+  border-color: rgba(40, 48, 58, 0.13);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 5px 16px rgba(40, 48, 58, 0.09);
+}
+
+:root[data-theme="light"] .inlineMentionToken,
+:root[data-theme="light"] .promptMentionToken {
+  color: var(--reference-token-text);
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .promptInputShell {
+  box-shadow:
+    0 5px 16px rgba(40, 48, 58, 0.045),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .promptInputShell:focus-within {
+  box-shadow:
+    0 8px 22px rgba(40, 48, 58, 0.06),
+    0 0 0 3px rgba(92, 101, 113, 0.045),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+:root[data-theme="light"] .sendButton,
+:root[data-theme="light"] .markdownCodeBlock,
+:root[data-theme="light"] .branchMenu,
+:root[data-theme="light"] .workspaceModeMenu,
+:root[data-theme="light"] .permissionMenu,
+:root[data-theme="light"] .attachmentMenu {
+  box-shadow: 0 8px 24px rgba(40, 48, 58, 0.07);
+}
+
+:root[data-theme="light"] .newChatButton,
+:root[data-theme="light"] .settingsPlaceholder {
+  border-color: rgba(40, 48, 58, 0.14);
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  background: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .newChatButton:hover,
+:root[data-theme="light"] .settingsPlaceholder:hover {
+  border-color: rgba(40, 48, 58, 0.24);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+:root[data-theme="light"] .attachmentCount {
+  color: #ffffff;
+  background: #596271;
+}
+
+:root[data-theme="light"] .bypassDialog {
+  box-shadow: 0 12px 34px rgba(40, 48, 58, 0.12);
+}
+
+:root[data-theme="light"] .settingsDialog,
+:root[data-theme="light"] .imagePreviewDialog {
+  box-shadow: 0 16px 42px rgba(40, 48, 58, 0.13);
 }
 
 * {
@@ -169,25 +303,33 @@ pre {
   grid-template-areas:
     "top top top"
     "side main review";
-  grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) minmax(360px, var(--review-width, 520px));
+  grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) var(--review-width, 520px);
   grid-template-rows: 36px minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
   min-width: 0;
   min-height: 0;
   background: var(--bg);
-  transition: grid-template-columns 205ms ease;
+  transition: grid-template-columns 400ms cubic-bezier(0.2, 0.86, 0.22, 1);
 }
 
 .appShell.sidebarClosed {
-  grid-template-columns: 0 minmax(480px, 1fr) minmax(360px, var(--review-width, 520px));
+  grid-template-columns: 0 minmax(480px, 1fr) var(--review-width, 520px);
 }
 
 .appShell.reviewClosed {
   grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) 0;
 }
 
+.appShell.reviewClosing {
+  grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) 0;
+}
+
 .appShell.sidebarClosed.reviewClosed {
+  grid-template-columns: 0 minmax(480px, 1fr) 0;
+}
+
+.appShell.sidebarClosed.reviewClosing {
   grid-template-columns: 0 minmax(480px, 1fr) 0;
 }
 
@@ -286,8 +428,11 @@ pre {
   overflow-y: auto;
   resize: none;
   padding: 28px 13px 13px;
-  border-right: 1px solid var(--line);
-  background: var(--sidebar);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), transparent 32%),
+    linear-gradient(90deg, rgba(178, 186, 197, 0.032), transparent 62%),
+    var(--sidebar);
   opacity: 1;
   transform: translateX(0);
   transition:
@@ -324,16 +469,19 @@ pre {
   resize: none;
   direction: rtl;
   padding: 0;
-  border-left: 1px solid var(--line);
-  background: var(--sidebar);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), transparent 32%),
+    linear-gradient(270deg, rgba(178, 186, 197, 0.032), transparent 62%),
+    var(--sidebar);
   opacity: 1;
   transform: translateX(0);
   transition:
-    width 205ms ease,
-    min-width 205ms ease,
-    padding 205ms ease,
-    opacity 180ms ease,
-    transform 205ms ease;
+    width 400ms cubic-bezier(0.2, 0.86, 0.22, 1),
+    min-width 400ms cubic-bezier(0.2, 0.86, 0.22, 1),
+    padding 400ms cubic-bezier(0.2, 0.86, 0.22, 1),
+    opacity 280ms ease,
+    transform 400ms cubic-bezier(0.2, 0.86, 0.22, 1);
 }
 
 .reviewSidebar > * {
@@ -350,6 +498,12 @@ pre {
   overflow: hidden;
   pointer-events: none;
   transform: translateX(12px);
+}
+
+.reviewClosing .reviewSidebar {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(18px);
 }
 
 .sidebarResizeHandle,
@@ -430,13 +584,13 @@ pre {
   gap: 7px;
   width: 100%;
   height: 32px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius);
   color: var(--text);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.026);
   font-weight: 500;
   font-size: 12.5px;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
   transition:
     border-color 120ms ease,
     background 120ms ease,
@@ -449,8 +603,8 @@ pre {
 }
 
 .newChatButton:hover {
-  border-color: var(--line-strong);
-  background: var(--control-hover-soft);
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .newChatButton:hover svg {
@@ -551,7 +705,7 @@ pre {
   color: var(--text);
   font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .chatProjectToggle em {
@@ -575,7 +729,7 @@ pre {
   bottom: 2px;
   left: 0;
   width: 1px;
-  background: var(--line-strong);
+  background: linear-gradient(180deg, transparent, rgba(178, 186, 197, 0.16), transparent);
 }
 
 .chatRow {
@@ -584,7 +738,7 @@ pre {
   align-items: stretch;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--muted);
   background: transparent;
   overflow: hidden;
@@ -606,12 +760,15 @@ pre {
 
 .chatRow:hover {
   color: var(--text);
-  background: var(--control-hover-soft);
+  background: rgba(255, 255, 255, 0.038);
 }
 
 .chatRow.active {
   color: var(--text);
-  background: var(--control-hover);
+  border-color: rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.08), transparent),
+    rgba(255, 255, 255, 0.046);
 }
 
 .chatRow.closed {
@@ -670,7 +827,7 @@ pre {
 .chatRowMain strong {
   font-size: 12px;
   font-weight: 500;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .chatRowMain em {
@@ -697,14 +854,14 @@ pre {
   align-items: center;
   min-height: 32px;
   padding: 0 11px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius);
   color: var(--muted);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.026);
   text-align: left;
   font-size: 12.5px;
   font-weight: 500;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
   transition:
     border-color 120ms ease,
     background 120ms ease,
@@ -713,8 +870,8 @@ pre {
 
 .settingsPlaceholder:hover {
   color: var(--text);
-  border-color: var(--line-strong);
-  background: var(--control-hover-soft);
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .todoPanel {
@@ -726,9 +883,9 @@ pre {
   min-height: 0;
   max-height: min(280px, 42vh);
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(255, 255, 255, 0.024);
 }
 
 .todoPanel::after {
@@ -743,7 +900,7 @@ pre {
   color: var(--text);
   background: var(--surface-3);
   box-shadow: 0 10px 24px var(--shadow-color);
-  content: "Local personal notes. Not tracked or shared.";
+  content: "Local notes. Private to this app.";
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0;
@@ -758,8 +915,8 @@ pre {
 }
 
 .todoPanel:hover::after {
-  animation: todoHintLifecycle 3000ms ease forwards;
-  animation-delay: 625ms;
+  animation: todoHintLifecycle 2400ms ease forwards;
+  animation-delay: 700ms;
 }
 
 @keyframes todoHintLifecycle {
@@ -885,6 +1042,43 @@ pre {
   background: var(--control-hover-soft);
 }
 
+:root[data-theme="light"] .todoPanel {
+  border-color: rgba(40, 48, 58, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+:root[data-theme="light"] .todoPanel::after {
+  border-color: rgba(40, 48, 58, 0.12);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 20px rgba(40, 48, 58, 0.08);
+}
+
+:root[data-theme="light"] .todoEditButton[aria-pressed="true"],
+:root[data-theme="light"] .todoEditButton:hover {
+  color: var(--text);
+  background: rgba(18, 24, 32, 0.08);
+}
+
+:root[data-theme="light"] .todoTextarea {
+  color: var(--text);
+  border-color: rgba(40, 48, 58, 0.16);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+:root[data-theme="light"] .todoTextarea:focus {
+  border-color: rgba(56, 86, 116, 0.36);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+:root[data-theme="light"] .todoTextarea::placeholder {
+  color: rgba(82, 96, 113, 0.68);
+}
+
+:root[data-theme="light"] .todoPreview {
+  color: var(--text);
+}
+
 .sideSection {
   display: flex;
   flex-direction: column;
@@ -983,9 +1177,11 @@ pre {
   gap: 9px;
   min-width: 0;
   padding: 11px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.035);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.018)),
+    rgba(255, 255, 255, 0.024);
 }
 
 .workspaceIdentity {
@@ -1140,7 +1336,24 @@ pre {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--bg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 18%),
+    linear-gradient(90deg, rgba(178, 186, 197, 0.035), transparent 26%, transparent 74%, rgba(178, 186, 197, 0.028)),
+    var(--bg);
+  isolation: isolate;
+}
+
+.workspace::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 64px);
+  opacity: 0.28;
+  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 82%, transparent);
 }
 
 .workspace.approvalPending .composerPanel,
@@ -1158,7 +1371,7 @@ pre {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 0 0 10px;
+  padding: 0;
 }
 
 .panel {
@@ -1179,37 +1392,47 @@ pre {
   min-width: 0;
   min-height: 220px;
   overflow: hidden;
+  background: transparent;
 }
 
 .composerTopbar {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 12;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  min-height: 61px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--line);
+  min-height: 0;
+  padding: 0;
+  border-bottom: 0;
   flex: 0 0 auto;
 }
 
 .composerReviewToggle {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 64%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(18px);
 }
 
 .composerBody {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 18px 20px 28px;
-  line-height: 1.58;
+  padding: clamp(28px, 5vh, 56px) clamp(22px, 4vw, 64px) clamp(44px, 8vh, 96px);
+  line-height: 1.65;
+  scroll-behavior: smooth;
 }
 
 .timeline {
   display: grid;
-  gap: 18px;
-  width: min(100%, 980px);
-  max-width: 980px;
+  gap: clamp(20px, 3vh, 34px);
+  width: min(100%, 1060px);
+  max-width: 1060px;
   margin: 0 auto;
 }
 
@@ -1220,11 +1443,12 @@ pre {
   color: var(--text);
   content-visibility: auto;
   contain-intrinsic-size: 1px 220px;
+  animation: timelineItemIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .timelineMessage.userMessage {
   margin-left: auto;
-  max-width: min(720px, 88%);
+  max-width: min(760px, 88%);
   padding: 0;
 }
 
@@ -1232,11 +1456,18 @@ pre {
   width: fit-content;
   max-width: 100%;
   margin-left: auto;
-  padding: 10px 13px;
-  border: 1px solid rgba(87, 157, 255, 0.28);
+  padding: 12px 14px;
+  border: 1px solid rgba(178, 186, 197, 0.2);
   border-radius: var(--radius);
-  border-color: rgba(87, 157, 255, 0.28);
-  background: rgba(87, 157, 255, 0.08);
+  background:
+    linear-gradient(135deg, rgba(178, 186, 197, 0.16), rgba(178, 186, 197, 0.08)),
+    rgba(255, 255, 255, 0.045);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  transform-origin: 100% 100%;
+  animation: userBubbleIn 360ms cubic-bezier(0.18, 0.88, 0.24, 1.18) both;
 }
 
 .userMessage > .messageAttachmentList {
@@ -1251,32 +1482,70 @@ pre {
 
 .timelineMessage.assistantMessage {
   width: 100%;
-  max-width: 920px;
-  padding: 0;
+  max-width: 980px;
+  padding: 0 0 0 18px;
+}
+
+.timelineMessage.assistantMessage::before {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 1px;
+  border-radius: 999px;
+  content: "";
+  background: linear-gradient(180deg, transparent, var(--accent), rgba(178, 186, 197, 0.54), transparent);
+  opacity: 0.8;
+  transform-origin: 50% 0;
+  animation: responseRailIn 520ms ease both;
 }
 
 .timelineReasoning {
-  width: 100%;
-  max-width: var(--timeline-card-width);
+  position: relative;
+  width: min(calc(100% - 18px), 980px);
+  max-width: 980px;
+  margin-left: 18px;
   min-width: 0;
-  padding: 0;
-  border: 1px solid var(--reasoning-border);
-  border-radius: var(--radius);
+  padding: 0 0 2px;
+  border: 0;
+  border-radius: 0;
   color: var(--muted);
-  background: var(--panel-tint);
-  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
   content-visibility: auto;
-  contain-intrinsic-size: 1px 74px;
+  contain-intrinsic-size: 1px 46px;
+  backdrop-filter: none;
+  animation: timelineItemIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.timelineReasoning::before {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 29px;
+  height: 1px;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(90deg, rgba(178, 186, 197, 0.3), rgba(178, 186, 197, 0.06), transparent);
+  opacity: 0.66;
+  transform: none;
 }
 
 .timelineReasoning.isFinished {
-  background: var(--control-bg);
+  background: transparent;
+  opacity: 0.74;
+}
+
+.timelineReasoning.isThinking::before {
+  opacity: 0.74;
+  animation: none;
 }
 
 .timelineReasoning:hover,
 .timelineReasoning:focus-within {
-  border-color: var(--reasoning-hover-border);
-  background: var(--reasoning-hover-bg);
+  background: transparent;
+  opacity: 1;
 }
 
 .reasoningHeader {
@@ -1284,13 +1553,14 @@ pre {
   align-items: center;
   gap: 7px;
   width: 100%;
-  height: 34px;
-  padding: 0 11px;
-  color: var(--reasoning-text);
+  height: 27px;
+  padding: 0;
+  color: color-mix(in srgb, var(--reasoning-text) 68%, var(--muted));
   text-align: left;
-  font-size: 11px;
-  font-weight: 800;
+  font-size: 10.5px;
+  font-weight: 680;
   line-height: 1.4;
+  letter-spacing: 0;
 }
 
 .reasoningHeader span {
@@ -1304,6 +1574,7 @@ pre {
 .reasoningHeader svg {
   display: block;
   flex: 0 0 auto;
+  color: var(--faint);
 }
 
 .reasoningHeader svg:last-child {
@@ -1311,31 +1582,32 @@ pre {
 }
 
 .reasoningBody {
-  max-height: 0;
+  display: grid;
+  grid-template-rows: 0fr;
   overflow: hidden;
   opacity: 0;
   transition:
-    max-height 185ms ease,
-    opacity 160ms ease;
+    grid-template-rows 240ms cubic-bezier(0.2, 0.78, 0.2, 1),
+    opacity 180ms ease;
 }
 
 .reasoningBody.open {
-  max-height: 240px;
+  grid-template-rows: 1fr;
   opacity: 1;
 }
 
 .reasoningBody pre {
   margin: 0;
-  max-height: 220px;
+  max-height: 92px;
   min-height: 0;
   overflow: auto;
-  padding: 0 10px 10px;
+  padding: 8px 0 4px;
   white-space: pre-wrap;
   word-break: break-word;
-  color: inherit;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
   font-family: var(--mono-font);
-  font-size: 10.5px;
-  line-height: 1.5;
+  font-size: 10px;
+  line-height: 1.42;
 }
 
 .timelineMessage .markdownContent > :last-child {
@@ -1391,7 +1663,11 @@ pre {
 
 .assistantMessage .messageActions {
   position: static;
-  margin-top: 9px;
+  margin-top: 10px;
+  opacity: 0.82;
+}
+
+.assistantMessage .messageActions:has(.messageAction[aria-pressed="true"]) {
   opacity: 1;
 }
 
@@ -1404,36 +1680,75 @@ pre {
 .messageAction {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--muted);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    background 160ms ease;
 }
 
 .messageAction:hover {
   border-color: var(--line);
   color: var(--text);
   background: var(--control-hover);
+  transform: translateY(-1px);
 }
 
-.messageAction.feedbackGood.active {
-  border-color: rgba(73, 211, 138, 0.45);
-  color: var(--green);
-  background: rgba(73, 211, 138, 0.12);
+.messageAction.feedbackGood.active,
+.messageAction.feedbackGood[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line-strong));
+  color: color-mix(in srgb, var(--green) 62%, var(--text));
+  background: color-mix(in srgb, var(--green) 11%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--green) 7%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-.messageAction.feedbackBad.active {
-  border-color: rgba(255, 111, 122, 0.45);
-  color: var(--red);
-  background: rgba(255, 111, 122, 0.12);
+.messageAction.feedbackBad.active,
+.messageAction.feedbackBad[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--red) 32%, var(--line-strong));
+  color: color-mix(in srgb, var(--red) 58%, var(--text));
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--red) 6%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.messageAction.feedbackGood[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.messageAction.feedbackBad[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--red) 13%, transparent);
 }
 
 .timelineCommand {
-  width: 100%;
-  max-width: var(--timeline-card-width);
+  position: relative;
+  width: min(calc(100% - 18px), 980px);
+  max-width: 980px;
+  margin-left: 18px;
+  padding-bottom: 10px;
+  color: var(--muted);
   content-visibility: auto;
   contain-intrinsic-size: 1px 54px;
+  animation: timelineItemIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.timelineCommand::before {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(90deg, rgba(178, 186, 197, 0.22), rgba(178, 186, 197, 0.045), transparent);
+  opacity: 0.58;
 }
 
 .reviewSummaryCard {
@@ -1562,6 +1877,7 @@ pre {
 
 .markdownContent {
   max-width: 980px;
+  font-size: 13.5px;
 }
 
 .markdownContent p,
@@ -1575,6 +1891,7 @@ pre {
 
 .markdownContent p {
   white-space: pre-wrap;
+  color: color-mix(in srgb, var(--text) 90%, var(--muted));
 }
 
 .markdownContent h3,
@@ -1639,22 +1956,27 @@ pre {
   color: var(--text);
 }
 
+.markdownContent em {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+}
+
 .markdownContent code {
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: 1px 5px;
+  border-radius: 5px;
   color: var(--inline-code-text);
   background: var(--inline-code-bg);
   font-family: var(--mono-font);
-  font-size: 12px;
+  font-size: 12.2px;
 }
 
 .inlineMentionToken {
   display: inline;
-  padding: 2px 4px;
-  border-radius: 6px;
+  padding: 0;
+  border-radius: 0;
   color: var(--reference-token-text);
-  background: var(--reference-token-bg);
-  box-shadow: 0 0 0 1px var(--reference-token-border), inset 0 0 0 1px var(--reference-token-inset);
+  background: transparent;
+  box-shadow: none;
+  font-weight: 640;
 }
 
 .reviewReferenceToken {
@@ -1665,16 +1987,21 @@ pre {
 
 .reviewReferenceToken:hover {
   color: var(--reference-token-hover-text);
-  background: var(--reference-token-hover-bg);
+  background: transparent;
 }
 
 .markdownCodeBlock {
-  margin: 0 0 12px;
-  border: 1px solid var(--line-strong);
+  margin: 2px 0 14px;
+  border: 1px solid rgba(236, 239, 243, 0.12);
   border-radius: var(--radius);
-  background: var(--code-bg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 32%),
+    var(--code-bg);
   overflow: hidden;
-  box-shadow: 0 10px 26px var(--shadow-color);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  animation: codeBlockIn 420ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .markdownCodeBlock figcaption {
@@ -1682,11 +2009,13 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 32px;
-  padding: 0 8px 0 11px;
+  min-height: 34px;
+  padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  background: var(--code-header-bg);
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.07), transparent 42%),
+    var(--code-header-bg);
   font-size: 11.5px;
   font-weight: 700;
 }
@@ -1697,7 +2026,7 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
 }
 
 .markdownCodeBlock figcaption button {
@@ -1706,21 +2035,26 @@ pre {
   gap: 5px;
   min-height: 24px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--muted);
   font-size: 11.5px;
   font-weight: 700;
+  transition:
+    color 150ms ease,
+    background 150ms ease,
+    transform 150ms ease;
 }
 
 .markdownCodeBlock figcaption button:hover {
   color: var(--text);
   background: var(--control-hover);
+  transform: translateY(-1px);
 }
 
 .markdownCode {
   max-width: 100%;
   overflow: auto;
-  padding: 12px 14px;
+  padding: 14px 16px;
   color: var(--text);
   background: transparent;
 }
@@ -1736,17 +2070,6 @@ pre {
   line-height: 1.6;
 }
 
-.streamCaret {
-  display: inline-block;
-  width: 3px;
-  height: 1.05em;
-  margin-left: 4px;
-  border-radius: 2px;
-  background: var(--green);
-  vertical-align: -0.16em;
-  animation: blink 1s steps(2, start) infinite;
-}
-
 .commandList {
   flex: 1 1 auto;
   display: flex;
@@ -1760,43 +2083,31 @@ pre {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel-tint);
-  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
 }
 
 .commandSummary {
   display: grid;
-  grid-template-columns: 14px 8px minmax(0, 1fr);
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  gap: 8px;
   align-items: center;
   min-width: 0;
-  padding: 7px 8px;
+  min-height: 29px;
+  padding: 0;
+  color: var(--muted);
   text-align: left;
 }
 
 .commandSummary > svg {
-  color: var(--muted);
+  justify-self: end;
+  color: var(--faint);
 }
 
 .commandSummary:hover {
-  background: var(--control-hover);
-}
-
-.commandStatus {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--amber);
-}
-
-.commandCard.passed .commandStatus {
-  background: var(--green);
-}
-
-.commandCard.failed .commandStatus {
-  background: var(--red);
+  color: var(--text);
 }
 
 .commandSummaryText {
@@ -1813,9 +2124,10 @@ pre {
 }
 
 .commandSummary strong {
-  color: var(--text);
+  color: color-mix(in srgb, var(--text) 76%, var(--muted));
   font-family: var(--mono-font);
   font-size: 11.5px;
+  font-weight: 650;
 }
 
 .commandSummary em {
@@ -1825,9 +2137,10 @@ pre {
 }
 
 .commandDetails {
-  padding: 8px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
+  padding: 8px 0 0;
+  border-top: 0;
+  background: transparent;
+  animation: commandDetailsIn 150ms ease both;
 }
 
 .shellBlock {
@@ -1871,27 +2184,49 @@ pre {
 }
 
 .promptDock {
+  position: relative;
+  z-index: 24;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
-  padding: 10px 20px 12px;
-  border-top: 1px solid var(--line);
-  background: transparent;
+  padding: 14px 20px 18px;
+  border-top: 0;
+  background:
+    linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.28) 28%, rgba(0, 0, 0, 0.42)),
+    linear-gradient(90deg, transparent, rgba(178, 186, 197, 0.035), transparent);
+  backdrop-filter: blur(14px);
+  overflow: visible;
+}
+
+.promptDock::before {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: min(960px, calc(100% - 40px));
+  height: 1px;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), rgba(178, 186, 197, 0.22), transparent);
+  transform: translateX(-50%);
 }
 
 .promptControls {
+  position: relative;
+  z-index: 34;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 5px;
   width: var(--prompt-width);
   min-width: 0;
-  min-height: 28px;
-  padding: 0 2px;
+  min-height: 30px;
+  overflow: visible;
+  padding: 0 4px;
+  color: var(--muted);
 }
 
 .closedChatNotice {
@@ -1901,15 +2236,16 @@ pre {
   width: var(--prompt-width);
   min-height: 34px;
   padding: 8px 10px;
-  border: 1px solid rgba(87, 157, 255, 0.24);
+  border: 1px solid rgba(178, 186, 197, 0.24);
   border-radius: var(--radius);
-  color: #cfe3ff;
-  background: rgba(87, 157, 255, 0.09);
+  color: color-mix(in srgb, var(--accent) 24%, var(--text));
+  background: rgba(178, 186, 197, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .closedChatNotice svg {
   flex: 0 0 auto;
-  color: var(--blue);
+  color: var(--accent);
 }
 
 .closedChatNotice span {
@@ -1935,17 +2271,18 @@ pre {
   min-width: 0;
   height: 28px;
   padding: 0 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--text);
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  background: rgba(255, 255, 255, 0.035);
   text-align: left;
   font-weight: 500;
   font-size: 12px;
-  letter-spacing: -0.005em;
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
 }
 
 .workspaceControl {
@@ -1954,7 +2291,9 @@ pre {
 }
 
 .workspaceControl:hover {
-  background: var(--control-hover);
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.07);
+  transform: translateY(-1px);
 }
 
 .controlIcon {
@@ -1973,6 +2312,7 @@ pre {
 
 .branchControl {
   position: relative;
+  z-index: 44;
   display: flex;
   align-items: center;
   margin-left: 2px;
@@ -1998,20 +2338,21 @@ pre {
   height: 28px;
   padding: 0 9px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--muted);
   background: transparent;
   font-size: 11.5px;
   font-weight: 500;
-  letter-spacing: -0.005em;
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
 }
 
 .branchTrigger:hover:not(:disabled) {
   color: var(--text);
   background: var(--control-hover);
+  transform: translateY(-1px);
 }
 
 .branchTrigger span {
@@ -2029,7 +2370,7 @@ pre {
   position: absolute;
   left: 0;
   bottom: calc(100% + 7px);
-  z-index: 90;
+  z-index: 120;
   display: grid;
   gap: 1px;
   width: max-content;
@@ -2041,8 +2382,10 @@ pre {
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
-  box-shadow: 0 16px 34px var(--shadow-color);
+  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
+  box-shadow: 0 22px 58px var(--shadow-color);
+  backdrop-filter: blur(22px);
+  animation: menuRise 180ms ease both;
 }
 
 .branchMenuHeader {
@@ -2143,11 +2486,12 @@ pre {
 .workspaceControl strong {
   font-weight: 500;
   font-size: 12px;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .permissionControl {
   position: relative;
+  z-index: 44;
   display: flex;
   align-items: center;
   flex: 0 1 auto;
@@ -2156,6 +2500,7 @@ pre {
 
 .workspaceModeControl {
   position: relative;
+  z-index: 44;
   display: flex;
   align-items: center;
   flex: 0 1 auto;
@@ -2169,33 +2514,34 @@ pre {
   flex: 0 0 auto;
   height: 28px;
   padding: 0 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 999px;
   color: var(--muted);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.026);
   font-weight: 500;
   font-size: 12px;
-  letter-spacing: -0.005em;
   transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
 }
 
 .workspaceModeTrigger:hover:not(:disabled) {
   color: var(--text);
   background: var(--control-hover);
+  transform: translateY(-1px);
 }
 
 .workspaceModeControl.isWorktree .workspaceModeTrigger {
-  color: var(--blue);
-  border-color: color-mix(in srgb, var(--blue) 36%, transparent);
-  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: color-mix(in srgb, var(--text) 82%, var(--accent));
+  border-color: rgba(178, 186, 197, 0.18);
+  background: rgba(178, 186, 197, 0.08);
 }
 
 .workspaceModeControl.isWorktree .workspaceModeTrigger:hover:not(:disabled) {
-  color: var(--blue);
-  background: color-mix(in srgb, var(--blue) 20%, transparent);
+  color: var(--text);
+  background: rgba(178, 186, 197, 0.12);
 }
 
 .workspaceModeTrigger svg {
@@ -2212,15 +2558,17 @@ pre {
   position: absolute;
   left: 0;
   bottom: calc(100% + 7px);
-  z-index: 90;
+  z-index: 120;
   display: grid;
   gap: 3px;
   min-width: 154px;
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
-  box-shadow: 0 18px 48px var(--shadow-color);
+  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
+  box-shadow: 0 22px 58px var(--shadow-color);
+  backdrop-filter: blur(22px);
+  animation: menuRise 180ms ease both;
 }
 
 .workspaceModeMenu button {
@@ -2243,7 +2591,7 @@ pre {
 }
 
 .workspaceModeMenu button.active svg {
-  color: var(--blue);
+  color: var(--accent);
 }
 
 .permissionTrigger {
@@ -2253,21 +2601,24 @@ pre {
   min-width: 0;
   height: 28px;
   padding: 0 9px;
-  border: 0;
-  border-radius: 6px;
-  color: var(--text);
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  background: rgba(255, 255, 255, 0.026);
   font-weight: 500;
   font-size: 12px;
-  letter-spacing: -0.005em;
   text-align: left;
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
 }
 
 .permissionTrigger:hover {
+  border-color: rgba(255, 255, 255, 0.13);
   background: var(--control-hover);
+  transform: translateY(-1px);
 }
 
 .permissionTrigger svg:first-child {
@@ -2312,15 +2663,17 @@ pre {
   position: absolute;
   left: 0;
   bottom: calc(100% + 7px);
-  z-index: 90;
+  z-index: 120;
   display: grid;
   gap: 3px;
   min-width: 168px;
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
-  box-shadow: 0 18px 48px var(--shadow-color);
+  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
+  box-shadow: 0 22px 58px var(--shadow-color);
+  backdrop-filter: blur(22px);
+  animation: menuRise 180ms ease both;
 }
 
 .permissionMenu button {
@@ -2362,6 +2715,8 @@ pre {
 
 .attachmentControl {
   display: flex;
+  position: relative;
+  z-index: 44;
   align-items: center;
   flex: 0 0 auto;
   min-width: 0;
@@ -2373,23 +2728,28 @@ pre {
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 999px;
   color: var(--muted);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.026);
   transition:
-    background 120ms ease,
-    color 120ms ease;
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
 }
 
 .attachmentTrigger:hover:not(:disabled),
 .attachmentTrigger.isActive {
   color: var(--text);
+  border-color: rgba(255, 255, 255, 0.13);
   background: var(--control-hover);
+  transform: translateY(-1px);
 }
 
 .attachmentTrigger.isActive {
-  color: #9fcbff;
-  background: rgba(87, 157, 255, 0.12);
+  color: var(--accent);
+  background: rgba(178, 186, 197, 0.12);
 }
 
 .attachmentTrigger:disabled {
@@ -2407,7 +2767,7 @@ pre {
   padding: 0 3px;
   border-radius: 999px;
   color: #061426;
-  background: var(--blue);
+  background: var(--accent);
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
@@ -2487,29 +2847,60 @@ pre {
 
 .composer {
   position: relative;
+  z-index: 18;
   display: grid;
-  gap: 8px;
+  gap: 9px;
   width: var(--prompt-width);
   min-width: 0;
+  animation: promptDockIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .attachmentPreviewList {
   display: flex;
-  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
 }
 
+.floatingAttachmentTray {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 32;
+  width: var(--prompt-width);
+  min-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(5px);
+  transition:
+    opacity 150ms ease,
+    transform 170ms ease;
+}
+
+.floatingAttachmentTray.hasAttachments {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
 .composerAttachmentList {
-  max-height: 118px;
-  overflow: auto;
-  padding: 1px;
+  align-items: center;
+  flex-wrap: nowrap;
+  max-height: 40px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 4px;
+  scrollbar-width: none;
+}
+
+.composerAttachmentList::-webkit-scrollbar {
+  display: none;
 }
 
 .messageAttachmentList {
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -2517,9 +2908,15 @@ pre {
   position: relative;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--control-bg);
+  border: 1px solid rgba(181, 196, 216, 0.14);
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(181, 196, 216, 0.034)),
+    color-mix(in srgb, var(--surface-2) 84%, transparent);
+  box-shadow:
+    0 5px 14px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: chipIn 260ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 button.attachmentPreview {
@@ -2532,12 +2929,14 @@ button.attachmentPreview {
 }
 
 button.attachmentPreview:hover {
-  border-color: var(--line-strong);
-  background: var(--control-hover);
+  border-color: rgba(181, 196, 216, 0.22);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.064), rgba(181, 196, 216, 0.05)),
+    color-mix(in srgb, var(--surface-2) 88%, transparent);
 }
 
 button.attachmentPreview:focus-visible {
-  outline: 2px solid rgba(87, 157, 255, 0.72);
+  outline: 2px solid rgba(178, 186, 197, 0.42);
   outline-offset: 2px;
 }
 
@@ -2546,20 +2945,27 @@ button.attachmentPreview:focus-visible {
   grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
-  max-width: min(100%, 260px);
-  min-height: 36px;
-  padding: 6px 8px 6px 6px;
+  max-width: min(100%, 250px);
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 4px 8px 4px 5px;
 }
 
 .attachmentPreview.fileAttachment:has(.attachmentPreviewRemove) {
   grid-template-columns: 24px minmax(0, 1fr) 24px;
-  padding-right: 6px;
+  padding-right: 5px;
 }
 
 .attachmentPreview.imageAttachment {
   width: 108px;
   height: 82px;
   background: var(--surface-2);
+}
+
+.composerAttachmentList .attachmentPreview.imageAttachment {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
 }
 
 .messageAttachmentList .attachmentPreview.imageAttachment {
@@ -2602,8 +3008,8 @@ button.attachmentPreview:focus-visible {
 }
 
 .attachmentPreviewFileIcon {
-  color: #9fcbff;
-  background: rgba(87, 157, 255, 0.12);
+  color: var(--reference-token-text);
+  background: rgba(181, 196, 216, 0.08);
 }
 
 .attachmentPreviewFileName {
@@ -2611,9 +3017,15 @@ button.attachmentPreview:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
+  color: var(--reference-token-text);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 590;
+}
+
+.messageAttachmentList .attachmentPreview {
+  border-color: rgba(181, 196, 216, 0.12);
+  background: color-mix(in srgb, var(--surface-2) 84%, transparent);
+  box-shadow: none;
 }
 
 .attachmentPreviewRemove {
@@ -2642,17 +3054,21 @@ button.attachmentPreview:focus-visible {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 10px);
   z-index: 28;
   display: grid;
   gap: 4px;
   max-height: 260px;
   overflow: auto;
-  padding: 7px;
-  border: 1px solid var(--line-strong);
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
-  box-shadow: 0 18px 40px var(--shadow-color);
+  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
+  box-shadow:
+    0 24px 64px var(--shadow-color),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24px);
+  animation: menuRise 180ms ease both;
 }
 
 .attachmentMenuHeader {
@@ -2679,15 +3095,17 @@ button.attachmentPreview:focus-visible {
 
 .attachmentMenu button:hover,
 .attachmentMenu button.active {
-  background: var(--control-hover);
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.09), transparent),
+    var(--control-hover);
 }
 
 .attachmentMenu button.active {
-  outline: 1px solid rgba(87, 157, 255, 0.34);
+  outline: 1px solid rgba(178, 186, 197, 0.34);
 }
 
 .attachmentMenu button > svg {
-  color: var(--blue);
+  color: var(--accent);
 }
 
 .attachmentMenu button span {
@@ -2713,7 +3131,7 @@ button.attachmentPreview:focus-visible {
 
 .attachmentMenu small {
   padding: 2px 6px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 999px;
 }
 
@@ -2723,21 +3141,43 @@ button.attachmentPreview:focus-visible {
 
 .promptInputShell {
   position: relative;
-  min-height: 48px;
+  min-height: 58px;
+  border: 1px solid rgba(255, 255, 255, 0.105);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.072), rgba(255, 255, 255, 0.034)),
+    rgba(14, 16, 20, 0.74);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(178, 186, 197, 0),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24px);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+.promptInputShell:focus-within {
+  border-color: rgba(178, 186, 197, 0.28);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.36),
+    0 0 0 3px rgba(178, 186, 197, 0.075),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .promptHighlight {
   position: absolute;
   inset: 0;
   z-index: 0;
-  min-height: 48px;
+  min-height: 58px;
   max-height: 108px;
-  padding: 10px 48px 10px 12px;
-  border: 1px solid transparent;
+  padding: 14px 56px 14px 16px;
+  border: 0;
   border-radius: var(--radius);
   overflow: hidden;
   color: var(--text);
-  line-height: 1.48;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   pointer-events: none;
@@ -2746,38 +3186,37 @@ button.attachmentPreview:focus-visible {
 .promptMentionToken {
   display: inline;
   padding: 0;
-  border-radius: 5px;
-  color: #9fcbff;
-  background: rgba(87, 157, 255, 0.13);
-  box-shadow: 0 0 0 2px rgba(87, 157, 255, 0.13), inset 0 0 0 1px rgba(87, 157, 255, 0.18);
+  border-radius: 0;
+  color: var(--reference-token-text);
+  background: transparent;
+  box-shadow: none;
+  font-weight: 640;
 }
 
 .composer textarea {
   position: relative;
   z-index: 1;
   width: 100%;
-  min-height: 48px;
+  min-height: 58px;
   max-height: 108px;
   resize: none;
-  padding: 10px 48px 10px 12px;
-  border: 1px solid var(--line-strong);
+  padding: 14px 56px 14px 16px;
+  border: 0;
   border-radius: var(--radius);
   outline: 0;
   color: transparent;
   caret-color: var(--text);
-  background: var(--control-bg);
-  line-height: 1.48;
+  background: transparent;
+  line-height: 1.5;
 }
 
 .composer textarea:focus {
-  border-color: rgba(87, 157, 255, 0.72);
-  box-shadow: 0 0 0 3px rgba(87, 157, 255, 0.14);
+  box-shadow: none;
 }
 
 .composer textarea:disabled {
   color: transparent;
-  border-color: var(--line);
-  background: var(--surface-2);
+  background: transparent;
   cursor: default;
 }
 
@@ -2786,21 +3225,42 @@ button.attachmentPreview:focus-visible {
 }
 
 .composer textarea::selection {
-  background: rgba(87, 157, 255, 0.32);
+  background: rgba(178, 186, 197, 0.26);
 }
 
 .sendButton {
   position: absolute;
   z-index: 2;
-  right: 8px;
-  bottom: 8px;
+  right: 9px;
+  bottom: 9px;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  background: var(--blue);
+  background: linear-gradient(180deg, #f6f7f8, color-mix(in srgb, var(--accent) 22%, #d9dde2));
   color: #07111e;
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.9, 0.2, 1),
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.sendButton:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow:
+    0 16px 38px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(255, 255, 255, 0.42),
+    0 0 28px rgba(178, 186, 197, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.sendButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
 }
 
 .actionBand {
@@ -2896,7 +3356,10 @@ button.attachmentPreview:focus-visible {
   min-height: 61px;
   padding: 13px 14px;
   margin: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.012)),
+    rgba(255, 255, 255, 0.012);
 }
 
 .reviewChangeSummary {
@@ -2959,8 +3422,10 @@ button.attachmentPreview:focus-visible {
   min-height: 30px;
   min-width: 32px;
   padding: 0 7px;
-  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
   color: var(--muted);
+  background: rgba(255, 255, 255, 0.022);
   font-weight: 700;
 }
 
@@ -2970,7 +3435,8 @@ button.attachmentPreview:focus-visible {
 
 .reviewTextButton:hover:not(:disabled) {
   color: var(--text);
-  background: var(--control-hover);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .diffWorkspace {
@@ -2990,14 +3456,16 @@ button.attachmentPreview:focus-visible {
   gap: 0;
   min-height: 0;
   overflow: auto;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: var(--radius);
-  background: var(--panel-tint);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.014)),
+    rgba(255, 255, 255, 0.02);
 }
 
 .reviewFile {
   min-width: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
 }
 
 .reviewFile:last-child {
@@ -3018,7 +3486,9 @@ button.attachmentPreview:focus-visible {
 
 .reviewFileHeader:hover,
 .reviewFileHeader.active {
-  background: var(--control-hover);
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.064), transparent),
+    rgba(255, 255, 255, 0.036);
 }
 
 .openReviewFileButton,
@@ -3034,7 +3504,7 @@ button.attachmentPreview:focus-visible {
 .openReviewFileButton:hover:not(:disabled),
 .reviewFileChevronButton:hover {
   color: var(--text);
-  background: var(--control-hover);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .reviewFileToggle {
@@ -3347,15 +3817,18 @@ button.attachmentPreview:focus-visible {
 .settingsDialog {
   display: flex;
   flex-direction: column;
-  width: min(720px, calc(100vw - 48px));
-  height: min(560px, calc(100vh - 48px));
+  width: min(760px, calc(100vw - 48px));
+  height: min(590px, calc(100vh - 48px));
   min-height: 0;
   padding: 0;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 82%, transparent);
   border-radius: var(--radius);
-  background: var(--modal-bg);
-  box-shadow: 0 24px 70px var(--shadow-color);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 26%),
+    color-mix(in srgb, var(--modal-bg) 98%, transparent);
+  box-shadow: 0 20px 58px color-mix(in srgb, var(--shadow-color) 78%, transparent);
   overflow: hidden;
+  backdrop-filter: blur(18px);
 }
 
 .imagePreviewScrim {
@@ -3418,6 +3891,7 @@ button.attachmentPreview:focus-visible {
   gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--modal-bg) 92%, transparent);
 }
 
 .settingsDialogHeader span {
@@ -3433,7 +3907,7 @@ button.attachmentPreview:focus-visible {
 
 .settingsLayout {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 176px minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -3441,10 +3915,12 @@ button.attachmentPreview:focus-visible {
 .settingsNav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   padding: 14px 10px;
   border-right: 1px solid var(--line);
-  background: var(--surface-2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 40%),
+    color-mix(in srgb, var(--surface-2) 82%, transparent);
   overflow: auto;
 }
 
@@ -3452,9 +3928,10 @@ button.attachmentPreview:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  min-height: 34px;
+  padding: 0 10px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--muted);
   background: transparent;
   font-size: 13px;
@@ -3466,27 +3943,31 @@ button.attachmentPreview:focus-visible {
 
 .settingsNavItem:hover {
   color: var(--text);
-  background: var(--control-bg);
+  background: var(--control-hover-soft);
 }
 
 .settingsNavItem.isActive {
   color: var(--text);
-  background: rgba(87, 157, 255, 0.12);
-  border-color: rgba(87, 157, 255, 0.28);
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.12), transparent 82%),
+    var(--control-bg);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .settingsContent {
   min-height: 0;
   overflow: auto;
   padding: 22px 24px;
-  background: var(--modal-bg);
+  background:
+    linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.018)),
+    var(--modal-bg);
 }
 
 .settingsPanel {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  max-width: 460px;
+  gap: 14px;
+  max-width: 520px;
 }
 
 .settingsPanelHead h3 {
@@ -3508,7 +3989,13 @@ button.attachmentPreview:focus-visible {
 .settingsGroup {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), transparent 60%),
+    color-mix(in srgb, var(--surface) 38%, transparent);
 }
 
 .settingsGroup h4 {
@@ -3523,10 +4010,10 @@ button.attachmentPreview:focus-visible {
 .settingsList {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
   border-radius: var(--radius);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.025);
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
 }
 
 .settingsListRow {
@@ -3618,11 +4105,11 @@ button.attachmentPreview:focus-visible {
   height: 32px;
   min-width: 0;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 6px;
   outline: 0;
   color: var(--text);
-  background: var(--control-bg);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
   font-size: 12.5px;
 }
 
@@ -3638,10 +4125,10 @@ button.attachmentPreview:focus-visible {
   gap: 7px;
   min-height: 70px;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: var(--radius);
   color: var(--muted);
-  background: var(--control-bg);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
   font-weight: 700;
 }
 
@@ -3652,8 +4139,10 @@ button.attachmentPreview:focus-visible {
 
 .appearanceOptionGrid button.isActive {
   color: var(--text);
-  border-color: rgba(87, 157, 255, 0.55);
-  background: rgba(87, 157, 255, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.13), rgba(178, 186, 197, 0.055)),
+    color-mix(in srgb, var(--surface-2) 54%, transparent);
 }
 
 .appearancePreview {
@@ -3690,7 +4179,7 @@ button.attachmentPreview:focus-visible {
 
 .settingsField input:focus,
 .settingsField select:focus {
-  border-color: rgba(87, 157, 255, 0.55);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .toolName {
@@ -3790,9 +4279,9 @@ button.attachmentPreview:focus-visible {
   align-items: center;
   gap: 6px;
   padding: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.025);
+  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
 }
 
 .skillCreateForm input[type="text"] {
@@ -3800,16 +4289,16 @@ button.attachmentPreview:focus-visible {
   min-width: 0;
   height: 30px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.25);
+  background: color-mix(in srgb, var(--code-bg) 80%, transparent);
   color: var(--text);
   font-size: 12.5px;
 }
 
 .skillCreateForm input[type="text"]:focus {
   outline: none;
-  border-color: rgba(87, 157, 255, 0.55);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .accountCard {
@@ -3817,9 +4306,11 @@ button.attachmentPreview:focus-visible {
   align-items: center;
   gap: 12px;
   padding: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.025);
+  background:
+    linear-gradient(135deg, rgba(178, 186, 197, 0.065), transparent 56%),
+    color-mix(in srgb, var(--surface-2) 52%, transparent);
 }
 
 .accountAvatar {
@@ -3828,8 +4319,8 @@ button.attachmentPreview:focus-visible {
   width: 40px;
   height: 40px;
   border-radius: 999px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--reference-token-text);
+  background: rgba(181, 196, 216, 0.08);
 }
 
 .accountIdentity {
@@ -3857,10 +4348,10 @@ button.attachmentPreview:focus-visible {
   gap: 10px;
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 84%, transparent);
   border-radius: 6px;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
   font-size: 13px;
   font-weight: 600;
   text-align: left;
@@ -3869,7 +4360,7 @@ button.attachmentPreview:focus-visible {
 }
 
 .ssoButton:hover {
-  background: var(--control-hover);
+  background: color-mix(in srgb, var(--surface-3) 62%, transparent);
   border-color: var(--line-strong);
 }
 
@@ -3883,10 +4374,10 @@ button.attachmentPreview:focus-visible {
   padding: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: var(--radius);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.025);
+  background: color-mix(in srgb, var(--surface-2) 46%, transparent);
 }
 
 .skillRow {
@@ -3913,10 +4404,10 @@ button.attachmentPreview:focus-visible {
   width: 100%;
   min-height: 76px;
   padding: 11px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 7px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.025);
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
   text-align: left;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
@@ -3925,13 +4416,15 @@ button.attachmentPreview:focus-visible {
 .harnessOption:focus-visible {
   color: var(--text);
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.045);
+  background: color-mix(in srgb, var(--surface-3) 46%, transparent);
 }
 
 .harnessOption.isActive {
   color: var(--text);
-  border-color: rgba(87, 157, 255, 0.55);
-  background: rgba(87, 157, 255, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.13), rgba(178, 186, 197, 0.055)),
+    color-mix(in srgb, var(--surface-2) 50%, transparent);
 }
 
 .harnessOptionHead {
@@ -3980,16 +4473,16 @@ button.attachmentPreview:focus-visible {
   gap: 16px;
   min-height: 58px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.025);
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
   transition: background 120ms ease, border-color 120ms ease;
 }
 
 .toolRow:hover,
 .toolRow:focus-within {
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.045);
+  background: color-mix(in srgb, var(--surface-3) 46%, transparent);
 }
 
 .toolRowText {
@@ -4042,7 +4535,7 @@ button.attachmentPreview:focus-visible {
 
 .toggle:hover,
 .toggle:focus-visible {
-  border-color: rgba(87, 157, 255, 0.55);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .toggle .toggleKnob {
@@ -4057,8 +4550,8 @@ button.attachmentPreview:focus-visible {
 }
 
 .toggle.isOn {
-  background: rgba(87, 157, 255, 0.55);
-  border-color: rgba(87, 157, 255, 0.7);
+  background: color-mix(in srgb, var(--accent) 48%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
 }
 
 .toggle.isOn .toggleKnob {
@@ -4077,9 +4570,9 @@ button.attachmentPreview:focus-visible {
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--surface-2) 46%, transparent);
 }
 
 .telemetryColumn h4 {
@@ -4135,16 +4628,16 @@ button.attachmentPreview:focus-visible {
   width: fit-content;
   max-width: 100%;
   padding: 0 12px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
   border-radius: 6px;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
   font-weight: 600;
   cursor: pointer;
 }
 
 .settingsInlineButton:hover:not(:disabled) {
-  background: var(--control-hover);
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
 }
 
 .settingsInlineButton:disabled {
@@ -4162,14 +4655,21 @@ button.attachmentPreview:focus-visible {
 
 .bypassDialog {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
-  width: min(440px, calc(100vw - 48px));
+  width: min(410px, calc(100vw - 48px));
   padding: 14px;
-  border: 1px solid rgba(255, 111, 122, 0.42);
+  border: 1px solid color-mix(in srgb, var(--red) 24%, var(--line-strong));
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
-  box-shadow: 0 24px 70px var(--shadow-color);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 46%),
+    color-mix(in srgb, var(--modal-bg) 96%, transparent);
+  box-shadow: 0 16px 44px color-mix(in srgb, var(--shadow-color) 70%, transparent);
+}
+
+.deleteDialog {
+  grid-template-columns: 22px minmax(0, 1fr);
+  width: min(440px, calc(100vw - 48px));
 }
 
 @media (max-width: 760px) {
@@ -4201,26 +4701,26 @@ button.attachmentPreview:focus-visible {
 .dialogIcon {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius);
-  color: #ffb4bb;
-  background: rgba(255, 111, 122, 0.14);
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--red) 74%, var(--text));
+  background: transparent;
 }
 
 .deleteIcon {
-  color: #ffc4c9;
+  color: color-mix(in srgb, var(--red) 74%, var(--text));
 }
 
 .bypassDialog h3 {
-  margin: 0 0 6px;
+  margin: 0 0 5px;
   font-size: 14px;
 }
 
 .bypassDialog p {
   margin: 0;
   color: var(--muted);
-  line-height: 1.48;
+  line-height: 1.42;
 }
 
 .dialogActions {
@@ -4228,24 +4728,24 @@ button.attachmentPreview:focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 .dangerAction {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
   min-height: 32px;
-  padding: 0 11px;
+  padding: 0 12px;
   border-radius: var(--radius);
-  color: #2d0508;
-  background: #ff9da6;
+  color: color-mix(in srgb, var(--red) 16%, var(--text));
+  border: 1px solid color-mix(in srgb, var(--red) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 14%, var(--control-bg));
   font-weight: 800;
 }
 
 .dangerAction:hover {
-  background: #ffb2ba;
+  background: color-mix(in srgb, var(--red) 20%, var(--control-hover));
 }
 
 .toast {
@@ -4298,6 +4798,126 @@ button.attachmentPreview:focus-visible {
   animation: spin 0.9s linear infinite;
 }
 
+@keyframes timelineItemIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes userBubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes responseRailIn {
+  from {
+    opacity: 0;
+    transform: scaleY(0.35);
+  }
+
+  to {
+    opacity: 0.8;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes reasoningWave {
+  0% {
+    transform: translateX(-82%);
+  }
+
+  48%,
+  100% {
+    transform: translateX(82%);
+  }
+}
+
+@keyframes codeBlockIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes commandDetailsIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes streamPulse {
+  0%,
+  100% {
+    opacity: 0.38;
+    transform: scaleY(0.82);
+  }
+
+  45% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes menuRise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes promptDockIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chipIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -4307,6 +4927,17 @@ button.attachmentPreview:focus-visible {
 @keyframes blink {
   50% {
     opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
   }
 }
 
@@ -4344,10 +4975,14 @@ button.attachmentPreview:focus-visible {
     grid-template-areas:
       "top top top"
       "side main review";
-    grid-template-columns: auto minmax(220px, 1fr) minmax(0, min(var(--review-width, 60vw), calc(100vw - 240px)));
+    grid-template-columns: auto minmax(220px, 1fr) var(--review-width, 520px);
   }
 
   .appShell.reviewClosed {
+    grid-template-columns: auto minmax(220px, 1fr) 0;
+  }
+
+  .appShell.reviewClosing {
     grid-template-columns: auto minmax(220px, 1fr) 0;
   }
 
@@ -4367,7 +5002,7 @@ button.attachmentPreview:focus-visible {
     width: 0;
     min-width: 0;
     max-width: 0;
-    transform: none;
+    transform: translateX(12px);
   }
 }
 
@@ -4394,13 +5029,20 @@ button.attachmentPreview:focus-visible {
     grid-template-areas:
       "top top"
       "main review";
-    grid-template-columns: minmax(180px, 1fr) minmax(0, min(var(--review-width, 60vw), calc(100vw - 200px)));
+    grid-template-columns: minmax(180px, 1fr) var(--review-width, 520px);
   }
 
   .appShell.reviewClosed {
     grid-template-areas:
       "top top"
       "main main";
+    grid-template-columns: minmax(0, 1fr) 0;
+  }
+
+  .appShell.reviewClosing {
+    grid-template-areas:
+      "top top"
+      "main review";
     grid-template-columns: minmax(0, 1fr) 0;
   }
 }

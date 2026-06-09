@@ -5,10 +5,12 @@
   "main": "dist-electron/main/main.js",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:composer": "node scripts/dev.mjs --composer-test",
     "dev:web": "vite --host 127.0.0.1 --port 5173",
     "build": "npm run build:runner && tsc -p tsconfig.main.json && vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build:runner": "npm --prefix runner run build",
+    "test:composer": "node scripts/test-composer-text.mjs",
     "typecheck": "npm --prefix runner run typecheck && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {

@@ -44,6 +44,13 @@ import {
   User,
   X,
 } from "lucide-react";
+import {
+  attachmentLabel,
+  attachmentMention,
+  markdownPreview,
+  parseMarkdown,
+  promptHighlightSegments,
+} from "./composerText";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type PermissionMode = "normal" | "bypass";
@@ -603,6 +610,131 @@ const defaultIdeChoices: IdeChoice[] = [
   { id: "visualstudio", label: "Visual Studio", icon: "visualstudio" },
   { id: "explorer", label: isMacLike ? "Finder" : "Explorer", icon: isMacLike ? "finder" : "explorer" },
 ];
+const composerTestMode = new URLSearchParams(window.location.search).has("composerTest");
+const composerTestAttachments: ChatAttachment[] = [
+  { path: "desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
+  { path: "desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
+];
+const composerTestPrompt =
+  'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
+const composerTestRepository: RepositoryInfo = {
+  id: "preview-umbratic",
+  name: "Umbratic AI",
+  rootPath: "/Users/carminep/Projects/Umbratic",
+  kind: "git",
+  originalBranch: "main",
+  baseCommit: "preview",
+  dirty: false,
+  statusSummary: "preview",
+};
+const composerTestEvents: BackendUiEvent[] = [
+  {
+    type: "user.message",
+    taskId: "composer-test",
+    text: composerTestPrompt,
+    attachedFiles: composerTestAttachments,
+    at: new Date(Date.now() - 18_000).toISOString(),
+  },
+  {
+    type: "assistant.reasoning.delta",
+    taskId: "composer-test",
+    text: "Checking message scale, markdown rhythm, escaped pipes, and attachment chips before composing the answer.",
+    at: new Date(Date.now() - 12_000).toISOString(),
+    endedAt: new Date(Date.now() - 8_000).toISOString(),
+  },
+  {
+    type: "command.started",
+    taskId: "composer-test",
+    id: "composer-fixture-search",
+    command: 'rg -n "promptDock|timelineReasoning" desktop/src/renderer/styles.css',
+    cwd: "/Users/carminep/Projects/Umbratic",
+    kind: "bash",
+    commandClass: "read",
+  },
+  {
+    type: "command.output",
+    taskId: "composer-test",
+    id: "composer-fixture-search",
+    stream: "stdout",
+    text: "desktop/src/renderer/styles.css:1405:.timelineReasoning {\ndesktop/src/renderer/styles.css:2073:.promptDock {\n",
+  },
+  {
+    type: "command.finished",
+    taskId: "composer-test",
+    id: "composer-fixture-search",
+    exitCode: 0,
+  },
+  {
+    type: "command.started",
+    taskId: "composer-test",
+    id: "composer-fixture-test",
+    command: "npm --workspace @umbratic/desktop run test:composer",
+    cwd: "/Users/carminep/Projects/Umbratic",
+    kind: "bash",
+    commandClass: "package-manager",
+  },
+  {
+    type: "command.output",
+    taskId: "composer-test",
+    id: "composer-fixture-test",
+    stream: "stdout",
+    text: "composer text tests passed\n",
+  },
+  {
+    type: "command.finished",
+    taskId: "composer-test",
+    id: "composer-fixture-test",
+    exitCode: 0,
+  },
+  {
+    type: "assistant.delta",
+    taskId: "composer-test",
+    text: [
+      "## Composer Fixture",
+      "",
+      "This response is intentionally plain text with a calmer visual rhythm. It checks **bold copy**, *italic copy*, inline `code`, escaped characters like `<tag>`, and a path reference to @main.tsx.",
+      "",
+      "### Surface Notes",
+      "",
+      "- Prompt chips should feel soft, not like raised badges.",
+      "- Thinking should stay compact and secondary.",
+      "- Code blocks should arrive smoothly without dominating the page.",
+      "",
+      "| Check | Render target |",
+      "| --- | --- |",
+      "| Escaped pipe | A\\|B stays in one cell |",
+      "| Inline code | `const value = \"A|B\";` |",
+      "",
+      "```tsx",
+      'const tone = "quiet";',
+      'const escaped = "A\\\\|B <safe> & visible";',
+      "return <Composer mood={tone} label={escaped} />;",
+      "```",
+      "",
+      "A final paragraph gives the stream a normal ending so spacing after code blocks can be checked against ordinary prose.",
+    ].join("\n"),
+    at: new Date(Date.now() - 5_000).toISOString(),
+  },
+];
+const composerTestTask: TaskInfo = {
+  id: "composer-test",
+  chatId: "composer-test-chat",
+  repositoryId: composerTestRepository.id,
+  prompt: composerTestPrompt,
+  workspaceKind: "git",
+  workspaceMode: "local",
+  state: "running",
+  originalBranch: "main",
+  baseCommit: "preview",
+  agentBranch: "preview",
+  worktreePath: composerTestRepository.rootPath,
+  permissionMode: "normal",
+  reasoningMode: "reasoning",
+  createdAt: new Date(Date.now() - 20_000).toISOString(),
+  changedFiles: [],
+  reviewFiles: [],
+  events: composerTestEvents,
+};
 
 const fallbackApi: DesktopApi = {
   listChats: async () => readPreviewChats(),
@@ -874,6 +1006,15 @@ function eventSignature(event: BackendUiEvent): string {
 }
 
 function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, limit = 500): BackendUiEvent[] {
+  if (event.type === "response.feedback") {
+    return [
+      ...events.filter(
+        (existing) =>
+          !(existing.type === "response.feedback" && existing.taskId === event.taskId && existing.messageId === event.messageId),
+      ),
+      event,
+    ].slice(-limit);
+  }
   const last = events.at(-1);
   if (
     last &&
@@ -1031,14 +1172,6 @@ function chatProjectKey(chat: ChatRecord): string {
   return chat.repositoryPath || "__unassigned__";
 }
 
-function attachmentName(pathValue: string): string {
-  return pathValue.split(/[\\/]/).filter(Boolean).pop() ?? pathValue;
-}
-
-function attachmentLabel(file: ChatAttachment): string {
-  return file.name || attachmentName(file.path);
-}
-
 function attachmentDetail(file: ChatAttachment): string {
   if (file.source === "workspace") return "Workspace file";
   return "Attached file";
@@ -1046,10 +1179,6 @@ function attachmentDetail(file: ChatAttachment): string {
 
 function isImageAttachment(file: ChatAttachment): boolean {
   return !!file.previewDataUrl || /\.(png|jpe?g|webp|gif)$/i.test(file.name || file.path);
-}
-
-function attachmentMention(file: ChatAttachment): string {
-  return `@${attachmentLabel(file)}`;
 }
 
 function mentionAtCursor(value: string, cursor: number): { query: string; start: number; end: number } | null {
@@ -1061,39 +1190,18 @@ function mentionAtCursor(value: string, cursor: number): { query: string; start:
 }
 
 function renderPromptHighlights(value: string, files: ChatAttachment[]): React.ReactNode[] {
-  const tokens = files
-    .map((file) => attachmentMention(normalizeAttachment(file)))
-    .filter(Boolean)
-    .sort((left, right) => right.length - left.length);
-  if (!tokens.length) return [value || "\u200b"];
-  const nodes: React.ReactNode[] = [];
-  let index = 0;
-  while (index < value.length) {
-    const token = tokens.find(
-      (candidate) =>
-        value.startsWith(candidate, index) &&
-        (index === 0 || /\s/.test(value[index - 1])) &&
-        (index + candidate.length === value.length || /\s|[.,;:!?)]/.test(value[index + candidate.length])),
-    );
-    if (token) {
-      nodes.push(
-        <span className="promptMentionToken" key={`${index}-${token}`}>
-          {token}
-        </span>,
-      );
-      index += token.length;
-      continue;
-    }
-    const nextMention = tokens
-      .map((candidate) => value.indexOf(candidate, index + 1))
-      .filter((position) => position >= 0)
-      .sort((left, right) => left - right)[0];
-    const end = nextMention ?? value.length;
-    nodes.push(value.slice(index, end));
-    index = end;
-  }
-  if (value.endsWith("\n")) nodes.push("\u200b");
-  return nodes;
+  return promptHighlightSegments(
+    value,
+    files.map(normalizeAttachment),
+  ).map((segment, index) =>
+    segment.mention ? (
+      <span className="promptMentionToken" key={`${index}-${segment.text}`}>
+        {segment.text}
+      </span>
+    ) : (
+      segment.text
+    ),
+  );
 }
 
 type ReviewReferenceOptions = {
@@ -1260,6 +1368,7 @@ const sidebarMaxWidth = 360;
 const sidebarCloseThreshold = 150;
 const reviewMinWidth = 365;
 const reviewCloseThreshold = 260;
+const reviewCloseAnimationMs = 440;
 const composerMinWidth = 480;
 const reviewOpenRatio = 0.7;
 const compactSidebarRatio = 0.18;
@@ -1337,7 +1446,9 @@ function AttachmentPreviewList({
 }) {
   if (!files.length) return null;
   return (
-    <div className={`attachmentPreviewList ${mode === "composer" ? "composerAttachmentList" : "messageAttachmentList"}`}>
+    <div
+      className={`attachmentPreviewList ${mode === "composer" ? "composerAttachmentList" : "messageAttachmentList"} hasAttachments`}
+    >
       {files.map((file) => {
         const key = file.storedPath || file.path;
         const label = attachmentLabel(file);
@@ -1449,7 +1560,13 @@ function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
 }
 
 function commandLabel(command: string): string {
-  return command.trim() || "tool";
+  const trimmed = command.trim();
+  if (!trimmed) return "Tool call";
+  if (/^(rg|grep|find|fd)\b/i.test(trimmed)) return "Search";
+  if (/^npm\b.+\brun\b/i.test(trimmed)) return "Run script";
+  if (/^git\b/i.test(trimmed)) return "Git";
+  if (/^(node|python|python3)\b/i.test(trimmed)) return "Runtime";
+  return trimmed.split(/\s+/).slice(0, 2).join(" ");
 }
 
 function stripAnsi(value: string): string {
@@ -1612,14 +1729,18 @@ function thoughtDurationMs(startedAt?: string, endedAt?: string, finished = true
 function formatDuration(value: number | null): string {
   if (value === null) return "";
   const totalSeconds = Math.max(1, Math.round(value / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
+  if (totalSeconds < 60) return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  const minuteLabel = `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return seconds ? `${minuteLabel} ${seconds} second${seconds === 1 ? "" : "s"}` : minuteLabel;
 }
 
 function thoughtSummary(item: Extract<ComposerTimelineItem, { type: "reasoning" }>): string {
-  if (!item.finished) return "Thinking";
+  if (!item.finished) {
+    const duration = formatDuration(item.durationMs);
+    return duration ? `Thinking for ${duration}` : "Thinking";
+  }
   const duration = formatDuration(item.durationMs);
   return duration ? `Thought for ${duration}` : "Thought";
 }
@@ -1782,132 +1903,8 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
   return items;
 }
 
-type MarkdownBlock =
-  | { type: "code"; language: string; content: string }
-  | { type: "heading"; level: number; text: string }
-  | { type: "list"; items: string[] }
-  | { type: "table"; headers: string[]; rows: string[][] }
-  | { type: "paragraph"; text: string };
-
-function splitMarkdownTableRow(line: string): string[] {
-  let source = line.trim();
-  if (source.startsWith("|")) source = source.slice(1);
-  if (source.endsWith("|")) source = source.slice(0, -1);
-
-  const cells: string[] = [];
-  let cell = "";
-  let inCode = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    const escaped = index > 0 && source[index - 1] === "\\";
-    if (char === "`" && !escaped) inCode = !inCode;
-    if (char === "|" && !inCode && !escaped) {
-      cells.push(cell.replace(/\\\|/g, "|").trim());
-      cell = "";
-      continue;
-    }
-    cell += char;
-  }
-  cells.push(cell.replace(/\\\|/g, "|").trim());
-  return cells;
-}
-
-function isMarkdownTableRow(line: string): boolean {
-  return line.includes("|") && splitMarkdownTableRow(line).length > 1;
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  const cells = splitMarkdownTableRow(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
-}
-
-function normalizeMarkdownTableRow(cells: string[], columnCount: number): string[] {
-  return Array.from({ length: columnCount }, (_, index) => cells[index] ?? "");
-}
-
-function parseMarkdown(content: string): MarkdownBlock[] {
-  const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  const blocks: MarkdownBlock[] = [];
-  let paragraph: string[] = [];
-  let list: string[] = [];
-  let code: { language: string; lines: string[]; indent: string } | null = null;
-
-  const flushParagraph = () => {
-    if (paragraph.length) {
-      blocks.push({ type: "paragraph", text: paragraph.join("\n") });
-      paragraph = [];
-    }
-  };
-  const flushList = () => {
-    if (list.length) {
-      blocks.push({ type: "list", items: list });
-      list = [];
-    }
-  };
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex];
-    const fence = line.match(/^(\s*)```\s*([A-Za-z0-9_+.#-]+)?\s*$/);
-    if (fence) {
-      if (code) {
-        blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
-        code = null;
-      } else {
-        flushParagraph();
-        flushList();
-        code = { language: fence[2] ?? "", lines: [], indent: fence[1] ?? "" };
-      }
-      continue;
-    }
-    if (code) {
-      code.lines.push(code.indent && line.startsWith(code.indent) ? line.slice(code.indent.length) : line);
-      continue;
-    }
-    if (isMarkdownTableRow(line) && isMarkdownTableSeparator(lines[lineIndex + 1] ?? "")) {
-      flushParagraph();
-      flushList();
-
-      const headers = splitMarkdownTableRow(line);
-      const rows: string[][] = [];
-      let rowIndex = lineIndex + 2;
-      while (rowIndex < lines.length && isMarkdownTableRow(lines[rowIndex]) && !isMarkdownTableSeparator(lines[rowIndex])) {
-        rows.push(normalizeMarkdownTableRow(splitMarkdownTableRow(lines[rowIndex]), headers.length));
-        rowIndex += 1;
-      }
-      blocks.push({ type: "table", headers, rows });
-      lineIndex = rowIndex - 1;
-      continue;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      blocks.push({ type: "heading", level: heading[1].length, text: heading[2] });
-      continue;
-    }
-    const listItem = line.match(/^\s*[-*]\s+(.+)$/);
-    if (listItem) {
-      flushParagraph();
-      list.push(listItem[1]);
-      continue;
-    }
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-    flushList();
-    paragraph.push(line);
-  }
-
-  if (code) blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
-  flushParagraph();
-  flushList();
-  return blocks;
-}
-
 function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, index) => {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*|_[^_\n]+_)/g).map((part, index) => {
     if (part.startsWith("`") && part.endsWith("`")) {
       const code = part.slice(1, -1);
       if (reviewFileForReference(code, options?.reviewFiles) || code.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(code)) {
@@ -1917,6 +1914,9 @@ function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): R
     }
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) {
+      return <em key={index}>{part.slice(1, -1)}</em>;
     }
     return <React.Fragment key={index}>{renderPlainInlineText(part, `inline-${index}`, options)}</React.Fragment>;
   });
@@ -1995,19 +1995,6 @@ function MarkdownContent({
   );
 }
 
-function markdownPreview(content: string): { text: string; truncated: boolean } {
-  if (content.length <= markdownPreviewCharacterLimit) return { text: content, truncated: false };
-  const paragraphBreak = content.lastIndexOf("\n\n", markdownPreviewCharacterLimit);
-  const sentenceBreak = content.lastIndexOf(". ", markdownPreviewCharacterLimit);
-  const cutoff =
-    paragraphBreak > markdownPreviewCharacterLimit * 0.55
-      ? paragraphBreak
-      : sentenceBreak > markdownPreviewCharacterLimit * 0.55
-        ? sentenceBreak + 1
-        : markdownPreviewCharacterLimit;
-  return { text: content.slice(0, cutoff).trimEnd(), truncated: true };
-}
-
 function LongMarkdownContent({
   content,
   onReviewFileClick,
@@ -2015,7 +2002,7 @@ function LongMarkdownContent({
   trailingInline,
 }: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
   const [expanded, setExpanded] = useState(false);
-  const preview = useMemo(() => markdownPreview(content), [content]);
+  const preview = useMemo(() => markdownPreview(content, markdownPreviewCharacterLimit), [content]);
   const displayContent = expanded || !preview.truncated ? content : preview.text;
   return (
     <>
@@ -2125,15 +2112,15 @@ function scrollElementToBottom(node: HTMLElement) {
 
 function App() {
   const [backend, setBackend] = useState<BackendStatus | null>(null);
-  const [repository, setRepository] = useState<RepositoryInfo | null>(null);
+  const [repository, setRepository] = useState<RepositoryInfo | null>(composerTestMode ? composerTestRepository : null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
   const reasoningMode: ReasoningMode = "reasoning";
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [task, setTask] = useState<TaskInfo | null>(null);
-  const [prompt, setPrompt] = useState(initialPrompt);
-  const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>([]);
+  const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
+  const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
+  const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(composerTestMode ? composerTestAttachments : []);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null);
@@ -2141,7 +2128,7 @@ function App() {
   const [promptScrollTop, setPromptScrollTop] = useState(0);
   const [deleteCandidate, setDeleteCandidate] = useState<ChatRecord | null>(null);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
-  const [events, setEvents] = useState<BackendUiEvent[]>([]);
+  const [events, setEvents] = useState<BackendUiEvent[]>(composerTestMode ? composerTestEvents : []);
   const [assistantText, setAssistantText] = useState("");
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
@@ -2151,6 +2138,7 @@ function App() {
   const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewClosing, setReviewClosing] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -2201,6 +2189,7 @@ function App() {
   const draftSaveRef = useRef<number | null>(null);
   const notesSaveRef = useRef<number | null>(null);
   const notesLoadedRef = useRef(false);
+  const reviewCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
@@ -2279,14 +2268,6 @@ function App() {
     () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
     [task?.prompt, task?.state, visibleEvents],
   );
-  const streamingAssistantItemId = useMemo(() => {
-    if (task?.state !== "running") return null;
-    for (let index = composerItems.length - 1; index >= 0; index -= 1) {
-      const item = composerItems[index];
-      if (item.type === "assistant") return item.id;
-    }
-    return null;
-  }, [composerItems, task?.state]);
   const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
     const groups = new Map<
@@ -2319,6 +2300,7 @@ function App() {
     "--sidebar-width": `${sidebarWidth}px`,
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
+  const reviewLayoutOpen = reviewOpen || reviewClosing;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
   const effectiveTheme = appearanceSettings.theme === "system" ? (systemPrefersDark ? "dark" : "light") : appearanceSettings.theme;
   const uiFontOptions = useMemo(
@@ -2549,6 +2531,15 @@ function App() {
   useEffect(() => {
     if (!canOpenIde) setIdeMenuOpen(false);
   }, [canOpenIde]);
+
+  useEffect(
+    () => () => {
+      if (reviewCloseTimerRef.current !== null) {
+        window.clearTimeout(reviewCloseTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!reviewOpen) return undefined;
@@ -2784,7 +2775,7 @@ function App() {
       { type: "assistant.done", taskId, at },
     ];
     setTask(null);
-    setReviewOpen(false);
+    closeReviewPanel();
     setPendingPermission(null);
     setApprovalChecks([]);
     setAssistantText(message);
@@ -2832,7 +2823,7 @@ function App() {
     setAutoExpandedReasoningIds(new Set());
     setPendingPermission(null);
     setExpandedReviewPaths(new Set());
-    setReviewOpen(false);
+    closeReviewPanel();
     setAttachedFiles([]);
     setMention(null);
     setFileMatches([]);
@@ -3205,7 +3196,7 @@ function App() {
       setExpandedReasoningIds(new Set());
       setAutoExpandedReasoningIds(new Set());
       setExpandedReviewPaths(new Set());
-      setReviewOpen(false);
+      closeReviewPanel();
     }
     setPendingPermission(null);
     try {
@@ -3275,9 +3266,27 @@ function App() {
   async function rateResponse(messageId: string, rating: "good" | "bad") {
     if (!latestTaskId) return;
     setError(null);
+    const taskId = latestTaskId;
+    const previousRating = responseFeedback.get(messageId);
+    const feedbackEvent: BackendUiEvent = {
+      type: "response.feedback",
+      taskId,
+      messageId,
+      rating,
+      at: new Date().toISOString(),
+    };
+    setEvents((current) => appendBackendEvent(current, feedbackEvent, 500));
     try {
-      await api.setResponseFeedback({ taskId: latestTaskId, messageId, rating });
+      await api.setResponseFeedback({ taskId, messageId, rating });
     } catch (cause) {
+      setEvents((current) => {
+        const withoutFailedRating = current.filter(
+          (event) => !(event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId),
+        );
+        return previousRating
+          ? appendBackendEvent(withoutFailedRating, { ...feedbackEvent, rating: previousRating, at: new Date().toISOString() }, 500)
+          : withoutFailedRating;
+      });
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -3320,7 +3329,29 @@ function App() {
     setSidebarOpen(true);
   }
 
+  function cancelReviewClose() {
+    if (reviewCloseTimerRef.current !== null) {
+      window.clearTimeout(reviewCloseTimerRef.current);
+      reviewCloseTimerRef.current = null;
+    }
+    setReviewClosing(false);
+  }
+
+  function closeReviewPanel() {
+    if (!reviewOpen && !reviewClosing) return;
+    if (reviewCloseTimerRef.current !== null) {
+      window.clearTimeout(reviewCloseTimerRef.current);
+    }
+    setReviewOpen(false);
+    setReviewClosing(true);
+    reviewCloseTimerRef.current = window.setTimeout(() => {
+      reviewCloseTimerRef.current = null;
+      setReviewClosing(false);
+    }, reviewCloseAnimationMs);
+  }
+
   function openReviewPanel(filePath?: string) {
+    cancelReviewClose();
     const nextSidebarWidth = sidebarOpen ? Math.min(sidebarWidth, compactSidebarWidth()) : 0;
     if (sidebarOpen && nextSidebarWidth !== sidebarWidth) {
       setSidebarWidth(nextSidebarWidth);
@@ -3334,7 +3365,7 @@ function App() {
 
   function toggleReviewPanel() {
     if (reviewOpen) {
-      setReviewOpen(false);
+      closeReviewPanel();
       return;
     }
     openReviewPanel();
@@ -3664,7 +3695,7 @@ function App() {
       await restoreChatRepository(chat, nextTask?.repositoryId);
       if (!chat.taskId) {
         setTask(null);
-        setReviewOpen(false);
+        closeReviewPanel();
         setPrompt(chat.draftPrompt ?? "");
         return;
       }
@@ -3701,7 +3732,7 @@ function App() {
         setAutoExpandedReasoningIds(new Set());
         setPendingPermission(null);
         setExpandedReviewPaths(new Set());
-        setReviewOpen(false);
+        closeReviewPanel();
         setAttachedFiles([]);
         setMention(null);
         setFileMatches([]);
@@ -3756,8 +3787,9 @@ function App() {
     };
     const stop = () => {
       if (closeAfterDrag) {
-        setReviewOpen(false);
+        closeReviewPanel();
       } else {
+        cancelReviewClose();
         setReviewOpen(true);
       }
       finish();
@@ -3768,7 +3800,9 @@ function App() {
 
   return (
     <div
-      className={`appShell ${isMacLike ? "macChrome" : ""} ${sidebarOpen ? "" : "sidebarClosed"} ${reviewOpen ? "" : "reviewClosed"}`}
+      className={`appShell ${isMacLike ? "macChrome" : ""} ${sidebarOpen ? "" : "sidebarClosed"} ${
+        reviewLayoutOpen ? "" : "reviewClosed"
+      } ${reviewClosing ? "reviewClosing" : ""}`}
       style={layoutStyle}
     >
       <header className="topbar">
@@ -3786,7 +3820,7 @@ function App() {
           type="button"
           onClick={() => {
             setTask(null);
-            setReviewOpen(false);
+            closeReviewPanel();
           }}
           title="Back"
         >
@@ -3919,7 +3953,6 @@ function App() {
               </div>
             ) : (
               <button className="todoEmpty" type="button" onClick={() => setTodoEditing(true)}>
-                <SquarePen size={14} />
                 <span>No notes yet</span>
               </button>
             )}
@@ -3985,7 +4018,6 @@ function App() {
                               content={item.text}
                               onReviewFileClick={openReviewReference}
                               reviewFiles={reviewFiles}
-                              trailingInline={item.id === streamingAssistantItemId ? <span className="streamCaret" /> : undefined}
                             />
                             <div className="messageActions">
                               <button
@@ -4050,7 +4082,6 @@ function App() {
                               }}
                               aria-expanded={expanded}
                             >
-                              <Brain size={13} />
                               <span>{thoughtSummary(item)}</span>
                               {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                             </button>
@@ -4061,18 +4092,23 @@ function App() {
                         );
                       })()
                     ) : (
-                      <article className={`timelineCommand commandCard ${item.run.status}`} key={item.id}>
+                      <article
+                        className={`timelineCommand commandCard ${item.run.status} ${
+                          expandedCommandId === item.run.id ? "isExpanded" : ""
+                        }`}
+                        key={item.id}
+                      >
                         <button
                           className="commandSummary"
                           type="button"
                           onClick={() => setExpandedCommandId((current) => (current === item.run.id ? null : item.run.id))}
+                          aria-expanded={expandedCommandId === item.run.id}
                         >
-                          <TerminalSquare size={15} />
-                          <span className="commandStatus" />
                           <span className="commandSummaryText">
                             <strong title={item.run.command}>{commandLabel(item.run.command)}</strong>
                             <em>{commandSummary(item.run)}</em>
                           </span>
+                          {expandedCommandId === item.run.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                         </button>
                         {expandedCommandId === item.run.id ? (
                           <div className="commandDetails">
@@ -4159,6 +4195,9 @@ function App() {
         ) : null}
 
         <section className="promptDock">
+          <div className={`floatingAttachmentTray ${attachedFiles.length ? "hasAttachments" : ""}`}>
+            <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
+          </div>
           <div className="promptControls">
             <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
               <button className="workspaceControl" type="button" onClick={pickRepository} disabled={busy}>
@@ -4369,7 +4408,6 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
             <div className="promptInputShell">
               <div className="promptHighlight" aria-hidden="true">
                 <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
@@ -5070,9 +5108,6 @@ function App() {
       {showBypassDialog ? (
         <div className="modalScrim" role="presentation">
           <section className="bypassDialog" role="dialog" aria-modal="true" aria-labelledby="bypass-title">
-            <div className="dialogIcon">
-              <ShieldAlert size={18} />
-            </div>
             <div>
               <h3 id="bypass-title">Enable bypass mode?</h3>
               <p>
@@ -5085,7 +5120,6 @@ function App() {
                 Cancel
               </button>
               <button className="dangerAction" type="button" onClick={confirmBypassMode}>
-                <TriangleAlert size={14} />
                 Enable bypass
               </button>
             </div>

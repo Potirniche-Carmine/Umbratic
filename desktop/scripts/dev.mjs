@@ -32,6 +32,7 @@ function usage() {
     "  --software <name>    ollama, lmstudio, or vllm. Defaults to vllm with --server.",
     "  --model <id>         Model ID to preselect.",
     "  --api-key <secret>   API key for the endpoint.",
+    "  --composer-test      Open the seeded composer UI test fixture in Electron.",
     "  --help              Show this message.",
   ].join("\n");
 }
@@ -49,6 +50,10 @@ function devEndpointEnv(args) {
   const env = {
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
   };
+
+  if (hasFlag(args, "--composer-test")) {
+    env.UMBRATIC_RENDERER_QUERY = "composerTest=1";
+  }
 
   if (server !== undefined) {
     if (!server) {

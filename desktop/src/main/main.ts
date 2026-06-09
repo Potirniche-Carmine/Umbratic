@@ -248,6 +248,15 @@ function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
 
 function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {
   const existing = visibleTaskEvents(events);
+  if (event.type === "response.feedback") {
+    return [
+      ...existing.filter(
+        (storedEvent) =>
+          !(storedEvent.type === "response.feedback" && storedEvent.taskId === event.taskId && storedEvent.messageId === event.messageId),
+      ),
+      event,
+    ].slice(-limit);
+  }
   const last = existing.at(-1);
   if (
     last &&
@@ -3345,6 +3354,7 @@ async function setResponseFeedback(input: unknown): Promise<void> {
     (event) => !(event.type === "response.feedback" && event.messageId === messageId),
   );
   saveTask(task);
+  console.info("Recorded response feedback", { taskId: task.id, messageId, rating });
   emit({ type: "response.feedback", taskId: task.id, messageId, rating });
 }
 
@@ -3526,6 +3536,17 @@ function devServerUrl(): URL {
   return new URL(fallbackDevServerUrl);
 }
 
+function rendererEntryUrl(): URL {
+  const url = devServerUrl();
+  const params = new URLSearchParams(process.env.UMBRATIC_RENDERER_QUERY || "");
+  for (const [key, value] of params) {
+    if (/^[A-Za-z0-9_-]{1,40}$/.test(key) && /^[A-Za-z0-9_.:-]{0,80}$/.test(value)) {
+      url.searchParams.set(key, value);
+    }
+  }
+  return url;
+}
+
 function isTrustedDevUrl(url: URL): boolean {
   const trusted = devServerUrl();
   return url.protocol === trusted.protocol && url.hostname === trusted.hostname && url.port === trusted.port;
@@ -3656,7 +3677,7 @@ async function createWindow() {
   });
 
   if (isDev) {
-    await mainWindow.loadURL(devServerUrl().toString());
+    await mainWindow.loadURL(rendererEntryUrl().toString());
   } else {
     await mainWindow.loadFile(path.resolve(__dirname, "../../dist/index.html"));
   }
