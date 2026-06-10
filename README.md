@@ -16,15 +16,28 @@ Run the desktop app in development:
 npm run desktop:dev
 ```
 
+Open the seeded composer UI fixture:
+
+```sh
+npm --workspace @umbratic/desktop run dev:composer
+```
+
 Build the desktop app:
 
 ```sh
 npm run desktop:build
 ```
 
+Run the full test suite:
+
+```sh
+npm run test:all
+```
+
 ## Project Structure
 
 - `desktop/` - Electron desktop app
 - `desktop/runner/` - local runner package
+- `desktop/tests/` - desktop app tests
 - `desktop/assets/` - app assets and branding
 

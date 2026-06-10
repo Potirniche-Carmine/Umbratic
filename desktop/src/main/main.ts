@@ -133,6 +133,11 @@ const pdfAttachmentByteLimit = 25 * 1024 * 1024;
 const pdfImagePageLimit = 12;
 const pdfImageScale = 1.4;
 const binarySnapshotPrefix = "__UMBRATIC_BINARY_FILE__:";
+const windowChromeDark = "#15161a";
+const windowChromeLight = "#ffffff";
+const windowChromeSymbolDark = "#d7dce2";
+const windowChromeSymbolLight = "#111827";
+const windowChromeHeight = 35;
 let pdfToImageModule: Promise<PdfToImageModule> | null = null;
 
 function appIcon() {
@@ -3486,36 +3491,53 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
     });
     return result;
   };
+  return withTelemetry(await openPathInIde(ideId, targetPath, relativeFilePath ? "file" : "folder"));
+}
+
+async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid repository IDE input.");
+  }
+  const ideId = requiredString(input.ideId, "ideId");
+  const repositoryPath = await resolveRepositoryPath(input);
+  if (!repositoryPath) {
+    return { ok: false, message: "Select a folder first." };
+  }
+  if (!fs.existsSync(repositoryPath)) {
+    return { ok: false, message: "Selected folder no longer exists." };
+  }
+  return openPathInIde(ideId, repositoryPath, "folder");
+}
+
+async function openPathInIde(ideId: string, targetPath: string, targetKind: "file" | "folder"): Promise<IdeOpenResult> {
   if (ideId === "explorer") {
-    if (relativeFilePath) {
+    if (targetKind === "file") {
       shell.showItemInFolder(targetPath);
-      return withTelemetry({ ok: true });
+      return { ok: true };
     }
     const error = await shell.openPath(targetPath);
-    return withTelemetry(error ? { ok: false, message: error } : { ok: true });
+    return error ? { ok: false, message: error } : { ok: true };
   }
   if (ideId === "visualstudio") {
     const command = await visualStudioExecutable();
     if (command) {
-      return withTelemetry(await launchCommand(command, [targetPath]));
+      return launchCommand(command, [targetPath]);
     }
   }
   const command = await firstAvailableCommand(commandCandidatesByIde[ideId] ?? []);
   if (command) {
-    return withTelemetry(await launchCommand(command, relativeFilePath ? [targetPath] : ["--new-window", targetPath]));
+    return launchCommand(command, targetKind === "file" ? [targetPath] : ["--new-window", targetPath]);
   }
   if (ideId === "code" && macApplicationExists("Visual Studio Code")) {
-    return withTelemetry(
-      await launchCommand(
-        "open",
-        relativeFilePath
-          ? ["-a", "Visual Studio Code", targetPath]
-          : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath],
-      ),
+    return launchCommand(
+      "open",
+      targetKind === "file"
+        ? ["-a", "Visual Studio Code", targetPath]
+        : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath],
     );
   }
   const error = await shell.openPath(targetPath);
-  return withTelemetry(error ? { ok: false, message: error } : { ok: true });
+  return error ? { ok: false, message: error } : { ok: true };
 }
 
 function setPermissionMode(input: unknown): Promise<BackendStatus> {
@@ -3581,9 +3603,9 @@ function handleIpc<T>(channel: string, handler: (input: unknown, event: IpcMainI
 function setWindowChromeTheme(theme: "dark" | "light") {
   if (process.platform !== "win32" || !mainWindow) return { ok: true };
   mainWindow.setTitleBarOverlay({
-    color: theme === "light" ? "#ffffff" : "#1b1d22",
-    symbolColor: theme === "light" ? "#111827" : "#d7dce2",
-    height: 35,
+    color: theme === "light" ? windowChromeLight : windowChromeDark,
+    symbolColor: theme === "light" ? windowChromeSymbolLight : windowChromeSymbolDark,
+    height: windowChromeHeight,
   });
   return { ok: true };
 }
@@ -3630,9 +3652,9 @@ async function createWindow() {
     titleBarStyle: isMac ? "hiddenInset" : isWin ? "hidden" : "default",
     titleBarOverlay: isWin
       ? {
-          color: "#1b1d22",
-          symbolColor: "#d7dce2",
-          height: 35,
+          color: windowChromeDark,
+          symbolColor: windowChromeSymbolDark,
+          height: windowChromeHeight,
         }
       : undefined,
     webPreferences: {
@@ -3717,6 +3739,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:create-skill", (input) => createSkill(input as { name?: string }));
   handleIpc("umbratic:set-permission-mode", (mode) => setPermissionMode(mode));
   handleIpc("umbratic:list-available-ides", () => listAvailableIdes());
+  handleIpc("umbratic:open-repository-in-ide", (input) => openRepositoryInIde(input));
   handleIpc("umbratic:start-task", (input) => startTask(input));
   handleIpc("umbratic:approve-worktree-creation", (input) => approveWorktreeCreation(input));
   handleIpc("umbratic:respond-tool-permission", (input) => respondToToolPermission(input));

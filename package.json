@@ -9,7 +9,8 @@
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
     "desktop:dev:server": "npm --workspace @umbratic/desktop run dev -- --server",
-    "desktop:build": "npm --workspace @umbratic/desktop run build"
+    "desktop:build": "npm --workspace @umbratic/desktop run build",
+    "test:all": "npm --workspace @umbratic/desktop run test:all"
   },
   "allowScripts": {
     "electron@42.3.2": true,

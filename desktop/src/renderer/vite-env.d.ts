@@ -317,6 +317,7 @@ declare global {
       }): Promise<UmbraticTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: UmbraticPermissionDecision): Promise<void>;
+      openRepositoryInIde(input: { repositoryId?: string; repositoryPath?: string; ideId: string }): Promise<UmbraticIdeOpenResult>;
       openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<UmbraticIdeOpenResult>;
       approveTaskMerge(input: { taskId: string }): Promise<UmbraticApproveResult>;
       rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;

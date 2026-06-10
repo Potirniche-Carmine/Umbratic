@@ -10,7 +10,8 @@
     "build": "npm run build:runner && tsc -p tsconfig.main.json && vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build:runner": "npm --prefix runner run build",
-    "test:composer": "node scripts/test-composer-text.mjs",
+    "test:all": "npm run typecheck && npm run test:composer",
+    "test:composer": "node tests/composer-text.test.mjs",
     "typecheck": "npm --prefix runner run typecheck && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {

@@ -389,6 +389,7 @@ type DesktopApi = {
   }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
+  openRepositoryInIde(input: { repositoryId?: string; repositoryPath?: string; ideId: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   approveTaskMerge(input: { taskId: string }): Promise<
     | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }
@@ -904,6 +905,7 @@ const fallbackApi: DesktopApi = {
   },
   approveWorktreeCreation: async () => undefined,
   respondToToolPermission: async () => undefined,
+  openRepositoryInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
   openTaskInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
   approveTaskMerge: async () => ({ ok: false, message: "Electron preload is not available." }),
   rejectTask: async () => undefined,
@@ -2171,7 +2173,7 @@ function App() {
   const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
-  const [ideMenuOpen, setIdeMenuOpen] = useState(false);
+  const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
@@ -2180,15 +2182,10 @@ function App() {
   const [showBypassDialog, setShowBypassDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [todoNotes, setTodoNotes] = useState("");
-  const [todoEditing, setTodoEditing] = useState(false);
-  const [todoSaving, setTodoSaving] = useState(false);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
-  const notesSaveRef = useRef<number | null>(null);
-  const notesLoadedRef = useRef(false);
   const reviewCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
@@ -2302,6 +2299,12 @@ function App() {
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
+  const composerHeaderTitle = activeChat
+    ? chatDisplayTitle(activeChat)
+    : task?.prompt
+      ? titleFromPrompt(task.prompt)
+      : "New chat";
+  const composerHeaderMeta = repository?.name ?? "No folder selected";
   const effectiveTheme = appearanceSettings.theme === "system" ? (systemPrefersDark ? "dark" : "light") : appearanceSettings.theme;
   const uiFontOptions = useMemo(
     () => uniqueFonts([...defaultUiFontChoices, appearanceSettings.uiFont, ...availableFontFamilies]),
@@ -2361,7 +2364,6 @@ function App() {
     void refreshStatus();
     void loadToolSettings();
     void loadHarnessProfile();
-    void loadNotes();
     void loadAvailableIdes();
     void loadChats();
     const statusTimer = window.setInterval(() => void refreshStatus(), 30000);
@@ -2472,18 +2474,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!notesLoadedRef.current) return undefined;
-    if (notesSaveRef.current) window.clearTimeout(notesSaveRef.current);
-    const content = todoNotes;
-    notesSaveRef.current = window.setTimeout(() => {
-      void persistNotes(content);
-    }, 450);
-    return () => {
-      if (notesSaveRef.current) window.clearTimeout(notesSaveRef.current);
-    };
-  }, [todoNotes]);
-
-  useEffect(() => {
     const markBlurred = () => {
       appBlurredRef.current = true;
     };
@@ -2529,8 +2519,8 @@ function App() {
   }, [availableIdes, selectedIdeId]);
 
   useEffect(() => {
-    if (!canOpenIde) setIdeMenuOpen(false);
-  }, [canOpenIde]);
+    if (!canOpenIde && ideMenuOpen === "review") setIdeMenuOpen(null);
+  }, [canOpenIde, ideMenuOpen]);
 
   useEffect(
     () => () => {
@@ -2566,14 +2556,14 @@ function App() {
       if (!target.closest(".branchControl")) setBranchMenuOpen(false);
       if (!target.closest(".workspaceModeControl")) setWorkspaceModeMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
-      if (!target.closest(".idePicker")) setIdeMenuOpen(false);
+      if (!target.closest(".idePicker")) setIdeMenuOpen(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setBranchMenuOpen(false);
       setWorkspaceModeMenuOpen(false);
       setPermissionMenuOpen(false);
-      setIdeMenuOpen(false);
+      setIdeMenuOpen(null);
     };
     document.addEventListener("pointerdown", closeMenus);
     document.addEventListener("keydown", closeOnEscape);
@@ -2704,28 +2694,6 @@ function App() {
       setChats(nextChats);
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  async function loadNotes() {
-    try {
-      const notes = await api.getNotes();
-      notesLoadedRef.current = true;
-      setTodoNotes(notes.content);
-    } catch (cause) {
-      notesLoadedRef.current = true;
-      setError(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
-  async function persistNotes(content: string) {
-    setTodoSaving(true);
-    try {
-      await api.updateNotes({ content });
-    } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setTodoSaving(false);
     }
   }
 
@@ -3292,10 +3260,74 @@ function App() {
   }
 
   async function openIde(ideId: string) {
-    if (!canOpenIde || !task) return;
-    setIdeMenuOpen(false);
-    const result = await api.openTaskInIde({ taskId: task.id, ideId });
+    if (!repository) return;
+    setIdeMenuOpen(null);
+    const result = await api.openRepositoryInIde({ repositoryId: repository.id, repositoryPath: repository.rootPath, ideId });
     if (!result.ok) setError(result.message);
+  }
+
+  function toggleIdeMenu(owner: "composer" | "review") {
+    setIdeMenuOpen((open) => {
+      const next = open === owner ? null : owner;
+      if (next) {
+        setBranchMenuOpen(false);
+        setWorkspaceModeMenuOpen(false);
+        setPermissionMenuOpen(false);
+      }
+      return next;
+    });
+  }
+
+  function renderIdePicker(owner: "composer" | "review") {
+    const canOpen = owner === "composer" ? !!repository : canOpenIde;
+    const expanded = ideMenuOpen === owner && canOpen;
+    const disabledTitle = owner === "composer" ? "Select a folder first" : "No review folder yet";
+    const openTitle =
+      owner === "composer"
+        ? `Open ${repository?.name ?? "folder"} in ${selectedIde.label}`
+        : `Use ${selectedIde.label} for changed files`;
+    return (
+      <div className={`idePicker ${canOpen ? "" : "isDisabled"}`}>
+        <button
+          className="idePickerOpen"
+          type="button"
+          onClick={() => openIde(selectedIde.id)}
+          disabled={!canOpen}
+          title={canOpen ? openTitle : disabledTitle}
+        >
+          <IdeIcon icon={selectedIde.icon} />
+        </button>
+        <button
+          className="idePickerToggle"
+          type="button"
+          onClick={() => toggleIdeMenu(owner)}
+          disabled={!canOpen}
+          aria-expanded={expanded}
+          aria-haspopup="menu"
+          title={canOpen ? "Choose editor" : disabledTitle}
+        >
+          <ChevronDown size={13} />
+        </button>
+        {expanded ? (
+          <div className="ideMenu" role="menu">
+            {availableIdes.map((ide) => (
+              <button
+                className={ide.id === selectedIde.id ? "active" : ""}
+                key={ide.id}
+                type="button"
+                onClick={() => {
+                  setSelectedIdeId(ide.id);
+                  setIdeMenuOpen(null);
+                }}
+              >
+                <IdeIcon icon={ide.icon} />
+                <span>{ide.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   function sidebarMaxAvailableWidth() {
@@ -3420,7 +3452,7 @@ function App() {
   async function undoTask() {
     if (!task || !canUndo) return;
     setBusy(true);
-    setIdeMenuOpen(false);
+    setIdeMenuOpen(null);
     try {
       await api.rejectTask({ taskId: task.id, cleanup: true });
       setExpandedReviewPaths(new Set());
@@ -3920,43 +3952,6 @@ function App() {
         </div>
 
         <div className="sidebarFooter">
-          <section className={`todoPanel ${todoEditing ? "isEditing" : ""}`}>
-            <div className="todoHeader">
-              <div
-                className="todoTitle"
-                tabIndex={0}
-                aria-label="Notes. Local personal notes. Not tracked or shared."
-              >
-                <h2>Notes</h2>
-              </div>
-              <span className="todoSaveState">{todoSaving ? "Saving" : ""}</span>
-              <button
-                className="todoEditButton"
-                type="button"
-                onClick={() => setTodoEditing((editing) => !editing)}
-                title={todoEditing ? "Preview notes" : "Edit notes"}
-                aria-pressed={todoEditing}
-              >
-                {todoEditing ? <Check size={13} /> : <SquarePen size={13} />}
-              </button>
-            </div>
-            {todoEditing ? (
-              <textarea
-                className="todoTextarea"
-                value={todoNotes}
-                onChange={(event) => setTodoNotes(event.target.value)}
-                placeholder="- Ship the thing"
-              />
-            ) : todoNotes.trim() ? (
-              <div className="todoPreview">
-                <MarkdownContent content={todoNotes} />
-              </div>
-            ) : (
-              <button className="todoEmpty" type="button" onClick={() => setTodoEditing(true)}>
-                <span>No notes yet</span>
-              </button>
-            )}
-          </section>
           <div className="sidebarBrand" aria-hidden="true">
             <span className="sidebarBrandLogo" />
             <span className="confidentialMark">Private and Confidential</span>
@@ -3982,16 +3977,23 @@ function App() {
       <main className={`workspace ${approvalPending ? "approvalPending" : ""}`}>
         <section className="workArea">
           <section className="composerPanel">
-            <div className="composerTopbar">
-              <button
-                className={`chromeButton composerReviewToggle ${reviewOpen ? "isActive" : ""}`}
-                type="button"
-                onClick={toggleReviewPanel}
-                aria-pressed={reviewOpen}
-                title="Toggle review"
-              >
-                <PanelRight size={15} />
-              </button>
+            <div className="composerHeader">
+              <div className="composerHeaderTitle">
+                <strong>{composerHeaderTitle}</strong>
+                <span>{composerHeaderMeta}</span>
+              </div>
+              <div className="composerHeaderActions">
+                <button
+                  className={`chromeButton composerReviewToggle ${reviewOpen ? "isActive" : ""}`}
+                  type="button"
+                  onClick={toggleReviewPanel}
+                  aria-pressed={reviewOpen}
+                  title="Toggle review"
+                >
+                  <PanelRight size={15} />
+                </button>
+                {renderIdePicker("composer")}
+              </div>
             </div>
             <div className="composerBody" ref={streamRef} onScroll={handleComposerScroll}>
               {composerItems.length ? (
@@ -4457,56 +4459,6 @@ function App() {
                 <span>Undo</span>
                 <Undo2 size={13} />
               </button>
-              <div className={`idePicker ${canOpenIde ? "" : "isDisabled"}`}>
-                <button
-                  className="idePickerOpen"
-                  type="button"
-                  onClick={() => openIde(selectedIde.id)}
-                  disabled={!canOpenIde}
-                  title={canOpenIde ? `Open in ${selectedIde.label}` : "No review folder yet"}
-                >
-                  <IdeIcon icon={selectedIde.icon} />
-                </button>
-                <button
-                  className="idePickerToggle"
-                  type="button"
-                  onClick={() => {
-                    setIdeMenuOpen((open) => {
-                      const next = !open;
-                      if (next) {
-                        setBranchMenuOpen(false);
-                        setWorkspaceModeMenuOpen(false);
-                        setPermissionMenuOpen(false);
-                      }
-                      return next;
-                    });
-                  }}
-                  disabled={!canOpenIde}
-                  aria-expanded={ideMenuOpen && canOpenIde}
-                  aria-haspopup="menu"
-                  title={canOpenIde ? "Choose editor" : "No review folder yet"}
-                >
-                  <ChevronDown size={13} />
-                </button>
-                {ideMenuOpen && canOpenIde ? (
-                  <div className="ideMenu" role="menu">
-                    {availableIdes.map((ide) => (
-                      <button
-                        className={ide.id === selectedIde.id ? "active" : ""}
-                        key={ide.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedIdeId(ide.id);
-                          setIdeMenuOpen(false);
-                        }}
-                      >
-                        <IdeIcon icon={ide.icon} />
-                        <span>{ide.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
             </div>
           </div>
 

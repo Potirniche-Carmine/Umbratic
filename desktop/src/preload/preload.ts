@@ -76,6 +76,8 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:approve-worktree-creation", input),
   respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>
     ipcRenderer.invoke("umbratic:respond-tool-permission", input),
+  openRepositoryInIde: (input: { repositoryId?: string; repositoryPath?: string; ideId: string }) =>
+    ipcRenderer.invoke("umbratic:open-repository-in-ide", input),
   openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
     ipcRenderer.invoke("umbratic:open-task-in-ide", input),
   approveTaskMerge: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:approve-task-merge", input),
