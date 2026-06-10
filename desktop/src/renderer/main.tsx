@@ -1,7 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  ArrowLeft,
   AtSign,
   BarChart3,
   Brain,
@@ -21,7 +20,6 @@ import {
   Minus,
   Monitor,
   Moon,
-  PanelLeft,
   PanelRight,
   Paperclip,
   Play,
@@ -717,6 +715,81 @@ const composerTestEvents: BackendUiEvent[] = [
     at: new Date(Date.now() - 5_000).toISOString(),
   },
 ];
+
+const composerTestReviewFiles: ReviewFile[] = [
+  {
+    path: "desktop/src/features/review/new-panel.ts",
+    status: "added",
+    diff: [
+      "diff --git a/desktop/src/features/review/new-panel.ts b/desktop/src/features/review/new-panel.ts",
+      "new file mode 100644",
+      "index 0000000..f4a17de",
+      "--- /dev/null",
+      "+++ b/desktop/src/features/review/new-panel.ts",
+      "@@ -0,0 +1,11 @@",
+      "+export type ReviewPanelTone = \"calm\" | \"focused\";",
+      "+",
+      "+export function reviewPanelTitle(fileCount: number) {",
+      "+  if (fileCount === 0) return \"No active review\";",
+      "+  if (fileCount === 1) return \"1 file ready\";",
+      "+  return `${fileCount} files ready`;",
+      "+}",
+      "+",
+      "+export const reviewPanelTone: ReviewPanelTone = \"calm\";",
+      "+export const reviewPanelDensity = \"comfortable\";",
+      "+",
+    ].join("\n"),
+  },
+  {
+    path: "desktop/src/legacy/review-banner.ts",
+    status: "deleted",
+    diff: [
+      "diff --git a/desktop/src/legacy/review-banner.ts b/desktop/src/legacy/review-banner.ts",
+      "deleted file mode 100644",
+      "index 24c118a..0000000",
+      "--- a/desktop/src/legacy/review-banner.ts",
+      "+++ /dev/null",
+      "@@ -1,9 +0,0 @@",
+      "-export function legacyReviewBanner() {",
+      "-  return {",
+      "-    tone: \"warning\",",
+      "-    label: \"Pending patch\",",
+      "-    showRawMarkers: true,",
+      "-  };",
+      "-}",
+      "-",
+      "-export const reviewBannerVersion = 1;",
+    ].join("\n"),
+  },
+  {
+    path: "desktop/src/renderer/review-panel.tsx",
+    status: "modified",
+    diff: [
+      "diff --git a/desktop/src/renderer/review-panel.tsx b/desktop/src/renderer/review-panel.tsx",
+      "index 9ac21d0..b7f53ce 100644",
+      "--- a/desktop/src/renderer/review-panel.tsx",
+      "+++ b/desktop/src/renderer/review-panel.tsx",
+      "@@ -12,13 +12,16 @@ export function ReviewPanel({ files }: ReviewPanelProps) {",
+      "   return (",
+      "     <section className=\"reviewPanel\">",
+      "-      <h2>Patch review</h2>",
+      "-      <p className=\"reviewHint\">Inspect the raw diff below.</p>",
+      "+      <h2>Review</h2>",
+      "+      <p className=\"reviewHint\">Inspect focused changes before accepting.</p>",
+      "       <div className=\"reviewFiles\">",
+      "         {files.map((file) => (",
+      "-          <RawDiff key={file.path} file={file} />",
+      "+          <ReviewFileCard key={file.path} file={file} />",
+      "         ))}",
+      "       </div>",
+      "+      <ReviewActions compact />",
+      "     </section>",
+      "   );",
+      " }",
+    ].join("\n"),
+  },
+];
+
 const composerTestTask: TaskInfo = {
   id: "composer-test",
   chatId: "composer-test-chat",
@@ -724,7 +797,7 @@ const composerTestTask: TaskInfo = {
   prompt: composerTestPrompt,
   workspaceKind: "git",
   workspaceMode: "local",
-  state: "running",
+  state: "review_ready",
   originalBranch: "main",
   baseCommit: "preview",
   agentBranch: "preview",
@@ -732,8 +805,8 @@ const composerTestTask: TaskInfo = {
   permissionMode: "normal",
   reasoningMode: "reasoning",
   createdAt: new Date(Date.now() - 20_000).toISOString(),
-  changedFiles: [],
-  reviewFiles: [],
+  changedFiles: composerTestReviewFiles.map((file) => file.path),
+  reviewFiles: composerTestReviewFiles,
   events: composerTestEvents,
 };
 
@@ -1364,16 +1437,14 @@ type ParsedDiff = {
 };
 
 const emptyParsedDiff: ParsedDiff = { additions: 0, deletions: 0, rows: [] };
-const sidebarDefaultWidth = 248;
-const sidebarMinWidth = 196;
-const sidebarMaxWidth = 360;
-const sidebarCloseThreshold = 150;
-const reviewMinWidth = 365;
+const sidebarDefaultWidth = 230;
+const sidebarMinWidth = 168;
+const sidebarMaxWidth = 230;
+const reviewMinWidth = 430;
 const reviewCloseThreshold = 260;
 const reviewCloseAnimationMs = 440;
-const composerMinWidth = 480;
-const reviewOpenRatio = 0.7;
-const compactSidebarRatio = 0.18;
+const reviewOverlayMaxWidth = 840;
+const reviewOpenRatio = 0.56;
 const sidebarMaxRatio = 0.28;
 
 function parseHunkHeader(line: string): { oldStart: number; newStart: number } | null {
@@ -2024,24 +2095,20 @@ function LongMarkdownContent({
 }
 
 function ReviewSummaryCard({
-  expandedPaths,
   files,
   diffs,
   onOpenReview,
-  onToggleFile,
   totals,
 }: {
-  expandedPaths: Set<string>;
   files: ReviewFile[];
   diffs: Map<string, ParsedDiff>;
-  onOpenReview(): void;
-  onToggleFile(filePath: string): void;
+  onOpenReview(filePath?: string): void;
   totals: { additions: number; deletions: number };
 }) {
   if (!files.length) return null;
   return (
     <article className="reviewSummaryCard">
-      <div className="reviewSummaryHeader">
+      <button className="reviewSummaryHeader" type="button" onClick={() => onOpenReview()}>
         <span className="reviewSummaryTitle">
           <FileText size={15} />
           <strong>
@@ -2050,49 +2117,28 @@ function ReviewSummaryCard({
           <span className="additions">+{totals.additions}</span>
           <span className="deletions">-{totals.deletions}</span>
         </span>
-        <button className="reviewSummaryReviewButton" type="button" onClick={onOpenReview}>
+        <span className="reviewSummaryReviewButton">
           <span>Review</span>
           <ExternalLink size={13} />
-        </button>
-      </div>
+        </span>
+      </button>
       <div className="reviewSummaryFiles">
         {files.map((file) => {
           const stats = diffs.get(file.path) ?? emptyParsedDiff;
-          const expanded = expandedPaths.has(file.path);
-          const previewRows = stats.rows.slice(0, 120);
           return (
-            <section className={`reviewSummaryFile ${expanded ? "expanded" : ""}`} key={file.path}>
+            <section className={`reviewSummaryFile status-${file.status}`} key={file.path}>
               <button
                 className="reviewSummaryFileButton"
                 type="button"
-                onClick={() => onToggleFile(file.path)}
-                aria-expanded={expanded}
+                onClick={() => onOpenReview(file.path)}
               >
                 <span className="reviewSummaryPath">{file.path}</span>
                 <span className="changeStats" aria-label={formatDiffStats(stats)}>
                   <span className="additions">+{stats.additions}</span>
                   <span className="deletions">-{stats.deletions}</span>
                 </span>
-                <ChevronDown className="reviewSummaryChevron" size={14} />
+                <PanelRight className="reviewSummaryOpenIcon" size={14} />
               </button>
-              <div className={`reviewSummaryFileBody ${expanded ? "open" : ""}`}>
-                <div className="diffRows compactDiffRows">
-                  {previewRows.length ? (
-                    <div className="diffRowsInner">
-                      {previewRows.map((row, index) => (
-                        <div className={`diffRow ${row.kind}`} key={`${file.path}-${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
-                          <span className="diffLineNumber">{row.oldLine ?? ""}</span>
-                          <span className="diffLineNumber">{row.newLine ?? ""}</span>
-                          <span className="diffMarker">{row.marker}</span>
-                          <code>{row.content || " "}</code>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <Empty label="No text diff available" />
-                  )}
-                </div>
-              </div>
             </section>
           );
         })}
@@ -2134,12 +2180,14 @@ function App() {
   const [assistantText, setAssistantText] = useState("");
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
-  const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() => new Set());
+  const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
+    composerTestMode ? new Set(composerTestReviewFiles.map((file) => file.path)) : new Set(),
+  );
   const [expandedCommandId, setExpandedCommandId] = useState<string | null>(null);
   const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewPinned, setReviewPinned] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
@@ -2187,6 +2235,7 @@ function App() {
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
   const reviewCloseTimerRef = useRef<number | null>(null);
+  const reviewHoverCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
@@ -2295,6 +2344,8 @@ function App() {
   }, [chats]);
   const layoutStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
+    "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
+    "--sidebar-visual-gap": `${Math.max(0, sidebarDefaultWidth - sidebarWidth)}px`,
     "--review-width": `${reviewWidth}px`,
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
@@ -2527,6 +2578,9 @@ function App() {
       if (reviewCloseTimerRef.current !== null) {
         window.clearTimeout(reviewCloseTimerRef.current);
       }
+      if (reviewHoverCloseTimerRef.current !== null) {
+        window.clearTimeout(reviewHoverCloseTimerRef.current);
+      }
     },
     [],
   );
@@ -2534,15 +2588,27 @@ function App() {
   useEffect(() => {
     if (!reviewOpen) return undefined;
     const resizeReview = () => {
-      const nextSidebarWidth = sidebarOpen ? Math.min(sidebarWidth, compactSidebarWidth()) : 0;
-      if (sidebarOpen && nextSidebarWidth !== sidebarWidth) {
-        setSidebarWidth(nextSidebarWidth);
-      }
-      setReviewWidth(wideReviewWidth(nextSidebarWidth));
+      setReviewWidth(wideReviewWidth());
     };
     window.addEventListener("resize", resizeReview);
     return () => window.removeEventListener("resize", resizeReview);
-  }, [reviewOpen, sidebarOpen, sidebarWidth]);
+  }, [reviewOpen]);
+
+  useEffect(() => {
+    if (!reviewOpen || reviewPinned) return undefined;
+    const watchPointer = (event: PointerEvent) => {
+      const review = document.querySelector(".reviewSidebar");
+      const zone = document.querySelector(".sideHoverZone.right");
+      const target = event.target instanceof Node ? event.target : null;
+      if ((target && review?.contains(target)) || (target && zone?.contains(target))) {
+        cancelReviewHoverClose();
+        return;
+      }
+      scheduleReviewHoverClose();
+    };
+    window.addEventListener("pointermove", watchPointer);
+    return () => window.removeEventListener("pointermove", watchPointer);
+  }, [reviewOpen, reviewPinned]);
 
   useLayoutEffect(() => {
     const node = streamRef.current;
@@ -3198,7 +3264,9 @@ function App() {
       setMention(null);
       setFileMatches([]);
       await persistDraft(nextTask.chatId ?? chatId, "", []);
-      if (!isContinuingChat) setExpandedReviewPaths(new Set());
+      if (!isContinuingChat) {
+        setExpandedReviewPaths(new Set());
+      }
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -3334,31 +3402,12 @@ function App() {
     return clamp(Math.round(window.innerWidth * sidebarMaxRatio), sidebarMinWidth, sidebarMaxWidth);
   }
 
-  function compactSidebarWidth() {
-    return clamp(Math.round(window.innerWidth * compactSidebarRatio), sidebarMinWidth, Math.min(sidebarDefaultWidth, sidebarMaxAvailableWidth()));
+  function reviewMaxWidth() {
+    return Math.max(reviewMinWidth, window.innerWidth - 32);
   }
 
-  function reviewAvailableWidth(sidebarWidthOverride = sidebarOpen ? sidebarWidth : 0) {
-    const sidebarSpace = sidebarOpen ? sidebarWidthOverride : 0;
-    return Math.max(reviewMinWidth + composerMinWidth, window.innerWidth - sidebarSpace);
-  }
-
-  function reviewMaxWidth(sidebarWidthOverride = sidebarOpen ? sidebarWidth : 0) {
-    return Math.max(reviewMinWidth, reviewAvailableWidth(sidebarWidthOverride) - composerMinWidth);
-  }
-
-  function wideReviewWidth(sidebarWidthOverride = sidebarOpen ? sidebarWidth : 0) {
-    const available = reviewAvailableWidth(sidebarWidthOverride);
-    return clamp(Math.round(available * reviewOpenRatio), reviewMinWidth, reviewMaxWidth(sidebarWidthOverride));
-  }
-
-  function toggleSidebarPanel() {
-    if (sidebarOpen) {
-      setSidebarOpen(false);
-      return;
-    }
-    setSidebarWidth(compactSidebarWidth());
-    setSidebarOpen(true);
+  function wideReviewWidth() {
+    return clamp(Math.round(window.innerWidth * reviewOpenRatio), reviewMinWidth, Math.min(reviewOverlayMaxWidth, reviewMaxWidth()));
   }
 
   function cancelReviewClose() {
@@ -3369,11 +3418,29 @@ function App() {
     setReviewClosing(false);
   }
 
+  function cancelReviewHoverClose() {
+    if (reviewHoverCloseTimerRef.current !== null) {
+      window.clearTimeout(reviewHoverCloseTimerRef.current);
+      reviewHoverCloseTimerRef.current = null;
+    }
+  }
+
+  function scheduleReviewHoverClose() {
+    cancelReviewHoverClose();
+    if (reviewPinned) return;
+    reviewHoverCloseTimerRef.current = window.setTimeout(() => {
+      reviewHoverCloseTimerRef.current = null;
+      closeReviewPanel();
+    }, 300);
+  }
+
   function closeReviewPanel() {
     if (!reviewOpen && !reviewClosing) return;
+    cancelReviewHoverClose();
     if (reviewCloseTimerRef.current !== null) {
       window.clearTimeout(reviewCloseTimerRef.current);
     }
+    setReviewPinned(false);
     setReviewOpen(false);
     setReviewClosing(true);
     reviewCloseTimerRef.current = window.setTimeout(() => {
@@ -3382,17 +3449,24 @@ function App() {
     }, reviewCloseAnimationMs);
   }
 
-  function openReviewPanel(filePath?: string) {
+  function openReviewPanel(filePath?: string, pinned = true) {
+    cancelReviewHoverClose();
     cancelReviewClose();
-    const nextSidebarWidth = sidebarOpen ? Math.min(sidebarWidth, compactSidebarWidth()) : 0;
-    if (sidebarOpen && nextSidebarWidth !== sidebarWidth) {
-      setSidebarWidth(nextSidebarWidth);
-    }
-    setReviewWidth(wideReviewWidth(nextSidebarWidth));
+    setReviewPinned((current) => current || pinned);
+    setReviewWidth(wideReviewWidth());
     setReviewOpen(true);
     if (filePath) {
-      setExpandedReviewPaths((current) => new Set([...current, filePath]));
+      setExpandedReviewPaths(new Set([filePath]));
     }
+  }
+
+  function previewReviewPanel() {
+    cancelReviewHoverClose();
+    cancelReviewClose();
+    setReviewPinned(false);
+    setReviewWidth(wideReviewWidth());
+    setReviewOpen(true);
+    scheduleReviewHoverClose();
   }
 
   function toggleReviewPanel() {
@@ -3400,7 +3474,7 @@ function App() {
       closeReviewPanel();
       return;
     }
-    openReviewPanel();
+    openReviewPanel(undefined, true);
   }
 
   async function openReviewFile(filePath: string) {
@@ -3779,19 +3853,13 @@ function App() {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = sidebarWidth;
-    let closeAfterDrag = false;
     document.body.classList.add("isResizing");
     const move = (moveEvent: PointerEvent) => {
       const nextWidth = startWidth + moveEvent.clientX - startX;
-      closeAfterDrag = nextWidth < sidebarCloseThreshold;
       setSidebarWidth(clamp(nextWidth, sidebarMinWidth, sidebarMaxAvailableWidth()));
     };
     const stop = () => {
-      if (closeAfterDrag) {
-        setSidebarOpen(false);
-      } else {
-        setSidebarOpen(true);
-      }
+      setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth()));
       document.body.classList.remove("isResizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
@@ -3832,32 +3900,12 @@ function App() {
 
   return (
     <div
-      className={`appShell ${isMacLike ? "macChrome" : ""} ${sidebarOpen ? "" : "sidebarClosed"} ${
+      className={`appShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
         reviewLayoutOpen ? "" : "reviewClosed"
-      } ${reviewClosing ? "reviewClosing" : ""}`}
+      } ${reviewLayoutOpen ? "reviewOpen" : ""} ${reviewClosing ? "reviewClosing" : ""}`}
       style={layoutStyle}
     >
       <header className="topbar">
-        <button
-          className={`chromeButton ${sidebarOpen ? "isActive" : ""}`}
-          type="button"
-          onClick={toggleSidebarPanel}
-          aria-pressed={sidebarOpen}
-          title="Toggle sidebar"
-        >
-          <PanelLeft size={15} />
-        </button>
-        <button
-          className="chromeButton"
-          type="button"
-          onClick={() => {
-            setTask(null);
-            closeReviewPanel();
-          }}
-          title="Back"
-        >
-          <ArrowLeft size={15} />
-        </button>
         <div className="topbarTitle" aria-hidden="true">
           <span className="topbarLogo" />
           <span>Umbratic AI</span>
@@ -3865,7 +3913,18 @@ function App() {
         <div className="topbarSpacer" />
       </header>
 
-      <aside className="sidebar">
+      <div
+        className="sideHoverZone right"
+        aria-hidden="true"
+        onMouseEnter={previewReviewPanel}
+        onMouseMove={previewReviewPanel}
+        onPointerEnter={previewReviewPanel}
+        onMouseLeave={scheduleReviewHoverClose}
+      />
+
+      <aside
+        className="sidebar"
+      >
         <div className="sidebarResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginSidebarResize} />
         <div className="sidebarHeader">
           <button className="newChatButton" type="button" onClick={newChat}>
@@ -3983,15 +4042,17 @@ function App() {
                 <span>{composerHeaderMeta}</span>
               </div>
               <div className="composerHeaderActions">
-                <button
-                  className={`chromeButton composerReviewToggle ${reviewOpen ? "isActive" : ""}`}
-                  type="button"
-                  onClick={toggleReviewPanel}
-                  aria-pressed={reviewOpen}
-                  title="Toggle review"
-                >
-                  <PanelRight size={15} />
-                </button>
+                {!reviewOpen ? (
+                  <button
+                    className="chromeButton composerReviewToggle"
+                    type="button"
+                    onClick={toggleReviewPanel}
+                    aria-pressed={reviewOpen}
+                    title="Open review"
+                  >
+                    <PanelRight size={15} />
+                  </button>
+                ) : null}
                 {renderIdePicker("composer")}
               </div>
             </div>
@@ -4149,10 +4210,8 @@ function App() {
                     task?.state === "rejected") ? (
                     <ReviewSummaryCard
                       diffs={reviewDiffs}
-                      expandedPaths={expandedReviewPaths}
                       files={reviewFiles}
-                      onOpenReview={() => openReviewPanel()}
-                      onToggleFile={toggleReviewFile}
+                      onOpenReview={(filePath) => openReviewPanel(filePath)}
                       totals={reviewTotals}
                     />
                   ) : null}
@@ -4439,10 +4498,18 @@ function App() {
         </section>
       </main>
 
-      <aside className="reviewSidebar">
+      <aside
+        className="reviewSidebar"
+        onMouseEnter={cancelReviewHoverClose}
+        onMouseLeave={scheduleReviewHoverClose}
+      >
         <div className="reviewResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginReviewResize} />
         <section className="panel reviewPanel">
           <div className="reviewTopbar">
+            <button className="reviewTextButton reviewHideButton" type="button" onClick={closeReviewPanel} title="Hide review">
+              <span>Hide</span>
+              <PanelRight size={13} />
+            </button>
             <span className="reviewChangeSummary">
               <FileText size={15} />
               <strong>Review</strong>
@@ -4469,15 +4536,18 @@ function App() {
                   const stats = reviewDiffs.get(file.path) ?? emptyParsedDiff;
                   const expanded = expandedReviewPaths.has(file.path);
                   return (
-                    <article className={`reviewFile ${expanded ? "expanded" : ""}`} key={file.path}>
+                    <article className={`reviewFile status-${file.status} ${expanded ? "expanded" : ""}`} key={file.path}>
                       <div className={`reviewFileHeader ${expanded ? "active" : ""}`}>
                         <button
                           className="reviewFileToggle"
                           type="button"
                           onClick={() => toggleReviewFile(file.path)}
                           aria-expanded={expanded}
+                          aria-label={`${file.path} ${file.status} ${formatDiffStats(stats)}`}
                         >
-                          <span className="changedFilePath">{file.path}</span>
+                          <span className="changedFileMeta">
+                            <span className="changedFilePath">{file.path}</span>
+                          </span>
                           <span className="changeStats" aria-label={formatDiffStats(stats)}>
                             <span className="additions">+{stats.additions}</span>
                             <span className="deletions">-{stats.deletions}</span>
@@ -4513,9 +4583,9 @@ function App() {
                               <div className="diffRowsInner">
                                 {stats.rows.map((row, index) => (
                                   <div className={`diffRow ${row.kind}`} key={`${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
-                                    <span className="diffLineNumber">{row.oldLine ?? ""}</span>
-                                    <span className="diffLineNumber">{row.newLine ?? ""}</span>
-                                    <span className="diffMarker">{row.marker}</span>
+                                    <span className="diffLineNumber oldLine">{row.oldLine ?? ""}</span>
+                                    <span className="diffLineNumber newLine">{row.newLine ?? ""}</span>
+                                    <span className="diffMarker" aria-hidden="true" />
                                     <code>{row.content || " "}</code>
                                   </div>
                                 ))}

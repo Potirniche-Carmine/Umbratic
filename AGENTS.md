@@ -12,6 +12,10 @@ Prefer simple, elegant flows over busy surfaces. Preserve visual clarity, smooth
 
 Avoid layout shift as a core design requirement. Interactive changes such as attaching files, opening composer affordances, streaming state updates, or revealing transient controls should not move stable app regions or cause the rest of the UI to jump; reserve space, overlay transient content, or scroll within fixed regions instead.
 
+Keep color systems consistent across related UI states and surfaces. When a semantic color appears in multiple places, such as diff additions/deletions, status accents, badges, gradients, borders, icons, hover states, or counters, use shared tokens or clearly matched values so the same meaning does not drift between components.
+
+When changing anything related to design, color, hover states, transparency, gradients, spacing, layout, or visual interaction, verify the result in both light and dark mode. Include hover/open/closed states when they are part of the behavior being changed.
+
 Do not use emoji in product UI. Prefer clear text, lucide icons, brand assets, custom illustration, or purpose-built visual treatments instead of emoji shortcuts.
 
 ## Technology

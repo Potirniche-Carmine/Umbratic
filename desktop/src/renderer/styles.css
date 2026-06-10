@@ -40,9 +40,12 @@
   --green: #49d38a;
   --amber: #e7b84f;
   --red: #ff6f7a;
+  --diff-add: #49d38a;
+  --diff-remove: #ff6f7a;
+  --response-content-width: 980px;
   --radius: 8px;
   --timeline-card-width: 900px;
-  --prompt-width: min(100%, 860px);
+  --prompt-width: min(100%, 980px);
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
@@ -88,6 +91,8 @@
   --green: #168a53;
   --amber: #9a6700;
   --red: #d1242f;
+  --diff-add: #087a45;
+  --diff-remove: #b4232e;
 }
 
 :root[data-theme="light"] .workspace {
@@ -98,6 +103,12 @@
 }
 
 :root[data-theme="light"] .promptDock {
+  background:
+    linear-gradient(180deg, transparent, rgba(245, 247, 250, 0.72) 28%, rgba(245, 247, 250, 0.92)),
+    linear-gradient(90deg, transparent, rgba(92, 101, 113, 0.04), transparent);
+}
+
+:root[data-theme="light"] .promptDock::after {
   background:
     linear-gradient(180deg, transparent, rgba(245, 247, 250, 0.72) 28%, rgba(245, 247, 250, 0.92)),
     linear-gradient(90deg, transparent, rgba(92, 101, 113, 0.04), transparent);
@@ -114,8 +125,14 @@
 :root[data-theme="light"] .reviewSidebar {
   border-color: rgba(40, 48, 58, 0.08);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.68), transparent 34%),
-    var(--sidebar);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), transparent 34%),
+    color-mix(in srgb, var(--sidebar) 86%, transparent);
+}
+
+:root[data-theme="light"] .reviewSidebar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), transparent 34%),
+    rgba(248, 250, 252, 0.86);
 }
 
 :root[data-theme="light"] .chatRow.active,
@@ -124,6 +141,45 @@
 :root[data-theme="light"] .changedFiles {
   border-color: rgba(40, 48, 58, 0.08);
   background: rgba(255, 255, 255, 0.62);
+}
+
+:root[data-theme="light"] .changedFiles {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.54)),
+    rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .reviewFile {
+  border-color: rgba(18, 24, 32, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.48)),
+    rgba(255, 255, 255, 0.58);
+}
+
+:root[data-theme="light"] .reviewFileHeader:hover,
+:root[data-theme="light"] .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, rgba(18, 24, 32, 0.052), transparent 72%),
+    rgba(18, 24, 32, 0.025);
+}
+
+:root[data-theme="light"] .reviewFileDiff {
+  border-top-color: rgba(18, 24, 32, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.56), transparent 28%),
+    rgba(255, 255, 255, 0.34);
+}
+
+:root[data-theme="light"] .reviewTopbar {
+  border-bottom-color: rgba(18, 24, 32, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.44)),
+    rgba(255, 255, 255, 0.5);
+}
+
+:root[data-theme="light"] .diffLineNumber,
+:root[data-theme="light"] .diffMarker {
+  color: rgba(74, 91, 112, 0.58);
 }
 
 :root[data-theme="light"] .attachmentPreview,
@@ -285,36 +341,16 @@ pre {
 .appShell {
   display: grid;
   grid-template-areas:
-    "top top top"
-    "side main review";
-  grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) var(--review-width, 520px);
+    "top"
+    "main";
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 36px minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
   min-width: 0;
   min-height: 0;
   background: var(--bg);
-  transition: grid-template-columns 400ms cubic-bezier(0.2, 0.86, 0.22, 1);
-}
-
-.appShell.sidebarClosed {
-  grid-template-columns: 0 minmax(480px, 1fr) var(--review-width, 520px);
-}
-
-.appShell.reviewClosed {
-  grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) 0;
-}
-
-.appShell.reviewClosing {
-  grid-template-columns: var(--sidebar-width, 248px) minmax(480px, 1fr) 0;
-}
-
-.appShell.sidebarClosed.reviewClosed {
-  grid-template-columns: 0 minmax(480px, 1fr) 0;
-}
-
-.appShell.sidebarClosed.reviewClosing {
-  grid-template-columns: 0 minmax(480px, 1fr) 0;
+  overflow: hidden;
 }
 
 .topbar {
@@ -399,65 +435,73 @@ pre {
 
 .sidebar {
   grid-area: side;
-  position: relative;
+  position: fixed;
+  top: 36px;
+  bottom: 0;
+  left: 0;
+  z-index: 34;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   gap: 12px;
-  width: var(--sidebar-width, 248px);
-  min-width: 196px;
-  max-width: 360px;
+  width: var(--sidebar-width, 230px);
+  min-width: 168px;
+  max-width: 230px;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   resize: none;
   padding: 28px 13px 13px;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.075);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.026), transparent 32%),
-    linear-gradient(90deg, rgba(178, 186, 197, 0.032), transparent 62%),
-    var(--sidebar);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 32%),
+    linear-gradient(90deg, rgba(178, 186, 197, 0.052), transparent 62%),
+    color-mix(in srgb, var(--sidebar) 88%, transparent);
+  box-shadow:
+    18px 0 46px rgba(0, 0, 0, 0.22),
+    inset -1px 0 0 rgba(255, 255, 255, 0.035);
+  -webkit-backdrop-filter: blur(24px) saturate(1.1);
+  backdrop-filter: blur(24px) saturate(1.1);
   opacity: 1;
   transform: translateX(0);
   transition:
-    width 170ms ease,
-    min-width 170ms ease,
-    padding 170ms ease,
-    opacity 150ms ease,
-    transform 170ms ease;
-}
-
-.sidebarClosed .sidebar {
-  width: 0;
-  min-width: 0;
-  max-width: 0;
-  padding: 0;
-  border-right: 0;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transform: translateX(-12px);
+    width 400ms cubic-bezier(0.2, 0.86, 0.22, 1),
+    min-width 400ms cubic-bezier(0.2, 0.86, 0.22, 1),
+    padding 400ms cubic-bezier(0.2, 0.86, 0.22, 1),
+    opacity 280ms ease,
+    transform 400ms cubic-bezier(0.2, 0.86, 0.22, 1);
 }
 
 .reviewSidebar {
   grid-area: review;
-  position: relative;
+  position: fixed;
+  top: 36px;
+  right: 0;
+  bottom: 0;
+  z-index: 34;
   container: review / inline-size;
   display: flex;
   justify-self: end;
-  width: 100%;
+  width: min(var(--review-width, 520px), calc(100vw - 32px));
   min-width: 0;
-  max-width: calc(100vw - 120px);
+  max-width: calc(100vw - 32px);
   min-height: 0;
   overflow: hidden;
   resize: none;
   direction: rtl;
   padding: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 1px solid rgba(255, 255, 255, 0.075);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.026), transparent 32%),
-    linear-gradient(270deg, rgba(178, 186, 197, 0.032), transparent 62%),
-    var(--sidebar);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 32%),
+    linear-gradient(270deg, rgba(178, 186, 197, 0.045), transparent 62%),
+    rgba(17, 18, 22, 0.62);
+  box-shadow:
+    -22px 0 58px rgba(0, 0, 0, 0.22),
+    inset 1px 0 0 rgba(255, 255, 255, 0.035),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.055);
+  -webkit-backdrop-filter: blur(20px) saturate(1.06);
+  backdrop-filter: blur(20px) saturate(1.06);
   opacity: 1;
   transform: translateX(0);
   transition:
@@ -473,21 +517,34 @@ pre {
 }
 
 .reviewClosed .reviewSidebar {
-  width: 0;
-  min-width: 0;
-  max-width: 0;
-  padding: 0;
-  border-left: 0;
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
-  transform: translateX(12px);
+  transform: translateX(calc(100% + 18px));
 }
 
 .reviewClosing .reviewSidebar {
   opacity: 0;
   pointer-events: none;
   transform: translateX(18px);
+}
+
+.sideHoverZone {
+  position: fixed;
+  top: 36px;
+  bottom: 0;
+  z-index: 28;
+  width: 20px;
+  background: rgba(255, 255, 255, 0.001);
+  pointer-events: auto;
+}
+
+.sideHoverZone.right {
+  right: 0;
+}
+
+.reviewOpen .sideHoverZone.right {
+  pointer-events: none;
 }
 
 .sidebarResizeHandle,
@@ -1115,6 +1172,7 @@ pre {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  padding-left: var(--sidebar-reserved-width, 230px);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 18%),
     linear-gradient(90deg, rgba(178, 186, 197, 0.035), transparent 26%, transparent 74%, rgba(178, 186, 197, 0.028)),
@@ -1133,6 +1191,21 @@ pre {
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 64px);
   opacity: 0.28;
   mask-image: linear-gradient(180deg, transparent, #000 16%, #000 82%, transparent);
+}
+
+.workspace::after {
+  position: absolute;
+  top: 0;
+  left: var(--sidebar-width, 230px);
+  z-index: 12;
+  width: var(--sidebar-visual-gap, 0px);
+  height: 51px;
+  pointer-events: none;
+  content: "";
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.01)),
+    rgba(255, 255, 255, 0.01);
 }
 
 .workspace.approvalPending .composerPanel,
@@ -1564,7 +1637,7 @@ pre {
 }
 
 .reviewSummaryCard {
-  width: min(100%, var(--timeline-card-width));
+  width: min(100%, var(--response-content-width));
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -1578,9 +1651,22 @@ pre {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
+  width: 100%;
   min-height: 40px;
   padding: 9px 11px;
   border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.reviewSummaryHeader:hover {
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.07), transparent 70%),
+    rgba(255, 255, 255, 0.026);
 }
 
 .reviewSummaryTitle,
@@ -1594,10 +1680,29 @@ pre {
   gap: 8px;
   min-width: 0;
   color: var(--text);
+  line-height: 1;
+}
+
+.reviewSummaryTitle svg,
+.reviewSummaryReviewButton svg,
+.reviewSummaryOpenIcon,
+.reviewTopActions svg,
+.openReviewFileButton svg,
+.reviewFileChevronButton svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.reviewSummaryTitle .additions,
+.reviewSummaryTitle .deletions {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .reviewSummaryTitle strong {
   overflow: hidden;
+  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1611,7 +1716,7 @@ pre {
   font-weight: 750;
 }
 
-.reviewSummaryReviewButton:hover {
+.reviewSummaryHeader:hover .reviewSummaryReviewButton {
   color: var(--text);
   background: var(--control-hover);
 }
@@ -1622,8 +1727,68 @@ pre {
 }
 
 .reviewSummaryFile {
+  position: relative;
   min-width: 0;
   border-bottom: 1px solid var(--line);
+}
+
+.reviewSummaryFile::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  content: "";
+  background: transparent;
+  opacity: 0.58;
+}
+
+.reviewSummaryFile.status-added {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.004);
+}
+
+.reviewSummaryFile.status-added::before {
+  background: var(--diff-add);
+}
+
+.reviewSummaryFile.status-deleted {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.004);
+}
+
+.reviewSummaryFile.status-deleted::before {
+  background: var(--diff-remove);
+}
+
+.reviewSummaryFile.status-modified {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.004);
+}
+
+.reviewSummaryFile.status-modified::before {
+  background: var(--amber);
+}
+
+:root[data-theme="light"] .reviewSummaryFile.status-added {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.2);
+}
+
+:root[data-theme="light"] .reviewSummaryFile.status-deleted {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.2);
+}
+
+:root[data-theme="light"] .reviewSummaryFile.status-modified {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.2);
 }
 
 .reviewSummaryFile:last-child {
@@ -1632,18 +1797,18 @@ pre {
 
 .reviewSummaryFileButton {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 18px;
+  grid-template-columns: minmax(0, 1fr) 64px 18px;
   gap: 8px;
+  align-items: center;
   width: 100%;
-  min-height: 38px;
-  padding: 7px 11px;
+  min-height: 42px;
+  padding: 9px 11px;
   color: var(--text);
   text-align: left;
 }
 
-.reviewSummaryFileButton:hover,
-.reviewSummaryFile.expanded .reviewSummaryFileButton {
-  background: var(--control-hover);
+.reviewSummaryFileButton:hover {
+  background: rgba(178, 186, 197, 0.045);
 }
 
 .reviewSummaryPath {
@@ -1652,43 +1817,16 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 650;
+  line-height: 1.25;
 }
 
-.reviewSummaryChevron {
+.reviewSummaryOpenIcon {
   color: var(--muted);
-  transition: transform 140ms ease;
-}
-
-.reviewSummaryFile.expanded .reviewSummaryChevron {
-  transform: rotate(180deg);
-}
-
-.reviewSummaryFileBody {
-  display: grid;
-  grid-template-rows: 0fr;
-  overflow: hidden;
-  opacity: 0;
-  transition:
-    grid-template-rows 180ms ease,
-    opacity 150ms ease;
-}
-
-.reviewSummaryFileBody.open {
-  grid-template-rows: 1fr;
-  opacity: 1;
-}
-
-.compactDiffRows {
-  max-height: 260px;
-  min-height: 0;
-  overflow: auto;
-  border-top: 1px solid var(--line);
-  background: rgba(0, 0, 0, 0.18);
-  font-size: 11px;
+  justify-self: center;
 }
 
 .markdownContent {
-  max-width: 980px;
+  max-width: var(--response-content-width);
   font-size: 13.5px;
 }
 
@@ -2004,13 +2142,28 @@ pre {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  padding: 14px 20px 18px;
+  padding: 16px clamp(22px, 4vw, 48px) 20px;
   border-top: 0;
   background:
     linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.28) 28%, rgba(0, 0, 0, 0.42)),
     linear-gradient(90deg, transparent, rgba(178, 186, 197, 0.035), transparent);
   backdrop-filter: blur(14px);
   overflow: visible;
+}
+
+.promptDock::after {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  bottom: 0;
+  z-index: 0;
+  width: var(--sidebar-visual-gap, 0px);
+  pointer-events: none;
+  content: "";
+  background:
+    linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.28) 28%, rgba(0, 0, 0, 0.42)),
+    linear-gradient(90deg, transparent, rgba(178, 186, 197, 0.035), transparent);
+  backdrop-filter: blur(14px);
 }
 
 .promptDock::before {
@@ -3147,7 +3300,7 @@ button.attachmentPreview:focus-visible {
 
 .reviewPanel {
   flex: 1 1 auto;
-  height: auto;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -3161,7 +3314,7 @@ button.attachmentPreview:focus-visible {
   z-index: 40;
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -3170,8 +3323,8 @@ button.attachmentPreview:focus-visible {
   margin: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.065);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.012)),
-    rgba(255, 255, 255, 0.012);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.036), rgba(255, 255, 255, 0.014)),
+    rgba(8, 9, 12, 0.1);
 }
 
 .reviewChangeSummary {
@@ -3179,18 +3332,22 @@ button.attachmentPreview:focus-visible {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  min-height: 30px;
   overflow: hidden;
   color: var(--muted);
+  line-height: 1;
   white-space: nowrap;
 }
 
 .reviewChangeSummary svg {
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
 .reviewChangeSummary strong {
   overflow: hidden;
   color: var(--text);
+  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3202,10 +3359,16 @@ button.attachmentPreview:focus-visible {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
+  font-family: var(--app-font);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .reviewStats span:first-child {
   overflow: hidden;
+  line-height: 1;
   text-overflow: ellipsis;
 }
 
@@ -3251,6 +3414,10 @@ button.attachmentPreview:focus-visible {
   background: rgba(255, 255, 255, 0.055);
 }
 
+.reviewHideButton {
+  margin-left: -2px;
+}
+
 .diffWorkspace {
   flex: 1 1 auto;
   display: flex;
@@ -3258,6 +3425,7 @@ button.attachmentPreview:focus-visible {
   gap: 10px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 12px 14px 14px;
 }
 
@@ -3265,42 +3433,132 @@ button.attachmentPreview:focus-visible {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 10px;
   min-height: 0;
-  overflow: auto;
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--radius);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.014)),
-    rgba(255, 255, 255, 0.02);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.012)),
+    rgba(8, 9, 12, 0.1);
 }
 
 .reviewFile {
+  flex: 0 0 auto;
+  overflow: hidden;
   min-width: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.072);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.014)),
+    rgba(15, 17, 21, 0.36);
+}
+
+.reviewFile.status-added {
+  border-color: color-mix(in srgb, var(--diff-add) 20%, rgba(255, 255, 255, 0.072));
+}
+
+.reviewFile.status-deleted {
+  border-color: color-mix(in srgb, var(--diff-remove) 18%, rgba(255, 255, 255, 0.072));
+}
+
+.reviewFile.status-modified {
+  border-color: color-mix(in srgb, var(--amber) 20%, rgba(255, 255, 255, 0.072));
 }
 
 .reviewFile:last-child {
-  border-bottom: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.072);
 }
 
 .reviewFileHeader {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  grid-template-columns: minmax(0, 1fr) 26px 26px;
   gap: 8px;
   align-items: center;
   width: 100%;
-  min-height: 37px;
-  padding: 6px 8px;
+  min-height: 46px;
+  padding: 9px 9px 9px 10px;
   color: var(--text);
   text-align: left;
+}
+
+.status-added .reviewFileHeader {
+  border-left: 2px solid color-mix(in srgb, var(--diff-add) 68%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 5%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.012);
+}
+
+.status-deleted .reviewFileHeader {
+  border-left: 2px solid color-mix(in srgb, var(--diff-remove) 64%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 5%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.012);
+}
+
+.status-modified .reviewFileHeader {
+  border-left: 2px solid color-mix(in srgb, var(--amber) 62%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 5%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.012);
 }
 
 .reviewFileHeader:hover,
 .reviewFileHeader.active {
   background:
-    linear-gradient(90deg, rgba(178, 186, 197, 0.064), transparent),
-    rgba(255, 255, 255, 0.036);
+    linear-gradient(90deg, rgba(178, 186, 197, 0.07), transparent 72%),
+    rgba(255, 255, 255, 0.028);
+}
+
+.status-added .reviewFileHeader:hover,
+.status-added .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 6.5%, transparent), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.status-deleted .reviewFileHeader:hover,
+.status-deleted .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 6.5%, transparent), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.status-modified .reviewFileHeader:hover,
+.status-modified .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 6.5%, transparent), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme="light"] .status-added .reviewFileHeader,
+:root[data-theme="light"] .status-added .reviewFileHeader:hover,
+:root[data-theme="light"] .status-added .reviewFileHeader.active {
+  border-left-color: color-mix(in srgb, var(--diff-add) 68%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 5%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.38);
+}
+
+:root[data-theme="light"] .status-deleted .reviewFileHeader,
+:root[data-theme="light"] .status-deleted .reviewFileHeader:hover,
+:root[data-theme="light"] .status-deleted .reviewFileHeader.active {
+  border-left-color: color-mix(in srgb, var(--diff-remove) 64%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 5%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.38);
+}
+
+:root[data-theme="light"] .status-modified .reviewFileHeader,
+:root[data-theme="light"] .status-modified .reviewFileHeader:hover,
+:root[data-theme="light"] .status-modified .reviewFileHeader.active {
+  border-left-color: color-mix(in srgb, var(--amber) 62%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 5%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.38);
 }
 
 .openReviewFileButton,
@@ -3319,13 +3577,18 @@ button.attachmentPreview:focus-visible {
   background: rgba(255, 255, 255, 0.055);
 }
 
+.openReviewFileButton:disabled {
+  color: var(--faint);
+  opacity: 1;
+}
+
 .reviewFileToggle {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 64px;
   gap: 8px;
   align-items: center;
   min-width: 0;
-  min-height: 26px;
+  min-height: 28px;
   color: var(--text);
   text-align: left;
 }
@@ -3340,66 +3603,101 @@ button.attachmentPreview:focus-visible {
 }
 
 .reviewFileDiff {
-  border-top: 1px solid var(--line);
-  background: var(--code-bg);
+  padding: 6px 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.062);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.016), transparent 26%),
+    rgba(5, 7, 10, 0.22);
+}
+
+.changedFileMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  line-height: 1.25;
 }
 
 .changedFilePath {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.25;
   white-space: nowrap;
 }
 
 .changeStats {
   display: inline-flex;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 5px;
   align-items: center;
+  min-width: 64px;
   color: var(--faint);
-  font-family: var(--mono-font);
-  font-size: 11px;
-  font-weight: 750;
+  font-family: var(--app-font);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1;
   white-space: nowrap;
 }
 
 .additions {
-  color: #78e6ad;
+  display: inline-flex;
+  align-items: center;
+  color: var(--diff-add);
 }
 
 .deletions {
-  color: #ff9ca5;
+  display: inline-flex;
+  align-items: center;
+  color: var(--diff-remove);
 }
 
 .diffRows {
   min-height: 0;
   overflow-x: auto;
   font-family: var(--mono-font);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.55;
+  scrollbar-width: thin;
 }
 
 .diffRowsInner {
   display: grid;
   align-content: start;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: max-content;
+  padding: 0 8px;
 }
 
 .diffRow {
+  position: relative;
   display: grid;
-  grid-template-columns: 48px 48px 20px minmax(max-content, 1fr);
+  grid-template-columns: 2px 44px 44px 18px minmax(0, 1fr);
   align-items: stretch;
   width: 100%;
-  min-height: 18px;
-  color: #d7dde5;
+  min-height: 21px;
+  overflow: hidden;
+  border-radius: 0;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
 }
 
 .diffRow code {
   min-width: 0;
-  padding: 0 12px 0 0;
+  padding: 1px 14px 1px 8px;
   color: inherit;
   background: transparent;
   font: inherit;
+  overflow: visible;
   white-space: pre;
+}
+
+.diffRow::before {
+  width: 2px;
+  margin: 0;
+  border-radius: 0;
+  content: "";
+  background: transparent;
 }
 
 .diffLineNumber,
@@ -3409,23 +3707,96 @@ button.attachmentPreview:focus-visible {
 }
 
 .diffLineNumber {
-  padding: 0 8px;
-  background: rgba(0, 0, 0, 0.16);
+  padding: 1px 7px 1px 4px;
   text-align: right;
 }
 
 .diffMarker {
+  display: grid;
+  place-items: center;
   text-align: center;
 }
 
+.diffMarker::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  content: "";
+  background: rgba(178, 186, 197, 0.16);
+}
+
 .diffRow.add {
-  color: #b9f4d2;
-  background: #173329;
+  color: color-mix(in srgb, var(--diff-add) 16%, var(--text));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-add) 12%, transparent),
+      color-mix(in srgb, var(--diff-add) 6.5%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-add) 2.2%, transparent);
 }
 
 .diffRow.remove {
-  color: #ffc4c9;
-  background: #351f24;
+  color: color-mix(in srgb, var(--diff-remove) 16%, var(--text));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-remove) 12%, transparent),
+      color-mix(in srgb, var(--diff-remove) 6.5%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-remove) 2.2%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.add {
+  color: #174832;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-add) 12%, transparent),
+      color-mix(in srgb, var(--diff-add) 5.5%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-add) 3.2%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.remove {
+  color: #4a2027;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-remove) 13%, transparent),
+      color-mix(in srgb, var(--diff-remove) 6%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-remove) 3.5%, transparent);
+}
+
+.diffRow.add::before {
+  background: color-mix(in srgb, var(--diff-add) 68%, transparent);
+}
+
+.diffRow.remove::before {
+  background: color-mix(in srgb, var(--diff-remove) 62%, transparent);
+}
+
+.diffRow.add .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-add) 72%, transparent);
+}
+
+.diffRow.remove .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-remove) 66%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.add::before,
+:root[data-theme="light"] .diffRow.add .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-add) 72%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.remove::before,
+:root[data-theme="light"] .diffRow.remove .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-remove) 68%, transparent);
+}
+
+.diffRow.context .diffMarker::before {
+  opacity: 0;
 }
 
 .reviewFooter {
@@ -4783,78 +5154,36 @@ button.attachmentPreview:focus-visible {
 }
 
 @media (max-width: 1120px) {
-  .appShell {
-    grid-template-areas:
-      "top top top"
-      "side main review";
-    grid-template-columns: auto minmax(220px, 1fr) var(--review-width, 520px);
-  }
-
-  .appShell.reviewClosed {
-    grid-template-columns: auto minmax(220px, 1fr) 0;
-  }
-
-  .appShell.reviewClosing {
-    grid-template-columns: auto minmax(220px, 1fr) 0;
-  }
-
   .reviewSidebar {
-    position: relative;
-    top: auto;
-    right: auto;
-    bottom: auto;
-    z-index: auto;
-    width: auto;
-    min-width: 0;
-    max-width: none;
-    box-shadow: none;
+    width: min(var(--review-width, 520px), calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
   }
 
-  .reviewClosed .reviewSidebar {
-    width: 0;
-    min-width: 0;
-    max-width: 0;
-    transform: translateX(12px);
+  .promptDock {
+    padding-inline: clamp(18px, 3vw, 34px);
   }
 }
 
 @media (max-width: 760px) {
   .sidebar {
-    position: fixed;
-    top: 36px;
-    bottom: 0;
-    left: 0;
-    z-index: 21;
-    width: min(var(--sidebar-width, 248px), calc(100vw - 42px));
-    min-width: min(196px, calc(100vw - 42px));
-    max-width: none;
-    box-shadow: 20px 0 40px rgba(0, 0, 0, 0.34);
+    width: min(var(--sidebar-width, 230px), calc(100vw - 42px));
+    min-width: min(168px, calc(100vw - 42px));
   }
 
-  .sidebarClosed .sidebar {
-    width: min(var(--sidebar-width, 248px), calc(100vw - 42px));
-    min-width: min(196px, calc(100vw - 42px));
-    transform: translateX(-100%);
+  .reviewSidebar {
+    width: min(var(--review-width, 520px), calc(100vw - 30px));
+    max-width: calc(100vw - 30px);
   }
 
-  .appShell {
-    grid-template-areas:
-      "top top"
-      "main review";
-    grid-template-columns: minmax(180px, 1fr) var(--review-width, 520px);
+  .sideHoverZone {
+    width: 17px;
   }
 
-  .appShell.reviewClosed {
-    grid-template-areas:
-      "top top"
-      "main main";
-    grid-template-columns: minmax(0, 1fr) 0;
+  .promptDock {
+    padding: 13px 12px 16px;
   }
 
-  .appShell.reviewClosing {
-    grid-template-areas:
-      "top top"
-      "main review";
-    grid-template-columns: minmax(0, 1fr) 0;
+  .composerBody {
+    padding-inline: 16px;
   }
 }
