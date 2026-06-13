@@ -1337,6 +1337,25 @@ function renderPlainInlineText(text: string, keyPrefix: string, options?: Review
     .map((part, index) => renderReferenceToken(part, `${keyPrefix}-ref-${index}`, options));
 }
 
+function isEscapedMarkdownAt(text: string, index: number): boolean {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function findClosingBacktickRun(text: string, startIndex: number, runLength: number): number {
+  for (let index = startIndex; index < text.length; index += 1) {
+    if (text[index] !== "`" || isEscapedMarkdownAt(text, index)) continue;
+    let nextIndex = index;
+    while (nextIndex < text.length && text[nextIndex] === "`") nextIndex += 1;
+    if (nextIndex - index === runLength) return index;
+    index = nextIndex - 1;
+  }
+  return -1;
+}
+
 function eventTitle(event: BackendUiEvent): string {
   switch (event.type) {
     case "user.message":
@@ -1442,7 +1461,7 @@ const sidebarMinWidth = 168;
 const sidebarMaxWidth = 230;
 const reviewMinWidth = 430;
 const reviewCloseThreshold = 260;
-const reviewCloseAnimationMs = 440;
+const reviewCloseAnimationMs = 360;
 const reviewOverlayMaxWidth = 840;
 const reviewOpenRatio = 0.56;
 const sidebarMaxRatio = 0.28;
@@ -1977,22 +1996,74 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
 }
 
 function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*|_[^_\n]+_)/g).map((part, index) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      const code = part.slice(1, -1);
-      if (reviewFileForReference(code, options?.reviewFiles) || code.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(code)) {
-        return renderReferenceToken(code, `code-ref-${index}`, options);
+  const nodes: React.ReactNode[] = [];
+  let plain = "";
+  let keyIndex = 0;
+
+  const flushPlain = () => {
+    if (!plain) return;
+    const key = `inline-${keyIndex}`;
+    nodes.push(<React.Fragment key={key}>{renderPlainInlineText(plain, key, options)}</React.Fragment>);
+    keyIndex += 1;
+    plain = "";
+  };
+
+  const pushCode = (code: string) => {
+    flushPlain();
+    const key = `code-${keyIndex}`;
+    keyIndex += 1;
+    if (reviewFileForReference(code, options?.reviewFiles) || code.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(code)) {
+      nodes.push(renderReferenceToken(code, key, options));
+      return;
+    }
+    nodes.push(<code key={key}>{code}</code>);
+  };
+
+  const pushFormatted = (node: React.ReactNode) => {
+    flushPlain();
+    nodes.push(node);
+    keyIndex += 1;
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\\" && /[`*_\\]/.test(text[index + 1] ?? "")) {
+      plain += text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === "`" && !isEscapedMarkdownAt(text, index)) {
+      let endOfRun = index;
+      while (endOfRun < text.length && text[endOfRun] === "`") endOfRun += 1;
+      const runLength = endOfRun - index;
+      const closingIndex = findClosingBacktickRun(text, endOfRun, runLength);
+      if (closingIndex >= 0) {
+        pushCode(text.slice(endOfRun, closingIndex));
+        index = closingIndex + runLength - 1;
+        continue;
       }
-      return <code key={index}>{code}</code>;
     }
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (text.startsWith("**", index) && !isEscapedMarkdownAt(text, index)) {
+      const closingIndex = text.indexOf("**", index + 2);
+      if (closingIndex > index + 2) {
+        pushFormatted(<strong key={`strong-${keyIndex}`}>{text.slice(index + 2, closingIndex)}</strong>);
+        index = closingIndex + 1;
+        continue;
+      }
     }
-    if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) {
-      return <em key={index}>{part.slice(1, -1)}</em>;
+    if ((char === "*" || char === "_") && !isEscapedMarkdownAt(text, index)) {
+      const closingIndex = text.indexOf(char, index + 1);
+      if (closingIndex > index + 1 && !text.slice(index + 1, closingIndex).includes("\n")) {
+        pushFormatted(<em key={`em-${keyIndex}`}>{text.slice(index + 1, closingIndex)}</em>);
+        index = closingIndex;
+        continue;
+      }
     }
-    return <React.Fragment key={index}>{renderPlainInlineText(part, `inline-${index}`, options)}</React.Fragment>;
-  });
+    plain += char;
+  }
+
+  flushPlain();
+  return nodes;
 }
 
 function MarkdownContent({
@@ -2022,16 +2093,13 @@ function MarkdownContent({
           return <h5 key={index}>{headingContent}</h5>;
         }
         if (block.type === "list") {
-          return (
-            <ul key={index}>
-              {block.items.map((item, itemIndex) => (
-                <li key={itemIndex}>
-                  {renderInlineMarkdown(item, referenceOptions)}
-                  {isLast && itemIndex === block.items.length - 1 ? trailingInline : null}
-                </li>
-              ))}
-            </ul>
-          );
+          const listItems = block.items.map((item, itemIndex) => (
+            <li key={itemIndex}>
+              {renderInlineMarkdown(item, referenceOptions)}
+              {isLast && itemIndex === block.items.length - 1 ? trailingInline : null}
+            </li>
+          ));
+          return block.ordered ? <ol key={index}>{listItems}</ol> : <ul key={index}>{listItems}</ul>;
         }
         if (block.type === "table") {
           return (
@@ -2151,10 +2219,34 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function scrollElementToBottom(node: HTMLElement) {
-  node.scrollTop = node.scrollHeight;
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function elementDistanceFromBottom(node: HTMLElement) {
+  return node.scrollHeight - node.scrollTop - node.clientHeight;
+}
+
+function isElementNearBottom(node: HTMLElement, threshold = 72) {
+  return elementDistanceFromBottom(node) < threshold;
+}
+
+function isElementAtBottom(node: HTMLElement) {
+  return elementDistanceFromBottom(node) < 4;
+}
+
+function scrollElementToBottom(node: HTMLElement, behavior: ScrollBehavior = "auto") {
+  const scrollBehavior = behavior === "smooth" && prefersReducedMotion() ? "auto" : behavior;
+  const scroll = () => {
+    if (scrollBehavior === "auto") {
+      node.scrollTop = node.scrollHeight;
+      return;
+    }
+    node.scrollTo({ top: node.scrollHeight, behavior: scrollBehavior });
+  };
+  scroll();
   window.requestAnimationFrame(() => {
-    node.scrollTop = node.scrollHeight;
+    scroll();
   });
 }
 
@@ -2187,7 +2279,6 @@ function App() {
   const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewPinned, setReviewPinned] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
@@ -2235,13 +2326,16 @@ function App() {
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
   const reviewCloseTimerRef = useRef<number | null>(null);
-  const reviewHoverCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
   const focusRefreshTimerRef = useRef<number | null>(null);
   const followComposerScrollRef = useRef(true);
+  const composerScrollInputRef = useRef(false);
+  const reasoningBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const reasoningFollowScrollRef = useRef<Map<string, boolean>>(new Map());
+  const reasoningScrollInputRef = useRef<Set<string>>(new Set());
 
   const latestTaskId = task?.id;
   const rawReviewFiles = task?.reviewFiles ?? emptyReviewFiles;
@@ -2578,9 +2672,6 @@ function App() {
       if (reviewCloseTimerRef.current !== null) {
         window.clearTimeout(reviewCloseTimerRef.current);
       }
-      if (reviewHoverCloseTimerRef.current !== null) {
-        window.clearTimeout(reviewHoverCloseTimerRef.current);
-      }
     },
     [],
   );
@@ -2594,26 +2685,29 @@ function App() {
     return () => window.removeEventListener("resize", resizeReview);
   }, [reviewOpen]);
 
-  useEffect(() => {
-    if (!reviewOpen || reviewPinned) return undefined;
-    const watchPointer = (event: PointerEvent) => {
-      const review = document.querySelector(".reviewSidebar");
-      const zone = document.querySelector(".sideHoverZone.right");
-      const target = event.target instanceof Node ? event.target : null;
-      if ((target && review?.contains(target)) || (target && zone?.contains(target))) {
-        cancelReviewHoverClose();
-        return;
-      }
-      scheduleReviewHoverClose();
-    };
-    window.addEventListener("pointermove", watchPointer);
-    return () => window.removeEventListener("pointermove", watchPointer);
-  }, [reviewOpen, reviewPinned]);
-
   useLayoutEffect(() => {
     const node = streamRef.current;
     if (node && followComposerScrollRef.current) scrollElementToBottom(node);
   }, [composerItems, task?.state, reviewFiles.length, expandedReviewPaths, reviewOpen]);
+
+  useLayoutEffect(() => {
+    const activeReasoningIds = new Set<string>();
+    for (const item of composerItems) {
+      if (item.type !== "reasoning") continue;
+      activeReasoningIds.add(item.id);
+      const expanded = !item.finished || autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
+      const node = reasoningBodyRefs.current.get(item.id);
+      if (!node || !expanded || item.finished) continue;
+      if (reasoningFollowScrollRef.current.get(item.id) ?? true) {
+        scrollElementToBottom(node, "smooth");
+      }
+    }
+    for (const id of reasoningFollowScrollRef.current.keys()) {
+      if (activeReasoningIds.has(id)) continue;
+      reasoningFollowScrollRef.current.delete(id);
+      reasoningScrollInputRef.current.delete(id);
+    }
+  }, [autoExpandedReasoningIds, composerItems, expandedReasoningIds]);
 
   useEffect(() => {
     const closeMenus = (event: PointerEvent) => {
@@ -3195,10 +3289,94 @@ function App() {
     setWorkspaceModeMenuOpen(false);
   }
 
+  function noteComposerScrollInput(node: HTMLElement, forcePause = false) {
+    composerScrollInputRef.current = true;
+    if (forcePause || !isElementNearBottom(node, 8)) {
+      followComposerScrollRef.current = false;
+    }
+  }
+
   function handleComposerScroll(event: React.UIEvent<HTMLDivElement>) {
     const node = event.currentTarget;
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-    followComposerScrollRef.current = distanceFromBottom < 72;
+    if (isElementAtBottom(node)) {
+      followComposerScrollRef.current = true;
+      composerScrollInputRef.current = false;
+      return;
+    }
+    if (isElementNearBottom(node) && !composerScrollInputRef.current) {
+      followComposerScrollRef.current = true;
+      return;
+    }
+    if (composerScrollInputRef.current) {
+      followComposerScrollRef.current = false;
+    }
+  }
+
+  function handleComposerWheel(event: React.WheelEvent<HTMLDivElement>) {
+    const shouldPause = event.deltaY < 0 || !isElementNearBottom(event.currentTarget);
+    if (shouldPause) {
+      noteComposerScrollInput(event.currentTarget, shouldPause);
+    }
+  }
+
+  function handleComposerScrollPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    noteComposerScrollInput(event.currentTarget);
+  }
+
+  function handleComposerTouchMove(event: React.TouchEvent<HTMLDivElement>) {
+    noteComposerScrollInput(event.currentTarget, true);
+  }
+
+  function setReasoningBodyRef(id: string, node: HTMLDivElement | null) {
+    if (!node) {
+      reasoningBodyRefs.current.delete(id);
+      return;
+    }
+    reasoningBodyRefs.current.set(id, node);
+    if (!reasoningFollowScrollRef.current.has(id)) {
+      reasoningFollowScrollRef.current.set(id, true);
+    }
+  }
+
+  function noteReasoningScrollInput(id: string, node: HTMLElement, forcePause = false) {
+    reasoningScrollInputRef.current.add(id);
+    if (forcePause || !isElementNearBottom(node, 8)) {
+      reasoningFollowScrollRef.current.set(id, false);
+    }
+  }
+
+  function handleReasoningScroll(id: string, event: React.UIEvent<HTMLDivElement>) {
+    const node = event.currentTarget;
+    if (isElementAtBottom(node)) {
+      reasoningFollowScrollRef.current.set(id, true);
+      reasoningScrollInputRef.current.delete(id);
+      return;
+    }
+    if (isElementNearBottom(node, 18) && !reasoningScrollInputRef.current.has(id)) {
+      reasoningFollowScrollRef.current.set(id, true);
+      return;
+    }
+    if (reasoningScrollInputRef.current.has(id)) {
+      reasoningFollowScrollRef.current.set(id, false);
+    }
+  }
+
+  function handleReasoningWheel(id: string, event: React.WheelEvent<HTMLDivElement>) {
+    const shouldPause = event.deltaY < 0 || !isElementNearBottom(event.currentTarget, 8);
+    if (shouldPause) {
+      noteReasoningScrollInput(id, event.currentTarget, shouldPause);
+    }
+  }
+
+  function handleReasoningPointerDown(id: string, event: React.PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.right - event.clientX <= 14) {
+      noteReasoningScrollInput(id, event.currentTarget, true);
+    }
+  }
+
+  function handleReasoningTouchMove(id: string, event: React.TouchEvent<HTMLDivElement>) {
+    noteReasoningScrollInput(id, event.currentTarget, true);
   }
 
   async function startTask() {
@@ -3222,6 +3400,7 @@ function App() {
     setError(null);
     setBusy(true);
     followComposerScrollRef.current = true;
+    composerScrollInputRef.current = false;
     if (!isContinuingChat) {
       setEvents([]);
       setAssistantText("");
@@ -3418,29 +3597,11 @@ function App() {
     setReviewClosing(false);
   }
 
-  function cancelReviewHoverClose() {
-    if (reviewHoverCloseTimerRef.current !== null) {
-      window.clearTimeout(reviewHoverCloseTimerRef.current);
-      reviewHoverCloseTimerRef.current = null;
-    }
-  }
-
-  function scheduleReviewHoverClose() {
-    cancelReviewHoverClose();
-    if (reviewPinned) return;
-    reviewHoverCloseTimerRef.current = window.setTimeout(() => {
-      reviewHoverCloseTimerRef.current = null;
-      closeReviewPanel();
-    }, 300);
-  }
-
   function closeReviewPanel() {
     if (!reviewOpen && !reviewClosing) return;
-    cancelReviewHoverClose();
     if (reviewCloseTimerRef.current !== null) {
       window.clearTimeout(reviewCloseTimerRef.current);
     }
-    setReviewPinned(false);
     setReviewOpen(false);
     setReviewClosing(true);
     reviewCloseTimerRef.current = window.setTimeout(() => {
@@ -3449,10 +3610,8 @@ function App() {
     }, reviewCloseAnimationMs);
   }
 
-  function openReviewPanel(filePath?: string, pinned = true) {
-    cancelReviewHoverClose();
+  function openReviewPanel(filePath?: string) {
     cancelReviewClose();
-    setReviewPinned((current) => current || pinned);
     setReviewWidth(wideReviewWidth());
     setReviewOpen(true);
     if (filePath) {
@@ -3460,21 +3619,12 @@ function App() {
     }
   }
 
-  function previewReviewPanel() {
-    cancelReviewHoverClose();
-    cancelReviewClose();
-    setReviewPinned(false);
-    setReviewWidth(wideReviewWidth());
-    setReviewOpen(true);
-    scheduleReviewHoverClose();
-  }
-
   function toggleReviewPanel() {
     if (reviewOpen) {
       closeReviewPanel();
       return;
     }
-    openReviewPanel(undefined, true);
+    openReviewPanel();
   }
 
   async function openReviewFile(filePath: string) {
@@ -3913,18 +4063,7 @@ function App() {
         <div className="topbarSpacer" />
       </header>
 
-      <div
-        className="sideHoverZone right"
-        aria-hidden="true"
-        onMouseEnter={previewReviewPanel}
-        onMouseMove={previewReviewPanel}
-        onPointerEnter={previewReviewPanel}
-        onMouseLeave={scheduleReviewHoverClose}
-      />
-
-      <aside
-        className="sidebar"
-      >
+      <aside className="sidebar">
         <div className="sidebarResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginSidebarResize} />
         <div className="sidebarHeader">
           <button className="newChatButton" type="button" onClick={newChat}>
@@ -4056,7 +4195,14 @@ function App() {
                 {renderIdePicker("composer")}
               </div>
             </div>
-            <div className="composerBody" ref={streamRef} onScroll={handleComposerScroll}>
+            <div
+              className="composerBody"
+              ref={streamRef}
+              onPointerDown={handleComposerScrollPointerDown}
+              onScroll={handleComposerScroll}
+              onTouchMove={handleComposerTouchMove}
+              onWheel={handleComposerWheel}
+            >
               {composerItems.length ? (
                 <div className="timeline">
                   {composerItems.map((item) =>
@@ -4146,10 +4292,19 @@ function App() {
                               aria-expanded={expanded}
                             >
                               <span>{thoughtSummary(item)}</span>
-                              {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              <ChevronRight className="reasoningChevron" size={13} />
                             </button>
                             <div className={`reasoningBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
-                              <pre>{item.text.trim()}</pre>
+                              <div
+                                className="reasoningBodyInner"
+                                ref={(node) => setReasoningBodyRef(item.id, node)}
+                                onPointerDown={(event) => handleReasoningPointerDown(item.id, event)}
+                                onScroll={(event) => handleReasoningScroll(item.id, event)}
+                                onTouchMove={(event) => handleReasoningTouchMove(item.id, event)}
+                                onWheel={(event) => handleReasoningWheel(item.id, event)}
+                              >
+                                <MarkdownContent content={item.text.trim()} />
+                              </div>
                             </div>
                           </article>
                         );
@@ -4498,11 +4653,7 @@ function App() {
         </section>
       </main>
 
-      <aside
-        className="reviewSidebar"
-        onMouseEnter={cancelReviewHoverClose}
-        onMouseLeave={scheduleReviewHoverClose}
-      >
+      <aside className="reviewSidebar">
         <div className="reviewResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginReviewResize} />
         <section className="panel reviewPanel">
           <div className="reviewTopbar">
@@ -4730,9 +4881,6 @@ function App() {
                           </strong>
                         </div>
                       </div>
-                      {backend?.providers[0]?.message || backend?.message ? (
-                        <p className="settingsMessage">{backend.providers[0]?.message ?? backend.message}</p>
-                      ) : null}
                     </div>
 
                     <div className="settingsGroup">

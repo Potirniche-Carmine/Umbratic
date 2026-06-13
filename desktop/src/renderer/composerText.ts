@@ -11,7 +11,7 @@ export type PromptHighlightSegment = {
 export type MarkdownBlock =
   | { type: "code"; language: string; content: string }
   | { type: "heading"; level: number; text: string }
-  | { type: "list"; items: string[] }
+  | { type: "list"; ordered?: boolean; items: string[] }
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "paragraph"; text: string };
 
@@ -100,6 +100,7 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let paragraph: string[] = [];
   let list: string[] = [];
+  let listOrdered = false;
   let code: { language: string; lines: string[]; indent: string } | null = null;
 
   const flushParagraph = () => {
@@ -110,8 +111,9 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
   };
   const flushList = () => {
     if (list.length) {
-      blocks.push({ type: "list", items: list });
+      blocks.push({ type: "list", ordered: listOrdered, items: list });
       list = [];
+      listOrdered = false;
     }
   };
 
@@ -155,10 +157,13 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
       blocks.push({ type: "heading", level: heading[1].length, text: heading[2] });
       continue;
     }
-    const listItem = line.match(/^\s*[-*]\s+(.+)$/);
+    const listItem = line.match(/^\s*(?:([-*])|(\d+)[.)])\s+(.+)$/);
     if (listItem) {
+      const ordered = !!listItem[2];
       flushParagraph();
-      list.push(listItem[1]);
+      if (list.length && listOrdered !== ordered) flushList();
+      listOrdered = ordered;
+      list.push(listItem[3]);
       continue;
     }
     if (!line.trim()) {

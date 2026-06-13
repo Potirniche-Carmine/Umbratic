@@ -30,6 +30,8 @@
   --reasoning-hover-border: rgba(178, 186, 197, 0.2);
   --reasoning-hover-bg: rgba(178, 186, 197, 0.045);
   --shadow-color: rgba(0, 0, 0, 0.42);
+  --sidebar-shadow: 18px 0 46px rgba(0, 0, 0, 0.22);
+  --review-sidebar-shadow: -22px 0 58px rgba(0, 0, 0, 0.22);
   --glass: rgba(255, 255, 255, 0.045);
   --glass-strong: rgba(255, 255, 255, 0.072);
   --composer-glow: rgba(178, 186, 197, 0.16);
@@ -81,6 +83,8 @@
   --reasoning-hover-border: rgba(92, 101, 113, 0.24);
   --reasoning-hover-bg: rgba(92, 101, 113, 0.08);
   --shadow-color: rgba(20, 35, 55, 0.18);
+  --sidebar-shadow: 8px 0 22px rgba(20, 35, 55, 0.08);
+  --review-sidebar-shadow: -8px 0 22px rgba(20, 35, 55, 0.08);
   --glass: rgba(255, 255, 255, 0.72);
   --glass-strong: rgba(255, 255, 255, 0.88);
   --composer-glow: rgba(92, 101, 113, 0.14);
@@ -201,6 +205,16 @@
 :root[data-theme="light"] .composerReviewToggle {
   border-color: rgba(40, 48, 58, 0.13);
   background: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .composerReviewToggle:hover {
+  border-color: rgba(40, 48, 58, 0.2);
+  background: rgba(18, 24, 32, 0.08);
+}
+
+:root[data-theme="light"] .reviewTextButton:hover:not(:disabled) {
+  border-color: rgba(40, 48, 58, 0.16);
+  background: rgba(18, 24, 32, 0.075);
 }
 
 :root[data-theme="light"] .inlineMentionToken,
@@ -458,7 +472,7 @@ pre {
     linear-gradient(90deg, rgba(178, 186, 197, 0.052), transparent 62%),
     color-mix(in srgb, var(--sidebar) 88%, transparent);
   box-shadow:
-    18px 0 46px rgba(0, 0, 0, 0.22),
+    var(--sidebar-shadow),
     inset -1px 0 0 rgba(255, 255, 255, 0.035);
   -webkit-backdrop-filter: blur(24px) saturate(1.1);
   backdrop-filter: blur(24px) saturate(1.1);
@@ -497,7 +511,7 @@ pre {
     linear-gradient(270deg, rgba(178, 186, 197, 0.045), transparent 62%),
     rgba(17, 18, 22, 0.62);
   box-shadow:
-    -22px 0 58px rgba(0, 0, 0, 0.22),
+    var(--review-sidebar-shadow),
     inset 1px 0 0 rgba(255, 255, 255, 0.035),
     inset 0 -1px 0 rgba(255, 255, 255, 0.055);
   -webkit-backdrop-filter: blur(20px) saturate(1.06);
@@ -516,6 +530,10 @@ pre {
   direction: ltr;
 }
 
+.reviewOpen:not(.reviewClosing) .reviewSidebar {
+  animation: reviewPanelSlideIn 440ms cubic-bezier(0.2, 0.86, 0.22, 1) both;
+}
+
 .reviewClosed .reviewSidebar {
   opacity: 0;
   overflow: hidden;
@@ -524,27 +542,8 @@ pre {
 }
 
 .reviewClosing .reviewSidebar {
-  opacity: 0;
   pointer-events: none;
-  transform: translateX(18px);
-}
-
-.sideHoverZone {
-  position: fixed;
-  top: 36px;
-  bottom: 0;
-  z-index: 28;
-  width: 20px;
-  background: rgba(255, 255, 255, 0.001);
-  pointer-events: auto;
-}
-
-.sideHoverZone.right {
-  right: 0;
-}
-
-.reviewOpen .sideHoverZone.right {
-  pointer-events: none;
+  animation: reviewPanelSlideOut 360ms cubic-bezier(0.78, 0, 0.8, 0.14) both;
 }
 
 .sidebarResizeHandle,
@@ -1466,33 +1465,115 @@ pre {
   margin-left: auto;
 }
 
+.reasoningChevron {
+  transform: rotate(0deg);
+  transition:
+    transform 210ms cubic-bezier(0.16, 1, 0.3, 1),
+    color 140ms ease;
+}
+
+.timelineReasoning.isExpanded .reasoningChevron {
+  color: color-mix(in srgb, var(--reasoning-text) 82%, var(--muted));
+  transform: rotate(90deg);
+}
+
 .reasoningBody {
-  display: grid;
-  grid-template-rows: 0fr;
+  max-height: 0;
   overflow: hidden;
   opacity: 0;
+  clip-path: inset(0 0 100% 0);
+  transform: translateY(-6px) scaleY(0.98);
+  transform-origin: top;
   transition:
-    grid-template-rows 240ms cubic-bezier(0.2, 0.78, 0.2, 1),
-    opacity 180ms ease;
+    max-height 260ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 150ms ease,
+    clip-path 260ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: max-height, opacity, clip-path, transform;
 }
 
 .reasoningBody.open {
-  grid-template-rows: 1fr;
+  max-height: 92px;
   opacity: 1;
+  clip-path: inset(0 0 0 0);
+  transform: translateY(0);
 }
 
-.reasoningBody pre {
-  margin: 0;
+.reasoningBodyInner {
   max-height: 92px;
   min-height: 0;
+  padding-right: 8px;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scrollbar-color: color-mix(in srgb, var(--reasoning-text) 30%, transparent) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  transform: translateY(-5px);
+  transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reasoningBody.open .reasoningBodyInner {
   overflow: auto;
+  transform: translateY(0);
+}
+
+.reasoningBodyInner::-webkit-scrollbar {
+  width: 8px;
+}
+
+.reasoningBodyInner::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.reasoningBodyInner::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reasoning-text) 28%, transparent);
+  background-clip: content-box;
+}
+
+.reasoningBodyInner::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--reasoning-text) 42%, transparent);
+  background-clip: content-box;
+}
+
+.reasoningBody .markdownContent {
+  max-width: none;
   padding: 8px 0 4px;
-  white-space: pre-wrap;
-  word-break: break-word;
   color: color-mix(in srgb, var(--muted) 86%, var(--text));
-  font-family: var(--mono-font);
-  font-size: 10px;
-  line-height: 1.42;
+  font-size: 11px;
+  line-height: 1.48;
+}
+
+.reasoningBody .markdownContent p,
+.reasoningBody .markdownContent ul,
+.reasoningBody .markdownContent ol,
+.reasoningBody .markdownTableWrapper,
+.reasoningBody .markdownContent h3,
+.reasoningBody .markdownContent h4,
+.reasoningBody .markdownContent h5 {
+  margin-bottom: 6px;
+}
+
+.reasoningBody .markdownContent p {
+  color: inherit;
+}
+
+.reasoningBody .markdownContent h3,
+.reasoningBody .markdownContent h4,
+.reasoningBody .markdownContent h5 {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+  font-size: 11px;
+}
+
+.reasoningBody .markdownContent ul,
+.reasoningBody .markdownContent ol {
+  padding-left: 17px;
+}
+
+.reasoningBody .markdownContent code {
+  font-size: 10.5px;
 }
 
 .timelineMessage .markdownContent > :last-child {
@@ -1832,6 +1913,7 @@ pre {
 
 .markdownContent p,
 .markdownContent ul,
+.markdownContent ol,
 .markdownTableWrapper,
 .markdownContent h3,
 .markdownContent h4,
@@ -1853,7 +1935,8 @@ pre {
   text-transform: none;
 }
 
-.markdownContent ul {
+.markdownContent ul,
+.markdownContent ol {
   padding-left: 20px;
 }
 
@@ -5077,6 +5160,30 @@ button.attachmentPreview:focus-visible {
   }
 }
 
+@keyframes reviewPanelSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(calc(100% + 18px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes reviewPanelSlideOut {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(calc(100% + 18px));
+  }
+}
+
 @keyframes promptDockIn {
   from {
     opacity: 0;
@@ -5173,10 +5280,6 @@ button.attachmentPreview:focus-visible {
   .reviewSidebar {
     width: min(var(--review-width, 520px), calc(100vw - 30px));
     max-width: calc(100vw - 30px);
-  }
-
-  .sideHoverZone {
-    width: 17px;
   }
 
   .promptDock {

@@ -51,6 +51,9 @@ const markdown = [
   "- One item",
   "- Second item with `code`",
   "",
+  "1. Ordered item",
+  "2. Second ordered item",
+  "",
   "| Name | Value |",
   "| --- | --- |",
   "| A\\|B | `x|y` |",
@@ -67,13 +70,17 @@ assert.equal(blocks[0].level, 2);
 assert.equal(blocks[1].type, "paragraph");
 assert.equal(blocks[2].type, "list");
 assert.deepEqual(plain(blocks[2].items), ["One item", "Second item with `code`"]);
-assert.equal(blocks[3].type, "table");
-assert.deepEqual(plain(blocks[3].headers), ["Name", "Value"]);
-assert.deepEqual(plain(blocks[3].rows[0]), ["A|B", "`x|y`"]);
-assert.equal(blocks[4].type, "code");
-assert.equal(blocks[4].language, "ts");
-assert.match(blocks[4].content, /<div>&<\/div>/);
-assert.match(blocks[4].content, /A\\\\\|B/);
+assert.equal(blocks[2].ordered, false);
+assert.equal(blocks[3].type, "list");
+assert.equal(blocks[3].ordered, true);
+assert.deepEqual(plain(blocks[3].items), ["Ordered item", "Second ordered item"]);
+assert.equal(blocks[4].type, "table");
+assert.deepEqual(plain(blocks[4].headers), ["Name", "Value"]);
+assert.deepEqual(plain(blocks[4].rows[0]), ["A|B", "`x|y`"]);
+assert.equal(blocks[5].type, "code");
+assert.equal(blocks[5].language, "ts");
+assert.match(blocks[5].content, /<div>&<\/div>/);
+assert.match(blocks[5].content, /A\\\\\|B/);
 
 assert.deepEqual(plain(splitMarkdownTableRow("| one | two\\|three | `a|b` |")), ["one", "two|three", "`a|b`"]);
 
