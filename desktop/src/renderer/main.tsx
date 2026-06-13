@@ -277,7 +277,7 @@ type AppearanceSettings = {
 
 type PermissionRequest = {
   id: string;
-  kind: "edit" | "bash";
+  kind: "read" | "edit" | "bash";
   summary: string;
   command: string;
   commandClass?: CommandClass;
@@ -1224,16 +1224,13 @@ function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolea
 function chatSubline(chat: ChatRecord): string {
   if (chat.taskState === "approved") return "Changes accepted";
   if (chat.taskState === "merged") return "Closed after approved merge";
-  if (chat.taskState === "rejected") return "Closed after undo";
+  if (chat.taskState === "rejected") return "Changes undone";
   return chat.updatedAt ? new Date(chat.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
 }
 
 function closedChatMessage(state?: TaskState): string | undefined {
   if (state === "merged") {
     return "This chat was closed after its approved merge. Start a new chat for more changes.";
-  }
-  if (state === "rejected") {
-    return "This chat was closed after its changes were undone. Start a new chat for more changes.";
   }
   return undefined;
 }
@@ -1671,7 +1668,7 @@ function previewTail(value: string, limit: number): { text: string; truncated: b
 }
 
 function isShellLikeCommand(command: string): boolean {
-  return !/^(read|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
+  return !/^(read|search|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
 }
 
 function commandSummary(run: CommandRun): string {
@@ -1687,7 +1684,7 @@ function commandSummary(run: CommandRun): string {
 }
 
 function commandShellText(run: CommandRun): string {
-  const parts = [run.kind === "edit" && !isShellLikeCommand(run.command) ? `tool ${run.command}` : `$ ${run.command}`];
+  const parts = [run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command) ? `tool ${run.command}` : `$ ${run.command}`];
   const outputPreview = previewTail([run.stdout, run.stderr].filter(Boolean).join("\n"), commandOutputPreviewCharacterLimit);
   const output = stripAnsi(outputPreview.text).trimEnd();
   if (outputPreview.truncated) {
@@ -1698,7 +1695,7 @@ function commandShellText(run: CommandRun): string {
 }
 
 function commandDetailLabel(run: CommandRun): string {
-  const label = run.kind === "edit" && !isShellLikeCommand(run.command) ? "Tool" : "Shell";
+  const label = run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command) ? "Tool" : "Shell";
   return run.commandClass ? `${label} - ${run.commandClass}` : label;
 }
 
@@ -1837,13 +1834,18 @@ function thoughtSummary(item: Extract<ComposerTimelineItem, { type: "reasoning" 
   return duration ? `Thought for ${duration}` : "Thought";
 }
 
+function stripAssistantSpeakerPrefix(text: string): string {
+  return text.replace(/^\s*(?:\*\*)?Umbratic AI(?:\*\*)?\s*:\s*/i, "");
+}
+
 function assistantTextFromEvents(events: BackendUiEvent[]): string {
-  return events
+  const text = events
     .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
     .map((event) => event.text)
     .filter((text) => !isReviewReadyText(text))
     .join("")
     .trim();
+  return stripAssistantSpeakerPrefix(text).trim();
 }
 
 function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
@@ -1863,12 +1865,13 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
   }
 
   const flushAssistant = () => {
-    if (!assistantBuffer.trim()) {
+    const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
+    if (!text) {
       assistantBuffer = "";
       return;
     }
     assistantIndex += 1;
-    items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text: assistantBuffer });
+    items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text });
     assistantBuffer = "";
   };
 
@@ -2278,6 +2281,7 @@ function App() {
   const [expandedCommandId, setExpandedCommandId] = useState<string | null>(null);
   const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
   const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
+  const [collapsedReasoningIds, setCollapsedReasoningIds] = useState<Set<string>>(() => new Set());
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -2492,7 +2496,7 @@ function App() {
       let changed = false;
       const next = new Set(current);
       for (const item of reasoningItems) {
-        if (!item.finished && !next.has(item.id)) {
+        if (!item.finished && !next.has(item.id) && !collapsedReasoningIds.has(item.id) && !expandedReasoningIds.has(item.id)) {
           next.add(item.id);
           changed = true;
           continue;
@@ -2503,7 +2507,18 @@ function App() {
       }
       return changed ? next : current;
     });
-  }, [composerItems]);
+    setCollapsedReasoningIds((current) => {
+      let changed = false;
+      const active = new Set(reasoningItems.filter((item) => !item.finished).map((item) => item.id));
+      const next = new Set(current);
+      for (const id of next) {
+        if (active.has(id)) continue;
+        next.delete(id);
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [collapsedReasoningIds, composerItems, expandedReasoningIds]);
 
   useEffect(() => {
     void refreshStatus();
@@ -2695,7 +2710,7 @@ function App() {
     for (const item of composerItems) {
       if (item.type !== "reasoning") continue;
       activeReasoningIds.add(item.id);
-      const expanded = !item.finished || autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
+      const expanded = autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
       const node = reasoningBodyRefs.current.get(item.id);
       if (!node || !expanded || item.finished) continue;
       if (reasoningFollowScrollRef.current.get(item.id) ?? true) {
@@ -2949,6 +2964,7 @@ function App() {
     setExpandedCommandId(null);
     setExpandedReasoningIds(new Set());
     setAutoExpandedReasoningIds(new Set());
+    setCollapsedReasoningIds(new Set());
     setPendingPermission(null);
     setExpandedReviewPaths(new Set());
     closeReviewPanel();
@@ -3408,6 +3424,7 @@ function App() {
       setExpandedCommandId(null);
       setExpandedReasoningIds(new Set());
       setAutoExpandedReasoningIds(new Set());
+      setCollapsedReasoningIds(new Set());
       setExpandedReviewPaths(new Set());
       closeReviewPanel();
     }
@@ -3937,6 +3954,7 @@ function App() {
     setExpandedCommandId(null);
     setExpandedReasoningIds(new Set());
     setAutoExpandedReasoningIds(new Set());
+    setCollapsedReasoningIds(new Set());
     setPendingPermission(null);
     setError(null);
     setExpandedReviewPaths(new Set());
@@ -3986,6 +4004,7 @@ function App() {
         setExpandedCommandId(null);
         setExpandedReasoningIds(new Set());
         setAutoExpandedReasoningIds(new Set());
+        setCollapsedReasoningIds(new Set());
         setPendingPermission(null);
         setExpandedReviewPaths(new Set());
         closeReviewPanel();
@@ -4261,7 +4280,7 @@ function App() {
                       })()
                     ) : item.type === "reasoning" ? (
                       (() => {
-                        const expanded = !item.finished || autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
+                        const expanded = autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
                         return (
                           <article
                             className={`timelineReasoning ${item.finished ? "isFinished" : "isThinking"} ${
@@ -4277,6 +4296,15 @@ function App() {
                                   if (!current.has(item.id)) return current;
                                   const next = new Set(current);
                                   next.delete(item.id);
+                                  return next;
+                                });
+                                setCollapsedReasoningIds((current) => {
+                                  const next = new Set(current);
+                                  if (expanded && !item.finished) {
+                                    next.add(item.id);
+                                  } else {
+                                    next.delete(item.id);
+                                  }
                                   return next;
                                 });
                                 setExpandedReasoningIds((current) => {

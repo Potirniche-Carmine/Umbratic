@@ -166,7 +166,7 @@ type UmbraticFileSearchResult = UmbraticChatAttachment & {
 
 type UmbraticPermissionRequest = {
   id: string;
-  kind: "edit" | "bash";
+  kind: "read" | "edit" | "bash";
   summary: string;
   command: string;
   commandClass?: UmbraticCommandClass;

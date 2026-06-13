@@ -246,7 +246,7 @@ export type TaskRecord = TaskInfo & {
 
 export type PermissionRequest = {
   id: string;
-  kind: "edit" | "bash";
+  kind: "read" | "edit" | "bash";
   summary: string;
   command: string;
   commandClass?: CommandClass;

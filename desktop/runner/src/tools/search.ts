@@ -107,6 +107,12 @@ export async function searchTool(ctx: ToolContext, input: Record<string, unknown
   const query = rawQuery.toLowerCase();
   const limit = typeof input.limit === "number" ? Math.min(Math.max(Math.floor(input.limit), 1), 100) : 50;
   if (!query) throw new Error("search requires query");
+  const decision = await ctx.askPermission({
+    permissionKind: "read",
+    summary: `search workspace for ${JSON.stringify(rawQuery)} (up to ${limit} match${limit === 1 ? "" : "es"})`,
+    autoAllow: ctx.permissionMode === "bypass",
+  });
+  if (decision !== "allow") throw new Error("Search denied.");
   const fastResults = [...pathMatchesWithFd(ctx, query, limit), ...contentMatchesWithRg(ctx, rawQuery, limit)];
   const results = fastResults.length ? fastResults.slice(0, limit) : fallbackSearch(ctx, query, limit);
   return { title: "search", output: results.join("\n") || "No matches." };

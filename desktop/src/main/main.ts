@@ -473,7 +473,11 @@ function taskCanCreateFiles(task: TaskRecord): boolean {
 
 function workspaceModeSystemPrompt(task: TaskRecord): string {
   if (taskUsesIsolatedWorktree(task)) {
-    return "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path. Do not merge this worktree back to the original branch unless the user explicitly asks for a merge while this chat is still using the worktree. When a turn produces file changes in the worktree, ask the user whether they want a separate merge back to the original branch.";
+    return [
+      "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path. Do not merge this worktree back to the original branch unless the user explicitly asks for a merge while this chat is still using the worktree. When a turn produces file changes in the worktree, ask the user whether they want a separate merge back to the original branch.",
+      "Only close, remove, or delete this worktree when the user explicitly asks for that cleanup. Rejecting changes is not a request to close or delete the worktree.",
+      `For an explicit worktree close/delete request, first explain that this will delete the local worktree folder and the branch, then wait for the permission prompt. After confirmation, run the Git cleanup in this order from the original repository: 1. git -C ${JSON.stringify(task.originalRepoPath)} worktree remove --force ${JSON.stringify(task.worktreePath)} 2. git -C ${JSON.stringify(task.originalRepoPath)} worktree prune 3. git -C ${JSON.stringify(task.originalRepoPath)} branch -D ${JSON.stringify(task.agentBranch)}. Do not run rm -rf before git worktree remove.`,
+    ].join(" ");
   }
   return "Workspace mode: local repository/folder. Do not ask to create, switch to, verify, or merge a Git worktree; work directly in the provided current working directory.";
 }
@@ -1036,10 +1040,9 @@ function repositoryTreePreview(rootPath: string, maxEntries = 90): string[] {
 }
 
 function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string }> {
-  const candidates = ["README.md", "package.json", "desktop/package.json", "src/package.json", "pyproject.toml"];
   const snippets: Array<{ path: string; text: string }> = [];
   let remaining = 12000;
-  for (const relative of candidates) {
+  for (const relative of keyWorkspaceFileCandidates) {
     const absolute = path.resolve(rootPath, relative);
     if (!pathInside(rootPath, absolute) || !fs.existsSync(absolute)) continue;
     const text = readTextFileIfSafe(absolute);
@@ -1053,6 +1056,8 @@ function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string
   return snippets;
 }
 
+const keyWorkspaceFileCandidates = ["README.md", "package.json", "desktop/package.json", "src/package.json", "pyproject.toml"];
+
 function compactHistoryText(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
   if (text.length <= limit) return text;
@@ -1064,7 +1069,7 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
     case "user.message":
       return `User: ${compactHistoryText(event.text, 1800)}`;
     case "assistant.delta":
-      return `Umbratic AI: ${compactHistoryText(event.text, 2400)}`;
+      return `Assistant: ${compactHistoryText(event.text, 2400)}`;
     case "command.started":
       return `Tool started: ${compactHistoryText(event.command, 500)}`;
     case "command.output":
@@ -2336,6 +2341,57 @@ async function respondToToolPermission(input: unknown) {
   }
 }
 
+function existingKeyWorkspaceFilePaths(rootPath: string): string[] {
+  return keyWorkspaceFileCandidates.filter((relative) => {
+    const absolute = path.resolve(rootPath, relative);
+    return pathInside(rootPath, absolute) && fs.existsSync(absolute);
+  });
+}
+
+function workspaceContextReadSummary(task: TaskRecord, rootPath: string, attachments: ChatAttachment[]): string {
+  const parts = [`read workspace context in ${rootPath}`];
+  const keyFiles = existingKeyWorkspaceFilePaths(rootPath);
+  parts.push("list visible files");
+  if (keyFiles.length) {
+    parts.push(`read key files: ${keyFiles.join(", ")}`);
+  }
+  const workspaceAttachments = attachments
+    .filter((file) => file.source !== "chat")
+    .map((file) => normalizeRelativePath(file.path))
+    .filter(Boolean);
+  if (workspaceAttachments.length) {
+    parts.push(`read attached workspace files: ${workspaceAttachments.join(", ")}`);
+  }
+  if (task.workspaceMode === "local" && !task.agentBranch) {
+    parts.push("snapshot small text files for review and undo");
+  }
+  return parts.join("; ");
+}
+
+async function runnerPromptForTaskWithPermission(
+  task: TaskRecord,
+  userPrompt: string,
+  attachments: ChatAttachment[],
+): Promise<RunnerPromptPart[]> {
+  const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  const hiddenChat = isHiddenChatTask(task);
+  if (!hiddenChat) {
+    const summary = workspaceContextReadSummary(task, rootPath, attachments);
+    await askPermission(task, {
+      kind: "read",
+      summary,
+      command: summary,
+      commandClass: "read",
+      cwd: rootPath,
+    });
+  }
+  if (task.workspaceMode === "local" && !task.agentBranch && !task.baselineFiles) {
+    task.baselineFiles = snapshotFolder(rootPath);
+    saveTask(task);
+  }
+  return runnerPromptForTask(task, userPrompt, attachments);
+}
+
 async function runCommandForTask(
   task: TaskRecord,
   command: string,
@@ -2544,6 +2600,8 @@ async function handleRunnerPermission(
     type;
   const classification = type.includes("edit")
     ? ({ commandClass: "edit" as const, risky: false })
+    : type === "read" || type === "search"
+      ? ({ commandClass: "read" as const, risky: false })
     : classifyCommandText(title, task.worktreePath);
 
   if (type === "bash" && isBarePythonCommand(title)) {
@@ -2577,7 +2635,7 @@ async function handleRunnerPermission(
 
   const request: PermissionRequest = {
     id,
-    kind: type.includes("edit") ? "edit" : "bash",
+    kind: type.includes("edit") ? "edit" : type === "read" || type === "search" ? "read" : "bash",
     summary: title,
     command: title,
     commandClass: classification.commandClass,
@@ -2591,7 +2649,11 @@ async function handleRunnerPermission(
     return "resolved";
   }
 
-  if (task.permissionMode === "bypass" && (type === "edit" || type === "bash") && !requiresBypassToolApproval(classification)) {
+  if (
+    task.permissionMode === "bypass" &&
+    (type === "read" || type === "search" || type === "edit" || type === "bash") &&
+    !requiresBypassToolApproval(classification)
+  ) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     await replyRunnerPermission(run, id, true);
     return "resolved";
@@ -2605,11 +2667,14 @@ async function handleRunnerPermission(
   return "pending";
 }
 
-async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, intentPrompt?: string) {
+async function runRunnerTask(
+  taskIdValue: string,
+  promptForRun?: RunnerPrompt,
+  intentPrompt?: string,
+  attachments: ChatAttachment[] = [],
+) {
   const task = getTask(taskIdValue);
   let run: RunnerProcess | null = null;
-  const prompt = promptForRun ?? (await runnerPromptForTask(task, task.prompt, []));
-  const promptParts = runnerPromptParts(prompt);
   const intent = intentPrompt ?? task.prompt;
   const expectsFileChanges = promptLooksLikeFileChange(intent);
   try {
@@ -2625,6 +2690,8 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
       failTask(task, "File creation tools are disabled for this run. Enable write, edit, or command in Settings > Tools and try again.");
       return;
     }
+    const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
+    const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
     activeRunnerProcesss.set(task.id, run);
 
@@ -2718,8 +2785,13 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : `tool-${toolRuns.size + 1}`;
         const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
         const command = typeof event.summary === "string" && event.summary.trim() ? event.summary.trim() : toolKind;
-        const kind: PermissionRequest["kind"] = toolKind === "command" || toolKind === "debugger" ? "bash" : "edit";
-        const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : "edit";
+        const kind: PermissionRequest["kind"] =
+          toolKind === "command" || toolKind === "debugger"
+            ? "bash"
+            : toolKind === "read" || toolKind === "search"
+              ? "read"
+              : "edit";
+        const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
         if (toolKind === "write" || toolKind === "edit" || toolKind === "command") {
           fileCreationToolRequested = true;
@@ -2807,7 +2879,7 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
         system: [
-          "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Use real Umbratic AI tool results when you need repository context, file details, or web results. Do not narrate imagined tool use, and never say you ran a command, searched the web, or inspected a path unless a tool actually returned that result. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
+          "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Use real Umbratic AI tool results when you need repository context, file details, or web results. Do not narrate imagined tool use, and never say you ran a command, searched the web, or inspected a path unless a tool actually returned that result. Do not begin responses with `Umbratic AI:`, `Assistant:`, or any other speaker label; start directly with the answer. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
           workspaceModeSystemPrompt(task),
           toolAccessSystemPrompt(task),
           harnessProfileSystemPrompt(readHarnessProfileSetting()),
@@ -2914,7 +2986,12 @@ async function runRunnerTask(taskIdValue: string, promptForRun?: RunnerPrompt, i
   }
 }
 
-async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: RunnerPrompt) {
+async function createWorktreeAndRunRunner(
+  task: TaskRecord,
+  promptForRun?: RunnerPrompt,
+  attachments: ChatAttachment[] = [],
+  intentPrompt?: string,
+) {
   try {
     fs.mkdirSync(path.dirname(task.worktreePath), { recursive: true });
     await execFileOutput("git", ["worktree", "add", "-b", task.agentBranch, task.worktreePath, task.baseCommit], {
@@ -2928,7 +3005,7 @@ async function createWorktreeAndRunRunner(task: TaskRecord, promptForRun?: Runne
     pendingRunnerPrompts.delete(task.id);
     saveTask(task);
     emit({ type: "worktree.created", taskId: task.id, branch: task.agentBranch, path: task.worktreePath });
-    void runRunnerTask(task.id, promptForRun);
+    void runRunnerTask(task.id, promptForRun, intentPrompt, attachments);
   } catch (error) {
     failTask(task, String(error instanceof Error ? error.message : error));
   }
@@ -2939,9 +3016,6 @@ function closedTaskMessage(task: TaskRecord): string | undefined {
     return taskUsesIsolatedWorktree(task)
       ? "This chat was closed after its approved merge. Start a new chat for more changes."
       : "This chat was closed after its workspace changes were approved. Start a new chat for more changes.";
-  }
-  if (task.state === "rejected") {
-    return "This chat was closed after its changes were undone. Start a new chat for more changes.";
   }
   return undefined;
 }
@@ -3037,7 +3111,6 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && requestedWorkspaceMode === "worktree" && !existingTask.agentBranch) {
-      const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
       existingTask.originalBranch = refreshed.originalBranch;
       existingTask.baseCommit = refreshed.baseCommit;
       existingTask.agentBranch = `umbratic/${existingTask.id}-${slugify(prompt)}`;
@@ -3051,7 +3124,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
       existingTask.state = "running";
       saveTask(existingTask);
       emit({ type: "user.message", taskId: existingTask.id, text: prompt, attachedFiles: attachments });
-      await createWorktreeAndRunRunner(existingTask, runnerPrompt);
+      await createWorktreeAndRunRunner(existingTask, undefined, attachments, prompt);
       return publicTask(existingTask);
     }
 
@@ -3059,7 +3132,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     if (!existingTask.agentBranch) {
       existingTask.workspaceMode = "local";
       existingTask.worktreePath = refreshed.rootPath;
-      existingTask.baselineFiles = snapshotFolder(refreshed.rootPath);
+      existingTask.baselineFiles = undefined;
     }
     existingTask.pendingPrompt = undefined;
     pendingRunnerPrompts.delete(existingTask.id);
@@ -3069,8 +3142,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.originalWasDirty = refreshed.dirty;
     saveTask(existingTask);
     emit({ type: "user.message", taskId: existingTask.id, text: prompt, attachedFiles: attachments });
-    const runnerPrompt = await runnerPromptForTask(existingTask, prompt, attachments);
-    void runRunnerTask(existingTask.id, runnerPrompt, prompt);
+    void runRunnerTask(existingTask.id, undefined, prompt, attachments);
     return publicTask(existingTask);
   }
 
@@ -3103,16 +3175,15 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     events: [],
     originalRepoPath: refreshed.rootPath,
     originalWasDirty: refreshed.dirty,
-    baselineFiles: shouldCreateWorktree ? undefined : snapshotFolder(refreshed.rootPath),
+    baselineFiles: undefined,
     enabledTools: requestedEnabledTools,
   };
   saveTask(task);
   emit({ type: "user.message", taskId: task.id, text: prompt, attachedFiles: attachments });
-  const runnerPrompt = await runnerPromptForTask(task, prompt, attachments);
   if (shouldCreateWorktree) {
-    await createWorktreeAndRunRunner(task, runnerPrompt);
+    await createWorktreeAndRunRunner(task, undefined, attachments, prompt);
   } else {
-    void runRunnerTask(task.id, runnerPrompt, prompt);
+    void runRunnerTask(task.id, undefined, prompt, attachments);
   }
   return publicTask(task);
 }
@@ -3273,8 +3344,16 @@ async function rejectTask(input: unknown): Promise<void> {
   const cleanup = input.cleanup === true;
   emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
   if (taskUsesIsolatedWorktree(task) && cleanup && taskStatesThatCanOpen.has(task.state)) {
-    await removeGitWorktree(task);
-    await gitResult(task.originalRepoPath, ["branch", "-D", task.agentBranch]);
+    if (fs.existsSync(task.worktreePath)) {
+      const reset = await gitResult(task.worktreePath, ["reset", "--hard", task.baseCommit]);
+      if (!reset.success) {
+        throw new Error((reset.stderr || reset.stdout || "Failed to reset worktree changes.").trim());
+      }
+      const clean = await gitResult(task.worktreePath, ["clean", "-fd"]);
+      if (!clean.success) {
+        throw new Error((clean.stderr || clean.stdout || "Failed to remove untracked worktree files.").trim());
+      }
+    }
     task.changedFiles = [];
     task.reviewFiles = [];
   }
