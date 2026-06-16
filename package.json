@@ -13,10 +13,6 @@
     "test:all": "npm --workspace @umbratic/desktop run test:all"
   },
   "allowScripts": {
-    "electron@42.3.2": true,
-    "esbuild@0.27.7": true
-  },
-  "dependencies": {
-    "electron": "^42.3.2"
+    "fsevents@2.3.3": true
   }
 }

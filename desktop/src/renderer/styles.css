@@ -4326,6 +4326,37 @@ button.attachmentPreview:focus-visible {
   gap: 7px;
 }
 
+.serverHealthControl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settingsIconButton {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 6px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
+  cursor: pointer;
+}
+
+.settingsIconButton:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
+}
+
+.settingsIconButton:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
 .serverStatusDot {
   width: 8px;
   height: 8px;
@@ -4456,6 +4487,19 @@ button.attachmentPreview:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+.settingsFieldRow,
+.endpointHeaderRow {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+  gap: 9px;
+}
+
+.endpointHeaders {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
 .toolName {
   font-family: var(--mono-font);
   font-size: 12.5px;
@@ -4579,12 +4623,35 @@ button.attachmentPreview:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: var(--radius);
+  color: inherit;
   background:
     linear-gradient(135deg, rgba(178, 186, 197, 0.065), transparent 56%),
     color-mix(in srgb, var(--surface-2) 52%, transparent);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.accountCard:hover,
+.accountCard.isOpen {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+  background:
+    linear-gradient(135deg, rgba(178, 186, 197, 0.105), transparent 56%),
+    color-mix(in srgb, var(--surface-3) 50%, transparent);
+}
+
+.accountCard > svg {
+  margin-left: auto;
+  color: var(--faint);
+  transition: transform 140ms ease;
+}
+
+.accountCard.isOpen > svg {
+  transform: rotate(180deg);
 }
 
 .accountAvatar {
@@ -4965,6 +5032,11 @@ button.attachmentPreview:focus-visible {
   .settingsListRow {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
+  }
+
+  .settingsFieldRow,
+  .endpointHeaderRow {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .telemetryColumns {

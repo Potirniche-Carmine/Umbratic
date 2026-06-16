@@ -59,6 +59,18 @@ type WorkspaceMode = "local" | "worktree";
 type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type LocalProviderId = "company-endpoint";
+type ModelEndpointMode = "local" | "server";
+type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
+type ModelEndpointSettings = {
+  mode: ModelEndpointMode;
+  software: ModelEndpointSoftware;
+  baseUrl: string;
+  chatEndpointPath: string;
+  modelsEndpointPath: string;
+  modelId: string;
+  secret: string;
+  headers: Array<{ name: string; value: string }>;
+};
 type CommandClass =
   | "read"
   | "edit"
@@ -367,6 +379,11 @@ type DesktopApi = {
     settings: HarnessProfileId;
     status: BackendStatus;
   }>;
+  getModelEndpointSettings(): Promise<ModelEndpointSettings>;
+  saveModelEndpointSettings(input: ModelEndpointSettings): Promise<{
+    settings: ModelEndpointSettings;
+    status: BackendStatus;
+  }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -407,6 +424,7 @@ const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
 const previewToolSettingsKey = "umbratic-preview-tool-settings";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
+const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
@@ -447,6 +465,19 @@ const runnerTools: Array<{ id: RunnerToolId; name: string; description: string }
 ];
 const defaultToolSettings = Object.fromEntries(runnerTools.map((tool) => [tool.id, true])) as Record<RunnerToolId, boolean>;
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
+const defaultModelEndpointSettings: ModelEndpointSettings = {
+  mode: "local",
+  software: "ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  chatEndpointPath: "/api/chat",
+  modelsEndpointPath: "/api/tags",
+  modelId: "",
+  secret: "",
+  headers: [
+    { name: "", value: "" },
+    { name: "", value: "" },
+  ],
+};
 const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
   {
     id: "marketing",
@@ -575,6 +606,84 @@ function readPreviewHarnessProfile(): HarnessProfileId {
 
 function writePreviewHarnessProfile(profileId: HarnessProfileId) {
   window.localStorage.setItem(previewHarnessProfileKey, profileId);
+}
+
+function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
+  const rows = Array.isArray(value) ? value : [];
+  const headers = rows.slice(0, 2).map((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return { name: "", value: "" };
+    const record = row as Record<string, unknown>;
+    return {
+      name: typeof record.name === "string" ? record.name : "",
+      value: typeof record.value === "string" ? record.value : "",
+    };
+  });
+  while (headers.length < 2) headers.push({ name: "", value: "" });
+  return headers;
+}
+
+function endpointModeForBaseUrl(baseUrl: string): ModelEndpointMode {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" ? "local" : "server";
+  } catch {
+    return defaultModelEndpointSettings.mode;
+  }
+}
+
+function endpointSoftwareForBaseUrl(baseUrl: string): ModelEndpointSoftware {
+  const normalized = baseUrl.toLowerCase();
+  if (normalized.includes("lmstudio")) return "lmstudio";
+  if (normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
+  return "ollama";
+}
+
+function defaultChatEndpointPathForSoftware(software: ModelEndpointSoftware): string {
+  return software === "ollama" ? "/api/chat" : "/v1/chat/completions";
+}
+
+function defaultModelsEndpointPathForSoftware(software: ModelEndpointSoftware): string {
+  return software === "ollama" ? "/api/tags" : "/v1/models";
+}
+
+function normalizeEndpointPath(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultModelEndpointSettings };
+  const settings = value as Partial<ModelEndpointSettings>;
+  const baseUrl = typeof settings.baseUrl === "string" ? settings.baseUrl : defaultModelEndpointSettings.baseUrl;
+  const software =
+    settings.software === "ollama" || settings.software === "lmstudio" || settings.software === "vllm"
+      ? settings.software
+      : endpointSoftwareForBaseUrl(baseUrl);
+  return {
+    mode: settings.mode === "local" || settings.mode === "server" ? settings.mode : endpointModeForBaseUrl(baseUrl),
+    software,
+    baseUrl,
+    chatEndpointPath: normalizeEndpointPath(settings.chatEndpointPath, defaultChatEndpointPathForSoftware(software)),
+    modelsEndpointPath: normalizeEndpointPath(settings.modelsEndpointPath, defaultModelsEndpointPathForSoftware(software)),
+    modelId: typeof settings.modelId === "string" ? settings.modelId : defaultModelEndpointSettings.modelId,
+    secret: typeof settings.secret === "string" ? settings.secret : "",
+    headers: normalizeEndpointHeaders(settings.headers),
+  };
+}
+
+function readPreviewEndpointSettings(): ModelEndpointSettings {
+  try {
+    return normalizeEndpointSettings(JSON.parse(window.localStorage.getItem(previewEndpointSettingsKey) ?? "{}"));
+  } catch {
+    return { ...defaultModelEndpointSettings };
+  }
+}
+
+function writePreviewEndpointSettings(settings: ModelEndpointSettings) {
+  window.localStorage.setItem(previewEndpointSettingsKey, JSON.stringify(settings));
 }
 
 function uniqueFonts(fonts: string[]): string[] {
@@ -962,6 +1071,12 @@ const fallbackApi: DesktopApi = {
   saveHarnessProfile: async (input) => {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
     writePreviewHarnessProfile(settings);
+    return { settings, status: await fallbackApi.getBackendStatus() };
+  },
+  getModelEndpointSettings: async () => readPreviewEndpointSettings(),
+  saveModelEndpointSettings: async (input) => {
+    const settings = normalizeEndpointSettings(input);
+    writePreviewEndpointSettings(settings);
     return { settings, status: await fallbackApi.getBackendStatus() };
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -1802,6 +1917,20 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
   return Array.from(runs.values());
 }
 
+function pendingPermissionFromEvents(events: BackendUiEvent[]): PermissionRequest | null {
+  const requests = new Map<string, PermissionRequest>();
+  for (const event of events) {
+    if (event.type === "permission.requested") {
+      requests.set(event.request.id, event.request);
+      continue;
+    }
+    if (event.type === "permission.resolved") {
+      requests.delete(event.id);
+    }
+  }
+  return Array.from(requests.values()).at(-1) ?? null;
+}
+
 function eventTimeMs(value?: string): number | undefined {
   if (!value) return undefined;
   const time = Date.parse(value);
@@ -2292,7 +2421,11 @@ function App() {
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "tools" | "skills" | "telemetry">("account");
+  const [accountAuthOpen, setAccountAuthOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
+  const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
+  const [endpointSaving, setEndpointSaving] = useState(false);
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
@@ -2331,6 +2464,7 @@ function App() {
   const draftSaveRef = useRef<number | null>(null);
   const reviewCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
+  const endpointSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
@@ -2340,6 +2474,8 @@ function App() {
   const reasoningBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const reasoningFollowScrollRef = useRef<Map<string, boolean>>(new Map());
   const reasoningScrollInputRef = useRef<Set<string>>(new Set());
+  const visibleTaskIdRef = useRef<string | null>(composerTestMode ? composerTestTask.id : null);
+  const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
   const latestTaskId = task?.id;
   const rawReviewFiles = task?.reviewFiles ?? emptyReviewFiles;
@@ -2370,14 +2506,17 @@ function App() {
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
   const connectionState = backend?.endpoint ?? "checking";
+  const connectionDisplayState = connectionState === "degraded" ? "ready" : connectionState;
   const connectionLabel =
-    backend?.endpoint === "ready"
+    backend?.endpoint === "ready" || backend?.endpoint === "degraded"
       ? "Connected"
-      : backend?.endpoint === "degraded"
-        ? "Warning"
-        : backend
-          ? "Unavailable"
-          : "Checking";
+      : backend
+        ? "Unavailable"
+        : "Checking";
+  const endpointDirty = JSON.stringify(endpointDraftSettings) !== JSON.stringify(endpointSettings);
+  const endpointModelOptions = backend?.models ?? [];
+  const endpointDraftModelAvailable =
+    !!endpointDraftSettings.modelId && endpointModelOptions.some((model) => model.modelId === endpointDraftSettings.modelId);
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
@@ -2464,6 +2603,32 @@ function App() {
     [appearanceSettings.monoFont, availableFontFamilies],
   );
 
+  function cacheTaskEvents(nextEvents: BackendUiEvent[]) {
+    if (!nextEvents.length) return;
+    for (const event of nextEvents) {
+      const cached = taskEventsByTaskIdRef.current.get(event.taskId) ?? [];
+      taskEventsByTaskIdRef.current.set(event.taskId, appendBackendEvent(cached, event, 500));
+    }
+  }
+
+  function cachedEventsForTask(taskId?: string): BackendUiEvent[] {
+    return taskId ? (taskEventsByTaskIdRef.current.get(taskId) ?? []) : [];
+  }
+
+  function visibleEventsForTask(nextTask: TaskInfo): BackendUiEvent[] {
+    return mergeEventSnapshots(nextTask.events ?? [], cachedEventsForTask(nextTask.id));
+  }
+
+  function setVisibleTask(nextTask: TaskInfo | null) {
+    visibleTaskIdRef.current = nextTask?.id ?? null;
+    setTask(nextTask);
+  }
+
+  function prepareVisibleTaskLoad(taskId: string | null) {
+    visibleTaskIdRef.current = taskId;
+    setTask(null);
+  }
+
   useEffect(() => {
     writeAppearanceSettings(appearanceSettings);
     document.documentElement.dataset.theme = effectiveTheme;
@@ -2522,6 +2687,7 @@ function App() {
 
   useEffect(() => {
     void refreshStatus();
+    void loadEndpointSettings();
     void loadToolSettings();
     void loadHarnessProfile();
     void loadAvailableIdes();
@@ -2534,10 +2700,13 @@ function App() {
       const batch = pendingBackendEvents.splice(0);
       if (batch.length === 0) return;
       const visibleBatch = batch.filter((event) => !(event.type === "assistant.delta" && isReviewReadyText(event.text)));
-      if (visibleBatch.length) {
-        setEvents((current) => visibleBatch.reduce((next, event) => appendBackendEvent(next, event, 500), current));
+      cacheTaskEvents(visibleBatch);
+      const visibleTaskId = visibleTaskIdRef.current;
+      const visibleTaskEvents = visibleTaskId ? visibleBatch.filter((event) => event.taskId === visibleTaskId) : [];
+      if (visibleTaskEvents.length) {
+        setEvents((current) => visibleTaskEvents.reduce((next, event) => appendBackendEvent(next, event, 500), current));
       }
-      const assistantDelta = visibleBatch
+      const assistantDelta = visibleTaskEvents
         .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
         .map((event) => event.text)
         .join("");
@@ -2545,50 +2714,61 @@ function App() {
         setAssistantText((current) => `${current}${assistantDelta}`);
       }
       for (const event of visibleBatch) {
+        const isVisibleTaskEvent = event.taskId === visibleTaskIdRef.current;
         if (event.type === "assistant.done") {
-          setTask((current) =>
-            current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
-          );
+          if (isVisibleTaskEvent) {
+            setTask((current) =>
+              current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
+            );
+          }
           void loadChats();
         }
-        if (event.type === "permission.requested") setPendingPermission(event.request);
-        if (event.type === "permission.resolved") {
+        if (event.type === "permission.requested" && isVisibleTaskEvent) setPendingPermission(event.request);
+        if (event.type === "permission.resolved" && isVisibleTaskEvent) {
           setPendingPermission((current) => (current?.id === event.id ? null : current));
         }
         if (event.type === "worktree.requested") {
-          setTask((current) =>
-            current && current.id === event.taskId
-              ? { ...current, state: "awaiting_worktree_approval", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
-              : current,
-          );
+          if (isVisibleTaskEvent) {
+            setTask((current) =>
+              current && current.id === event.taskId
+                ? { ...current, state: "awaiting_worktree_approval", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
+                : current,
+            );
+          }
           void loadChats();
         }
         if (event.type === "worktree.created") {
-          setTask((current) =>
-            current && current.id === event.taskId
-              ? { ...current, state: "running", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
-              : current,
-          );
+          if (isVisibleTaskEvent) {
+            setTask((current) =>
+              current && current.id === event.taskId
+                ? { ...current, state: "running", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
+                : current,
+            );
+          }
         }
         if (event.type === "review.ready") {
-          setTask((current) =>
-            current && current.id === event.taskId
-              ? {
-                  ...current,
-                  state: "review_ready",
-                  changedFiles: event.changedFiles,
-                  reviewFiles: event.reviewFiles,
-                  latestTest: event.latestTest,
+          if (isVisibleTaskEvent) {
+            setTask((current) =>
+              current && current.id === event.taskId
+                ? {
+                    ...current,
+                    state: "review_ready",
+                    changedFiles: event.changedFiles,
+                    reviewFiles: event.reviewFiles,
+                    latestTest: event.latestTest,
+                }
+                : current,
+            );
+            setExpandedReviewPaths(new Set());
+            window.setTimeout(() => {
+              if (visibleTaskIdRef.current === event.taskId) {
+                void refreshTaskReviewById(event.taskId);
               }
-              : current,
-          );
-          setExpandedReviewPaths(new Set());
-          window.setTimeout(() => {
-            void refreshTaskReviewById(event.taskId);
-          }, 120);
+            }, 120);
+          }
           void loadChats();
         }
-        if (event.type === "approval.check") {
+        if (event.type === "approval.check" && isVisibleTaskEvent) {
           setApprovalChecks((current) => {
             const next = current.filter((check) => check.name !== event.name);
             next.push({ name: event.name, status: event.status, detail: event.detail });
@@ -2596,22 +2776,28 @@ function App() {
           });
         }
         if (event.type === "approval.completed") {
-          setTask((current) =>
-            current && current.id === event.taskId ? { ...current, state: "approved", patchHash: event.patchHash } : current,
-          );
+          if (isVisibleTaskEvent) {
+            setTask((current) =>
+              current && current.id === event.taskId ? { ...current, state: "approved", patchHash: event.patchHash } : current,
+            );
+          }
           void loadChats();
         }
         if (event.type === "merge.completed") {
-          setTask((current) =>
-            current && current.id === event.taskId ? { ...current, state: "merged", patchHash: event.patchHash } : current,
-          );
+          if (isVisibleTaskEvent) {
+            setTask((current) =>
+              current && current.id === event.taskId ? { ...current, state: "merged", patchHash: event.patchHash } : current,
+            );
+          }
           void loadChats();
         }
         if (event.type === "task.error") {
-          setError(event.message);
-          setTask((current) =>
-            current && current.id === event.taskId ? { ...current, state: "failed", error: event.message } : current,
-          );
+          if (isVisibleTaskEvent) {
+            setError(event.message);
+            setTask((current) =>
+              current && current.id === event.taskId ? { ...current, state: "failed", error: event.message } : current,
+            );
+          }
           void loadChats();
         }
       }
@@ -2620,6 +2806,13 @@ function App() {
       const event = asBackendEvent(rawEvent);
       if (!event) return;
       pendingBackendEvents.push(event);
+      if (event.type === "assistant.reasoning.delta") {
+        if (backendEventFlushTimer) {
+          window.clearTimeout(backendEventFlushTimer);
+        }
+        flushBackendEvents();
+        return;
+      }
       if (backendEventFlushTimer) return;
       backendEventFlushTimer = window.setTimeout(flushBackendEvents, 50);
     });
@@ -2917,7 +3110,7 @@ function App() {
       { type: "assistant.delta", taskId, text: message, at },
       { type: "assistant.done", taskId, at },
     ];
-    setTask(null);
+    setVisibleTask(null);
     closeReviewPanel();
     setPendingPermission(null);
     setApprovalChecks([]);
@@ -2957,7 +3150,7 @@ function App() {
   function resetUnsavedChat() {
     suppressDraftSaveBriefly();
     setActiveChatId(null);
-    setTask(null);
+    setVisibleTask(null);
     setEvents([]);
     setAssistantText("");
     setApprovalChecks([]);
@@ -2993,6 +3186,90 @@ function App() {
       setToolsMessage(null);
     } catch (cause) {
       setToolsMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function loadEndpointSettings() {
+    try {
+      const settings = normalizeEndpointSettings(await api.getModelEndpointSettings());
+      setEndpointSettings(settings);
+      setEndpointDraftSettings(settings);
+      setAccountMessage(null);
+    } catch (cause) {
+      setAccountMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  function updateEndpointDraft(patch: Partial<ModelEndpointSettings>) {
+    endpointSaveSequenceRef.current += 1;
+    setEndpointSaving(false);
+    setEndpointDraftSettings((current) => {
+      const next = normalizeEndpointSettings({ ...current, ...patch });
+      if ("baseUrl" in patch) {
+        return {
+          ...next,
+          mode: endpointModeForBaseUrl(next.baseUrl),
+          software: endpointSoftwareForBaseUrl(next.baseUrl),
+        };
+      }
+      return next;
+    });
+    setAccountMessage(null);
+  }
+
+  function updateEndpointHeader(index: number, patch: Partial<{ name: string; value: string }>) {
+    endpointSaveSequenceRef.current += 1;
+    setEndpointSaving(false);
+    setEndpointDraftSettings((current) => {
+      const headers = normalizeEndpointHeaders(current.headers);
+      headers[index] = { ...headers[index], ...patch };
+      return normalizeEndpointSettings({ ...current, headers });
+    });
+    setAccountMessage(null);
+  }
+
+  function closeSettingsDialog() {
+    setEndpointDraftSettings(endpointSettings);
+    setAccountMessage(null);
+    setSettingsOpen(false);
+  }
+
+  async function refreshConnectionStatus() {
+    const requestId = endpointSaveSequenceRef.current + 1;
+    endpointSaveSequenceRef.current = requestId;
+    setEndpointSaving(true);
+    setAccountMessage(null);
+    try {
+      const status = await refreshStatus();
+      if (requestId !== endpointSaveSequenceRef.current) return;
+    } finally {
+      if (requestId === endpointSaveSequenceRef.current) setEndpointSaving(false);
+    }
+  }
+
+  async function saveEndpointSettings() {
+    const requestId = endpointSaveSequenceRef.current + 1;
+    endpointSaveSequenceRef.current = requestId;
+    const nextDraft = normalizeEndpointSettings({
+      ...endpointDraftSettings,
+      mode: endpointModeForBaseUrl(endpointDraftSettings.baseUrl),
+      software: endpointSoftwareForBaseUrl(endpointDraftSettings.baseUrl),
+    });
+    setEndpointSaving(true);
+    setAccountMessage(null);
+    try {
+      const result = await api.saveModelEndpointSettings(nextDraft);
+      if (requestId !== endpointSaveSequenceRef.current) return;
+      const normalized = normalizeEndpointSettings(result.settings);
+      setEndpointSettings(normalized);
+      setEndpointDraftSettings(normalized);
+      setBackend(result.status);
+      setPermissionModeState(result.status.permissionMode);
+    } catch (cause) {
+      if (requestId !== endpointSaveSequenceRef.current) return;
+      setAccountMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      if (requestId === endpointSaveSequenceRef.current) setEndpointSaving(false);
     }
   }
 
@@ -3146,13 +3423,19 @@ function App() {
     try {
       const nextTask = await api.refreshTaskReview({ taskId });
       if (!nextTask) return;
-      setTask((current) => (!current || current.id === nextTask.id ? nextTask : current));
-      setExpandedReviewPaths((current) => {
-        const availablePaths = new Set(nextTask.reviewFiles.map((file) => file.path));
-        return new Set(Array.from(current).filter((filePath) => availablePaths.has(filePath)));
-      });
-      if (openWhenReady && nextTask.state === "review_ready") {
-        openReviewPanel();
+      if (visibleTaskIdRef.current === nextTask.id) {
+        cacheTaskEvents(nextTask.events ?? []);
+        setVisibleTask(nextTask);
+        const nextEvents = visibleEventsForTask(nextTask);
+        setEvents(nextEvents);
+        setPendingPermission(pendingPermissionFromEvents(nextEvents));
+        setExpandedReviewPaths((current) => {
+          const availablePaths = new Set(nextTask.reviewFiles.map((file) => file.path));
+          return new Set(Array.from(current).filter((filePath) => availablePaths.has(filePath)));
+        });
+        if (openWhenReady && nextTask.state === "review_ready") {
+          openReviewPanel();
+        }
       }
       upsertChatFromTask(nextTask);
       void loadChats();
@@ -3446,12 +3729,15 @@ function App() {
         useWorktree: useWorktreeForNextRun,
         enabledTools: enabledToolIds(toolsEnabled),
       });
-      setTask(nextTask);
+      cacheTaskEvents(nextTask.events ?? []);
+      setVisibleTask(nextTask);
+      const nextVisibleEvents = visibleEventsForTask(nextTask);
       setEvents((current) =>
         isContinuingChat
-          ? mergeEventSnapshots(preservedEvents, nextTask.events ?? [], current)
-          : mergeEventSnapshots(nextTask.events ?? [], current),
+          ? mergeEventSnapshots(preservedEvents, nextVisibleEvents, current)
+          : mergeEventSnapshots(nextVisibleEvents, current),
       );
+      setPendingPermission(pendingPermissionFromEvents(nextVisibleEvents));
       if (nextTask.chatId) setActiveChatId(nextTask.chatId);
       upsertChatFromTask(nextTask);
       suppressDraftSaveBriefly();
@@ -3947,6 +4233,7 @@ function App() {
     }
     if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
     suppressDraftSaveBriefly();
+    prepareVisibleTaskLoad(chat.taskId ?? null);
     setActiveChatId(chat.id);
     setEvents([]);
     setAssistantText("");
@@ -3968,13 +4255,15 @@ function App() {
       }
       await restoreChatRepository(chat, nextTask?.repositoryId);
       if (!chat.taskId) {
-        setTask(null);
+        setVisibleTask(null);
         closeReviewPanel();
         setPrompt(chat.draftPrompt ?? "");
         return;
       }
-      setTask(nextTask);
-      setEvents(compactBackendEvents(nextTask?.events ?? [], 500));
+      setVisibleTask(nextTask);
+      const nextEvents = nextTask ? visibleEventsForTask(nextTask) : [];
+      setEvents(compactBackendEvents(nextEvents, 500));
+      setPendingPermission(pendingPermissionFromEvents(nextEvents));
       const draftPrompt = chat.draftPrompt ?? "";
       const sentDraft = nextTask ? draftMatchesTaskPrompt(draftPrompt, nextTask.prompt) : false;
       setPrompt(sentDraft ? "" : draftPrompt);
@@ -3982,7 +4271,7 @@ function App() {
       if (sentDraft) void persistDraft(chat.id, "", []);
       setExpandedReviewPaths(new Set());
     } catch (cause) {
-      setTask(null);
+      setVisibleTask(null);
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -3997,7 +4286,7 @@ function App() {
       if (activeChatId === target.id) {
         suppressDraftSaveBriefly();
         setActiveChatId(null);
-        setTask(null);
+        setVisibleTask(null);
         setEvents([]);
         setAssistantText("");
         setApprovalChecks([]);
@@ -4823,7 +5112,7 @@ function App() {
                 <Settings size={17} />
                 <strong id="settings-title">Settings</strong>
               </span>
-              <button className="chromeButton" type="button" onClick={() => setSettingsOpen(false)} title="Close settings">
+              <button className="chromeButton" type="button" onClick={closeSettingsDialog} title="Close settings">
                 <X size={15} />
               </button>
             </header>
@@ -4888,7 +5177,15 @@ function App() {
                       <p>Sign in is required to use Umbratic AI.</p>
                     </div>
 
-                    <div className="accountCard">
+                    <button
+                      className={`accountCard ${accountAuthOpen ? "isOpen" : ""}`}
+                      type="button"
+                      aria-expanded={accountAuthOpen}
+                      onClick={() => {
+                        setAccountAuthOpen((open) => !open);
+                        setAccountMessage(null);
+                      }}
+                    >
                       <div className="accountAvatar" aria-hidden="true">
                         <User size={22} />
                       </div>
@@ -4896,32 +5193,142 @@ function App() {
                         <strong>Developer</strong>
                         <em>Sign in required</em>
                       </div>
-                    </div>
+                      <ChevronDown size={15} aria-hidden="true" />
+                    </button>
+
+                    {accountAuthOpen ? (
+                      <div className="settingsGroup">
+                        <h4>Authentication</h4>
+                        <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
+                          <GoogleMark />
+                          <span>Continue with Google</span>
+                        </button>
+                        <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
+                          <MicrosoftMark />
+                          <span>Continue with Microsoft</span>
+                        </button>
+                      </div>
+                    ) : null}
 
                     <div className="settingsGroup">
                       <h4>Connection</h4>
                       <div className="settingsList">
                         <div className="settingsListRow">
                           <span>Model server</span>
-                          <strong className={`serverHealthText ${connectionState}`}>
-                            <span className="serverStatusDot" aria-hidden="true" />
-                            {connectionLabel}
-                          </strong>
+                          <div className="serverHealthControl">
+                            <strong className={`serverHealthText ${connectionDisplayState}`}>
+                              <span className="serverStatusDot" aria-hidden="true" />
+                              {connectionLabel}
+                            </strong>
+                            <button
+                              className="settingsIconButton"
+                              type="button"
+                              onClick={() => void refreshConnectionStatus()}
+                              disabled={endpointSaving}
+                              title="Check connection"
+                              aria-label="Check connection"
+                            >
+                              <RefreshCw className={endpointSaving ? "spin" : ""} size={14} />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>Authentication</h4>
-                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
-                        <GoogleMark />
-                        <span>Continue with Google</span>
-                      </button>
-                      <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
-                        <MicrosoftMark />
-                        <span>Continue with Microsoft</span>
-                      </button>
-                      {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
+                      <label className="settingsField">
+                        <span>Server URL</span>
+                        <input
+                          value={endpointDraftSettings.baseUrl}
+                          onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
+                          placeholder="http://127.0.0.1:11434"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <div className="settingsFieldRow">
+                        <label className="settingsField">
+                          <span>Chat endpoint</span>
+                          <input
+                            value={endpointDraftSettings.chatEndpointPath}
+                            onChange={(event) => updateEndpointDraft({ chatEndpointPath: event.currentTarget.value })}
+                            placeholder="/api/chat"
+                            spellCheck={false}
+                          />
+                        </label>
+                        <label className="settingsField">
+                          <span>Models endpoint</span>
+                          <input
+                            value={endpointDraftSettings.modelsEndpointPath}
+                            onChange={(event) => updateEndpointDraft({ modelsEndpointPath: event.currentTarget.value })}
+                            placeholder="/api/tags"
+                            spellCheck={false}
+                          />
+                        </label>
+                      </div>
+                      <label className="settingsField">
+                        <span>Model</span>
+                        <select
+                          value={endpointDraftModelAvailable ? endpointDraftSettings.modelId : ""}
+                          onChange={(event) => updateEndpointDraft({ modelId: event.currentTarget.value })}
+                          disabled={endpointModelOptions.length === 0}
+                        >
+                          {endpointModelOptions.length === 0 ? (
+                            <option value="">No models found</option>
+                          ) : (
+                            <>
+                              <option value="">Select model</option>
+                              {endpointModelOptions.map((model) => (
+                                <option key={`${model.providerId}:${model.modelId}`} value={model.modelId}>
+                                  {model.modelId}
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                      </label>
+                      <label className="settingsField">
+                        <span>Bearer token</span>
+                        <input
+                          value={endpointDraftSettings.secret}
+                          onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
+                          placeholder="Optional Authorization token"
+                          type="password"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <div className="endpointHeaders">
+                        {normalizeEndpointHeaders(endpointDraftSettings.headers).map((header, index) => (
+                          <div className="endpointHeaderRow" key={index}>
+                            <label className="settingsField">
+                              <span>{`Header ${index + 1}`}</span>
+                              <input
+                                value={header.name}
+                                onChange={(event) => updateEndpointHeader(index, { name: event.currentTarget.value })}
+                                placeholder="Header name"
+                                spellCheck={false}
+                              />
+                            </label>
+                            <label className="settingsField">
+                              <span>Token</span>
+                              <input
+                                value={header.value}
+                                onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
+                                placeholder="Security token"
+                                type="password"
+                                spellCheck={false}
+                              />
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="settingsActions">
+                        <button
+                          className="settingsInlineButton"
+                          type="button"
+                          onClick={() => void saveEndpointSettings()}
+                          disabled={endpointSaving}
+                        >
+                          {endpointSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                          <span>{endpointSaving ? "Saving" : "Save connection"}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : null}
@@ -4952,9 +5359,6 @@ function App() {
                           </button>
                         ))}
                       </div>
-                      <p className="settingsMessage">
-                        The profile adjusts which context the harness emphasizes. The Tools tab still controls exact runner tool access.
-                      </p>
                       <div className="settingsActions">
                         <button
                           className="settingsInlineButton"

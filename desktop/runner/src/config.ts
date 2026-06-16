@@ -30,6 +30,17 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function headersValue(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const headers: Record<string, string> = {};
+  for (const [name, headerValue] of Object.entries(value)) {
+    if (name.trim() && typeof headerValue === "string" && headerValue) {
+      headers[name.trim()] = headerValue;
+    }
+  }
+  return Object.keys(headers).length ? headers : undefined;
+}
+
 export function isRunnerToolName(value: unknown): value is RunnerToolName {
   return typeof value === "string" && (runnerToolNames as readonly string[]).includes(value);
 }
@@ -60,8 +71,10 @@ export function loadRunnerConfig(): RunnerConfig {
       id: "company-endpoint",
       name: stringValue(provider.name, "provider.name"),
       baseURL: stringValue(provider.baseURL, "provider.baseURL").replace(/\/+$/, ""),
+      chatEndpointPath: optionalString(provider.chatEndpointPath),
       apiKey: typeof provider.apiKey === "string" ? provider.apiKey : "local",
       modelId: stringValue(provider.modelId, "provider.modelId"),
+      headers: headersValue(provider.headers),
       mtls: mtls
         ? {
             caPath: optionalString(mtls.caPath),

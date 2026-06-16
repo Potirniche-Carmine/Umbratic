@@ -120,9 +120,9 @@ const isDev = !app.isPackaged;
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
 type RunnerPrompt = string | RunnerPromptPart[];
-type PdfImageDocument = { length: number; getPage(pageNumber: number): Promise<Buffer> };
-type PdfToImageModule = { pdf(input: string | Buffer | Uint8Array, options?: { scale?: number }): Promise<PdfImageDocument> };
-const importEsm = new Function("specifier", "return import(specifier)") as <T>(specifier: string) => Promise<T>;
+type PdfRenderWorkerResult =
+  | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
+  | { ok: false; error: string };
 
 const activeRunnerProcesss = new Map<string, RunnerProcess>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
@@ -132,13 +132,13 @@ const imageAttachmentByteLimit = 10 * 1024 * 1024;
 const pdfAttachmentByteLimit = 25 * 1024 * 1024;
 const pdfImagePageLimit = 12;
 const pdfImageScale = 1.4;
+const pdfRenderTimeoutMs = 30000;
 const binarySnapshotPrefix = "__UMBRATIC_BINARY_FILE__:";
 const windowChromeDark = "#15161a";
 const windowChromeLight = "#ffffff";
 const windowChromeSymbolDark = "#d7dce2";
 const windowChromeSymbolLight = "#111827";
 const windowChromeHeight = 35;
-let pdfToImageModule: Promise<PdfToImageModule> | null = null;
 
 function appIcon() {
   if (!fs.existsSync(runtimeAppIconPath)) return undefined;
@@ -907,29 +907,118 @@ function imagePreviewDataUrl(filePath: string): string | undefined {
   }
 }
 
-async function loadPdfToImageModule(): Promise<PdfToImageModule> {
-  pdfToImageModule ??= importEsm<PdfToImageModule>("pdf-to-img");
-  return pdfToImageModule;
+function isPdfRenderWorkerResult(value: unknown): value is PdfRenderWorkerResult {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return false;
+  if (!value.ok) {
+    return typeof value.error === "string";
+  }
+  return (
+    typeof value.pageCount === "number" &&
+    Number.isInteger(value.pageCount) &&
+    value.pageCount >= 0 &&
+    Array.isArray(value.pages) &&
+    value.pages.every(
+      (page) =>
+        isRecord(page) &&
+        typeof page.pageNumber === "number" &&
+        Number.isInteger(page.pageNumber) &&
+        page.pageNumber > 0 &&
+        typeof page.filePath === "string",
+    )
+  );
+}
+
+async function renderPdfAttachmentInWorker(filePath: string, outputDir: string): Promise<PdfRenderWorkerResult | null> {
+  const workerPath = path.resolve(__dirname, "pdfRendererWorker.js");
+  if (!fs.existsSync(workerPath)) {
+    return null;
+  }
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if ((process.versions as NodeJS.ProcessVersions & { electron?: string }).electron) {
+    env.ELECTRON_RUN_AS_NODE = "1";
+  }
+  const child = spawn(process.execPath, [workerPath], {
+    cwd: path.dirname(workerPath),
+    env,
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    windowsHide: true,
+  });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: PdfRenderWorkerResult | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdout?.removeAllListeners("data");
+      child.stderr?.removeAllListeners("data");
+      child.removeAllListeners("message");
+      child.removeAllListeners("error");
+      child.removeAllListeners("exit");
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(null);
+    }, pdfRenderTimeoutMs);
+
+    child.stdout?.on("data", () => undefined);
+    child.stderr?.on("data", () => undefined);
+    child.once("message", (message: unknown) => {
+      finish(isPdfRenderWorkerResult(message) ? message : null);
+    });
+    child.once("error", () => finish(null));
+    child.once("exit", () => finish(null));
+
+    if (typeof child.send !== "function") {
+      finish(null);
+      return;
+    }
+    child.send(
+      {
+        filePath,
+        outputDir,
+        pageLimit: pdfImagePageLimit,
+        scale: pdfImageScale,
+        byteLimit: pdfAttachmentByteLimit,
+      },
+      (error) => {
+        if (error) finish(null);
+      },
+    );
+  });
 }
 
 async function pdfAttachmentImageParts(filePath: string): Promise<{ pageCount: number; rendered: number; parts: RunnerPromptPart[] } | null> {
+  let outputDir: string | null = null;
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile() || stat.size > pdfAttachmentByteLimit) {
       return null;
     }
-    const { pdf } = await loadPdfToImageModule();
-    const document = await pdf(filePath, { scale: pdfImageScale });
-    const rendered = Math.min(document.length, pdfImagePageLimit);
+    outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-pdf-"));
+    const result = await renderPdfAttachmentInWorker(filePath, outputDir);
+    if (!result?.ok) {
+      return null;
+    }
+    const pages = result.pages.slice().sort((left, right) => left.pageNumber - right.pageNumber);
     const parts: RunnerPromptPart[] = [];
-    for (let pageNumber = 1; pageNumber <= rendered; pageNumber += 1) {
-      const png = await document.getPage(pageNumber);
-      parts.push({ type: "text", text: `PDF page ${pageNumber}:` });
+    for (const page of pages) {
+      const pagePath = path.resolve(page.filePath);
+      if (!pathInside(outputDir, pagePath) || !fs.existsSync(pagePath)) {
+        return null;
+      }
+      const png = fs.readFileSync(pagePath);
+      parts.push({ type: "text", text: `PDF page ${page.pageNumber}:` });
       parts.push({ type: "image", data_url: `data:image/png;base64,${png.toString("base64")}` });
     }
-    return { pageCount: document.length, rendered, parts };
+    return { pageCount: result.pageCount, rendered: pages.length, parts };
   } catch {
     return null;
+  } finally {
+    if (outputDir) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -1660,20 +1749,26 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function normalizeV1EndpointBaseUrl(baseUrl: string): string {
-  const normalized = normalizeBaseUrl(baseUrl);
-  return /\/v\d+$/i.test(normalized) ? normalized : `${normalized}/v1`;
-}
-
-function normalizeEndpointRootUrl(baseUrl: string): string {
-  return normalizeBaseUrl(baseUrl).replace(/\/v\d+$/i, "");
-}
-
 function modelDisplayName(providerName: string, modelId: string): string {
   return `${modelId} via ${providerName}`;
 }
 
-function endpointProvider(): (typeof localProviderCatalog)[number] & { baseUrl: string; software: ReturnType<typeof readModelEndpointSettings>["software"] } {
+function endpointHeaders(headers: ReturnType<typeof readModelEndpointSettings>["headers"]): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const header of headers) {
+    if (!header.name.trim() || !header.value) continue;
+    next[header.name.trim()] = header.value;
+  }
+  return next;
+}
+
+function endpointProvider(): (typeof localProviderCatalog)[number] & {
+  baseUrl: string;
+  software: ReturnType<typeof readModelEndpointSettings>["software"];
+  chatEndpointPath: string;
+  modelsEndpointPath: string;
+  headers: Record<string, string>;
+} {
   const provider = localProviderCatalog[0];
   const settings = readModelEndpointSettings();
   return {
@@ -1689,8 +1784,11 @@ function endpointProvider(): (typeof localProviderCatalog)[number] & { baseUrl: 
             ? "Local vLLM"
             : "vLLM server",
     software: settings.software,
-    baseUrl: settings.software === "ollama" ? normalizeBaseUrl(settings.baseUrl) : normalizeV1EndpointBaseUrl(settings.baseUrl),
+    baseUrl: normalizeBaseUrl(settings.baseUrl),
+    chatEndpointPath: settings.chatEndpointPath,
+    modelsEndpointPath: settings.modelsEndpointPath,
     apiKey: settings.secret.trim(),
+    headers: endpointHeaders(settings.headers),
     mtls: settings.mode === "server" ? provider.mtls : undefined,
   };
 }
@@ -1709,15 +1807,18 @@ function configuredEndpointModel(): LocalModelInfo {
   };
 }
 
-function endpointRoute(baseUrl: string, route: string): string {
-  return new URL(route.replace(/^\/+/, ""), `${normalizeV1EndpointBaseUrl(baseUrl)}/`).toString();
+function configuredEndpointRoute(baseUrl: string, route: string): string {
+  if (/^https?:\/\//i.test(route)) return route;
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  let normalizedRoute = route.replace(/^\/+/, "");
+  if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedRoute)) {
+    normalizedRoute = normalizedRoute.replace(/^v\d+\//i, "");
+  }
+  return new URL(normalizedRoute, `${normalizedBaseUrl}/`).toString();
 }
 
 function endpointModelsRoute(provider: ReturnType<typeof endpointProvider>): string {
-  if (provider.software === "ollama") {
-    return new URL("api/tags", `${normalizeEndpointRootUrl(provider.baseUrl)}/`).toString();
-  }
-  return endpointRoute(provider.baseUrl, "models");
+  return configuredEndpointRoute(provider.baseUrl, provider.modelsEndpointPath);
 }
 
 function localEndpointModelInfo(modelId: string, provider: ReturnType<typeof endpointProvider>): LocalModelInfo {
@@ -1756,6 +1857,7 @@ async function fetchEndpointModels(
     if (provider.apiKey) {
       headers.Authorization = `Bearer ${provider.apiKey}`;
     }
+    Object.assign(headers, provider.headers);
     const modelsRoute = endpointModelsRoute(provider);
     const response = await getProviderJson(modelsRoute, {
       headers,
@@ -1826,12 +1928,7 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
   const configured = configuredEndpointModel();
   const providerConfig = endpointProvider();
   const health = await fetchEndpointModels(providerConfig, configured.modelId);
-  const discoveredDefault = configured.modelId ? configured : health.models[0];
-  const models = configured.modelId && health.models.some((model) => model.modelId === configured.modelId)
-    ? health.models
-    : discoveredDefault
-      ? [discoveredDefault, ...health.models.filter((model) => model.modelId !== discoveredDefault.modelId)]
-      : health.models;
+  const models = health.models;
   const selected = configured.modelId
     ? models.find((model) => model.modelId === configured.modelId) ?? configured
     : models[0] ?? null;
@@ -2733,15 +2830,19 @@ async function runRunnerTask(
       rejectCompletion(new Error(message));
     };
 
-    const emitAssistantText = (text: string) => {
+    const eventAt = (event: Record<string, unknown>): string | undefined => (
+      typeof event.at === "string" ? event.at : undefined
+    );
+
+    const emitAssistantText = (text: string, at?: string) => {
       if (!text || text.trim() === "Ready for review.") return;
       assistantTextForCurrentAttempt += text;
-      emit({ type: "assistant.delta", taskId: task.id, text });
+      emit({ type: "assistant.delta", taskId: task.id, text, at });
     };
 
-    const emitReasoningText = (text: string) => {
+    const emitReasoningText = (text: string, at?: string) => {
       if (!text || task.reasoningMode !== "reasoning") return;
-      emit({ type: "assistant.reasoning.delta", taskId: task.id, text });
+      emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at });
     };
 
     const ensureToolRun = (
@@ -2772,12 +2873,12 @@ async function runRunnerTask(
       if (eventTaskId !== task.id) return;
 
       if (type === "assistant.delta" && typeof event.text === "string") {
-        emitAssistantText(event.text);
+        emitAssistantText(event.text, eventAt(event));
         return;
       }
 
       if (type === "assistant.reasoning.delta" && typeof event.text === "string") {
-        emitReasoningText(event.text);
+        emitReasoningText(event.text, eventAt(event));
         return;
       }
 

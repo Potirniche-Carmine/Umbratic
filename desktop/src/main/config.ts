@@ -193,6 +193,7 @@ export const localProviderCatalog: Array<{
   providerName: string;
   baseUrl: string;
   apiKey: string;
+  headers?: Record<string, string>;
   mtls?: EndpointMtlsConfig;
 }> = [
   {

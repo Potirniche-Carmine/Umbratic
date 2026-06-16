@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, safeStorage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -189,10 +189,78 @@ export function writeChats(chats: ChatRecord[]) {
 
 type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
-  modelEndpoint?: Partial<ModelEndpointSettings>;
+  modelEndpoint?: Partial<Omit<ModelEndpointSettings, "headers" | "secret">> & {
+    secret?: unknown;
+    headers?: unknown;
+  };
   tools?: Partial<Record<RunnerToolId, boolean>>;
   harnessProfile?: unknown;
 };
+
+type StoredProtectedString = {
+  encoding: "electron-safe-storage-v1";
+  encrypted: string;
+};
+
+type StoredModelEndpointSettings = Omit<ModelEndpointSettings, "headers" | "secret"> & {
+  secret: "" | StoredProtectedString;
+  headers: Array<{ name: string; value: "" | StoredProtectedString }>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function readProtectedString(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (!isRecord(value) || value.encoding !== "electron-safe-storage-v1" || typeof value.encrypted !== "string") return undefined;
+  try {
+    return safeStorage.decryptString(Buffer.from(value.encrypted, "base64"));
+  } catch {
+    return undefined;
+  }
+}
+
+function writeProtectedString(value: string): "" | StoredProtectedString {
+  if (!value) return "";
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("Secure storage is not available, so endpoint tokens were not saved.");
+  }
+  return {
+    encoding: "electron-safe-storage-v1",
+    encrypted: safeStorage.encryptString(value).toString("base64"),
+  };
+}
+
+function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
+  const rows = Array.isArray(value) ? value : [];
+  const headers = rows.slice(0, 2).map((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return { name: "", value: "" };
+    const record = row as Record<string, unknown>;
+    return {
+      name: typeof record.name === "string" ? record.name.trim() : "",
+      value: readProtectedString(record.value) ?? "",
+    };
+  });
+  while (headers.length < 2) headers.push({ name: "", value: "" });
+  return headers;
+}
+
+function defaultEndpointChatPathForSoftware(software: ModelEndpointSettings["software"]): string {
+  return software === "ollama" ? "/api/chat" : "/v1/chat/completions";
+}
+
+function defaultEndpointModelsPathForSoftware(software: ModelEndpointSettings["software"]): string {
+  return software === "ollama" ? "/api/tags" : "/v1/models";
+}
+
+function normalizeEndpointPath(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
 
 function defaultModelEndpointMode(): ModelEndpointMode {
   return isLocalhostUrl(defaultEndpointBaseUrl) ? "local" : "server";
@@ -220,8 +288,22 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
     mode,
     software,
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
+    chatEndpointPath: normalizeEndpointPath(endpoint.chatEndpointPath, defaultEndpointChatPathForSoftware(software)),
+    modelsEndpointPath: normalizeEndpointPath(endpoint.modelsEndpointPath, defaultEndpointModelsPathForSoftware(software)),
     modelId: managed?.modelId ?? storedModelId ?? defaultEndpointModelId,
-    secret: managed?.secret ?? (typeof endpoint.secret === "string" ? endpoint.secret : mode === "local" ? "" : defaultEndpointApiKey),
+    secret: managed?.secret ?? readProtectedString(endpoint.secret) ?? (mode === "local" ? "" : defaultEndpointApiKey),
+    headers: normalizeEndpointHeaders(endpoint.headers),
+  };
+}
+
+function protectEndpointSettings(settings: ModelEndpointSettings): StoredModelEndpointSettings {
+  return {
+    ...settings,
+    secret: writeProtectedString(settings.secret),
+    headers: settings.headers.map((header) => ({
+      name: header.name,
+      value: writeProtectedString(header.value),
+    })),
   };
 }
 
@@ -247,14 +329,17 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
         : typeof input.baseUrl === "string" && input.baseUrl.trim()
           ? input.baseUrl.trim()
           : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
+    chatEndpointPath: normalizeEndpointPath(input.chatEndpointPath, current.chatEndpointPath || defaultEndpointChatPathForSoftware(nextSoftware)),
+    modelsEndpointPath: normalizeEndpointPath(input.modelsEndpointPath, current.modelsEndpointPath || defaultEndpointModelsPathForSoftware(nextSoftware)),
     modelId: managed?.modelId ?? (typeof input.modelId === "string" ? input.modelId.trim() : current.modelId),
     secret: managed?.secret ?? (typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret),
+    headers: normalizeEndpointHeaders(input.headers ?? current.headers),
   };
   const settings = readJsonFile<RawSettings>(settingsPath(), {});
   writeJsonFile(settingsPath(), {
     ...settings,
     selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
-    modelEndpoint: next,
+    modelEndpoint: protectEndpointSettings(next),
   });
   return next;
 }

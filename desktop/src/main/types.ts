@@ -14,8 +14,11 @@ export type ModelEndpointSettings = {
   mode: ModelEndpointMode;
   software: ModelEndpointSoftware;
   baseUrl: string;
+  chatEndpointPath: string;
+  modelsEndpointPath: string;
   modelId: string;
   secret: string;
+  headers: Array<{ name: string; value: string }>;
 };
 export type CommandClass =
   | "read"

@@ -2,8 +2,10 @@ export type UmbraticProviderConfig = {
   id: "company-endpoint";
   name: string;
   baseURL: string;
+  chatEndpointPath?: string;
   apiKey: string;
   modelId: string;
+  headers?: Record<string, string>;
   mtls?: UmbraticProviderMtlsConfig;
 };
 

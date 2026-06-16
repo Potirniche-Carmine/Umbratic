@@ -28,8 +28,14 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
       id: selectedModel.providerId,
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
+      chatEndpointPath: endpointSettings.chatEndpointPath,
       apiKey: endpointSettings.secret.trim(),
       modelId: selectedModel.modelId,
+      headers: Object.fromEntries(
+        endpointSettings.headers
+          .filter((header) => header.name.trim() && header.value)
+          .map((header) => [header.name.trim(), header.value]),
+      ),
       mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
     },
   };

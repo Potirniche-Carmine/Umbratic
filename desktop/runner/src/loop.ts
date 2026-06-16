@@ -1,5 +1,5 @@
 import { nowIso, type UmbraticRunnerEvent } from "./events.js";
-import type { ChatContentPart, InputPart, Session } from "./session.js";
+import type { ChatContentPart, ChatMessage, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
 import { enabledToolSpecs, runTool } from "./tools/index.js";
 import type { ToolContext } from "./tools/common.js";
@@ -24,6 +24,26 @@ function chatCompletionsUrl(baseURL: string): string {
   return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
 }
 
+function configuredEndpointUrl(baseURL: string, endpointPath?: string): string {
+  if (!endpointPath?.trim()) return chatCompletionsUrl(baseURL);
+  const trimmed = endpointPath.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const normalizedBaseUrl = baseURL.replace(/\/+$/, "");
+  let normalizedPath = trimmed.replace(/^\/+/, "");
+  if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedPath)) {
+    normalizedPath = normalizedPath.replace(/^v\d+\//i, "");
+  }
+  return new URL(normalizedPath, `${normalizedBaseUrl}/`).toString();
+}
+
+function isOllamaChatUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.replace(/\/+$/, "") === "/api/chat";
+  } catch {
+    return false;
+  }
+}
+
 function parseSseLine(line: string): unknown | null {
   if (!line.startsWith("data:")) return null;
   const data = line.slice(5).trim();
@@ -37,6 +57,22 @@ function parseSseLine(line: string): unknown | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function appendOllamaToolCalls(acc: StreamAccumulator, toolCalls: unknown) {
+  if (!Array.isArray(toolCalls)) return;
+  for (const raw of toolCalls) {
+    if (!isRecord(raw)) continue;
+    const fn = isRecord(raw.function) ? raw.function : {};
+    const name = typeof fn.name === "string" ? fn.name : "";
+    const args = typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {});
+    const index = acc.toolCalls.size;
+    acc.toolCalls.set(index, {
+      id: `tool-${index}`,
+      name,
+      arguments: args,
+    });
+  }
 }
 
 function choiceDelta(value: unknown): Record<string, unknown> {
@@ -58,6 +94,35 @@ function textContent(value: unknown): string {
     .join("");
 }
 
+function reasoningContent(record: Record<string, unknown>): string {
+  return (
+    textContent(record.reasoning_content) ||
+    textContent(record.reasoning) ||
+    textContent(record.thinking)
+  );
+}
+
+function ollamaMessageContent(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function ollamaMessages(messages: ChatMessage[]) {
+  return messages.map((message) => ({
+    role: message.role,
+    content: ollamaMessageContent(message.content),
+    ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
+    ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+  }));
+}
+
 function messageContentFromParts(parts: InputPart[]): string | ChatContentPart[] {
   if (parts.every((part) => part.type === "text")) {
     return parts.map((part) => (part.type === "text" ? part.text : "")).join("\n\n");
@@ -67,6 +132,72 @@ function messageContentFromParts(parts: InputPart[]): string | ChatContentPart[]
       ? { type: "image_url", image_url: { url: part.data_url } }
       : { type: "text", text: part.text },
   );
+}
+
+async function streamOllamaChat(
+  session: Session,
+  url: string,
+  headers: Record<string, string>,
+  tools: ReturnType<typeof enabledToolSpecs>,
+  emit?: (event: UmbraticRunnerEvent) => void,
+): Promise<StreamAccumulator> {
+  const response = await modelHttpRequest(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: session.config.provider.modelId,
+      messages: ollamaMessages(session.messages),
+      stream: true,
+      ...(tools.length ? { tools } : {}),
+    }),
+    mtls: session.config.provider.mtls,
+    signal: session.abortController.signal,
+  });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    const body = await readBodyText(response.body, 4096).catch(() => "");
+    throw new Error(
+      `model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`,
+    );
+  }
+
+  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false };
+  let buffer = "";
+  const processLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const parsed = JSON.parse(trimmed) as unknown;
+    const row = isRecord(parsed) ? parsed : {};
+    const message = isRecord(row.message) ? row.message : {};
+    const text = textContent(message.content);
+    const reasoning = reasoningContent(message);
+    if (text) {
+      acc.content += text;
+      if (emit) {
+        acc.emittedContent = true;
+        emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
+      }
+    }
+    if (reasoning) {
+      acc.reasoning += reasoning;
+      if (emit) {
+        acc.emittedReasoning = true;
+        emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() });
+      }
+    }
+    appendOllamaToolCalls(acc, message.tool_calls);
+  };
+  for await (const chunk of response.body) {
+    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : Buffer.from(chunk).toString("utf8");
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      processLine(line);
+      newline = buffer.indexOf("\n");
+    }
+  }
+  processLine(buffer);
+  return acc;
 }
 
 function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>) {
@@ -92,7 +223,12 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
   if (session.config.provider.apiKey.trim()) {
     headers.Authorization = `Bearer ${session.config.provider.apiKey}`;
   }
-  const response = await modelHttpRequest(chatCompletionsUrl(session.config.provider.baseURL), {
+  Object.assign(headers, session.config.provider.headers ?? {});
+  const url = configuredEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
+  if (isOllamaChatUrl(url)) {
+    return streamOllamaChat(session, url, headers, tools, emit);
+  }
+  const response = await modelHttpRequest(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -122,7 +258,7 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
       const parsed = parseSseLine(line);
       const delta = choiceDelta(parsed);
       const text = textContent(delta.content);
-      const reasoning = textContent(delta.reasoning_content) || textContent(delta.reasoning);
+      const reasoning = reasoningContent(delta);
       if (text) {
         acc.content += text;
         if (emit) {
