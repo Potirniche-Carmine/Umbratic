@@ -14,8 +14,6 @@ type UmbraticModelEndpointSettings = {
   mode: UmbraticModelEndpointMode;
   software: UmbraticModelEndpointSoftware;
   baseUrl: string;
-  chatEndpointPath: string;
-  modelsEndpointPath: string;
   modelId: string;
   secret: string;
   headers: Array<{ name: string; value: string }>;

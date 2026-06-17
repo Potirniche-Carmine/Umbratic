@@ -65,8 +65,6 @@ type ModelEndpointSettings = {
   mode: ModelEndpointMode;
   software: ModelEndpointSoftware;
   baseUrl: string;
-  chatEndpointPath: string;
-  modelsEndpointPath: string;
   modelId: string;
   secret: string;
   headers: Array<{ name: string; value: string }>;
@@ -468,9 +466,7 @@ const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
   mode: "local",
   software: "ollama",
-  baseUrl: "http://127.0.0.1:11434",
-  chatEndpointPath: "/api/chat",
-  modelsEndpointPath: "/api/tags",
+  baseUrl: "http://127.0.0.1:8080",
   modelId: "",
   secret: "",
   headers: [
@@ -638,22 +634,6 @@ function endpointSoftwareForBaseUrl(baseUrl: string): ModelEndpointSoftware {
   return "ollama";
 }
 
-function defaultChatEndpointPathForSoftware(software: ModelEndpointSoftware): string {
-  return software === "ollama" ? "/api/chat" : "/v1/chat/completions";
-}
-
-function defaultModelsEndpointPathForSoftware(software: ModelEndpointSoftware): string {
-  return software === "ollama" ? "/api/tags" : "/v1/models";
-}
-
-function normalizeEndpointPath(value: unknown, fallback: string): string {
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  if (!trimmed) return fallback;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
 function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultModelEndpointSettings };
   const settings = value as Partial<ModelEndpointSettings>;
@@ -666,8 +646,6 @@ function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
     mode: settings.mode === "local" || settings.mode === "server" ? settings.mode : endpointModeForBaseUrl(baseUrl),
     software,
     baseUrl,
-    chatEndpointPath: normalizeEndpointPath(settings.chatEndpointPath, defaultChatEndpointPathForSoftware(software)),
-    modelsEndpointPath: normalizeEndpointPath(settings.modelsEndpointPath, defaultModelsEndpointPathForSoftware(software)),
     modelId: typeof settings.modelId === "string" ? settings.modelId : defaultModelEndpointSettings.modelId,
     secret: typeof settings.secret === "string" ? settings.secret : "",
     headers: normalizeEndpointHeaders(settings.headers),
@@ -5238,30 +5216,10 @@ function App() {
                         <input
                           value={endpointDraftSettings.baseUrl}
                           onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                          placeholder="http://127.0.0.1:11434"
+                          placeholder="https://ollama.umbratic.ai"
                           spellCheck={false}
                         />
                       </label>
-                      <div className="settingsFieldRow">
-                        <label className="settingsField">
-                          <span>Chat endpoint</span>
-                          <input
-                            value={endpointDraftSettings.chatEndpointPath}
-                            onChange={(event) => updateEndpointDraft({ chatEndpointPath: event.currentTarget.value })}
-                            placeholder="/api/chat"
-                            spellCheck={false}
-                          />
-                        </label>
-                        <label className="settingsField">
-                          <span>Models endpoint</span>
-                          <input
-                            value={endpointDraftSettings.modelsEndpointPath}
-                            onChange={(event) => updateEndpointDraft({ modelsEndpointPath: event.currentTarget.value })}
-                            placeholder="/api/tags"
-                            spellCheck={false}
-                          />
-                        </label>
-                      </div>
                       <label className="settingsField">
                         <span>Model</span>
                         <select

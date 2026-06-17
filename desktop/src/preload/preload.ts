@@ -52,8 +52,6 @@ const umbraticApi = {
     mode: "local" | "server";
     software: "ollama" | "lmstudio" | "vllm";
     baseUrl: string;
-    chatEndpointPath: string;
-    modelsEndpointPath: string;
     modelId: string;
     secret: string;
     headers: Array<{ name: string; value: string }>;

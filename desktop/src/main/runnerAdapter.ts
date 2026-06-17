@@ -7,13 +7,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
-import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
-import { readModelEndpointSettings } from "./storage";
+import { promptLooksLikeDebugTask, umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
+import { readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type { LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
 
 const nodeRequire = createRequire(__filename);
+
+function veilChatEndpointPath(profileId: ReturnType<typeof readHarnessProfileSetting>): string {
+  return `/api/${profileId}/chat`;
+}
+
+function runtimeProfilesForTask(task: TaskRecord): string[] {
+  const profiles = new Set<string>(["workspace-toolchain"]);
+  if (task.workspaceKind === "git") profiles.add("git");
+  if (task.workspaceMode === "worktree") profiles.add("worktree");
+  if (task.runtimeProfile && task.runtimeProfile !== "none") profiles.add(task.runtimeProfile);
+  if (promptLooksLikeDebugTask(task.prompt)) profiles.add("debugger");
+  return [...profiles];
+}
 
 export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
@@ -22,13 +35,14 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     taskId: task.id,
     cwd: task.worktreePath,
     workspaceMode: task.workspaceMode,
+    runtimeProfiles: runtimeProfilesForTask(task),
     permissionMode: "normal",
     enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
     provider: {
       id: selectedModel.providerId,
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
-      chatEndpointPath: endpointSettings.chatEndpointPath,
+      chatEndpointPath: veilChatEndpointPath(readHarnessProfileSetting()),
       apiKey: endpointSettings.secret.trim(),
       modelId: selectedModel.modelId,
       headers: Object.fromEntries(

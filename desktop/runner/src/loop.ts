@@ -33,12 +33,25 @@ function configuredEndpointUrl(baseURL: string, endpointPath?: string): string {
   if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedPath)) {
     normalizedPath = normalizedPath.replace(/^v\d+\//i, "");
   }
+  const baseSegment = new URL(normalizedBaseUrl).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
+  const routeSegment = normalizedPath.split("/").filter(Boolean)[0];
+  if (baseSegment && baseSegment === routeSegment) {
+    normalizedPath = normalizedPath.split("/").filter(Boolean).slice(1).join("/");
+  }
   return new URL(normalizedPath, `${normalizedBaseUrl}/`).toString();
 }
 
 function isOllamaChatUrl(url: string): boolean {
   try {
     return new URL(url).pathname.replace(/\/+$/, "") === "/api/chat";
+  } catch {
+    return false;
+  }
+}
+
+function isVeilChatUrl(url: string): boolean {
+  try {
+    return /^\/api\/(?:engineering|marketing|sales)\/chat\/?$/i.test(new URL(url).pathname);
   } catch {
     return false;
   }
@@ -228,13 +241,15 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
   if (isOllamaChatUrl(url)) {
     return streamOllamaChat(session, url, headers, tools, emit);
   }
+  const routeIsVeil = isVeilChatUrl(url);
   const response = await modelHttpRequest(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      model: session.config.provider.modelId,
+      ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
       messages: session.messages,
       stream: true,
+      ...(routeIsVeil && session.config.runtimeProfiles?.length ? { runtime_profiles: session.config.runtimeProfiles } : {}),
       ...(tools.length ? { tools, tool_choice: "auto" } : {}),
     }),
     mtls: session.config.provider.mtls,

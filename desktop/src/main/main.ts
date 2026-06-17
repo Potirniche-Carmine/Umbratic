@@ -22,13 +22,10 @@ import {
   defaultEndpointModelId,
   debuggerRuntimeSystemPrompt,
   endpointEditingAllowed,
-  harnessProfileSystemPrompt,
   localProviderCatalog,
   markdownRuntimeSystemPrompt,
   managedModelEndpointDefaults,
   pythonRuntimeSystemPrompt,
-  reasoningSystemPrompt,
-  runtimeHarnessSystemPrompt,
   taskStatesThatCanOpen,
   workspaceToolchainSystemPrompt,
 } from "./config";
@@ -81,7 +78,7 @@ import {
   writeToolSettings,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
-import { enabledToolsFromSettings, normalizeEnabledTools, runnerToolIds } from "./toolSettings";
+import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type {
   ApproveResult,
   BackendStatus,
@@ -469,27 +466,6 @@ function taskEnabledTools(task: TaskRecord): RunnerToolId[] {
 function taskCanCreateFiles(task: TaskRecord): boolean {
   const enabled = new Set(taskEnabledTools(task));
   return enabled.has("write") || enabled.has("edit") || enabled.has("command");
-}
-
-function workspaceModeSystemPrompt(task: TaskRecord): string {
-  if (taskUsesIsolatedWorktree(task)) {
-    return [
-      "Workspace mode: isolated Git worktree. All file edits and verification commands must stay inside the provided worktree path. Do not merge this worktree back to the original branch unless the user explicitly asks for a merge while this chat is still using the worktree. When a turn produces file changes in the worktree, ask the user whether they want a separate merge back to the original branch.",
-      "Only close, remove, or delete this worktree when the user explicitly asks for that cleanup. Rejecting changes is not a request to close or delete the worktree.",
-      `For an explicit worktree close/delete request, first explain that this will delete the local worktree folder and the branch, then wait for the permission prompt. After confirmation, run the Git cleanup in this order from the original repository: 1. git -C ${JSON.stringify(task.originalRepoPath)} worktree remove --force ${JSON.stringify(task.worktreePath)} 2. git -C ${JSON.stringify(task.originalRepoPath)} worktree prune 3. git -C ${JSON.stringify(task.originalRepoPath)} branch -D ${JSON.stringify(task.agentBranch)}. Do not run rm -rf before git worktree remove.`,
-    ].join(" ");
-  }
-  return "Workspace mode: local repository/folder. Do not ask to create, switch to, verify, or merge a Git worktree; work directly in the provided current working directory.";
-}
-
-function toolAccessSystemPrompt(task: TaskRecord): string {
-  const enabled = new Set(taskEnabledTools(task));
-  const disabled = runnerToolIds.filter((id) => !enabled.has(id));
-  return [
-    `Enabled runner tools for this run: ${enabled.size ? Array.from(enabled).join(", ") : "none"}.`,
-    disabled.length ? `Disabled runner tools are not allowed: ${disabled.join(", ")}.` : "No runner tools are disabled.",
-    "Do not use web fetch, web search, public providers, or external directories.",
-  ].join(" ");
 }
 
 function publicTaskById(input: unknown): TaskInfo | null {
@@ -1765,28 +1741,15 @@ function endpointHeaders(headers: ReturnType<typeof readModelEndpointSettings>["
 function endpointProvider(): (typeof localProviderCatalog)[number] & {
   baseUrl: string;
   software: ReturnType<typeof readModelEndpointSettings>["software"];
-  chatEndpointPath: string;
-  modelsEndpointPath: string;
   headers: Record<string, string>;
 } {
   const provider = localProviderCatalog[0];
   const settings = readModelEndpointSettings();
   return {
     ...provider,
-    providerName:
-      settings.software === "ollama"
-        ? settings.mode === "local"
-          ? "Ollama"
-          : "Ollama server"
-        : settings.software === "lmstudio"
-          ? "LM Studio"
-          : settings.mode === "local"
-            ? "Local vLLM"
-            : "vLLM server",
+    providerName: "Umbratic Veil",
     software: settings.software,
     baseUrl: normalizeBaseUrl(settings.baseUrl),
-    chatEndpointPath: settings.chatEndpointPath,
-    modelsEndpointPath: settings.modelsEndpointPath,
     apiKey: settings.secret.trim(),
     headers: endpointHeaders(settings.headers),
     mtls: settings.mode === "server" ? provider.mtls : undefined,
@@ -1814,11 +1777,16 @@ function configuredEndpointRoute(baseUrl: string, route: string): string {
   if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedRoute)) {
     normalizedRoute = normalizedRoute.replace(/^v\d+\//i, "");
   }
+  const baseSegment = new URL(normalizedBaseUrl).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
+  const routeSegment = normalizedRoute.split("/").filter(Boolean)[0];
+  if (baseSegment && baseSegment === routeSegment) {
+    normalizedRoute = normalizedRoute.split("/").filter(Boolean).slice(1).join("/");
+  }
   return new URL(normalizedRoute, `${normalizedBaseUrl}/`).toString();
 }
 
 function endpointModelsRoute(provider: ReturnType<typeof endpointProvider>): string {
-  return configuredEndpointRoute(provider.baseUrl, provider.modelsEndpointPath);
+  return configuredEndpointRoute(provider.baseUrl, "/api/models");
 }
 
 function localEndpointModelInfo(modelId: string, provider: ReturnType<typeof endpointProvider>): LocalModelInfo {
@@ -2979,14 +2947,6 @@ async function runRunnerTask(
       body: {
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
-        system: [
-          "Identity: you are Umbratic AI, a secure enterprise coding agent that empowers developers through company-owned private AI infrastructure. If the user asks who you are, answer as Umbratic AI. Never identify yourself as a CLI or an underlying runner; those are implementation details hidden behind Umbratic AI. Work only inside the current task workspace. Use real Umbratic AI tool results when you need repository context, file details, or web results. Do not narrate imagined tool use, and never say you ran a command, searched the web, or inspected a path unless a tool actually returned that result. Do not begin responses with `Umbratic AI:`, `Assistant:`, or any other speaker label; start directly with the answer. For codebase questions, inspect the relevant files before summarizing. When you create or modify files, keep the final response concise and do not paste full file contents or code blocks for changed files. Mention changed file paths only; Umbratic AI will link those paths to the Review panel.",
-          workspaceModeSystemPrompt(task),
-          toolAccessSystemPrompt(task),
-          harnessProfileSystemPrompt(readHarnessProfileSetting()),
-          reasoningSystemPrompt(task.reasoningMode ?? "fast"),
-          runtimeHarnessSystemPrompt,
-        ].join(" "),
         parts: promptParts,
       },
     });

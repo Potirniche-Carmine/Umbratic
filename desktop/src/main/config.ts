@@ -1,6 +1,6 @@
 import { env } from "node:process";
 
-import type { HarnessProfileId, LocalProviderId, ModelEndpointMode, ModelEndpointSoftware, ReasoningMode, TaskState } from "./types";
+import type { HarnessProfileId, LocalProviderId, ModelEndpointMode, ModelEndpointSoftware, TaskState } from "./types";
 
 export type EndpointMtlsConfig = {
   caPath?: string;
@@ -13,6 +13,7 @@ export type EndpointMtlsConfig = {
 };
 
 const configuredEndpointBaseUrl =
+  env.UMBRATIC_VEIL_BASE_URL ||
   env.UMBRATIC_MANAGED_MODEL_BASE_URL ||
   env.UMBRATIC_MODEL_BASE_URL ||
   env.OLLAMA_BASE_URL ||
@@ -24,9 +25,9 @@ const configuredEndpointBaseUrl =
 
 export const defaultEndpointBaseUrl =
   configuredEndpointBaseUrl ||
-  "http://127.0.0.1:11434";
+  "http://127.0.0.1:8080";
 export const defaultEndpointApiKey =
-  env.UMBRATIC_MODEL_API_KEY || env.OLLAMA_API_KEY || env.LMSTUDIO_API_KEY || env.VLLM_API_KEY || "";
+  env.UMBRATIC_VEIL_TOKEN || env.UMBRATIC_MODEL_API_KEY || env.OLLAMA_API_KEY || env.LMSTUDIO_API_KEY || env.VLLM_API_KEY || "";
 export const defaultEndpointModelId =
   env.UMBRATIC_MANAGED_MODEL_ID || env.UMBRATIC_MODEL_ID || env.OLLAMA_MODEL || env.LMSTUDIO_MODEL || env.VLLM_MODEL || "";
 
@@ -143,51 +144,6 @@ export const debuggerRuntimeSystemPrompt = [
   "The debugger tool is intentionally non-interactive and only runs executables inside the workspace. It should collect backtraces, locals, registers, and stack memory through gdb, lldb, or cdb. If no supported debugger is installed, report the missing debugger and platform install commands instead of inventing results.",
 ].join(" ");
 
-export const gitRuntimeSystemPrompt = [
-  "Git harness policy: use Git confidently when the selected workspace is a Git repository. Prefer read-only inspection before changing anything: `git status --short --branch`, `git diff`, `git diff --staged`, `git log --oneline --decorate --graph -n 20`, `git show <rev>`, `git branch --show-current`, `git branch --list`, `git remote -v`, `git worktree list`, and `git blame -L <range> -- <file>`.",
-  "For user requests about branch cleanup, staging, restoring, worktrees, or history, use the precise Git command when it is safe to act and the permission prompt will mediate writes. Common write commands include `git switch <branch>`, `git switch -c <branch>`, `git branch -d <branch>`, `git branch -D <branch>`, `git restore --staged <path>`, `git restore --source <commit> -- <path>`, `git checkout <commit> -- <path>`, `git worktree add <path> <branch>`, and `git worktree remove <path>`.",
-  "Treat history rewriting and broad deletion as destructive. Before running commands like `git reset --hard`, `git clean -fd`, `git branch -D`, `git push --force`, `git rebase`, `git cherry-pick`, or `git revert`, explain the intended effect in plain language and rely on the permission flow. If the user only asks how, provide the command and what it does instead of executing it.",
-].join(" ");
-
-export const runtimeHarnessSystemPrompt = [
-  workspaceToolchainSystemPrompt,
-  gitRuntimeSystemPrompt,
-  cCmakeRuntimeSystemPrompt,
-  pythonRuntimeSystemPrompt,
-  markdownRuntimeSystemPrompt,
-  debuggerRuntimeSystemPrompt,
-].join(" ");
-
-export function harnessProfileSystemPrompt(profileId: HarnessProfileId): string {
-  if (profileId === "marketing") {
-    return [
-      "Harness profile: Marketing.",
-      "Favor clear campaign, positioning, launch, copy, content, audience, and brand-context work.",
-      "Use repository tools only when they help inspect or change relevant assets, docs, site copy, analytics wiring, or content workflows.",
-      "Keep technical detail practical and avoid pulling in unrelated engineering harness guidance unless the task asks for implementation.",
-    ].join(" ");
-  }
-  if (profileId === "sales") {
-    return [
-      "Harness profile: Sales.",
-      "Favor customer-facing context: account research notes, CRM-style workflows, enablement material, demos, proposals, objection handling, and pipeline support.",
-      "Use repository tools only when they help inspect or change relevant docs, app surfaces, integrations, or sales operations assets.",
-      "Keep responses action-oriented and avoid unnecessary implementation depth unless the task needs it.",
-    ].join(" ");
-  }
-  return [
-    "Harness profile: Engineering.",
-    "Favor codebase inspection, implementation, verification, debugging, tests, and precise repository changes.",
-    "Use available runner tools to understand the workspace before making claims, and keep product or go-to-market assumptions lightweight unless requested.",
-  ].join(" ");
-}
-
-export function reasoningSystemPrompt(mode: ReasoningMode): string {
-  return mode === "reasoning"
-    ? "Umbratic AI is using a reasoning-capable endpoint model for this task. Use deliberate reasoning for ambiguous or multi-step work. If the model/provider exposes reasoning parts or reasoning_content, Umbratic AI may display that stream live. Keep visible reasoning concise and incremental: do not restate the same branch list, command plan, or failure explanation after each tool result. When a command fails for the same structural reason twice, stop retrying that exact approach and either choose a materially different command or explain the blocker."
-    : "The user disabled Think mode. Do not emit hidden reasoning, chain-of-thought, thinking-process text, or reasoning_content. Give direct answers and concise progress only.";
-}
-
 export const localProviderCatalog: Array<{
   providerId: LocalProviderId;
   providerName: string;
@@ -198,7 +154,7 @@ export const localProviderCatalog: Array<{
 }> = [
   {
     providerId: "company-endpoint",
-    providerName: "Company private endpoint",
+    providerName: "Umbratic Veil",
     baseUrl: defaultEndpointBaseUrl,
     apiKey: defaultEndpointApiKey,
     mtls: defaultEndpointMtlsConfig,

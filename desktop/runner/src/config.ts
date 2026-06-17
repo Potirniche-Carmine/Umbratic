@@ -8,6 +8,7 @@ export type RunnerConfig = {
   taskId?: string;
   cwd: string;
   workspaceMode?: "local" | "worktree";
+  runtimeProfiles?: string[];
   permissionMode: PermissionMode;
   enabledTools: RunnerToolName[];
   provider: UmbraticProviderConfig;
@@ -54,6 +55,15 @@ function enabledToolsValue(value: unknown): RunnerToolName[] {
   return runnerToolNames.filter((name) => seen.has(name));
 }
 
+function runtimeProfilesValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) seen.add(item.trim());
+  }
+  return seen.size ? [...seen] : undefined;
+}
+
 export function loadRunnerConfig(): RunnerConfig {
   const raw = process.env.UMBRATIC_RUNNER_CONFIG;
   if (!raw) throw new Error("UMBRATIC_RUNNER_CONFIG is required");
@@ -64,6 +74,7 @@ export function loadRunnerConfig(): RunnerConfig {
     taskId: typeof config.taskId === "string" && config.taskId.trim() ? config.taskId.trim() : undefined,
     cwd: stringValue(config.cwd, "cwd"),
     workspaceMode: config.workspaceMode === "worktree" ? "worktree" : "local",
+    runtimeProfiles: runtimeProfilesValue(config.runtimeProfiles),
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     enabledTools: enabledToolsValue(config.enabledTools),
     system: typeof config.system === "string" ? config.system : undefined,

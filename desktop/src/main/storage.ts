@@ -246,22 +246,6 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
   return headers;
 }
 
-function defaultEndpointChatPathForSoftware(software: ModelEndpointSettings["software"]): string {
-  return software === "ollama" ? "/api/chat" : "/v1/chat/completions";
-}
-
-function defaultEndpointModelsPathForSoftware(software: ModelEndpointSettings["software"]): string {
-  return software === "ollama" ? "/api/tags" : "/v1/models";
-}
-
-function normalizeEndpointPath(value: unknown, fallback: string): string {
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  if (!trimmed) return fallback;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
 function defaultModelEndpointMode(): ModelEndpointMode {
   return isLocalhostUrl(defaultEndpointBaseUrl) ? "local" : "server";
 }
@@ -288,8 +272,6 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
     mode,
     software,
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
-    chatEndpointPath: normalizeEndpointPath(endpoint.chatEndpointPath, defaultEndpointChatPathForSoftware(software)),
-    modelsEndpointPath: normalizeEndpointPath(endpoint.modelsEndpointPath, defaultEndpointModelsPathForSoftware(software)),
     modelId: managed?.modelId ?? storedModelId ?? defaultEndpointModelId,
     secret: managed?.secret ?? readProtectedString(endpoint.secret) ?? (mode === "local" ? "" : defaultEndpointApiKey),
     headers: normalizeEndpointHeaders(endpoint.headers),
@@ -329,8 +311,6 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
         : typeof input.baseUrl === "string" && input.baseUrl.trim()
           ? input.baseUrl.trim()
           : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
-    chatEndpointPath: normalizeEndpointPath(input.chatEndpointPath, current.chatEndpointPath || defaultEndpointChatPathForSoftware(nextSoftware)),
-    modelsEndpointPath: normalizeEndpointPath(input.modelsEndpointPath, current.modelsEndpointPath || defaultEndpointModelsPathForSoftware(nextSoftware)),
     modelId: managed?.modelId ?? (typeof input.modelId === "string" ? input.modelId.trim() : current.modelId),
     secret: managed?.secret ?? (typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret),
     headers: normalizeEndpointHeaders(input.headers ?? current.headers),
