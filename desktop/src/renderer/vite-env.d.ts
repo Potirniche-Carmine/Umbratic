@@ -9,7 +9,7 @@ type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "command" | "
 type UmbraticHarnessProfileId = "marketing" | "sales" | "engineering";
 type UmbraticLocalProviderId = "company-endpoint";
 type UmbraticModelEndpointMode = "local" | "server";
-type UmbraticModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
+type UmbraticModelEndpointSoftware = "ollama" | "vllm";
 type UmbraticModelEndpointSettings = {
   mode: UmbraticModelEndpointMode;
   software: UmbraticModelEndpointSoftware;

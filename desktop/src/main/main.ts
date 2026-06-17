@@ -19,7 +19,6 @@ import * as path from "node:path";
 
 import {
   cCmakeRuntimeSystemPrompt,
-  defaultEndpointModelId,
   debuggerRuntimeSystemPrompt,
   endpointEditingAllowed,
   localProviderCatalog,
@@ -65,7 +64,6 @@ import {
   readModelEndpointSettings,
   readNotes,
   readProjects,
-  readSettings,
   readTasks,
   readToolSettings,
   writeHarnessProfileSetting,
@@ -1725,9 +1723,7 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function modelDisplayName(providerName: string, modelId: string): string {
-  return `${modelId} via ${providerName}`;
-}
+const veilManagedModelId = "veil-managed";
 
 function endpointHeaders(headers: ReturnType<typeof readModelEndpointSettings>["headers"]): Record<string, string> {
   const next: Record<string, string> = {};
@@ -1758,14 +1754,11 @@ function endpointProvider(): (typeof localProviderCatalog)[number] & {
 
 function configuredEndpointModel(): LocalModelInfo {
   const provider = endpointProvider();
-  const selected = readSettings().selectedModel;
-  const endpointSettings = readModelEndpointSettings();
-  const modelId = selected?.modelId || endpointSettings.modelId || defaultEndpointModelId;
   return {
     providerId: provider.providerId,
     providerName: provider.providerName,
-    modelId,
-    displayName: modelDisplayName(provider.providerName, modelId),
+    modelId: veilManagedModelId,
+    displayName: provider.providerName,
     baseUrl: provider.baseUrl,
   };
 }
@@ -1785,39 +1778,11 @@ function configuredEndpointRoute(baseUrl: string, route: string): string {
   return new URL(normalizedRoute, `${normalizedBaseUrl}/`).toString();
 }
 
-function endpointModelsRoute(provider: ReturnType<typeof endpointProvider>): string {
-  return configuredEndpointRoute(provider.baseUrl, "/api/models");
+function endpointHealthRoute(provider: ReturnType<typeof endpointProvider>): string {
+  return configuredEndpointRoute(provider.baseUrl, "/api/health");
 }
 
-function localEndpointModelInfo(modelId: string, provider: ReturnType<typeof endpointProvider>): LocalModelInfo {
-  return {
-    providerId: provider.providerId,
-    providerName: provider.providerName,
-    modelId,
-    displayName: modelDisplayName(provider.providerName, modelId),
-    baseUrl: provider.baseUrl,
-  };
-}
-
-function modelIdsFromPayload(payload: unknown): string[] {
-  if (!isRecord(payload)) return [];
-  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-  const ids = rows
-    .map((row) => {
-      if (!isRecord(row)) return "";
-      if (typeof row.id === "string") return row.id.trim();
-      if (typeof row.name === "string") return row.name.trim();
-      if (typeof row.model === "string") return row.model.trim();
-      return "";
-    })
-    .filter((id) => id.length > 0);
-  return Array.from(new Set(ids));
-}
-
-async function fetchEndpointModels(
-  provider: ReturnType<typeof endpointProvider>,
-  configuredModelId: string,
-): Promise<{ status: ServiceStatus; models: LocalModelInfo[]; message?: string }> {
+async function checkEndpointHealth(provider: ReturnType<typeof endpointProvider>): Promise<{ status: ServiceStatus; message?: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
@@ -1826,8 +1791,8 @@ async function fetchEndpointModels(
       headers.Authorization = `Bearer ${provider.apiKey}`;
     }
     Object.assign(headers, provider.headers);
-    const modelsRoute = endpointModelsRoute(provider);
-    const response = await getProviderJson(modelsRoute, {
+    const healthRoute = endpointHealthRoute(provider);
+    const response = await getProviderJson(healthRoute, {
       headers,
       mtls: provider.mtls,
       signal: controller.signal,
@@ -1836,36 +1801,18 @@ async function fetchEndpointModels(
       const body = response.text;
       return {
         status: "unavailable",
-        models: [],
-        message: `Model discovery failed at ${new URL(modelsRoute).pathname} with ${response.statusCode} ${response.statusMessage}${
+        message: `Health check failed at ${new URL(healthRoute).pathname} with ${response.statusCode} ${response.statusMessage}${
           body.trim() ? `: ${body.trim().slice(0, 160)}` : ""
         }`,
       };
     }
-    const payload = response.json;
-    const modelIds = modelIdsFromPayload(payload);
-    if (!modelIds.length) {
-      return {
-        status: "degraded",
-        models: [],
-        message: `Connected to ${new URL(modelsRoute).pathname}, but no model ids were returned.`,
-      };
-    }
-    const models = modelIds.map((modelId) => localEndpointModelInfo(modelId, provider));
-    if (configuredModelId && !modelIds.includes(configuredModelId)) {
-      return {
-        status: "degraded",
-        models,
-        message: `Connected, but configured model "${configuredModelId}" was not returned by ${new URL(modelsRoute).pathname}.`,
-      };
-    }
-    return { status: "ready", models, message: `Model discovery passed at ${new URL(modelsRoute).pathname}.` };
+    return { status: "ready", message: `Health check passed at ${new URL(healthRoute).pathname}.` };
   } catch (error) {
     const message =
       error instanceof Error && error.name === "AbortError"
-        ? "Model discovery timed out."
-        : `Healthcheck failed: ${error instanceof Error ? error.message : String(error)}`;
-    return { status: "unavailable", models: [], message };
+        ? "Health check timed out."
+        : `Health check failed: ${error instanceof Error ? error.message : String(error)}`;
+    return { status: "unavailable", message };
   } finally {
     clearTimeout(timeout);
   }
@@ -1895,15 +1842,13 @@ async function saveHarnessProfileSetting(input: unknown) {
 async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
   const configured = configuredEndpointModel();
   const providerConfig = endpointProvider();
-  const health = await fetchEndpointModels(providerConfig, configured.modelId);
-  const models = health.models;
-  const selected = configured.modelId
-    ? models.find((model) => model.modelId === configured.modelId) ?? configured
-    : models[0] ?? null;
+  const health = await checkEndpointHealth(providerConfig);
+  const models: LocalModelInfo[] = [];
+  const selected = health.status === "ready" ? configured : null;
   const provider: LocalModelProvider = {
-    providerId: selected?.providerId ?? configured.providerId,
-    providerName: selected?.providerName ?? configured.providerName,
-    baseUrl: selected?.baseUrl ?? configured.baseUrl,
+    providerId: configured.providerId,
+    providerName: configured.providerName,
+    baseUrl: configured.baseUrl,
     status: health.status,
     models,
     message: health.message,
@@ -1923,7 +1868,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       : "unavailable";
   const messages = [
     runnerPath ? undefined : "Umbratic runner is not built in the app bundle.",
-    selected ? undefined : "No model id is configured for the selected model endpoint.",
+    selected ? undefined : "Veil health check is not ready.",
     ...providers.map((provider) => provider.message).filter((message): message is string => !!message),
   ].filter((message): message is string => !!message);
 
@@ -2743,9 +2688,9 @@ async function runRunnerTask(
   const intent = intentPrompt ?? task.prompt;
   const expectsFileChanges = promptLooksLikeFileChange(intent);
   try {
-    const { selected } = await resolveSelectedModel();
+    const { providers, selected } = await resolveSelectedModel();
     if (!selected) {
-      failTask(task, "No model id is configured for the selected model endpoint.");
+      failTask(task, providers[0]?.message ?? "Veil health check is not ready.");
       return;
     }
     task.model = selected;

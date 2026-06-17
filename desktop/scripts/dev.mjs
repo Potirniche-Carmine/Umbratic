@@ -25,12 +25,11 @@ function usage() {
   return [
     "Usage:",
     "  npm run desktop:dev",
-    "  npm run desktop:dev -- --server https://models.example.com/v1 --software vllm --model model-id",
+    "  npm run desktop:dev -- --server https://veil.example --software vllm",
     "",
     "Options:",
     "  --server <url>       Run dev against a managed server endpoint for this process.",
-    "  --software <name>    ollama, lmstudio, or vllm. Defaults to vllm with --server.",
-    "  --model <id>         Model ID to preselect.",
+    "  --software <name>    ollama or vllm. Defaults to vllm with --server.",
     "  --api-key <secret>   API key for the endpoint.",
     "  --composer-test      Open the seeded composer UI test fixture in Electron.",
     "  --help              Show this message.",
@@ -45,7 +44,6 @@ function devEndpointEnv(args) {
 
   const server = readFlag(args, "--server");
   const software = readFlag(args, "--software");
-  const model = readFlag(args, "--model");
   const apiKey = readFlag(args, "--api-key");
   const env = {
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
@@ -66,13 +64,8 @@ function devEndpointEnv(args) {
     env.UMBRATIC_MODEL_SOFTWARE = software;
   }
 
-  if (software && !["ollama", "lmstudio", "vllm"].includes(software)) {
-    throw new Error("--software must be one of: ollama, lmstudio, vllm.");
-  }
-  if (model && server !== undefined) {
-    env.UMBRATIC_MANAGED_MODEL_ID = model;
-  } else if (model) {
-    env.UMBRATIC_MODEL_ID = model;
+  if (software && !["ollama", "vllm"].includes(software)) {
+    throw new Error("--software must be one of: ollama, vllm.");
   }
   if (apiKey && server !== undefined) {
     env.UMBRATIC_MANAGED_MODEL_API_KEY = apiKey;

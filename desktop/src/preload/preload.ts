@@ -50,7 +50,7 @@ const umbraticApi = {
   getModelEndpointSettings: () => ipcRenderer.invoke("umbratic:get-model-endpoint-settings"),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";
-    software: "ollama" | "lmstudio" | "vllm";
+    software: "ollama" | "vllm";
     baseUrl: string;
     modelId: string;
     secret: string;

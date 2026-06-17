@@ -17,8 +17,6 @@ const configuredEndpointBaseUrl =
   env.UMBRATIC_MANAGED_MODEL_BASE_URL ||
   env.UMBRATIC_MODEL_BASE_URL ||
   env.OLLAMA_BASE_URL ||
-  env.UMBRATIC_LMSTUDIO_BASE_URL ||
-  env.LMSTUDIO_BASE_URL ||
   env.UMBRATIC_VLLM_BASE_URL ||
   env.VLLM_BASE_URL ||
   "";
@@ -27,16 +25,15 @@ export const defaultEndpointBaseUrl =
   configuredEndpointBaseUrl ||
   "http://127.0.0.1:8080";
 export const defaultEndpointApiKey =
-  env.UMBRATIC_VEIL_TOKEN || env.UMBRATIC_MODEL_API_KEY || env.OLLAMA_API_KEY || env.LMSTUDIO_API_KEY || env.VLLM_API_KEY || "";
-export const defaultEndpointModelId =
-  env.UMBRATIC_MANAGED_MODEL_ID || env.UMBRATIC_MODEL_ID || env.OLLAMA_MODEL || env.LMSTUDIO_MODEL || env.VLLM_MODEL || "";
+  env.UMBRATIC_VEIL_TOKEN || env.UMBRATIC_MODEL_API_KEY || env.OLLAMA_API_KEY || env.VLLM_API_KEY || "";
+export const defaultEndpointModelId = "veil-managed";
 
 export function isModelEndpointMode(value: unknown): value is ModelEndpointMode {
   return value === "local" || value === "server";
 }
 
 export function isModelEndpointSoftware(value: unknown): value is ModelEndpointSoftware {
-  return value === "ollama" || value === "lmstudio" || value === "vllm";
+  return value === "ollama" || value === "vllm";
 }
 
 export function defaultEndpointSoftware(mode: ModelEndpointMode, baseUrl = defaultEndpointBaseUrl): ModelEndpointSoftware {
@@ -47,7 +44,6 @@ export function defaultEndpointSoftware(mode: ModelEndpointMode, baseUrl = defau
   if (env.UMBRATIC_MODEL_SOFTWARE && isModelEndpointSoftware(env.UMBRATIC_MODEL_SOFTWARE)) {
     return env.UMBRATIC_MODEL_SOFTWARE;
   }
-  if (env.LMSTUDIO_BASE_URL || normalized.includes("lmstudio")) return "lmstudio";
   if (env.OLLAMA_BASE_URL || normalized.includes("11434") || normalized.includes("ollama")) return "ollama";
   if (env.UMBRATIC_VLLM_BASE_URL || env.VLLM_BASE_URL || normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
   return mode === "local" ? "ollama" : "vllm";
@@ -58,20 +54,17 @@ export function managedModelEndpointDefaults():
       mode?: ModelEndpointMode;
       software?: ModelEndpointSoftware;
       baseUrl?: string;
-      modelId?: string;
       secret?: string;
     }
   | undefined {
   const mode = isModelEndpointMode(env.UMBRATIC_MANAGED_ENDPOINT_MODE) ? env.UMBRATIC_MANAGED_ENDPOINT_MODE : undefined;
   const software = isModelEndpointSoftware(env.UMBRATIC_MANAGED_MODEL_SOFTWARE) ? env.UMBRATIC_MANAGED_MODEL_SOFTWARE : undefined;
   const baseUrl = env.UMBRATIC_MANAGED_MODEL_BASE_URL?.trim();
-  const modelId = env.UMBRATIC_MANAGED_MODEL_ID?.trim();
   const secret = env.UMBRATIC_MANAGED_MODEL_API_KEY ?? undefined;
   const managed = {
     mode,
     software,
     baseUrl: baseUrl || undefined,
-    modelId: modelId || undefined,
     secret,
   };
   return Object.values(managed).some((value) => value !== undefined) ? managed : undefined;
@@ -89,15 +82,10 @@ export function isHarnessProfileId(value: unknown): value is HarnessProfileId {
 }
 
 export function defaultEndpointBaseUrlForSoftware(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
-  if (mode === "local") {
-    if (software === "lmstudio") return "http://127.0.0.1:1234/v1";
-    if (software === "vllm") return "http://127.0.0.1:8000/v1";
-    return "http://127.0.0.1:11434";
-  }
+  void software;
+  if (mode === "local") return "http://127.0.0.1:8080";
   if (configuredEndpointBaseUrl) return configuredEndpointBaseUrl;
-  if (software === "ollama") return "https://your-ollama-server.example";
-  if (software === "lmstudio") return "https://your-lm-studio-endpoint.example/v1";
-  return "https://your-vllm-endpoint.example/v1";
+  return "https://your-veil-server.example";
 }
 
 function optionalEnv(name: string): string | undefined {

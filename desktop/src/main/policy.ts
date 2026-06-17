@@ -329,7 +329,7 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   const provider = config.provider as Record<string, unknown> | undefined;
   assert(isHttpModelUrl(selectedModel.baseUrl), "model base URL must be an HTTP(S) endpoint");
   assert(provider?.id === selectedModel.providerId, "provider id must match the selected endpoint");
-  assert(provider?.modelId === selectedModel.modelId, "model must match the configured endpoint model");
+  assert(provider?.modelId === selectedModel.modelId, "provider model token must match the selected endpoint");
   assert(provider?.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
 }
 

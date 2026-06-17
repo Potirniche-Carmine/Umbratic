@@ -60,7 +60,7 @@ type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type LocalProviderId = "company-endpoint";
 type ModelEndpointMode = "local" | "server";
-type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
+type ModelEndpointSoftware = "ollama" | "vllm";
 type ModelEndpointSettings = {
   mode: ModelEndpointMode;
   software: ModelEndpointSoftware;
@@ -467,7 +467,7 @@ const defaultModelEndpointSettings: ModelEndpointSettings = {
   mode: "local",
   software: "ollama",
   baseUrl: "http://127.0.0.1:8080",
-  modelId: "",
+  modelId: "veil-managed",
   secret: "",
   headers: [
     { name: "", value: "" },
@@ -629,7 +629,6 @@ function endpointModeForBaseUrl(baseUrl: string): ModelEndpointMode {
 
 function endpointSoftwareForBaseUrl(baseUrl: string): ModelEndpointSoftware {
   const normalized = baseUrl.toLowerCase();
-  if (normalized.includes("lmstudio")) return "lmstudio";
   if (normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
   return "ollama";
 }
@@ -639,7 +638,7 @@ function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
   const settings = value as Partial<ModelEndpointSettings>;
   const baseUrl = typeof settings.baseUrl === "string" ? settings.baseUrl : defaultModelEndpointSettings.baseUrl;
   const software =
-    settings.software === "ollama" || settings.software === "lmstudio" || settings.software === "vllm"
+    settings.software === "ollama" || settings.software === "vllm"
       ? settings.software
       : endpointSoftwareForBaseUrl(baseUrl);
   return {
@@ -2492,9 +2491,6 @@ function App() {
         ? "Unavailable"
         : "Checking";
   const endpointDirty = JSON.stringify(endpointDraftSettings) !== JSON.stringify(endpointSettings);
-  const endpointModelOptions = backend?.models ?? [];
-  const endpointDraftModelAvailable =
-    !!endpointDraftSettings.modelId && endpointModelOptions.some((model) => model.modelId === endpointDraftSettings.modelId);
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
@@ -5216,30 +5212,9 @@ function App() {
                         <input
                           value={endpointDraftSettings.baseUrl}
                           onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                          placeholder="https://ollama.umbratic.ai"
+                          placeholder="https://veil.umbratic.ai"
                           spellCheck={false}
                         />
-                      </label>
-                      <label className="settingsField">
-                        <span>Model</span>
-                        <select
-                          value={endpointDraftModelAvailable ? endpointDraftSettings.modelId : ""}
-                          onChange={(event) => updateEndpointDraft({ modelId: event.currentTarget.value })}
-                          disabled={endpointModelOptions.length === 0}
-                        >
-                          {endpointModelOptions.length === 0 ? (
-                            <option value="">No models found</option>
-                          ) : (
-                            <>
-                              <option value="">Select model</option>
-                              {endpointModelOptions.map((model) => (
-                                <option key={`${model.providerId}:${model.modelId}`} value={model.modelId}>
-                                  {model.modelId}
-                                </option>
-                              ))}
-                            </>
-                          )}
-                        </select>
                       </label>
                       <label className="settingsField">
                         <span>Bearer token</span>

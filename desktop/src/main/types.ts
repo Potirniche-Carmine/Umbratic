@@ -9,7 +9,7 @@ export type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "d
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
-export type ModelEndpointSoftware = "ollama" | "lmstudio" | "vllm";
+export type ModelEndpointSoftware = "ollama" | "vllm";
 export type ModelEndpointSettings = {
   mode: ModelEndpointMode;
   software: ModelEndpointSoftware;

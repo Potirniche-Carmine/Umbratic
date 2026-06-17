@@ -265,14 +265,13 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
   const managedBaseUrl = managed?.baseUrl;
   const managedSoftware = managed?.software;
   const storedBaseUrl = typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : undefined;
-  const storedModelId = typeof endpoint.modelId === "string" && endpoint.modelId.trim() ? endpoint.modelId.trim() : undefined;
   const software =
     managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
   return {
     mode,
     software,
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
-    modelId: managed?.modelId ?? storedModelId ?? defaultEndpointModelId,
+    modelId: defaultEndpointModelId,
     secret: managed?.secret ?? readProtectedString(endpoint.secret) ?? (mode === "local" ? "" : defaultEndpointApiKey),
     headers: normalizeEndpointHeaders(endpoint.headers),
   };
@@ -311,7 +310,7 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
         : typeof input.baseUrl === "string" && input.baseUrl.trim()
           ? input.baseUrl.trim()
           : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
-    modelId: managed?.modelId ?? (typeof input.modelId === "string" ? input.modelId.trim() : current.modelId),
+    modelId: defaultEndpointModelId,
     secret: managed?.secret ?? (typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret),
     headers: normalizeEndpointHeaders(input.headers ?? current.headers),
   };
