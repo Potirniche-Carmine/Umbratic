@@ -120,6 +120,8 @@ type PdfRenderWorkerResult =
   | { ok: false; error: string };
 
 const activeRunnerProcesss = new Map<string, RunnerProcess>();
+const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
+const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
 const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
 const textAttachmentByteLimit = 512 * 1024;
@@ -260,6 +262,14 @@ function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit:
   const last = existing.at(-1);
   if (
     last &&
+    event.type === "user.message" &&
+    last.type === "user.message" &&
+    taskEventSignature(last) === taskEventSignature(event)
+  ) {
+    return existing;
+  }
+  if (
+    last &&
     (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") &&
     last.type === event.type &&
     last.taskId === event.taskId
@@ -298,6 +308,32 @@ function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEv
 }
 
 function taskEventSignature(event: BackendUiEvent): string {
+  if (event.type === "user.message") {
+    return JSON.stringify({
+      type: event.type,
+      taskId: event.taskId,
+      text: event.text,
+      attachedFiles: (event.attachedFiles ?? []).map((file) => ({
+        path: file.path,
+        name: file.name,
+        storedPath: file.storedPath,
+        originalPath: file.originalPath,
+      })),
+    });
+  }
+  if (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") {
+    return JSON.stringify({
+      type: event.type,
+      taskId: event.taskId,
+      text: event.text,
+    });
+  }
+  if (event.type === "assistant.done") {
+    return JSON.stringify({
+      type: event.type,
+      taskId: event.taskId,
+    });
+  }
   return JSON.stringify(event);
 }
 
@@ -1168,8 +1204,16 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
   }
 }
 
-function priorChatContext(events: BackendUiEvent[]): string {
-  const lines = visibleTaskEvents(events)
+function priorChatContext(events: BackendUiEvent[], currentUserPrompt = ""): string {
+  const historyEvents = visibleTaskEvents(events);
+  const currentPrompt = currentUserPrompt.trim();
+  if (currentPrompt) {
+    const last = historyEvents.at(-1);
+    if (last?.type === "user.message" && last.text.trim() === currentPrompt) {
+      historyEvents.pop();
+    }
+  }
+  const lines = historyEvents
     .map(historyLineForEvent)
     .filter((line): line is string => !!line);
   if (lines.length === 0) return "";
@@ -1284,14 +1328,14 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       lines.push(`\n### ${file.path}`, "```", file.text, "```");
     }
   }
-  const history = priorChatContext(task.events ?? []);
+  const history = priorChatContext(task.events ?? [], userPrompt);
   if (history) {
     lines.push(
       "",
-      "Previous chat context:",
+      "Conversation so far, for reference only:",
       history,
       "",
-      "Continue from the previous chat context above. Do not repeat earlier checklists or re-answer earlier messages unless the new user request asks for it.",
+      "Use the conversation above only as background. The next section is the current user request to answer now.",
     );
   }
   lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
@@ -1499,6 +1543,19 @@ function emit(event: BackendUiEvent) {
   const stampedEvent = { ...event, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
   recordTaskEvent(stampedEvent);
   mainWindow?.webContents.send("umbratic:backend-event", stampedEvent);
+}
+
+function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAttachment[]) {
+  const event = {
+    type: "user.message",
+    taskId: task.id,
+    text,
+    attachedFiles,
+    at: new Date().toISOString(),
+  } satisfies BackendUiEvent;
+  task.events = appendTaskEvent(task.events ?? [], event, 500);
+  saveTask(task);
+  mainWindow?.webContents.send("umbratic:backend-event", event);
 }
 
 function failTask(task: TaskRecord, message: string) {
@@ -3058,10 +3115,76 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.metadataPath = undefined;
 }
 
+function startTaskRequestKey(input: Record<string, unknown>): string {
+  const attachedFiles = Array.isArray(input.attachedFiles)
+    ? input.attachedFiles.map((file) => {
+        if (!isRecord(file)) return {};
+        return {
+          path: typeof file.path === "string" ? file.path : "",
+          name: typeof file.name === "string" ? file.name : "",
+          storedPath: typeof file.storedPath === "string" ? file.storedPath : "",
+          originalPath: typeof file.originalPath === "string" ? file.originalPath : "",
+        };
+      })
+    : [];
+  const enabledTools = Array.isArray(input.enabledTools)
+    ? input.enabledTools.filter((tool): tool is string => typeof tool === "string").sort()
+    : [];
+  return JSON.stringify({
+    repositoryId: typeof input.repositoryId === "string" ? input.repositoryId.trim() : "",
+    prompt: typeof input.prompt === "string" ? input.prompt.trim() : "",
+    attachedFiles,
+    reasoningMode: input.reasoningMode === "fast" ? "fast" : "reasoning",
+    useWorktree: input.useWorktree === true,
+    enabledTools,
+  });
+}
+
+function recentActiveStartTask(requestKey: string): TaskInfo | null {
+  const recent = recentStartTaskRequests.get(requestKey);
+  if (!recent) return null;
+  if (recent.expiresAt <= Date.now()) {
+    recentStartTaskRequests.delete(requestKey);
+    return null;
+  }
+  const task = readTasks().find((row) => row.id === recent.taskId);
+  if (!task) {
+    recentStartTaskRequests.delete(requestKey);
+    return null;
+  }
+  if (
+    activeRunnerProcesss.has(task.id) ||
+    task.state === "running" ||
+    task.state === "awaiting_worktree_approval" ||
+    task.state === "approving"
+  ) {
+    return publicTask(task);
+  }
+  return null;
+}
+
 async function startTask(input: unknown): Promise<TaskInfo> {
   if (!isRecord(input)) {
     throw new Error("Invalid task input.");
   }
+  const requestKey = startTaskRequestKey(input);
+  const activeRequest = activeStartTaskRequests.get(requestKey);
+  if (activeRequest) return activeRequest;
+  const recentTask = recentActiveStartTask(requestKey);
+  if (recentTask) return recentTask;
+
+  const request = startTaskOnce(input);
+  activeStartTaskRequests.set(requestKey, request);
+  try {
+    const task = await request;
+    recentStartTaskRequests.set(requestKey, { taskId: task.id, expiresAt: Date.now() + 15000 });
+    return task;
+  } finally {
+    activeStartTaskRequests.delete(requestKey);
+  }
+}
+
+async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> {
   const requestedRepositoryId =
     typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
   const prompt = requiredString(input.prompt, "prompt");
@@ -3129,7 +3252,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
       pendingRunnerPrompts.delete(existingTask.id);
       existingTask.state = "running";
       saveTask(existingTask);
-      emit({ type: "user.message", taskId: existingTask.id, text: prompt, attachedFiles: attachments });
+      appendUserMessage(existingTask, prompt, attachments);
       await createWorktreeAndRunRunner(existingTask, undefined, attachments, prompt);
       return publicTask(existingTask);
     }
@@ -3147,7 +3270,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     existingTask.originalRepoPath = refreshed.rootPath;
     existingTask.originalWasDirty = refreshed.dirty;
     saveTask(existingTask);
-    emit({ type: "user.message", taskId: existingTask.id, text: prompt, attachedFiles: attachments });
+    appendUserMessage(existingTask, prompt, attachments);
     void runRunnerTask(existingTask.id, undefined, prompt, attachments);
     return publicTask(existingTask);
   }
@@ -3185,7 +3308,7 @@ async function startTask(input: unknown): Promise<TaskInfo> {
     enabledTools: requestedEnabledTools,
   };
   saveTask(task);
-  emit({ type: "user.message", taskId: task.id, text: prompt, attachedFiles: attachments });
+  appendUserMessage(task, prompt, attachments);
   if (shouldCreateWorktree) {
     await createWorktreeAndRunRunner(task, undefined, attachments, prompt);
   } else {

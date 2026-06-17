@@ -1169,6 +1169,32 @@ function isReviewReadyText(text: string): boolean {
 }
 
 function eventSignature(event: BackendUiEvent): string {
+  if (event.type === "user.message") {
+    return JSON.stringify({
+      type: event.type,
+      taskId: event.taskId,
+      text: event.text,
+      attachedFiles: (event.attachedFiles ?? []).map((file) => ({
+        path: file.path,
+        name: file.name,
+        storedPath: file.storedPath,
+        originalPath: file.originalPath,
+      })),
+    });
+  }
+  if (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") {
+    return JSON.stringify({
+      type: event.type,
+      taskId: event.taskId,
+      text: event.text,
+    });
+  }
+  if (event.type === "assistant.done") {
+    return JSON.stringify({
+      type: event.type,
+      taskId: event.taskId,
+    });
+  }
   return JSON.stringify(event);
 }
 
@@ -1183,6 +1209,14 @@ function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, lim
     ].slice(-limit);
   }
   const last = events.at(-1);
+  if (
+    last &&
+    event.type === "user.message" &&
+    last.type === "user.message" &&
+    eventSignature(last) === eventSignature(event)
+  ) {
+    return events;
+  }
   if (
     last &&
     (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") &&
@@ -2445,6 +2479,7 @@ function App() {
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
+  const startTaskInFlightRef = useRef(false);
   const focusRefreshTimerRef = useRef<number | null>(null);
   const followComposerScrollRef = useRef(true);
   const composerScrollInputRef = useRef(false);
@@ -3398,9 +3433,9 @@ function App() {
       const nextTask = await api.refreshTaskReview({ taskId });
       if (!nextTask) return;
       if (visibleTaskIdRef.current === nextTask.id) {
-        cacheTaskEvents(nextTask.events ?? []);
         setVisibleTask(nextTask);
         const nextEvents = visibleEventsForTask(nextTask);
+        cacheTaskEvents(nextEvents);
         setEvents(nextEvents);
         setPendingPermission(pendingPermissionFromEvents(nextEvents));
         setExpandedReviewPaths((current) => {
@@ -3659,22 +3694,33 @@ function App() {
     }
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) return;
-    const status = selectedModel && backend?.endpoint === "ready" ? backend : await refreshStatus();
+    if (startTaskInFlightRef.current) return;
+    startTaskInFlightRef.current = true;
+    let status: BackendStatus | null = null;
+    try {
+      status = selectedModel && backend?.endpoint === "ready" ? backend : await refreshStatus();
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+      startTaskInFlightRef.current = false;
+      return;
+    }
     if (!status?.model || status.endpoint !== "ready") {
       try {
         await showConnectionErrorInChat(trimmedPrompt, status);
       } catch (cause) {
         setError(String(cause instanceof Error ? cause.message : cause));
+      } finally {
+        startTaskInFlightRef.current = false;
       }
       return;
     }
     const isContinuingChat = !!task && task.chatId === activeChatId;
-    const preservedEvents = isContinuingChat ? events : [];
     setError(null);
     setBusy(true);
     followComposerScrollRef.current = true;
     composerScrollInputRef.current = false;
     if (!isContinuingChat) {
+      setVisibleTask(null);
       setEvents([]);
       setAssistantText("");
       setApprovalChecks([]);
@@ -3703,14 +3749,10 @@ function App() {
         useWorktree: useWorktreeForNextRun,
         enabledTools: enabledToolIds(toolsEnabled),
       });
-      cacheTaskEvents(nextTask.events ?? []);
       setVisibleTask(nextTask);
       const nextVisibleEvents = visibleEventsForTask(nextTask);
-      setEvents((current) =>
-        isContinuingChat
-          ? mergeEventSnapshots(preservedEvents, nextVisibleEvents, current)
-          : mergeEventSnapshots(nextVisibleEvents, current),
-      );
+      cacheTaskEvents(nextVisibleEvents);
+      setEvents(nextVisibleEvents);
       setPendingPermission(pendingPermissionFromEvents(nextVisibleEvents));
       if (nextTask.chatId) setActiveChatId(nextTask.chatId);
       upsertChatFromTask(nextTask);
@@ -3726,6 +3768,7 @@ function App() {
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
+      startTaskInFlightRef.current = false;
       setBusy(false);
     }
   }
