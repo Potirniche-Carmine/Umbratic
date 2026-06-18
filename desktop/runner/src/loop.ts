@@ -19,6 +19,35 @@ type StreamAccumulator = {
   emittedReasoning: boolean;
 };
 
+type ToolContextResult = {
+  call: ToolCall;
+  title: string;
+  output: string;
+  failed: boolean;
+};
+
+const maxToolContextBytes = 56 * 1024;
+
+function clipUtf8(value: string, byteLimit: number): string {
+  const buffer = Buffer.from(value, "utf8");
+  if (buffer.length <= byteLimit) return value;
+  return buffer.subarray(0, byteLimit).toString("utf8").replace(/\uFFFD$/u, "");
+}
+
+function formatToolContextMessage(results: ToolContextResult[]): string {
+  const lines = [
+    "Workspace tool results:",
+    "Use these local workspace results to answer the user's request. Do not repeat the same read or search unless more specific context is still needed.",
+  ];
+  for (const result of results) {
+    const status = result.failed ? "failed" : "ok";
+    lines.push("", `### ${result.call.name}: ${result.title || result.call.id} (${status})`, "```", result.output, "```");
+  }
+  const message = lines.join("\n");
+  if (Buffer.byteLength(message, "utf8") <= maxToolContextBytes) return message;
+  return `${clipUtf8(message, maxToolContextBytes)}\n...[truncated: workspace tool context exceeded ${maxToolContextBytes} bytes]`;
+}
+
 function chatCompletionsUrl(baseURL: string): string {
   const base = baseURL.replace(/\/+$/, "");
   return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
@@ -147,6 +176,11 @@ function messageContentFromParts(parts: InputPart[]): string | ChatContentPart[]
   );
 }
 
+function lastMessageIsToolContext(session: Session): boolean {
+  const content = session.messages.at(-1)?.content;
+  return typeof content === "string" && content.startsWith("Workspace tool results:");
+}
+
 async function streamOllamaChat(
   session: Session,
   url: string,
@@ -242,29 +276,49 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
     return streamOllamaChat(session, url, headers, tools, emit);
   }
   const routeIsVeil = isVeilChatUrl(url);
-  const response = await modelHttpRequest(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
-      messages: session.messages,
-      stream: true,
-      ...(routeIsVeil && session.config.runtimeProfiles?.length ? { runtime_profiles: session.config.runtimeProfiles } : {}),
-      ...(tools.length ? { tools, tool_choice: "auto" } : {}),
-    }),
-    mtls: session.config.provider.mtls,
-    signal: session.abortController.signal,
-  });
+  const requestModel = (includeTools: boolean) =>
+    modelHttpRequest(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
+        messages: session.messages,
+        stream: true,
+        ...(routeIsVeil && session.config.runtimeProfiles?.length ? { runtime_profiles: session.config.runtimeProfiles } : {}),
+        ...(includeTools && tools.length ? { tools, tool_choice: "auto" } : {}),
+      }),
+      mtls: session.config.provider.mtls,
+      signal: session.abortController.signal,
+    });
+  let response = await requestModel(true);
   if (response.statusCode < 200 || response.statusCode >= 300) {
     const body = await readBodyText(response.body, 4096).catch(() => "");
+    if (tools.length && lastMessageIsToolContext(session)) {
+      response = await requestModel(false);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return readOpenAIStream(session, response.body, emit);
+      }
+      const retryBody = await readBodyText(response.body, 4096).catch(() => "");
+      throw new Error(
+        `model request failed: ${response.statusCode} ${response.statusMessage}${retryBody ? ` ${retryBody.slice(0, 400)}` : ""}`,
+      );
+    }
     throw new Error(
       `model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`,
     );
   }
 
+  return readOpenAIStream(session, response.body, emit);
+}
+
+async function readOpenAIStream(
+  session: Session,
+  body: AsyncIterable<Buffer | string>,
+  emit?: (event: UmbraticRunnerEvent) => void,
+): Promise<StreamAccumulator> {
   const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false };
   let buffer = "";
-  for await (const chunk of response.body) {
+  for await (const chunk of body) {
     buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : Buffer.from(chunk).toString("utf8");
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
@@ -300,12 +354,8 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
   for (let turn = 0; turn < 12; turn++) {
     const acc = await streamModel(session, emit);
     const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
-    session.messages.push({
-      role: "assistant",
-      content: acc.content || null,
-      tool_calls: toolCalls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })),
-    });
     if (toolCalls.length === 0) {
+      session.messages.push({ role: "assistant", content: acc.content || null });
       if (acc.reasoning && !acc.emittedReasoning) {
         emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: acc.reasoning, at: nowIso() });
       }
@@ -324,17 +374,22 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
       },
     };
+    if (acc.content.trim()) {
+      session.messages.push({ role: "assistant", content: acc.content });
+    }
+    const toolResults: ToolContextResult[] = [];
     for (const toolCall of toolCalls) {
       try {
         const result = await runTool(ctx, emit, toolCall);
-        session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: result.output });
+        toolResults.push({ call: toolCall, title: result.title, output: result.output, failed: false });
       } catch (error) {
         const message = `Tool failed: ${error instanceof Error ? error.message : String(error)}`;
         emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
         emit({ type: "tool.finished", taskId: session.taskId, toolCallId: toolCall.id, exitCode: 1, at: nowIso() });
-        session.messages.push({ role: "tool", tool_call_id: toolCall.id, content: message });
+        toolResults.push({ call: toolCall, title: toolCall.name, output: message, failed: true });
       }
     }
+    session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });
   }
   throw new Error("model exceeded maximum tool turns");
 }

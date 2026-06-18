@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   AtSign,
@@ -1347,11 +1348,25 @@ function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolea
   return !!draft && (prompt === draft || prompt.startsWith(`${draft}\n\nAttached files:`));
 }
 
+function relativeChatAge(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  const elapsedMs = Math.max(0, Date.now() - timestamp);
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 1) return "<1m";
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
+  const elapsedHours = Math.floor(elapsedMs / 3_600_000);
+  if (elapsedHours < 24) return `${elapsedHours}h`;
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  if (elapsedDays < 7) return `${elapsedDays}d`;
+  return `${Math.floor(elapsedDays / 7)}w`;
+}
+
 function chatSubline(chat: ChatRecord): string {
   if (chat.taskState === "approved") return "Changes accepted";
   if (chat.taskState === "merged") return "Closed after approved merge";
   if (chat.taskState === "rejected") return "Changes undone";
-  return chat.updatedAt ? new Date(chat.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  return chat.updatedAt ? relativeChatAge(chat.updatedAt) : "";
 }
 
 function closedChatMessage(state?: TaskState): string | undefined {
@@ -1368,6 +1383,21 @@ function folderName(pathValue?: string): string {
 
 function chatProjectKey(chat: ChatRecord): string {
   return chat.repositoryPath || "__unassigned__";
+}
+
+function chatAttachmentsMatch(left: ChatAttachment[], right: ChatAttachment[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((file, index) => {
+    const other = right[index];
+    return (
+      !!other &&
+      file.path === other.path &&
+      file.name === other.name &&
+      file.source === other.source &&
+      file.storedPath === other.storedPath &&
+      file.originalPath === other.originalPath
+    );
+  });
 }
 
 function attachmentDetail(file: ChatAttachment): string {
@@ -2393,6 +2423,10 @@ function scrollElementToBottom(node: HTMLElement, behavior: ScrollBehavior = "au
   });
 }
 
+function placeElementAtBottom(node: HTMLElement) {
+  node.scrollTop = node.scrollHeight;
+}
+
 function App() {
   const [backend, setBackend] = useState<BackendStatus | null>(null);
   const [repository, setRepository] = useState<RepositoryInfo | null>(composerTestMode ? composerTestRepository : null);
@@ -2480,8 +2514,10 @@ function App() {
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
   const startTaskInFlightRef = useRef(false);
+  const chatSelectionSequenceRef = useRef(0);
   const focusRefreshTimerRef = useRef<number | null>(null);
   const followComposerScrollRef = useRef(true);
+  const forceComposerBottomScrollRef = useRef(false);
   const composerScrollInputRef = useRef(false);
   const reasoningBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const reasoningFollowScrollRef = useRef<Map<string, boolean>>(new Map());
@@ -2564,14 +2600,13 @@ function App() {
   const chatProjectGroups = useMemo(() => {
     const groups = new Map<
       string,
-      { key: string; name: string; path?: string; chats: ChatRecord[]; latestUpdatedAt: string }
+      { key: string; name: string; path?: string; chats: ChatRecord[] }
     >();
     for (const chat of chats) {
       const key = chatProjectKey(chat);
       const existing = groups.get(key);
       if (existing) {
         existing.chats.push(chat);
-        if (chat.updatedAt > existing.latestUpdatedAt) existing.latestUpdatedAt = chat.updatedAt;
         continue;
       }
       groups.set(key, {
@@ -2579,14 +2614,18 @@ function App() {
         name: chat.repositoryName || folderName(chat.repositoryPath),
         path: chat.repositoryPath,
         chats: [chat],
-        latestUpdatedAt: chat.updatedAt,
       });
     }
-    return Array.from(groups.values()).sort((left, right) => {
-      if (left.key === "__unassigned__") return 1;
-      if (right.key === "__unassigned__") return -1;
-      return right.latestUpdatedAt.localeCompare(left.latestUpdatedAt);
-    });
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        chats: [...group.chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      }))
+      .sort((left, right) => {
+        if (left.key === "__unassigned__") return 1;
+        if (right.key === "__unassigned__") return -1;
+        return left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) || left.key.localeCompare(right.key);
+      });
   }, [chats]);
   const layoutStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
@@ -2904,8 +2943,16 @@ function App() {
 
   useLayoutEffect(() => {
     const node = streamRef.current;
-    if (node && followComposerScrollRef.current) scrollElementToBottom(node);
-  }, [composerItems, task?.state, reviewFiles.length, expandedReviewPaths, reviewOpen]);
+    if (!node) return;
+    if (forceComposerBottomScrollRef.current) {
+      if (composerItems.length === 0 && (activeChat?.taskId || task)) return;
+      forceComposerBottomScrollRef.current = false;
+      followComposerScrollRef.current = true;
+      placeElementAtBottom(node);
+      return;
+    }
+    if (followComposerScrollRef.current) scrollElementToBottom(node);
+  }, [activeChat?.taskId, composerItems, task, reviewFiles.length, expandedReviewPaths, reviewOpen]);
 
   useLayoutEffect(() => {
     const activeReasoningIds = new Set<string>();
@@ -2934,6 +2981,7 @@ function App() {
       if (!target.closest(".workspaceModeControl")) setWorkspaceModeMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
       if (!target.closest(".idePicker")) setIdeMenuOpen(null);
+      if (!target.closest(".attachmentMenu")) setMention(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -2941,6 +2989,7 @@ function App() {
       setWorkspaceModeMenuOpen(false);
       setPermissionMenuOpen(false);
       setIdeMenuOpen(null);
+      setMention(null);
     };
     document.addEventListener("pointerdown", closeMenus);
     document.addEventListener("keydown", closeOnEscape);
@@ -2999,6 +3048,14 @@ function App() {
   }, [fileMatches.length, selectedFileIndex]);
 
   async function persistDraft(chatId: string, draftPrompt: string, files: ChatAttachment[]) {
+    const existing = chats.find((chat) => chat.id === chatId);
+    if (
+      existing &&
+      (existing.draftPrompt ?? "") === draftPrompt &&
+      chatAttachmentsMatch(existing.attachedFiles ?? [], files)
+    ) {
+      return;
+    }
     try {
       const next = await api.updateChatDraft({ chatId, draftPrompt, attachedFiles: files });
       setChats((current) =>
@@ -4245,50 +4302,92 @@ function App() {
 
   async function selectChat(chat: ChatRecord) {
     if (activeChatId === chat.id) {
+      const node = streamRef.current;
+      if (node) {
+        followComposerScrollRef.current = true;
+        forceComposerBottomScrollRef.current = false;
+        placeElementAtBottom(node);
+      }
       void restoreChatRepository(chat, task?.repositoryId);
       return;
     }
-    if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
+    const selectionSequence = chatSelectionSequenceRef.current + 1;
+    chatSelectionSequenceRef.current = selectionSequence;
+    if (activeChatId) void persistDraft(activeChatId, prompt, attachedFiles);
     suppressDraftSaveBriefly();
-    prepareVisibleTaskLoad(chat.taskId ?? null);
-    setActiveChatId(chat.id);
-    setEvents([]);
-    setAssistantText("");
-    setApprovalChecks([]);
-    setExpandedCommandId(null);
-    setExpandedReasoningIds(new Set());
-    setAutoExpandedReasoningIds(new Set());
-    setCollapsedReasoningIds(new Set());
-    setPendingPermission(null);
-    setError(null);
-    setExpandedReviewPaths(new Set());
-    setAttachedFiles(chat.attachedFiles ?? []);
-    setMention(null);
-    setFileMatches([]);
+    const cachedEvents = chat.taskId ? compactBackendEvents(cachedEventsForTask(chat.taskId), 500) : [];
+    const canOpenImmediately = !chat.taskId || cachedEvents.length > 0;
+    if (canOpenImmediately) {
+      flushSync(() => {
+        forceComposerBottomScrollRef.current = true;
+        prepareVisibleTaskLoad(chat.taskId ?? null);
+        setActiveChatId(chat.id);
+        setEvents(cachedEvents);
+        setAssistantText("");
+        setApprovalChecks([]);
+        setExpandedCommandId(null);
+        setExpandedReasoningIds(new Set());
+        setAutoExpandedReasoningIds(new Set());
+        setCollapsedReasoningIds(new Set());
+        setPendingPermission(null);
+        setError(null);
+        setExpandedReviewPaths(new Set());
+        setAttachedFiles(chat.attachedFiles ?? []);
+        setMention(null);
+        setFileMatches([]);
+      });
+      const openedNode = streamRef.current;
+      if (openedNode) placeElementAtBottom(openedNode);
+    } else {
+      setError(null);
+      setMention(null);
+      setFileMatches([]);
+    }
     try {
       let nextTask = chat.taskId ? await api.getTask({ taskId: chat.taskId }) : null;
       if (reviewOpen && nextTask?.state === "review_ready") {
         nextTask = (await api.refreshTaskReview({ taskId: nextTask.id })) ?? nextTask;
       }
-      await restoreChatRepository(chat, nextTask?.repositoryId);
+      if (chatSelectionSequenceRef.current !== selectionSequence) return;
+      void restoreChatRepository(chat, nextTask?.repositoryId);
       if (!chat.taskId) {
-        setVisibleTask(null);
-        closeReviewPanel();
-        setPrompt(chat.draftPrompt ?? "");
+        flushSync(() => {
+          setVisibleTask(null);
+          closeReviewPanel();
+          setPrompt(chat.draftPrompt ?? "");
+        });
+        const node = streamRef.current;
+        if (node) placeElementAtBottom(node);
         return;
       }
-      setVisibleTask(nextTask);
       const nextEvents = nextTask ? visibleEventsForTask(nextTask) : [];
-      setEvents(compactBackendEvents(nextEvents, 500));
-      setPendingPermission(pendingPermissionFromEvents(nextEvents));
       const draftPrompt = chat.draftPrompt ?? "";
       const sentDraft = nextTask ? draftMatchesTaskPrompt(draftPrompt, nextTask.prompt) : false;
-      setPrompt(sentDraft ? "" : draftPrompt);
-      setAttachedFiles(!draftPrompt || sentDraft ? [] : (chat.attachedFiles ?? []));
+      flushSync(() => {
+        forceComposerBottomScrollRef.current = true;
+        setActiveChatId(chat.id);
+        setVisibleTask(nextTask);
+        setEvents(compactBackendEvents(nextEvents, 500));
+        setAssistantText("");
+        setApprovalChecks([]);
+        setExpandedCommandId(null);
+        setExpandedReasoningIds(new Set());
+        setAutoExpandedReasoningIds(new Set());
+        setCollapsedReasoningIds(new Set());
+        setPendingPermission(pendingPermissionFromEvents(nextEvents));
+        setError(null);
+        setPrompt(sentDraft ? "" : draftPrompt);
+        setAttachedFiles(!draftPrompt || sentDraft ? [] : (chat.attachedFiles ?? []));
+        setMention(null);
+        setFileMatches([]);
+        setExpandedReviewPaths(new Set());
+      });
+      const node = streamRef.current;
+      if (node) placeElementAtBottom(node);
       if (sentDraft) void persistDraft(chat.id, "", []);
-      setExpandedReviewPaths(new Set());
     } catch (cause) {
-      setVisibleTask(null);
+      if (chatSelectionSequenceRef.current !== selectionSequence) return;
+      if (canOpenImmediately) setVisibleTask(null);
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -4751,7 +4850,7 @@ function App() {
           <div className="promptControls">
             <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
               <button className="workspaceControl" type="button" onClick={pickRepository} disabled={busy}>
-                <span className="controlIcon">{repository?.kind === "git" ? <GitBranch size={14} /> : <FolderOpen size={14} />}</span>
+                <span className="controlIcon"><FolderOpen size={14} /></span>
                 <span>
                   <strong>{repository ? repository.name : "Select folder"}</strong>
                 </span>
@@ -4767,6 +4866,7 @@ function App() {
                     disabled={busy || checkoutPending}
                     title={`Branch: ${repository.originalBranch}`}
                   >
+                    <GitBranch size={12} />
                     <span>{repository.originalBranch}</span>
                     <ChevronDown size={12} />
                   </button>

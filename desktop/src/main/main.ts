@@ -159,6 +159,10 @@ const cleanUserData = path.join(app.getPath("appData"), "Umbratic AI");
 try {
   fs.mkdirSync(cleanUserData, { recursive: true });
   app.setPath("userData", cleanUserData);
+  if (isDev) {
+    app.commandLine.appendSwitch("disable-http-cache");
+    app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
+  }
 } catch {
   /* Electron will use the default userData path. */
 }
@@ -2408,50 +2412,12 @@ async function respondToToolPermission(input: unknown) {
   }
 }
 
-function existingKeyWorkspaceFilePaths(rootPath: string): string[] {
-  return keyWorkspaceFileCandidates.filter((relative) => {
-    const absolute = path.resolve(rootPath, relative);
-    return pathInside(rootPath, absolute) && fs.existsSync(absolute);
-  });
-}
-
-function workspaceContextReadSummary(task: TaskRecord, rootPath: string, attachments: ChatAttachment[]): string {
-  const parts = [`read workspace context in ${rootPath}`];
-  const keyFiles = existingKeyWorkspaceFilePaths(rootPath);
-  parts.push("list visible files");
-  if (keyFiles.length) {
-    parts.push(`read key files: ${keyFiles.join(", ")}`);
-  }
-  const workspaceAttachments = attachments
-    .filter((file) => file.source !== "chat")
-    .map((file) => normalizeRelativePath(file.path))
-    .filter(Boolean);
-  if (workspaceAttachments.length) {
-    parts.push(`read attached workspace files: ${workspaceAttachments.join(", ")}`);
-  }
-  if (task.workspaceMode === "local" && !task.agentBranch) {
-    parts.push("snapshot small text files for review and undo");
-  }
-  return parts.join("; ");
-}
-
 async function runnerPromptForTaskWithPermission(
   task: TaskRecord,
   userPrompt: string,
   attachments: ChatAttachment[],
 ): Promise<RunnerPromptPart[]> {
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
-  const hiddenChat = isHiddenChatTask(task);
-  if (!hiddenChat) {
-    const summary = workspaceContextReadSummary(task, rootPath, attachments);
-    await askPermission(task, {
-      kind: "read",
-      summary,
-      command: summary,
-      commandClass: "read",
-      cwd: rootPath,
-    });
-  }
   if (task.workspaceMode === "local" && !task.agentBranch && !task.baselineFiles) {
     task.baselineFiles = snapshotFolder(rootPath);
     saveTask(task);
@@ -2674,6 +2640,12 @@ async function handleRunnerPermission(
   if (type === "bash" && isBarePythonCommand(title)) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
     await replyRunnerPermission(run, id, false);
+    return "resolved";
+  }
+
+  if (type === "read" || type === "search") {
+    emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
+    await replyRunnerPermission(run, id, true);
     return "resolved";
   }
 
@@ -3699,7 +3671,7 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
     });
     return result;
   };
-  return withTelemetry(await openPathInIde(ideId, targetPath, relativeFilePath ? "file" : "folder"));
+  return withTelemetry(await openPathInIde(ideId, targetPath, relativeFilePath ? "file" : "folder", task.worktreePath));
 }
 
 async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
@@ -3717,7 +3689,19 @@ async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
   return openPathInIde(ideId, repositoryPath, "folder");
 }
 
-async function openPathInIde(ideId: string, targetPath: string, targetKind: "file" | "folder"): Promise<IdeOpenResult> {
+function codeLikeIdeArgs(targetPath: string, targetKind: "file" | "folder", workspacePath?: string): string[] {
+  if (targetKind === "file" && workspacePath) {
+    return ["--reuse-window", workspacePath, "--goto", targetPath];
+  }
+  return targetKind === "file" ? [targetPath] : ["--new-window", targetPath];
+}
+
+async function openPathInIde(
+  ideId: string,
+  targetPath: string,
+  targetKind: "file" | "folder",
+  workspacePath?: string,
+): Promise<IdeOpenResult> {
   if (ideId === "explorer") {
     if (targetKind === "file") {
       shell.showItemInFolder(targetPath);
@@ -3734,13 +3718,15 @@ async function openPathInIde(ideId: string, targetPath: string, targetKind: "fil
   }
   const command = await firstAvailableCommand(commandCandidatesByIde[ideId] ?? []);
   if (command) {
-    return launchCommand(command, targetKind === "file" ? [targetPath] : ["--new-window", targetPath]);
+    return launchCommand(command, codeLikeIdeArgs(targetPath, targetKind, workspacePath));
   }
   if (ideId === "code" && macApplicationExists("Visual Studio Code")) {
     return launchCommand(
       "open",
-      targetKind === "file"
-        ? ["-a", "Visual Studio Code", targetPath]
+      targetKind === "file" && workspacePath
+        ? ["-a", "Visual Studio Code", workspacePath, "--args", "--reuse-window", "--goto", targetPath]
+        : targetKind === "file"
+          ? ["-a", "Visual Studio Code", targetPath]
         : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath],
     );
   }

@@ -82,6 +82,11 @@ assert.equal(blocks[5].language, "ts");
 assert.match(blocks[5].content, /<div>&<\/div>/);
 assert.match(blocks[5].content, /A\\\\\|B/);
 
+const nestedHeadingBlocks = parseMarkdown("#### A. The Agent/Skill Layer\n\nContent");
+assert.equal(nestedHeadingBlocks[0].type, "heading");
+assert.equal(nestedHeadingBlocks[0].level, 4);
+assert.equal(nestedHeadingBlocks[0].text, "A. The Agent/Skill Layer");
+
 assert.deepEqual(plain(splitMarkdownTableRow("| one | two\\|three | `a|b` |")), ["one", "two|three", "`a|b`"]);
 
 const unfinishedFence = parseMarkdown('```bash\nnpm run build && echo "done"');

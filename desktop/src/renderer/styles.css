@@ -243,7 +243,12 @@
 :root[data-theme="light"] .workspaceModeMenu,
 :root[data-theme="light"] .permissionMenu,
 :root[data-theme="light"] .attachmentMenu {
-  box-shadow: 0 8px 24px rgba(40, 48, 58, 0.07);
+  box-shadow: 0 18px 46px rgba(40, 48, 58, 0.16);
+}
+
+:root[data-theme="light"] .attachmentMenu {
+  border-color: rgba(40, 48, 58, 0.16);
+  background: #ffffff;
 }
 
 :root[data-theme="light"] .floatingApproval {
@@ -1317,7 +1322,7 @@ pre {
   overflow: auto;
   padding: clamp(22px, 4vh, 44px) clamp(22px, 4vw, 64px) clamp(44px, 8vh, 96px);
   line-height: 1.65;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 .timeline {
@@ -1333,9 +1338,6 @@ pre {
   min-width: 0;
   padding: 0 88px 0 0;
   color: var(--text);
-  content-visibility: auto;
-  contain-intrinsic-size: 1px 220px;
-  animation: timelineItemIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .timelineMessage.userMessage {
@@ -1359,7 +1361,6 @@ pre {
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(18px);
   transform-origin: 100% 100%;
-  animation: userBubbleIn 360ms cubic-bezier(0.18, 0.88, 0.24, 1.18) both;
 }
 
 .userMessage > .messageAttachmentList {
@@ -1389,7 +1390,6 @@ pre {
   background: linear-gradient(180deg, transparent, var(--accent), rgba(178, 186, 197, 0.54), transparent);
   opacity: 0.8;
   transform-origin: 50% 0;
-  animation: responseRailIn 520ms ease both;
 }
 
 .timelineReasoning {
@@ -1405,10 +1405,7 @@ pre {
   background: transparent;
   box-shadow: none;
   overflow: visible;
-  content-visibility: auto;
-  contain-intrinsic-size: 1px 46px;
   backdrop-filter: none;
-  animation: timelineItemIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .timelineReasoning::before {
@@ -1708,9 +1705,6 @@ pre {
   margin-left: 18px;
   padding-bottom: 10px;
   color: var(--muted);
-  content-visibility: auto;
-  contain-intrinsic-size: 1px 54px;
-  animation: timelineItemIn 360ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .timelineCommand::before {
@@ -2042,7 +2036,6 @@ pre {
   box-shadow:
     0 18px 48px rgba(0, 0, 0, 0.26),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  animation: codeBlockIn 420ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 .markdownCodeBlock figcaption {
@@ -2314,6 +2307,7 @@ pre {
 .workspaceCluster {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 280px;
@@ -2371,18 +2365,8 @@ pre {
   z-index: 44;
   display: flex;
   align-items: center;
-  margin-left: 2px;
-  padding-left: 6px;
-}
-
-.branchControl::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 1px;
-  background: var(--line);
+  margin-left: 0;
+  padding-left: 0;
 }
 
 .branchTrigger {
@@ -2392,13 +2376,14 @@ pre {
   min-width: 0;
   max-width: 140px;
   height: 28px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 0;
   border-radius: 999px;
   color: var(--muted);
   background: transparent;
   font-size: 11.5px;
   font-weight: 500;
+  line-height: 1;
   transition:
     background 150ms ease,
     color 150ms ease,
@@ -2903,7 +2888,7 @@ pre {
 
 .composer {
   position: relative;
-  z-index: 18;
+  z-index: 46;
   display: grid;
   gap: 9px;
   width: var(--prompt-width);
@@ -2972,7 +2957,6 @@ pre {
   box-shadow:
     0 5px 14px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  animation: chipIn 260ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
 
 button.attachmentPreview {
@@ -3111,19 +3095,19 @@ button.attachmentPreview:focus-visible {
   left: 0;
   right: 0;
   bottom: calc(100% + 10px);
-  z-index: 28;
+  z-index: 80;
   display: grid;
   gap: 4px;
   max-height: 260px;
   overflow: auto;
   padding: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
+  background: var(--modal-bg);
   box-shadow:
-    0 24px 64px var(--shadow-color),
+    0 28px 72px rgba(0, 0, 0, 0.48),
+    0 0 0 1px rgba(0, 0, 0, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(24px);
   animation: menuRise 180ms ease both;
 }
 
@@ -5144,42 +5128,6 @@ button.attachmentPreview:focus-visible {
   animation: spin 0.9s linear infinite;
 }
 
-@keyframes timelineItemIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes userBubbleIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes responseRailIn {
-  from {
-    opacity: 0;
-    transform: scaleY(0.35);
-  }
-
-  to {
-    opacity: 0.8;
-    transform: scaleY(1);
-  }
-}
-
 @keyframes reasoningWave {
   0% {
     transform: translateX(-82%);
@@ -5188,18 +5136,6 @@ button.attachmentPreview:focus-visible {
   48%,
   100% {
     transform: translateX(82%);
-  }
-}
-
-@keyframes codeBlockIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.99);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
@@ -5273,18 +5209,6 @@ button.attachmentPreview:focus-visible {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes chipIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.98);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 

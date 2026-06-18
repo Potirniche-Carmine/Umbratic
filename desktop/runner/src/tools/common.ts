@@ -28,7 +28,20 @@ export function pathInside(root: string, candidate: string): boolean {
 }
 
 export function resolveWorkspacePath(cwd: string, filePath: string): { absolute: string; relative: string } {
-  const absolute = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(cwd, normalizeRelativePath(filePath));
+  let requestedPath = normalizeRelativePath(filePath);
+  let absolute = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(cwd, requestedPath);
+  if (!path.isAbsolute(filePath) && !fs.existsSync(absolute)) {
+    const rootName = path.basename(path.resolve(cwd)).toLowerCase();
+    const parts = requestedPath.split("/").filter(Boolean);
+    if (parts[0]?.toLowerCase() === rootName) {
+      const withoutRootName = parts.slice(1).join("/");
+      const fallbackAbsolute = path.resolve(cwd, withoutRootName);
+      if (fs.existsSync(fallbackAbsolute)) {
+        requestedPath = withoutRootName;
+        absolute = fallbackAbsolute;
+      }
+    }
+  }
   if (!pathInside(cwd, absolute)) throw new Error(`Refusing path outside workspace: ${filePath}`);
   const relative = normalizeRelativePath(path.relative(cwd, absolute));
   if (isBlockedPath(relative)) throw new Error(`Refusing blocked path: ${relative}`);

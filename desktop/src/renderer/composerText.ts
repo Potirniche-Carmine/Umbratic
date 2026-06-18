@@ -150,7 +150,7 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
       lineIndex = rowIndex - 1;
       continue;
     }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       flushParagraph();
       flushList();
