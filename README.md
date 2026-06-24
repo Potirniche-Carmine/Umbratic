@@ -36,8 +36,8 @@ npm run test:all
 
 ## Project Structure
 
-- `desktop/` - Electron desktop app
-- `desktop/runner/` - local runner package
-- `desktop/tests/` - desktop app tests
-- `desktop/assets/` - app assets and branding
-
+- `apps/desktop/` - Electron desktop app
+- `packages/runner/` - local runner package
+- `apps/desktop/tests/` - desktop app tests
+- `apps/desktop/assets/` - app assets and branding
+- `infrastructure/veil/` - Go service that owns model boundary policy and runtime calls

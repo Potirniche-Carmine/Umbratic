@@ -3,13 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "desktop",
-    "desktop/runner"
+    "apps/desktop",
+    "packages/*"
   ],
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
     "desktop:dev:server": "npm --workspace @umbratic/desktop run dev -- --server",
     "desktop:build": "npm --workspace @umbratic/desktop run build",
+    "runner:build": "npm --workspace @umbratic/runner run build",
+    "runner:typecheck": "npm --workspace @umbratic/runner run typecheck",
+    "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",
+    "veil:test": "cd infrastructure/veil && go test ./...",
     "test:all": "npm --workspace @umbratic/desktop run test:all"
   },
   "allowScripts": {

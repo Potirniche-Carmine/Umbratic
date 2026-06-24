@@ -8,6 +8,8 @@ import { createServer } from "vite";
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(__dirname, "..");
+const monorepoRoot = path.resolve(desktopRoot, "../..");
+const runnerRoot = path.join(monorepoRoot, "packages/runner");
 const requestedPort = Number(process.env.UMBRATIC_DEV_PORT || "5173");
 
 function readFlag(args, name) {
@@ -103,7 +105,7 @@ function localServerUrl(server) {
 
 async function buildDesktopProcessFiles() {
   const tsc = require.resolve("typescript/bin/tsc");
-  await runNodeScript(tsc, ["-p", "runner/tsconfig.json"]);
+  await runNodeScript(tsc, ["-p", path.join(runnerRoot, "tsconfig.json")]);
   await runNodeScript(tsc, ["-p", "tsconfig.main.json"]);
 }
 

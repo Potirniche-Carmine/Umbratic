@@ -299,10 +299,14 @@ declare global {
         status: UmbraticBackendStatus;
       }>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
-      listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string }>; directory: string }>;
+      listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string; enabled: boolean }>; directory: string }>;
+      saveSkillSettings(input: Record<string, boolean>): Promise<{
+        skills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
+        directory: string;
+      }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
       createSkill(input: { name: string }): Promise<
-        | { ok: true; skill: { id: string; name: string; description: string }; directory: string }
+        | { ok: true; skill: { id: string; name: string; description: string; enabled: boolean }; directory: string }
         | { ok: false; message: string }
       >;
       setPermissionMode(mode: UmbraticPermissionMode): Promise<UmbraticBackendStatus>;

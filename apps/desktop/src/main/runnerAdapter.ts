@@ -89,7 +89,7 @@ export function runnerBinaryPath(): string | null {
   } catch {
     /* The direct workspace fallback covers source-tree runs. */
   }
-  candidates.push(path.resolve(__dirname, "../../runner/bin/umbratic-runner.cjs"));
+  candidates.push(path.resolve(__dirname, "../../../../packages/runner/bin/umbratic-runner.cjs"));
   for (const candidate of candidates) {
     const resolved = existingRunnerCliPath(candidate);
     if (resolved && fs.existsSync(path.resolve(path.dirname(resolved), "../dist/cli.js"))) {

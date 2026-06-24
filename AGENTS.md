@@ -1,37 +1,11 @@
 # AGENTS.md
 
-## Project Overview
+This is a monorepo. Treat each top-level area as a separate project unless the user explicitly asks for cross-project work:
 
-Umbratic is a desktop AI app built with Electron, Vite, React, and TypeScript. The workspace is organized as an npm workspace with the main desktop app in `desktop/` and the local runner package in `desktop/runner/`.
+- `apps/desktop/` - Electron desktop app
+- `packages/runner/` - local runner package
+- `infrastructure/veil/` - Go Veil service
 
-## Product And Design Bar
+Only gather context and make changes in the project needed for the task. Do not search, inspect, or edit other project directories unless the request names them or the dependency is directly relevant.
 
-Design and UX should stay at the forefront of every change. Interfaces should feel clean, fluid, intentional, and fast: the kind of polish engineers and designers at Apple, Airbnb, or Tesla would be proud to ship.
-
-Prefer simple, elegant flows over busy surfaces. Preserve visual clarity, smooth interactions, responsive layouts, strong spacing, and details that make the app feel calm and premium. Avoid changes that technically work but make the experience feel clunky, crowded, slow, or visually inconsistent.
-
-Avoid layout shift as a core design requirement. Interactive changes such as attaching files, opening composer affordances, streaming state updates, or revealing transient controls should not move stable app regions or cause the rest of the UI to jump; reserve space, overlay transient content, or scroll within fixed regions instead.
-
-Keep color systems consistent across related UI states and surfaces. When a semantic color appears in multiple places, such as diff additions/deletions, status accents, badges, gradients, borders, icons, hover states, or counters, use shared tokens or clearly matched values so the same meaning does not drift between components.
-
-When changing anything related to design, color, hover states, transparency, gradients, spacing, layout, or visual interaction, verify the result in both light and dark mode. Include hover/open/closed states when they are part of the behavior being changed.
-
-Do not use emoji in product UI. Prefer clear text, lucide icons, brand assets, custom illustration, or purpose-built visual treatments instead of emoji shortcuts.
-
-## Technology
-
-This project primarily uses TypeScript across the Electron main process, preload layer, React renderer, and local runner. The frontend uses React with Vite, and the desktop shell uses Electron.
-
-When adding or changing code, follow the existing TypeScript patterns and local project structure. Keep implementation choices consistent with nearby files before introducing new abstractions or dependencies.
-
-## Context Gathering
-
-Gather only the context needed for the task at hand. Read the nearest relevant files, package metadata, tests, and call sites before editing, but avoid broad, unrelated repo sweeps unless the change clearly crosses boundaries.
-
-Use focused searches and inspect existing patterns before making assumptions. Keep edits scoped to the requested behavior and the files that naturally own it.
-
-## Testing And Local Servers
-
-When running tests, dev servers, preview servers, Electron processes, or any other long-lived command, always clean them up before ending the chat. Do not leave local servers, watch processes, or background app sessions running after verification is complete.
-
-If a server or app process was started to test something, stop it and confirm it is closed before reporting back to the user.
+Keep changes focused and avoid broad cleanup. Follow the nearest project-level `AGENTS.md` when one exists.

@@ -98,7 +98,7 @@ assert.match(unfinishedFence[0].content, /npm run build/);
 const segments = promptHighlightSegments(
   "Open @main.tsx, then @metrics.csv) and not email@main.tsx",
   [
-    { path: "desktop/src/renderer/main.tsx", name: "main.tsx" },
+    { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx" },
     { path: "reports/metrics.csv", name: "metrics.csv" },
   ],
 );

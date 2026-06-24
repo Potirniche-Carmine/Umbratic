@@ -64,6 +64,7 @@ import {
   readModelEndpointSettings,
   readNotes,
   readProjects,
+  readSkillSettings,
   readTasks,
   readToolSettings,
   writeHarnessProfileSetting,
@@ -72,6 +73,7 @@ import {
   writeJsonFile,
   writeNotes,
   writeProjects,
+  writeSkillSettings,
   writeTasks,
   writeToolSettings,
 } from "./storage";
@@ -115,6 +117,13 @@ const isDev = !app.isPackaged;
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
 type RunnerPrompt = string | RunnerPromptPart[];
+type PromptSkillInfo = {
+  id: string;
+  name: string;
+  description: string;
+  instructionPath: string;
+  content: string;
+};
 type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
@@ -1159,7 +1168,149 @@ function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string
   return snippets;
 }
 
-const keyWorkspaceFileCandidates = ["README.md", "package.json", "desktop/package.json", "src/package.json", "pyproject.toml"];
+const keyWorkspaceFileCandidates = ["README.md", "package.json", "apps/desktop/package.json", "src/package.json", "pyproject.toml"];
+
+function findAgentInstructionFiles(rootPath: string): Array<{ path: string; text: string }> {
+  const root = path.resolve(rootPath);
+  const files: Array<{ path: string; text: string }> = [];
+  const seen = new Set<string>();
+  let remaining = 24000;
+  const addFile = (absolute: string) => {
+    const resolved = path.resolve(absolute);
+    if (!pathInside(root, resolved) || seen.has(resolved) || !fs.existsSync(resolved)) return;
+    const text = readTextFileIfSafe(resolved);
+    if (text === null) return;
+    const relative = normalizeRelativePath(path.relative(root, resolved)) || "AGENTS.md";
+    const snippet = text.slice(0, Math.max(0, remaining));
+    if (!snippet) return;
+    files.push({ path: relative, text: snippet });
+    seen.add(resolved);
+    remaining -= snippet.length;
+  };
+
+  addFile(path.join(root, "AGENTS.md"));
+  const walk = (directory: string, depth: number) => {
+    if (remaining <= 0 || files.length >= 12 || depth > 3) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (remaining <= 0 || files.length >= 12) return;
+      const absolute = path.join(directory, entry.name);
+      const relative = normalizeRelativePath(path.relative(root, absolute));
+      if (entry.isFile() && entry.name === "AGENTS.md") {
+        addFile(absolute);
+        continue;
+      }
+      if (
+        entry.isDirectory() &&
+        depth < 3 &&
+        !ignoredSnapshotDirectories.has(entry.name) &&
+        !isGeneratedRuntimePath(relative) &&
+        !isBlockedPath(relative)
+      ) {
+        walk(absolute, depth + 1);
+      }
+    }
+  };
+  walk(root, 0);
+  return files;
+}
+
+function pushAgentInstructionContext(lines: string[], rootPath: string) {
+  const files = findAgentInstructionFiles(rootPath);
+  lines.push(
+    "",
+    "AGENTS.md instructions:",
+    files.length
+      ? "The following AGENTS.md files were discovered before this request. You must follow them as repository instructions. For files under nested directories, follow the nearest applicable AGENTS.md in addition to higher-level instructions."
+      : "No AGENTS.md file was found in the opened workspace. If one appears while working, read and follow it before making changes.",
+  );
+  for (const file of files) {
+    lines.push(`\n### ${file.path}`, "```", file.text, "```");
+  }
+}
+
+function skillDescriptionFromMarkdown(content: string): string {
+  const withoutFrontmatter = content.replace(/^---\r?\n[\s\S]*?\r?\n---\s*/, "").trim();
+  const paragraph = withoutFrontmatter
+    .split(/\r?\n\s*\r?\n/)
+    .map((part) => part.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim())
+    .find(Boolean);
+  return paragraph?.slice(0, 240) ?? "";
+}
+
+function readPromptSkillInfo(id: string, nameFallback: string, skillFile: string): PromptSkillInfo | null {
+  const content = readTextFileIfSafe(skillFile) ?? "";
+  if (!content.trim()) return null;
+  const meta = parseSkillFrontmatter(content);
+  return {
+    id,
+    name: meta.name || nameFallback,
+    description: meta.description || skillDescriptionFromMarkdown(content),
+    instructionPath: skillFile,
+    content,
+  };
+}
+
+function collectPromptSkillsFromDirectory(directory: string): PromptSkillInfo[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const skills: PromptSkillInfo[] = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      const skillFile = path.join(directory, entry.name, "SKILL.md");
+      if (fs.existsSync(skillFile)) {
+        const skill = readPromptSkillInfo(entry.name, entry.name, skillFile);
+        if (skill) skills.push(skill);
+      }
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      const id = entry.name.replace(/\.md$/i, "");
+      const skill = readPromptSkillInfo(id, id, path.join(directory, entry.name));
+      if (skill) skills.push(skill);
+    }
+  }
+  return skills;
+}
+
+function enabledPromptSkills(): PromptSkillInfo[] {
+  const settings = readSkillSettings();
+  return collectPromptSkillsFromDirectory(skillsDirectoryPath())
+    .filter((skill) => settings[skill.id] !== false)
+    .slice(0, 24);
+}
+
+function pushSkillContext(lines: string[]) {
+  const skills = enabledPromptSkills();
+  lines.push(
+    "",
+    "User skills:",
+    skills.length
+      ? "The user enabled the following app skills from ~/.umbratic/skills. Treat each skill as optional guidance: decide whether it is relevant before applying it, and do not apply unrelated skills."
+      : "No enabled user skills were found for this request.",
+  );
+  let remaining = 30000;
+  for (const skill of skills) {
+    if (remaining <= 0) {
+      lines.push("\n...(additional enabled skills omitted because the skill context limit was reached)");
+      break;
+    }
+    const content = skill.content.slice(0, remaining);
+    remaining -= content.length;
+    const description = skill.description ? `\nDescription: ${skill.description}` : "";
+    lines.push(`\n### ${skill.name}${description}\nSource: ${skill.instructionPath}`, "```", content, "```");
+  }
+}
 
 function compactHistoryText(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -1332,6 +1483,8 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       lines.push(`\n### ${file.path}`, "```", file.text, "```");
     }
   }
+  pushAgentInstructionContext(lines, rootPath);
+  pushSkillContext(lines);
   const history = priorChatContext(task.events ?? [], userPrompt);
   if (history) {
     lines.push(
@@ -1966,7 +2119,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
   };
 }
 
-type SkillInfo = { id: string; name: string; description: string };
+type SkillInfo = { id: string; name: string; description: string; enabled: boolean };
 
 function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -1988,6 +2141,7 @@ function skillsDirectoryPath(): string {
 
 async function listSkills(): Promise<{ skills: SkillInfo[]; directory: string }> {
   const directory = skillsDirectoryPath();
+  const settings = readSkillSettings();
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(directory, { withFileTypes: true });
@@ -2011,7 +2165,7 @@ async function listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>
       } catch {
         // SKILL.md missing — fall back to folder name
       }
-      skills.push({ id: entry.name, name, description });
+      skills.push({ id: entry.name, name, description, enabled: settings[entry.name] !== false });
       continue;
     }
 
@@ -2027,7 +2181,7 @@ async function listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>
       } catch {
         // unreadable — keep defaults
       }
-      skills.push({ id, name, description });
+      skills.push({ id, name, description, enabled: settings[id] !== false });
     }
   }
 
@@ -2071,13 +2225,22 @@ async function createSkill(input: { name?: string }): Promise<
     }
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
-  const template = `---\nname: ${rawName}\ndescription: Briefly describe what this skill teaches Umbratic AI to do in every chat.\n---\n\n# ${rawName}\n\nReplace this with the guidance you want every chat to follow.\n`;
+  const template = `---\nname: ${rawName}\ndescription: Briefly describe when Umbratic AI should use this skill.\n---\n\n# ${rawName}\n\nReplace this with the guidance Umbratic AI should follow when this skill is relevant.\n`;
   await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), template, "utf8");
+  writeSkillSettings({ [id]: true });
   return {
     ok: true,
-    skill: { id, name: rawName, description: "Briefly describe what this skill teaches Umbratic AI to do in every chat." },
+    skill: { id, name: rawName, description: "Briefly describe when Umbratic AI should use this skill.", enabled: true },
     directory: root,
   };
+}
+
+async function saveSkillSettings(input: unknown): Promise<{ skills: SkillInfo[]; directory: string }> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid skill settings.");
+  }
+  writeSkillSettings(input as Record<string, boolean>);
+  return listSkills();
 }
 
 async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
@@ -3929,6 +4092,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:save-harness-profile", (input) => saveHarnessProfileSetting(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
   handleIpc("umbratic:list-skills", () => listSkills());
+  handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettings(input));
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
   handleIpc("umbratic:create-skill", (input) => createSkill(input as { name?: string }));
   handleIpc("umbratic:set-permission-mode", (mode) => setPermissionMode(mode));

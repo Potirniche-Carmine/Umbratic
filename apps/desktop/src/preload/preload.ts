@@ -59,6 +59,7 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:save-model-endpoint-settings", input),
   exportTelemetry: () => ipcRenderer.invoke("umbratic:export-telemetry"),
   listSkills: () => ipcRenderer.invoke("umbratic:list-skills"),
+  saveSkillSettings: (input: Record<string, boolean>) => ipcRenderer.invoke("umbratic:save-skill-settings", input),
   openSkillsFolder: () => ipcRenderer.invoke("umbratic:open-skills-folder"),
   createSkill: (input: { name: string }) => ipcRenderer.invoke("umbratic:create-skill", input),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("umbratic:set-permission-mode", mode),

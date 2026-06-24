@@ -2,7 +2,6 @@ node_modules/
 *.log
 .env
 target/
-desktop/dist/
-desktop/dist-electron/
-desktop/runner/dist/
-.aegis/
+apps/desktop/dist/
+apps/desktop/dist-electron/
+packages/runner/dist/

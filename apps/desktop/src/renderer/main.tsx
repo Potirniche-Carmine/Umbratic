@@ -344,7 +344,7 @@ type ComposerTimelineItem =
   | { type: "assistant"; id: string; text: string }
   | { type: "command"; id: string; run: CommandRun };
 
-type SkillInfo = { id: string; name: string; description: string };
+type SkillInfo = { id: string; name: string; description: string; enabled: boolean };
 
 type DesktopApi = {
   listChats(): Promise<ChatRecord[]>;
@@ -385,6 +385,7 @@ type DesktopApi = {
   }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
+  saveSkillSettings(input: Record<string, boolean>): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
   createSkill(input: { name: string }): Promise<
     | { ok: true; skill: SkillInfo; directory: string }
@@ -698,8 +699,8 @@ const defaultIdeChoices: IdeChoice[] = [
 ];
 const composerTestMode = new URLSearchParams(window.location.search).has("composerTest");
 const composerTestAttachments: ChatAttachment[] = [
-  { path: "desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
-  { path: "desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
+  { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
+  { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
 ];
 const composerTestPrompt =
   'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
@@ -732,7 +733,7 @@ const composerTestEvents: BackendUiEvent[] = [
     type: "command.started",
     taskId: "composer-test",
     id: "composer-fixture-search",
-    command: 'rg -n "promptDock|timelineReasoning" desktop/src/renderer/styles.css',
+    command: 'rg -n "promptDock|timelineReasoning" apps/desktop/src/renderer/styles.css',
     cwd: "/Users/carminep/Projects/Umbratic",
     kind: "bash",
     commandClass: "read",
@@ -742,7 +743,7 @@ const composerTestEvents: BackendUiEvent[] = [
     taskId: "composer-test",
     id: "composer-fixture-search",
     stream: "stdout",
-    text: "desktop/src/renderer/styles.css:1405:.timelineReasoning {\ndesktop/src/renderer/styles.css:2073:.promptDock {\n",
+    text: "apps/desktop/src/renderer/styles.css:1405:.timelineReasoning {\napps/desktop/src/renderer/styles.css:2073:.promptDock {\n",
   },
   {
     type: "command.finished",
@@ -805,14 +806,14 @@ const composerTestEvents: BackendUiEvent[] = [
 
 const composerTestReviewFiles: ReviewFile[] = [
   {
-    path: "desktop/src/features/review/new-panel.ts",
+    path: "apps/desktop/src/features/review/new-panel.ts",
     status: "added",
     diff: [
-      "diff --git a/desktop/src/features/review/new-panel.ts b/desktop/src/features/review/new-panel.ts",
+      "diff --git a/apps/desktop/src/features/review/new-panel.ts b/apps/desktop/src/features/review/new-panel.ts",
       "new file mode 100644",
       "index 0000000..f4a17de",
       "--- /dev/null",
-      "+++ b/desktop/src/features/review/new-panel.ts",
+      "+++ b/apps/desktop/src/features/review/new-panel.ts",
       "@@ -0,0 +1,11 @@",
       "+export type ReviewPanelTone = \"calm\" | \"focused\";",
       "+",
@@ -828,13 +829,13 @@ const composerTestReviewFiles: ReviewFile[] = [
     ].join("\n"),
   },
   {
-    path: "desktop/src/legacy/review-banner.ts",
+    path: "apps/desktop/src/legacy/review-banner.ts",
     status: "deleted",
     diff: [
-      "diff --git a/desktop/src/legacy/review-banner.ts b/desktop/src/legacy/review-banner.ts",
+      "diff --git a/apps/desktop/src/legacy/review-banner.ts b/apps/desktop/src/legacy/review-banner.ts",
       "deleted file mode 100644",
       "index 24c118a..0000000",
-      "--- a/desktop/src/legacy/review-banner.ts",
+      "--- a/apps/desktop/src/legacy/review-banner.ts",
       "+++ /dev/null",
       "@@ -1,9 +0,0 @@",
       "-export function legacyReviewBanner() {",
@@ -849,13 +850,13 @@ const composerTestReviewFiles: ReviewFile[] = [
     ].join("\n"),
   },
   {
-    path: "desktop/src/renderer/review-panel.tsx",
+    path: "apps/desktop/src/renderer/review-panel.tsx",
     status: "modified",
     diff: [
-      "diff --git a/desktop/src/renderer/review-panel.tsx b/desktop/src/renderer/review-panel.tsx",
+      "diff --git a/apps/desktop/src/renderer/review-panel.tsx b/apps/desktop/src/renderer/review-panel.tsx",
       "index 9ac21d0..b7f53ce 100644",
-      "--- a/desktop/src/renderer/review-panel.tsx",
-      "+++ b/desktop/src/renderer/review-panel.tsx",
+      "--- a/apps/desktop/src/renderer/review-panel.tsx",
+      "+++ b/apps/desktop/src/renderer/review-panel.tsx",
       "@@ -12,13 +12,16 @@ export function ReviewPanel({ files }: ReviewPanelProps) {",
       "   return (",
       "     <section className=\"reviewPanel\">",
@@ -939,9 +940,9 @@ const fallbackApi: DesktopApi = {
   refreshTaskReview: async () => null,
   searchFiles: async (input) =>
     [
-      { path: "desktop/src/renderer/main.tsx", name: "main.tsx", match: "path" as const },
-      { path: "desktop/src/renderer/styles.css", name: "styles.css", match: "path" as const },
-      { path: "desktop/src/main/main.ts", name: "main.ts", match: "content" as const },
+      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", match: "path" as const },
+      { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", match: "path" as const },
+      { path: "apps/desktop/src/main/main.ts", name: "main.ts", match: "content" as const },
     ].filter((file) => file.path.toLowerCase().includes(input.query.toLowerCase())),
   pickRepository: async () => ({
     canceled: false,
@@ -958,7 +959,7 @@ const fallbackApi: DesktopApi = {
   }),
   pickAttachmentFiles: async () => ({
     canceled: false,
-    files: [{ path: "desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" }],
+    files: [{ path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" }],
   }),
   savePastedAttachments: async (input) => ({
     files: input.files.map((file, index) =>
@@ -1059,6 +1060,7 @@ const fallbackApi: DesktopApi = {
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   listSkills: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
+  saveSkillSettings: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
   createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
@@ -2509,6 +2511,7 @@ function App() {
   const draftSaveRef = useRef<number | null>(null);
   const reviewCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
+  const skillsSaveSequenceRef = useRef(0);
   const endpointSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
@@ -3422,18 +3425,36 @@ function App() {
       const result = await api.listSkills();
       setSkills(result.skills);
       setSkillsDirectory(result.directory);
-      setSkillsEnabled((prev) => {
-        const next: Record<string, boolean> = {};
-        for (const skill of result.skills) {
-          next[skill.id] = prev[skill.id] ?? true;
-        }
-        return next;
-      });
+      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
     } catch (cause) {
       setSkills([]);
       console.warn("Failed to list skills", cause);
     } finally {
       setSkillsLoading(false);
+    }
+  }
+
+  async function toggleSkillSetting(skillId: string) {
+    let previous = skillsEnabled;
+    let next = skillsEnabled;
+    setSkillsEnabled((current) => {
+      previous = current;
+      next = { ...current, [skillId]: !current[skillId] };
+      return next;
+    });
+    setSkillsMessage(null);
+    const requestId = skillsSaveSequenceRef.current + 1;
+    skillsSaveSequenceRef.current = requestId;
+    try {
+      const result = await api.saveSkillSettings(next);
+      if (requestId !== skillsSaveSequenceRef.current) return;
+      setSkills(result.skills);
+      setSkillsDirectory(result.directory);
+      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
+    } catch (cause) {
+      if (requestId !== skillsSaveSequenceRef.current) return;
+      setSkillsEnabled(previous);
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
     }
   }
 
@@ -5575,22 +5596,8 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Skills</h3>
                       <p>
-                        Skills are global guidance Umbratic AI includes in <strong>every chat</strong>. Use them for things like a personal style guide or rules every task should follow.
+                        Skills are personal guidance Umbratic AI can use when relevant. Enabled skills are included with each new run so the model can decide whether they apply.
                       </p>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <div className="skillSectionHeader">
-                        <h4>Managed</h4>
-                        <span className="skillSectionTag">Company</span>
-                      </div>
-                      <p className="skillSectionHint">
-                        Maintained by your organization and baked into the model. Always on — these can't be disabled here.
-                      </p>
-                      <div className="settingsEmpty">
-                        <ShieldCheck size={16} />
-                        <span>No managed skills yet. They'll appear here once your team publishes them from the server.</span>
-                      </div>
                     </div>
 
                     <div className="settingsGroup">
@@ -5615,7 +5622,7 @@ function App() {
                         </div>
                       </div>
                       <p className="skillSectionHint">
-                        Loaded from <code className="settingsCode">{skillsDirectory}</code>. Each subfolder with a <code className="settingsCode">SKILL.md</code> becomes a skill.
+                        Loaded from <code className="settingsCode">{skillsDirectory}</code>. Each skill is a folder with a <code className="settingsCode">SKILL.md</code> file.
                       </p>
 
                       {newSkillFormOpen ? (
@@ -5660,7 +5667,7 @@ function App() {
                       ) : skills.length === 0 ? (
                         <div className="settingsEmpty">
                           <Sparkles size={16} />
-                          <span>No skills yet. Use New skill to scaffold one, or drop a folder with a SKILL.md into the directory above.</span>
+                          <span>No skills yet. Use New skill, or add a folder with a SKILL.md to the directory above.</span>
                         </div>
                       ) : (
                         <ul className="skillList">
@@ -5676,7 +5683,7 @@ function App() {
                                 role="switch"
                                 aria-checked={!!skillsEnabled[skill.id]}
                                 aria-label={`Toggle ${skill.name}`}
-                                onClick={() => setSkillsEnabled((prev) => ({ ...prev, [skill.id]: !prev[skill.id] }))}
+                                onClick={() => void toggleSkillSetting(skill.id)}
                               >
                                 <span className="toggleKnob" />
                               </button>

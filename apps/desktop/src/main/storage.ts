@@ -194,6 +194,7 @@ type RawSettings = {
     headers?: unknown;
   };
   tools?: Partial<Record<RunnerToolId, boolean>>;
+  skills?: Record<string, boolean>;
   harnessProfile?: unknown;
 };
 
@@ -350,6 +351,31 @@ export function writeToolSettings(input: Partial<Record<RunnerToolId, boolean>>)
   writeJsonFile(settingsPath(), {
     ...settings,
     tools: toolSettingsFromEnabledTools(enabledToolsFromSettings(next)),
+  });
+  return next;
+}
+
+export function readSkillSettings(): Record<string, boolean> {
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const rawSkills = settings.skills && typeof settings.skills === "object" ? settings.skills : {};
+  return Object.fromEntries(
+    Object.entries(rawSkills).filter(([id, value]) => /^[A-Za-z0-9_-]{1,96}$/.test(id) && typeof value === "boolean"),
+  );
+}
+
+export function writeSkillSettings(input: Record<string, boolean>): Record<string, boolean> {
+  const current = readSkillSettings();
+  const sanitized: Record<string, boolean> = {};
+  for (const [id, value] of Object.entries(input)) {
+    if (/^[A-Za-z0-9_-]{1,96}$/.test(id) && typeof value === "boolean") {
+      sanitized[id] = value;
+    }
+  }
+  const next = { ...current, ...sanitized };
+  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  writeJsonFile(settingsPath(), {
+    ...settings,
+    skills: next,
   });
   return next;
 }
