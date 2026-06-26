@@ -5,14 +5,14 @@
   "main": "dist-electron/main/main.js",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:composer": "node scripts/dev.mjs --composer-test",
     "dev:web": "vite --host 127.0.0.1 --port 5173",
     "build": "npm run build:runner && tsc -p tsconfig.main.json && vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build:runner": "npm --workspace @umbratic/runner run build",
-    "test:all": "npm run typecheck && npm run test:composer",
+    "test:all": "npm run typecheck && npm run test:unit",
     "test:composer": "node tests/composer-text.test.mjs",
-    "typecheck": "npm --workspace @umbratic/runner run typecheck && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
+    "test:unit": "node --test tests/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {
     "@umbratic/runner": "file:../../packages/runner",

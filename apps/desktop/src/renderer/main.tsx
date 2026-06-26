@@ -48,7 +48,6 @@ import {
   attachmentMention,
   markdownPreview,
   parseMarkdown,
-  promptHighlightSegments,
 } from "./composerText";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
@@ -345,6 +344,8 @@ type ComposerTimelineItem =
   | { type: "command"; id: string; run: CommandRun };
 
 type SkillInfo = { id: string; name: string; description: string; enabled: boolean };
+type SkillDocument = SkillInfo & { path: string; content: string };
+type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };
 
 type DesktopApi = {
   listChats(): Promise<ChatRecord[]>;
@@ -389,6 +390,14 @@ type DesktopApi = {
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
   createSkill(input: { name: string }): Promise<
     | { ok: true; skill: SkillInfo; directory: string }
+    | { ok: false; message: string }
+  >;
+  getSkillDocument(input: { id: string }): Promise<
+    | { ok: true; skill: SkillDocument; directory: string }
+    | { ok: false; message: string }
+  >;
+  saveSkillDocument(input: { id: string; content: string }): Promise<
+    | { ok: true; skill: SkillDocument; skills: SkillInfo[]; directory: string }
     | { ok: false; message: string }
   >;
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
@@ -1063,6 +1072,8 @@ const fallbackApi: DesktopApi = {
   saveSkillSettings: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
   createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
+  getSkillDocument: async () => ({ ok: false, message: "Electron preload is not available." }),
+  saveSkillDocument: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
     previewPermissionMode = mode;
     return fallbackApi.getBackendStatus();
@@ -1411,19 +1422,50 @@ function isImageAttachment(file: ChatAttachment): boolean {
   return !!file.previewDataUrl || /\.(png|jpe?g|webp|gif)$/i.test(file.name || file.path);
 }
 
-function mentionAtCursor(value: string, cursor: number): { query: string; start: number; end: number } | null {
+export function mentionAtCursor(value: string, cursor: number): PromptMention | null {
   const beforeCursor = value.slice(0, cursor);
-  const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/);
+  const match = beforeCursor.match(/(^|\s)([@$])([^\s@$]*)$/);
   if (!match || match.index === undefined) return null;
   const start = match.index + match[1].length;
-  return { query: match[2], start, end: cursor };
+  return { kind: match[2] === "$" ? "skill" : "file", query: match[3], start, end: cursor };
 }
 
-function renderPromptHighlights(value: string, files: ChatAttachment[]): React.ReactNode[] {
-  return promptHighlightSegments(
-    value,
-    files.map(normalizeAttachment),
-  ).map((segment, index) =>
+export function skillMention(skill: SkillInfo): string {
+  return `$${skill.id}`;
+}
+
+export function renderPromptHighlights(value: string, files: ChatAttachment[], skills: SkillInfo[]): React.ReactNode[] {
+  const tokens = [
+    ...files.map(normalizeAttachment).map(attachmentMention),
+    ...skills.map(skillMention),
+  ]
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  if (!tokens.length) return [value || "\u200b"];
+  const segments: Array<{ text: string; mention: boolean }> = [];
+  let index = 0;
+  while (index < value.length) {
+    const token = tokens.find(
+      (candidate) =>
+        value.startsWith(candidate, index) &&
+        (index === 0 || /\s/.test(value[index - 1])) &&
+        (index + candidate.length === value.length || /\s|[.,;:!?)]/.test(value[index + candidate.length])),
+    );
+    if (token) {
+      segments.push({ text: token, mention: true });
+      index += token.length;
+      continue;
+    }
+    const nextMention = tokens
+      .map((candidate) => value.indexOf(candidate, index + 1))
+      .filter((position) => position >= 0)
+      .sort((left, right) => left - right)[0];
+    const end = nextMention ?? value.length;
+    segments.push({ text: value.slice(index, end), mention: false });
+    index = end;
+  }
+  if (value.endsWith("\n")) segments.push({ text: "\u200b", mention: false });
+  return segments.map((segment, index) =>
     segment.mention ? (
       <span className="promptMentionToken" key={`${index}-${segment.text}`}>
         {segment.text}
@@ -1439,7 +1481,7 @@ type ReviewReferenceOptions = {
   onReviewFileClick?: (filePath: string) => void;
 };
 
-function normalizeReviewReference(value: string): string {
+export function normalizeReviewReference(value: string): string {
   return value
     .replace(/^@/, "")
     .replace(/\\/g, "/")
@@ -1452,7 +1494,7 @@ function fileNameFromPath(value: string): string {
   return value.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? value;
 }
 
-function reviewFileForReference(value: string, reviewFiles?: ReviewFile[]): ReviewFile | undefined {
+export function reviewFileForReference(value: string, reviewFiles?: ReviewFile[]): ReviewFile | undefined {
   if (!reviewFiles?.length) return undefined;
   const reference = normalizeReviewReference(value);
   if (!reference) return undefined;
@@ -1627,7 +1669,7 @@ function parseHunkHeader(line: string): { oldStart: number; newStart: number } |
   return { oldStart: Number(match[1]), newStart: Number(match[2]) };
 }
 
-function parseUnifiedDiff(diff: string): ParsedDiff {
+export function parseUnifiedDiff(diff: string): ParsedDiff {
   const rows: DiffRow[] = [];
   let additions = 0;
   let deletions = 0;
@@ -1676,7 +1718,7 @@ function parseUnifiedDiff(diff: string): ParsedDiff {
   return { additions, deletions, rows };
 }
 
-function formatDiffStats(stats: ParsedDiff): string {
+export function formatDiffStats(stats: ParsedDiff): string {
   return `+${stats.additions} -${stats.deletions}`;
 }
 
@@ -1759,14 +1801,14 @@ async function copyPlainText(value: string) {
   }
 }
 
-function codeBlockLabel(language: string, content: string): string {
+export function codeBlockLabel(language: string, content: string): string {
   const normalized = language.trim().toLowerCase();
   if (/^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(normalized)) return normalized || "command";
   if (!normalized && looksLikeCommandBlock(content)) return "command";
   return normalized || "code";
 }
 
-function looksLikeCommandBlock(content: string): boolean {
+export function looksLikeCommandBlock(content: string): boolean {
   const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (!lines.length) return false;
   return lines.every((line) =>
@@ -1829,7 +1871,7 @@ function isShellLikeCommand(command: string): boolean {
   return !/^(read|search|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
 }
 
-function commandSummary(run: CommandRun): string {
+export function commandSummary(run: CommandRun): string {
   if (run.status === "running") return "running";
   const outputPreview = previewTail(run.stdout || run.stderr, commandOutputPreviewCharacterLimit);
   const output = stripAnsi(outputPreview.text).trim();
@@ -1889,7 +1931,7 @@ function taskStatusDetail(task: TaskInfo): string {
   return task.workspaceMode === "worktree" ? task.agentBranch : task.worktreePath;
 }
 
-function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
+export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
   const runs = new Map<string, CommandRun>();
   for (const event of events) {
     if (event.type === "command.started") {
@@ -1960,7 +2002,7 @@ function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
   return Array.from(runs.values());
 }
 
-function pendingPermissionFromEvents(events: BackendUiEvent[]): PermissionRequest | null {
+export function pendingPermissionFromEvents(events: BackendUiEvent[]): PermissionRequest | null {
   const requests = new Map<string, PermissionRequest>();
   for (const event of events) {
     if (event.type === "permission.requested") {
@@ -2010,7 +2052,7 @@ function stripAssistantSpeakerPrefix(text: string): string {
   return text.replace(/^\s*(?:\*\*)?Umbratic AI(?:\*\*)?\s*:\s*/i, "");
 }
 
-function assistantTextFromEvents(events: BackendUiEvent[]): string {
+export function assistantTextFromEvents(events: BackendUiEvent[]): string {
   const text = events
     .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
     .map((event) => event.text)
@@ -2020,7 +2062,7 @@ function assistantTextFromEvents(events: BackendUiEvent[]): string {
   return stripAssistantSpeakerPrefix(text).trim();
 }
 
-function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
+export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
   const runs = new Map<string, CommandRun>();
   const items: ComposerTimelineItem[] = [];
   let assistantBuffer = "";
@@ -2170,7 +2212,7 @@ function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: strin
   return items;
 }
 
-function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
+export function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let plain = "";
   let keyIndex = 0;
@@ -2241,7 +2283,7 @@ function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): R
   return nodes;
 }
 
-function MarkdownContent({
+export function MarkdownContent({
   content,
   onReviewFileClick,
   reviewFiles,
@@ -2311,7 +2353,7 @@ function MarkdownContent({
   );
 }
 
-function LongMarkdownContent({
+export function LongMarkdownContent({
   content,
   onReviewFileClick,
   reviewFiles,
@@ -2442,8 +2484,9 @@ function App() {
   const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(composerTestMode ? composerTestAttachments : []);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
-  const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null);
+  const [mention, setMention] = useState<PromptMention | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [promptScrollTop, setPromptScrollTop] = useState(0);
   const [deleteCandidate, setDeleteCandidate] = useState<ChatRecord | null>(null);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
@@ -2491,11 +2534,17 @@ function App() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.umbratic/skills");
   const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
   const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
   const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [skillDocument, setSkillDocument] = useState<SkillDocument | null>(null);
+  const [skillEditorText, setSkillEditorText] = useState("");
+  const [skillEditorLoading, setSkillEditorLoading] = useState(false);
+  const [skillEditorSaving, setSkillEditorSaving] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
@@ -2512,6 +2561,7 @@ function App() {
   const reviewCloseTimerRef = useRef<number | null>(null);
   const toolsSaveSequenceRef = useRef(0);
   const skillsSaveSequenceRef = useRef(0);
+  const skillsLoadedRef = useRef(false);
   const endpointSaveSequenceRef = useRef(0);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
@@ -2578,8 +2628,24 @@ function App() {
     : task.state === "review_ready"
       ? "No file changes found"
       : stateLabel(task.state);
-  const attachmentMenuOpen = !!mention;
-  const attachmentSearchQuery = mention?.query ?? "";
+  const attachmentMenuOpen = mention?.kind === "file";
+  const skillMenuOpen = mention?.kind === "skill";
+  const promptReferenceMenuOpen = attachmentMenuOpen || skillMenuOpen;
+  const attachmentSearchQuery = attachmentMenuOpen ? mention?.query ?? "" : "";
+  const skillSearchQuery = skillMenuOpen ? mention?.query ?? "" : "";
+  const skillMatches = useMemo(() => {
+    const query = skillSearchQuery.trim().toLowerCase();
+    const candidates = skills.filter((skill) => {
+      if (!query) return true;
+      return (
+        skill.id.toLowerCase().includes(query) ||
+        skill.name.toLowerCase().includes(query) ||
+        skill.description.toLowerCase().includes(query)
+      );
+    });
+    return candidates.slice(0, 10);
+  }, [skillSearchQuery, skills]);
+  const skillEditorDirty = !!skillDocument && skillEditorText !== skillDocument.content;
   const canAttachFiles = !busy && !closedChatNotice;
   const canUseWorktreeMode = repository?.kind === "git";
   const activeTaskWorkspaceMode = task?.chatId === activeChatId ? task.workspaceMode : undefined;
@@ -2743,6 +2809,7 @@ function App() {
     void loadHarnessProfile();
     void loadAvailableIdes();
     void loadChats();
+    void loadSkills();
     const statusTimer = window.setInterval(() => void refreshStatus(), 30000);
     const pendingBackendEvents: BackendUiEvent[] = [];
     let backendEventFlushTimer: number | null = null;
@@ -3049,6 +3116,23 @@ function App() {
     if (!menu || !fileMatches.length) return;
     menu.querySelector<HTMLButtonElement>(`[data-file-index="${selectedFileIndex}"]`)?.scrollIntoView({ block: "nearest" });
   }, [fileMatches.length, selectedFileIndex]);
+
+  useEffect(() => {
+    const menu = attachmentMenuRef.current;
+    if (!menu || !skillMatches.length) return;
+    menu.querySelector<HTMLButtonElement>(`[data-skill-index="${selectedSkillIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [selectedSkillIndex, skillMatches.length]);
+
+  useEffect(() => {
+    setSelectedSkillIndex(0);
+  }, [skillSearchQuery]);
+
+  useEffect(() => {
+    if (!selectedSkillId || skills.some((skill) => skill.id === selectedSkillId)) return;
+    setSelectedSkillId(null);
+    setSkillDocument(null);
+    setSkillEditorText("");
+  }, [selectedSkillId, skills]);
 
   async function persistDraft(chatId: string, draftPrompt: string, files: ChatAttachment[]) {
     const existing = chats.find((chat) => chat.id === chatId);
@@ -3426,8 +3510,11 @@ function App() {
       setSkills(result.skills);
       setSkillsDirectory(result.directory);
       setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
+      setSelectedSkillId((current) => (current && result.skills.some((skill) => skill.id === current) ? current : null));
+      skillsLoadedRef.current = true;
+      setSkillsLoaded(true);
     } catch (cause) {
-      setSkills([]);
+      if (!skillsLoadedRef.current) setSkills([]);
       console.warn("Failed to list skills", cause);
     } finally {
       setSkillsLoading(false);
@@ -3451,6 +3538,9 @@ function App() {
       setSkills(result.skills);
       setSkillsDirectory(result.directory);
       setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
+      setSkillDocument((current) =>
+        current && current.id === skillId ? { ...current, enabled: result.skills.find((skill) => skill.id === skillId)?.enabled ?? current.enabled } : current,
+      );
     } catch (cause) {
       if (requestId !== skillsSaveSequenceRef.current) return;
       setSkillsEnabled(previous);
@@ -3472,6 +3562,62 @@ function App() {
     }
   }
 
+  async function openSkillEditor(skillId: string) {
+    if (skillEditorLoading) return;
+    if (selectedSkillId === skillId) {
+      setSelectedSkillId(null);
+      setSkillDocument(null);
+      setSkillEditorText("");
+      setSkillsMessage(null);
+      return;
+    }
+    setSelectedSkillId(skillId);
+    setSkillsMessage(null);
+    setSkillEditorLoading(true);
+    try {
+      const result = await api.getSkillDocument({ id: skillId });
+      if (!result.ok) {
+        setSkillsMessage(result.message);
+        setSkillDocument(null);
+        setSkillEditorText("");
+        return;
+      }
+      setSkillsDirectory(result.directory);
+      setSkillDocument(result.skill);
+      setSkillEditorText(result.skill.content);
+    } catch (cause) {
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
+      setSkillDocument(null);
+      setSkillEditorText("");
+    } finally {
+      setSkillEditorLoading(false);
+    }
+  }
+
+  async function saveSkillEditor() {
+    if (!skillDocument || skillEditorSaving) return;
+    setSkillsMessage(null);
+    setSkillEditorSaving(true);
+    try {
+      const result = await api.saveSkillDocument({ id: skillDocument.id, content: skillEditorText });
+      if (!result.ok) {
+        setSkillsMessage(result.message);
+        return;
+      }
+      setSkills(result.skills);
+      setSkillsDirectory(result.directory);
+      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
+      setSkillDocument(result.skill);
+      setSkillEditorText(result.skill.content);
+      setSelectedSkillId(result.skill.id);
+      setSkillsMessage("Skill saved.");
+    } catch (cause) {
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setSkillEditorSaving(false);
+    }
+  }
+
   async function submitCreateSkill() {
     if (creatingSkill) return;
     setSkillsMessage(null);
@@ -3485,6 +3631,7 @@ function App() {
       setNewSkillName("");
       setNewSkillFormOpen(false);
       await loadSkills();
+      await openSkillEditor(result.skill.id);
     } catch (cause) {
       setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -4104,6 +4251,7 @@ function App() {
     const nextMention = cursor === null ? null : mentionAtCursor(value, cursor);
     setMention(nextMention);
     if (!nextMention) setFileMatches([]);
+    if (!nextMention || nextMention.kind !== "skill") setSelectedSkillIndex(0);
   }
 
   function handlePromptChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -4168,7 +4316,7 @@ function App() {
   function addAttachment(file: ChatAttachment) {
     const normalized = normalizeAttachment(file);
     setAttachedFiles((current) => mergeAttachments(current, [normalized]));
-    if (mention) {
+    if (mention?.kind === "file") {
       const mentionText = `${attachmentMention(normalized)} `;
       const nextPrompt = `${prompt.slice(0, mention.start)}${mentionText}${prompt.slice(mention.end)}`;
       setPrompt(nextPrompt);
@@ -4186,6 +4334,30 @@ function App() {
     }
 
     insertAttachmentMentions([normalized]);
+  }
+
+  function insertSkillMention(skill: SkillInfo) {
+    const node = textareaRef.current;
+    const activeMention = mention?.kind === "skill" ? mention : null;
+    const cursor = activeMention?.start ?? node?.selectionStart ?? prompt.length;
+    const end = activeMention?.end ?? cursor;
+    const before = prompt.slice(0, activeMention ? activeMention.start : cursor);
+    const after = prompt.slice(end);
+    const leading = before && !/\s$/.test(before) ? " " : "";
+    const trailing = after && !/^\s/.test(after) ? " " : "";
+    const mentionText = `${skillMention(skill)} `;
+    const insertion = `${leading}${mentionText}${trailing}`;
+    const nextPrompt = `${before}${insertion}${after}`;
+    const caret = before.length + insertion.length;
+    setPrompt(nextPrompt);
+    setMention(null);
+    setSelectedSkillIndex(0);
+    window.setTimeout(() => {
+      const current = textareaRef.current;
+      if (!current) return;
+      current.focus();
+      current.setSelectionRange(caret, caret);
+    }, 0);
   }
 
   async function pickAttachment() {
@@ -4266,15 +4438,16 @@ function App() {
   }
 
   function handlePromptKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (attachmentMenuOpen) {
+    if (promptReferenceMenuOpen) {
       if (event.key === "Escape") {
         event.preventDefault();
         setMention(null);
         setFileMatches([]);
         setSelectedFileIndex(0);
+        setSelectedSkillIndex(0);
         return;
       }
-      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && fileMatches.length) {
+      if (attachmentMenuOpen && (event.key === "ArrowDown" || event.key === "ArrowUp") && fileMatches.length) {
         event.preventDefault();
         setSelectedFileIndex((current) => {
           const direction = event.key === "ArrowDown" ? 1 : -1;
@@ -4282,9 +4455,22 @@ function App() {
         });
         return;
       }
-      if ((event.key === "Enter" || event.key === "Tab") && fileMatches.length) {
+      if (skillMenuOpen && (event.key === "ArrowDown" || event.key === "ArrowUp") && skillMatches.length) {
+        event.preventDefault();
+        setSelectedSkillIndex((current) => {
+          const direction = event.key === "ArrowDown" ? 1 : -1;
+          return (current + direction + skillMatches.length) % skillMatches.length;
+        });
+        return;
+      }
+      if (attachmentMenuOpen && (event.key === "Enter" || event.key === "Tab") && fileMatches.length) {
         event.preventDefault();
         addAttachment(fileMatches[Math.min(selectedFileIndex, fileMatches.length - 1)]);
+        return;
+      }
+      if (skillMenuOpen && (event.key === "Enter" || event.key === "Tab") && skillMatches.length) {
+        event.preventDefault();
+        insertSkillMention(skillMatches[Math.min(selectedSkillIndex, skillMatches.length - 1)]);
         return;
       }
     }
@@ -5048,13 +5234,41 @@ function App() {
             </div>
           ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
-            {attachmentMenuOpen && !closedChatNotice ? (
+            {promptReferenceMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
-                  {mention ? <AtSign size={14} /> : <Paperclip size={14} />}
-                  <span>{repository ? `Attach from ${repository.name}` : "Search files after selecting a folder"}</span>
+                  {skillMenuOpen ? <Sparkles size={14} /> : <AtSign size={14} />}
+                  <span>
+                    {skillMenuOpen
+                      ? "Use a skill for this turn"
+                      : repository
+                        ? `Attach from ${repository.name}`
+                        : "Search files after selecting a folder"}
+                  </span>
                 </div>
-                {repository ? (
+                {skillMenuOpen ? (
+                  skillMatches.length ? (
+                    skillMatches.map((skill, index) => (
+                      <button
+                        className={index === selectedSkillIndex ? "active" : ""}
+                        data-skill-index={index}
+                        key={skill.id}
+                        type="button"
+                        onClick={() => insertSkillMention(skill)}
+                        onMouseEnter={() => setSelectedSkillIndex(index)}
+                      >
+                        <Sparkles size={14} />
+                        <span>
+                          <strong>{skill.name}</strong>
+                          <em>{skill.description || skill.id}</em>
+                        </span>
+                        <small>{skillsEnabled[skill.id] === false ? "Off" : skillMention(skill)}</small>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="attachmentMenuEmpty">No matching skills</div>
+                  )
+                ) : repository ? (
                   fileMatches.length ? (
                     fileMatches.map((file, index) => (
                       <button
@@ -5082,7 +5296,7 @@ function App() {
             <div className="promptInputShell">
               <div className="promptHighlight" aria-hidden="true">
                 <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
-                  {renderPromptHighlights(prompt, attachedFiles)}
+                  {renderPromptHighlights(prompt, attachedFiles, skills)}
                 </div>
               </div>
               <textarea
@@ -5604,6 +5818,19 @@ function App() {
                       <div className="skillSectionHeader">
                         <h4>Your skills</h4>
                         <div className="skillSectionActions">
+                          <button
+                            className="settingsInlineButton"
+                            type="button"
+                            onClick={() => {
+                              setSkillsMessage(null);
+                              void loadSkills();
+                            }}
+                            disabled={skillsLoading}
+                            title="Refresh skills"
+                          >
+                            {skillsLoading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                            <span>Refresh</span>
+                          </button>
                           <button className="settingsInlineButton" type="button" onClick={() => void openSkillsFolder()}>
                             <FolderOpen size={13} />
                             <span>Open folder</span>
@@ -5659,7 +5886,7 @@ function App() {
                         </form>
                       ) : null}
 
-                      {skillsLoading ? (
+                      {skillsLoading && !skillsLoaded ? (
                         <div className="settingsEmpty">
                           <Loader2 className="spin" size={16} />
                           <span>Loading skills…</span>
@@ -5672,11 +5899,18 @@ function App() {
                       ) : (
                         <ul className="skillList">
                           {skills.map((skill) => (
-                            <li key={skill.id} className="skillRow">
-                              <div className="skillRowText">
-                                <strong>{skill.name}</strong>
-                                {skill.description ? <em>{skill.description}</em> : null}
-                              </div>
+                            <li key={skill.id} className={`skillRow ${selectedSkillId === skill.id ? "isSelected" : ""}`}>
+                              <button
+                                type="button"
+                                className="skillRowButton"
+                                onClick={() => void openSkillEditor(skill.id)}
+                                aria-pressed={selectedSkillId === skill.id}
+                              >
+                                <div className="skillRowText">
+                                  <strong>{skill.name}</strong>
+                                  {skill.description ? <em>{skill.description}</em> : <em>{skillMention(skill)}</em>}
+                                </div>
+                              </button>
                               <button
                                 type="button"
                                 className={`toggle ${skillsEnabled[skill.id] ? "isOn" : ""}`}
@@ -5691,6 +5925,39 @@ function App() {
                           ))}
                         </ul>
                       )}
+
+                      {selectedSkillId ? (
+                        <div className="skillEditor">
+                          <div className="skillEditorHeader">
+                            <div>
+                              <strong>{skillDocument?.name ?? selectedSkillId}</strong>
+                              <span>
+                                {skillEditorLoading
+                                  ? "Loading SKILL.md"
+                                  : skillDocument?.path
+                                    ? skillDocument.path
+                                    : "Select a skill to edit its SKILL.md"}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="settingsInlineButton"
+                              onClick={() => void saveSkillEditor()}
+                              disabled={!skillDocument || !skillEditorDirty || skillEditorSaving || skillEditorLoading}
+                            >
+                              {skillEditorSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                              <span>{skillEditorDirty ? "Save" : "Saved"}</span>
+                            </button>
+                          </div>
+                          <textarea
+                            className="skillEditorText"
+                            value={skillEditorText}
+                            onChange={(event) => setSkillEditorText(event.target.value)}
+                            disabled={skillEditorLoading || !skillDocument}
+                            spellCheck={false}
+                          />
+                        </div>
+                      ) : null}
 
                       {skillsMessage ? <p className="settingsMessage">{skillsMessage}</p> : null}
                     </div>
@@ -5775,7 +6042,10 @@ function App() {
             </div>
             <div>
               <h3 id="delete-chat-title">Delete chat?</h3>
-              <p>This removes "{chatDisplayTitle(deleteCandidate)}" from the chat archive. Task files and folders are left alone.</p>
+              <p>
+                This removes "{chatDisplayTitle(deleteCandidate)}" from the chat archive and deletes app-managed chat files.
+                Project folders and task worktrees are left alone.
+              </p>
             </div>
             <div className="dialogActions">
               <button className="secondaryAction" type="button" onClick={() => setDeleteCandidate(null)}>
@@ -5868,6 +6138,8 @@ type RootElement = HTMLElement & {
   umbraticRoot?: ReturnType<typeof createRoot>;
 };
 
-const rootElement = document.getElementById("root") as RootElement;
-rootElement.umbraticRoot ??= createRoot(rootElement);
-rootElement.umbraticRoot.render(<App />);
+const rootElement = typeof document === "undefined" ? null : document.getElementById("root") as RootElement | null;
+if (rootElement) {
+  rootElement.umbraticRoot ??= createRoot(rootElement);
+  rootElement.umbraticRoot.render(<App />);
+}

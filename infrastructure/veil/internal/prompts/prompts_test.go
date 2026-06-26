@@ -78,3 +78,51 @@ func TestBuildRejectsUnknownRoute(t *testing.T) {
 		t.Fatal("expected unknown route error")
 	}
 }
+
+func TestBuildDedupesRuntimePrompts(t *testing.T) {
+	messages, err := Build(EngineeringChat, []model.Message{{Role: "user", Content: "fix git workflow"}}, RuntimeGit, RuntimeGit, RuntimeWorktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	countGit := 0
+	countWorktree := 0
+	for _, message := range messages {
+		content, _ := message.Content.(string)
+		if strings.Contains(content, "Git policy") {
+			countGit++
+		}
+		if strings.Contains(content, "Worktree policy") {
+			countWorktree++
+		}
+	}
+	if countGit != 1 || countWorktree != 1 {
+		t.Fatalf("runtime prompts were not deduped: git=%d worktree=%d messages=%#v", countGit, countWorktree, messages)
+	}
+}
+
+func TestRouteAndRuntimeCatalogsContainExpectedProfiles(t *testing.T) {
+	for _, route := range []Route{EngineeringChat, MarketingChat, SalesChat} {
+		if prompt, ok := RoutePrompt(route); !ok || prompt == "" {
+			t.Fatalf("missing route prompt for %q", route)
+		}
+	}
+	for _, profile := range []RuntimeProfile{
+		RuntimeWorkspaceToolchain,
+		RuntimePython,
+		RuntimeCCmake,
+		RuntimeMarkdown,
+		RuntimeDebugger,
+		RuntimeGit,
+		RuntimeWorktree,
+	} {
+		if !IsRuntimeProfile(profile) {
+			t.Fatalf("profile %q should be supported", profile)
+		}
+		if prompt, ok := RuntimePrompt(profile); !ok || prompt == "" {
+			t.Fatalf("missing runtime prompt for %q", profile)
+		}
+	}
+	if IsRuntimeProfile("custom-system-prompt") {
+		t.Fatal("unexpected custom runtime profile support")
+	}
+}

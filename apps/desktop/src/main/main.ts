@@ -64,7 +64,6 @@ import {
   readModelEndpointSettings,
   readNotes,
   readProjects,
-  readSkillSettings,
   readTasks,
   readToolSettings,
   writeHarnessProfileSetting,
@@ -73,12 +72,20 @@ import {
   writeJsonFile,
   writeNotes,
   writeProjects,
-  writeSkillSettings,
   writeTasks,
   writeToolSettings,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
+import {
+  createSkill as createSkillService,
+  getSkillDocument as getSkillDocumentService,
+  listSkills as listSkillsService,
+  promptSkillsForRequest as promptSkillsForRequestService,
+  saveSkillDocument as saveSkillDocumentService,
+  saveSkillSettings as saveSkillSettingsService,
+  skillsDirectoryPath as skillsDirectoryPathService,
+} from "./skills";
 import type {
   ApproveResult,
   BackendStatus,
@@ -117,13 +124,6 @@ const isDev = !app.isPackaged;
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
 type RunnerPrompt = string | RunnerPromptPart[];
-type PromptSkillInfo = {
-  id: string;
-  name: string;
-  description: string;
-  instructionPath: string;
-  content: string;
-};
 type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
@@ -789,7 +789,12 @@ function deleteChat(input: unknown): { ok: true } {
     throw new Error("Invalid chat delete input.");
   }
   const id = requiredString(input.chatId, "chatId");
+  if (!/^chat-[A-Za-z0-9_-]+$/.test(id)) {
+    throw new Error("Invalid chat id.");
+  }
   writeChats(readChats().filter((chat) => chat.id !== id));
+  fs.rmSync(hiddenChatWorkspacePath(id), { recursive: true, force: true });
+  fs.rmSync(chatAttachmentDirectory(id), { recursive: true, force: true });
   return { ok: true };
 }
 
@@ -1234,70 +1239,14 @@ function pushAgentInstructionContext(lines: string[], rootPath: string) {
   }
 }
 
-function skillDescriptionFromMarkdown(content: string): string {
-  const withoutFrontmatter = content.replace(/^---\r?\n[\s\S]*?\r?\n---\s*/, "").trim();
-  const paragraph = withoutFrontmatter
-    .split(/\r?\n\s*\r?\n/)
-    .map((part) => part.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim())
-    .find(Boolean);
-  return paragraph?.slice(0, 240) ?? "";
-}
-
-function readPromptSkillInfo(id: string, nameFallback: string, skillFile: string): PromptSkillInfo | null {
-  const content = readTextFileIfSafe(skillFile) ?? "";
-  if (!content.trim()) return null;
-  const meta = parseSkillFrontmatter(content);
-  return {
-    id,
-    name: meta.name || nameFallback,
-    description: meta.description || skillDescriptionFromMarkdown(content),
-    instructionPath: skillFile,
-    content,
-  };
-}
-
-function collectPromptSkillsFromDirectory(directory: string): PromptSkillInfo[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const skills: PromptSkillInfo[] = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.name.startsWith(".")) continue;
-    if (entry.isDirectory()) {
-      const skillFile = path.join(directory, entry.name, "SKILL.md");
-      if (fs.existsSync(skillFile)) {
-        const skill = readPromptSkillInfo(entry.name, entry.name, skillFile);
-        if (skill) skills.push(skill);
-      }
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      const id = entry.name.replace(/\.md$/i, "");
-      const skill = readPromptSkillInfo(id, id, path.join(directory, entry.name));
-      if (skill) skills.push(skill);
-    }
-  }
-  return skills;
-}
-
-function enabledPromptSkills(): PromptSkillInfo[] {
-  const settings = readSkillSettings();
-  return collectPromptSkillsFromDirectory(skillsDirectoryPath())
-    .filter((skill) => settings[skill.id] !== false)
-    .slice(0, 24);
-}
-
-function pushSkillContext(lines: string[]) {
-  const skills = enabledPromptSkills();
+function pushSkillContext(lines: string[], userPrompt: string) {
+  const skills = promptSkillsForRequestService(userPrompt);
   lines.push(
     "",
     "User skills:",
     skills.length
-      ? "The user enabled the following app skills from ~/.umbratic/skills. Treat each skill as optional guidance: decide whether it is relevant before applying it, and do not apply unrelated skills."
-      : "No enabled user skills were found for this request.",
+      ? "The following app skills are available at the beginning of this run. Enabled skills are optional guidance: decide whether each is relevant before applying it. Skills explicitly referenced with $skill-id in the user request should be treated as requested for this turn."
+      : "No enabled or explicitly requested user skills were found for this request.",
   );
   let remaining = 30000;
   for (const skill of skills) {
@@ -1308,7 +1257,8 @@ function pushSkillContext(lines: string[]) {
     const content = skill.content.slice(0, remaining);
     remaining -= content.length;
     const description = skill.description ? `\nDescription: ${skill.description}` : "";
-    lines.push(`\n### ${skill.name}${description}\nSource: ${skill.instructionPath}`, "```", content, "```");
+    const status = skill.requested ? "explicitly requested for this turn" : "enabled";
+    lines.push(`\n### ${skill.name}${description}\nStatus: ${status}\nSource: ${skill.instructionPath}`, "```", content, "```");
   }
 }
 
@@ -1477,6 +1427,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
         "Visible workspace files:",
         tree.length ? tree.join("\n") : "- (no readable files found)",
       ];
+  pushSkillContext(lines, userPrompt);
   if (keyFiles.length) {
     lines.push("", "Key workspace files:");
     for (const file of keyFiles) {
@@ -1484,7 +1435,6 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
     }
   }
   pushAgentInstructionContext(lines, rootPath);
-  pushSkillContext(lines);
   const history = priorChatContext(task.events ?? [], userPrompt);
   if (history) {
     lines.push(
@@ -2119,78 +2069,8 @@ async function getBackendStatus(): Promise<BackendStatus> {
   };
 }
 
-type SkillInfo = { id: string; name: string; description: string; enabled: boolean };
-
-function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return {};
-  const out: { name?: string; description?: string } = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const kv = line.match(/^(\w+):\s*(.+)$/);
-    if (!kv) continue;
-    const value = kv[2].trim().replace(/^['"]|['"]$/g, "");
-    if (kv[1] === "name") out.name = value;
-    if (kv[1] === "description") out.description = value;
-  }
-  return out;
-}
-
-function skillsDirectoryPath(): string {
-  return path.join(os.homedir(), ".umbratic", "skills");
-}
-
-async function listSkills(): Promise<{ skills: SkillInfo[]; directory: string }> {
-  const directory = skillsDirectoryPath();
-  const settings = readSkillSettings();
-  let entries: fs.Dirent[];
-  try {
-    entries = await fs.promises.readdir(directory, { withFileTypes: true });
-  } catch {
-    return { skills: [], directory };
-  }
-
-  const skills: SkillInfo[] = [];
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-
-    if (entry.isDirectory()) {
-      const skillFile = path.join(directory, entry.name, "SKILL.md");
-      let name = entry.name;
-      let description = "";
-      try {
-        const content = await fs.promises.readFile(skillFile, "utf8");
-        const meta = parseSkillFrontmatter(content);
-        if (meta.name) name = meta.name;
-        if (meta.description) description = meta.description;
-      } catch {
-        // SKILL.md missing — fall back to folder name
-      }
-      skills.push({ id: entry.name, name, description, enabled: settings[entry.name] !== false });
-      continue;
-    }
-
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      const id = entry.name.replace(/\.md$/, "");
-      let name = id;
-      let description = "";
-      try {
-        const content = await fs.promises.readFile(path.join(directory, entry.name), "utf8");
-        const meta = parseSkillFrontmatter(content);
-        if (meta.name) name = meta.name;
-        if (meta.description) description = meta.description;
-      } catch {
-        // unreadable — keep defaults
-      }
-      skills.push({ id, name, description, enabled: settings[id] !== false });
-    }
-  }
-
-  skills.sort((a, b) => a.name.localeCompare(b.name));
-  return { skills, directory };
-}
-
 async function openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }> {
-  const directory = skillsDirectoryPath();
+  const directory = skillsDirectoryPathService();
   try {
     await fs.promises.mkdir(directory, { recursive: true });
     const failure = await shell.openPath(directory);
@@ -2201,46 +2081,6 @@ async function openSkillsFolder(): Promise<{ ok: true; directory: string } | { o
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
-}
-
-async function createSkill(input: { name?: string }): Promise<
-  | { ok: true; skill: SkillInfo; directory: string }
-  | { ok: false; message: string }
-> {
-  const rawName = (input?.name ?? "").trim();
-  if (!rawName) {
-    return { ok: false, message: "Enter a name for the skill." };
-  }
-  const id = rawName.toLowerCase().replace(/[^a-z0-9-_]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!id) {
-    return { ok: false, message: "Use letters, numbers, hyphens, or underscores in the name." };
-  }
-  const root = skillsDirectoryPath();
-  const skillDir = path.join(root, id);
-  try {
-    await fs.promises.mkdir(skillDir, { recursive: false });
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "EEXIST") {
-      return { ok: false, message: `A skill named "${id}" already exists.` };
-    }
-    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
-  }
-  const template = `---\nname: ${rawName}\ndescription: Briefly describe when Umbratic AI should use this skill.\n---\n\n# ${rawName}\n\nReplace this with the guidance Umbratic AI should follow when this skill is relevant.\n`;
-  await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), template, "utf8");
-  writeSkillSettings({ [id]: true });
-  return {
-    ok: true,
-    skill: { id, name: rawName, description: "Briefly describe when Umbratic AI should use this skill.", enabled: true },
-    directory: root,
-  };
-}
-
-async function saveSkillSettings(input: unknown): Promise<{ skills: SkillInfo[]; directory: string }> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid skill settings.");
-  }
-  writeSkillSettings(input as Record<string, boolean>);
-  return listSkills();
 }
 
 async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
@@ -4091,10 +3931,12 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:get-harness-profile", () => readHarnessProfileSetting());
   handleIpc("umbratic:save-harness-profile", (input) => saveHarnessProfileSetting(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
-  handleIpc("umbratic:list-skills", () => listSkills());
-  handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettings(input));
+  handleIpc("umbratic:list-skills", () => listSkillsService());
+  handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettingsService(input));
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
-  handleIpc("umbratic:create-skill", (input) => createSkill(input as { name?: string }));
+  handleIpc("umbratic:create-skill", (input) => createSkillService(input as { name?: string }));
+  handleIpc("umbratic:get-skill-document", (input) => getSkillDocumentService(input as { id?: string }));
+  handleIpc("umbratic:save-skill-document", (input) => saveSkillDocumentService(input as { id?: string; content?: string }));
   handleIpc("umbratic:set-permission-mode", (mode) => setPermissionMode(mode));
   handleIpc("umbratic:list-available-ides", () => listAvailableIdes());
   handleIpc("umbratic:open-repository-in-ide", (input) => openRepositoryInIde(input));

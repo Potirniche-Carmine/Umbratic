@@ -309,6 +309,23 @@ declare global {
         | { ok: true; skill: { id: string; name: string; description: string; enabled: boolean }; directory: string }
         | { ok: false; message: string }
       >;
+      getSkillDocument(input: { id: string }): Promise<
+        | {
+            ok: true;
+            skill: { id: string; name: string; description: string; enabled: boolean; path: string; content: string };
+            directory: string;
+          }
+        | { ok: false; message: string }
+      >;
+      saveSkillDocument(input: { id: string; content: string }): Promise<
+        | {
+            ok: true;
+            skill: { id: string; name: string; description: string; enabled: boolean; path: string; content: string };
+            skills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
+            directory: string;
+          }
+        | { ok: false; message: string }
+      >;
       setPermissionMode(mode: UmbraticPermissionMode): Promise<UmbraticBackendStatus>;
       listAvailableIdes(): Promise<UmbraticIdeInfo[]>;
       startTask(input: {

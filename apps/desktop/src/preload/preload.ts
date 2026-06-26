@@ -62,6 +62,8 @@ const umbraticApi = {
   saveSkillSettings: (input: Record<string, boolean>) => ipcRenderer.invoke("umbratic:save-skill-settings", input),
   openSkillsFolder: () => ipcRenderer.invoke("umbratic:open-skills-folder"),
   createSkill: (input: { name: string }) => ipcRenderer.invoke("umbratic:create-skill", input),
+  getSkillDocument: (input: { id: string }) => ipcRenderer.invoke("umbratic:get-skill-document", input),
+  saveSkillDocument: (input: { id: string; content: string }) => ipcRenderer.invoke("umbratic:save-skill-document", input),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("umbratic:set-permission-mode", mode),
   listAvailableIdes: () => ipcRenderer.invoke("umbratic:list-available-ides"),
   startTask: (input: {

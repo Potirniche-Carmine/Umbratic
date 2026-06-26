@@ -16,12 +16,6 @@ Run the desktop app in development:
 npm run desktop:dev
 ```
 
-Open the seeded composer UI fixture:
-
-```sh
-npm --workspace @umbratic/desktop run dev:composer
-```
-
 Build the desktop app:
 
 ```sh

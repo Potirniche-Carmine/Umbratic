@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,9 @@ import (
 type fakeModelClient struct {
 	req               model.ChatRequest
 	models            []model.ModelInfo
+	chatErr           error
+	listErr           error
+	streamErr         error
 	streamStatusCode  int
 	streamContentType string
 	streamBody        string
@@ -25,11 +29,17 @@ type fakeModelClient struct {
 
 func (f *fakeModelClient) Chat(ctx context.Context, req model.ChatRequest) (model.ChatResponse, error) {
 	f.req = req
+	if f.chatErr != nil {
+		return model.ChatResponse{}, f.chatErr
+	}
 	return model.ChatResponse{Message: model.Message{Role: "assistant", Content: "ok"}}, nil
 }
 
 func (f *fakeModelClient) DoChat(ctx context.Context, req model.ChatRequest) (*http.Response, error) {
 	f.req = req
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	statusCode := f.streamStatusCode
 	if statusCode == 0 {
 		statusCode = http.StatusOK
@@ -50,6 +60,9 @@ func (f *fakeModelClient) DoChat(ctx context.Context, req model.ChatRequest) (*h
 }
 
 func (f *fakeModelClient) ListModels(ctx context.Context) ([]model.ModelInfo, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	if f.models == nil {
 		return []model.ModelInfo{{ID: "default-model"}}, nil
 	}
@@ -88,6 +101,34 @@ func TestAPIRouteRequiresAuth(t *testing.T) {
 	server.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("got status %d", rr.Code)
+	}
+}
+
+func TestAPIRouteRejectsWrongBearerToken(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("got status %d", rr.Code)
+	}
+}
+
+func TestChatRouteRequiresPost(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/engineering/chat", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("got status %d", rr.Code)
 	}
 }
@@ -215,6 +256,30 @@ func TestHealthRouteRejectsMissingConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestHealthRouteRequiresGetAndSanitizesListErrors(t *testing.T) {
+	modelClient := &fakeModelClient{listErr: errors.New("provider leaked model default-model")}
+	server := NewServer(testConfig(), modelClient)
+
+	post := httptest.NewRequest(http.MethodPost, "/api/health", nil)
+	post.Header.Set("Authorization", "Bearer test-token")
+	postRecorder := httptest.NewRecorder()
+	server.ServeHTTP(postRecorder, post)
+	if postRecorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("got status %d for POST", postRecorder.Code)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	get.Header.Set("Authorization", "Bearer test-token")
+	getRecorder := httptest.NewRecorder()
+	server.ServeHTTP(getRecorder, get)
+	if getRecorder.Code != http.StatusBadGateway {
+		t.Fatalf("got status %d body %s", getRecorder.Code, getRecorder.Body.String())
+	}
+	if strings.Contains(getRecorder.Body.String(), "default-model") {
+		t.Fatalf("health error leaked provider details: %s", getRecorder.Body.String())
+	}
+}
+
 func TestChatRouteStreams(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(testConfig(), modelClient)
@@ -232,6 +297,45 @@ func TestChatRouteStreams(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "data: [DONE]") {
 		t.Fatalf("unexpected stream body %q", rr.Body.String())
+	}
+}
+
+func TestChatRouteSanitizesModelChatErrors(t *testing.T) {
+	modelClient := &fakeModelClient{chatErr: errors.New("runtime says token=secret and model default-model failed")}
+	server := NewServer(testConfig(), modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"hello"}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("got status %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "default-model") {
+		t.Fatalf("model error leaked details: %s", rr.Body.String())
+	}
+}
+
+func TestChatRouteSanitizesStreamErrorsAndNonSuccessResponses(t *testing.T) {
+	for name, modelClient := range map[string]*fakeModelClient{
+		"request error": {streamErr: errors.New("runtime dial leaked host")},
+		"bad status":    {streamStatusCode: http.StatusForbidden, streamBody: "secret provider body"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := NewServer(testConfig(), modelClient)
+			req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"hello","stream":true}`))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rr := httptest.NewRecorder()
+			server.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusBadGateway {
+				t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "runtime") {
+				t.Fatalf("stream error leaked details: %s", rr.Body.String())
+			}
+		})
 	}
 }
 

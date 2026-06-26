@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -70,6 +72,21 @@ func TestLoadRequiresConfiguredModel(t *testing.T) {
 	}
 }
 
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	value, existed := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(name, value)
+			return
+		}
+		_ = os.Unsetenv(name)
+	})
+}
+
 func TestLoadRejectsInvalidTimeout(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_MODEL_TIMEOUT", "soon")
@@ -77,5 +94,68 @@ func TestLoadRejectsInvalidTimeout(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected invalid timeout error")
+	}
+}
+
+func TestLoadRejectsInvalidMaxBodyBytes(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_MAX_BODY_BYTES", "not-a-number")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected invalid max body error")
+	}
+}
+
+func TestLoadRequiresProviderBaseURL(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_PROVIDER_BASE_URL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected missing provider base URL error")
+	}
+}
+
+func TestLoadRejectsUnsupportedProviderProtocol(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_PROVIDER_PROTOCOL", "raw-runtime")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected unsupported provider protocol error")
+	}
+}
+
+func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("VEIL_AUTH_TOKEN=from-file\nVEIL_MODEL=file-model\nVEIL_PROVIDER_BASE_URL=http://from-file.test\nVEIL_ADDR=0.0.0.0:9000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("VEIL_ENV_FILE", envPath)
+	t.Setenv("VEIL_AUTH_TOKEN", "from-process")
+	unsetEnv(t, "VEIL_ADDR")
+	unsetEnv(t, "VEIL_MODEL")
+	unsetEnv(t, "VEIL_PROVIDER_BASE_URL")
+	t.Setenv("VEIL_PROVIDER_PROTOCOL", "")
+	t.Setenv("VEIL_MODEL_TIMEOUT", "")
+	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
+	t.Setenv("VEIL_MAX_BODY_BYTES", "")
+	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
+	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "")
+	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
+	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthToken != "from-process" {
+		t.Fatalf("dotenv overrode process env token: %q", cfg.AuthToken)
+	}
+	if cfg.DefaultModel != "file-model" || cfg.ProviderBaseURL != "http://from-file.test" || cfg.Addr != "0.0.0.0:9000" {
+		t.Fatalf("dotenv values were not loaded: %#v", cfg)
 	}
 }
