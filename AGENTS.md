@@ -9,3 +9,5 @@ This is a monorepo. Treat each top-level area as a separate project unless the u
 Only gather context and make changes in the project needed for the task. Do not search, inspect, or edit other project directories unless the request names them or the dependency is directly relevant.
 
 Keep changes focused and avoid broad cleanup. Follow the nearest project-level `AGENTS.md` when one exists.
+
+Always run `npm run test:all` before finishing changes.

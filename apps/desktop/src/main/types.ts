@@ -5,7 +5,7 @@ export type PermissionMode = "normal" | "bypass";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
-export type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
+export type RunnerToolId = "read" | "write" | "edit" | "search" | "command";
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
@@ -112,11 +112,6 @@ export type RuntimeDiagnostics = {
   cmake: {
     profileVersion: string;
     buildDir: ".umbratic/build";
-  };
-  debugger: {
-    supported: Array<"gdb" | "lldb" | "cdb">;
-    toolName: "debugger";
-    nonInteractive: boolean;
   };
   toolchain: {
     bundledHelperCommands: string[];

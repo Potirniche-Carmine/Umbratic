@@ -9,7 +9,7 @@ const iconNames = [
   "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronRight", "CheckCircle2", "CircleDashed",
   "Copy", "ExternalLink", "File", "FileText", "FolderOpen", "GitBranch", "Hand", "Loader2", "Minus",
   "Monitor", "Moon", "PanelRight", "Paperclip", "Play", "Plus", "RefreshCw", "Send", "Settings",
-  "ShieldAlert", "ShieldCheck", "Sparkles", "SquarePen", "Sun", "TerminalSquare", "ThumbsDown", "ThumbsUp",
+  "ShieldAlert", "ShieldCheck", "Sparkles", "SquarePen", "Sun", "ThumbsDown", "ThumbsUp",
   "Trash2", "TriangleAlert", "Type", "Undo2", "User", "X",
 ];
 

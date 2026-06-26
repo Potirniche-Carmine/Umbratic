@@ -19,7 +19,6 @@ import * as path from "node:path";
 
 import {
   cCmakeRuntimeSystemPrompt,
-  debuggerRuntimeSystemPrompt,
   endpointEditingAllowed,
   localProviderCatalog,
   markdownRuntimeSystemPrompt,
@@ -49,7 +48,6 @@ import {
   isGeneratedRuntimePath,
   isLocalhostUrl,
   promptLooksLikeCmakeTask,
-  promptLooksLikeDebugTask,
   promptLooksLikeMarkdownTask,
   promptLooksLikePythonTask,
   runtimeDiagnostics,
@@ -65,7 +63,6 @@ import {
   readNotes,
   readProjects,
   readTasks,
-  readToolSettings,
   writeHarnessProfileSetting,
   writeModelEndpointSettings,
   writeChats,
@@ -73,7 +70,6 @@ import {
   writeNotes,
   writeProjects,
   writeTasks,
-  writeToolSettings,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
@@ -507,7 +503,7 @@ function taskUsesIsolatedWorktree(task: TaskRecord): boolean {
 }
 
 function taskEnabledTools(task: TaskRecord): RunnerToolId[] {
-  return normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings(readToolSettings()));
+  return normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
 }
 
 function taskCanCreateFiles(task: TaskRecord): boolean {
@@ -1460,9 +1456,6 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   if (promptLooksLikeMarkdownTask(userPrompt)) {
     lines.push("", "Markdown runtime policy for this request:", markdownRuntimeSystemPrompt);
   }
-  if (promptLooksLikeDebugTask(userPrompt)) {
-    lines.push("", "Debugger policy for this request:", debuggerRuntimeSystemPrompt);
-  }
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
   parts.push(...(await attachmentPromptParts(rootPath, attachments)));
   parts.push({
@@ -1984,15 +1977,6 @@ async function checkEndpointHealth(provider: ReturnType<typeof endpointProvider>
 
 async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
   const settings = writeModelEndpointSettings(input);
-  const status = await getBackendStatus();
-  return { settings, status };
-}
-
-async function saveRunnerToolSettings(input: unknown) {
-  if (!isRecord(input)) {
-    throw new Error("Invalid tool settings.");
-  }
-  const settings = writeToolSettings(input as Partial<Record<RunnerToolId, boolean>>);
   const status = await getBackendStatus();
   return { settings, status };
 }
@@ -2729,7 +2713,7 @@ async function runRunnerTask(
     applyTaskPolicyMetadata(task, intent);
     saveTask(task);
     if (expectsFileChanges && !taskCanCreateFiles(task)) {
-      failTask(task, "File creation tools are disabled for this run. Enable write, edit, or command in Settings > Tools and try again.");
+      failTask(task, "File creation tools are disabled for this run.");
       return;
     }
     const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
@@ -3188,7 +3172,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
   const requestedWorkspaceMode: WorkspaceMode =
     !hiddenWorkspace && refreshed.kind === "git" && input.useWorktree === true ? "worktree" : "local";
-  const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings(readToolSettings()));
+  const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
 
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
@@ -3926,8 +3910,6 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:save-model-endpoint-settings", (input) =>
     saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),
   );
-  handleIpc("umbratic:get-tool-settings", () => readToolSettings());
-  handleIpc("umbratic:save-tool-settings", (input) => saveRunnerToolSettings(input));
   handleIpc("umbratic:get-harness-profile", () => readHarnessProfileSetting());
   handleIpc("umbratic:save-harness-profile", (input) => saveHarnessProfileSetting(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());

@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
-import { promptLooksLikeDebugTask, umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
+import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type { LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
@@ -24,7 +24,6 @@ function runtimeProfilesForTask(task: TaskRecord): string[] {
   if (task.workspaceKind === "git") profiles.add("git");
   if (task.workspaceMode === "worktree") profiles.add("worktree");
   if (task.runtimeProfile && task.runtimeProfile !== "none") profiles.add(task.runtimeProfile);
-  if (promptLooksLikeDebugTask(task.prompt)) profiles.add("debugger");
   return [...profiles];
 }
 

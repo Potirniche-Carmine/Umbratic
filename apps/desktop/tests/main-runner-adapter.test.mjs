@@ -69,8 +69,8 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.taskId, "task-1");
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
   assert.equal(config.permissionMode, "normal");
-  assert.deepEqual(plain(config.enabledTools), ["read", "debugger"]);
-  assert.deepEqual(plain(config.runtimeProfiles), ["workspace-toolchain", "git", "worktree", "cmake", "debugger"]);
+  assert.deepEqual(plain(config.enabledTools), ["read"]);
+  assert.deepEqual(plain(config.runtimeProfiles), ["workspace-toolchain", "git", "worktree", "cmake"]);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
   assert.equal(config.provider.apiKey, "endpoint-token");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });

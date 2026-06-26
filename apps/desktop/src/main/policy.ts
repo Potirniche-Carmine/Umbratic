@@ -104,10 +104,6 @@ export function promptLooksLikeCmakeTask(prompt: string): boolean {
   );
 }
 
-export function promptLooksLikeDebugTask(prompt: string): boolean {
-  return /\b(debugger|debugging|gdb|lldb|cdb|windbg|backtrace|registers?|stack trace|segfault|crash|memory|pointer|invalid free|use-after-free|buffer overflow|security audit|audit)\b/i.test(prompt);
-}
-
 export function runtimeProfileForPrompt(prompt: string): RuntimeProfileId {
   if (promptLooksLikeCmakeTask(prompt)) return "cmake";
   if (promptLooksLikePythonTask(prompt)) return "python";
@@ -375,14 +371,9 @@ export function runtimeDiagnostics(): RuntimeDiagnostics {
       profileVersion: cmakeRuntimeProfileVersion,
       buildDir: ".umbratic/build",
     },
-    debugger: {
-      supported: ["gdb", "lldb", "cdb"],
-      toolName: "debugger",
-      nonInteractive: true,
-    },
     toolchain: {
       bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
-      optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend", "debugger"],
+      optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend"],
     },
     shell: {
       platform: process.platform,

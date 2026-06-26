@@ -13,7 +13,6 @@ test("desktop policy detects runtime profiles from realistic prompts", () => {
   assert.equal(policy.runtimeProfileForPrompt("Fix failing pytest in tests/test_api.py"), "python");
   assert.equal(policy.runtimeProfileForPrompt("Update README markdown tables"), "markdown");
   assert.equal(policy.runtimeProfileForPrompt("Debug a segfault in src/main.c with CMake"), "cmake");
-  assert.equal(policy.promptLooksLikeDebugTask("Need a stack trace and register inspection"), true);
   assert.equal(policy.runtimeProfileForPrompt("What is the app called?"), "none");
 });
 
@@ -73,15 +72,13 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     edit: true,
     search: true,
     command: true,
-    debugger: true,
   });
-  assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read"])), ["read", "command"]);
+  assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "debugger"])), ["read", "command"]);
   assert.deepEqual(plain(tools.toolSettingsFromEnabledTools(["read", "debugger"])), {
     read: true,
     write: false,
     edit: false,
     search: false,
     command: false,
-    debugger: true,
   });
 });

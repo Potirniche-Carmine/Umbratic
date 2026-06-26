@@ -156,7 +156,7 @@ test("tool, skill, harness, and notes settings sanitize invalid input", () => {
   });
   assert.equal(storage.readToolSettings().read, false);
   assert.equal(storage.readToolSettings().write, true);
-  assert.equal(storage.readToolSettings().debugger, true);
+  assert.equal(Object.hasOwn(storage.readToolSettings(), "debugger"), false);
   assert.deepEqual(plain(storage.readSkillSettings()), { "good-skill": false, also_good: true });
 
   const notes = storage.writeNotes("a".repeat(5));

@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
-type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type BackendUiEvent = Record<string, unknown>;
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean };
@@ -43,8 +42,6 @@ const umbraticApi = {
   checkoutRepositoryBranch: (input: { repositoryId?: string; repositoryPath?: string; branch: string }) =>
     ipcRenderer.invoke("umbratic:checkout-repository-branch", input),
   getBackendStatus: () => ipcRenderer.invoke("umbratic:get-backend-status"),
-  getToolSettings: () => ipcRenderer.invoke("umbratic:get-tool-settings"),
-  saveToolSettings: (input: Partial<Record<RunnerToolId, boolean>>) => ipcRenderer.invoke("umbratic:save-tool-settings", input),
   getHarnessProfile: () => ipcRenderer.invoke("umbratic:get-harness-profile"),
   saveHarnessProfile: (input: HarnessProfileId) => ipcRenderer.invoke("umbratic:save-harness-profile", input),
   getModelEndpointSettings: () => ipcRenderer.invoke("umbratic:get-model-endpoint-settings"),
@@ -73,7 +70,6 @@ const umbraticApi = {
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
-    enabledTools?: RunnerToolId[];
   }) =>
     ipcRenderer.invoke("umbratic:start-task", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>

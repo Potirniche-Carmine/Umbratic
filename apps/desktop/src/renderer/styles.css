@@ -4796,48 +4796,6 @@ button.attachmentPreview:focus-visible {
   line-height: 1.4;
 }
 
-.toolList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.toolRow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
-  transition: background 120ms ease, border-color 120ms ease;
-}
-
-.toolRow:hover,
-.toolRow:focus-within {
-  border-color: var(--line-strong);
-  background: color-mix(in srgb, var(--surface-3) 46%, transparent);
-}
-
-.toolRowText {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.toolRowText em {
-  color: var(--faint);
-  font-style: normal;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
 .skillRowText {
   display: flex;
   flex-direction: column;

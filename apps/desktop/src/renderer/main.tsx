@@ -33,7 +33,6 @@ import {
   Sparkles,
   SquarePen,
   Sun,
-  TerminalSquare,
   ThumbsDown,
   ThumbsUp,
   Trash2,
@@ -56,7 +55,6 @@ type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
-type RunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type LocalProviderId = "company-endpoint";
 type ModelEndpointMode = "local" | "server";
@@ -158,11 +156,6 @@ type BackendDiagnostics = {
     cmake: {
       profileVersion: string;
       buildDir: ".umbratic/build";
-    };
-    debugger: {
-      supported: Array<"gdb" | "lldb" | "cdb">;
-      toolName: "debugger";
-      nonInteractive: boolean;
     };
     toolchain: {
       bundledHelperCommands: string[];
@@ -369,11 +362,6 @@ type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
-  getToolSettings(): Promise<Record<RunnerToolId, boolean>>;
-  saveToolSettings(input: Partial<Record<RunnerToolId, boolean>>): Promise<{
-    settings: Record<RunnerToolId, boolean>;
-    status: BackendStatus;
-  }>;
   getHarnessProfile(): Promise<HarnessProfileId>;
   saveHarnessProfile(input: HarnessProfileId): Promise<{
     settings: HarnessProfileId;
@@ -409,7 +397,6 @@ type DesktopApi = {
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
-    enabledTools?: RunnerToolId[];
   }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
@@ -431,7 +418,6 @@ const previewChatsKey = "umbratic-preview-chats";
 const previewNotesKey = "umbratic-preview-notes";
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
-const previewToolSettingsKey = "umbratic-preview-tool-settings";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
@@ -464,15 +450,6 @@ const defaultMonoFontChoices = [
   "Source Code Pro",
   "ui-monospace",
 ];
-const runnerTools: Array<{ id: RunnerToolId; name: string; description: string }> = [
-  { id: "read", name: "read", description: "Read a workspace file or list a directory." },
-  { id: "search", name: "search", description: "Search workspace file paths and small text files." },
-  { id: "edit", name: "edit", description: "Replace exact text in a workspace file. Requires permission." },
-  { id: "write", name: "write", description: "Write a workspace file. Requires permission." },
-  { id: "command", name: "command", description: "Run a workspace shell command after policy and permission checks." },
-  { id: "debugger", name: "debugger", description: "Inspect a workspace executable with gdb, lldb, or cdb. Requires permission." },
-];
-const defaultToolSettings = Object.fromEntries(runnerTools.map((tool) => [tool.id, true])) as Record<RunnerToolId, boolean>;
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
   mode: "local",
@@ -571,39 +548,8 @@ function writeWorkspaceMode(mode: WorkspaceMode) {
   window.localStorage.setItem(workspaceModeKey, mode);
 }
 
-function isRunnerToolId(value: unknown): value is RunnerToolId {
-  return typeof value === "string" && runnerTools.some((tool) => tool.id === value);
-}
-
 function isHarnessProfileId(value: unknown): value is HarnessProfileId {
   return value === "marketing" || value === "sales" || value === "engineering";
-}
-
-function normalizeToolSettings(value: unknown): Record<RunnerToolId, boolean> {
-  const next = { ...defaultToolSettings };
-  if (!value || typeof value !== "object" || Array.isArray(value)) return next;
-  for (const [id, enabled] of Object.entries(value)) {
-    if (isRunnerToolId(id) && typeof enabled === "boolean") {
-      next[id] = enabled;
-    }
-  }
-  return next;
-}
-
-function readPreviewToolSettings(): Record<RunnerToolId, boolean> {
-  try {
-    return normalizeToolSettings(JSON.parse(window.localStorage.getItem(previewToolSettingsKey) ?? "{}"));
-  } catch {
-    return { ...defaultToolSettings };
-  }
-}
-
-function writePreviewToolSettings(settings: Record<RunnerToolId, boolean>) {
-  window.localStorage.setItem(previewToolSettingsKey, JSON.stringify(settings));
-}
-
-function enabledToolIds(settings: Record<RunnerToolId, boolean>): RunnerToolId[] {
-  return runnerTools.filter((tool) => settings[tool.id]).map((tool) => tool.id);
 }
 
 function readPreviewHarnessProfile(): HarnessProfileId {
@@ -1039,22 +985,15 @@ const fallbackApi: DesktopApi = {
         },
         markdown: { docsOnlyClassification: "enabled" },
         cmake: { profileVersion: "cmake-umbratic-build-1", buildDir: ".umbratic/build" },
-        debugger: { supported: ["gdb", "lldb", "cdb"], toolName: "debugger", nonInteractive: true },
         toolchain: {
           bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
-          optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend", "debugger"],
+          optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend"],
         },
         shell: { platform: navigator.platform, preferred: "posix", nonInteractive: true },
       },
     },
     message: "Electron preload is not available in this browser preview.",
   }),
-  getToolSettings: async () => readPreviewToolSettings(),
-  saveToolSettings: async (input) => {
-    const settings = normalizeToolSettings({ ...readPreviewToolSettings(), ...input });
-    writePreviewToolSettings(settings);
-    return { settings, status: await fallbackApi.getBackendStatus() };
-  },
   getHarnessProfile: async () => readPreviewHarnessProfile(),
   saveHarnessProfile: async (input) => {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
@@ -2510,7 +2449,7 @@ function App() {
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "tools" | "skills" | "telemetry">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "skills" | "telemetry">("account");
   const [accountAuthOpen, setAccountAuthOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
@@ -2529,8 +2468,6 @@ function App() {
   const [fontScanPending, setFontScanPending] = useState(false);
   const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
   const [exportingTelemetry, setExportingTelemetry] = useState(false);
-  const [toolsEnabled, setToolsEnabled] = useState<Record<RunnerToolId, boolean>>(() => ({ ...defaultToolSettings }));
-  const [toolsMessage, setToolsMessage] = useState<string | null>(null);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.umbratic/skills");
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -2559,7 +2496,6 @@ function App() {
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
   const reviewCloseTimerRef = useRef<number | null>(null);
-  const toolsSaveSequenceRef = useRef(0);
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const endpointSaveSequenceRef = useRef(0);
@@ -2805,7 +2741,6 @@ function App() {
   useEffect(() => {
     void refreshStatus();
     void loadEndpointSettings();
-    void loadToolSettings();
     void loadHarnessProfile();
     void loadAvailableIdes();
     void loadChats();
@@ -3332,16 +3267,6 @@ function App() {
     }
   }
 
-  async function loadToolSettings() {
-    try {
-      const settings = await api.getToolSettings();
-      setToolsEnabled(normalizeToolSettings(settings));
-      setToolsMessage(null);
-    } catch (cause) {
-      setToolsMessage(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
   async function loadEndpointSettings() {
     try {
       const settings = normalizeEndpointSettings(await api.getModelEndpointSettings());
@@ -3463,30 +3388,6 @@ function App() {
       setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
       setHarnessSaving(false);
-    }
-  }
-
-  async function toggleToolSetting(toolId: RunnerToolId) {
-    let previous = toolsEnabled;
-    let next = toolsEnabled;
-    setToolsEnabled((current) => {
-      previous = current;
-      next = { ...current, [toolId]: !current[toolId] };
-      return next;
-    });
-    setToolsMessage(null);
-    const requestId = toolsSaveSequenceRef.current + 1;
-    toolsSaveSequenceRef.current = requestId;
-    try {
-      const result = await api.saveToolSettings(next);
-      if (requestId !== toolsSaveSequenceRef.current) return;
-      setToolsEnabled(normalizeToolSettings(result.settings));
-      setBackend(result.status);
-      setPermissionModeState(result.status.permissionMode);
-    } catch (cause) {
-      if (requestId !== toolsSaveSequenceRef.current) return;
-      setToolsEnabled(previous);
-      setToolsMessage(String(cause instanceof Error ? cause.message : cause));
     }
   }
 
@@ -3972,7 +3873,6 @@ function App() {
         attachedFiles: attachedFiles.map(normalizeAttachment),
         reasoningMode,
         useWorktree: useWorktreeForNextRun,
-        enabledTools: enabledToolIds(toolsEnabled),
       });
       setVisibleTask(nextTask);
       const nextVisibleEvents = visibleEventsForTask(nextTask);
@@ -5497,14 +5397,6 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  className={`settingsNavItem ${settingsTab === "tools" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("tools")}
-                >
-                  <TerminalSquare size={15} />
-                  <span>Tools</span>
-                </button>
-                <button
-                  type="button"
                   className={`settingsNavItem ${settingsTab === "skills" ? "isActive" : ""}`}
                   onClick={() => setSettingsTab("skills")}
                 >
@@ -5770,38 +5662,6 @@ function App() {
                       <p>The quick brown fox jumps over a careful build log.</p>
                       <code>cmake --build .umbratic/build --parallel</code>
                     </div>
-                  </div>
-                ) : null}
-
-                {settingsTab === "tools" ? (
-                  <div className="settingsPanel">
-                    <div className="settingsPanelHead">
-                      <h3>Tools</h3>
-                      <p>Capabilities the model can call during a run. Disable any tool to keep it out of new turns.</p>
-                    </div>
-
-                    {toolsMessage ? <p className="settingsMessage">{toolsMessage}</p> : null}
-
-                    <ul className="toolList">
-                      {runnerTools.map((tool) => (
-                        <li key={tool.id} className="toolRow">
-                          <div className="toolRowText">
-                            <strong className="toolName">{tool.name}</strong>
-                            <em>{tool.description}</em>
-                          </div>
-                          <button
-                            type="button"
-                            className={`toggle ${toolsEnabled[tool.id] ? "isOn" : ""}`}
-                            role="switch"
-                            aria-checked={!!toolsEnabled[tool.id]}
-                            aria-label={`Toggle ${tool.name}`}
-                            onClick={() => void toggleToolSetting(tool.id)}
-                          >
-                            <span className="toggleKnob" />
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
                   </div>
                 ) : null}
 

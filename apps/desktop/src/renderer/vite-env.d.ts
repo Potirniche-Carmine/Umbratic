@@ -5,7 +5,6 @@ type UmbraticReasoningMode = "fast" | "reasoning";
 type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
 type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
-type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "command" | "debugger";
 type UmbraticHarnessProfileId = "marketing" | "sales" | "engineering";
 type UmbraticLocalProviderId = "company-endpoint";
 type UmbraticModelEndpointMode = "local" | "server";
@@ -94,16 +93,11 @@ type UmbraticBackendDiagnostics = {
     markdown: {
       docsOnlyClassification: "enabled";
     };
-    cmake: {
-      profileVersion: string;
-      buildDir: ".umbratic/build";
-    };
-    debugger: {
-      supported: Array<"gdb" | "lldb" | "cdb">;
-      toolName: "debugger";
-      nonInteractive: boolean;
-    };
-    toolchain: {
+  cmake: {
+    profileVersion: string;
+    buildDir: ".umbratic/build";
+  };
+  toolchain: {
       bundledHelperCommands: string[];
       optionalCapabilityCommands: string[];
     };
@@ -283,11 +277,6 @@ declare global {
         { ok: true; repository: UmbraticRepositoryInfo } | { ok: false; message: string }
       >;
       getBackendStatus(): Promise<UmbraticBackendStatus>;
-      getToolSettings(): Promise<Record<UmbraticRunnerToolId, boolean>>;
-      saveToolSettings(input: Partial<Record<UmbraticRunnerToolId, boolean>>): Promise<{
-        settings: Record<UmbraticRunnerToolId, boolean>;
-        status: UmbraticBackendStatus;
-      }>;
       getHarnessProfile(): Promise<UmbraticHarnessProfileId>;
       saveHarnessProfile(input: UmbraticHarnessProfileId): Promise<{
         settings: UmbraticHarnessProfileId;
@@ -335,7 +324,6 @@ declare global {
         attachedFiles?: UmbraticChatAttachment[];
         reasoningMode?: UmbraticReasoningMode;
         useWorktree?: boolean;
-        enabledTools?: UmbraticRunnerToolId[];
       }): Promise<UmbraticTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: UmbraticPermissionDecision): Promise<void>;
