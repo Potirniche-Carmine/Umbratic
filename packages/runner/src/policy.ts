@@ -163,13 +163,37 @@ function commandLooksDestructive(command: string): boolean {
   );
 }
 
+function quotedStringPattern(): RegExp {
+  return /(["'`])([\s\S]*?)\1/g;
+}
+
+function startsWithAbsolutePath(value: string): boolean {
+  return process.platform === "win32" ? /^(?:[A-Za-z]:\\|\\\\)/.test(value) : value.startsWith("/");
+}
+
+function absolutePathCandidates(command: string): string[] {
+  const candidates: string[] = [];
+  for (const match of command.matchAll(quotedStringPattern())) {
+    const candidate = match[2]?.trim();
+    if (candidate && startsWithAbsolutePath(candidate)) candidates.push(candidate);
+  }
+
+  const unquoted = command.replace(quotedStringPattern(), " ");
+  const unquotedPattern =
+    process.platform === "win32"
+      ? /(?:^|\s)((?:[A-Za-z]:\\|\\\\)[^\s"'`<>|;&]*)/g
+      : /(?:^|\s)(\/[^\s"'`<>|;&]*)/g;
+  for (const match of unquoted.matchAll(unquotedPattern)) {
+    const candidate = match[1]?.trim();
+    if (candidate) candidates.push(candidate);
+  }
+  return candidates;
+}
+
 function commandTouchesExternalDirectory(command: string, cwd?: string): boolean {
   if (!cwd) return false;
-  const absolutePathPattern =
-    process.platform === "win32" ? /(?:^|\s)([A-Za-z]:\\[^\s"'`<>|]+|\\\\[^\s"'`<>|]+)/g : /(?:^|\s)(\/[^\s"'`<>|]+)/g;
-  for (const match of command.matchAll(absolutePathPattern)) {
-    const candidate = match[1];
-    if (candidate && !pathInside(cwd, path.resolve(candidate))) return true;
+  for (const candidate of absolutePathCandidates(command)) {
+    if (!pathInside(cwd, path.resolve(candidate))) return true;
   }
   return false;
 }

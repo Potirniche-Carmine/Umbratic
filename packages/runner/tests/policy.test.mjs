@@ -45,6 +45,15 @@ test("external absolute paths are blocked when a command escapes the workspace",
   const got = policy.classifyCommandText(`type ${external}`, cwd);
   assert.equal(got.commandClass, "external-directory");
   assert.equal(got.risky, true);
+
+  const quoted = policy.classifyCommandText(process.platform === "win32" ? `type "${external}"` : `cat "${external}"`, cwd);
+  assert.equal(quoted.commandClass, "external-directory");
+  assert.equal(quoted.risky, true);
+
+  const inside = path.join(cwd, "src", "app.ts");
+  const safe = policy.classifyCommandText(process.platform === "win32" ? `type "${inside}"` : `cat "${inside}"`, cwd);
+  assert.equal(safe.commandClass, "read");
+  assert.equal(safe.risky, false);
 });
 
 test("redaction removes common secrets and clips long telemetry text", () => {

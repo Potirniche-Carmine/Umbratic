@@ -133,10 +133,47 @@ func contentIsBlank(content any) bool {
 	case string:
 		return strings.TrimSpace(value) == ""
 	case []any:
-		return len(value) == 0
+		return contentPartsAreBlank(value)
 	default:
 		return false
 	}
+}
+
+func contentPartsAreBlank(parts []any) bool {
+	if len(parts) == 0 {
+		return true
+	}
+	for _, part := range parts {
+		switch value := part.(type) {
+		case string:
+			if strings.TrimSpace(value) != "" {
+				return false
+			}
+		case map[string]any:
+			if contentPartHasValue(value) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func contentPartHasValue(part map[string]any) bool {
+	if text, ok := part["text"].(string); ok && strings.TrimSpace(text) != "" {
+		return true
+	}
+	if partType, _ := part["type"].(string); partType == "image_url" {
+		switch image := part["image_url"].(type) {
+		case string:
+			return strings.TrimSpace(image) != ""
+		case map[string]any:
+			url, _ := image["url"].(string)
+			return strings.TrimSpace(url) != ""
+		}
+	}
+	return false
 }
 
 func encodedSize(value any) int {

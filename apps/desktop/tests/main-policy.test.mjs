@@ -19,6 +19,8 @@ test("desktop policy detects runtime profiles from realistic prompts", () => {
 
 test("desktop command classifier blocks unsafe branches and allows expected tooling", () => {
   const cwd = path.join(os.tmpdir(), "umbratic-desktop-policy");
+  const external = process.platform === "win32" ? "C:\\Windows\\System32\\drivers\\etc\\hosts" : "/etc/hosts";
+  const inside = path.join(cwd, "src", "app.ts");
   const cases = [
     ["git diff -- src/main.ts", "git-read", false],
     ["git push --force origin main", "destructive-file", true],
@@ -28,6 +30,8 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     ["cmake --build .umbratic/build --parallel", "cmake-build", false],
     ["npm install", "package-manager", true],
     ["curl http://127.0.0.1:8080/api/health", "network", true],
+    [process.platform === "win32" ? `type "${external}"` : `cat "${external}"`, "external-directory", true],
+    [process.platform === "win32" ? `type "${inside}"` : `cat "${inside}"`, "read", false],
   ];
 
   for (const [command, commandClass, risky] of cases) {
@@ -81,4 +85,3 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     debugger: true,
   });
 });
-

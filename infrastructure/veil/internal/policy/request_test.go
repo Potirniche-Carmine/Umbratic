@@ -99,6 +99,19 @@ func TestDecodeChatInputValidatesMessageContentAndCount(t *testing.T) {
 		t.Fatal("expected blank user content rejection")
 	}
 
+	_, err = DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[{"type":"text","text":"   "}]}]}`))
+	if err == nil {
+		t.Fatal("expected blank structured user content rejection")
+	}
+
+	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`))
+	if err != nil {
+		t.Fatalf("expected image content part to be accepted: %v", err)
+	}
+	if len(input.Messages) != 1 {
+		t.Fatalf("unexpected messages: %#v", input.Messages)
+	}
+
 	tooMany := strings.Builder{}
 	tooMany.WriteString(`{"messages":[`)
 	for i := 0; i < MaxMessages+1; i++ {
