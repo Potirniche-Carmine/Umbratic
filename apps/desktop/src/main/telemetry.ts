@@ -89,7 +89,17 @@ function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
     };
   }
   if (event.type === "command.finished") {
-    return { ...base, data: { id: event.id, exitCode: event.exitCode } };
+    return {
+      ...base,
+      data: {
+        id: event.id,
+        exitCode: event.exitCode,
+        status: event.status,
+        errorCode: event.errorCode,
+        errorMessage: event.errorMessage ? redactText(event.errorMessage, 320) : undefined,
+        durationMs: event.durationMs,
+      },
+    };
   }
   if (event.type === "permission.requested") {
     return {

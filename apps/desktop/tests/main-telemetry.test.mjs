@@ -65,7 +65,17 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
             text: "api_key=abcdefghijklmnopqrstuvwxyz",
             at: "2026-01-01T00:00:03.000Z",
           },
-          { type: "command.finished", taskId: "task-1", id: "cmd-1", exitCode: 0, at: "2026-01-01T00:00:04.000Z" },
+          {
+            type: "command.finished",
+            taskId: "task-1",
+            id: "cmd-1",
+            exitCode: 1,
+            status: "runtime_error",
+            errorCode: "command_exit_nonzero",
+            errorMessage: "token=abcdefghijklmnopqrstuvwxyz",
+            durationMs: 42,
+            at: "2026-01-01T00:00:04.000Z",
+          },
           {
             type: "review.ready",
             taskId: "task-1",
@@ -103,6 +113,10 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.equal(task.review.deletions, 1);
   assert.equal(task.events[0].data.length, "password=abcdefghijklmnopqrstuvwxyz".length);
   assert.equal(task.events[2].data.command, "echo token=[redacted]");
+  assert.equal(task.events[4].data.status, "runtime_error");
+  assert.equal(task.events[4].data.errorCode, "command_exit_nonzero");
+  assert.equal(task.events[4].data.errorMessage, "token=[redacted]");
+  assert.equal(task.events[4].data.durationMs, 42);
   const reviewReady = task.events.find((event) => event.type === "review.ready");
   assert.equal(reviewReady.data.latestTest.command, "npm run test -- --token=[redacted]");
 });

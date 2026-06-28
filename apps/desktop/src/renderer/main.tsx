@@ -75,7 +75,6 @@ type CommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
-  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -84,6 +83,20 @@ type CommandClass =
   | "external-directory"
   | "unknown";
 type RuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
+type ToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
+type ToolErrorCode =
+  | "tool_disabled"
+  | "unknown_tool"
+  | "invalid_arguments"
+  | "permission_denied"
+  | "policy_blocked"
+  | "workspace_boundary"
+  | "blocked_path"
+  | "command_exit_nonzero"
+  | "process_timeout"
+  | "process_error"
+  | "missing_dependency"
+  | "runtime_error";
 type TaskState =
   | "awaiting_worktree_approval"
   | "running"
@@ -298,7 +311,16 @@ type BackendUiEvent = BackendEventMeta &
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
+  | {
+      type: "command.finished";
+      taskId: string;
+      id: string;
+      exitCode: number | null;
+      status?: ToolResultStatus;
+      errorCode?: ToolErrorCode;
+      errorMessage?: string;
+      durationMs?: number;
+    }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
@@ -336,7 +358,14 @@ type ComposerTimelineItem =
   | { type: "assistant"; id: string; text: string }
   | { type: "command"; id: string; run: CommandRun };
 
-type SkillInfo = { id: string; name: string; description: string; enabled: boolean };
+type SkillInfo = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  source?: "harness" | "local";
+  readOnly?: boolean;
+};
 type SkillDocument = SkillInfo & { path: string; content: string };
 type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };
 
@@ -3496,7 +3525,7 @@ function App() {
   }
 
   async function saveSkillEditor() {
-    if (!skillDocument || skillEditorSaving) return;
+    if (!skillDocument || skillDocument.readOnly || skillEditorSaving) return;
     setSkillsMessage(null);
     setSkillEditorSaving(true);
     try {
@@ -5670,13 +5699,13 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Skills</h3>
                       <p>
-                        Skills are personal guidance Umbratic AI can use when relevant. Enabled skills are included with each new run so the model can decide whether they apply.
+                        Skills are bundled harness guidance and personal guidance Umbratic AI can use when relevant. Enabled skills are available for new runs so the model can decide whether they apply.
                       </p>
                     </div>
 
                     <div className="settingsGroup">
                       <div className="skillSectionHeader">
-                        <h4>Your skills</h4>
+                        <h4>Available skills</h4>
                         <div className="skillSectionActions">
                           <button
                             className="settingsInlineButton"
@@ -5709,7 +5738,7 @@ function App() {
                         </div>
                       </div>
                       <p className="skillSectionHint">
-                        Loaded from <code className="settingsCode">{skillsDirectory}</code>. Each skill is a folder with a <code className="settingsCode">SKILL.md</code> file.
+                        Built-in harness skills are bundled and read-only. Personal skills load from <code className="settingsCode">{skillsDirectory}</code>.
                       </p>
 
                       {newSkillFormOpen ? (
@@ -5768,7 +5797,11 @@ function App() {
                               >
                                 <div className="skillRowText">
                                   <strong>{skill.name}</strong>
-                                  {skill.description ? <em>{skill.description}</em> : <em>{skillMention(skill)}</em>}
+                                  <em>
+                                    {skill.readOnly
+                                      ? `Built-in harness skill${skill.description ? `: ${skill.description}` : ""}`
+                                      : skill.description || skillMention(skill)}
+                                  </em>
                                 </div>
                               </button>
                               <button
@@ -5794,6 +5827,8 @@ function App() {
                               <span>
                                 {skillEditorLoading
                                   ? "Loading SKILL.md"
+                                  : skillDocument?.readOnly
+                                    ? `Built-in harness skill: ${skillDocument.path}`
                                   : skillDocument?.path
                                     ? skillDocument.path
                                     : "Select a skill to edit its SKILL.md"}
@@ -5803,17 +5838,17 @@ function App() {
                               type="button"
                               className="settingsInlineButton"
                               onClick={() => void saveSkillEditor()}
-                              disabled={!skillDocument || !skillEditorDirty || skillEditorSaving || skillEditorLoading}
+                              disabled={!skillDocument || skillDocument.readOnly || !skillEditorDirty || skillEditorSaving || skillEditorLoading}
                             >
                               {skillEditorSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                              <span>{skillEditorDirty ? "Save" : "Saved"}</span>
+                              <span>{skillDocument?.readOnly ? "Read-only" : skillEditorDirty ? "Save" : "Saved"}</span>
                             </button>
                           </div>
                           <textarea
                             className="skillEditorText"
                             value={skillEditorText}
                             onChange={(event) => setSkillEditorText(event.target.value)}
-                            disabled={skillEditorLoading || !skillDocument}
+                            disabled={skillEditorLoading || !skillDocument || skillDocument.readOnly}
                             spellCheck={false}
                           />
                         </div>

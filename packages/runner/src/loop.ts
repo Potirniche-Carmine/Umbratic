@@ -2,7 +2,7 @@ import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, ChatMessage, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
 import { enabledToolSpecs, runTool } from "./tools/index.js";
-import type { ToolContext } from "./tools/common.js";
+import { toolFailureDetails, type ToolContext, type ToolResultStatus } from "./tools/common.js";
 import { modelHttpRequest, readBodyText } from "./provider/http.js";
 
 type ToolCall = {
@@ -23,7 +23,7 @@ type ToolContextResult = {
   call: ToolCall;
   title: string;
   output: string;
-  failed: boolean;
+  status: ToolResultStatus;
 };
 
 const maxToolContextBytes = 56 * 1024;
@@ -40,7 +40,7 @@ function formatToolContextMessage(results: ToolContextResult[]): string {
     "Use these local workspace results to answer the user's request. Do not repeat the same read or search unless more specific context is still needed.",
   ];
   for (const result of results) {
-    const status = result.failed ? "failed" : "ok";
+    const status = result.status === "success" ? "ok" : "failed";
     lines.push("", `### ${result.call.name}: ${result.title || result.call.id} (${status})`, "```", result.output, "```");
   }
   const message = lines.join("\n");
@@ -381,12 +381,12 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
     for (const toolCall of toolCalls) {
       try {
         const result = await runTool(ctx, emit, toolCall);
-        toolResults.push({ call: toolCall, title: result.title, output: result.output, failed: false });
+        toolResults.push({ call: toolCall, title: result.title, output: result.output, status: result.status });
       } catch (error) {
-        const message = `Tool failed: ${error instanceof Error ? error.message : String(error)}`;
+        const failure = toolFailureDetails(error);
+        const message = redactText(`Tool failed: ${failure.message}`);
         emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
-        emit({ type: "tool.finished", taskId: session.taskId, toolCallId: toolCall.id, exitCode: 1, at: nowIso() });
-        toolResults.push({ call: toolCall, title: toolCall.name, output: message, failed: true });
+        toolResults.push({ call: toolCall, title: toolCall.name, output: message, status: failure.status });
       }
     }
     session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });

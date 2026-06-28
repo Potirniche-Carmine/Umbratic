@@ -198,5 +198,63 @@ test("runTurn executes model tool calls and feeds real tool output into the next
       ["tool.requested", "tool.output", "tool.finished"],
     );
     assert.equal(events.find((event) => event.type === "tool.requested").summary, "read README.md --limit 1");
+    const finished = events.find((event) => event.type === "tool.finished");
+    assert.equal(finished.status, "success");
+    assert.equal(finished.exitCode, 0);
+    assert.equal(typeof finished.durationMs, "number");
+  });
+});
+
+test("runTurn accumulates partial tool-call argument chunks by stable index", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-tool-partials-"));
+  fs.writeFileSync(path.join(root, "README.md"), "Partial chunks work\nSecond line\n", "utf8");
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (requests.length === 1) {
+      response.end(
+        sseData({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: "call-read",
+                function: {
+                  name: "read",
+                  arguments: "{\"file",
+                },
+              }],
+            },
+          }],
+        }) +
+          sseData({
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  function: {
+                    arguments: "Path\":\"README.md\",\"limit\":1}",
+                  },
+                }],
+              },
+            }],
+          }) +
+          "data: [DONE]\n\n",
+      );
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Done" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, { enabledTools: ["read"] });
+
+    await runTurn(activeSession, [{ type: "text", text: "Read the file" }], (event) => events.push(event), async () => "allow");
+
+    assert.equal(requests.length, 2);
+    assert.match(requests[1].body.messages.at(-1).content, /1: Partial chunks work/);
+    assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
   });
 });

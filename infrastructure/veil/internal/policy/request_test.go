@@ -142,7 +142,7 @@ func TestDecodeChatInputMapsMaxBytesReaderError(t *testing.T) {
 }
 
 func TestDecodeChatInputRejectsTooManyRuntimeProfiles(t *testing.T) {
-	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"runtime_profiles":["workspace-toolchain","python","cmake","markdown","debugger","git","worktree","python","git"]}`))
+	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"runtime_profiles":["workspace-toolchain","python","cmake","markdown","git","worktree","python","git","cmake"]}`))
 	if err == nil {
 		t.Fatal("expected too many runtime profiles error")
 	}

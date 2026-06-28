@@ -44,12 +44,19 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
 
   const listing = await skills.listSkills(directory, { marketing: false });
   assert.equal(listing.directory, directory);
-  assert.deepEqual(plain(listing.skills).map((skill) => skill.id), ["engineering-review", "marketing"]);
-  assert.equal(listing.skills[0].name, "Engineering Review");
-  assert.equal(listing.skills[0].description, "Use for code review.");
-  assert.equal(listing.skills[1].name, "marketing");
-  assert.equal(listing.skills[1].description, "Marketing Voice");
-  assert.equal(listing.skills[1].enabled, false);
+  const localSkills = listing.skills.filter((skill) => skill.source === "local");
+  assert.deepEqual(plain(localSkills).map((skill) => skill.id), ["engineering-review", "marketing"]);
+  assert.equal(localSkills[0].name, "Engineering Review");
+  assert.equal(localSkills[0].description, "Use for code review.");
+  assert.equal(localSkills[1].name, "marketing");
+  assert.equal(localSkills[1].description, "Marketing Voice");
+  assert.equal(localSkills[1].enabled, false);
+
+  const harnessSkills = listing.skills.filter((skill) => skill.source === "harness");
+  assert.equal(harnessSkills.some((skill) => skill.id === "harness-markdown" && skill.readOnly && skill.enabled), true);
+
+  const disabledHarness = await skills.listSkills(directory, { "harness-markdown": false });
+  assert.equal(disabledHarness.skills.find((skill) => skill.id === "harness-markdown").enabled, false);
 });
 
 test("promptSkillsForRequest includes enabled skills and explicitly requested disabled skills first", () => {
@@ -66,6 +73,61 @@ test("promptSkillsForRequest includes enabled skills and explicitly requested di
     { id: "marketing", enabled: false, requested: true },
     { id: "engineering-review", enabled: true, requested: false },
   ]);
+  assert.equal(selected[0].fullContent, true);
+  assert.equal(selected[0].reason, "explicit_request");
+  assert.equal(selected[1].fullContent, false);
+  assert.equal(selected[1].reason, "metadata");
+});
+
+test("promptSkillsForRequest keeps local skills compact unless metadata strongly matches", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-compact-"));
+  const skills = loadSkills(userData);
+  const directory = seedSkillsDirectory();
+
+  const generic = skills.promptSkillsForRequest("Summarize this note.", directory, {
+    marketing: true,
+    "engineering-review": true,
+  });
+  assert.deepEqual(plain(generic.map((skill) => ({ id: skill.id, fullContent: skill.fullContent, reason: skill.reason }))), [
+    { id: "engineering-review", fullContent: false, reason: "metadata" },
+    { id: "marketing", fullContent: false, reason: "metadata" },
+  ]);
+
+  const matched = skills.promptSkillsForRequest("Please do an engineering review of these diffs.", directory, {
+    marketing: true,
+    "engineering-review": true,
+  });
+  assert.equal(matched.find((skill) => skill.id === "engineering-review").fullContent, true);
+  assert.equal(matched.find((skill) => skill.id === "engineering-review").reason, "strong_match");
+});
+
+test("harnessSkillsForProfile selects mode-specific artifact skills", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-harness-skills-"));
+  const skills = loadSkills(userData);
+
+  const marketing = skills.harnessSkillsForProfile("marketing", "Create a PowerPoint launch deck and PDF one-pager.");
+  assert.deepEqual(plain(marketing.map((skill) => skill.id)), [
+    "harness-pdf-artifacts",
+    "harness-presentation-artifacts",
+    "harness-marketing-content",
+  ]);
+  assert.equal(marketing.every((skill) => skill.fullContent && skill.reason === "harness_mode"), true);
+
+  const engineering = skills.harnessSkillsForProfile("engineering", "Fix a failing test.");
+  assert.deepEqual(plain(engineering.map((skill) => skill.id)), ["harness-engineering-workspace"]);
+
+  const salesMarkdown = skills.harnessSkillsForProfile("sales", "Write a Markdown table for this proposal.");
+  assert.equal(salesMarkdown.some((skill) => skill.id === "harness-markdown"), true);
+  assert.equal(salesMarkdown.some((skill) => skill.id === "harness-sales-enablement"), true);
+
+  const disabled = skills.harnessSkillsForProfile("sales", "Write a Markdown table.", { "harness-markdown": false });
+  assert.equal(disabled.some((skill) => skill.id === "harness-markdown"), false);
+
+  const document = skills.harnessSkillsForProfile("sales", "Draft a Word document memo for this account.");
+  assert.equal(document.some((skill) => skill.id === "harness-document-artifacts"), true);
+
+  const spreadsheet = skills.harnessSkillsForProfile("marketing", "Create an Excel campaign forecast workbook.");
+  assert.equal(spreadsheet.some((skill) => skill.id === "harness-spreadsheet-artifacts"), true);
 });
 
 test("skill document editing validates ids, size, and real files", async () => {
@@ -77,6 +139,15 @@ test("skill document editing validates ids, size, and real files", async () => {
   const document = await skills.getSkillDocument({ id: "engineering-review" }, directory);
   assert.equal(document.ok, true);
   assert.match(document.skill.content, /Check diffs carefully/);
+
+  const harnessDocument = await skills.getSkillDocument({ id: "harness-markdown" }, directory);
+  assert.equal(harnessDocument.ok, true);
+  assert.equal(harnessDocument.skill.readOnly, true);
+  assert.equal(harnessDocument.skill.source, "harness");
+  assert.match(harnessDocument.skill.path, /^harness:\/\//);
+
+  const harnessSaved = await skills.saveSkillDocument({ id: "harness-markdown", content: "# Changed" }, directory);
+  assert.deepEqual(plain(harnessSaved), { ok: false, message: "Built-in harness skills are read-only." });
 
   const updatedContent = "---\nname: Engineering Review\ndescription: Updated.\n---\n\nRun tests and inspect changed files.";
   const saved = await skills.saveSkillDocument({ id: "engineering-review", content: updatedContent }, directory);

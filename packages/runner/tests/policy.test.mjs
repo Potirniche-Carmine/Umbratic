@@ -22,8 +22,10 @@ test("command classification distinguishes safe reads from risky mutations", () 
   const cwd = path.join(os.tmpdir(), "umbratic-runner-policy");
   const cases = [
     ["git status --short", "git-read", false],
+    ["git diff -- README.md", "git-read", false],
     ["git commit -am update", "git-write", true],
     ["git reset --hard HEAD", "destructive-file", true],
+    ["git clean -fd", "destructive-file", true],
     ["curl https://example.test", "network", true],
     ["npm install left-pad", "package-manager", true],
     ["npm run test", "package-manager", false],

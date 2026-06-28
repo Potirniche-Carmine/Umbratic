@@ -162,7 +162,7 @@ function gitCommandIsReadOnly(command: string): boolean {
 function gitCommandLooksDestructive(command: string): boolean {
   const destructive = [
     "reset\\s+--hard",
-    "clean\\s+-[^\\s]*f",
+    "clean\\s+-[^\\s]*f[^\\s]*",
     "branch\\s+--delete\\s+--force",
     "worktree\\s+(?:remove|prune)",
     "push\\s+(?:[^;&|]*\\s)?(?:--force|-f|--force-with-lease)",
@@ -247,7 +247,6 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
   if (commandContainsGit(trimmed)) {
     return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
   }
-  if (/\b(gdb|lldb|cdb|windbg|vsdbg|valgrind|drmemory)\b/i.test(trimmed)) return { commandClass: "debugger", risky: false };
   if (/\b(cmake|ctest|ninja|make|msbuild)\b/i.test(trimmed)) return { commandClass: "cmake-build", risky: false };
   if (/\b(cl|clang|clang\+\+|gcc|g\+\+)\b/i.test(trimmed)) return { commandClass: "compiler", risky: false };
   if (/\b(npm|pnpm|yarn|bun|cargo|go|dotnet)\b/i.test(trimmed)) {

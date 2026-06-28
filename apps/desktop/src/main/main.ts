@@ -76,6 +76,7 @@ import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings"
 import {
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
+  harnessSkillsForProfile,
   listSkills as listSkillsService,
   promptSkillsForRequest as promptSkillsForRequestService,
   saveSkillDocument as saveSkillDocumentService,
@@ -110,6 +111,8 @@ import type {
   TaskInfo,
   TaskRecord,
   TaskState,
+  ToolErrorCode,
+  ToolResultStatus,
   UserNotes,
   WorkspaceKind,
   WorkspaceMode,
@@ -368,13 +371,18 @@ function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
   task.runnerVersion = task.runnerVersion || umbraticRunnerVersion;
   task.policyVersion = task.policyVersion || umbraticPolicyVersion;
   if (!task.runtimeProfile || task.runtimeProfile === "none" || intentPrompt !== task.prompt) {
-    task.runtimeProfile = runtimeProfileForPrompt(intentPrompt);
+    task.runtimeProfile = runtimeProfileForCurrentHarness(intentPrompt);
   }
   if (task.model) {
     task.providerId = task.model.providerId;
     task.modelId = task.model.modelId;
     task.modelBaseUrlHost = baseUrlHost(task.model.baseUrl);
   }
+}
+
+function runtimeProfileForCurrentHarness(prompt: string) {
+  if (promptLooksLikeMarkdownTask(prompt)) return "markdown";
+  return readHarnessProfileSetting() === "engineering" ? runtimeProfileForPrompt(prompt) : "none";
 }
 
 function takePendingTaskEvents(taskIdValue: string): BackendUiEvent[] {
@@ -1236,24 +1244,48 @@ function pushAgentInstructionContext(lines: string[], rootPath: string) {
 }
 
 function pushSkillContext(lines: string[], userPrompt: string) {
+  const harnessProfile = readHarnessProfileSetting();
+  const harnessSkills = harnessSkillsForProfile(harnessProfile, userPrompt);
   const skills = promptSkillsForRequestService(userPrompt);
+  const fullSkills = [...harnessSkills, ...skills.filter((skill) => skill.fullContent)];
+  const metadataOnlySkills = skills.filter((skill) => !skill.fullContent);
   lines.push(
     "",
     "User skills:",
-    skills.length
-      ? "The following app skills are available at the beginning of this run. Enabled skills are optional guidance: decide whether each is relevant before applying it. Skills explicitly referenced with $skill-id in the user request should be treated as requested for this turn."
-      : "No enabled or explicitly requested user skills were found for this request.",
+    "Skills are local procedural guidance. Harness-mode skills below are selected for the current mode. Local skills are shown as compact metadata by default; full local skill content is included only when the user explicitly references $skill-id or the request strongly matches the skill metadata.",
   );
+  if (harnessSkills.length || skills.length) {
+    lines.push("", "Available skill index:");
+    for (const skill of [...harnessSkills, ...skills]) {
+      const source = skill.source === "harness" ? "built-in harness skill" : "local skill";
+      const status = skill.fullContent ? "full instructions included" : "metadata only";
+      lines.push(`- ${skill.id}: ${skill.name} (${source}; ${status})${skill.description ? ` - ${skill.description}` : ""}`);
+    }
+  } else {
+    lines.push("No harness or local skills were selected for this request.");
+  }
+  if (metadataOnlySkills.length) {
+    lines.push(
+      "",
+      "Metadata-only local skills:",
+      "Do not claim to have read or applied a metadata-only skill. Apply a local skill only when its full instructions are included in this prompt.",
+    );
+  }
+  if (!fullSkills.length) return;
+  lines.push("", "Selected skill instructions:");
   let remaining = 30000;
-  for (const skill of skills) {
+  for (const skill of fullSkills) {
     if (remaining <= 0) {
-      lines.push("\n...(additional enabled skills omitted because the skill context limit was reached)");
+      lines.push("\n...(additional selected skills omitted because the skill context limit was reached)");
       break;
     }
     const content = skill.content.slice(0, remaining);
     remaining -= content.length;
     const description = skill.description ? `\nDescription: ${skill.description}` : "";
-    const status = skill.requested ? "explicitly requested for this turn" : "enabled";
+    const status =
+      skill.reason === "harness_mode" ? `selected for ${harnessProfile} harness mode` :
+      skill.reason === "explicit_request" ? "explicitly requested for this turn" :
+      "selected by skill metadata match";
     lines.push(`\n### ${skill.name}${description}\nStatus: ${status}\nSource: ${skill.instructionPath}`, "```", content, "```");
   }
 }
@@ -1400,6 +1432,7 @@ async function attachmentPromptParts(rootPath: string, attachments: ChatAttachme
 async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  const harnessProfile = readHarnessProfileSetting();
   const hiddenChat = isHiddenChatTask(task);
   const tree = repositoryTreePreview(rootPath);
   const keyFiles = hiddenChat ? [] : keyWorkspaceFiles(rootPath);
@@ -1441,17 +1474,19 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       "Use the conversation above only as background. The next section is the current user request to answer now.",
     );
   }
-  lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
-  if (promptLooksLikeCmakeTask(userPrompt)) {
-    lines.push("", "C/CMake runtime policy for this request:", cCmakeRuntimeSystemPrompt);
-  }
-  if (promptLooksLikePythonTask(userPrompt)) {
-    lines.push(
-      "",
-      "Python runtime policy for this request:",
-      pythonRuntimeSystemPrompt,
-      "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
-    );
+  if (harnessProfile === "engineering") {
+    lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
+    if (promptLooksLikeCmakeTask(userPrompt)) {
+      lines.push("", "C/CMake runtime policy for this request:", cCmakeRuntimeSystemPrompt);
+    }
+    if (promptLooksLikePythonTask(userPrompt)) {
+      lines.push(
+        "",
+        "Python runtime policy for this request:",
+        pythonRuntimeSystemPrompt,
+        "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
+      );
+    }
   }
   if (promptLooksLikeMarkdownTask(userPrompt)) {
     lines.push("", "Markdown runtime policy for this request:", markdownRuntimeSystemPrompt);
@@ -2816,7 +2851,7 @@ async function runRunnerTask(
         const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
         const command = typeof event.summary === "string" && event.summary.trim() ? event.summary.trim() : toolKind;
         const kind: PermissionRequest["kind"] =
-          toolKind === "command" || toolKind === "debugger"
+          toolKind === "command"
             ? "bash"
             : toolKind === "read" || toolKind === "search"
               ? "read"
@@ -2849,10 +2884,24 @@ async function runRunnerTask(
         if (!current.finished) {
           current.finished = true;
           const exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
+          const status = typeof event.status === "string" ? event.status as ToolResultStatus : undefined;
+          const errorCode = typeof event.errorCode === "string" ? event.errorCode as ToolErrorCode : undefined;
+          const errorMessage = typeof event.errorMessage === "string" ? event.errorMessage : undefined;
+          const durationMs = typeof event.durationMs === "number" && Number.isFinite(event.durationMs) ? event.durationMs : undefined;
           if ((current.kind === "edit" || current.command.startsWith("write ") || current.command.startsWith("edit ")) && exitCode === 0) {
             fileCreationToolSucceeded = true;
           }
-          emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode });
+          emit({
+            type: "command.finished",
+            taskId: task.id,
+            id: current.commandId,
+            exitCode,
+            ...(status ? { status } : {}),
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorMessage ? { errorMessage: errorMessage.slice(0, 1000) } : {}),
+            ...(durationMs !== undefined ? { durationMs } : {}),
+            at: eventAt(event),
+          });
         }
         return;
       }
@@ -3064,7 +3113,7 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.runnerName = umbraticRunnerName;
   task.runnerVersion = umbraticRunnerVersion;
   task.policyVersion = umbraticPolicyVersion;
-  task.runtimeProfile = runtimeProfileForPrompt(task.prompt);
+  task.runtimeProfile = runtimeProfileForCurrentHarness(task.prompt);
   task.runnerSessionId = undefined;
   task.pendingPrompt = undefined;
   task.changedFiles = [];
@@ -3194,7 +3243,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
-    existingTask.runtimeProfile = runtimeProfileForPrompt(prompt);
+    existingTask.runtimeProfile = runtimeProfileForCurrentHarness(prompt);
     existingTask.enabledTools = requestedEnabledTools;
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
@@ -3256,7 +3305,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     runnerName: umbraticRunnerName,
     runnerVersion: umbraticRunnerVersion,
     policyVersion: umbraticPolicyVersion,
-    runtimeProfile: runtimeProfileForPrompt(prompt),
+    runtimeProfile: runtimeProfileForCurrentHarness(prompt),
     createdAt: new Date().toISOString(),
     changedFiles: [],
     reviewFiles: [],

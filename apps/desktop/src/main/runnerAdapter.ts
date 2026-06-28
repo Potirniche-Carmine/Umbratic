@@ -19,7 +19,8 @@ function veilChatEndpointPath(profileId: ReturnType<typeof readHarnessProfileSet
   return `/api/${profileId}/chat`;
 }
 
-function runtimeProfilesForTask(task: TaskRecord): string[] {
+function runtimeProfilesForTask(task: TaskRecord, profileId: ReturnType<typeof readHarnessProfileSetting>): string[] {
+  if (profileId !== "engineering") return task.runtimeProfile === "markdown" ? ["markdown"] : [];
   const profiles = new Set<string>(["workspace-toolchain"]);
   if (task.workspaceKind === "git") profiles.add("git");
   if (task.workspaceMode === "worktree") profiles.add("worktree");
@@ -30,18 +31,19 @@ function runtimeProfilesForTask(task: TaskRecord): string[] {
 export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   const endpointSettings = readModelEndpointSettings();
+  const harnessProfile = readHarnessProfileSetting();
   return {
     taskId: task.id,
     cwd: task.worktreePath,
     workspaceMode: task.workspaceMode,
-    runtimeProfiles: runtimeProfilesForTask(task),
+    runtimeProfiles: runtimeProfilesForTask(task, harnessProfile),
     permissionMode: "normal",
     enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
     provider: {
       id: selectedModel.providerId,
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
-      chatEndpointPath: veilChatEndpointPath(readHarnessProfileSetting()),
+      chatEndpointPath: veilChatEndpointPath(harnessProfile),
       apiKey: endpointSettings.secret.trim(),
       modelId: selectedModel.modelId,
       headers: Object.fromEntries(

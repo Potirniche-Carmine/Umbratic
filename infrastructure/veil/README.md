@@ -28,7 +28,7 @@ POST /api/sales/chat
 
 There is no unauthenticated health endpoint and no generic provider passthrough route.
 
-Engineering requests may include `runtime_profiles` so Veil can add skill-like server guidance only when it is relevant. Supported values are `workspace-toolchain`, `python`, `cmake`, `markdown`, `debugger`, `git`, and `worktree`.
+Engineering requests may include `runtime_profiles` so Veil can add skill-like server guidance only when it is relevant. Supported values are `workspace-toolchain`, `python`, `cmake`, `markdown`, `git`, and `worktree`.
 
 The health route checks that the model configured inside Veil is available from the runtime, but it does not return model names or runtime metadata.
 

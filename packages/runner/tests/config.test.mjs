@@ -81,7 +81,7 @@ test("loadRunnerConfig defaults invalid modes and all tools when no explicit lis
 
   assert.equal(loaded.workspaceMode, "local");
   assert.equal(loaded.permissionMode, "normal");
-  assert.deepEqual(plain(loaded.enabledTools), ["read", "write", "edit", "search", "command", "debugger"]);
+  assert.deepEqual(plain(loaded.enabledTools), ["read", "write", "edit", "search", "command"]);
   assert.equal(loaded.provider.apiKey, "local");
 });
 

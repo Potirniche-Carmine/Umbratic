@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveWorkspacePath, type ToolContext, type ToolResult } from "./common.js";
+import { resolveWorkspacePath, toolError, type ToolContext, type ToolResult } from "./common.js";
 
 export async function writeTool(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolResult> {
   const filePath = typeof input.filePath === "string" ? input.filePath : typeof input.path === "string" ? input.path : "";
@@ -11,8 +11,8 @@ export async function writeTool(ctx: ToolContext, input: Record<string, unknown>
     summary: `write ${relative}`,
     autoAllow: ctx.permissionMode === "bypass",
   });
-  if (decision !== "allow") throw new Error(`Write denied: ${relative}`);
+  if (decision !== "allow") throw toolError("permission_denied", "permission_denied", `Write denied: ${relative}`);
   fs.mkdirSync(path.dirname(absolute), { recursive: true });
   fs.writeFileSync(absolute, content, "utf8");
-  return { title: relative, output: "Wrote file successfully." };
+  return { title: relative, output: "Wrote file successfully.", status: "success" };
 }

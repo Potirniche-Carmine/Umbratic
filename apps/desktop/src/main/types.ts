@@ -26,7 +26,6 @@ export type CommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
-  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -99,6 +98,28 @@ export type TelemetryPolicyInfo = {
   exportFormat: "redacted-json";
   storage: "company-managed-telemetry" | "task-event-snapshots";
 };
+
+export type ToolResultStatus =
+  | "success"
+  | "permission_denied"
+  | "policy_blocked"
+  | "validation_error"
+  | "runtime_error"
+  | "timeout";
+
+export type ToolErrorCode =
+  | "tool_disabled"
+  | "unknown_tool"
+  | "invalid_arguments"
+  | "permission_denied"
+  | "policy_blocked"
+  | "workspace_boundary"
+  | "blocked_path"
+  | "command_exit_nonzero"
+  | "process_timeout"
+  | "process_error"
+  | "missing_dependency"
+  | "runtime_error";
 
 export type RuntimeDiagnostics = {
   python: {
@@ -261,7 +282,16 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
+  | {
+      type: "command.finished";
+      taskId: string;
+      id: string;
+      exitCode: number | null;
+      status?: ToolResultStatus;
+      errorCode?: ToolErrorCode;
+      errorMessage?: string;
+      durationMs?: number;
+    }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }

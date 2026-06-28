@@ -13,8 +13,7 @@ const { writeTool } = loadTypeScriptModule(new URL("../src/tools/write.ts", impo
 const { editTool } = loadTypeScriptModule(new URL("../src/tools/edit.ts", import.meta.url).pathname, { cache: moduleCache });
 const { searchTool } = loadTypeScriptModule(new URL("../src/tools/search.ts", import.meta.url).pathname, { cache: moduleCache });
 const { commandTool } = loadTypeScriptModule(new URL("../src/tools/command.ts", import.meta.url).pathname, { cache: moduleCache });
-const { debuggerTool } = loadTypeScriptModule(new URL("../src/tools/debugger.ts", import.meta.url).pathname, { cache: moduleCache });
-const { enabledToolSpecs, runTool } = loadTypeScriptModule(new URL("../src/tools/index.ts", import.meta.url).pathname, { cache: moduleCache });
+const { enabledToolSpecs, runTool, toolSpecs } = loadTypeScriptModule(new URL("../src/tools/index.ts", import.meta.url).pathname, { cache: moduleCache });
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 function workspace() {
@@ -35,7 +34,7 @@ function context(cwd, options = {}) {
       taskId: "task-1",
       cwd,
       permissionMode: options.permissionMode ?? "normal",
-      enabledTools: options.enabledTools ?? ["read", "write", "edit", "search", "command", "debugger"],
+      enabledTools: options.enabledTools ?? ["read", "write", "edit", "search", "command"],
       async askPermission(input) {
         permissions.push(input);
         return options.decision ?? "allow";
@@ -82,11 +81,13 @@ test("writeTool and editTool enforce permission and make real workspace changes"
   const allowed = context(root);
   const written = await writeTool(allowed.ctx, { filePath: "notes/todo.md", content: "ship it" });
   assert.equal(written.output, "Wrote file successfully.");
+  assert.equal(written.status, "success");
   assert.equal(fs.readFileSync(path.join(root, "notes", "todo.md"), "utf8"), "ship it");
   assert.deepEqual(allowed.permissions.map((request) => request.summary), ["write notes/todo.md"]);
 
   const edited = await editTool(allowed.ctx, { filePath: "src/app.ts", oldText: "41", newText: "42" });
   assert.equal(edited.output, "Edited file successfully.");
+  assert.equal(edited.status, "success");
   assert.match(fs.readFileSync(path.join(root, "src", "app.ts"), "utf8"), /42/);
   await assert.rejects(() => editTool(allowed.ctx, { filePath: "src/app.ts", oldText: "missing", newText: "x" }), /not found/);
 });
@@ -116,17 +117,21 @@ test("commandTool blocks unsafe commands, asks permission for safe commands, and
   const result = await commandTool(allowed.ctx, { command }, "tool-2");
 
   assert.equal(result.exitCode, 0);
+  assert.equal(result.status, "success");
   assert.match(result.output, /runner-ok/);
   assert.doesNotMatch(result.output, /abcdefghijklmnopqrstuvwxyz/);
   assert.equal(allowed.permissions.length, 1);
   assert.equal(allowed.outputs.some((output) => output.stream === "stdout" && output.text.includes("runner-ok")), true);
 });
 
-test("debuggerTool validates workspace executable input before requiring optional debuggers", async () => {
+test("commandTool reports non-zero command exits as structured runtime errors", async () => {
   const root = workspace();
-  const { ctx } = context(root);
+  const allowed = context(root);
+  const result = await commandTool(allowed.ctx, { command: "node -e \"process.exit(7)\"" }, "tool-exit");
 
-  await assert.rejects(() => debuggerTool(ctx, { executablePath: "missing.exe" }, "debug-1"), /was not found/);
+  assert.equal(result.exitCode, 7);
+  assert.equal(result.status, "runtime_error");
+  assert.equal(result.errorCode, "command_exit_nonzero");
 });
 
 test("runTool gates disabled tools, emits lifecycle events, and forwards tool output", async () => {
@@ -140,17 +145,55 @@ test("runTool gates disabled tools, emits lifecycle events, and forwards tool ou
   });
 
   assert.equal(result.title, "README.md");
+  assert.equal(result.status, "success");
   assert.deepEqual(events.map((event) => event.type), ["tool.requested", "tool.finished"]);
   assert.equal(events[0].summary, "read README.md --limit 1");
+  assert.equal(events[1].status, "success");
+  assert.equal(events[1].exitCode, 0);
+  assert.equal(typeof events[1].durationMs, "number");
+  assert.match(events[1].startedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(events[1].finishedAt, /^\d{4}-\d{2}-\d{2}T/);
 
   const disabled = context(root, { enabledTools: ["read"] });
+  const disabledEvents = [];
   await assert.rejects(
-    () => runTool(disabled.ctx, (event) => events.push(event), { id: "call-write", name: "write", arguments: { filePath: "x.txt", content: "x" } }),
+    () => runTool(disabled.ctx, (event) => disabledEvents.push(event), { id: "call-write", name: "write", arguments: { filePath: "x.txt", content: "x" } }),
     /disabled/,
   );
+  assert.deepEqual(disabledEvents.map((event) => event.type), ["tool.requested", "tool.finished"]);
+  assert.equal(disabledEvents[1].status, "validation_error");
+  assert.equal(disabledEvents[1].errorCode, "tool_disabled");
+});
+
+test("runTool marks malformed model tool arguments as validation errors", async () => {
+  const root = workspace();
+  const events = [];
+  await assert.rejects(
+    () => runTool(context(root).ctx, (event) => events.push(event), { id: "bad-args", name: "read", arguments: "{bad json" }),
+    /valid JSON/,
+  );
+
+  assert.deepEqual(events.map((event) => event.type), ["tool.requested", "tool.finished"]);
+  assert.equal(events[1].status, "validation_error");
+  assert.equal(events[1].errorCode, "invalid_arguments");
 });
 
 test("enabledToolSpecs returns only configured tool definitions in canonical order", () => {
   const specs = enabledToolSpecs(["command", "read"]);
   assert.deepEqual(plain(specs.map((spec) => spec.function.name)), ["read", "command"]);
+});
+
+test("toolSpecs keep small stable schemas for local model tool calling", () => {
+  assert.deepEqual(plain(toolSpecs.map((spec) => spec.function.name)), ["read", "write", "edit", "search", "command"]);
+  for (const spec of toolSpecs) {
+    const parameters = spec.function.parameters;
+    assert.equal(parameters.type, "object", spec.function.name);
+    assert.equal(Array.isArray(parameters.required), true, spec.function.name);
+    assert.equal(Object.prototype.hasOwnProperty.call(parameters, "oneOf"), false, spec.function.name);
+    assert.equal(Object.prototype.hasOwnProperty.call(parameters, "anyOf"), false, spec.function.name);
+    assert.equal(Object.prototype.hasOwnProperty.call(parameters, "allOf"), false, spec.function.name);
+    for (const property of Object.values(parameters.properties ?? {})) {
+      assert.equal(["string", "number", "array"].includes(property.type), true, spec.function.name);
+    }
+  }
 });

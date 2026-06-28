@@ -1,7 +1,7 @@
 import { assertAllowedProvider, type UmbraticProviderConfig } from "./provider/local.js";
 
 export type PermissionMode = "normal" | "bypass";
-export const runnerToolNames = ["read", "write", "edit", "search", "command", "debugger"] as const;
+export const runnerToolNames = ["read", "write", "edit", "search", "command"] as const;
 export type RunnerToolName = (typeof runnerToolNames)[number];
 
 export type RunnerConfig = {

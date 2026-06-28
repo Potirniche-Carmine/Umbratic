@@ -25,7 +25,6 @@ type UmbraticCommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
-  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -34,6 +33,20 @@ type UmbraticCommandClass =
   | "external-directory"
   | "unknown";
 type UmbraticRuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
+type UmbraticToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
+type UmbraticToolErrorCode =
+  | "tool_disabled"
+  | "unknown_tool"
+  | "invalid_arguments"
+  | "permission_denied"
+  | "policy_blocked"
+  | "workspace_boundary"
+  | "blocked_path"
+  | "command_exit_nonzero"
+  | "process_timeout"
+  | "process_error"
+  | "missing_dependency"
+  | "runtime_error";
 
 type UmbraticRepositoryInfo = {
   id: string;
@@ -179,7 +192,16 @@ type UmbraticBackendUiEvent = UmbraticBackendEventMeta &
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: UmbraticPermissionRequest["kind"]; commandClass?: UmbraticCommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
+  | {
+      type: "command.finished";
+      taskId: string;
+      id: string;
+      exitCode: number | null;
+      status?: UmbraticToolResultStatus;
+      errorCode?: UmbraticToolErrorCode;
+      errorMessage?: string;
+      durationMs?: number;
+    }
   | { type: "permission.requested"; taskId: string; request: UmbraticPermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: UmbraticReviewFile[]; latestTest?: UmbraticTestResult }
@@ -288,20 +310,36 @@ declare global {
         status: UmbraticBackendStatus;
       }>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
-      listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string; enabled: boolean }>; directory: string }>;
+      listSkills(): Promise<{
+        skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "harness" | "local"; readOnly?: boolean }>;
+        directory: string;
+      }>;
       saveSkillSettings(input: Record<string, boolean>): Promise<{
-        skills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
+        skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "harness" | "local"; readOnly?: boolean }>;
         directory: string;
       }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
       createSkill(input: { name: string }): Promise<
-        | { ok: true; skill: { id: string; name: string; description: string; enabled: boolean }; directory: string }
+        | {
+            ok: true;
+            skill: { id: string; name: string; description: string; enabled: boolean; source?: "harness" | "local"; readOnly?: boolean };
+            directory: string;
+          }
         | { ok: false; message: string }
       >;
       getSkillDocument(input: { id: string }): Promise<
         | {
             ok: true;
-            skill: { id: string; name: string; description: string; enabled: boolean; path: string; content: string };
+            skill: {
+              id: string;
+              name: string;
+              description: string;
+              enabled: boolean;
+              source?: "harness" | "local";
+              readOnly?: boolean;
+              path: string;
+              content: string;
+            };
             directory: string;
           }
         | { ok: false; message: string }
@@ -309,8 +347,17 @@ declare global {
       saveSkillDocument(input: { id: string; content: string }): Promise<
         | {
             ok: true;
-            skill: { id: string; name: string; description: string; enabled: boolean; path: string; content: string };
-            skills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
+            skill: {
+              id: string;
+              name: string;
+              description: string;
+              enabled: boolean;
+              source?: "harness" | "local";
+              readOnly?: boolean;
+              path: string;
+              content: string;
+            };
+            skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "harness" | "local"; readOnly?: boolean }>;
             directory: string;
           }
         | { ok: false; message: string }

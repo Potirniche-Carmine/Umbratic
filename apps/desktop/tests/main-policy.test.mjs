@@ -23,6 +23,7 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
   const cases = [
     ["git diff -- src/main.ts", "git-read", false],
     ["git push --force origin main", "destructive-file", true],
+    ["git clean -fd", "destructive-file", true],
     ["Remove-Item -Recurse build", "destructive-file", true],
     ["uv run python script.py", "python-runtime", false],
     ["python script.py", "python-runtime", true],
@@ -73,8 +74,8 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     search: true,
     command: true,
   });
-  assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "debugger"])), ["read", "command"]);
-  assert.deepEqual(plain(tools.toolSettingsFromEnabledTools(["read", "debugger"])), {
+  assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "legacy-tool"])), ["read", "command"]);
+  assert.deepEqual(plain(tools.toolSettingsFromEnabledTools(["read", "legacy-tool"])), {
     read: true,
     write: false,
     edit: false,
