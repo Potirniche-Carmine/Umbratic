@@ -76,6 +76,7 @@ function runnerConfig(cwd, baseURL, overrides = {}) {
     permissionMode: "normal",
     enabledTools: overrides.enabledTools ?? [],
     runtimeProfiles: overrides.runtimeProfiles,
+    system: overrides.system,
     provider: {
       name: "Veil",
       baseURL,
@@ -91,7 +92,7 @@ function session(cwd, baseURL, overrides = {}) {
     id: "session-1",
     taskId: "task-1",
     config: runnerConfig(cwd, baseURL, overrides),
-    messages: [],
+    messages: overrides.system ? [{ role: "system", content: overrides.system }] : [],
     abortController: new AbortController(),
   };
 }
@@ -148,6 +149,7 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     const activeSession = session(root, baseURL, {
       chatEndpointPath: "/api/engineering/chat",
       runtimeProfiles: ["workspace-toolchain", "python"],
+      system: "Engineering route focus.",
     });
 
     await runTurn(activeSession, [{ type: "text", text: "Say hi" }], (event) => events.push(event), async () => "allow");
@@ -156,7 +158,8 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     assert.equal(requests[0].url, "/api/engineering/chat");
     assert.equal(requests[0].body.model, undefined);
     assert.deepEqual(plain(requests[0].body.runtime_profiles), ["workspace-toolchain", "python"]);
-    assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["user"]);
+    assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["system", "user"]);
+    assert.equal(requests[0].body.messages[0].content, "Engineering route focus.");
     assert.equal(activeSession.messages.at(-1).content, "Hello");
     assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.delta", "assistant.reasoning.delta"]);
   });

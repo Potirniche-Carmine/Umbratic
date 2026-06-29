@@ -104,6 +104,7 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
     cmake: true,
     artifacts: true,
   });
+  assert.match(promptGuidance, /do not recite or summarize tool availability/);
   assert.match(promptGuidance, /if rg is missing, search still works/);
   assert.match(promptGuidance, /Python dependency-heavy verification is degraded until uv is available/);
   assert.match(promptGuidance, /C\/C\+\+ build verification is unavailable/);
@@ -111,6 +112,7 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
   assert.match(promptGuidance, /JS artifact authoring packages missing: node-pptx, node-xlsx/);
 
   const skillGuidance = capabilities.harnessSkillCapabilityGuidance(report);
+  assert.match(skillGuidance["umbratic-git-worktree"], /Git command: available/);
   assert.match(skillGuidance["umbratic-pdf"], /do not claim PDF visual QA/);
   assert.match(skillGuidance["umbratic-presentations"], /PPTX JavaScript authoring runtime is missing/);
 });
