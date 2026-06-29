@@ -17,7 +17,21 @@ import {
 } from "./config";
 import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
-import type { ChatRecord, HarnessProfileId, LocalProviderId, ModelEndpointMode, ModelEndpointSettings, RepositoryInfo, RunnerToolId, TaskRecord, UserNotes } from "./types";
+import type {
+  CapabilityProbeCategory,
+  CapabilityProbeImportance,
+  CapabilityProbeStatus,
+  CapabilityTelemetryProbe,
+  ChatRecord,
+  HarnessProfileId,
+  LocalProviderId,
+  ModelEndpointMode,
+  ModelEndpointSettings,
+  RepositoryInfo,
+  RunnerToolId,
+  TaskRecord,
+  UserNotes,
+} from "./types";
 
 type JsonCacheEntry = {
   mtimeMs: number;
@@ -126,6 +140,48 @@ function normalizeStoredEnabledTools(value: unknown): RunnerToolId[] | undefined
   return Array.from(seen);
 }
 
+function isCapabilityProbeStatus(value: unknown): value is CapabilityProbeStatus {
+  return value === "available" || value === "missing" || value === "error" || value === "unknown";
+}
+
+function isCapabilityProbeCategory(value: unknown): value is CapabilityProbeCategory {
+  return value === "required" || value === "recommended" || value === "optional-engineering" || value === "optional-artifacts";
+}
+
+function isCapabilityProbeImportance(value: unknown): value is CapabilityProbeImportance {
+  return value === "required" || value === "recommended" || value === "optional";
+}
+
+function normalizeStoredCapabilityProbes(value: unknown): CapabilityTelemetryProbe[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const probes: CapabilityTelemetryProbe[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    if (
+      typeof item.id !== "string" ||
+      !item.id ||
+      !isCapabilityProbeStatus(item.status) ||
+      !isCapabilityProbeCategory(item.category) ||
+      !isCapabilityProbeImportance(item.importance)
+    ) {
+      continue;
+    }
+    const workflows = Array.isArray(item.workflows)
+      ? item.workflows.filter((workflow): workflow is string => typeof workflow === "string" && workflow.trim().length > 0).slice(0, 12)
+      : [];
+    probes.push({
+      id: item.id.slice(0, 96),
+      status: item.status,
+      category: item.category,
+      importance: item.importance,
+      workflows,
+      versionFamily: typeof item.versionFamily === "string" && item.versionFamily ? item.versionFamily.slice(0, 48) : undefined,
+      affectedCurrentRun: item.affectedCurrentRun === true ? true : undefined,
+    });
+  }
+  return probes;
+}
+
 export function readTasks(): TaskRecord[] {
   return readJsonFile<TaskRecord[]>(tasksPath(), [])
     .filter(
@@ -154,6 +210,7 @@ export function readTasks(): TaskRecord[] {
           ? task.runtimeProfile
           : runtimeProfileForPrompt(task.prompt ?? ""),
       enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
+      capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
       reviewFiles: Array.isArray(task.reviewFiles) ? task.reviewFiles : [],
       events: Array.isArray(task.events) ? task.events : [],
     }));

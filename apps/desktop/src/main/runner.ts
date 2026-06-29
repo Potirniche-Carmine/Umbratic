@@ -1,4 +1,4 @@
-import type { CommandClass, LocalModelInfo, TaskRecord } from "./types";
+import type { CommandClass, LocalModelInfo, TaskRecord, ToolErrorCode, ToolResultStatus } from "./types";
 
 export type RunnerHandle = {
   taskId: string;
@@ -26,7 +26,19 @@ export type UmbraticRunnerEvent =
       redacted: boolean;
       at: string;
     }
-  | { type: "tool.finished"; taskId: string; toolCallId: string; exitCode: number | null; at: string }
+  | {
+      type: "tool.finished";
+      taskId: string;
+      toolCallId: string;
+      exitCode: number | null;
+      status?: ToolResultStatus;
+      errorCode?: ToolErrorCode;
+      errorMessage?: string;
+      startedAt?: string;
+      finishedAt?: string;
+      durationMs?: number;
+      at: string;
+    }
   | {
       type: "permission.requested";
       taskId: string;

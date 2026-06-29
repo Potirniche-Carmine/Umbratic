@@ -151,12 +151,12 @@ test("tool, skill, harness, and notes settings sanitize invalid input", () => {
   assert.equal(storage.readHarnessProfileSetting(), "engineering");
 
   storage.writeJsonFile(path.join(userData, "settings.json"), {
-    tools: { read: false, write: "no", debugger: true, nope: false },
+    tools: { read: false, write: "no", legacyTool: true, nope: false },
     skills: { "good-skill": false, "../bad": true, also_good: true, bad: "yes" },
   });
   assert.equal(storage.readToolSettings().read, false);
   assert.equal(storage.readToolSettings().write, true);
-  assert.equal(Object.hasOwn(storage.readToolSettings(), "debugger"), false);
+  assert.equal(Object.hasOwn(storage.readToolSettings(), "legacyTool"), false);
   assert.deepEqual(plain(storage.readSkillSettings()), { "good-skill": false, also_good: true });
 
   const notes = storage.writeNotes("a".repeat(5));

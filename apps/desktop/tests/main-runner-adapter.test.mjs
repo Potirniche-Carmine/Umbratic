@@ -61,7 +61,17 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     workspaceKind: "git",
     workspaceMode: "worktree",
     runtimeProfile: "cmake",
-    enabledTools: ["read", "debugger", "bad"],
+    enabledTools: ["read", "legacy-tool", "bad"],
+    capabilityProbes: [
+      {
+        id: "uv",
+        status: "missing",
+        category: "recommended",
+        importance: "recommended",
+        workflows: ["Python"],
+        affectedCurrentRun: true,
+      },
+    ],
     worktreePath: "C:/repo/.umbratic/worktree",
   };
 
@@ -70,10 +80,76 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
   assert.equal(config.permissionMode, "normal");
   assert.deepEqual(plain(config.enabledTools), ["read"]);
-  assert.deepEqual(plain(config.runtimeProfiles), ["workspace-toolchain", "git", "worktree", "cmake"]);
+  assert.deepEqual(plain(config.capabilities), [
+    {
+      id: "uv",
+      status: "missing",
+      category: "recommended",
+      importance: "recommended",
+      workflows: ["Python"],
+      affectedCurrentRun: true,
+    },
+  ]);
+  assert.deepEqual(plain(config.runtimeProfiles), []);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
   assert.equal(config.provider.apiKey, "endpoint-token");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });
+});
+
+test("engineering harness mode receives engineering runtime profiles", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-engineering-"));
+  const { adapter, storage } = loadRunnerAdapter(userData);
+  storage.writeHarnessProfileSetting("engineering");
+
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "http://127.0.0.1:8080",
+  };
+  const task = {
+    id: "task-2",
+    repositoryId: "repo-1",
+    prompt: "Fix a CMake build",
+    workspaceKind: "git",
+    workspaceMode: "worktree",
+    runtimeProfile: "cmake",
+    enabledTools: ["read", "command"],
+    worktreePath: "/repo/.umbratic/worktree",
+  };
+
+  const config = adapter.buildUmbraticRunnerConfig(task, model);
+  assert.deepEqual(plain(config.runtimeProfiles), ["workspace-toolchain", "git", "worktree", "cmake"]);
+  assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
+});
+
+test("business harness modes can still request markdown runtime profile", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-markdown-"));
+  const { adapter, storage } = loadRunnerAdapter(userData);
+  storage.writeHarnessProfileSetting("marketing");
+
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "http://127.0.0.1:8080",
+  };
+  const task = {
+    id: "task-3",
+    repositoryId: "repo-1",
+    prompt: "Write a Markdown table for the launch brief",
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    runtimeProfile: "markdown",
+    enabledTools: ["read"],
+    worktreePath: "/repo",
+  };
+
+  const config = adapter.buildUmbraticRunnerConfig(task, model);
+  assert.deepEqual(plain(config.runtimeProfiles), ["markdown"]);
+  assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
 });
 
 test("runtimeEnv prepends workspace-managed runtime directories and hardening vars are stable", () => {

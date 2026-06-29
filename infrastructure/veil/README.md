@@ -24,11 +24,12 @@ GET  /api/health
 POST /api/engineering/chat
 POST /api/marketing/chat
 POST /api/sales/chat
+POST /api/telemetry
 ```
 
 There is no unauthenticated health endpoint and no generic provider passthrough route.
 
-Engineering requests may include `runtime_profiles` so Veil can add skill-like server guidance only when it is relevant. Supported values are `workspace-toolchain`, `python`, `cmake`, `markdown`, `debugger`, `git`, and `worktree`.
+Engineering requests may include `runtime_profiles` so Veil can add skill-like server guidance only when it is relevant. Supported values are `workspace-toolchain`, `python`, `cmake`, `markdown`, `git`, and `worktree`.
 
 The health route checks that the model configured inside Veil is available from the runtime, but it does not return model names or runtime metadata.
 
@@ -58,9 +59,32 @@ Optional:
 ```sh
 VEIL_PROVIDER_CHAT_PATH=/v1/chat/completions
 VEIL_PROVIDER_MODELS_PATH=/v1/models
+VEIL_TEMPLATE_REGISTRY_PATH=/srv/umbratic/templates.json
+VEIL_TELEMETRY_ENABLED=true
+VEIL_TELEMETRY_STORE_PATH=/srv/umbratic/telemetry
+VEIL_TELEMETRY_RETENTION_DAYS=30
 ```
 
 Use `VEIL_ENV_FILE=/path/to/file.env` only when the env file is not `.env`.
+
+When `VEIL_TEMPLATE_REGISTRY_PATH` is set, Veil reads a server-owned JSON registry and injects only matching template metadata into protected prompt context. The registry can be either an array or `{ "templates": [...] }` with entries like:
+
+```json
+{
+  "id": "sales-quarterly-review",
+  "kind": "powerpoint",
+  "displayName": "Sales Quarterly Review",
+  "serverKey": "templates/powerpoint/sales-quarterly-review",
+  "version": "2026-06",
+  "tags": ["sales", "qbr"],
+  "description": "Quarterly sales review deck.",
+  "available": true,
+  "checksum": "sha256:...",
+  "routes": ["sales/chat"]
+}
+```
+
+`POST /api/telemetry` accepts the desktop app's redacted telemetry bundles using the same bearer token as chat. It rejects raw prompt/task fields, applies the configured request body limit, and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
 
 ## Network
 

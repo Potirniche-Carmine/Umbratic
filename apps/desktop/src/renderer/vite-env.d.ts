@@ -3,8 +3,47 @@
 type UmbraticPermissionMode = "normal" | "bypass";
 type UmbraticReasoningMode = "fast" | "reasoning";
 type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
+type UmbraticCapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
+type UmbraticCapabilityProbeCategory = "required" | "recommended" | "optional-engineering" | "optional-artifacts";
+type UmbraticCapabilityProbeImportance = "required" | "recommended" | "optional";
+type UmbraticCapabilityProbeResult = {
+  id: string;
+  label: string;
+  category: UmbraticCapabilityProbeCategory;
+  importance: UmbraticCapabilityProbeImportance;
+  status: UmbraticCapabilityProbeStatus;
+  version?: string;
+  executablePath?: string;
+  detectedCommand?: string;
+  purpose: string;
+  installHint: string;
+  workflows: string[];
+  checkedAt: string;
+  message?: string;
+};
+type UmbraticCapabilityProbeReport = {
+  checkedAt: string;
+  probes: UmbraticCapabilityProbeResult[];
+  summary: {
+    available: number;
+    missing: number;
+    error: number;
+    unknown: number;
+    requiredMissing: number;
+    recommendedMissing: number;
+    optionalMissing: number;
+  };
+};
 type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
+type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "command";
+type UmbraticRequiredToolContractRequirement = "file_change";
+type UmbraticRequiredToolContractReason =
+  | "file_tools_disabled"
+  | "missing_tool_call"
+  | "agent_reported_blocker"
+  | "attempted_tool_failed"
+  | "no_review_changes";
 type UmbraticHarnessProfileId = "marketing" | "sales" | "engineering";
 type UmbraticLocalProviderId = "company-endpoint";
 type UmbraticModelEndpointMode = "local" | "server";
@@ -25,7 +64,6 @@ type UmbraticCommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
-  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -34,6 +72,20 @@ type UmbraticCommandClass =
   | "external-directory"
   | "unknown";
 type UmbraticRuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
+type UmbraticToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
+type UmbraticToolErrorCode =
+  | "tool_disabled"
+  | "unknown_tool"
+  | "invalid_arguments"
+  | "permission_denied"
+  | "policy_blocked"
+  | "workspace_boundary"
+  | "blocked_path"
+  | "command_exit_nonzero"
+  | "process_timeout"
+  | "process_error"
+  | "missing_dependency"
+  | "runtime_error";
 
 type UmbraticRepositoryInfo = {
   id: string;
@@ -76,14 +128,7 @@ type UmbraticBackendDiagnostics = {
   providerAllowlist: UmbraticLocalProviderId[];
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
-  telemetry: {
-    mode: "developer_toggle" | "managed_required" | "managed_disabled";
-    localEnabled: boolean;
-    syncEnabled: boolean;
-    retentionDays: number;
-    exportFormat: "redacted-json";
-    storage: "company-managed-telemetry" | "task-event-snapshots";
-  };
+  telemetry: UmbraticTelemetryPolicyInfo;
   runtimes: {
     python: {
       profileVersion: string;
@@ -107,6 +152,16 @@ type UmbraticBackendDiagnostics = {
       nonInteractive: boolean;
     };
   };
+  capabilities: UmbraticCapabilityProbeReport;
+};
+
+type UmbraticTelemetryPolicyInfo = {
+  mode: "developer_toggle" | "managed_required" | "managed_disabled";
+  localEnabled: boolean;
+  syncEnabled: boolean;
+  retentionDays: number;
+  exportFormat: "redacted-json";
+  storage: "company-managed-telemetry" | "task-event-snapshots";
 };
 
 type UmbraticLocalModelInfo = {
@@ -179,7 +234,16 @@ type UmbraticBackendUiEvent = UmbraticBackendEventMeta &
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: UmbraticPermissionRequest["kind"]; commandClass?: UmbraticCommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
+  | {
+      type: "command.finished";
+      taskId: string;
+      id: string;
+      exitCode: number | null;
+      status?: UmbraticToolResultStatus;
+      errorCode?: UmbraticToolErrorCode;
+      errorMessage?: string;
+      durationMs?: number;
+    }
   | { type: "permission.requested"; taskId: string; request: UmbraticPermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: UmbraticReviewFile[]; latestTest?: UmbraticTestResult }
@@ -187,6 +251,17 @@ type UmbraticBackendUiEvent = UmbraticBackendEventMeta &
   | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
+  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
+  | {
+      type: "required_tool.failed";
+      taskId: string;
+      requirement: UmbraticRequiredToolContractRequirement;
+      reason: UmbraticRequiredToolContractReason;
+      requiredTools: UmbraticRunnerToolId[];
+      attemptedTools?: UmbraticRunnerToolId[];
+      attempt?: number;
+      detail?: string;
+    }
   | { type: "task.error"; taskId: string; message: string }
 );
 
@@ -277,6 +352,7 @@ declare global {
         { ok: true; repository: UmbraticRepositoryInfo } | { ok: false; message: string }
       >;
       getBackendStatus(): Promise<UmbraticBackendStatus>;
+      getCapabilityProbes(input?: { force?: boolean }): Promise<UmbraticCapabilityProbeReport>;
       getHarnessProfile(): Promise<UmbraticHarnessProfileId>;
       saveHarnessProfile(input: UmbraticHarnessProfileId): Promise<{
         settings: UmbraticHarnessProfileId;
@@ -288,20 +364,46 @@ declare global {
         status: UmbraticBackendStatus;
       }>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
-      listSkills(): Promise<{ skills: Array<{ id: string; name: string; description: string; enabled: boolean }>; directory: string }>;
+      listSkills(): Promise<{
+        skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
+        directory: string;
+      }>;
       saveSkillSettings(input: Record<string, boolean>): Promise<{
-        skills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
+        skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
         directory: string;
       }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
+      openSkillInEditor(input: { id: string }): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+      importSkill(input?: { sourcePath?: string }): Promise<
+        | {
+            ok: true;
+            skill: { id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean };
+            skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
+            directory: string;
+          }
+        | { ok: false; message: string }
+      >;
       createSkill(input: { name: string }): Promise<
-        | { ok: true; skill: { id: string; name: string; description: string; enabled: boolean }; directory: string }
+        | {
+            ok: true;
+            skill: { id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean };
+            directory: string;
+          }
         | { ok: false; message: string }
       >;
       getSkillDocument(input: { id: string }): Promise<
         | {
             ok: true;
-            skill: { id: string; name: string; description: string; enabled: boolean; path: string; content: string };
+            skill: {
+              id: string;
+              name: string;
+              description: string;
+              enabled: boolean;
+              source?: "system" | "local";
+              readOnly?: boolean;
+              path: string;
+              content: string;
+            };
             directory: string;
           }
         | { ok: false; message: string }
@@ -309,8 +411,17 @@ declare global {
       saveSkillDocument(input: { id: string; content: string }): Promise<
         | {
             ok: true;
-            skill: { id: string; name: string; description: string; enabled: boolean; path: string; content: string };
-            skills: Array<{ id: string; name: string; description: string; enabled: boolean }>;
+            skill: {
+              id: string;
+              name: string;
+              description: string;
+              enabled: boolean;
+              source?: "system" | "local";
+              readOnly?: boolean;
+              path: string;
+              content: string;
+            };
+            skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
             directory: string;
           }
         | { ok: false; message: string }

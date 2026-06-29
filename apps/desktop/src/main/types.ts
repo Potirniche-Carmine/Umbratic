@@ -6,6 +6,13 @@ export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type RunnerToolId = "read" | "write" | "edit" | "search" | "command";
+export type RequiredToolContractRequirement = "file_change";
+export type RequiredToolContractReason =
+  | "file_tools_disabled"
+  | "missing_tool_call"
+  | "agent_reported_blocker"
+  | "attempted_tool_failed"
+  | "no_review_changes";
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
@@ -26,7 +33,6 @@ export type CommandClass =
   | "markdown"
   | "cmake-build"
   | "compiler"
-  | "debugger"
   | "package-manager"
   | "git-read"
   | "git-write"
@@ -89,6 +95,7 @@ export type BackendDiagnostics = {
   commandClassifier: "enabled";
   telemetry: TelemetryPolicyInfo;
   runtimes: RuntimeDiagnostics;
+  capabilities: CapabilityProbeReport;
 };
 
 export type TelemetryPolicyInfo = {
@@ -99,6 +106,38 @@ export type TelemetryPolicyInfo = {
   exportFormat: "redacted-json";
   storage: "company-managed-telemetry" | "task-event-snapshots";
 };
+
+export type TelemetrySyncResult = {
+  ok: boolean;
+  uploaded: number;
+  pending: number;
+  spooledPath: string;
+  spoolDirectory: string;
+  destination: string;
+  message: string;
+};
+
+export type ToolResultStatus =
+  | "success"
+  | "permission_denied"
+  | "policy_blocked"
+  | "validation_error"
+  | "runtime_error"
+  | "timeout";
+
+export type ToolErrorCode =
+  | "tool_disabled"
+  | "unknown_tool"
+  | "invalid_arguments"
+  | "permission_denied"
+  | "policy_blocked"
+  | "workspace_boundary"
+  | "blocked_path"
+  | "command_exit_nonzero"
+  | "process_timeout"
+  | "process_error"
+  | "missing_dependency"
+  | "runtime_error";
 
 export type RuntimeDiagnostics = {
   python: {
@@ -122,6 +161,50 @@ export type RuntimeDiagnostics = {
     preferred: "pwsh" | "powershell" | "posix";
     nonInteractive: boolean;
   };
+};
+
+export type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
+export type CapabilityProbeCategory = "required" | "recommended" | "optional-engineering" | "optional-artifacts";
+export type CapabilityProbeImportance = "required" | "recommended" | "optional";
+
+export type CapabilityProbeResult = {
+  id: string;
+  label: string;
+  category: CapabilityProbeCategory;
+  importance: CapabilityProbeImportance;
+  status: CapabilityProbeStatus;
+  version?: string;
+  executablePath?: string;
+  detectedCommand?: string;
+  purpose: string;
+  installHint: string;
+  workflows: string[];
+  checkedAt: string;
+  message?: string;
+};
+
+export type CapabilityProbeReport = {
+  checkedAt: string;
+  probes: CapabilityProbeResult[];
+  summary: {
+    available: number;
+    missing: number;
+    error: number;
+    unknown: number;
+    requiredMissing: number;
+    recommendedMissing: number;
+    optionalMissing: number;
+  };
+};
+
+export type CapabilityTelemetryProbe = {
+  id: string;
+  status: CapabilityProbeStatus;
+  category: CapabilityProbeCategory;
+  importance: CapabilityProbeImportance;
+  workflows: string[];
+  versionFamily?: string;
+  affectedCurrentRun?: boolean;
 };
 
 export type LocalModelInfo = {
@@ -232,6 +315,7 @@ export type TaskRecord = TaskInfo & {
   modelId?: string;
   modelBaseUrlHost?: string;
   enabledTools?: RunnerToolId[];
+  capabilityProbes?: CapabilityTelemetryProbe[];
   runnerSessionId?: string;
   pendingPrompt?: string;
   metadataPath?: string;
@@ -261,7 +345,16 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null }
+  | {
+      type: "command.finished";
+      taskId: string;
+      id: string;
+      exitCode: number | null;
+      status?: ToolResultStatus;
+      errorCode?: ToolErrorCode;
+      errorMessage?: string;
+      durationMs?: number;
+    }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
   | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
@@ -272,6 +365,17 @@ export type BackendUiEvent = BackendEventMeta &
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
+  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
+  | {
+      type: "required_tool.failed";
+      taskId: string;
+      requirement: RequiredToolContractRequirement;
+      reason: RequiredToolContractReason;
+      requiredTools: RunnerToolId[];
+      attemptedTools?: RunnerToolId[];
+      attempt?: number;
+      detail?: string;
+    }
   | { type: "task.error"; taskId: string; message: string }
 );
 

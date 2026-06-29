@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(__dirname, "..");
 const monorepoRoot = path.resolve(desktopRoot, "../..");
 const runnerRoot = path.join(monorepoRoot, "packages/runner");
+const copySystemSkillsScript = path.join(desktopRoot, "scripts/copy-system-skills.mjs");
 const requestedPort = Number(process.env.UMBRATIC_DEV_PORT || "5173");
 
 function readFlag(args, name) {
@@ -102,6 +103,7 @@ async function buildDesktopProcessFiles() {
   const tsc = require.resolve("typescript/bin/tsc");
   await runNodeScript(tsc, ["-p", path.join(runnerRoot, "tsconfig.json")]);
   await runNodeScript(tsc, ["-p", "tsconfig.main.json"]);
+  await runNodeScript(copySystemSkillsScript, []);
 }
 
 async function main() {

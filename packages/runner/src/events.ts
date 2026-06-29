@@ -1,4 +1,5 @@
 import type { CommandClass } from "./policy.js";
+import type { ToolErrorCode, ToolResultStatus } from "./tools/common.js";
 
 export type UmbraticRunnerEvent =
   | { type: "assistant.delta"; taskId: string; text: string; at: string }
@@ -22,7 +23,19 @@ export type UmbraticRunnerEvent =
       redacted: boolean;
       at: string;
     }
-  | { type: "tool.finished"; taskId: string; toolCallId: string; exitCode: number | null; at: string }
+  | {
+      type: "tool.finished";
+      taskId: string;
+      toolCallId: string;
+      exitCode: number | null;
+      status?: ToolResultStatus;
+      errorCode?: ToolErrorCode;
+      errorMessage?: string;
+      startedAt?: string;
+      finishedAt?: string;
+      durationMs?: number;
+      at: string;
+    }
   | {
       type: "permission.requested";
       taskId: string;

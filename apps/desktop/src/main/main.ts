@@ -28,6 +28,14 @@ import {
   workspaceToolchainSystemPrompt,
 } from "./config";
 import {
+  capabilityPromptGuidance,
+  capabilityTelemetrySnapshot,
+  harnessSkillCapabilityGuidance,
+  probeLocalCapabilities,
+  type CapabilityPromptNeeds,
+} from "./capabilities";
+import { artifactRuntimePromptGuidance, promptLooksLikeArtifactTask } from "./artifactRuntime";
+import {
   beginRunnerEventStream,
   runnerRequest,
   runnerBinaryPath,
@@ -72,20 +80,41 @@ import {
   writeTasks,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
+import {
+  syncTelemetryBundle,
+  telemetrySpoolDirectory,
+  uploadTelemetrySpool,
+  type TelemetryUploadEndpoint,
+} from "./telemetrySync";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
+import {
+  buildRequiredFileChangeRetryPrompt,
+  canSatisfyFileChangeContract,
+  cannotCreateFileBlocker,
+  isFileChangingTool,
+  noReviewFailureSummary,
+  promptLooksLikeFileChange,
+  requiredFileChangeTools,
+  requiredToolFailureMessage,
+  type RequiredToolContractReason,
+} from "./requiredToolContract";
 import {
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
+  importSkill as importSkillService,
   listSkills as listSkillsService,
   promptSkillsForRequest as promptSkillsForRequestService,
   saveSkillDocument as saveSkillDocumentService,
   saveSkillSettings as saveSkillSettingsService,
   skillsDirectoryPath as skillsDirectoryPathService,
+  systemSkillsForProfile,
+  type PromptSkillInfo,
 } from "./skills";
 import type {
   ApproveResult,
   BackendStatus,
   BackendUiEvent,
+  CapabilityProbeReport,
   ChatAttachment,
   ChatRecord,
   CommandClass,
@@ -107,9 +136,12 @@ import type {
   RepositoryInfo,
   ReviewFile,
   ServiceStatus,
+  TelemetrySyncResult,
   TaskInfo,
   TaskRecord,
   TaskState,
+  ToolErrorCode,
+  ToolResultStatus,
   UserNotes,
   WorkspaceKind,
   WorkspaceMode,
@@ -124,7 +156,7 @@ type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
 
-const activeRunnerProcesss = new Map<string, RunnerProcess>();
+const activeRunnerProcesses = new Map<string, RunnerProcess>();
 const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
@@ -177,6 +209,7 @@ let permissionMode: PermissionMode = "normal";
 const pendingPermissions = new Map<string, PendingPermission>();
 const pendingTaskEvents = new Map<string, BackendUiEvent[]>();
 let pendingTaskEventFlushTimer: NodeJS.Timeout | null = null;
+let telemetrySyncTimer: NodeJS.Timeout | null = null;
 
 function finishInterruptedRunningTasks() {
   const now = new Date().toISOString();
@@ -368,13 +401,18 @@ function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
   task.runnerVersion = task.runnerVersion || umbraticRunnerVersion;
   task.policyVersion = task.policyVersion || umbraticPolicyVersion;
   if (!task.runtimeProfile || task.runtimeProfile === "none" || intentPrompt !== task.prompt) {
-    task.runtimeProfile = runtimeProfileForPrompt(intentPrompt);
+    task.runtimeProfile = runtimeProfileForCurrentHarness(intentPrompt);
   }
   if (task.model) {
     task.providerId = task.model.providerId;
     task.modelId = task.model.modelId;
     task.modelBaseUrlHost = baseUrlHost(task.model.baseUrl);
   }
+}
+
+function runtimeProfileForCurrentHarness(prompt: string) {
+  if (promptLooksLikeMarkdownTask(prompt)) return "markdown";
+  return readHarnessProfileSetting() === "engineering" ? runtimeProfileForPrompt(prompt) : "none";
 }
 
 function takePendingTaskEvents(taskIdValue: string): BackendUiEvent[] {
@@ -409,6 +447,7 @@ function flushPendingTaskEvents() {
   });
   if (changed) {
     writeTasks(nextTasks);
+    scheduleManagedTelemetrySync();
   }
 }
 
@@ -433,6 +472,7 @@ function saveTask(task: TaskRecord) {
   const tasks = [nextTask, ...existingTasks.filter((row) => row.id !== task.id)];
   writeTasks(tasks);
   updateChatFromTask(nextTask);
+  scheduleManagedTelemetrySync();
 }
 
 function publicTask(task: TaskRecord): TaskInfo {
@@ -504,11 +544,6 @@ function taskUsesIsolatedWorktree(task: TaskRecord): boolean {
 
 function taskEnabledTools(task: TaskRecord): RunnerToolId[] {
   return normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
-}
-
-function taskCanCreateFiles(task: TaskRecord): boolean {
-  const enabled = new Set(taskEnabledTools(task));
-  return enabled.has("write") || enabled.has("edit") || enabled.has("command");
 }
 
 function publicTaskById(input: unknown): TaskInfo | null {
@@ -668,17 +703,6 @@ const titleStopWords = new Set([
   "would",
   "you",
 ]);
-
-const mutatingPromptPattern =
-  /\b(add|build|change|create|delete|edit|fix|generate|implement|make|modify|patch|refactor|remove|rename|replace|scaffold|update|write)\b/i;
-const codeTargetPattern =
-  /\b(file|code|component|function|class|module|page|screen|route|api|test|bug|readme|docs?|scripts?|scrip|python|style|css|html|tsx?|jsx?|py|json|yaml|yml|toml|md)\b/i;
-
-function promptLooksLikeFileChange(prompt: string): boolean {
-  const text = prompt.split(/\n\s*\nAttached files:/i)[0].trim();
-  if (!text) return false;
-  return mutatingPromptPattern.test(text) && codeTargetPattern.test(text);
-}
 
 function parseReasoningMode(value: unknown): ReasoningMode {
   void value;
@@ -1235,27 +1259,64 @@ function pushAgentInstructionContext(lines: string[], rootPath: string) {
   }
 }
 
-function pushSkillContext(lines: string[], userPrompt: string) {
+type SelectedSkillSummary = Pick<PromptSkillInfo, "id" | "source" | "reason" | "fullContent">;
+
+function pushSkillContext(lines: string[], userPrompt: string, capabilityReport?: CapabilityProbeReport): SelectedSkillSummary[] {
+  const harnessProfile = readHarnessProfileSetting();
+  const systemSkills = systemSkillsForProfile(
+    harnessProfile,
+    userPrompt,
+    undefined,
+    capabilityReport ? harnessSkillCapabilityGuidance(capabilityReport) : {},
+  );
   const skills = promptSkillsForRequestService(userPrompt);
+  const fullSkills = [...systemSkills, ...skills].filter((skill) => skill.fullContent);
+  const metadataOnlySkills = [...systemSkills, ...skills].filter((skill) => !skill.fullContent);
+  const selectedSkillSummaries = [...systemSkills, ...skills].map((skill) => ({
+    id: skill.id,
+    source: skill.source,
+    reason: skill.reason,
+    fullContent: skill.fullContent,
+  }));
   lines.push(
     "",
-    "User skills:",
-    skills.length
-      ? "The following app skills are available at the beginning of this run. Enabled skills are optional guidance: decide whether each is relevant before applying it. Skills explicitly referenced with $skill-id in the user request should be treated as requested for this turn."
-      : "No enabled or explicitly requested user skills were found for this request.",
+    "Skills:",
+    "Skills are editable procedural guidance. The available skill index gives the model only skill names and descriptions by default. Full skill instructions are included only when the user explicitly references $skill-id or the request strongly matches the skill metadata.",
+    "The model must not claim to have read or applied a metadata-only skill. When full instructions are included for a skill, the model must read the whole skill before applying it.",
   );
+  if (systemSkills.length || skills.length) {
+    lines.push("", "Available skill index:");
+    for (const skill of [...systemSkills, ...skills]) {
+      const source = skill.source === "system" ? "system skill" : "personal skill";
+      const status = skill.fullContent ? "full instructions included" : "metadata only";
+      lines.push(`- ${skill.id}: ${skill.name} (${source}; ${status})${skill.description ? ` - ${skill.description}` : ""}`);
+    }
+  } else {
+    lines.push("No system or personal skills were selected for this request.");
+  }
+  if (metadataOnlySkills.length) {
+    lines.push(
+      "",
+      "Metadata-only skills:",
+      "These skills are available by name and description only. Do not apply them unless full instructions are included in this prompt.",
+    );
+  }
+  if (!fullSkills.length) return selectedSkillSummaries;
+  lines.push("", "Selected skill instructions:");
   let remaining = 30000;
-  for (const skill of skills) {
+  for (const skill of fullSkills) {
     if (remaining <= 0) {
-      lines.push("\n...(additional enabled skills omitted because the skill context limit was reached)");
+      lines.push("\n...(additional selected skills omitted because the skill context limit was reached)");
       break;
     }
     const content = skill.content.slice(0, remaining);
     remaining -= content.length;
     const description = skill.description ? `\nDescription: ${skill.description}` : "";
-    const status = skill.requested ? "explicitly requested for this turn" : "enabled";
+    const status =
+      skill.reason === "explicit_request" ? "explicitly requested for this turn" : "selected by skill metadata match";
     lines.push(`\n### ${skill.name}${description}\nStatus: ${status}\nSource: ${skill.instructionPath}`, "```", content, "```");
   }
+  return selectedSkillSummaries;
 }
 
 function compactHistoryText(value: string, limit: number): string {
@@ -1294,6 +1355,10 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
       return `Merge completed into ${event.targetBranch}.`;
     case "ide.opened":
       return `IDE open ${event.result}: ${event.filePath ?? event.target}.`;
+    case "skill.selected":
+      return `Skill selected: ${event.skillId} (${event.reason}, ${event.fullContent ? "full instructions" : "metadata only"})`;
+    case "required_tool.failed":
+      return `Required tool failed: ${event.requirement} (${event.reason}${event.detail ? `: ${compactHistoryText(event.detail, 300)}` : ""})`;
     case "task.error":
       return `Task error: ${compactHistoryText(event.message, 900)}`;
     case "assistant.done":
@@ -1328,6 +1393,14 @@ function priorChatContext(events: BackendUiEvent[], currentUserPrompt = ""): str
     remaining -= next.length + 1;
   }
   return compacted.join("\n");
+}
+
+function capabilityNeedsForPrompt(prompt: string): CapabilityPromptNeeds {
+  return {
+    python: promptLooksLikePythonTask(prompt) || promptLooksLikeArtifactTask(prompt),
+    cmake: promptLooksLikeCmakeTask(prompt),
+    artifacts: promptLooksLikeArtifactTask(prompt),
+  };
 }
 
 function pushPromptText(parts: RunnerPromptPart[], lines: string[]) {
@@ -1400,6 +1473,9 @@ async function attachmentPromptParts(rootPath: string, attachments: ChatAttachme
 async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  const harnessProfile = readHarnessProfileSetting();
+  const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
+  const capabilityNeeds = capabilityNeedsForPrompt(userPrompt);
   const hiddenChat = isHiddenChatTask(task);
   const tree = repositoryTreePreview(rootPath);
   const keyFiles = hiddenChat ? [] : keyWorkspaceFiles(rootPath);
@@ -1423,7 +1499,17 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
         "Visible workspace files:",
         tree.length ? tree.join("\n") : "- (no readable files found)",
       ];
-  pushSkillContext(lines, userPrompt);
+  const selectedSkills = pushSkillContext(lines, userPrompt, capabilityReport);
+  for (const skill of selectedSkills) {
+    emit({
+      type: "skill.selected",
+      taskId: task.id,
+      skillId: skill.id,
+      source: skill.source,
+      reason: skill.reason,
+      fullContent: skill.fullContent,
+    });
+  }
   if (keyFiles.length) {
     lines.push("", "Key workspace files:");
     for (const file of keyFiles) {
@@ -1441,17 +1527,24 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       "Use the conversation above only as background. The next section is the current user request to answer now.",
     );
   }
-  lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
-  if (promptLooksLikeCmakeTask(userPrompt)) {
-    lines.push("", "C/CMake runtime policy for this request:", cCmakeRuntimeSystemPrompt);
+  lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
+  const artifactGuidance = artifactRuntimePromptGuidance(capabilityReport, userPrompt);
+  if (artifactGuidance) {
+    lines.push("", artifactGuidance);
   }
-  if (promptLooksLikePythonTask(userPrompt)) {
-    lines.push(
-      "",
-      "Python runtime policy for this request:",
-      pythonRuntimeSystemPrompt,
-      "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
-    );
+  if (harnessProfile === "engineering") {
+    lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
+    if (promptLooksLikeCmakeTask(userPrompt)) {
+      lines.push("", "C/CMake runtime policy for this request:", cCmakeRuntimeSystemPrompt);
+    }
+    if (promptLooksLikePythonTask(userPrompt)) {
+      lines.push(
+        "",
+        "Python runtime policy for this request:",
+        pythonRuntimeSystemPrompt,
+        "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
+      );
+    }
   }
   if (promptLooksLikeMarkdownTask(userPrompt)) {
     lines.push("", "Markdown runtime policy for this request:", markdownRuntimeSystemPrompt);
@@ -1939,18 +2032,30 @@ function endpointHealthRoute(provider: ReturnType<typeof endpointProvider>): str
   return configuredEndpointRoute(provider.baseUrl, "/api/health");
 }
 
+function endpointRequestHeaders(provider: ReturnType<typeof endpointProvider>): Record<string, string> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (provider.apiKey) {
+    headers.Authorization = `Bearer ${provider.apiKey}`;
+  }
+  Object.assign(headers, provider.headers);
+  return headers;
+}
+
+function telemetryUploadEndpoint(provider: ReturnType<typeof endpointProvider>): TelemetryUploadEndpoint {
+  return {
+    url: configuredEndpointRoute(provider.baseUrl, "/api/telemetry"),
+    headers: endpointRequestHeaders(provider),
+    mtls: provider.mtls,
+  };
+}
+
 async function checkEndpointHealth(provider: ReturnType<typeof endpointProvider>): Promise<{ status: ServiceStatus; message?: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (provider.apiKey) {
-      headers.Authorization = `Bearer ${provider.apiKey}`;
-    }
-    Object.assign(headers, provider.headers);
     const healthRoute = endpointHealthRoute(provider);
     const response = await getProviderJson(healthRoute, {
-      headers,
+      headers: endpointRequestHeaders(provider),
       mtls: provider.mtls,
       signal: controller.signal,
     });
@@ -2007,6 +2112,7 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
 async function getBackendStatus(): Promise<BackendStatus> {
   const { providers, models, selected } = await resolveSelectedModel();
   const runnerPath = runnerBinaryPath();
+  const capabilityReport = await probeLocalCapabilities({ runnerPath });
   const managedEndpoint = managedModelEndpointDefaults();
   const hasManagedEndpoint = !!(managedEndpoint?.baseUrl || managedEndpoint?.mode || managedEndpoint?.software);
   const endpointStatus = providers.some((provider) => provider.status === "ready")
@@ -2048,9 +2154,15 @@ async function getBackendStatus(): Promise<BackendStatus> {
       commandClassifier: "enabled",
       telemetry: telemetryPolicyInfo,
       runtimes: runtimeDiagnostics(),
+      capabilities: capabilityReport,
     },
     message: messages.length ? messages.join(" ") : undefined,
   };
+}
+
+async function getCapabilityProbes(input: unknown): Promise<CapabilityProbeReport> {
+  const force = isRecord(input) && input.force === true;
+  return probeLocalCapabilities({ runnerPath: runnerBinaryPath(), force });
 }
 
 async function openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }> {
@@ -2065,6 +2177,41 @@ async function openSkillsFolder(): Promise<{ ok: true; directory: string } | { o
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
+}
+
+async function openSkillInEditor(input: unknown): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
+  const result = await getSkillDocumentService(input as { id?: string });
+  if (!result.ok) return result;
+  const failure = await shell.openPath(result.skill.path);
+  if (failure) return { ok: false, message: failure };
+  return { ok: true, path: result.skill.path };
+}
+
+async function importSkillFromDialog(input?: { sourcePath?: string }) {
+  if (typeof input?.sourcePath === "string" && input.sourcePath.trim()) {
+    return importSkillService({ sourcePath: input.sourcePath });
+  }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, {
+        title: "Import Umbratic Skill",
+        properties: ["openFile", "openDirectory"],
+        filters: [
+          { name: "Skill folders or archives", extensions: ["md", "zip"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      })
+    : await dialog.showOpenDialog({
+        title: "Import Umbratic Skill",
+        properties: ["openFile", "openDirectory"],
+        filters: [
+          { name: "Skill folders or archives", extensions: ["md", "zip"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+  if (result.canceled || result.filePaths.length === 0) {
+    return { ok: false as const, message: "Skill import was canceled." };
+  }
+  return importSkillService({ sourcePath: result.filePaths[0] });
 }
 
 async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
@@ -2086,6 +2233,37 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
   const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects());
   writeJsonFile(result.filePath, bundle);
   return { ok: true, path: result.filePath };
+}
+
+async function retryTelemetrySpoolQueue(): Promise<void> {
+  if (!telemetryPolicyInfo.syncEnabled) return;
+  const provider = endpointProvider();
+  await uploadTelemetrySpool({
+    directory: telemetrySpoolDirectory(app.getPath("userData")),
+    endpoint: telemetryUploadEndpoint(provider),
+  });
+}
+
+async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
+  if (!telemetryPolicyInfo.syncEnabled) {
+    throw new Error("Telemetry sync is disabled by policy.");
+  }
+  const provider = endpointProvider();
+  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects());
+  return syncTelemetryBundle({
+    directory: telemetrySpoolDirectory(app.getPath("userData")),
+    bundle,
+    endpoint: telemetryUploadEndpoint(provider),
+  });
+}
+
+function scheduleManagedTelemetrySync() {
+  if (!telemetryPolicyInfo.syncEnabled || telemetrySyncTimer) return;
+  telemetrySyncTimer = setTimeout(() => {
+    telemetrySyncTimer = null;
+    void syncTelemetryNow().catch(() => undefined);
+  }, 5000);
+  telemetrySyncTimer.unref?.();
 }
 
 async function inspectRepository(selectedPath: string): Promise<RepositoryInfo> {
@@ -2703,6 +2881,7 @@ async function runRunnerTask(
   let run: RunnerProcess | null = null;
   const intent = intentPrompt ?? task.prompt;
   const expectsFileChanges = promptLooksLikeFileChange(intent);
+  const enabledToolsForRun = taskEnabledTools(task);
   try {
     const { providers, selected } = await resolveSelectedModel();
     if (!selected) {
@@ -2712,19 +2891,32 @@ async function runRunnerTask(
     task.model = selected;
     applyTaskPolicyMetadata(task, intent);
     saveTask(task);
-    if (expectsFileChanges && !taskCanCreateFiles(task)) {
+    if (expectsFileChanges && !canSatisfyFileChangeContract(enabledToolsForRun)) {
+      emit({
+        type: "required_tool.failed",
+        taskId: task.id,
+        requirement: "file_change",
+        reason: "file_tools_disabled",
+        requiredTools: requiredFileChangeTools,
+        attemptedTools: [],
+        attempt: 0,
+        detail: "File creation tools are disabled for this run.",
+      });
       failTask(task, "File creation tools are disabled for this run.");
       return;
     }
     const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
     const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
-    activeRunnerProcesss.set(task.id, run);
+    activeRunnerProcesses.set(task.id, run);
 
-    const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; finished: boolean }>();
+    const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; toolKind?: RunnerToolId; finished: boolean }>();
     let delegatedToWorktree = false;
     let fileCreationToolRequested = false;
     let fileCreationToolSucceeded = false;
+    let requiredToolAttempt = 1;
+    const fileChangingToolCallIds = new Set<string>();
+    const fileChangingToolsAttempted = new Set<RunnerToolId>();
     let assistantTextForCurrentAttempt = "";
     let completed = false;
     let resolveCompletion!: () => void;
@@ -2774,15 +2966,38 @@ async function runRunnerTask(
       emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at });
     };
 
+    const attemptedFileChangeTools = () => requiredFileChangeTools.filter((tool) => fileChangingToolsAttempted.has(tool));
+
+    const emitRequiredToolFailure = (
+      reason: RequiredToolContractReason,
+      detail: string,
+      attempt = requiredToolAttempt,
+    ) => {
+      emit({
+        type: "required_tool.failed",
+        taskId: task.id,
+        requirement: "file_change",
+        reason,
+        requiredTools: requiredFileChangeTools,
+        attemptedTools: attemptedFileChangeTools(),
+        attempt,
+        detail,
+      });
+    };
+
     const ensureToolRun = (
       toolCallId: string,
       command: string,
       kind: PermissionRequest["kind"],
       commandClass: CommandClass,
+      toolKind?: RunnerToolId,
     ) => {
       const existing = toolRuns.get(toolCallId);
-      if (existing) return existing;
-      const current = { commandId: `ar-${toolCallId}`, command, kind, finished: false };
+      if (existing) {
+        if (toolKind && !existing.toolKind) existing.toolKind = toolKind;
+        return existing;
+      }
+      const current = { commandId: `ar-${toolCallId}`, command, kind, toolKind, finished: false };
       toolRuns.set(toolCallId, current);
       emit({
         type: "command.started",
@@ -2814,19 +3029,24 @@ async function runRunnerTask(
       if (type === "tool.requested") {
         const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : `tool-${toolRuns.size + 1}`;
         const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
+        const runnerToolKind = (
+          toolKind === "read" || toolKind === "write" || toolKind === "edit" || toolKind === "search" || toolKind === "command"
+        ) ? toolKind as RunnerToolId : undefined;
         const command = typeof event.summary === "string" && event.summary.trim() ? event.summary.trim() : toolKind;
         const kind: PermissionRequest["kind"] =
-          toolKind === "command" || toolKind === "debugger"
+          toolKind === "command"
             ? "bash"
             : toolKind === "read" || toolKind === "search"
               ? "read"
               : "edit";
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
-        if (toolKind === "write" || toolKind === "edit" || toolKind === "command") {
+        if (runnerToolKind && isFileChangingTool(runnerToolKind)) {
           fileCreationToolRequested = true;
+          fileChangingToolCallIds.add(toolCallId);
+          fileChangingToolsAttempted.add(runnerToolKind);
         }
-        ensureToolRun(toolCallId, command, kind, commandClass);
+        ensureToolRun(toolCallId, command, kind, commandClass, runnerToolKind);
         return;
       }
 
@@ -2849,10 +3069,35 @@ async function runRunnerTask(
         if (!current.finished) {
           current.finished = true;
           const exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
-          if ((current.kind === "edit" || current.command.startsWith("write ") || current.command.startsWith("edit ")) && exitCode === 0) {
+          const status = typeof event.status === "string" ? event.status as ToolResultStatus : undefined;
+          const errorCode = typeof event.errorCode === "string" ? event.errorCode as ToolErrorCode : undefined;
+          const errorMessage = typeof event.errorMessage === "string" ? event.errorMessage : undefined;
+          const durationMs = typeof event.durationMs === "number" && Number.isFinite(event.durationMs) ? event.durationMs : undefined;
+          if (
+            (
+              fileChangingToolCallIds.has(toolCallId) ||
+              current.toolKind === "write" ||
+              current.toolKind === "edit" ||
+              current.toolKind === "command" ||
+              current.kind === "edit" ||
+              current.command.startsWith("write ") ||
+              current.command.startsWith("edit ")
+            ) &&
+            exitCode === 0
+          ) {
             fileCreationToolSucceeded = true;
           }
-          emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode });
+          emit({
+            type: "command.finished",
+            taskId: task.id,
+            id: current.commandId,
+            exitCode,
+            ...(status ? { status } : {}),
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorMessage ? { errorMessage: errorMessage.slice(0, 1000) } : {}),
+            ...(durationMs !== undefined ? { durationMs } : {}),
+            at: eventAt(event),
+          });
         }
         return;
       }
@@ -2928,20 +3173,18 @@ async function runRunnerTask(
       const previousAssistantText = compactHistoryText(assistantTextForCurrentAttempt.trim(), 1800);
       assistantTextForCurrentAttempt = "";
       armCompletion();
+      emitRequiredToolFailure("missing_tool_call", "The first runner attempt ended without a file-changing tool call.", requiredToolAttempt);
+      requiredToolAttempt = 2;
       await runnerRequest<void>(run, `/session/${encodeURIComponent(session.id)}/prompt_async`, {
         method: "POST",
         body: {
           parts: [
             {
               type: "text",
-              text: [
-                "Harness check failed: the user asked for file changes, but your previous turn ended without any file-changing tool call.",
-                previousAssistantText ? `Your previous answer was:\n${previousAssistantText}` : "Your previous answer did not include a usable explanation.",
-                `Enabled tools for this run: ${taskEnabledTools(task).join(", ") || "none"}.`,
-                "Choose exactly one path now:",
-                "1. Create or modify the requested file by calling `write`, `edit`, or an approved workspace `command`, then reply briefly with the changed file path.",
-                "2. If you genuinely cannot create or modify the file, reply with `CANNOT_CREATE_FILE:` followed by the specific blocker. Do not claim the file was created.",
-              ].join(" "),
+              text: buildRequiredFileChangeRetryPrompt({
+                previousAssistantText,
+                enabledTools: enabledToolsForRun,
+              }),
             },
           ],
         },
@@ -2952,17 +3195,10 @@ async function runRunnerTask(
         return;
       }
 
-      if (!fileCreationToolRequested && assistantTextForCurrentAttempt.trim().startsWith("CANNOT_CREATE_FILE:")) {
-        task.latestTest = {
-          command: `umbratic runner session ${session.id}`,
-          output: "Umbratic runner explained why no file changes were made",
-          passed: true,
-          exitCode: 0,
-          completedAt: new Date().toISOString(),
-        };
-        task.state = "completed";
-        saveTask(task);
-        emit({ type: "assistant.done", taskId: task.id });
+      const blocker = !fileCreationToolRequested ? cannotCreateFileBlocker(assistantTextForCurrentAttempt) : null;
+      if (blocker) {
+        emitRequiredToolFailure("agent_reported_blocker", blocker, requiredToolAttempt);
+        failTask(task, `Umbratic runner could not make requested file changes. ${blocker}`);
         return;
       }
     }
@@ -2977,12 +3213,12 @@ async function runRunnerTask(
     const reviewFiles = await refreshReview(task);
     if (reviewFiles.length === 0) {
       if (expectsFileChanges) {
-        const reason = !fileCreationToolRequested
-          ? "No file creation tool was called."
-          : !fileCreationToolSucceeded
-            ? "A file creation tool was attempted but did not succeed."
-            : "A file creation tool reported success, but no reviewable file changes were found.";
-        failTask(task, `Umbratic runner finished without file changes. ${reason}`);
+        const summary = noReviewFailureSummary({
+          toolRequested: fileCreationToolRequested,
+          toolSucceeded: fileCreationToolSucceeded,
+        });
+        emitRequiredToolFailure(summary.reason, summary.detail, requiredToolAttempt);
+        failTask(task, requiredToolFailureMessage(summary));
         return;
       }
       task.state = "completed";
@@ -3001,7 +3237,7 @@ async function runRunnerTask(
     failTask(task, String(error instanceof Error ? error.message : error));
   } finally {
     clearPendingPermissionsForTask(task.id);
-    activeRunnerProcesss.delete(task.id);
+    activeRunnerProcesses.delete(task.id);
     if (run) {
       stopRunnerProcess(run);
     }
@@ -3064,7 +3300,7 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.runnerName = umbraticRunnerName;
   task.runnerVersion = umbraticRunnerVersion;
   task.policyVersion = umbraticPolicyVersion;
-  task.runtimeProfile = runtimeProfileForPrompt(task.prompt);
+  task.runtimeProfile = runtimeProfileForCurrentHarness(task.prompt);
   task.runnerSessionId = undefined;
   task.pendingPrompt = undefined;
   task.changedFiles = [];
@@ -3112,7 +3348,7 @@ function recentActiveStartTask(requestKey: string): TaskInfo | null {
     return null;
   }
   if (
-    activeRunnerProcesss.has(task.id) ||
+    activeRunnerProcesses.has(task.id) ||
     task.state === "running" ||
     task.state === "awaiting_worktree_approval" ||
     task.state === "approving"
@@ -3173,13 +3409,15 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const requestedWorkspaceMode: WorkspaceMode =
     !hiddenWorkspace && refreshed.kind === "git" && input.useWorktree === true ? "worktree" : "local";
   const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
+  const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
+  const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt));
 
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
     if (closedMessage) {
       throw new Error(closedMessage);
     }
-    if (activeRunnerProcesss.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
+    if (activeRunnerProcesses.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
     }
     if (existingTask.repositoryId !== repositoryId) {
@@ -3194,8 +3432,9 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
-    existingTask.runtimeProfile = runtimeProfileForPrompt(prompt);
+    existingTask.runtimeProfile = runtimeProfileForCurrentHarness(prompt);
     existingTask.enabledTools = requestedEnabledTools;
+    existingTask.capabilityProbes = taskCapabilityProbes;
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
     existingTask.error = undefined;
     if (existingTask.workspaceKind === "git" && requestedWorkspaceMode === "worktree" && !existingTask.agentBranch) {
@@ -3256,7 +3495,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     runnerName: umbraticRunnerName,
     runnerVersion: umbraticRunnerVersion,
     policyVersion: umbraticPolicyVersion,
-    runtimeProfile: runtimeProfileForPrompt(prompt),
+    runtimeProfile: runtimeProfileForCurrentHarness(prompt),
     createdAt: new Date().toISOString(),
     changedFiles: [],
     reviewFiles: [],
@@ -3265,6 +3504,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     originalWasDirty: refreshed.dirty,
     baselineFiles: undefined,
     enabledTools: requestedEnabledTools,
+    capabilityProbes: taskCapabilityProbes,
   };
   saveTask(task);
   appendUserMessage(task, prompt, attachments);
@@ -3422,9 +3662,9 @@ async function rejectTask(input: unknown): Promise<void> {
     throw new Error("Invalid reject input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  const run = activeRunnerProcesss.get(task.id);
+  const run = activeRunnerProcesses.get(task.id);
   if (run) {
-    activeRunnerProcesss.delete(task.id);
+    activeRunnerProcesses.delete(task.id);
     stopRunnerProcess(run);
   }
   pendingRunnerPrompts.delete(task.id);
@@ -3494,9 +3734,9 @@ async function cancelTask(input: unknown): Promise<void> {
     throw new Error("Invalid cancel input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  const run = activeRunnerProcesss.get(task.id);
+  const run = activeRunnerProcesses.get(task.id);
   if (run) {
-    activeRunnerProcesss.delete(task.id);
+    activeRunnerProcesses.delete(task.id);
     if (run.sessionId) {
       await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(
         () => undefined,
@@ -3906,6 +4146,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:list-repository-branches", (input) => listRepositoryBranches(input));
   handleIpc("umbratic:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
   handleIpc("umbratic:get-backend-status", () => getBackendStatus());
+  handleIpc("umbratic:get-capability-probes", (input) => getCapabilityProbes(input));
   handleIpc("umbratic:get-model-endpoint-settings", () => readModelEndpointSettings());
   handleIpc("umbratic:save-model-endpoint-settings", (input) =>
     saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),
@@ -3916,6 +4157,8 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:list-skills", () => listSkillsService());
   handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettingsService(input));
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
+  handleIpc("umbratic:open-skill-in-editor", (input) => openSkillInEditor(input));
+  handleIpc("umbratic:import-skill", (input) => importSkillFromDialog(input as { sourcePath?: string } | undefined));
   handleIpc("umbratic:create-skill", (input) => createSkillService(input as { name?: string }));
   handleIpc("umbratic:get-skill-document", (input) => getSkillDocumentService(input as { id?: string }));
   handleIpc("umbratic:save-skill-document", (input) => saveSkillDocumentService(input as { id?: string; content?: string }));
@@ -3938,6 +4181,7 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   await createWindow();
   void getBackendStatus();
+  void retryTelemetrySpoolQueue().catch(() => undefined);
 });
 
 app.on("window-all-closed", () => {
@@ -3952,8 +4196,8 @@ app.on("before-quit", () => {
     pendingPermissions.delete(id);
     void pending.onDeny();
   }
-  for (const [taskId, run] of activeRunnerProcesss) {
-    activeRunnerProcesss.delete(taskId);
+  for (const [taskId, run] of activeRunnerProcesses) {
+    activeRunnerProcesses.delete(taskId);
     stopRunnerProcess(run);
   }
 });

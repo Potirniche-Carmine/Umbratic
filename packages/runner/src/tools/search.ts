@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { ensureReadableText, normalizeRelativePath, shouldSkipEntry, type ToolContext, type ToolResult } from "./common.js";
+import { ensureReadableText, normalizeRelativePath, shouldSkipEntry, toolError, type ToolContext, type ToolResult } from "./common.js";
 
 function commandAvailable(command: string): boolean {
   const lookup =
@@ -26,7 +26,7 @@ function pathMatchesWithFd(ctx: ToolContext, query: string, limit: number): stri
   if (!command) return [];
   const result = spawnSync(
     command,
-    [".", "--type", "f", "--hidden", "--exclude", ".git", "--exclude", "node_modules", "--exclude", ".umbratic", "--exclude", ".umbratic", "--exclude", ".venv"],
+    [".", "--type", "f", "--hidden", "--exclude", ".git", "--exclude", "node_modules", "--exclude", ".umbratic", "--exclude", ".venv"],
     { cwd: ctx.cwd, encoding: "utf8", windowsHide: true, timeout: 8000 },
   );
   if (result.status !== 0 && !result.stdout) return [];
@@ -106,8 +106,8 @@ export async function searchTool(ctx: ToolContext, input: Record<string, unknown
   const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
   const query = rawQuery.toLowerCase();
   const limit = typeof input.limit === "number" ? Math.min(Math.max(Math.floor(input.limit), 1), 100) : 50;
-  if (!query) throw new Error("search requires query");
+  if (!query) throw toolError("validation_error", "invalid_arguments", "search requires query");
   const fastResults = [...pathMatchesWithFd(ctx, query, limit), ...contentMatchesWithRg(ctx, rawQuery, limit)];
   const results = fastResults.length ? fastResults.slice(0, limit) : fallbackSearch(ctx, query, limit);
-  return { title: "search", output: results.join("\n") || "No matches." };
+  return { title: "search", output: results.join("\n") || "No matches.", status: "success" };
 }

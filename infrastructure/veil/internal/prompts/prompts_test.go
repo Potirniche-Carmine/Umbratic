@@ -111,7 +111,6 @@ func TestRouteAndRuntimeCatalogsContainExpectedProfiles(t *testing.T) {
 		RuntimePython,
 		RuntimeCCmake,
 		RuntimeMarkdown,
-		RuntimeDebugger,
 		RuntimeGit,
 		RuntimeWorktree,
 	} {

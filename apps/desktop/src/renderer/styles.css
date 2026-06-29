@@ -1146,8 +1146,12 @@ pre {
 }
 
 .segmented button.active {
-  color: #07190e;
-  background: var(--green);
+  color: var(--text);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-3) 72%, transparent), color-mix(in srgb, var(--surface-2) 82%, transparent));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--line-strong) 84%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .riskCallout {
@@ -4566,6 +4570,11 @@ button.attachmentPreview:focus-visible {
   line-height: 1.5;
 }
 
+.skillFilter {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 260px);
+}
+
 .skillCreateForm {
   display: flex;
   align-items: center;
@@ -4696,10 +4705,8 @@ button.attachmentPreview:focus-visible {
 }
 
 .skillRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  display: grid;
+  gap: 0;
   padding: 0;
   border-bottom: 1px solid var(--line);
   transition: background 120ms ease;
@@ -4720,7 +4727,18 @@ button.attachmentPreview:focus-visible {
     color-mix(in srgb, var(--surface-3) 38%, transparent);
 }
 
+.skillRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
 .skillRowButton {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   flex: 1 1 auto;
   min-width: 0;
   padding: 12px 14px;
@@ -4728,8 +4746,19 @@ button.attachmentPreview:focus-visible {
   text-align: left;
 }
 
-.skillRow > .toggle {
+.skillRowTop > .toggle {
   margin-right: 14px;
+}
+
+.skillExpandIcon {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform 120ms ease, color 120ms ease;
+}
+
+.skillRow.isSelected .skillExpandIcon {
+  color: var(--text);
+  transform: rotate(90deg);
 }
 
 .harnessOptionGrid {
@@ -4816,71 +4845,68 @@ button.attachmentPreview:focus-visible {
   line-height: 1.4;
 }
 
-.skillEditor {
+.skillPreviewPanel {
   display: grid;
-  grid-template-rows: auto minmax(180px, 1fr);
-  min-height: 260px;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin: 0 10px 10px 37px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: var(--radius);
+  border-radius: 7px;
   overflow: hidden;
   background: color-mix(in srgb, var(--surface-2) 46%, transparent);
 }
 
-.skillEditorHeader {
+.skillPreviewHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 8px 10px 8px 12px;
   border-bottom: 1px solid var(--line);
 }
 
-.skillEditorHeader > div {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
+.skillPreviewActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
-.skillEditorHeader strong,
-.skillEditorHeader span {
+.skillPreviewHeader > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.skillEditorHeader strong {
-  color: var(--text);
-  font-size: 13px;
-}
-
-.skillEditorHeader span {
   color: var(--faint);
   font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.skillEditorText {
-  width: 100%;
+.skillPreviewBody {
   min-width: 0;
-  min-height: 0;
-  resize: none;
   padding: 12px;
-  border: 0;
-  outline: none;
-  color: var(--text);
-  background: color-mix(in srgb, var(--code-bg) 76%, transparent);
-  font-family: var(--mono-font);
+  background: color-mix(in srgb, var(--surface) 34%, transparent);
+}
+
+.skillPreviewBody .markdownContent {
+  max-width: none;
+  font-size: 12.5px;
+}
+
+.skillPreviewBody .markdownContent > :last-child {
+  margin-bottom: 0;
+}
+
+.skillPreviewEmpty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  color: var(--faint);
   font-size: 12px;
-  line-height: 1.55;
-}
-
-.skillEditorText:focus {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-.skillEditorText:disabled {
-  opacity: 0.66;
-  cursor: default;
 }
 
 .toggle {
@@ -4921,60 +4947,6 @@ button.attachmentPreview:focus-visible {
 .toggle.isOn .toggleKnob {
   transform: translateX(14px);
   background: #fff;
-}
-
-.telemetryColumns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.telemetryColumn {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface-2) 46%, transparent);
-}
-
-.telemetryColumn h4 {
-  margin: 0;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.telemetryColumn ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.telemetryColumn li {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-  font-size: 12.5px;
-}
-
-.telemetryColumn li svg {
-  flex-shrink: 0;
-}
-
-.telemetryColumn:first-child li svg {
-  color: var(--green);
-}
-
-.telemetryColumn:last-child li svg {
-  color: var(--faint);
 }
 
 .settingsActions {
@@ -5062,9 +5034,6 @@ button.attachmentPreview:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .telemetryColumns {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .dialogIcon {

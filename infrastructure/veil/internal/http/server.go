@@ -8,11 +8,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"umbratic-veil/internal/config"
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
 	"umbratic-veil/internal/prompts"
+	"umbratic-veil/internal/telemetry"
+	"umbratic-veil/internal/templates"
 )
 
 type ModelClient interface {
@@ -22,12 +25,15 @@ type ModelClient interface {
 }
 
 type Server struct {
-	cfg   config.Config
-	model ModelClient
+	cfg          config.Config
+	model        ModelClient
+	templateErr  error
+	templateData templates.Registry
 }
 
 func NewServer(cfg config.Config, modelClient ModelClient) http.Handler {
-	return &Server{cfg: cfg, model: modelClient}
+	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
+	return &Server{cfg: cfg, model: modelClient, templateData: registry, templateErr: err}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +67,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChat(prompts.MarketingChat)(w, r)
 	case "/api/sales/chat":
 		s.handleChat(prompts.SalesChat)(w, r)
+	case "/api/telemetry":
+		s.handleTelemetry(w, r)
 	default:
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 	}
@@ -93,8 +101,13 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if s.templateErr != nil {
+			writeJSONError(w, http.StatusInternalServerError, "template registry unavailable")
+			return
+		}
 
-		messages, err := prompts.Build(route, input.Messages, input.Profiles...)
+		templateMessages := s.templateData.ProtectedContext(string(route), input.Messages)
+		messages, err := prompts.BuildWithProtectedMessages(route, input.Messages, templateMessages, input.Profiles...)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return
@@ -125,6 +138,33 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			"message": resp.Message,
 		})
 	}
+}
+
+func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.TelemetryEnabled {
+		writeJSONError(w, http.StatusForbidden, "telemetry disabled by admin policy")
+		return
+	}
+	bundle, raw, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes))
+	if err != nil {
+		if errors.Is(err, telemetry.ErrInvalidBundle) {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "invalid telemetry request")
+		return
+	}
+	storedPath, err := telemetry.StoreBundle(s.cfg.TelemetryStorePath, raw, time.Now(), s.cfg.TelemetryRetentionDays)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "telemetry storage unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            true,
+		"acceptedTasks": len(bundle.Tasks),
+		"retentionDays": s.cfg.TelemetryRetentionDays,
+		"stored":        storedPath != "",
+	})
 }
 
 func (s *Server) configuredModelAvailable(ctx context.Context) (bool, error) {

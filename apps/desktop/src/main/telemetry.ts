@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import type { BackendUiEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
 import { baseUrlHost, classifyCommandText, redactCommandText, redactText, shortHashValue, telemetryPolicyInfo } from "./policy";
 
@@ -89,7 +92,17 @@ function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
     };
   }
   if (event.type === "command.finished") {
-    return { ...base, data: { id: event.id, exitCode: event.exitCode } };
+    return {
+      ...base,
+      data: {
+        id: event.id,
+        exitCode: event.exitCode,
+        status: event.status,
+        errorCode: event.errorCode,
+        errorMessage: event.errorMessage ? redactText(event.errorMessage, 320) : undefined,
+        durationMs: event.durationMs,
+      },
+    };
   }
   if (event.type === "permission.requested") {
     return {
@@ -180,6 +193,30 @@ function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
   if (event.type === "response.feedback") {
     return { ...base, data: { messageId: event.messageId, rating: event.rating } };
   }
+  if (event.type === "skill.selected") {
+    return {
+      ...base,
+      data: {
+        skillId: event.skillId,
+        source: event.source,
+        reason: event.reason,
+        fullContent: event.fullContent,
+      },
+    };
+  }
+  if (event.type === "required_tool.failed") {
+    return {
+      ...base,
+      data: {
+        requirement: event.requirement,
+        reason: event.reason,
+        requiredTools: event.requiredTools,
+        attemptedTools: event.attemptedTools ?? [],
+        attempt: event.attempt,
+        detail: event.detail ? redactText(event.detail, 320) : undefined,
+      },
+    };
+  }
   if (event.type === "task.error") {
     return { ...base, data: { message: redactText(event.message, 320) } };
   }
@@ -226,6 +263,15 @@ export function buildRedactedTelemetryBundle(tasks: TaskRecord[], projects: Repo
       runnerVersion: task.runnerVersion,
       policyVersion: task.policyVersion,
       runtimeProfile: task.runtimeProfile,
+      capabilityProbes: (task.capabilityProbes ?? []).map((probe) => ({
+        id: probe.id,
+        status: probe.status,
+        category: probe.category,
+        importance: probe.importance,
+        workflows: probe.workflows,
+        versionFamily: probe.versionFamily,
+        affectedCurrentRun: probe.affectedCurrentRun,
+      })),
       permissionMode: task.permissionMode,
       reasoningMode: task.reasoningMode,
       status: task.state,
@@ -239,4 +285,44 @@ export function buildRedactedTelemetryBundle(tasks: TaskRecord[], projects: Repo
       events: (task.events ?? []).map(redactEvent),
     })),
   };
+}
+
+export type RedactedTelemetryBundle = ReturnType<typeof buildRedactedTelemetryBundle>;
+
+export function telemetrySpoolFileName(date = new Date()): string {
+  return `telemetry-${date.toISOString().replace(/[:.]/g, "-")}.json`;
+}
+
+export async function writeTelemetrySpoolFile(
+  directory: string,
+  bundle: RedactedTelemetryBundle,
+  date = new Date(),
+): Promise<string> {
+  await fs.promises.mkdir(directory, { recursive: true });
+  const baseName = telemetrySpoolFileName(date).replace(/\.json$/, "");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+    const filePath = path.join(directory, `${baseName}${suffix}.json`);
+    try {
+      await fs.promises.writeFile(filePath, `${JSON.stringify(bundle, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      return filePath;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw cause;
+    }
+  }
+  throw new Error("Unable to allocate a telemetry spool file name.");
+}
+
+export async function listTelemetrySpoolFiles(directory: string): Promise<string[]> {
+  try {
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && /^telemetry-.+\.json$/.test(entry.name))
+      .map((entry) => path.join(directory, entry.name))
+      .sort();
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw cause;
+  }
 }

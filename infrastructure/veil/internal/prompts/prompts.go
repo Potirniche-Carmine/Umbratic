@@ -20,7 +20,6 @@ const (
 	RuntimePython             RuntimeProfile = "python"
 	RuntimeCCmake             RuntimeProfile = "cmake"
 	RuntimeMarkdown           RuntimeProfile = "markdown"
-	RuntimeDebugger           RuntimeProfile = "debugger"
 	RuntimeGit                RuntimeProfile = "git"
 	RuntimeWorktree           RuntimeProfile = "worktree"
 )
@@ -38,22 +37,26 @@ var runtimePrompts = map[RuntimeProfile]string{
 	RuntimePython:             "Python runtime policy for this request: create or use a workspace .venv and run through uv whenever uv is available. Never verify by running bare python, python3, or py. First check uv --version. If uv exists, use uv python install 3.12 when Python is missing, uv venv .venv --python 3.12, then verify with uv run python <script.py> or the direct .venv interpreter. If dependencies are needed, install them into the uv environment with uv add, uv pip install, or uv run --with <package>. If uv is unavailable, explain how to install uv before continuing Python verification unless a safe workspace-managed fallback is already available.",
 	RuntimeCCmake:             "C/CMake runtime policy for this request: inspect the repository's own build path first, including README files, CMakePresets.json, CMakeUserPresets.json, CMakeLists.txt, Makefile, build scripts, compile_commands.json, source files, headers, and tests. Use CMake when the project supports it and cmake exists. Prefer out-of-tree builds under .umbratic/build with CMAKE_EXPORT_COMPILE_COMMANDS=ON unless a preset already defines a build directory. Build with cmake --build .umbratic/build --parallel or the matching preset, and run ctest when available. If CMake is not usable, use documented scripts, make, ninja, direct compiler checks, or static/source inspection.",
 	RuntimeMarkdown:           "Markdown policy for this request: prefer repository-local documentation checks. Inspect nearby docs and config first, use markdownlint, remark, or prettier only when already present or clearly available, and avoid introducing a documentation toolchain just to edit prose.",
-	RuntimeDebugger:           "Debugger policy for this request: use debugger inspection for C/C++ crash, pointer, memory, stack, register, or security-audit work only when a supported debugger is installed and a workspace executable is available. If not, use source review, compiler diagnostics, sanitizers, tests, or report the missing optional debugger capability.",
 	RuntimeGit:                "Git policy for this request: inspect status and diffs before changing tracked files. Read-only git commands such as status, diff, log, show, branch, and worktree list are safe context gathering. Do not rewrite history, delete branches, reset hard, clean files, remove worktrees, or discard user changes unless the user explicitly asks for that exact destructive operation.",
 	RuntimeWorktree:           "Worktree policy for this request: when running inside an Umbratic worktree, treat that worktree as the editable workspace and do not make assumptions about the original repository path. Keep generated build and runtime artifacts inside workspace-local locations such as .umbratic/build, .umbratic/runtime, or .venv when possible.",
 }
 
 func Build(route Route, clientMessages []model.Message, runtimeProfiles ...RuntimeProfile) ([]model.Message, error) {
+	return BuildWithProtectedMessages(route, clientMessages, nil, runtimeProfiles...)
+}
+
+func BuildWithProtectedMessages(route Route, clientMessages []model.Message, protectedMessages []model.Message, runtimeProfiles ...RuntimeProfile) ([]model.Message, error) {
 	routePrompt, ok := routePrompts[route]
 	if !ok {
 		return nil, fmt.Errorf("unknown prompt route %q", route)
 	}
 
 	runtimeMessages := runtimePromptMessages(runtimeProfiles)
-	messages := make([]model.Message, 0, len(clientMessages)+2+len(runtimeMessages))
+	messages := make([]model.Message, 0, len(clientMessages)+2+len(runtimeMessages)+len(protectedMessages))
 	messages = append(messages, model.Message{Role: "system", Content: GlobalSystemPrompt})
 	messages = append(messages, model.Message{Role: "system", Content: routePrompt})
 	messages = append(messages, runtimeMessages...)
+	messages = append(messages, protectedMessages...)
 	messages = append(messages, clientMessages...)
 	return messages, nil
 }

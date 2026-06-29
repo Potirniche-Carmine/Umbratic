@@ -22,9 +22,13 @@ export async function readTool(ctx: ToolContext, input: Record<string, unknown>)
       .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`)
       .filter((entry) => !shouldSkipEntry(path.posix.join(relative, entry)))
       .sort((left, right) => left.localeCompare(right));
-    return { title: relative || ".", output: limitReadOutput(entries.slice(offset - 1, offset - 1 + limit).join("\n") || "(empty directory)") };
+    return {
+      title: relative || ".",
+      output: limitReadOutput(entries.slice(offset - 1, offset - 1 + limit).join("\n") || "(empty directory)"),
+      status: "success",
+    };
   }
   const lines = ensureReadableText(absolute).replace(/\r\n/g, "\n").split("\n");
   const selected = lines.slice(offset - 1, offset - 1 + limit).map((line, index) => `${offset + index}: ${line}`);
-  return { title: relative, output: limitReadOutput(selected.join("\n")) };
+  return { title: relative, output: limitReadOutput(selected.join("\n")), status: "success" };
 }
