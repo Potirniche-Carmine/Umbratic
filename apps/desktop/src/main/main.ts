@@ -1261,11 +1261,16 @@ function pushAgentInstructionContext(lines: string[], rootPath: string) {
 
 type SelectedSkillSummary = Pick<PromptSkillInfo, "id" | "source" | "reason" | "fullContent">;
 
-function pushSkillContext(lines: string[], userPrompt: string, capabilityReport?: CapabilityProbeReport): SelectedSkillSummary[] {
+function pushSkillContext(
+  lines: string[],
+  userPrompt: string,
+  capabilityReport?: CapabilityProbeReport,
+  systemSkillMatchText = userPrompt,
+): SelectedSkillSummary[] {
   const harnessProfile = readHarnessProfileSetting();
   const systemSkills = systemSkillsForProfile(
     harnessProfile,
-    userPrompt,
+    systemSkillMatchText,
     undefined,
     capabilityReport ? harnessSkillCapabilityGuidance(capabilityReport) : {},
   );
@@ -1499,7 +1504,12 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
         "Visible workspace files:",
         tree.length ? tree.join("\n") : "- (no readable files found)",
       ];
-  const selectedSkills = pushSkillContext(lines, userPrompt, capabilityReport);
+  const systemSkillMatchText = [
+    userPrompt,
+    task.workspaceMode === "worktree" ? "workspace mode: git worktree isolated workspace" : "",
+    task.workspaceMode === "worktree" && task.agentBranch ? `task branch: ${task.agentBranch}` : "",
+  ].filter(Boolean).join("\n");
+  const selectedSkills = pushSkillContext(lines, userPrompt, capabilityReport, systemSkillMatchText);
   for (const skill of selectedSkills) {
     emit({
       type: "skill.selected",
@@ -1560,6 +1570,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       hiddenChat
         ? "Answer as a normal chat unless the user asks you to create or inspect files. Treat the scratch workspace as private working storage, not as a meaningful project folder."
         : "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
+      "Do not start visible thinking or the final answer by listing available tools, enabled tools, runtime profiles, or capability probes. Treat that context as understood; mention a tool or capability only when it directly affects an action, skill choice, verification result, or blocker.",
       "If the user asks you to create, write, edit, update, or otherwise change a file, you must call a workspace file-changing tool before saying the file was created or changed.",
       "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
     ].join("\n"),

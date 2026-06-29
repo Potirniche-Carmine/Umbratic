@@ -1018,9 +1018,9 @@ function previewCapabilityReport(): CapabilityProbeReport {
 
 const previewDefaultSkills: SkillInfo[] = [
   {
-    id: "umbratic-engineering",
-    name: "Engineering",
-    description: "Use local workspace tools for code inspection, precise edits, tests, and review-ready summaries.",
+    id: "umbratic-git-worktree",
+    name: "Git Worktree",
+    description: "Use for Git worktree isolation, branch/base awareness, review diffs, merge safety, and Umbratic task worktree behavior.",
     enabled: true,
     source: "system",
     readOnly: false,
@@ -1065,29 +1065,13 @@ const previewDefaultSkills: SkillInfo[] = [
     source: "system",
     readOnly: false,
   },
-  {
-    id: "umbratic-sales",
-    name: "Sales",
-    description: "Use for account notes, discovery, objections, proposals, mutual plans, and concise buyer-facing artifacts.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-marketing",
-    name: "Marketing",
-    description: "Use for positioning, launch copy, campaign briefs, web copy, messaging, and brand-safe content drafts.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
 ];
 
 const previewDefaultSkillGuidance: Record<string, string[]> = {
-  "umbratic-engineering": [
-    "Use the local workspace as the source of truth.",
-    "Prefer read/search before editing. Prefer exact edits and reviewable file changes.",
-    "Run the narrowest available verification for the changed area and report any verification gap clearly.",
+  "umbratic-git-worktree": [
+    "Use the current worktree path as authoritative when an engineering run is isolated.",
+    "Keep original branch, task branch, and base commit distinct when explaining Git state.",
+    "Inspect status and diffs with non-destructive Git commands before summarizing or changing branch state.",
   ],
   "umbratic-markdown": [
     "Use clean Markdown when the user asks for docs, README content, tables, briefs, or paste-ready formatted text.",
@@ -1113,16 +1097,6 @@ const previewDefaultSkillGuidance: Record<string, string[]> = {
     "Produce stable columns, short cell values, explicit formulas, and clear assumptions.",
     "Separate provided values, derived values, assumptions, and formulas.",
     "Provide paste-ready tables when an XLSX runtime is unavailable.",
-  ],
-  "umbratic-sales": [
-    "Shape outputs around account context, pain, value hypothesis, proof needed, next step, and owner.",
-    "Separate known facts from assumptions.",
-    "Keep tone direct, specific, and customer-safe.",
-  ],
-  "umbratic-marketing": [
-    "Shape outputs around audience, offer, message hierarchy, proof, channel, and call to action.",
-    "Avoid unsupported superlatives, fabricated metrics, customer claims, or competitive assertions.",
-    "Provide scan-friendly variants and label where each variant is intended to be used.",
   ],
 };
 
