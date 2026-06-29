@@ -18,7 +18,6 @@ import {
   GitBranch,
   Hand,
   Loader2,
-  Minus,
   Monitor,
   Moon,
   PanelRight,
@@ -50,11 +49,50 @@ import {
 } from "./composerText";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
+type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
+type CapabilityProbeCategory = "required" | "recommended" | "optional-engineering" | "optional-artifacts";
+type CapabilityProbeImportance = "required" | "recommended" | "optional";
+type CapabilityProbeResult = {
+  id: string;
+  label: string;
+  category: CapabilityProbeCategory;
+  importance: CapabilityProbeImportance;
+  status: CapabilityProbeStatus;
+  version?: string;
+  executablePath?: string;
+  detectedCommand?: string;
+  purpose: string;
+  installHint: string;
+  workflows: string[];
+  checkedAt: string;
+  message?: string;
+};
+type CapabilityProbeReport = {
+  checkedAt: string;
+  probes: CapabilityProbeResult[];
+  summary: {
+    available: number;
+    missing: number;
+    error: number;
+    unknown: number;
+    requiredMissing: number;
+    recommendedMissing: number;
+    optionalMissing: number;
+  };
+};
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
+type RunnerToolId = "read" | "write" | "edit" | "search" | "command";
+type RequiredToolContractRequirement = "file_change";
+type RequiredToolContractReason =
+  | "file_tools_disabled"
+  | "missing_tool_call"
+  | "agent_reported_blocker"
+  | "attempted_tool_failed"
+  | "no_review_changes";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type LocalProviderId = "company-endpoint";
 type ModelEndpointMode = "local" | "server";
@@ -149,14 +187,7 @@ type BackendDiagnostics = {
   providerAllowlist: LocalProviderId[];
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
-  telemetry: {
-    mode: "developer_toggle" | "managed_required" | "managed_disabled";
-    localEnabled: boolean;
-    syncEnabled: boolean;
-    retentionDays: number;
-    exportFormat: "redacted-json";
-    storage: "company-managed-telemetry" | "task-event-snapshots";
-  };
+  telemetry: TelemetryPolicyInfo;
   runtimes: {
     python: {
       profileVersion: string;
@@ -180,6 +211,16 @@ type BackendDiagnostics = {
       nonInteractive: boolean;
     };
   };
+  capabilities: CapabilityProbeReport;
+};
+
+type TelemetryPolicyInfo = {
+  mode: "developer_toggle" | "managed_required" | "managed_disabled";
+  localEnabled: boolean;
+  syncEnabled: boolean;
+  retentionDays: number;
+  exportFormat: "redacted-json";
+  storage: "company-managed-telemetry" | "task-event-snapshots";
 };
 
 type LocalModelInfo = {
@@ -331,6 +372,17 @@ type BackendUiEvent = BackendEventMeta &
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
+  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
+  | {
+      type: "required_tool.failed";
+      taskId: string;
+      requirement: RequiredToolContractRequirement;
+      reason: RequiredToolContractReason;
+      requiredTools: RunnerToolId[];
+      attemptedTools?: RunnerToolId[];
+      attempt?: number;
+      detail?: string;
+    }
   | { type: "task.error"; taskId: string; message: string }
 );
 
@@ -363,10 +415,11 @@ type SkillInfo = {
   name: string;
   description: string;
   enabled: boolean;
-  source?: "harness" | "local";
+  source?: "system" | "local";
   readOnly?: boolean;
 };
 type SkillDocument = SkillInfo & { path: string; content: string };
+type SkillSourceFilter = "local" | "system";
 type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };
 
 type DesktopApi = {
@@ -391,6 +444,7 @@ type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
+  getCapabilityProbes(input?: { force?: boolean }): Promise<CapabilityProbeReport>;
   getHarnessProfile(): Promise<HarnessProfileId>;
   saveHarnessProfile(input: HarnessProfileId): Promise<{
     settings: HarnessProfileId;
@@ -405,6 +459,11 @@ type DesktopApi = {
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   saveSkillSettings(input: Record<string, boolean>): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
+  openSkillInEditor(input: { id: string }): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+  importSkill(input?: { sourcePath?: string }): Promise<
+    | { ok: true; skill: SkillInfo; skills: SkillInfo[]; directory: string }
+    | { ok: false; message: string }
+  >;
   createSkill(input: { name: string }): Promise<
     | { ok: true; skill: SkillInfo; directory: string }
     | { ok: false; message: string }
@@ -508,7 +567,6 @@ const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: 
     description: "Codebase inspection, implementation, debugging, tests, verification, and precise repository changes.",
   },
 ];
-
 type LocalFontDescriptor = {
   family?: string;
   fullName?: string;
@@ -882,6 +940,197 @@ const composerTestTask: TaskInfo = {
   events: composerTestEvents,
 };
 
+function previewCapabilityReport(): CapabilityProbeReport {
+  const checkedAt = new Date().toISOString();
+  const probes: CapabilityProbeResult[] = [
+    {
+      id: "node-runtime",
+      label: "Node runtime",
+      category: "required",
+      importance: "required",
+      status: "available",
+      version: "browser preview",
+      purpose: "Runs the desktop and local harness code.",
+      installHint: "Open the Electron app for real runtime probes.",
+      workflows: ["desktop", "runner"],
+      checkedAt,
+    },
+    {
+      id: "runner-binary",
+      label: "Umbratic runner",
+      category: "required",
+      importance: "required",
+      status: "missing",
+      purpose: "Starts local workspace tools for read, search, write, edit, and command execution.",
+      installHint: "Open the Electron app to check the runner bundle.",
+      workflows: ["runner", "workspace tools"],
+      checkedAt,
+      message: "Electron preload is not available in browser preview.",
+    },
+    {
+      id: "rg",
+      label: "ripgrep",
+      category: "recommended",
+      importance: "recommended",
+      status: "unknown",
+      purpose: "Fast text search in workspaces.",
+      installHint: "Open the Electron app to run local command probes.",
+      workflows: ["workspace search"],
+      checkedAt,
+    },
+    {
+      id: "uv",
+      label: "uv",
+      category: "recommended",
+      importance: "recommended",
+      status: "unknown",
+      purpose: "Creates repeatable Python environments.",
+      installHint: "Open the Electron app to run local command probes.",
+      workflows: ["Python", "artifacts"],
+      checkedAt,
+    },
+    {
+      id: "pdftoppm",
+      label: "Poppler pdftoppm",
+      category: "optional-artifacts",
+      importance: "optional",
+      status: "unknown",
+      purpose: "Renders PDF pages to images for visual QA.",
+      installHint: "Open the Electron app to run local command probes.",
+      workflows: ["PDF artifact", "visual QA"],
+      checkedAt,
+    },
+  ];
+  const summary = probes.reduce<CapabilityProbeReport["summary"]>(
+    (total, probe) => {
+      total[probe.status] += 1;
+      if (probe.status !== "available") {
+        if (probe.importance === "required") total.requiredMissing += 1;
+        if (probe.importance === "recommended") total.recommendedMissing += 1;
+        if (probe.importance === "optional") total.optionalMissing += 1;
+      }
+      return total;
+    },
+    { available: 0, missing: 0, error: 0, unknown: 0, requiredMissing: 0, recommendedMissing: 0, optionalMissing: 0 },
+  );
+  return { checkedAt, probes, summary };
+}
+
+const previewDefaultSkills: SkillInfo[] = [
+  {
+    id: "umbratic-engineering",
+    name: "Engineering",
+    description: "Use local workspace tools for code inspection, precise edits, tests, and review-ready summaries.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-markdown",
+    name: "Markdown",
+    description: "Use for Markdown structure, readable formatting, tables, docs, and plain-text artifact source.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-pdf",
+    name: "PDF",
+    description: "Use for PDF reading, summarization, page-aware review, and PDF-backed business artifacts.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-presentations",
+    name: "Presentations",
+    description: "Use for PowerPoint/PPTX outlines, slide copy, speaker notes, proposals, and customer-facing decks.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-documents",
+    name: "Documents",
+    description: "Use for DOCX/Word drafts, redlines, memos, proposals, and rendered document QA.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-spreadsheets",
+    name: "Spreadsheets",
+    description: "Use for XLSX/Excel workbooks, spreadsheet-ready tables, formulas, forecasts, and chart specs.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-sales",
+    name: "Sales",
+    description: "Use for account notes, discovery, objections, proposals, mutual plans, and concise buyer-facing artifacts.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-marketing",
+    name: "Marketing",
+    description: "Use for positioning, launch copy, campaign briefs, web copy, messaging, and brand-safe content drafts.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+];
+
+const previewDefaultSkillGuidance: Record<string, string[]> = {
+  "umbratic-engineering": [
+    "Use the local workspace as the source of truth.",
+    "Prefer read/search before editing. Prefer exact edits and reviewable file changes.",
+    "Run the narrowest available verification for the changed area and report any verification gap clearly.",
+  ],
+  "umbratic-markdown": [
+    "Use clean Markdown when the user asks for docs, README content, tables, briefs, or paste-ready formatted text.",
+    "Prefer simple headings, short paragraphs, bullets, and tables only when they improve scanning.",
+    "Keep Markdown portable: avoid custom components and renderer-specific formatting.",
+  ],
+  "umbratic-pdf": [
+    "Use local PDFs as page-aware source material; use extraction for text checks and rendered pages for layout fidelity.",
+    "Generate PDFs with the configured Python artifact runtime and keep final files under `.umbratic/artifacts/pdf/` unless directed otherwise.",
+    "Render with Poppler and inspect pages before claiming visual QA; state extraction, generation, or render gaps plainly.",
+  ],
+  "umbratic-presentations": [
+    "Use this default for local PowerPoint/PPTX work only; do not route to Google Slides workflows from this guidance.",
+    "Define audience, narrative, slide sequence, visual system, and speaker notes while keeping slide copy concise.",
+    "Export or render with LibreOffice and inspect every slide before claiming visual QA; state PPTX runtime or export gaps plainly.",
+  ],
+  "umbratic-documents": [
+    "Use this default for local DOCX/Word work only; do not route to Google Docs workflows from this guidance.",
+    "Create documents with explicit styles, numbering, margins, table geometry, headers, footers, and stable page behavior.",
+    "Render or export with LibreOffice and inspect every page before claiming visual QA; state DOCX runtime or render gaps plainly.",
+  ],
+  "umbratic-spreadsheets": [
+    "Produce stable columns, short cell values, explicit formulas, and clear assumptions.",
+    "Separate provided values, derived values, assumptions, and formulas.",
+    "Provide paste-ready tables when an XLSX runtime is unavailable.",
+  ],
+  "umbratic-sales": [
+    "Shape outputs around account context, pain, value hypothesis, proof needed, next step, and owner.",
+    "Separate known facts from assumptions.",
+    "Keep tone direct, specific, and customer-safe.",
+  ],
+  "umbratic-marketing": [
+    "Shape outputs around audience, offer, message hierarchy, proof, channel, and call to action.",
+    "Avoid unsupported superlatives, fabricated metrics, customer claims, or competitive assertions.",
+    "Provide scan-friendly variants and label where each variant is intended to be used.",
+  ],
+};
+
+function previewSkillContent(skill: SkillInfo): string {
+  const guidance = previewDefaultSkillGuidance[skill.id] ?? [skill.description];
+  return `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n# ${skill.name}\n\n${guidance.map((line) => `- ${line}`).join("\n")}\n`;
+}
+
 const fallbackApi: DesktopApi = {
   listChats: async () => readPreviewChats(),
   createChat: async (input) => {
@@ -1020,9 +1269,11 @@ const fallbackApi: DesktopApi = {
         },
         shell: { platform: navigator.platform, preferred: "posix", nonInteractive: true },
       },
+      capabilities: previewCapabilityReport(),
     },
     message: "Electron preload is not available in this browser preview.",
   }),
+  getCapabilityProbes: async () => previewCapabilityReport(),
   getHarnessProfile: async () => readPreviewHarnessProfile(),
   saveHarnessProfile: async (input) => {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
@@ -1036,11 +1287,18 @@ const fallbackApi: DesktopApi = {
     return { settings, status: await fallbackApi.getBackendStatus() };
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
-  listSkills: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
-  saveSkillSettings: async () => ({ skills: [], directory: "~/.umbratic/skills" }),
+  listSkills: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
+  saveSkillSettings: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
+  openSkillInEditor: async () => ({ ok: false, message: "Electron preload is not available." }),
+  importSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
-  getSkillDocument: async () => ({ ok: false, message: "Electron preload is not available." }),
+  getSkillDocument: async (input) => {
+    const skill = previewDefaultSkills.find((row) => row.id === input.id);
+    return skill
+      ? { ok: true, skill: { ...skill, path: `~/.umbratic/skills/${skill.id}.md`, content: previewSkillContent(skill) }, directory: "~/.umbratic/skills" }
+      : { ok: false, message: "Electron preload is not available." };
+  },
   saveSkillDocument: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
     previewPermissionMode = mode;
@@ -1561,6 +1819,10 @@ function eventTitle(event: BackendUiEvent): string {
       return event.result === "success" ? "opened editor" : "editor open failed";
     case "response.feedback":
       return event.rating === "good" ? "liked response" : "disliked response";
+    case "skill.selected":
+      return "skill selected";
+    case "required_tool.failed":
+      return "required tool failed";
     case "task.error":
       return "task event";
   }
@@ -1606,6 +1868,10 @@ function eventDetail(event: BackendUiEvent): string {
       return [event.ideId, event.target, event.filePath, event.message].filter(Boolean).join(" - ");
     case "response.feedback":
       return event.messageId;
+    case "skill.selected":
+      return `${event.skillId} - ${event.reason}${event.fullContent ? " - full instructions" : " - metadata only"}`;
+    case "required_tool.failed":
+      return [event.requirement, event.reason, event.detail].filter(Boolean).join(" - ");
     case "task.error":
       return event.message;
   }
@@ -2347,6 +2613,23 @@ export function LongMarkdownContent({
   );
 }
 
+function normalizeSkillPreviewHeading(value: string): string {
+  return value.replace(/^#+\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+export function skillPreviewMarkdown(content: string, skillName: string): string {
+  const lines = content.replace(/^---\r?\n[\s\S]*?\r?\n---\s*/, "").trim().split(/\r?\n/);
+  if (lines[0]?.startsWith("# ") && normalizeSkillPreviewHeading(lines[0]) === normalizeSkillPreviewHeading(skillName)) {
+    lines.shift();
+    while (lines[0]?.trim() === "") lines.shift();
+  }
+  return lines.join("\n").trim();
+}
+
+export function filterSkillsBySource(skills: SkillInfo[], filter: SkillSourceFilter): SkillInfo[] {
+  return skills.filter((skill) => skill.source === filter);
+}
+
 function ReviewSummaryCard({
   files,
   diffs,
@@ -2495,8 +2778,6 @@ function App() {
   );
   const [fontScanMessage, setFontScanMessage] = useState<string | null>(null);
   const [fontScanPending, setFontScanPending] = useState(false);
-  const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
-  const [exportingTelemetry, setExportingTelemetry] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.umbratic/skills");
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -2506,11 +2787,10 @@ function App() {
   const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
+  const [skillSourceFilter, setSkillSourceFilter] = useState<SkillSourceFilter>("local");
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [skillDocument, setSkillDocument] = useState<SkillDocument | null>(null);
-  const [skillEditorText, setSkillEditorText] = useState("");
-  const [skillEditorLoading, setSkillEditorLoading] = useState(false);
-  const [skillEditorSaving, setSkillEditorSaving] = useState(false);
+  const [skillPreviewLoading, setSkillPreviewLoading] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState<"composer" | "review" | null>(null);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
@@ -2610,7 +2890,14 @@ function App() {
     });
     return candidates.slice(0, 10);
   }, [skillSearchQuery, skills]);
-  const skillEditorDirty = !!skillDocument && skillEditorText !== skillDocument.content;
+  const selectedSkillPreview = useMemo(
+    () => (skillDocument ? skillPreviewMarkdown(skillDocument.content, skillDocument.name) : ""),
+    [skillDocument],
+  );
+  const visibleSkills = useMemo(
+    () => filterSkillsBySource(skills, skillSourceFilter),
+    [skillSourceFilter, skills],
+  );
   const canAttachFiles = !busy && !closedChatNotice;
   const canUseWorktreeMode = repository?.kind === "git";
   const activeTaskWorkspaceMode = task?.chatId === activeChatId ? task.workspaceMode : undefined;
@@ -3095,7 +3382,6 @@ function App() {
     if (!selectedSkillId || skills.some((skill) => skill.id === selectedSkillId)) return;
     setSelectedSkillId(null);
     setSkillDocument(null);
-    setSkillEditorText("");
   }, [selectedSkillId, skills]);
 
   async function persistDraft(chatId: string, draftPrompt: string, files: ChatAttachment[]) {
@@ -3420,19 +3706,6 @@ function App() {
     }
   }
 
-  async function exportTelemetry() {
-    setExportingTelemetry(true);
-    setTelemetryMessage(null);
-    try {
-      const result = await api.exportTelemetry();
-      setTelemetryMessage(result.ok ? "Telemetry sample exported." : result.message);
-    } catch (cause) {
-      setTelemetryMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setExportingTelemetry(false);
-    }
-  }
-
   async function loadSkills() {
     setSkillsLoading(true);
     try {
@@ -3492,59 +3765,53 @@ function App() {
     }
   }
 
-  async function openSkillEditor(skillId: string) {
-    if (skillEditorLoading) return;
+  function selectSkillSourceFilter(filter: SkillSourceFilter) {
+    setSkillSourceFilter(filter);
+    setSelectedSkillId(null);
+    setSkillDocument(null);
+    setSkillsMessage(null);
+  }
+
+  async function toggleSkillPreview(skillId: string) {
+    if (skillPreviewLoading) return;
     if (selectedSkillId === skillId) {
       setSelectedSkillId(null);
       setSkillDocument(null);
-      setSkillEditorText("");
       setSkillsMessage(null);
       return;
     }
     setSelectedSkillId(skillId);
     setSkillsMessage(null);
-    setSkillEditorLoading(true);
+    setSkillPreviewLoading(true);
     try {
       const result = await api.getSkillDocument({ id: skillId });
       if (!result.ok) {
         setSkillsMessage(result.message);
         setSkillDocument(null);
-        setSkillEditorText("");
         return;
       }
       setSkillsDirectory(result.directory);
       setSkillDocument(result.skill);
-      setSkillEditorText(result.skill.content);
     } catch (cause) {
       setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
       setSkillDocument(null);
-      setSkillEditorText("");
     } finally {
-      setSkillEditorLoading(false);
+      setSkillPreviewLoading(false);
     }
   }
 
-  async function saveSkillEditor() {
-    if (!skillDocument || skillDocument.readOnly || skillEditorSaving) return;
+  async function openSelectedSkillInEditor() {
+    if (!skillDocument) return;
     setSkillsMessage(null);
-    setSkillEditorSaving(true);
     try {
-      const result = await api.saveSkillDocument({ id: skillDocument.id, content: skillEditorText });
+      const result = await api.openSkillInEditor({ id: skillDocument.id });
       if (!result.ok) {
         setSkillsMessage(result.message);
         return;
       }
-      setSkills(result.skills);
-      setSkillsDirectory(result.directory);
-      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
-      setSkillDocument(result.skill);
-      setSkillEditorText(result.skill.content);
-      setSelectedSkillId(result.skill.id);
-      setSkillsMessage("Skill saved.");
+      setSkillsMessage("Opened skill file.");
     } catch (cause) {
       setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setSkillEditorSaving(false);
     }
   }
 
@@ -3561,11 +3828,35 @@ function App() {
       setNewSkillName("");
       setNewSkillFormOpen(false);
       await loadSkills();
-      await openSkillEditor(result.skill.id);
+      await toggleSkillPreview(result.skill.id);
     } catch (cause) {
       setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
       setCreatingSkill(false);
+    }
+  }
+
+  async function importSkill() {
+    if (skillsLoading) return;
+    setSkillsMessage(null);
+    setSkillsLoading(true);
+    try {
+      const result = await api.importSkill();
+      if (!result.ok) {
+        setSkillsMessage(result.message);
+        return;
+      }
+      setSkills(result.skills);
+      setSkillsDirectory(result.directory);
+      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
+      skillsLoadedRef.current = true;
+      setSkillsLoaded(true);
+      await toggleSkillPreview(result.skill.id);
+      setSkillsMessage(`Imported ${result.skill.name}.`);
+    } catch (cause) {
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setSkillsLoading(false);
     }
   }
 
@@ -4720,7 +5011,6 @@ function App() {
             onClick={() => {
               setSettingsOpen(true);
               setAccountMessage(null);
-              setTelemetryMessage(null);
               setFontScanMessage(null);
               void refreshStatus();
               void loadSkills();
@@ -5699,7 +5989,7 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Skills</h3>
                       <p>
-                        Skills are bundled harness guidance and personal guidance Umbratic AI can use when relevant. Enabled skills are available for new runs so the model can decide whether they apply.
+                        Skills give Umbratic focused guidance for different kinds of work. Enabled skills are available for new runs.
                       </p>
                     </div>
 
@@ -5724,6 +6014,10 @@ function App() {
                             <FolderOpen size={13} />
                             <span>Open folder</span>
                           </button>
+                          <button className="settingsInlineButton" type="button" onClick={() => void importSkill()} disabled={skillsLoading}>
+                            <FileText size={13} />
+                            <span>Import</span>
+                          </button>
                           <button
                             className="settingsInlineButton"
                             type="button"
@@ -5738,8 +6032,24 @@ function App() {
                         </div>
                       </div>
                       <p className="skillSectionHint">
-                        Built-in harness skills are bundled and read-only. Personal skills load from <code className="settingsCode">{skillsDirectory}</code>.
+                        Personal and system skills are editable. Personal skills load from <code className="settingsCode">{skillsDirectory}</code>.
                       </p>
+                      <div className="segmented skillFilter" aria-label="Skill source filter">
+                        <button
+                          type="button"
+                          className={skillSourceFilter === "local" ? "active" : ""}
+                          onClick={() => selectSkillSourceFilter("local")}
+                        >
+                          Personal
+                        </button>
+                        <button
+                          type="button"
+                          className={skillSourceFilter === "system" ? "active" : ""}
+                          onClick={() => selectSkillSourceFilter("system")}
+                        >
+                          System
+                        </button>
+                      </div>
 
                       {newSkillFormOpen ? (
                         <form
@@ -5785,74 +6095,73 @@ function App() {
                           <Sparkles size={16} />
                           <span>No skills yet. Use New skill, or add a folder with a SKILL.md to the directory above.</span>
                         </div>
+                      ) : visibleSkills.length === 0 ? (
+                        <div className="settingsEmpty">
+                          <Sparkles size={16} />
+                          <span>No skills match this filter.</span>
+                        </div>
                       ) : (
                         <ul className="skillList">
-                          {skills.map((skill) => (
+                          {visibleSkills.map((skill) => (
                             <li key={skill.id} className={`skillRow ${selectedSkillId === skill.id ? "isSelected" : ""}`}>
-                              <button
-                                type="button"
-                                className="skillRowButton"
-                                onClick={() => void openSkillEditor(skill.id)}
-                                aria-pressed={selectedSkillId === skill.id}
-                              >
-                                <div className="skillRowText">
-                                  <strong>{skill.name}</strong>
-                                  <em>
-                                    {skill.readOnly
-                                      ? `Built-in harness skill${skill.description ? `: ${skill.description}` : ""}`
-                                      : skill.description || skillMention(skill)}
-                                  </em>
+                              <div className="skillRowTop">
+                                <button
+                                  type="button"
+                                  className="skillRowButton"
+                                  onClick={() => void toggleSkillPreview(skill.id)}
+                                  aria-expanded={selectedSkillId === skill.id}
+                                >
+                                  <ChevronRight className="skillExpandIcon" size={14} aria-hidden="true" />
+                                  <div className="skillRowText">
+                                    <strong>{skill.name}</strong>
+                                    <em>{skill.description || skillMention(skill)}</em>
+                                  </div>
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`toggle ${skillsEnabled[skill.id] ? "isOn" : ""}`}
+                                  role="switch"
+                                  aria-checked={!!skillsEnabled[skill.id]}
+                                  aria-label={`Toggle ${skill.name}`}
+                                  onClick={() => void toggleSkillSetting(skill.id)}
+                                >
+                                  <span className="toggleKnob" />
+                                </button>
+                              </div>
+                              {selectedSkillId === skill.id ? (
+                                <div className="skillPreviewPanel">
+                                  <div className="skillPreviewHeader">
+                                    <span>{skillPreviewLoading ? "Loading preview" : "Preview"}</span>
+                                    <div className="skillPreviewActions">
+                                      <button
+                                        type="button"
+                                        className="settingsInlineButton"
+                                        onClick={() => void openSelectedSkillInEditor()}
+                                        disabled={!skillDocument || skillPreviewLoading}
+                                      >
+                                        <ExternalLink size={13} />
+                                        <span>Edit</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {skillPreviewLoading ? (
+                                    <div className="skillPreviewEmpty">
+                                      <Loader2 className="spin" size={14} />
+                                      <span>Loading skill preview</span>
+                                    </div>
+                                  ) : selectedSkillPreview ? (
+                                    <div className="skillPreviewBody">
+                                      <MarkdownContent content={selectedSkillPreview} />
+                                    </div>
+                                  ) : (
+                                    <p className="skillPreviewEmpty">No preview content.</p>
+                                  )}
                                 </div>
-                              </button>
-                              <button
-                                type="button"
-                                className={`toggle ${skillsEnabled[skill.id] ? "isOn" : ""}`}
-                                role="switch"
-                                aria-checked={!!skillsEnabled[skill.id]}
-                                aria-label={`Toggle ${skill.name}`}
-                                onClick={() => void toggleSkillSetting(skill.id)}
-                              >
-                                <span className="toggleKnob" />
-                              </button>
+                              ) : null}
                             </li>
                           ))}
                         </ul>
                       )}
-
-                      {selectedSkillId ? (
-                        <div className="skillEditor">
-                          <div className="skillEditorHeader">
-                            <div>
-                              <strong>{skillDocument?.name ?? selectedSkillId}</strong>
-                              <span>
-                                {skillEditorLoading
-                                  ? "Loading SKILL.md"
-                                  : skillDocument?.readOnly
-                                    ? `Built-in harness skill: ${skillDocument.path}`
-                                  : skillDocument?.path
-                                    ? skillDocument.path
-                                    : "Select a skill to edit its SKILL.md"}
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              className="settingsInlineButton"
-                              onClick={() => void saveSkillEditor()}
-                              disabled={!skillDocument || skillDocument.readOnly || !skillEditorDirty || skillEditorSaving || skillEditorLoading}
-                            >
-                              {skillEditorSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                              <span>{skillDocument?.readOnly ? "Read-only" : skillEditorDirty ? "Save" : "Saved"}</span>
-                            </button>
-                          </div>
-                          <textarea
-                            className="skillEditorText"
-                            value={skillEditorText}
-                            onChange={(event) => setSkillEditorText(event.target.value)}
-                            disabled={skillEditorLoading || !skillDocument || skillDocument.readOnly}
-                            spellCheck={false}
-                          />
-                        </div>
-                      ) : null}
 
                       {skillsMessage ? <p className="settingsMessage">{skillsMessage}</p> : null}
                     </div>
@@ -5864,41 +6173,13 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
                       <p>
-                        Stored only on your company server. Umbratic does not have access unless your organization
-                        explicitly grants it.
+                        Redacted run events are stored on your company server when policy enables telemetry.
+                        Umbratic does not have access unless your organization explicitly grants it.
                       </p>
                     </div>
-
-                    <div className="telemetryColumns">
-                      <div className="telemetryColumn">
-                        <h4>Collected</h4>
-                        <ul>
-                          <li><Check size={13} /> Feedback (thumbs up / down)</li>
-                          <li><Check size={13} /> Approval decisions</li>
-                          <li><Check size={13} /> IDE opens</li>
-                          <li><Check size={13} /> Command outcomes</li>
-                          <li><Check size={13} /> Review changes</li>
-                          <li><Check size={13} /> Fine-tuning signals</li>
-                        </ul>
-                      </div>
-                      <div className="telemetryColumn">
-                        <h4>Excluded</h4>
-                        <ul>
-                          <li><Minus size={13} /> Raw prompts</li>
-                          <li><Minus size={13} /> Full diffs</li>
-                          <li><Minus size={13} /> Full command output</li>
-                          <li><Minus size={13} /> Source file contents</li>
-                        </ul>
-                      </div>
-                    </div>
-
-                    <div className="settingsActions">
-                      <button className="settingsInlineButton" type="button" onClick={exportTelemetry} disabled={exportingTelemetry}>
-                        {exportingTelemetry ? <Loader2 className="spin" size={13} /> : <ExternalLink size={13} />}
-                        <span>Export telemetry sample</span>
-                      </button>
-                      {telemetryMessage ? <p className="settingsMessage">{telemetryMessage}</p> : null}
-                    </div>
+                    <p className="settingsMessage">
+                      Sync runs automatically in the background. There is nothing to configure here.
+                    </p>
                   </div>
                 ) : null}
               </div>

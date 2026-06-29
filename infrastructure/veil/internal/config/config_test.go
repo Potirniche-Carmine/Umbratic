@@ -18,6 +18,10 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_MODEL", "default-model")
+	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
+	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
+	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
+	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
@@ -57,8 +61,49 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	if cfg.DefaultModel != "default-model" {
 		t.Fatalf("unexpected default model %q", cfg.DefaultModel)
 	}
+	if cfg.TemplateRegistryPath != "" {
+		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
+	}
+	if !cfg.TelemetryEnabled || cfg.TelemetryRetentionDays != 30 || cfg.TelemetryStorePath != "" {
+		t.Fatalf("unexpected telemetry defaults: %#v", cfg)
+	}
 	if cfg.ModelTimeout != 12*time.Second || cfg.RequestTimeout != 20*time.Second {
 		t.Fatalf("unexpected timeouts: %s %s", cfg.ModelTimeout, cfg.RequestTimeout)
+	}
+}
+
+func TestLoadUsesConfiguredTemplateRegistryPath(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "/srv/veil/templates.json")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TemplateRegistryPath != "/srv/veil/templates.json" {
+		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
+	}
+}
+
+func TestLoadUsesConfiguredTelemetryPolicy(t *testing.T) {
+	setRequiredEnv(t)
+	storePath := filepath.Join(t.TempDir(), "telemetry")
+	t.Setenv("VEIL_TELEMETRY_ENABLED", "false")
+	t.Setenv("VEIL_TELEMETRY_STORE_PATH", storePath)
+	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "14")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TelemetryEnabled {
+		t.Fatal("expected telemetry to be disabled by admin policy")
+	}
+	if cfg.TelemetryStorePath != storePath {
+		t.Fatalf("unexpected telemetry store path %q", cfg.TelemetryStorePath)
+	}
+	if cfg.TelemetryRetentionDays != 14 {
+		t.Fatalf("unexpected retention days %d", cfg.TelemetryRetentionDays)
 	}
 }
 
@@ -104,6 +149,23 @@ func TestLoadRejectsInvalidMaxBodyBytes(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected invalid max body error")
+	}
+}
+
+func TestLoadRejectsInvalidTelemetryPolicy(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_TELEMETRY_ENABLED", "sometimes")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected invalid telemetry enabled error")
+	}
+
+	setRequiredEnv(t)
+	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "0")
+	_, err = Load()
+	if err == nil {
+		t.Fatal("expected invalid telemetry retention error")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -71,11 +72,13 @@ func (f *fakeModelClient) ListModels(ctx context.Context) ([]model.ModelInfo, er
 
 func testConfig() config.Config {
 	return config.Config{
-		Addr:           "127.0.0.1:0",
-		AuthToken:      "test-token",
-		DefaultModel:   "default-model",
-		RequestTimeout: time.Second,
-		MaxBodyBytes:   1 << 20,
+		Addr:                   "127.0.0.1:0",
+		AuthToken:              "test-token",
+		DefaultModel:           "default-model",
+		TelemetryEnabled:       true,
+		TelemetryRetentionDays: 30,
+		RequestTimeout:         time.Second,
+		MaxBodyBytes:           1 << 20,
 	}
 }
 
@@ -185,6 +188,203 @@ func TestChatRouteAddsRuntimeProfilePrompts(t *testing.T) {
 	}
 	if modelClient.req.Messages[4].Role != "user" {
 		t.Fatalf("client message should follow runtime prompts: %#v", modelClient.req.Messages)
+	}
+}
+
+func TestChatRouteAddsSelectedTemplateMetadata(t *testing.T) {
+	registryPath := t.TempDir() + "/templates.json"
+	if err := os.WriteFile(registryPath, []byte(`{
+		"templates": [{
+			"id": "sales-quarterly-review",
+			"kind": "powerpoint",
+			"displayName": "Sales Quarterly Review",
+			"serverKey": "templates/powerpoint/sales-quarterly-review",
+			"version": "2026-06",
+			"tags": ["sales", "qbr"],
+			"description": "Quarterly sales review deck.",
+			"available": true,
+			"checksum": "sha256:abc",
+			"routes": ["sales/chat"]
+		}]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.TemplateRegistryPath = registryPath
+	modelClient := &fakeModelClient{}
+	server := NewServer(cfg, modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sales/chat", strings.NewReader(`{"messages":[{"role":"user","content":"Create a QBR deck."}]}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if len(modelClient.req.Messages) != 4 {
+		t.Fatalf("got %d messages: %#v", len(modelClient.req.Messages), modelClient.req.Messages)
+	}
+	templatePrompt, ok := modelClient.req.Messages[2].Content.(string)
+	if !ok {
+		t.Fatalf("template prompt was not string: %#v", modelClient.req.Messages[2])
+	}
+	if !strings.Contains(templatePrompt, "sales-quarterly-review") || !strings.Contains(templatePrompt, "serverKey: templates/powerpoint/sales-quarterly-review") {
+		t.Fatalf("template metadata was not injected: %s", templatePrompt)
+	}
+	if modelClient.req.Messages[3].Role != "user" {
+		t.Fatalf("client message should follow template prompt: %#v", modelClient.req.Messages)
+	}
+}
+
+func TestChatRouteHidesTemplateRegistryLoadErrors(t *testing.T) {
+	cfg := testConfig()
+	cfg.TemplateRegistryPath = t.TempDir() + "/missing.json"
+	modelClient := &fakeModelClient{}
+	server := NewServer(cfg, modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sales/chat", strings.NewReader(`{"input":"Create a deck."}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "missing.json") {
+		t.Fatalf("registry path leaked in error: %s", rr.Body.String())
+	}
+	if modelClient.req.Model != "" {
+		t.Fatalf("unexpected provider request: %#v", modelClient.req)
+	}
+}
+
+func redactedTelemetryBody() string {
+	return `{
+		"schemaVersion": 1,
+		"exportedAt": "2026-01-01T00:00:00.000Z",
+		"policy": {
+			"mode": "managed_required",
+			"localEnabled": false,
+			"syncEnabled": true,
+			"retentionDays": 30,
+			"exportFormat": "redacted-json",
+			"storage": "company-managed-telemetry"
+		},
+		"tasks": [{
+			"id": "task-1",
+			"chatId": "chat-1",
+			"repoId": "repo-1",
+			"repoRootHash": "hash-1",
+			"workspaceKind": "git",
+			"baseBranch": "main",
+			"baseCommit": "abcdef1234567890",
+			"status": "completed",
+			"capabilityProbes": [{
+				"id": "pdftoppm",
+				"status": "missing",
+				"category": "optional-artifacts",
+				"importance": "optional",
+				"workflows": ["PDF artifact"]
+			}],
+			"events": [{
+				"type": "user.message",
+				"at": "2026-01-01T00:00:00.000Z",
+				"data": {"promptRedacted": true, "length": 42}
+			}]
+		}]
+	}`
+}
+
+func TestTelemetryRouteAcceptsRedactedBundleAndPersistsIt(t *testing.T) {
+	cfg := testConfig()
+	cfg.TelemetryStorePath = t.TempDir()
+	cfg.TelemetryRetentionDays = 14
+	modelClient := &fakeModelClient{}
+	server := NewServer(cfg, modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(redactedTelemetryBody()))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["acceptedTasks"] != float64(1) || response["stored"] != true || response["retentionDays"] != float64(14) {
+		t.Fatalf("unexpected telemetry response: %#v", response)
+	}
+	entries, err := os.ReadDir(cfg.TelemetryStorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one stored telemetry file, got %d", len(entries))
+	}
+	stored, err := os.ReadFile(cfg.TelemetryStorePath + "/" + entries[0].Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stored), "promptRedacted") {
+		t.Fatalf("stored telemetry did not contain redacted event facts: %s", stored)
+	}
+	if strings.Contains(string(stored), "raw secret prompt") {
+		t.Fatalf("stored telemetry contained raw prompt text: %s", stored)
+	}
+	if modelClient.req.Model != "" {
+		t.Fatalf("telemetry route unexpectedly called model: %#v", modelClient.req)
+	}
+}
+
+func TestTelemetryRouteRejectsRawPromptFields(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+	body := strings.Replace(redactedTelemetryBody(), `"id": "task-1",`, `"id": "task-1", "prompt": "raw secret prompt",`, 1)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "raw task field") || strings.Contains(rr.Body.String(), "raw secret prompt") {
+		t.Fatalf("unexpected validation response: %s", rr.Body.String())
+	}
+	if modelClient.req.Model != "" {
+		t.Fatalf("telemetry route unexpectedly called model: %#v", modelClient.req)
+	}
+}
+
+func TestTelemetryRouteObeysAdminDisablePolicy(t *testing.T) {
+	cfg := testConfig()
+	cfg.TelemetryEnabled = false
+	cfg.TelemetryStorePath = t.TempDir()
+	modelClient := &fakeModelClient{}
+	server := NewServer(cfg, modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(redactedTelemetryBody()))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	entries, err := os.ReadDir(cfg.TelemetryStorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("disabled telemetry route wrote files: %#v", entries)
+	}
+	if modelClient.req.Model != "" {
+		t.Fatalf("telemetry route unexpectedly called model: %#v", modelClient.req)
 	}
 }
 

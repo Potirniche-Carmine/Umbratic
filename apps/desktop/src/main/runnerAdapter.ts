@@ -37,6 +37,7 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     cwd: task.worktreePath,
     workspaceMode: task.workspaceMode,
     runtimeProfiles: runtimeProfilesForTask(task, harnessProfile),
+    capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
     enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
     provider: {

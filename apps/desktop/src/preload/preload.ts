@@ -42,6 +42,7 @@ const umbraticApi = {
   checkoutRepositoryBranch: (input: { repositoryId?: string; repositoryPath?: string; branch: string }) =>
     ipcRenderer.invoke("umbratic:checkout-repository-branch", input),
   getBackendStatus: () => ipcRenderer.invoke("umbratic:get-backend-status"),
+  getCapabilityProbes: (input?: { force?: boolean }) => ipcRenderer.invoke("umbratic:get-capability-probes", input ?? {}),
   getHarnessProfile: () => ipcRenderer.invoke("umbratic:get-harness-profile"),
   saveHarnessProfile: (input: HarnessProfileId) => ipcRenderer.invoke("umbratic:save-harness-profile", input),
   getModelEndpointSettings: () => ipcRenderer.invoke("umbratic:get-model-endpoint-settings"),
@@ -58,6 +59,8 @@ const umbraticApi = {
   listSkills: () => ipcRenderer.invoke("umbratic:list-skills"),
   saveSkillSettings: (input: Record<string, boolean>) => ipcRenderer.invoke("umbratic:save-skill-settings", input),
   openSkillsFolder: () => ipcRenderer.invoke("umbratic:open-skills-folder"),
+  openSkillInEditor: (input: { id: string }) => ipcRenderer.invoke("umbratic:open-skill-in-editor", input),
+  importSkill: (input?: { sourcePath?: string }) => ipcRenderer.invoke("umbratic:import-skill", input ?? {}),
   createSkill: (input: { name: string }) => ipcRenderer.invoke("umbratic:create-skill", input),
   getSkillDocument: (input: { id: string }) => ipcRenderer.invoke("umbratic:get-skill-document", input),
   saveSkillDocument: (input: { id: string; content: string }) => ipcRenderer.invoke("umbratic:save-skill-document", input),

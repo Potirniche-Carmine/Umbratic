@@ -21,6 +21,10 @@ type Config struct {
 	ProviderModelsEndpointPath string
 	ProviderAPIKey             string
 	DefaultModel               string
+	TemplateRegistryPath       string
+	TelemetryEnabled           bool
+	TelemetryStorePath         string
+	TelemetryRetentionDays     int
 	ModelTimeout               time.Duration
 	RequestTimeout             time.Duration
 	MaxBodyBytes               int64
@@ -43,6 +47,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	telemetryEnabled, err := envBool("VEIL_TELEMETRY_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	telemetryRetentionDays, err := envInt("VEIL_TELEMETRY_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
 	protocol, err := model.ParseProviderProtocol(os.Getenv("VEIL_PROVIDER_PROTOCOL"))
 	if err != nil {
 		return Config{}, err
@@ -57,6 +69,10 @@ func Load() (Config, error) {
 		ProviderModelsEndpointPath: envFirst("VEIL_PROVIDER_MODELS_PATH", "VEIL_PROVIDER_MODELS_ENDPOINT_PATH"),
 		ProviderAPIKey:             os.Getenv("VEIL_PROVIDER_API_KEY"),
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
+		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
+		TelemetryEnabled:           telemetryEnabled,
+		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
+		TelemetryRetentionDays:     telemetryRetentionDays,
 		ModelTimeout:               modelTimeout,
 		RequestTimeout:             requestTimeout,
 		MaxBodyBytes:               maxBodyBytes,
@@ -79,6 +95,9 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxBodyBytes <= 0 {
 		return Config{}, errors.New("VEIL_MAX_BODY_BYTES must be positive")
+	}
+	if cfg.TelemetryRetentionDays <= 0 {
+		return Config{}, errors.New("VEIL_TELEMETRY_RETENTION_DAYS must be positive")
 	}
 
 	return cfg, nil
@@ -128,6 +147,26 @@ func envInt64(name string, fallback int64) (int64, error) {
 		return 0, fmt.Errorf("%s must be an integer", name)
 	}
 	return parsed, nil
+}
+
+func envInt(name string, fallback int) (int, error) {
+	value, err := envInt64(name, int64(fallback))
+	return int(value), err
+}
+
+func envBool(name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+	if value == "" {
+		return fallback, nil
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
 }
 
 func loadDotEnv(filePath string) error {

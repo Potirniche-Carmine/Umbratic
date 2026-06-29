@@ -13,7 +13,14 @@ const { writeTool } = loadTypeScriptModule(new URL("../src/tools/write.ts", impo
 const { editTool } = loadTypeScriptModule(new URL("../src/tools/edit.ts", import.meta.url).pathname, { cache: moduleCache });
 const { searchTool } = loadTypeScriptModule(new URL("../src/tools/search.ts", import.meta.url).pathname, { cache: moduleCache });
 const { commandTool } = loadTypeScriptModule(new URL("../src/tools/command.ts", import.meta.url).pathname, { cache: moduleCache });
-const { enabledToolSpecs, runTool, toolSpecs } = loadTypeScriptModule(new URL("../src/tools/index.ts", import.meta.url).pathname, { cache: moduleCache });
+const {
+  enabledModelToolSpecs,
+  enabledToolSpecs,
+  normalizeModelToolSpec,
+  runTool,
+  schemaHasAdapterHostileShapes,
+  toolSpecs,
+} = loadTypeScriptModule(new URL("../src/tools/index.ts", import.meta.url).pathname, { cache: moduleCache });
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 function workspace() {
@@ -92,6 +99,90 @@ test("writeTool and editTool enforce permission and make real workspace changes"
   await assert.rejects(() => editTool(allowed.ctx, { filePath: "src/app.ts", oldText: "missing", newText: "x" }), /not found/);
 });
 
+test("editTool patch mode applies multi-file add update and delete after one permission", async () => {
+  const root = workspace();
+  const allowed = context(root);
+  const patch = [
+    "*** Begin Patch",
+    "*** Add File: notes/plan.md",
+    "+ship",
+    "+verify",
+    "*** Update File: src/app.ts",
+    "@@",
+    "-export const answer = 41;",
+    "+export const answer = 42;",
+    "*** Delete File: README.md",
+    "*** End Patch",
+  ].join("\n");
+
+  const result = await editTool(allowed.ctx, { mode: "patch", patch });
+
+  assert.equal(result.status, "success");
+  assert.equal(result.title, "patch");
+  assert.match(result.output, /Patched 3 files successfully/);
+  assert.match(result.output, /added notes\/plan\.md/);
+  assert.match(result.output, /modified src\/app\.ts/);
+  assert.match(result.output, /deleted README\.md/);
+  assert.equal(fs.readFileSync(path.join(root, "notes", "plan.md"), "utf8"), "ship\nverify");
+  assert.equal(fs.readFileSync(path.join(root, "src", "app.ts"), "utf8"), "export const answer = 42;\n");
+  assert.equal(fs.existsSync(path.join(root, "README.md")), false);
+  assert.deepEqual(allowed.permissions.map((request) => request.summary), [
+    "patch 3 files: notes/plan.md, src/app.ts, README.md",
+  ]);
+});
+
+test("editTool patch mode supports update plus move", async () => {
+  const root = workspace();
+  const allowed = context(root);
+  const patch = [
+    "*** Begin Patch",
+    "*** Update File: src/app.ts",
+    "*** Move to: src/answer.ts",
+    "@@",
+    "-export const answer = 41;",
+    "+export const answer = 43;",
+    "*** End Patch",
+  ].join("\n");
+
+  const result = await editTool(allowed.ctx, { mode: "patch", patch });
+
+  assert.equal(result.status, "success");
+  assert.match(result.output, /renamed src\/app\.ts -> src\/answer\.ts/);
+  assert.equal(fs.existsSync(path.join(root, "src", "app.ts")), false);
+  assert.equal(fs.readFileSync(path.join(root, "src", "answer.ts"), "utf8"), "export const answer = 43;\n");
+});
+
+test("editTool patch mode validates grammar and hunks before permission or writes", async () => {
+  const root = workspace();
+  const invalid = context(root);
+  const patch = [
+    "*** Begin Patch",
+    "*** Add File: notes/new.md",
+    "+created only if the whole patch validates",
+    "*** Update File: src/app.ts",
+    "@@",
+    "-export const answer = 999;",
+    "+export const answer = 1000;",
+    "*** End Patch",
+  ].join("\n");
+
+  await assert.rejects(() => editTool(invalid.ctx, { mode: "patch", patch }), /hunk was not found/);
+  assert.equal(fs.existsSync(path.join(root, "notes", "new.md")), false);
+  assert.equal(fs.readFileSync(path.join(root, "src", "app.ts"), "utf8"), "export const answer = 41;\n");
+  assert.equal(invalid.permissions.length, 0);
+
+  await assert.rejects(() => editTool(invalid.ctx, { mode: "patch", patch: "*** Add File: x.txt\n+missing envelope" }), /Begin Patch/);
+  await assert.rejects(
+    () => editTool(invalid.ctx, { mode: "patch", patch: "*** Begin Patch\n*** Add File: .env\n+SECRET=value\n*** End Patch" }),
+    /blocked path/,
+  );
+  await assert.rejects(
+    () => editTool(invalid.ctx, { mode: "patch", patch: "*** Begin Patch\n*** Add File: ../outside.txt\n+escape\n*** End Patch" }),
+    /outside workspace/,
+  );
+  assert.equal(invalid.permissions.length, 0);
+});
+
 test("searchTool finds real path and content matches without returning generated directories", async () => {
   const root = workspace();
   const { ctx } = context(root);
@@ -165,6 +256,30 @@ test("runTool gates disabled tools, emits lifecycle events, and forwards tool ou
   assert.equal(disabledEvents[1].errorCode, "tool_disabled");
 });
 
+test("runTool applies edit patch mode and emits patch summaries", async () => {
+  const root = workspace();
+  const events = [];
+  const toolContext = context(root);
+  const patch = [
+    "*** Begin Patch",
+    "*** Add File: notes/run-tool.md",
+    "+created through runTool",
+    "*** End Patch",
+  ].join("\n");
+
+  const result = await runTool(toolContext.ctx, (event) => events.push(event), {
+    id: "call-patch",
+    name: "edit",
+    arguments: { mode: "patch", patch },
+  });
+
+  assert.equal(result.status, "success");
+  assert.equal(events[0].summary, "edit patch");
+  assert.equal(events[0].commandClass, "edit");
+  assert.equal(toolContext.outputs.some((output) => output.toolCallId === "call-patch" && output.text.includes("added notes/run-tool.md")), true);
+  assert.equal(fs.readFileSync(path.join(root, "notes", "run-tool.md"), "utf8"), "created through runTool");
+});
+
 test("runTool marks malformed model tool arguments as validation errors", async () => {
   const root = workspace();
   const events = [];
@@ -183,8 +298,63 @@ test("enabledToolSpecs returns only configured tool definitions in canonical ord
   assert.deepEqual(plain(specs.map((spec) => spec.function.name)), ["read", "command"]);
 });
 
+test("enabledModelToolSpecs returns provider-facing schemas without adapter-hostile shapes", () => {
+  const specs = enabledModelToolSpecs(["command", "read", "edit"]);
+  assert.deepEqual(plain(specs.map((spec) => spec.function.name)), ["read", "edit", "command"]);
+  for (const spec of specs) {
+    assert.equal(schemaHasAdapterHostileShapes(spec.function.parameters), false, spec.function.name);
+    assert.equal(spec.function.parameters.type, "object", spec.function.name);
+    assert.equal(Array.isArray(spec.function.parameters.required), true, spec.function.name);
+  }
+});
+
+test("normalizeModelToolSpec removes schema shapes local model adapters handle poorly", () => {
+  const normalized = normalizeModelToolSpec({
+    type: "function",
+    function: {
+      name: "demo",
+      description: "demo",
+      parameters: {
+        properties: {
+          path: { type: ["string", "null"] },
+          nested: {
+            properties: {
+              flag: { enum: [true, false] },
+            },
+            required: "flag",
+            additionalProperties: false,
+          },
+          items: {
+            items: { type: ["string", "null"] },
+            anyOf: [{ type: "array" }],
+          },
+        },
+        required: ["path", 42],
+        additionalProperties: false,
+        oneOf: [{ required: ["path"] }],
+      },
+    },
+  });
+
+  const parameters = plain(normalized.function.parameters);
+  assert.equal(schemaHasAdapterHostileShapes(parameters), false);
+  assert.equal(parameters.type, "object");
+  assert.deepEqual(parameters.required, ["path"]);
+  assert.equal(parameters.properties.path.type, "string");
+  assert.equal(parameters.properties.nested.type, "object");
+  assert.deepEqual(parameters.properties.nested.required, []);
+  assert.equal(parameters.properties.nested.additionalProperties, undefined);
+  assert.equal(parameters.properties.nested.properties.flag.type, "boolean");
+  assert.equal(parameters.properties.items.type, "array");
+  assert.equal(parameters.properties.items.anyOf, undefined);
+  assert.equal(parameters.properties.items.items.type, "string");
+});
+
 test("toolSpecs keep small stable schemas for local model tool calling", () => {
   assert.deepEqual(plain(toolSpecs.map((spec) => spec.function.name)), ["read", "write", "edit", "search", "command"]);
+  const editSpec = toolSpecs.find((spec) => spec.function.name === "edit");
+  assert.deepEqual(plain(editSpec.function.parameters.properties.mode.enum), ["replace", "patch"]);
+  assert.equal(editSpec.function.parameters.properties.patch.type, "string");
   for (const spec of toolSpecs) {
     const parameters = spec.function.parameters;
     assert.equal(parameters.type, "object", spec.function.name);

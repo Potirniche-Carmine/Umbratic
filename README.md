@@ -41,7 +41,7 @@ Out of scope:
 
 Telemetry should capture everything operationally useful while avoiding raw sensitive data. Prompts, assistant text, full command output, full diffs, absolute paths, and secrets are redacted or summarized before export or sync. Managed deployments should store telemetry only on company-controlled servers.
 
-Harness modes select different local guidance. Engineering mode can add workspace, Git, worktree, Python, CMake, or Markdown runtime profiles when relevant. Marketing and sales mode avoid engineering profiles by default, but Markdown remains available across modes for Markdown-shaped requests. Those modes instead add local harness skills for PDFs, DOCX documents, PPTX presentations, XLSX spreadsheets, campaign content, and sales enablement. Built-in harness skills and local user skills are visible in Skills settings, can be toggled, and local user skills remain stored under `~/.umbratic/skills`; Umbratic shows compact skill metadata by default and includes full skill instructions only when a skill is explicitly requested or strongly matched to the task.
+Harness modes select different local guidance. Engineering mode can add workspace, Git, worktree, Python, CMake, or Markdown runtime profiles when relevant. Marketing and sales mode avoid engineering profiles by default, but Markdown remains available across modes for Markdown-shaped requests. Those modes instead add system skills for PDFs, DOCX documents, PPTX presentations, XLSX spreadsheets, campaign content, and sales enablement. System and personal skills are visible in Skills settings, can be toggled, and can be edited; system skills are editable files under `~/.umbratic/skills/system/<id>/SKILL.md`, while personal skills remain stored under `~/.umbratic/skills`. Umbratic shows compact skill metadata by default and includes full skill instructions only when a skill is explicitly requested or strongly matched to the task.
 
 ## Install Runtime Expectations
 
@@ -53,7 +53,7 @@ Recommended installer bundle:
 - Engineering helpers: `rg`, `fd`, `uv`, CMake, Ninja, compiler toolchains, `jq`, `yq`, `tree-sitter`, and `bat` when engineering mode is enabled.
 - PDF artifacts: Poppler commands such as `pdftoppm` and `pdfinfo`, plus Python packages `reportlab`, `pdfplumber`, and `pypdf`.
 - DOCX/PPTX/XLSX artifacts: a bundled Node artifact runtime for Office files, plus LibreOffice or another local render/export path for visual QA.
-- Skills: built-in harness skills for Markdown, PDF, document, presentation, spreadsheet, marketing, sales, and engineering workflows, plus local `~/.umbratic/skills`.
+- Skills: system skills for Markdown, PDF, document, presentation, spreadsheet, marketing, sales, and engineering workflows under `~/.umbratic/skills/system/<id>/SKILL.md`, plus personal skills under `~/.umbratic/skills`.
 
 The app should probe these dependencies and expose the matching runtime profiles or artifact skills only when they can work. PDF text extraction is useful for quick checks, but final PDF, DOCX, PPTX, and XLSX work should use render/export verification before claiming visual QA.
 

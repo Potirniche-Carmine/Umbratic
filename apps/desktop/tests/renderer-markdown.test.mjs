@@ -7,7 +7,7 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.mjs";
 
 const iconNames = [
   "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronRight", "CheckCircle2", "CircleDashed",
-  "Copy", "ExternalLink", "File", "FileText", "FolderOpen", "GitBranch", "Hand", "Loader2", "Minus",
+  "Copy", "ExternalLink", "File", "FileText", "FolderOpen", "GitBranch", "Hand", "Loader2",
   "Monitor", "Moon", "PanelRight", "Paperclip", "Play", "Plus", "RefreshCw", "Send", "Settings",
   "ShieldAlert", "ShieldCheck", "Sparkles", "SquarePen", "Sun", "ThumbsDown", "ThumbsUp",
   "Trash2", "TriangleAlert", "Type", "Undo2", "User", "X",
@@ -114,6 +114,32 @@ test("inline references render review buttons only for unambiguous review files"
   assert.match(html, /<button class="inlineMentionToken reviewReferenceToken"/);
   assert.match(html, />src\/app\.ts<\/button>/);
   assert.match(html, />docs\/README\.md<\/button>/);
+});
+
+test("skill previews render markdown content and source filters split system from personal skills", () => {
+  const { filterSkillsBySource, skillPreviewMarkdown } = loadRenderer();
+  const skillFile = [
+    "---",
+    "name: Marketing",
+    "description: Launch copy and campaign briefs.",
+    "---",
+    "",
+    "# Marketing",
+    "",
+    "Use concise campaign briefs.",
+    "",
+    "- Keep claims grounded.",
+  ].join("\n");
+
+  assert.equal(skillPreviewMarkdown(skillFile, "Marketing"), "Use concise campaign briefs.\n\n- Keep claims grounded.");
+  assert.equal(skillPreviewMarkdown("# Custom Playbook\n\nKeep this heading.", "Marketing"), "# Custom Playbook\n\nKeep this heading.");
+
+  const skills = [
+    { id: "umbratic-marketing", name: "Marketing", description: "Campaign work.", enabled: true, source: "system" },
+    { id: "personal-style", name: "Personal Style", description: "House tone.", enabled: true, source: "local" },
+  ];
+  assert.deepEqual(filterSkillsBySource(skills, "system").map((skill) => skill.id), ["umbratic-marketing"]);
+  assert.deepEqual(filterSkillsBySource(skills, "local").map((skill) => skill.id), ["personal-style"]);
 });
 
 test("diff parsing, command aggregation, pending permissions, and timelines reflect real event streams", () => {

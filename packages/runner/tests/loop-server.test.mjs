@@ -11,6 +11,16 @@ const loopPath = new URL("../src/loop.ts", import.meta.url).pathname;
 const serverPath = new URL("../src/server.ts", import.meta.url).pathname;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+function hasAdapterHostileSchemaShape(value) {
+  if (Array.isArray(value)) return value.some(hasAdapterHostileSchemaShape);
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value.type)) return true;
+  if (typeof value.additionalProperties === "boolean") return true;
+  if ("oneOf" in value || "anyOf" in value || "allOf" in value) return true;
+  if (value.properties && typeof value.type !== "string") return true;
+  return Object.values(value).some(hasAdapterHostileSchemaShape);
+}
+
 async function readRequestJson(request) {
   let text = "";
   for await (const chunk of request) {
@@ -189,9 +199,18 @@ test("runTurn executes model tool calls and feeds real tool output into the next
     await runTurn(activeSession, [{ type: "text", text: "Read the notes" }], (event) => events.push(event), async () => "allow");
 
     assert.equal(requests.length, 2);
-    const toolContext = requests[1].body.messages.at(-1).content;
-    assert.match(toolContext, /Workspace tool results/);
-    assert.match(toolContext, /1: Project notes/);
+    assert.equal(requests[0].body.tool_choice, "auto");
+    assert.equal(requests[0].body.tools[0].function.name, "read");
+    assert.equal(requests[0].body.tools[0].function.parameters.type, "object");
+    assert.equal(hasAdapterHostileSchemaShape(requests[0].body.tools), false);
+    assert.deepEqual(plain(requests[1].body.messages.map((message) => message.role)), ["user", "assistant", "tool"]);
+    const assistantToolCallMessage = requests[1].body.messages[1];
+    assert.equal(assistantToolCallMessage.tool_calls[0].id, "call-read");
+    assert.equal(assistantToolCallMessage.tool_calls[0].function.name, "read");
+    const toolContext = requests[1].body.messages[2];
+    assert.equal(toolContext.tool_call_id, "call-read");
+    assert.match(toolContext.content, /read: README\.md \(ok\)/);
+    assert.match(toolContext.content, /1: Project notes/);
     assert.equal(activeSession.messages.at(-1).content, "Done after read");
     assert.deepEqual(
       plain(events.filter((event) => event.type.startsWith("tool.")).map((event) => event.type)),
@@ -254,7 +273,95 @@ test("runTurn accumulates partial tool-call argument chunks by stable index", as
     await runTurn(activeSession, [{ type: "text", text: "Read the file" }], (event) => events.push(event), async () => "allow");
 
     assert.equal(requests.length, 2);
-    assert.match(requests[1].body.messages.at(-1).content, /1: Partial chunks work/);
+    assert.deepEqual(plain(requests[1].body.messages.map((message) => message.role)), ["user", "assistant", "tool"]);
+    assert.equal(requests[1].body.messages[1].tool_calls[0].function.arguments, "{\"filePath\":\"README.md\",\"limit\":1}");
+    assert.match(requests[1].body.messages[2].content, /1: Partial chunks work/);
+    assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
+  });
+});
+
+test("runTurn compacts old structured tool history before model requests", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-tool-history-"));
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(sseData({ choices: [{ delta: { content: "Ready for new work" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const activeSession = session(root, baseURL, { enabledTools: ["read"] });
+    for (let index = 0; index < 6; index += 1) {
+      activeSession.messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: `call-${index}`,
+          type: "function",
+          function: { name: "read", arguments: JSON.stringify({ filePath: `file-${index}.md` }) },
+        }],
+      });
+      activeSession.messages.push({
+        role: "tool",
+        tool_call_id: `call-${index}`,
+        content: `read: file-${index}.md (ok)\n\n${index}: content ${index}`,
+      });
+    }
+
+    await runTurn(activeSession, [{ type: "text", text: "Use the latest context" }], () => undefined, async () => "allow");
+
+    assert.equal(requests.length, 1);
+    const messages = requests[0].body.messages;
+    const summary = messages.find((message) => message.role === "user" && String(message.content).startsWith("Compacted earlier workspace tool history:"));
+    assert.ok(summary);
+    assert.match(summary.content, /file-0\.md/);
+    assert.match(summary.content, /file-1\.md/);
+    assert.match(summary.content, /Recent tool calls remain available/);
+    assert.equal(messages.filter((message) => message.role === "tool").length, 4);
+    assert.equal(JSON.stringify(messages).includes("call-0"), false);
+    assert.equal(JSON.stringify(messages).includes("call-5"), true);
+    assert.deepEqual(plain(messages.slice(-3).map((message) => message.role)), ["assistant", "tool", "user"]);
+  });
+});
+
+test("runTurn keeps prose tool-result fallback for Ollama chat routes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-ollama-tools-"));
+  fs.writeFileSync(path.join(root, "README.md"), "Ollama fallback context\nSecond line\n", "utf8");
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, { "Content-Type": "application/x-ndjson" });
+    if (requests.length === 1) {
+      response.end(`${JSON.stringify({
+        message: {
+          tool_calls: [{
+            function: {
+              name: "read",
+              arguments: { filePath: "README.md", limit: 1 },
+            },
+          }],
+        },
+      })}\n`);
+      return;
+    }
+    response.end(`${JSON.stringify({ message: { content: "Done through Ollama fallback" } })}\n`);
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, { enabledTools: ["read"], chatEndpointPath: "/api/chat" });
+
+    await runTurn(activeSession, [{ type: "text", text: "Read through Ollama" }], (event) => events.push(event), async () => "allow");
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, "/api/chat");
+    assert.equal(Object.prototype.hasOwnProperty.call(requests[0].body, "tool_choice"), false);
+    assert.equal(requests[0].body.tools[0].function.name, "read");
+    assert.equal(hasAdapterHostileSchemaShape(requests[0].body.tools), false);
+    assert.deepEqual(plain(requests[1].body.messages.map((message) => message.role)), ["user", "user"]);
+    assert.match(requests[1].body.messages.at(-1).content, /Workspace tool results/);
+    assert.match(requests[1].body.messages.at(-1).content, /1: Ollama fallback context/);
+    assert.equal(activeSession.messages.at(-1).content, "Done through Ollama fallback");
     assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
   });
 });

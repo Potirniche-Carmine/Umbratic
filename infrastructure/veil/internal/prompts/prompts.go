@@ -42,16 +42,21 @@ var runtimePrompts = map[RuntimeProfile]string{
 }
 
 func Build(route Route, clientMessages []model.Message, runtimeProfiles ...RuntimeProfile) ([]model.Message, error) {
+	return BuildWithProtectedMessages(route, clientMessages, nil, runtimeProfiles...)
+}
+
+func BuildWithProtectedMessages(route Route, clientMessages []model.Message, protectedMessages []model.Message, runtimeProfiles ...RuntimeProfile) ([]model.Message, error) {
 	routePrompt, ok := routePrompts[route]
 	if !ok {
 		return nil, fmt.Errorf("unknown prompt route %q", route)
 	}
 
 	runtimeMessages := runtimePromptMessages(runtimeProfiles)
-	messages := make([]model.Message, 0, len(clientMessages)+2+len(runtimeMessages))
+	messages := make([]model.Message, 0, len(clientMessages)+2+len(runtimeMessages)+len(protectedMessages))
 	messages = append(messages, model.Message{Role: "system", Content: GlobalSystemPrompt})
 	messages = append(messages, model.Message{Role: "system", Content: routePrompt})
 	messages = append(messages, runtimeMessages...)
+	messages = append(messages, protectedMessages...)
 	messages = append(messages, clientMessages...)
 	return messages, nil
 }

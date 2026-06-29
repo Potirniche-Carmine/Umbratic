@@ -62,6 +62,16 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     workspaceMode: "worktree",
     runtimeProfile: "cmake",
     enabledTools: ["read", "legacy-tool", "bad"],
+    capabilityProbes: [
+      {
+        id: "uv",
+        status: "missing",
+        category: "recommended",
+        importance: "recommended",
+        workflows: ["Python"],
+        affectedCurrentRun: true,
+      },
+    ],
     worktreePath: "C:/repo/.umbratic/worktree",
   };
 
@@ -70,6 +80,16 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
   assert.equal(config.permissionMode, "normal");
   assert.deepEqual(plain(config.enabledTools), ["read"]);
+  assert.deepEqual(plain(config.capabilities), [
+    {
+      id: "uv",
+      status: "missing",
+      category: "recommended",
+      importance: "recommended",
+      workflows: ["Python"],
+      affectedCurrentRun: true,
+    },
+  ]);
   assert.deepEqual(plain(config.runtimeProfiles), []);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
   assert.equal(config.provider.apiKey, "endpoint-token");

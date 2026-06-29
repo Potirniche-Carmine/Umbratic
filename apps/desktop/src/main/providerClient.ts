@@ -51,14 +51,38 @@ export async function getProviderJson(
   rawUrl: string,
   options: { headers?: Record<string, string>; mtls?: EndpointMtlsConfig; signal?: AbortSignal } = {},
 ): Promise<{ statusCode: number; statusMessage: string; text: string; json: unknown | null }> {
+  return requestProviderJson(rawUrl, { method: "GET", headers: options.headers, mtls: options.mtls, signal: options.signal });
+}
+
+export async function postProviderJson(
+  rawUrl: string,
+  body: unknown,
+  options: { headers?: Record<string, string>; mtls?: EndpointMtlsConfig; signal?: AbortSignal } = {},
+): Promise<{ statusCode: number; statusMessage: string; text: string; json: unknown | null }> {
+  return requestProviderJson(rawUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
+    body: JSON.stringify(body),
+    mtls: options.mtls,
+    signal: options.signal,
+  });
+}
+
+async function requestProviderJson(
+  rawUrl: string,
+  options: { method: "GET" | "POST"; headers?: Record<string, string>; body?: string; mtls?: EndpointMtlsConfig; signal?: AbortSignal },
+): Promise<{ statusCode: number; statusMessage: string; text: string; json: unknown | null }> {
   const url = new URL(rawUrl);
   const requestOptions: http.RequestOptions | https.RequestOptions = {
     protocol: url.protocol,
     hostname: url.hostname,
     port: url.port,
     path: `${url.pathname}${url.search}`,
-    method: "GET",
-    headers: options.headers,
+    method: options.method,
+    headers: {
+      ...(options.headers ?? {}),
+      ...(options.body ? { "Content-Length": Buffer.byteLength(options.body).toString() } : {}),
+    },
     ...(url.protocol === "https:" ? tlsOptions(url, options.mtls) : {}),
   };
   const transport = url.protocol === "https:" ? https : http;
@@ -91,6 +115,6 @@ export async function getProviderJson(
     options.signal?.addEventListener("abort", abort, { once: true });
     request.once("error", reject);
     request.once("close", () => options.signal?.removeEventListener("abort", abort));
-    request.end();
+    request.end(options.body);
   });
 }

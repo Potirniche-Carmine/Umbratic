@@ -1,7 +1,7 @@
 import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, ChatMessage, InputPart, Session } from "./session.js";
 import { redactText } from "./policy.js";
-import { enabledToolSpecs, runTool } from "./tools/index.js";
+import { enabledModelToolSpecs, runTool } from "./tools/index.js";
 import { toolFailureDetails, type ToolContext, type ToolResultStatus } from "./tools/common.js";
 import { modelHttpRequest, readBodyText } from "./provider/http.js";
 
@@ -27,6 +27,9 @@ type ToolContextResult = {
 };
 
 const maxToolContextBytes = 56 * 1024;
+const maxToolResultBytes = 24 * 1024;
+const maxStructuredToolHistorySegments = 4;
+const maxCompactedToolHistoryBytes = 12 * 1024;
 
 function clipUtf8(value: string, byteLimit: number): string {
   const buffer = Buffer.from(value, "utf8");
@@ -46,6 +49,101 @@ function formatToolContextMessage(results: ToolContextResult[]): string {
   const message = lines.join("\n");
   if (Buffer.byteLength(message, "utf8") <= maxToolContextBytes) return message;
   return `${clipUtf8(message, maxToolContextBytes)}\n...[truncated: workspace tool context exceeded ${maxToolContextBytes} bytes]`;
+}
+
+function formatToolResultContent(result: ToolContextResult): string {
+  const status = result.status === "success" ? "ok" : "failed";
+  const message = [`${result.call.name}: ${result.title || result.call.id} (${status})`, result.output].join("\n\n");
+  if (Buffer.byteLength(message, "utf8") <= maxToolResultBytes) return message;
+  return `${clipUtf8(message, maxToolResultBytes)}\n...[truncated: workspace tool result exceeded ${maxToolResultBytes} bytes]`;
+}
+
+function assistantToolMessage(content: string, toolCalls: ToolCall[]): ChatMessage {
+  return {
+    role: "assistant",
+    content: content.trim() ? content : null,
+    tool_calls: toolCalls.map((call) => ({
+      id: call.id,
+      type: "function",
+      function: { name: call.name, arguments: call.arguments },
+    })),
+  };
+}
+
+function toolHistorySegmentSummary(assistant: ChatMessage, tools: ChatMessage[]): string {
+  const callSummary = (assistant.tool_calls ?? [])
+    .map((call) => call.function.name || call.id)
+    .filter(Boolean)
+    .join(", ") || "tool";
+  const outputSummary = tools
+    .map((message) => typeof message.content === "string" ? message.content.replace(/\s+/g, " ").trim() : "")
+    .filter(Boolean)
+    .map((content) => clipUtf8(content, 360))
+    .join(" | ");
+  return `- ${callSummary}: ${outputSummary || "completed"}`;
+}
+
+export function compactToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
+  const segments: Array<{ start: number; end: number; summary: string }> = [];
+  for (let index = 0; index < messages.length; index++) {
+    const assistant = messages[index];
+    if (assistant.role !== "assistant" || !assistant.tool_calls?.length) continue;
+    const toolCallIds = new Set(assistant.tool_calls.map((call) => call.id));
+    let end = index + 1;
+    while (end < messages.length) {
+      const next = messages[end];
+      if (!next || next.role !== "tool") break;
+      if (next.tool_call_id && !toolCallIds.has(next.tool_call_id)) break;
+      end += 1;
+    }
+    if (end > index + 1) {
+      segments.push({
+        start: index,
+        end,
+        summary: toolHistorySegmentSummary(assistant, messages.slice(index + 1, end)),
+      });
+      index = end - 1;
+    }
+  }
+  if (segments.length <= maxStructuredToolHistorySegments) return messages;
+
+  const compactedSegments = segments.slice(0, Math.max(0, segments.length - maxStructuredToolHistorySegments));
+  const compactedStarts = new Map(compactedSegments.map((segment) => [segment.start, segment]));
+  const retainedStarts = new Map(segments.slice(compactedSegments.length).map((segment) => [segment.start, segment]));
+  const summary = clipUtf8(
+    [
+      "Compacted earlier workspace tool history:",
+      ...compactedSegments.map((segment) => segment.summary),
+      "Recent tool calls remain available as structured assistant/tool messages.",
+    ].join("\n"),
+    maxCompactedToolHistoryBytes,
+  );
+  const compacted: ChatMessage[] = [];
+  let insertedSummary = false;
+  for (let index = 0; index < messages.length;) {
+    const compactedSegment = compactedStarts.get(index);
+    if (compactedSegment) {
+      if (!insertedSummary) {
+        compacted.push({ role: "user", content: summary });
+        insertedSummary = true;
+      }
+      index = compactedSegment.end;
+      continue;
+    }
+    const retainedSegment = retainedStarts.get(index);
+    if (retainedSegment) {
+      compacted.push(...messages.slice(index, retainedSegment.end));
+      index = retainedSegment.end;
+      continue;
+    }
+    compacted.push(messages[index]);
+    index += 1;
+  }
+  return compacted;
+}
+
+function messagesForModel(session: Session): ChatMessage[] {
+  return compactToolHistoryMessages(session.messages);
 }
 
 function chatCompletionsUrl(baseURL: string): string {
@@ -181,11 +279,16 @@ function lastMessageIsToolContext(session: Session): boolean {
   return typeof content === "string" && content.startsWith("Workspace tool results:");
 }
 
+function toolRoleHistorySupported(session: Session): boolean {
+  const url = configuredEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
+  return !isOllamaChatUrl(url);
+}
+
 async function streamOllamaChat(
   session: Session,
   url: string,
   headers: Record<string, string>,
-  tools: ReturnType<typeof enabledToolSpecs>,
+  tools: ReturnType<typeof enabledModelToolSpecs>,
   emit?: (event: UmbraticRunnerEvent) => void,
 ): Promise<StreamAccumulator> {
   const response = await modelHttpRequest(url, {
@@ -193,7 +296,7 @@ async function streamOllamaChat(
     headers,
     body: JSON.stringify({
       model: session.config.provider.modelId,
-      messages: ollamaMessages(session.messages),
+      messages: ollamaMessages(messagesForModel(session)),
       stream: true,
       ...(tools.length ? { tools } : {}),
     }),
@@ -263,7 +366,7 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
 }
 
 async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent) => void): Promise<StreamAccumulator> {
-  const tools = enabledToolSpecs(session.config.enabledTools);
+  const tools = enabledModelToolSpecs(session.config.enabledTools);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -282,7 +385,7 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
       headers,
       body: JSON.stringify({
         ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
-        messages: session.messages,
+        messages: messagesForModel(session),
         stream: true,
         ...(routeIsVeil && session.config.runtimeProfiles?.length ? { runtime_profiles: session.config.runtimeProfiles } : {}),
         ...(includeTools && tools.length ? { tools, tool_choice: "auto" } : {}),
@@ -374,7 +477,10 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
       },
     };
-    if (acc.content.trim()) {
+    const structuredToolHistory = toolRoleHistorySupported(session);
+    if (structuredToolHistory) {
+      session.messages.push(assistantToolMessage(acc.content, toolCalls));
+    } else if (acc.content.trim()) {
       session.messages.push({ role: "assistant", content: acc.content });
     }
     const toolResults: ToolContextResult[] = [];
@@ -389,7 +495,17 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         toolResults.push({ call: toolCall, title: toolCall.name, output: message, status: failure.status });
       }
     }
-    session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });
+    if (structuredToolHistory) {
+      for (const result of toolResults) {
+        session.messages.push({
+          role: "tool",
+          tool_call_id: result.call.id,
+          content: formatToolResultContent(result),
+        });
+      }
+    } else {
+      session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });
+    }
   }
   throw new Error("model exceeded maximum tool turns");
 }
