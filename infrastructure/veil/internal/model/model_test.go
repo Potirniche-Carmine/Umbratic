@@ -41,10 +41,11 @@ func TestVLLMClientChat(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewVLLMClient(VLLMConfig{
-		BaseURL: server.URL,
-		APIKey:  "redacted-test-key",
-		Timeout: time.Second,
+	client, err := NewClient(ClientConfig{
+		Protocol: ProtocolVLLM,
+		BaseURL:  server.URL,
+		APIKey:   "redacted-test-key",
+		Timeout:  time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,8 +157,8 @@ func TestParseProviderProtocolAliases(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsURLAvoidsDuplicateV1(t *testing.T) {
-	got, err := chatCompletionsURL("http://example.test/v1", "")
+func TestProviderEndpointURLAvoidsDuplicateV1(t *testing.T) {
+	got, err := providerEndpointURL("http://example.test/v1", "", "v1/chat/completions")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,13 +53,6 @@ type ClientConfig struct {
 	Timeout            time.Duration
 }
 
-type VLLMConfig struct {
-	BaseURL          string
-	ChatEndpointPath string
-	APIKey           string
-	Timeout          time.Duration
-}
-
 type Client struct {
 	protocol       ProviderProtocol
 	chatEndpoint   string
@@ -125,16 +118,6 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 			Timeout: timeout,
 		},
 	}, nil
-}
-
-func NewVLLMClient(cfg VLLMConfig) (*Client, error) {
-	return NewClient(ClientConfig{
-		Protocol:         ProtocolVLLM,
-		BaseURL:          cfg.BaseURL,
-		ChatEndpointPath: cfg.ChatEndpointPath,
-		APIKey:           cfg.APIKey,
-		Timeout:          cfg.Timeout,
-	})
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
@@ -577,10 +560,6 @@ func modelIDsFromPayload(payload any) []string {
 	return ids
 }
 
-func chatCompletionsURL(baseURL, endpointPath string) (string, error) {
-	return providerEndpointURL(baseURL, endpointPath, "v1/chat/completions")
-}
-
 func providerEndpointURL(baseURL, endpointPath, defaultPath string) (string, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	endpointPath = strings.TrimSpace(endpointPath)
@@ -652,7 +631,7 @@ func pathVersion(path string) string {
 }
 
 func firstPathSegment(path string) string {
-	segments := strings.Split(strings.Trim(strings.TrimLeft(path, "/"), "/"), "/")
+	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) == 0 {
 		return ""
 	}
@@ -660,7 +639,7 @@ func firstPathSegment(path string) string {
 }
 
 func lastPathSegment(path string) string {
-	segments := strings.Split(strings.Trim(strings.TrimLeft(path, "/"), "/"), "/")
+	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) == 0 {
 		return ""
 	}

@@ -14,6 +14,13 @@ import (
 const maxRegistryBytes = 512 * 1024
 const maxSelectedTemplates = 3
 
+var kindMatchPatterns = map[string]*regexp.Regexp{
+	"powerpoint":   regexp.MustCompile(`\b(powerpoint|pptx|presentation|deck|slides?)\b`),
+	"word":         regexp.MustCompile(`\b(docx|word document|word|memo|proposal document)\b`),
+	"spreadsheets": regexp.MustCompile(`\b(xlsx|excel|spreadsheet|workbook|worksheet)\b`),
+	"pdf":          regexp.MustCompile(`\b(pdf|one[-\s]?pager|report|whitepaper|white paper)\b`),
+}
+
 type Template struct {
 	ID          string   `json:"id"`
 	Kind        string   `json:"kind"`
@@ -166,18 +173,8 @@ func templateMatches(template Template, query string) bool {
 }
 
 func kindMatches(kind string, query string) bool {
-	switch kind {
-	case "powerpoint":
-		return regexp.MustCompile(`\b(powerpoint|pptx|presentation|deck|slides?)\b`).MatchString(query)
-	case "word":
-		return regexp.MustCompile(`\b(docx|word document|word|memo|proposal document)\b`).MatchString(query)
-	case "spreadsheets":
-		return regexp.MustCompile(`\b(xlsx|excel|spreadsheet|workbook|worksheet)\b`).MatchString(query)
-	case "pdf":
-		return regexp.MustCompile(`\b(pdf|one[-\s]?pager|report|whitepaper|white paper)\b`).MatchString(query)
-	default:
-		return false
-	}
+	pattern := kindMatchPatterns[kind]
+	return pattern != nil && pattern.MatchString(query)
 }
 
 func messageText(messages []model.Message) string {

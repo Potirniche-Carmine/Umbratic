@@ -218,7 +218,7 @@ test("commandTool blocks unsafe commands, asks permission for safe commands, and
 test("commandTool reports non-zero command exits as structured runtime errors", async () => {
   const root = workspace();
   const allowed = context(root);
-  const result = await commandTool(allowed.ctx, { command: "node -e \"process.exit(7)\"" }, "tool-exit");
+  const result = await commandTool(allowed.ctx, { command: "exit 7" }, "tool-exit");
 
   assert.equal(result.exitCode, 7);
   assert.equal(result.status, "runtime_error");

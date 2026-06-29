@@ -307,16 +307,6 @@ export function isLocalhostUrl(value: string): boolean {
   }
 }
 
-export function isMtlsInternalModelUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    return url.protocol === "https:" && /^ai\.[a-z0-9.-]+\.internal$/.test(hostname);
-  } catch {
-    return false;
-  }
-}
-
 export function isHttpModelUrl(value: string): boolean {
   try {
     const url = new URL(value);

@@ -69,7 +69,7 @@ export function loadRunnerConfig(): RunnerConfig {
   if (!raw) throw new Error("UMBRATIC_RUNNER_CONFIG is required");
   const config = asRecord(JSON.parse(raw) as unknown);
   const provider = asRecord(config.provider);
-  const mtls = config.provider && "mtls" in provider && provider.mtls ? asRecord(provider.mtls) : undefined;
+  const mtls = "mtls" in provider && provider.mtls ? asRecord(provider.mtls) : undefined;
   return {
     taskId: typeof config.taskId === "string" && config.taskId.trim() ? config.taskId.trim() : undefined,
     cwd: stringValue(config.cwd, "cwd"),

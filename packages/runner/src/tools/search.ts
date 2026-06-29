@@ -26,7 +26,7 @@ function pathMatchesWithFd(ctx: ToolContext, query: string, limit: number): stri
   if (!command) return [];
   const result = spawnSync(
     command,
-    [".", "--type", "f", "--hidden", "--exclude", ".git", "--exclude", "node_modules", "--exclude", ".umbratic", "--exclude", ".umbratic", "--exclude", ".venv"],
+    [".", "--type", "f", "--hidden", "--exclude", ".git", "--exclude", "node_modules", "--exclude", ".umbratic", "--exclude", ".venv"],
     { cwd: ctx.cwd, encoding: "utf8", windowsHide: true, timeout: 8000 },
   );
   if (result.status !== 0 && !result.stdout) return [];

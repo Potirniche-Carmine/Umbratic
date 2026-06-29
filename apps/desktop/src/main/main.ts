@@ -156,7 +156,7 @@ type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
 
-const activeRunnerProcesss = new Map<string, RunnerProcess>();
+const activeRunnerProcesses = new Map<string, RunnerProcess>();
 const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
@@ -2908,7 +2908,7 @@ async function runRunnerTask(
     const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
     const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
-    activeRunnerProcesss.set(task.id, run);
+    activeRunnerProcesses.set(task.id, run);
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; toolKind?: RunnerToolId; finished: boolean }>();
     let delegatedToWorktree = false;
@@ -3237,7 +3237,7 @@ async function runRunnerTask(
     failTask(task, String(error instanceof Error ? error.message : error));
   } finally {
     clearPendingPermissionsForTask(task.id);
-    activeRunnerProcesss.delete(task.id);
+    activeRunnerProcesses.delete(task.id);
     if (run) {
       stopRunnerProcess(run);
     }
@@ -3348,7 +3348,7 @@ function recentActiveStartTask(requestKey: string): TaskInfo | null {
     return null;
   }
   if (
-    activeRunnerProcesss.has(task.id) ||
+    activeRunnerProcesses.has(task.id) ||
     task.state === "running" ||
     task.state === "awaiting_worktree_approval" ||
     task.state === "approving"
@@ -3417,7 +3417,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     if (closedMessage) {
       throw new Error(closedMessage);
     }
-    if (activeRunnerProcesss.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
+    if (activeRunnerProcesses.has(existingTask.id) || existingTask.state === "awaiting_worktree_approval" || existingTask.state === "approving") {
       throw new Error("This chat already has a task in progress.");
     }
     if (existingTask.repositoryId !== repositoryId) {
@@ -3662,9 +3662,9 @@ async function rejectTask(input: unknown): Promise<void> {
     throw new Error("Invalid reject input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  const run = activeRunnerProcesss.get(task.id);
+  const run = activeRunnerProcesses.get(task.id);
   if (run) {
-    activeRunnerProcesss.delete(task.id);
+    activeRunnerProcesses.delete(task.id);
     stopRunnerProcess(run);
   }
   pendingRunnerPrompts.delete(task.id);
@@ -3734,9 +3734,9 @@ async function cancelTask(input: unknown): Promise<void> {
     throw new Error("Invalid cancel input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  const run = activeRunnerProcesss.get(task.id);
+  const run = activeRunnerProcesses.get(task.id);
   if (run) {
-    activeRunnerProcesss.delete(task.id);
+    activeRunnerProcesses.delete(task.id);
     if (run.sessionId) {
       await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(
         () => undefined,
@@ -4196,8 +4196,8 @@ app.on("before-quit", () => {
     pendingPermissions.delete(id);
     void pending.onDeny();
   }
-  for (const [taskId, run] of activeRunnerProcesss) {
-    activeRunnerProcesss.delete(taskId);
+  for (const [taskId, run] of activeRunnerProcesses) {
+    activeRunnerProcesses.delete(taskId);
     stopRunnerProcess(run);
   }
 });
