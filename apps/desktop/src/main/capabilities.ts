@@ -722,7 +722,11 @@ function artifactRequested(needs: CapabilityPromptNeeds): boolean {
 }
 
 export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: CapabilityPromptNeeds): string {
-  const lines = ["Local capability probes:", `- checked at ${report.checkedAt}`];
+  const lines = [
+    "Internal local capability context:",
+    "- use these facts for planning and verification choices, but do not recite or summarize tool availability at the start of visible thinking or the final answer.",
+    `- checked at ${report.checkedAt}`,
+  ];
   const requiredMissing = missingRequiredLabels(report);
   if (requiredMissing.length) {
     lines.push(`- setup problem: missing required capability ${requiredMissing.join(", ")}`);
@@ -784,11 +788,11 @@ function artifactSkillLine(report: CapabilityProbeReport, ids: string[], availab
 
 export function harnessSkillCapabilityGuidance(report: CapabilityProbeReport): Record<string, string> {
   return {
-    "umbratic-engineering": [
+    "umbratic-git-worktree": [
       "Runtime capability gate:",
-      `- rg search: ${statusLabel(capabilityById(report, "rg"))}; fd path discovery: ${statusLabel(capabilityById(report, "fd"))}`,
-      `- uv Python runtime: ${statusLabel(capabilityById(report, "uv"))}; CMake: ${statusLabel(capabilityById(report, "cmake"))}; compiler: ${statusLabel(capabilityById(report, "compiler"))}`,
-      "Use missing capabilities as verification gaps, not as reasons to invent successful checks.",
+      `- Git command: ${statusLabel(capabilityById(report, "git"))}; rg search: ${statusLabel(capabilityById(report, "rg"))}; fd path discovery: ${statusLabel(capabilityById(report, "fd"))}`,
+      "If Git is missing or errors, do not claim branch, worktree, diff, or merge facts that were not verified.",
+      "Use missing search/path capabilities as verification gaps, not as reasons to invent successful checks.",
     ].join("\n"),
     "umbratic-pdf": [
       "Runtime capability gate:",

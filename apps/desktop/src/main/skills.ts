@@ -35,9 +35,9 @@ const skillImportTempPrefix = "umbratic-skill-import-";
 
 const systemSkillDefinitions: SystemSkillDefinition[] = [
   {
-    id: "umbratic-engineering",
+    id: "umbratic-git-worktree",
     profiles: ["engineering"],
-    matchPattern: /\b(code|repo|repository|workspace|bug|fix|test|debug|implement|refactor|build|diff|review)\b/i,
+    matchPattern: /\b(git|worktree|branch|checkout|merge|rebase|diff|commit|stash|conflict|base commit|agent branch|isolated workspace)\b/i,
   },
   {
     id: "umbratic-markdown",
@@ -64,17 +64,9 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
     profiles: ["marketing", "sales"],
     matchPattern: /\b(xlsx|excel|spreadsheet|workbook|worksheet|forecast|formula|chart|csv)\b/i,
   },
-  {
-    id: "umbratic-sales",
-    profiles: ["sales"],
-    matchPattern: /\b(sales|account|buyer|crm|proposal|mutual plan|discovery|objection|pipeline|deal)\b/i,
-  },
-  {
-    id: "umbratic-marketing",
-    profiles: ["marketing"],
-    matchPattern: /\b(marketing|campaign|launch|positioning|copy|messaging|brand|web copy|landing page)\b/i,
-  },
 ];
+
+const retiredSystemSkillIds = ["umbratic-engineering", "umbratic-sales", "umbratic-marketing"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -164,6 +156,11 @@ function isReservedSkillId(id: string): boolean {
 
 function cleanupObsoleteSkillPaths(directory: string) {
   fs.rmSync(path.join(directory, ".defaults"), { recursive: true, force: true });
+  const systemRoot = systemSkillsDirectory(directory);
+  for (const id of retiredSystemSkillIds) {
+    fs.rmSync(path.join(directory, `${id}.md`), { force: true });
+    fs.rmSync(path.join(systemRoot, id), { recursive: true, force: true });
+  }
 }
 
 function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {

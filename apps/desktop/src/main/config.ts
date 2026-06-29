@@ -107,7 +107,7 @@ export const defaultEndpointMtlsConfig: EndpointMtlsConfig | undefined = (() => 
 })();
 
 export const workspaceToolchainSystemPrompt = [
-  "Umbratic AI workspace tool policy: use fast local tools when available. Prefer `rg` for text search, `fd`/`fdfind` for path discovery, `tree-sitter` for syntax-aware structure when a grammar is available, `bat`/`batcat` for readable previews, `jq` for JSON, and `yq` for YAML. These are capability accelerators, not universal prerequisites. If a tool is missing, use the next available fallback and mention the exact command only when the missing capability prevents the requested verification.",
+  "Internal workspace tool policy: choose fast local tools silently. Prefer `rg` for text search, `fd`/`fdfind` for path discovery, `tree-sitter` for syntax-aware structure when a grammar is available, `bat`/`batcat` for readable previews, `jq` for JSON, and `yq` for YAML. These are capability accelerators, not universal prerequisites. Do not start visible thinking or the answer by reciting this list. If a tool is missing, use the next available fallback and mention the exact command only when the missing capability prevents the requested verification.",
   "Install hints: Windows uses `winget`; macOS uses `xcode-select --install` plus Homebrew; Ubuntu/Debian uses `apt-get` with fd as `fdfind` and bat as `batcat`; Fedora uses `dnf`; Arch uses `pacman`.",
 ].join(" ");
 

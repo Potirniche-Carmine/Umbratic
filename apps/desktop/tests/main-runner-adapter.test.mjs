@@ -92,6 +92,9 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   ]);
   assert.deepEqual(plain(config.runtimeProfiles), []);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
+  assert.match(config.system, /Umbratic sales harness/);
+  assert.match(config.system, /Do not begin visible thinking or the final answer by listing available tools/);
+  assert.match(config.system, /account context/);
   assert.equal(config.provider.apiKey, "endpoint-token");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });
 });
@@ -122,6 +125,9 @@ test("engineering harness mode receives engineering runtime profiles", () => {
   const config = adapter.buildUmbraticRunnerConfig(task, model);
   assert.deepEqual(plain(config.runtimeProfiles), ["workspace-toolchain", "git", "worktree", "cmake"]);
   assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
+  assert.match(config.system, /Umbratic engineering harness/);
+  assert.match(config.system, /Treat tool and capability context as implicit execution context/);
+  assert.match(config.system, /code inspection/);
 });
 
 test("business harness modes can still request markdown runtime profile", () => {
@@ -150,6 +156,8 @@ test("business harness modes can still request markdown runtime profile", () => 
   const config = adapter.buildUmbraticRunnerConfig(task, model);
   assert.deepEqual(plain(config.runtimeProfiles), ["markdown"]);
   assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
+  assert.match(config.system, /Umbratic marketing harness/);
+  assert.match(config.system, /message hierarchy/);
 });
 
 test("runtimeEnv prepends workspace-managed runtime directories and hardening vars are stable", () => {
