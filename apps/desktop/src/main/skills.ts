@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,7 +9,19 @@ import type { HarnessProfileId } from "./types";
 import { pathInside } from "./utils";
 
 export type SkillSource = "system" | "local";
-export type SkillInfo = { id: string; name: string; description: string; enabled: boolean; source: SkillSource; readOnly: boolean };
+export type SkillChecksumStatus = "known_good" | "modified" | "untracked";
+export type SkillInfo = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  source: SkillSource;
+  readOnly: boolean;
+  checksum?: string;
+  checksumStatus: SkillChecksumStatus;
+  modified: boolean;
+  provenance?: "bundled" | "created" | "imported";
+};
 export type SkillDocument = SkillInfo & { path: string; content: string };
 export type PromptSkillInfo = {
   id: string;
@@ -27,11 +40,23 @@ type SystemSkillDefinition = {
   matchPattern?: RegExp;
 };
 
+type SkillManifestEntry = {
+  checksum: string;
+  provenance: "created" | "imported";
+  recordedAt: string;
+};
+
+type SkillManifest = {
+  version: 1;
+  skills: Record<string, SkillManifestEntry>;
+};
+
 const skillFileByteLimit = 512 * 1024;
 const skillResourceByteLimit = 128 * 1024;
 const skillResourceTotalByteLimit = 512 * 1024;
 const skillImportTotalByteLimit = 10 * 1024 * 1024;
 const skillImportTempPrefix = "umbratic-skill-import-";
+const skillManifestFileName = ".manifest.json";
 
 const systemSkillDefinitions: SystemSkillDefinition[] = [
   {
@@ -70,6 +95,93 @@ const retiredSystemSkillIds = ["umbratic-engineering", "umbratic-sales", "umbrat
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function sha256Hex(buffer: Buffer | string): string {
+  return `sha256:${crypto.createHash("sha256").update(buffer).digest("hex")}`;
+}
+
+function manifestPath(directory: string): string {
+  return path.join(path.resolve(directory), skillManifestFileName);
+}
+
+function readSkillManifest(directory: string): SkillManifest {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath(directory), "utf8")) as unknown;
+    if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.skills)) {
+      return { version: 1, skills: {} };
+    }
+    const skills: Record<string, SkillManifestEntry> = {};
+    for (const [id, value] of Object.entries(parsed.skills)) {
+      if (
+        isValidSkillId(id) &&
+        isRecord(value) &&
+        typeof value.checksum === "string" &&
+        /^sha256:[a-f0-9]{64}$/i.test(value.checksum) &&
+        (value.provenance === "created" || value.provenance === "imported") &&
+        typeof value.recordedAt === "string"
+      ) {
+        skills[id] = {
+          checksum: value.checksum.toLowerCase(),
+          provenance: value.provenance,
+          recordedAt: value.recordedAt,
+        };
+      }
+    }
+    return { version: 1, skills };
+  } catch {
+    return { version: 1, skills: {} };
+  }
+}
+
+function writeSkillManifest(directory: string, manifest: SkillManifest) {
+  fs.mkdirSync(path.resolve(directory), { recursive: true });
+  fs.writeFileSync(manifestPath(directory), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+function recordSkillChecksum(directory: string, id: string, checksum: string, provenance: "created" | "imported") {
+  const manifest = readSkillManifest(directory);
+  manifest.skills[id] = { checksum, provenance, recordedAt: new Date().toISOString() };
+  writeSkillManifest(directory, manifest);
+}
+
+function checksumPath(targetPath: string): string | undefined {
+  try {
+    const resolved = path.resolve(targetPath);
+    const stat = fs.statSync(resolved);
+    const hash = crypto.createHash("sha256");
+    let totalBytes = 0;
+    const addFile = (filePath: string, rootPath: string) => {
+      const fileStat = fs.statSync(filePath);
+      if (!fileStat.isFile()) return;
+      totalBytes += fileStat.size;
+      if (totalBytes > skillImportTotalByteLimit) throw new Error("skill checksum input too large");
+      const relative = path.relative(rootPath, filePath).replace(/\\/g, "/");
+      hash.update(`file:${relative}\0`);
+      hash.update(fs.readFileSync(filePath));
+      hash.update("\0");
+    };
+    if (stat.isFile()) {
+      addFile(resolved, path.dirname(resolved));
+    } else if (stat.isDirectory()) {
+      const walk = (directoryPath: string) => {
+        const entries = fs.readdirSync(directoryPath, { withFileTypes: true })
+          .filter((entry) => entry.name !== ".DS_Store")
+          .sort((left, right) => left.name.localeCompare(right.name));
+        for (const entry of entries) {
+          const entryPath = path.join(directoryPath, entry.name);
+          if (entry.isDirectory()) walk(entryPath);
+          else addFile(entryPath, resolved);
+        }
+      };
+      walk(resolved);
+    } else {
+      return undefined;
+    }
+    return `sha256:${hash.digest("hex")}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function readTextFileIfSafe(filePath: string): string | null {
@@ -255,8 +367,16 @@ export async function skillFilePathForId(id: string, directory = skillsDirectory
   return null;
 }
 
-export function skillInfoFromContent(id: string, content: string, settings: Record<string, boolean>): SkillInfo {
+export function skillInfoFromContent(
+  id: string,
+  content: string,
+  settings: Record<string, boolean>,
+  governance?: { checksum?: string; manifest?: SkillManifestEntry },
+): SkillInfo {
   const meta = parseSkillFrontmatter(content);
+  const checksum = governance?.checksum ?? sha256Hex(content);
+  const expected = governance?.manifest?.checksum;
+  const modified = !!expected && checksum !== expected;
   return {
     id,
     name: meta.name || id,
@@ -264,6 +384,10 @@ export function skillInfoFromContent(id: string, content: string, settings: Reco
     enabled: settings[id] !== false,
     source: "local",
     readOnly: false,
+    checksum,
+    checksumStatus: expected ? modified ? "modified" : "known_good" : "untracked",
+    modified,
+    provenance: governance?.manifest?.provenance,
   };
 }
 
@@ -274,6 +398,10 @@ function systemSkillContent(skill: SystemSkillDefinition, directory = skillsDire
 
 function systemSkillDisplayInfo(skill: SystemSkillDefinition, settings: Record<string, boolean>, directory = skillsDirectoryPath()): SkillInfo {
   const content = systemSkillContent(skill, directory);
+  const bundled = bundledSystemSkillContent(skill.id);
+  const checksum = sha256Hex(content);
+  const bundledChecksum = sha256Hex(bundled);
+  const modified = checksum !== bundledChecksum;
   const meta = parseSkillFrontmatter(content);
   return {
     id: skill.id,
@@ -282,6 +410,10 @@ function systemSkillDisplayInfo(skill: SystemSkillDefinition, settings: Record<s
     enabled: settings[skill.id] !== false,
     source: "system",
     readOnly: false,
+    checksum,
+    checksumStatus: modified ? "modified" : "known_good",
+    modified,
+    provenance: "bundled",
   };
 }
 
@@ -422,6 +554,7 @@ export async function listSkills(
   settings = readSkillSettings(),
 ): Promise<{ skills: SkillInfo[]; directory: string }> {
   ensureSystemSkillFiles(directory);
+  const manifest = readSkillManifest(directory);
   const skills: SkillInfo[] = systemSkillDefinitions.map((skill) => systemSkillDisplayInfo(skill, settings, directory));
   let entries: fs.Dirent[];
   try {
@@ -435,34 +568,64 @@ export async function listSkills(
 
     if (entry.isDirectory()) {
       const skillFile = path.join(directory, entry.name, "SKILL.md");
+      const skillRoot = path.join(directory, entry.name);
       let name = entry.name;
       let description = "";
+      let info: SkillInfo | undefined;
       try {
         const content = await fs.promises.readFile(skillFile, "utf8");
-        const info = skillInfoFromContent(entry.name, content, settings);
+        info = skillInfoFromContent(entry.name, content, settings, {
+          checksum: checksumPath(skillRoot),
+          manifest: manifest.skills[entry.name],
+        });
         name = info.name;
         description = info.description;
       } catch {
         // SKILL.md missing or unreadable: keep the visible folder name.
       }
-      skills.push({ id: entry.name, name, description, enabled: settings[entry.name] !== false, source: "local", readOnly: false });
+      skills.push(info ?? {
+        id: entry.name,
+        name,
+        description,
+        enabled: settings[entry.name] !== false,
+        source: "local",
+        readOnly: false,
+        checksum: checksumPath(skillRoot),
+        checksumStatus: "untracked",
+        modified: false,
+      });
       continue;
     }
 
     if (entry.isFile() && entry.name.endsWith(".md")) {
       const id = entry.name.replace(/\.md$/i, "");
       if (isReservedSkillId(id)) continue;
+      const skillFile = path.join(directory, entry.name);
       let name = id;
       let description = "";
+      let info: SkillInfo | undefined;
       try {
-        const content = await fs.promises.readFile(path.join(directory, entry.name), "utf8");
-        const info = skillInfoFromContent(id, content, settings);
+        const content = await fs.promises.readFile(skillFile, "utf8");
+        info = skillInfoFromContent(id, content, settings, {
+          checksum: checksumPath(skillFile),
+          manifest: manifest.skills[id],
+        });
         name = info.name;
         description = info.description;
       } catch {
         // Unreadable files remain listed by their file id.
       }
-      skills.push({ id, name, description, enabled: settings[id] !== false, source: "local", readOnly: false });
+      skills.push(info ?? {
+        id,
+        name,
+        description,
+        enabled: settings[id] !== false,
+        source: "local",
+        readOnly: false,
+        checksum: checksumPath(skillFile),
+        checksumStatus: "untracked",
+        modified: false,
+      });
     }
   }
 
@@ -488,7 +651,12 @@ export async function getSkillDocument(
   if (!skillPath) return { ok: false, message: "Skill file was not found." };
   try {
     const content = await fs.promises.readFile(skillPath, "utf8");
-    const info = skillInfoFromContent(id, content, readSkillSettings());
+    const manifest = readSkillManifest(directory);
+    const checksumTarget = path.basename(skillPath).toLowerCase() === "skill.md" ? path.dirname(skillPath) : skillPath;
+    const info = skillInfoFromContent(id, content, readSkillSettings(), {
+      checksum: checksumPath(checksumTarget),
+      manifest: manifest.skills[id],
+    });
     return { ok: true, directory, skill: { ...info, path: skillPath, content } };
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
@@ -525,7 +693,12 @@ export async function saveSkillDocument(
   if (!skillPath) return { ok: false, message: "Skill file was not found." };
   try {
     await fs.promises.writeFile(skillPath, input.content, "utf8");
-    const info = skillInfoFromContent(id, input.content, readSkillSettings());
+    const manifest = readSkillManifest(directory);
+    const checksumTarget = path.basename(skillPath).toLowerCase() === "skill.md" ? path.dirname(skillPath) : skillPath;
+    const info = skillInfoFromContent(id, input.content, readSkillSettings(), {
+      checksum: checksumPath(checksumTarget),
+      manifest: manifest.skills[id],
+    });
     const listing = await listSkills(directory);
     return {
       ok: true,
@@ -533,6 +706,31 @@ export async function saveSkillDocument(
       skills: listing.skills,
       skill: { ...info, path: skillPath, content: input.content },
     };
+  } catch (cause) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+export async function resetSystemSkill(
+  input: { id?: string },
+  directory = skillsDirectoryPath(),
+): Promise<
+  | { ok: true; skill: SkillDocument; skills: SkillInfo[]; directory: string }
+  | { ok: false; message: string }
+> {
+  const id = (input?.id ?? "").trim();
+  if (!isValidSkillId(id)) return { ok: false, message: "Invalid skill id." };
+  const systemSkill = systemSkillById(id);
+  if (!systemSkill) return { ok: false, message: "Only system skills can be reset." };
+  try {
+    ensureSystemSkillFiles(directory);
+    const skillPath = systemSkillFilePath(systemSkill, directory);
+    const content = bundledSystemSkillContent(id);
+    await fs.promises.mkdir(path.dirname(skillPath), { recursive: true });
+    await fs.promises.writeFile(skillPath, content, "utf8");
+    const info = systemSkillDisplayInfo(systemSkill, readSkillSettings(), directory);
+    const listing = await listSkills(directory);
+    return { ok: true, directory, skills: listing.skills, skill: { ...info, path: skillPath, content } };
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
@@ -678,6 +876,7 @@ export async function importSkill(
       await fs.promises.mkdir(target, { recursive: false });
       copyDirectoryContents(sourceRoot, target);
     }
+    recordSkillChecksum(root, id, checksumPath(target) ?? sha256Hex(content), "imported");
     writeSkillSettings({ [id]: true });
     const listing = await listSkills(directory);
     const skill = listing.skills.find((row) => row.id === id);
@@ -714,6 +913,7 @@ export async function createSkill(
   }
   const template = `---\nname: ${rawName}\ndescription: Briefly describe when Umbratic AI should use this skill.\n---\n\n# ${rawName}\n\nReplace this with the guidance Umbratic AI should follow when this skill is relevant.\n`;
   await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), template, "utf8");
+  recordSkillChecksum(root, id, checksumPath(skillDir) ?? sha256Hex(template), "created");
   writeSkillSettings({ [id]: true });
   return {
     ok: true,
@@ -724,6 +924,10 @@ export async function createSkill(
       enabled: true,
       source: "local",
       readOnly: false,
+      checksum: checksumPath(skillDir) ?? sha256Hex(template),
+      checksumStatus: "known_good",
+      modified: false,
+      provenance: "created",
     },
     directory: root,
   };

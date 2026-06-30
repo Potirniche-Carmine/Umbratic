@@ -52,18 +52,25 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
   const config = {
     taskId: "task-1",
     cwd: "C:/repo",
+    modelBoundary: "managed",
     permissionMode: "normal",
     enabledTools: ["read", "search"],
     provider: {
       id: "company-endpoint",
       modelId: "veil-managed",
       baseURL: "http://127.0.0.1:8080",
+      chatEndpointPath: "/api/engineering/chat",
     },
   };
 
   assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig(config, model));
   assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, permissionMode: "bypass" }, model), /permissions/);
   assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, enabledTools: ["read", "bad"] }, model), /enabled tools/);
+  assert.throws(
+    () => policy.assertUmbraticRunnerConfig({ ...config, provider: { ...config.provider, chatEndpointPath: "/api/chat" } }, model),
+    /approved Veil chat API/,
+  );
+  assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, system: "client prompt" }, model), /protected system prompts/);
 });
 
 test("tool settings normalize enabled tools without accepting unknown ids", () => {

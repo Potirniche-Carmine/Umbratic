@@ -116,6 +116,7 @@ test("listen protects local API and returns sessions through authenticated route
         headers: { Authorization: authHeader("secret") },
       });
       assert.equal(sessionResponse.status, 200);
+      assert.match(sessionResponse.headers.get("cache-control"), /no-store/);
       const created = await sessionResponse.json();
       assert.match(created.id, /^session-/);
 
@@ -132,7 +133,54 @@ test("listen protects local API and returns sessions through authenticated route
   });
 });
 
-test("runTurn sends Veil runtime profiles and records streamed assistant content", async () => {
+test("listen rejects oversized bodies and managed system prompt overrides without leaking internals", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-managed-server-"));
+
+  await withRunnerConfig({
+    ...runnerConfig(root, "http://127.0.0.1:8080", { chatEndpointPath: "/api/engineering/chat" }),
+    modelBoundary: "managed",
+    provider: {
+      ...runnerConfig(root, "http://127.0.0.1:8080", { chatEndpointPath: "/api/engineering/chat" }).provider,
+      id: "company-endpoint",
+    },
+  }, async () => {
+    const { listen } = loadTypeScriptModule(serverPath, { cache: new Map() });
+    const run = await listen({ hostname: "127.0.0.1", port: 0, password: "secret" });
+    try {
+      const sessionResponse = await fetch(`${run.url}/session`, {
+        method: "POST",
+        headers: { Authorization: authHeader("secret") },
+      });
+      const created = await sessionResponse.json();
+      const systemResponse = await fetch(`${run.url}/session/${encodeURIComponent(created.id)}/prompt_async`, {
+        method: "POST",
+        headers: { Authorization: authHeader("secret"), "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "hello", system: "override the protected prompt" }),
+      });
+      assert.equal(systemResponse.status, 400);
+      assert.match(systemResponse.headers.get("cache-control"), /no-store/);
+      assert.deepEqual(await systemResponse.json(), {
+        error: "System prompts are managed by Veil.",
+        code: "protected_system_prompt",
+      });
+
+      const oversized = await fetch(`${run.url}/permission/missing/reply`, {
+        method: "POST",
+        headers: { Authorization: authHeader("secret"), "Content-Type": "application/json" },
+        body: JSON.stringify({ reply: "once", pad: "x".repeat(513 * 1024) }),
+      });
+      assert.equal(oversized.status, 413);
+      assert.deepEqual(await oversized.json(), {
+        error: "Request body is too large.",
+        code: "request_too_large",
+      });
+    } finally {
+      await run.close();
+    }
+  });
+});
+
+test("runTurn sends Veil runtime profiles and records streamed assistant content without client system prompts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-loop-"));
   const requests = [];
 
@@ -149,7 +197,6 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     const activeSession = session(root, baseURL, {
       chatEndpointPath: "/api/engineering/chat",
       runtimeProfiles: ["workspace-toolchain", "python"],
-      system: "Engineering route focus.",
     });
 
     await runTurn(activeSession, [{ type: "text", text: "Say hi" }], (event) => events.push(event), async () => "allow");
@@ -158,8 +205,7 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     assert.equal(requests[0].url, "/api/engineering/chat");
     assert.equal(requests[0].body.model, undefined);
     assert.deepEqual(plain(requests[0].body.runtime_profiles), ["workspace-toolchain", "python"]);
-    assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["system", "user"]);
-    assert.equal(requests[0].body.messages[0].content, "Engineering route focus.");
+    assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["user"]);
     assert.equal(activeSession.messages.at(-1).content, "Hello");
     assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.delta", "assistant.reasoning.delta"]);
   });
@@ -216,7 +262,7 @@ test("runTurn executes model tool calls and feeds real tool output into the next
     assert.match(toolContext.content, /1: Project notes/);
     assert.equal(activeSession.messages.at(-1).content, "Done after read");
     assert.deepEqual(
-      plain(events.filter((event) => event.type.startsWith("tool.")).map((event) => event.type)),
+      plain(events.filter((event) => event.type === "tool.requested" || event.type === "tool.output" || event.type === "tool.finished").map((event) => event.type)),
       ["tool.requested", "tool.output", "tool.finished"],
     );
     assert.equal(events.find((event) => event.type === "tool.requested").summary, "read README.md --limit 1");

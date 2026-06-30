@@ -79,6 +79,74 @@ test("projects and chats are normalized from real JSON files", () => {
   assert.deepEqual(plain(chats[1].attachedFiles), []);
 });
 
+test("project chats are stored under the project's .umbratic directory", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-project-chats-"));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
+  const storage = loadStorage(userData);
+  const project = {
+    id: "repo",
+    name: "Repo",
+    rootPath: repo,
+    kind: "git",
+    originalBranch: "main",
+    baseCommit: "abc",
+    dirty: false,
+    statusSummary: "clean",
+  };
+  storage.writeJsonFile(path.join(userData, "projects.json"), [project]);
+
+  storage.writeChats([
+    {
+      id: "chat-project",
+      title: "Project chat",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-03T00:00:00.000Z",
+      repositoryName: "Repo",
+      repositoryPath: repo,
+      draftPrompt: "project draft",
+      attachedFiles: [],
+    },
+    {
+      id: "chat-global",
+      title: "Global chat",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      draftPrompt: "global draft",
+      attachedFiles: [],
+    },
+  ]);
+
+  const appChats = JSON.parse(fs.readFileSync(path.join(userData, "chats.json"), "utf8"));
+  assert.deepEqual(appChats.map((chat) => chat.id), ["chat-global"]);
+  const projectChatsPath = path.join(repo, ".umbratic", "chats.json");
+  const projectChats = JSON.parse(fs.readFileSync(projectChatsPath, "utf8"));
+  assert.deepEqual(projectChats.map((chat) => chat.id), ["chat-project"]);
+  assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), ["chat-project", "chat-global"]);
+
+  storage.writeJsonFile(path.join(userData, "chats.json"), [
+    ...appChats,
+    {
+      id: "chat-legacy-project",
+      title: "Legacy project chat",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-04T00:00:00.000Z",
+      repositoryPath: repo,
+      draftPrompt: "legacy draft",
+      attachedFiles: [],
+    },
+  ]);
+
+  storage.writeChats(storage.readChats());
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(userData, "chats.json"), "utf8")).map((chat) => chat.id),
+    ["chat-global"],
+  );
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(projectChatsPath, "utf8")).map((chat) => chat.id),
+    ["chat-legacy-project", "chat-project"],
+  );
+});
+
 test("tasks migrate old records with runtime profile, tool settings, and event defaults", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-tasks-"));
   const storage = loadStorage(userData);

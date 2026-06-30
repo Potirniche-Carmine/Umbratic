@@ -328,13 +328,35 @@ type UmbraticIdeInfo = {
   icon: "vscode" | "visualstudio" | "explorer" | "finder" | "files";
 };
 
+type UmbraticSkillChecksumStatus = "known_good" | "modified" | "untracked";
+type UmbraticSkillInfo = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  source?: "system" | "local";
+  readOnly?: boolean;
+  checksum?: string;
+  checksumStatus?: UmbraticSkillChecksumStatus;
+  modified?: boolean;
+  provenance?: "bundled" | "created" | "imported";
+};
+type UmbraticSkillDocument = UmbraticSkillInfo & {
+  path: string;
+  content: string;
+};
+
 declare global {
   interface Window {
     umbratic?: {
+      listProjects(): Promise<UmbraticRepositoryInfo[]>;
       listChats(): Promise<UmbraticChatRecord[]>;
       createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean }): Promise<UmbraticChatRecord>;
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: UmbraticChatAttachment[] }): Promise<UmbraticChatRecord>;
+      updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<UmbraticChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
+      deleteProjectChats(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
+      deleteProject(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
       getNotes(): Promise<UmbraticUserNotes>;
       updateNotes(input: { content: string }): Promise<UmbraticUserNotes>;
       getTask(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
@@ -365,11 +387,11 @@ declare global {
       }>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
       listSkills(): Promise<{
-        skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
+        skills: UmbraticSkillInfo[];
         directory: string;
       }>;
       saveSkillSettings(input: Record<string, boolean>): Promise<{
-        skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
+        skills: UmbraticSkillInfo[];
         directory: string;
       }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -377,8 +399,8 @@ declare global {
       importSkill(input?: { sourcePath?: string }): Promise<
         | {
             ok: true;
-            skill: { id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean };
-            skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
+            skill: UmbraticSkillInfo;
+            skills: UmbraticSkillInfo[];
             directory: string;
           }
         | { ok: false; message: string }
@@ -386,7 +408,7 @@ declare global {
       createSkill(input: { name: string }): Promise<
         | {
             ok: true;
-            skill: { id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean };
+            skill: UmbraticSkillInfo;
             directory: string;
           }
         | { ok: false; message: string }
@@ -394,16 +416,7 @@ declare global {
       getSkillDocument(input: { id: string }): Promise<
         | {
             ok: true;
-            skill: {
-              id: string;
-              name: string;
-              description: string;
-              enabled: boolean;
-              source?: "system" | "local";
-              readOnly?: boolean;
-              path: string;
-              content: string;
-            };
+            skill: UmbraticSkillDocument;
             directory: string;
           }
         | { ok: false; message: string }
@@ -411,17 +424,17 @@ declare global {
       saveSkillDocument(input: { id: string; content: string }): Promise<
         | {
             ok: true;
-            skill: {
-              id: string;
-              name: string;
-              description: string;
-              enabled: boolean;
-              source?: "system" | "local";
-              readOnly?: boolean;
-              path: string;
-              content: string;
-            };
-            skills: Array<{ id: string; name: string; description: string; enabled: boolean; source?: "system" | "local"; readOnly?: boolean }>;
+            skill: UmbraticSkillDocument;
+            skills: UmbraticSkillInfo[];
+            directory: string;
+          }
+        | { ok: false; message: string }
+      >;
+      resetSystemSkill(input: { id: string }): Promise<
+        | {
+            ok: true;
+            skill: UmbraticSkillDocument;
+            skills: UmbraticSkillInfo[];
             directory: string;
           }
         | { ok: false; message: string }

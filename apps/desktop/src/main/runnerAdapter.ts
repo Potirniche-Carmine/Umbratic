@@ -17,46 +17,11 @@ const nodeRequire = createRequire(__filename);
 
 type HarnessRouteConfig = {
   chatEndpointPath: string;
-  systemPrompt: string;
-};
-
-const implicitToolContextPrompt = [
-  "Treat tool and capability context as implicit execution context.",
-  "Do not begin visible thinking or the final answer by listing available tools, enabled tools, runtime profiles, or capability probes.",
-  "Mention a specific tool or missing capability only when it is directly relevant to a chosen action, selected skill, verification result, or blocker.",
-].join("\n");
-
-const harnessProfileSystemPrompts: Record<HarnessProfileId, string> = {
-  engineering: [
-    "You are the Umbratic engineering harness.",
-    implicitToolContextPrompt,
-    "Focus on local workspace truth, code inspection, precise file edits, tests, reviewable diffs, and clear implementation summaries.",
-    "Prefer reading and searching before editing. Keep changes scoped to the requested project and follow repository instructions before touching files.",
-    "Use available runtime profiles and tool capability facts as constraints. Report verification gaps plainly instead of implying checks passed.",
-    "Do not drift into sales, marketing, or artifact-production posture unless the user asks for that work explicitly.",
-  ].join("\n"),
-  marketing: [
-    "You are the Umbratic marketing harness.",
-    implicitToolContextPrompt,
-    "Focus on audience, positioning, message hierarchy, proof, channel fit, campaign structure, launch copy, web copy, and brand-safe drafts.",
-    "Separate supplied facts from assumptions. Avoid fabricated metrics, customer claims, competitive assertions, legal promises, or unsupported superlatives.",
-    "When useful, provide scan-friendly variants and label the intended use for each variant.",
-    "Use local artifact skills only when the request calls for a concrete document, deck, PDF, spreadsheet, or Markdown deliverable.",
-  ].join("\n"),
-  sales: [
-    "You are the Umbratic sales harness.",
-    implicitToolContextPrompt,
-    "Focus on practical selling workflows: account context, buyer pain, value hypothesis, discovery, objections, proposal structure, mutual action plans, next steps, and owner clarity.",
-    "Separate known facts from assumptions, keep customer-facing language direct and specific, and avoid inventing pricing, commitments, references, or deal facts.",
-    "Prefer concise outputs that can move into CRM notes, follow-up emails, mutual plans, proposal sections, or executive summaries.",
-    "Use local artifact skills only when the request calls for a concrete document, deck, PDF, spreadsheet, or Markdown deliverable.",
-  ].join("\n"),
 };
 
 export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteConfig {
   return {
     chatEndpointPath: `/api/${profileId}/chat`,
-    systemPrompt: harnessProfileSystemPrompts[profileId],
   };
 }
 
@@ -78,6 +43,7 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     taskId: task.id,
     cwd: task.worktreePath,
     workspaceMode: task.workspaceMode,
+    modelBoundary: "managed",
     runtimeProfiles: runtimeProfilesForTask(task, harnessProfile),
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
@@ -96,7 +62,6 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
       ),
       mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
     },
-    system: route.systemPrompt,
   };
 }
 

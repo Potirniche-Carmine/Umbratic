@@ -4,6 +4,7 @@ import { redactText } from "./policy.js";
 import { enabledModelToolSpecs, runTool } from "./tools/index.js";
 import { toolFailureDetails, type ToolContext, type ToolResultStatus } from "./tools/common.js";
 import { modelHttpRequest, readBodyText } from "./provider/http.js";
+import { configuredProviderEndpointUrl, isApprovedVeilChatUrl } from "./provider/local.js";
 
 type ToolCall = {
   id: string;
@@ -146,28 +147,6 @@ function messagesForModel(session: Session): ChatMessage[] {
   return compactToolHistoryMessages(session.messages);
 }
 
-function chatCompletionsUrl(baseURL: string): string {
-  const base = baseURL.replace(/\/+$/, "");
-  return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
-}
-
-function configuredEndpointUrl(baseURL: string, endpointPath?: string): string {
-  if (!endpointPath?.trim()) return chatCompletionsUrl(baseURL);
-  const trimmed = endpointPath.trim();
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  const normalizedBaseUrl = baseURL.replace(/\/+$/, "");
-  let normalizedPath = trimmed.replace(/^\/+/, "");
-  if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedPath)) {
-    normalizedPath = normalizedPath.replace(/^v\d+\//i, "");
-  }
-  const baseSegment = new URL(normalizedBaseUrl).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
-  const routeSegment = normalizedPath.split("/").filter(Boolean)[0];
-  if (baseSegment && baseSegment === routeSegment) {
-    normalizedPath = normalizedPath.split("/").filter(Boolean).slice(1).join("/");
-  }
-  return new URL(normalizedPath, `${normalizedBaseUrl}/`).toString();
-}
-
 function isOllamaChatUrl(url: string): boolean {
   try {
     return new URL(url).pathname.replace(/\/+$/, "") === "/api/chat";
@@ -177,11 +156,7 @@ function isOllamaChatUrl(url: string): boolean {
 }
 
 function isVeilChatUrl(url: string): boolean {
-  try {
-    return /^\/api\/(?:engineering|marketing|sales)\/chat\/?$/i.test(new URL(url).pathname);
-  } catch {
-    return false;
-  }
+  return isApprovedVeilChatUrl(url);
 }
 
 function parseSseLine(line: string): unknown | null {
@@ -280,7 +255,7 @@ function lastMessageIsToolContext(session: Session): boolean {
 }
 
 function toolRoleHistorySupported(session: Session): boolean {
-  const url = configuredEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
+  const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
   return !isOllamaChatUrl(url);
 }
 
@@ -374,18 +349,19 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
     headers.Authorization = `Bearer ${session.config.provider.apiKey}`;
   }
   Object.assign(headers, session.config.provider.headers ?? {});
-  const url = configuredEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
+  const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
   if (isOllamaChatUrl(url)) {
     return streamOllamaChat(session, url, headers, tools, emit);
   }
   const routeIsVeil = isVeilChatUrl(url);
+  const messages = routeIsVeil ? messagesForModel(session).filter((message) => message.role !== "system") : messagesForModel(session);
   const requestModel = (includeTools: boolean) =>
     modelHttpRequest(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
         ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
-        messages: messagesForModel(session),
+        messages,
         stream: true,
         ...(routeIsVeil && session.config.runtimeProfiles?.length ? { runtime_profiles: session.config.runtimeProfiles } : {}),
         ...(includeTools && tools.length ? { tools, tool_choice: "auto" } : {}),

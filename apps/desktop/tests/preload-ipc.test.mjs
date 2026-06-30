@@ -35,10 +35,14 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   assert.equal(exposedName, "umbratic");
 
   const cases = [
+    ["listProjects", [], "umbratic:list-projects", undefined],
     ["listChats", [], "umbratic:list-chats", undefined],
     ["createChat", [], "umbratic:create-chat", {}],
     ["updateChatDraft", [{ chatId: "chat-1", draftPrompt: "hi", attachedFiles: [] }], "umbratic:update-chat-draft"],
+    ["updateChatProject", [{ chatId: "chat-1", repositoryName: "Repo", repositoryPath: "/repo" }], "umbratic:update-chat-project"],
     ["deleteChat", [{ chatId: "chat-1" }], "umbratic:delete-chat"],
+    ["deleteProjectChats", [{ repositoryPath: "/repo" }], "umbratic:delete-project-chats"],
+    ["deleteProject", [{ repositoryPath: "/repo" }], "umbratic:delete-project"],
     ["getNotes", [], "umbratic:get-notes", undefined],
     ["updateNotes", [{ content: "notes" }], "umbratic:update-notes"],
     ["getTask", [{ taskId: "task-1" }], "umbratic:get-task"],
@@ -66,6 +70,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["createSkill", [{ name: "Skill" }], "umbratic:create-skill"],
     ["getSkillDocument", [{ id: "skill" }], "umbratic:get-skill-document"],
     ["saveSkillDocument", [{ id: "skill", content: "# Skill" }], "umbratic:save-skill-document"],
+    ["resetSystemSkill", [{ id: "umbratic-markdown" }], "umbratic:reset-system-skill"],
     ["setPermissionMode", ["bypass"], "umbratic:set-permission-mode"],
     ["listAvailableIdes", [], "umbratic:list-available-ides", undefined],
     ["startTask", [{ prompt: "go" }], "umbratic:start-task"],

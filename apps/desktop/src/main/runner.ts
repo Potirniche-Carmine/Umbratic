@@ -1,5 +1,15 @@
 import type { CommandClass, LocalModelInfo, TaskRecord, ToolErrorCode, ToolResultStatus } from "./types";
 
+type ToolPolicyStage =
+  | "normalize_tool_call"
+  | "resolve_workspace_paths"
+  | "classify_action"
+  | "apply_static_deny_rules"
+  | "request_permission"
+  | "execute_backend"
+  | "redact_and_summarize_output"
+  | "emit_audit_telemetry";
+
 export type RunnerHandle = {
   taskId: string;
 };
@@ -24,6 +34,16 @@ export type UmbraticRunnerEvent =
       stream: "stdout" | "stderr";
       text: string;
       redacted: boolean;
+      at: string;
+    }
+  | {
+      type: "tool.policy.stage";
+      taskId: string;
+      toolCallId: string;
+      stage: ToolPolicyStage;
+      outcome: "started" | "passed" | "blocked" | "skipped";
+      summary?: string;
+      code?: ToolErrorCode;
       at: string;
     }
   | {
@@ -55,7 +75,7 @@ export type UmbraticRunnerEvent =
       at: string;
     }
   | { type: "session.idle"; taskId: string; sessionId: string; at: string }
-  | { type: "runner.error"; taskId: string; category: string; message: string; at: string };
+  | { type: "runner.error"; taskId: string; category: string; code?: string; message: string; at: string };
 
 export interface UmbraticRunner {
   start(task: TaskRecord, model: LocalModelInfo, models: LocalModelInfo[]): Promise<RunnerHandle>;

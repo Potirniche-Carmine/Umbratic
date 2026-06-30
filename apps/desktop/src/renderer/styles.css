@@ -3,22 +3,23 @@
   font-family: var(--app-font, system-ui, sans-serif);
   --app-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono-font: "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
-  --bg: #0b0c0f;
-  --chrome: #15161a;
-  --sidebar: #111216;
-  --surface: #17191e;
-  --surface-2: #1f2228;
-  --surface-3: #292e36;
+  --bg: #0b0d10;
+  --chrome: #14171b;
+  --sidebar: #111418;
+  --surface: #161a20;
+  --surface-2: #1c2229;
+  --surface-3: #252c35;
   --text: #eceff3;
   --muted: #a4abb5;
   --faint: #6f7782;
-  --line: rgba(236, 239, 243, 0.1);
-  --line-strong: rgba(236, 239, 243, 0.18);
-  --control-bg: rgba(255, 255, 255, 0.04);
-  --control-hover-soft: rgba(255, 255, 255, 0.045);
-  --control-hover: rgba(255, 255, 255, 0.08);
-  --panel-tint: rgba(255, 255, 255, 0.035);
-  --modal-bg: #1d1e22;
+  --line: rgba(225, 230, 238, 0.1);
+  --line-strong: rgba(225, 230, 238, 0.17);
+  --control-bg: #191f26;
+  --control-hover-soft: #1d242c;
+  --control-hover: #242b34;
+  --control-active: #29313b;
+  --panel-tint: #141a20;
+  --modal-bg: #181d23;
   --code-bg: #101319;
   --code-header-bg: #191d24;
   --inline-code-bg: rgba(255, 255, 255, 0.08);
@@ -29,14 +30,14 @@
   --reasoning-border: rgba(178, 186, 197, 0.14);
   --reasoning-hover-border: rgba(178, 186, 197, 0.2);
   --reasoning-hover-bg: rgba(178, 186, 197, 0.045);
-  --shadow-color: rgba(0, 0, 0, 0.42);
-  --sidebar-shadow: 18px 0 46px rgba(0, 0, 0, 0.22);
-  --review-sidebar-shadow: -22px 0 58px rgba(0, 0, 0, 0.22);
-  --glass: rgba(255, 255, 255, 0.045);
-  --glass-strong: rgba(255, 255, 255, 0.072);
-  --composer-glow: rgba(178, 186, 197, 0.16);
-  --accent: #b7bec8;
-  --accent-2: #8f9aaa;
+  --shadow-color: rgba(0, 0, 0, 0.36);
+  --sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --review-sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --glass: #191f26;
+  --glass-strong: #202732;
+  --composer-glow: transparent;
+  --accent: #a7b0bb;
+  --accent-2: #7d8794;
   --accent-warm: #d6c9aa;
   --blue: #579dff;
   --green: #49d38a;
@@ -56,21 +57,22 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f5f6f8;
+  --bg: #f4f6f8;
   --chrome: #ffffff;
-  --sidebar: #eef1f5;
+  --sidebar: #edf1f5;
   --surface: #ffffff;
-  --surface-2: #f3f5f8;
-  --surface-3: #e7ebf0;
+  --surface-2: #f0f3f6;
+  --surface-3: #e3e8ee;
   --text: #161a20;
   --muted: #526071;
   --faint: #788394;
   --line: rgba(18, 24, 32, 0.11);
   --line-strong: rgba(18, 24, 32, 0.18);
-  --control-bg: rgba(18, 24, 32, 0.045);
-  --control-hover-soft: rgba(18, 24, 32, 0.085);
-  --control-hover: rgba(18, 24, 32, 0.13);
-  --panel-tint: rgba(255, 255, 255, 0.72);
+  --control-bg: #eef2f6;
+  --control-hover-soft: #e7ecf2;
+  --control-hover: #dfe6ee;
+  --control-active: #d7e0e9;
+  --panel-tint: #f1f4f7;
   --modal-bg: #ffffff;
   --code-bg: #f7f9fc;
   --code-header-bg: #eef2f7;
@@ -83,11 +85,11 @@
   --reasoning-hover-border: rgba(92, 101, 113, 0.24);
   --reasoning-hover-bg: rgba(92, 101, 113, 0.08);
   --shadow-color: rgba(20, 35, 55, 0.18);
-  --sidebar-shadow: 8px 0 22px rgba(20, 35, 55, 0.08);
-  --review-sidebar-shadow: -8px 0 22px rgba(20, 35, 55, 0.08);
-  --glass: rgba(255, 255, 255, 0.72);
-  --glass-strong: rgba(255, 255, 255, 0.88);
-  --composer-glow: rgba(92, 101, 113, 0.14);
+  --sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --review-sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --glass: #eef2f6;
+  --glass-strong: #ffffff;
+  --composer-glow: transparent;
   --accent: #5c6571;
   --accent-2: #758092;
   --accent-warm: #9a6700;
@@ -100,43 +102,30 @@
 }
 
 :root[data-theme="light"] .workspace {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.78), transparent 24%),
-    linear-gradient(90deg, rgba(92, 101, 113, 0.055), transparent 30%, transparent 72%, rgba(31, 111, 235, 0.045)),
-    var(--bg);
+  background: var(--bg);
 }
 
 :root[data-theme="light"] .promptDock {
-  background:
-    linear-gradient(180deg, rgba(245, 246, 248, 0), rgba(245, 246, 248, 0.82) 30%, rgba(245, 246, 248, 0.96)),
-    var(--bg);
+  background: var(--bg);
 }
 
 :root[data-theme="light"] .promptDock::after {
-  background:
-    linear-gradient(180deg, rgba(245, 246, 248, 0), rgba(245, 246, 248, 0.82) 30%, rgba(245, 246, 248, 0.96)),
-    var(--bg);
+  background: var(--bg);
 }
 
 :root[data-theme="light"] .promptInputShell,
 :root[data-theme="light"] .userMessageBubble {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.68)),
-    rgba(255, 255, 255, 0.9);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] .sidebar,
 :root[data-theme="light"] .reviewSidebar {
-  border-color: rgba(40, 48, 58, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.78), transparent 34%),
-    color-mix(in srgb, var(--sidebar) 86%, transparent);
+  border-color: var(--line);
+  background: var(--sidebar);
 }
 
 :root[data-theme="light"] .reviewSidebar {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.74), transparent 34%),
-    rgba(248, 250, 252, 0.86);
+  background: var(--sidebar);
 }
 
 :root[data-theme="light"] .chatRow.active,
@@ -144,41 +133,31 @@
 :root[data-theme="light"] .taskCard,
 :root[data-theme="light"] .changedFiles {
   border-color: rgba(40, 48, 58, 0.08);
-  background: rgba(255, 255, 255, 0.62);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] .changedFiles {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.54)),
-    rgba(255, 255, 255, 0.72);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] .reviewFile {
   border-color: rgba(18, 24, 32, 0.1);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.48)),
-    rgba(255, 255, 255, 0.58);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] .reviewFileHeader:hover,
 :root[data-theme="light"] .reviewFileHeader.active {
-  background:
-    linear-gradient(90deg, rgba(18, 24, 32, 0.052), transparent 72%),
-    rgba(18, 24, 32, 0.025);
+  background: var(--control-hover-soft);
 }
 
 :root[data-theme="light"] .reviewFileDiff {
   border-top-color: rgba(18, 24, 32, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.56), transparent 28%),
-    rgba(255, 255, 255, 0.34);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] .reviewTopbar {
   border-bottom-color: rgba(18, 24, 32, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.44)),
-    rgba(255, 255, 255, 0.5);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] .diffLineNumber,
@@ -188,9 +167,7 @@
 
 :root[data-theme="light"] .attachmentPreview,
 :root[data-theme="light"] .userMessageBubble {
-  box-shadow:
-    0 3px 10px rgba(40, 48, 58, 0.035),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  box-shadow: 0 3px 10px rgba(40, 48, 58, 0.035);
 }
 
 :root[data-theme="light"] .attachmentPreviewFileIcon {
@@ -204,12 +181,12 @@
 
 :root[data-theme="light"] .composerReviewToggle {
   border-color: rgba(40, 48, 58, 0.13);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--control-bg);
 }
 
 :root[data-theme="light"] .composerReviewToggle:hover {
   border-color: rgba(40, 48, 58, 0.2);
-  background: rgba(18, 24, 32, 0.08);
+  background: var(--control-hover);
 }
 
 :root[data-theme="light"] .reviewTextButton:hover:not(:disabled) {
@@ -225,19 +202,13 @@
 }
 
 :root[data-theme="light"] .promptInputShell {
-  box-shadow:
-    0 5px 16px rgba(40, 48, 58, 0.045),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  box-shadow: none;
 }
 
 :root[data-theme="light"] .promptInputShell:focus-within {
-  box-shadow:
-    0 8px 22px rgba(40, 48, 58, 0.06),
-    0 0 0 3px rgba(92, 101, 113, 0.045),
-    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  box-shadow: 0 0 0 3px rgba(92, 101, 113, 0.045);
 }
 
-:root[data-theme="light"] .sendButton,
 :root[data-theme="light"] .markdownCodeBlock,
 :root[data-theme="light"] .branchMenu,
 :root[data-theme="light"] .workspaceModeMenu,
@@ -259,18 +230,18 @@
     0 14px 34px rgba(40, 48, 58, 0.12);
 }
 
-:root[data-theme="light"] .newChatButton,
+:root[data-theme="light"] .newActionSplit,
 :root[data-theme="light"] .settingsPlaceholder {
   border-color: rgba(40, 48, 58, 0.14);
   color: color-mix(in srgb, var(--text) 78%, var(--muted));
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--control-bg);
 }
 
-:root[data-theme="light"] .newChatButton:hover,
+:root[data-theme="light"] .newActionButton:hover,
 :root[data-theme="light"] .settingsPlaceholder:hover {
   border-color: rgba(40, 48, 58, 0.24);
   color: var(--text);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--control-hover);
 }
 
 :root[data-theme="light"] .attachmentCount {
@@ -479,16 +450,13 @@ pre {
   overflow-y: auto;
   resize: none;
   padding: 28px 13px 13px;
-  border-right: 1px solid rgba(255, 255, 255, 0.075);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 32%),
-    linear-gradient(90deg, rgba(178, 186, 197, 0.052), transparent 62%),
-    color-mix(in srgb, var(--sidebar) 88%, transparent);
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
   box-shadow:
     var(--sidebar-shadow),
-    inset -1px 0 0 rgba(255, 255, 255, 0.035);
-  -webkit-backdrop-filter: blur(24px) saturate(1.1);
-  backdrop-filter: blur(24px) saturate(1.1);
+    inset -1px 0 0 rgba(255, 255, 255, 0.02);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   opacity: 1;
   transform: translateX(0);
   transition:
@@ -517,18 +485,15 @@ pre {
   resize: none;
   direction: rtl;
   padding: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.075);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 32%),
-    linear-gradient(270deg, rgba(178, 186, 197, 0.045), transparent 62%),
-    rgba(17, 18, 22, 0.62);
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--sidebar);
   box-shadow:
     var(--review-sidebar-shadow),
-    inset 1px 0 0 rgba(255, 255, 255, 0.035),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.055);
-  -webkit-backdrop-filter: blur(20px) saturate(1.06);
-  backdrop-filter: blur(20px) saturate(1.06);
+    inset 1px 0 0 rgba(255, 255, 255, 0.02),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.02);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   opacity: 1;
   transform: translateX(0);
   transition:
@@ -630,37 +595,57 @@ pre {
   min-height: 0;
 }
 
-.newChatButton {
+.newActionSplit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--control-bg);
+  overflow: hidden;
+}
+
+.newActionButton {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  width: 100%;
   height: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius);
+  min-width: 0;
+  padding: 0 9px;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.026);
   font-weight: 500;
   font-size: 12.5px;
   letter-spacing: 0;
   transition:
-    border-color 120ms ease,
     background 120ms ease,
     color 120ms ease;
 }
 
-.newChatButton svg {
+.newActionButton + .newActionButton {
+  border-left: 1px solid var(--line);
+}
+
+.newActionButton span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.newActionButton svg {
+  flex: 0 0 auto;
   color: var(--muted);
   transition: color 120ms ease;
 }
 
-.newChatButton:hover {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: rgba(255, 255, 255, 0.055);
+.newActionButton:hover {
+  background: var(--control-hover);
 }
 
-.newChatButton:hover svg {
+.newActionButton:hover svg {
   color: var(--text);
 }
 
@@ -695,7 +680,7 @@ pre {
 
 .chatProjectHeader {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) 24px 24px;
   align-items: center;
   gap: 2px;
   min-width: 0;
@@ -718,18 +703,106 @@ pre {
   place-items: center;
   width: 24px;
   height: 24px;
+  padding: 0;
   border-radius: 6px;
   color: var(--faint);
-  opacity: 1;
+  line-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background 100ms ease,
+    color 100ms ease,
+    opacity 100ms ease;
+}
+
+.chatProjectActions {
+  position: relative;
+  line-height: 0;
+}
+
+.chatProjectActionButton {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--faint);
+  line-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background 100ms ease,
+    color 100ms ease,
+    opacity 100ms ease;
 }
 
 .chatProjectToggle:hover {
   color: var(--text);
 }
 
-.chatProjectNewButton:hover {
+.chatProjectNewButton:hover,
+.chatProjectActionButton:hover,
+.chatProjectActionButton[aria-expanded="true"] {
   color: var(--text);
   background: var(--control-hover);
+}
+
+.chatProject:hover .chatProjectNewButton,
+.chatProject:focus-within .chatProjectNewButton,
+.chatProject:hover .chatProjectActionButton,
+.chatProject:focus-within .chatProjectActionButton,
+.chatProjectActionButton[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chatProjectNewButton svg,
+.chatProjectActionButton svg {
+  display: block;
+}
+
+.chatProjectMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 90;
+  display: grid;
+  gap: 2px;
+  min-width: 174px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  animation: menuRise 180ms ease both;
+}
+
+.chatProjectMenu button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 600;
+}
+
+.chatProjectMenu button:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.chatProjectMenu button.danger {
+  color: color-mix(in srgb, var(--red) 28%, var(--muted));
+}
+
+.chatProjectMenu button.danger:hover {
+  color: #ffb4bb;
+  background: rgba(255, 111, 122, 0.12);
 }
 
 .chatProjectToggle svg {
@@ -782,7 +855,16 @@ pre {
   bottom: 2px;
   left: 0;
   width: 1px;
-  background: linear-gradient(180deg, transparent, rgba(178, 186, 197, 0.16), transparent);
+  background: var(--line);
+}
+
+.chatProjectEmpty {
+  min-height: 30px;
+  padding: 8px 9px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  color: var(--faint);
+  font-size: 11px;
 }
 
 .chatRow {
@@ -813,15 +895,13 @@ pre {
 
 .chatRow:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.038);
+  background: var(--control-hover-soft);
 }
 
 .chatRow.active {
   color: var(--text);
-  border-color: rgba(255, 255, 255, 0.08);
-  background:
-    linear-gradient(90deg, rgba(178, 186, 197, 0.08), transparent),
-    rgba(255, 255, 255, 0.046);
+  border-color: var(--line);
+  background: var(--control-bg);
 }
 
 .chatRow.closed {
@@ -907,10 +987,10 @@ pre {
   align-items: center;
   min-height: 32px;
   padding: 0 11px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.026);
+  background: var(--control-bg);
   text-align: left;
   font-size: 12.5px;
   font-weight: 500;
@@ -923,8 +1003,8 @@ pre {
 
 .settingsPlaceholder:hover {
   color: var(--text);
-  border-color: rgba(255, 255, 255, 0.13);
-  background: rgba(255, 255, 255, 0.055);
+  border-color: var(--line-strong);
+  background: var(--control-hover);
 }
 
 .sideSection {
@@ -1025,11 +1105,9 @@ pre {
   gap: 9px;
   min-width: 0;
   padding: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.018)),
-    rgba(255, 255, 255, 0.024);
+  background: var(--panel-tint);
 }
 
 .workspaceIdentity {
@@ -1147,8 +1225,7 @@ pre {
 
 .segmented button.active {
   color: var(--text);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-3) 72%, transparent), color-mix(in srgb, var(--surface-2) 82%, transparent));
+  background: var(--control-active);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--line-strong) 84%, transparent),
     0 1px 0 rgba(255, 255, 255, 0.04);
@@ -1189,24 +1266,12 @@ pre {
   min-width: 0;
   min-height: 0;
   padding-left: var(--sidebar-reserved-width, 230px);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 18%),
-    linear-gradient(90deg, rgba(178, 186, 197, 0.035), transparent 26%, transparent 74%, rgba(178, 186, 197, 0.028)),
-    var(--bg);
+  background: var(--bg);
   isolation: isolate;
 }
 
 .workspace::before {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  content: "";
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 64px);
-  opacity: 0.28;
-  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 82%, transparent);
+  display: none;
 }
 
 .workspace::after {
@@ -1218,10 +1283,8 @@ pre {
   height: 51px;
   pointer-events: none;
   content: "";
-  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.01)),
-    rgba(255, 255, 255, 0.01);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
 
 .workspace.approvalPending .composerPanel,
@@ -1274,10 +1337,8 @@ pre {
   min-width: 0;
   min-height: 50px;
   padding: 9px 14px 9px 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.01)),
-    rgba(255, 255, 255, 0.01);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
 
 .composerHeaderTitle {
@@ -1316,7 +1377,7 @@ pre {
   width: 32px;
   height: 32px;
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--control-bg);
   border: 1px solid var(--line);
 }
 
@@ -1357,13 +1418,11 @@ pre {
   padding: 12px 14px;
   border: 1px solid rgba(178, 186, 197, 0.2);
   border-radius: var(--radius);
-  background:
-    linear-gradient(135deg, rgba(178, 186, 197, 0.16), rgba(178, 186, 197, 0.08)),
-    rgba(255, 255, 255, 0.045);
+  background: var(--surface-2);
   box-shadow:
-    0 18px 44px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(18px);
+    0 12px 32px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: none;
   transform-origin: 100% 100%;
 }
 
@@ -2231,11 +2290,9 @@ pre {
   gap: 9px;
   min-width: 0;
   padding: 16px clamp(22px, 4vw, 48px) 20px;
-  border-top: 0;
-  background:
-    linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.28) 28%, rgba(0, 0, 0, 0.42)),
-    linear-gradient(90deg, transparent, rgba(178, 186, 197, 0.035), transparent);
-  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  backdrop-filter: none;
   overflow: visible;
 }
 
@@ -2248,22 +2305,20 @@ pre {
   width: var(--sidebar-visual-gap, 0px);
   pointer-events: none;
   content: "";
-  background:
-    linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.28) 28%, rgba(0, 0, 0, 0.42)),
-    linear-gradient(90deg, transparent, rgba(178, 186, 197, 0.035), transparent);
-  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  backdrop-filter: none;
 }
 
 .promptDock::before {
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
   top: 0;
-  width: min(960px, calc(100% - 40px));
   height: 1px;
   pointer-events: none;
   content: "";
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), rgba(178, 186, 197, 0.22), transparent);
-  transform: translateX(-50%);
+  background: var(--line);
 }
 
 .promptControls {
@@ -2325,10 +2380,10 @@ pre {
   min-width: 0;
   height: 28px;
   padding: 0 9px;
-  border: 1px solid rgba(255, 255, 255, 0.065);
+  border: 1px solid var(--line);
   border-radius: 999px;
   color: color-mix(in srgb, var(--text) 88%, var(--muted));
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--control-bg);
   text-align: left;
   font-weight: 500;
   font-size: 12px;
@@ -2345,8 +2400,8 @@ pre {
 }
 
 .workspaceControl:hover {
-  border-color: rgba(255, 255, 255, 0.13);
-  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--line-strong);
+  background: var(--control-hover);
   transform: translateY(-1px);
 }
 
@@ -2427,9 +2482,9 @@ pre {
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
-  box-shadow: 0 22px 58px var(--shadow-color);
-  backdrop-filter: blur(22px);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  backdrop-filter: none;
   animation: menuRise 180ms ease both;
 }
 
@@ -2559,10 +2614,10 @@ pre {
   flex: 0 0 auto;
   height: 28px;
   padding: 0 9px;
-  border: 1px solid rgba(255, 255, 255, 0.065);
+  border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.026);
+  background: var(--control-bg);
   font-weight: 500;
   font-size: 12px;
   transition:
@@ -2575,18 +2630,19 @@ pre {
 .workspaceModeTrigger:hover:not(:disabled) {
   color: var(--text);
   background: var(--control-hover);
+  border-color: var(--line-strong);
   transform: translateY(-1px);
 }
 
 .workspaceModeControl.isWorktree .workspaceModeTrigger {
   color: color-mix(in srgb, var(--text) 82%, var(--accent));
-  border-color: rgba(178, 186, 197, 0.18);
-  background: rgba(178, 186, 197, 0.08);
+  border-color: var(--line-strong);
+  background: var(--control-active);
 }
 
 .workspaceModeControl.isWorktree .workspaceModeTrigger:hover:not(:disabled) {
   color: var(--text);
-  background: rgba(178, 186, 197, 0.12);
+  background: var(--control-hover);
 }
 
 .workspaceModeTrigger svg {
@@ -2610,9 +2666,9 @@ pre {
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
-  box-shadow: 0 22px 58px var(--shadow-color);
-  backdrop-filter: blur(22px);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  backdrop-filter: none;
   animation: menuRise 180ms ease both;
 }
 
@@ -2646,10 +2702,10 @@ pre {
   min-width: 0;
   height: 28px;
   padding: 0 9px;
-  border: 1px solid rgba(255, 255, 255, 0.065);
+  border: 1px solid var(--line);
   border-radius: 999px;
   color: color-mix(in srgb, var(--text) 88%, var(--muted));
-  background: rgba(255, 255, 255, 0.026);
+  background: var(--control-bg);
   font-weight: 500;
   font-size: 12px;
   text-align: left;
@@ -2661,7 +2717,7 @@ pre {
 }
 
 .permissionTrigger:hover {
-  border-color: rgba(255, 255, 255, 0.13);
+  border-color: var(--line-strong);
   background: var(--control-hover);
   transform: translateY(-1px);
 }
@@ -2715,9 +2771,9 @@ pre {
   padding: 5px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--modal-bg) 94%, transparent);
-  box-shadow: 0 22px 58px var(--shadow-color);
-  backdrop-filter: blur(22px);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  backdrop-filter: none;
   animation: menuRise 180ms ease both;
 }
 
@@ -2773,10 +2829,10 @@ pre {
   place-items: center;
   width: 28px;
   height: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.065);
+  border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.026);
+  background: var(--control-bg);
   transition:
     background 150ms ease,
     border-color 150ms ease,
@@ -2787,14 +2843,14 @@ pre {
 .attachmentTrigger:hover:not(:disabled),
 .attachmentTrigger.isActive {
   color: var(--text);
-  border-color: rgba(255, 255, 255, 0.13);
+  border-color: var(--line-strong);
   background: var(--control-hover);
   transform: translateY(-1px);
 }
 
 .attachmentTrigger.isActive {
   color: var(--accent);
-  background: rgba(178, 186, 197, 0.12);
+  background: var(--control-active);
 }
 
 .attachmentTrigger:disabled {
@@ -2955,9 +3011,7 @@ pre {
   overflow: hidden;
   border: 1px solid rgba(181, 196, 216, 0.14);
   border-radius: 999px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(181, 196, 216, 0.034)),
-    color-mix(in srgb, var(--surface-2) 84%, transparent);
+  background: var(--control-bg);
   box-shadow:
     0 5px 14px rgba(0, 0, 0, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -2974,9 +3028,7 @@ button.attachmentPreview {
 
 button.attachmentPreview:hover {
   border-color: rgba(181, 196, 216, 0.22);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.064), rgba(181, 196, 216, 0.05)),
-    color-mix(in srgb, var(--surface-2) 88%, transparent);
+  background: var(--control-hover);
 }
 
 button.attachmentPreview:focus-visible {
@@ -3139,9 +3191,7 @@ button.attachmentPreview:focus-visible {
 
 .attachmentMenu button:hover,
 .attachmentMenu button.active {
-  background:
-    linear-gradient(90deg, rgba(178, 186, 197, 0.09), transparent),
-    var(--control-hover);
+  background: var(--control-hover);
 }
 
 .attachmentMenu button.active {
@@ -3186,16 +3236,11 @@ button.attachmentPreview:focus-visible {
 .promptInputShell {
   position: relative;
   min-height: 58px;
-  border: 1px solid rgba(255, 255, 255, 0.105);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.072), rgba(255, 255, 255, 0.034)),
-    rgba(14, 16, 20, 0.74);
-  box-shadow:
-    0 20px 60px rgba(0, 0, 0, 0.32),
-    0 0 0 1px rgba(178, 186, 197, 0),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(24px);
+  background: var(--surface);
+  box-shadow: none;
+  backdrop-filter: none;
   transition:
     border-color 180ms ease,
     box-shadow 180ms ease,
@@ -3203,11 +3248,8 @@ button.attachmentPreview:focus-visible {
 }
 
 .promptInputShell:focus-within {
-  border-color: rgba(178, 186, 197, 0.28);
-  box-shadow:
-    0 24px 70px rgba(0, 0, 0, 0.36),
-    0 0 0 3px rgba(178, 186, 197, 0.075),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line-strong));
+  box-shadow: 0 0 0 3px rgba(178, 186, 197, 0.075);
 }
 
 .promptHighlight {
@@ -3281,26 +3323,25 @@ button.attachmentPreview:focus-visible {
   place-items: center;
   width: 40px;
   height: 40px;
+  border: 1px solid var(--line-strong);
   border-radius: 50%;
-  background: linear-gradient(180deg, #f6f7f8, color-mix(in srgb, var(--accent) 22%, #d9dde2));
-  color: #07111e;
-  box-shadow:
-    0 12px 30px rgba(0, 0, 0, 0.3),
-    0 0 0 1px rgba(255, 255, 255, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  background: var(--control-active);
+  color: var(--text);
+  box-shadow: none;
   transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
     transform 160ms cubic-bezier(0.2, 0.9, 0.2, 1),
     box-shadow 160ms ease,
     opacity 160ms ease;
 }
 
 .sendButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent) 18%, var(--control-active));
   transform: translateY(-2px) scale(1.03);
-  box-shadow:
-    0 16px 38px rgba(0, 0, 0, 0.34),
-    0 0 0 1px rgba(255, 255, 255, 0.42),
-    0 0 28px rgba(178, 186, 197, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  box-shadow: none;
 }
 
 .sendButton:active:not(:disabled) {
@@ -4073,24 +4114,25 @@ button.attachmentPreview:focus-visible {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.58);
+  background: rgba(0, 0, 0, 0.18);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62);
+  backdrop-filter: blur(10px) brightness(0.62);
 }
 
 .settingsDialog {
   display: flex;
   flex-direction: column;
-  width: min(760px, calc(100vw - 48px));
-  height: min(590px, calc(100vh - 48px));
+  width: min(960px, calc(100vw - 56px));
+  height: min(720px, calc(100vh - 56px));
   min-height: 0;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--line-strong) 82%, transparent);
   border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 26%),
-    color-mix(in srgb, var(--modal-bg) 98%, transparent);
-  box-shadow: 0 20px 58px color-mix(in srgb, var(--shadow-color) 78%, transparent);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 44px color-mix(in srgb, var(--shadow-color) 68%, transparent);
   overflow: hidden;
-  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .imagePreviewScrim {
@@ -4286,6 +4328,18 @@ button.attachmentPreview:focus-visible {
   align-items: center;
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
+}
+
+.telemetryDisclosureList .settingsListRow {
+  align-items: start;
+}
+
+.telemetryDisclosureList .settingsListRow p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .settingsListRow:last-child {
@@ -4843,6 +4897,16 @@ button.attachmentPreview:focus-visible {
   font-style: normal;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.skillGovernance {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+
+.skillGovernance.isModified {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
 }
 
 .skillPreviewPanel {

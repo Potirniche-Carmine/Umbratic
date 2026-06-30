@@ -11,13 +11,16 @@ import {
   CheckCircle2,
   CircleDashed,
   Copy,
+  Ellipsis,
   ExternalLink,
   File,
   FileText,
+  FolderX,
   FolderOpen,
   GitBranch,
   Hand,
   Loader2,
+  MessageSquareX,
   Monitor,
   Moon,
   PanelRight,
@@ -321,6 +324,23 @@ type ChatRecord = {
   attachedFiles?: ChatAttachment[];
 };
 
+type ChatProjectGroup = {
+  key: string;
+  name: string;
+  path?: string;
+  chats: ChatRecord[];
+};
+type ProjectDeleteTarget = {
+  key: string;
+  name: string;
+  path: string;
+  chatCount: number;
+};
+type DeleteCandidate =
+  | { kind: "chat"; chat: ChatRecord }
+  | { kind: "projectChats"; project: ProjectDeleteTarget }
+  | { kind: "project"; project: ProjectDeleteTarget };
+
 type UserNotes = {
   content: string;
   updatedAt: string;
@@ -417,16 +437,24 @@ type SkillInfo = {
   enabled: boolean;
   source?: "system" | "local";
   readOnly?: boolean;
+  checksum?: string;
+  checksumStatus?: "known_good" | "modified" | "untracked";
+  modified?: boolean;
+  provenance?: "bundled" | "created" | "imported";
 };
 type SkillDocument = SkillInfo & { path: string; content: string };
 type SkillSourceFilter = "local" | "system";
 type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };
 
 type DesktopApi = {
+  listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
   createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean }): Promise<ChatRecord>;
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
+  updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
+  deleteProjectChats(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
+  deleteProject(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
   getNotes(): Promise<UserNotes>;
   updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
@@ -476,6 +504,10 @@ type DesktopApi = {
     | { ok: true; skill: SkillDocument; skills: SkillInfo[]; directory: string }
     | { ok: false; message: string }
   >;
+  resetSystemSkill(input: { id: string }): Promise<
+    | { ok: true; skill: SkillDocument; skills: SkillInfo[]; directory: string }
+    | { ok: false; message: string }
+  >;
   setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
   listAvailableIdes(): Promise<IdeChoice[]>;
   startTask(input: {
@@ -502,6 +534,7 @@ type DesktopApi = {
   onBackendEvent(callback: (event: unknown) => void): () => void;
 };
 
+const previewProjectsKey = "umbratic-preview-projects";
 const previewChatsKey = "umbratic-preview-chats";
 const previewNotesKey = "umbratic-preview-notes";
 const appearanceSettingsKey = "umbratic-ui-appearance";
@@ -578,6 +611,18 @@ type LocalFontWindow = Window & {
 
 function isAppearanceTheme(value: unknown): value is AppearanceTheme {
   return value === "system" || value === "light" || value === "dark";
+}
+
+function readPreviewProjects(): RepositoryInfo[] {
+  try {
+    return JSON.parse(window.localStorage.getItem(previewProjectsKey) ?? "[]") as RepositoryInfo[];
+  } catch {
+    return [];
+  }
+}
+
+function writePreviewProjects(projects: RepositoryInfo[]) {
+  window.localStorage.setItem(previewProjectsKey, JSON.stringify(projects));
 }
 
 function readPreviewChats(): ChatRecord[] {
@@ -1106,6 +1151,7 @@ function previewSkillContent(skill: SkillInfo): string {
 }
 
 const fallbackApi: DesktopApi = {
+  listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
   createChat: async (input) => {
     const now = new Date().toISOString();
@@ -1137,9 +1183,36 @@ const fallbackApi: DesktopApi = {
     writePreviewChats([next, ...chats.filter((chat) => chat.id !== input.chatId)]);
     return next;
   },
+  updateChatProject: async (input) => {
+    const chats = readPreviewChats();
+    const existing = chats.find((chat) => chat.id === input.chatId);
+    if (!existing) throw new Error("Chat was not found.");
+    const next = {
+      ...existing,
+      repositoryName: input.repositoryName,
+      repositoryPath: input.repositoryPath,
+    };
+    writePreviewChats([next, ...chats.filter((chat) => chat.id !== input.chatId)]);
+    return next;
+  },
   deleteChat: async (input) => {
     writePreviewChats(readPreviewChats().filter((chat) => chat.id !== input.chatId));
     return { ok: true };
+  },
+  deleteProjectChats: async (input) => {
+    const deletedChatIds = readPreviewChats()
+      .filter((chat) => chat.repositoryPath === input.repositoryPath)
+      .map((chat) => chat.id);
+    writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== input.repositoryPath));
+    return { ok: true, deletedChatIds };
+  },
+  deleteProject: async (input) => {
+    const deletedChatIds = readPreviewChats()
+      .filter((chat) => chat.repositoryPath === input.repositoryPath)
+      .map((chat) => chat.id);
+    writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== input.repositoryPath));
+    writePreviewProjects(readPreviewProjects().filter((project) => project.rootPath !== input.repositoryPath));
+    return { ok: true, deletedChatIds };
   },
   getNotes: async () => readPreviewNotes(),
   updateNotes: async (input) => writePreviewNotes(input.content),
@@ -1151,9 +1224,8 @@ const fallbackApi: DesktopApi = {
       { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", match: "path" as const },
       { path: "apps/desktop/src/main/main.ts", name: "main.ts", match: "content" as const },
     ].filter((file) => file.path.toLowerCase().includes(input.query.toLowerCase())),
-  pickRepository: async () => ({
-    canceled: false,
-    repository: {
+  pickRepository: async () => {
+    const repository = {
       id: "preview-umbratic",
       name: "Umbratic AI",
       rootPath: "C:\\Users\\potir\\Documents\\Umbratic",
@@ -1162,8 +1234,13 @@ const fallbackApi: DesktopApi = {
       baseCommit: "preview",
       dirty: false,
       statusSummary: "preview",
-    },
-  }),
+    } satisfies RepositoryInfo;
+    writePreviewProjects([repository, ...readPreviewProjects().filter((project) => project.id !== repository.id)]);
+    return {
+      canceled: false,
+      repository,
+    };
+  },
   pickAttachmentFiles: async () => ({
     canceled: false,
     files: [{ path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" }],
@@ -1274,6 +1351,7 @@ const fallbackApi: DesktopApi = {
       : { ok: false, message: "Electron preload is not available." };
   },
   saveSkillDocument: async () => ({ ok: false, message: "Electron preload is not available." }),
+  resetSystemSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
     previewPermissionMode = mode;
     return fallbackApi.getBackendStatus();
@@ -1596,6 +1674,35 @@ function folderName(pathValue?: string): string {
 
 function chatProjectKey(chat: ChatRecord): string {
   return chat.repositoryPath || "__unassigned__";
+}
+
+function chatCountLabel(count: number): string {
+  return `${count} chat${count === 1 ? "" : "s"}`;
+}
+
+function deleteCandidateTitle(candidate: DeleteCandidate): string {
+  if (candidate.kind === "chat") return "Delete chat?";
+  if (candidate.kind === "projectChats") return `Delete all chats in ${candidate.project.name}?`;
+  return `Delete project ${candidate.project.name}?`;
+}
+
+function deleteCandidateDescription(candidate: DeleteCandidate): string {
+  if (candidate.kind === "chat") {
+    return `This removes "${chatDisplayTitle(candidate.chat)}" from the chat archive and deletes app-managed chat files. Project folders and task worktrees are left alone.`;
+  }
+  if (candidate.kind === "projectChats") {
+    return `This removes all ${chatCountLabel(candidate.project.chatCount)} in "${candidate.project.name}" from the chat archive and deletes app-managed chat files. The project folder and task worktrees are left alone.`;
+  }
+  if (candidate.project.chatCount === 0) {
+    return `This removes "${candidate.project.name}" from saved projects. The project folder and task worktrees are left alone.`;
+  }
+  return `This removes "${candidate.project.name}" from saved projects and deletes its ${chatCountLabel(candidate.project.chatCount)} from the chat archive. The project folder and task worktrees are left alone.`;
+}
+
+function deleteCandidateActionLabel(candidate: DeleteCandidate): string {
+  if (candidate.kind === "chat") return "Delete chat";
+  if (candidate.kind === "projectChats") return "Delete chats";
+  return "Delete project";
 }
 
 function chatAttachmentsMatch(left: ChatAttachment[], right: ChatAttachment[]): boolean {
@@ -2604,6 +2711,16 @@ export function filterSkillsBySource(skills: SkillInfo[], filter: SkillSourceFil
   return skills.filter((skill) => skill.source === filter);
 }
 
+function skillGovernanceLabel(skill: SkillInfo): string {
+  const source = skill.source === "system" ? "System" : "Personal";
+  const state =
+    skill.checksumStatus === "modified" || skill.modified ? "Modified" :
+    skill.checksumStatus === "known_good" ? "Verified" :
+    "Untracked";
+  const hash = skill.checksum?.startsWith("sha256:") ? skill.checksum.slice("sha256:".length, "sha256:".length + 8) : "";
+  return [source, state, hash ? `sha256:${hash}` : ""].filter(Boolean).join(" · ");
+}
+
 function ReviewSummaryCard({
   files,
   diffs,
@@ -2702,6 +2819,7 @@ function App() {
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
   const reasoningMode: ReasoningMode = "reasoning";
+  const [projects, setProjects] = useState<RepositoryInfo[]>(composerTestMode ? [composerTestRepository] : []);
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
@@ -2713,8 +2831,9 @@ function App() {
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [promptScrollTop, setPromptScrollTop] = useState(0);
-  const [deleteCandidate, setDeleteCandidate] = useState<ChatRecord | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<DeleteCandidate | null>(null);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
+  const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(composerTestMode ? composerTestEvents : []);
   const [assistantText, setAssistantText] = useState("");
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -2826,6 +2945,7 @@ function App() {
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
   const connectionState = backend?.endpoint ?? "checking";
+  const telemetryPolicy = backend?.diagnostics.telemetry;
   const connectionDisplayState = connectionState === "degraded" ? "ready" : connectionState;
   const connectionLabel =
     backend?.endpoint === "ready" || backend?.endpoint === "degraded"
@@ -2893,10 +3013,15 @@ function App() {
   );
   const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
-    const groups = new Map<
-      string,
-      { key: string; name: string; path?: string; chats: ChatRecord[] }
-    >();
+    const groups = new Map<string, ChatProjectGroup>();
+    for (const project of projects) {
+      groups.set(project.rootPath, {
+        key: project.rootPath,
+        name: project.name,
+        path: project.rootPath,
+        chats: [],
+      });
+    }
     for (const chat of chats) {
       const key = chatProjectKey(chat);
       const existing = groups.get(key);
@@ -2921,7 +3046,7 @@ function App() {
         if (right.key === "__unassigned__") return -1;
         return left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) || left.key.localeCompare(right.key);
       });
-  }, [chats]);
+  }, [chats, projects]);
   const layoutStyle = {
     "--sidebar-width": `${sidebarWidth}px`,
     "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
@@ -3033,6 +3158,7 @@ function App() {
     void loadEndpointSettings();
     void loadHarnessProfile();
     void loadAvailableIdes();
+    void loadProjects();
     void loadChats();
     void loadSkills();
     const statusTimer = window.setInterval(() => void refreshStatus(), 30000);
@@ -3276,6 +3402,7 @@ function App() {
       if (!target.closest(".workspaceModeControl")) setWorkspaceModeMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
       if (!target.closest(".idePicker")) setIdeMenuOpen(null);
+      if (!target.closest(".chatProjectActions")) setProjectActionMenuKey(null);
       if (!target.closest(".attachmentMenu")) setMention(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -3284,6 +3411,7 @@ function App() {
       setWorkspaceModeMenuOpen(false);
       setPermissionMenuOpen(false);
       setIdeMenuOpen(null);
+      setProjectActionMenuKey(null);
       setMention(null);
     };
     document.addEventListener("pointerdown", closeMenus);
@@ -3385,6 +3513,10 @@ function App() {
     setChats((current) => [chat, ...current.filter((row) => row.id !== chat.id)]);
   }
 
+  function mergeProject(project: RepositoryInfo) {
+    setProjects((current) => [project, ...current.filter((row) => row.id !== project.id)]);
+  }
+
   async function ensurePersistedChatForMessage(title: string): Promise<string> {
     if (activeChatId && chats.some((chat) => chat.id === activeChatId)) {
       return activeChatId;
@@ -3437,6 +3569,14 @@ function App() {
     try {
       const nextChats = await api.listChats();
       setChats(nextChats);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function loadProjects() {
+    try {
+      setProjects(await api.listProjects());
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -3789,6 +3929,28 @@ function App() {
     }
   }
 
+  async function resetSelectedSystemSkill() {
+    if (!skillDocument || skillDocument.source !== "system") return;
+    setSkillsMessage(null);
+    setSkillPreviewLoading(true);
+    try {
+      const result = await api.resetSystemSkill({ id: skillDocument.id });
+      if (!result.ok) {
+        setSkillsMessage(result.message);
+        return;
+      }
+      setSkills(result.skills);
+      setSkillsDirectory(result.directory);
+      setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
+      setSkillDocument(result.skill);
+      setSkillsMessage(`Reset ${result.skill.name}.`);
+    } catch (cause) {
+      setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setSkillPreviewLoading(false);
+    }
+  }
+
   async function submitCreateSkill() {
     if (creatingSkill) return;
     setSkillsMessage(null);
@@ -3886,7 +4048,24 @@ function App() {
     try {
       const result = await api.pickRepository();
       if (!result.canceled) {
-        setRepository(result.repository);
+        const nextRepository = result.repository;
+        mergeProject(nextRepository);
+        setRepository(nextRepository);
+        const chatWithoutProject = activeChatId ? chats.find((chat) => chat.id === activeChatId && !chat.repositoryPath) : undefined;
+        if (chatWithoutProject) {
+          const nextChat = await api.updateChatProject({
+            chatId: chatWithoutProject.id,
+            repositoryName: nextRepository.name,
+            repositoryPath: nextRepository.rootPath,
+          });
+          setChats((current) =>
+            current.map((chat) =>
+              chat.id === nextChat.id
+                ? { ...chat, repositoryName: nextChat.repositoryName, repositoryPath: nextChat.repositoryPath }
+                : chat,
+            ),
+          );
+        }
         setBranches([]);
         setBranchError(null);
       }
@@ -3943,6 +4122,7 @@ function App() {
         branch,
       });
       if (result.ok) {
+        mergeProject(result.repository);
         setRepository(result.repository);
         setBranchMenuOpen(false);
       } else {
@@ -3963,6 +4143,7 @@ function App() {
     try {
       const nextRepository = await api.getRepository({ repositoryId, repositoryPath: chat.repositoryPath });
       if (nextRepository) {
+        mergeProject(nextRepository);
         setRepository(nextRepository);
       }
     } catch (cause) {
@@ -4686,6 +4867,24 @@ function App() {
     }
   }
 
+  async function newProject() {
+    setError(null);
+    setBusy(true);
+    try {
+      if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
+      const result = await api.pickRepository();
+      if (!result.canceled) {
+        resetUnsavedChat();
+        mergeProject(result.repository);
+        setRepository(result.repository);
+      }
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function newChatForProject(project: { name: string; path?: string }) {
     if (!project.path) return;
     setError(null);
@@ -4694,6 +4893,7 @@ function App() {
       resetUnsavedChat();
       const nextRepository = await api.getRepository({ repositoryPath: project.path });
       if (nextRepository) {
+        mergeProject(nextRepository);
         setRepository(nextRepository);
       }
     } catch (cause) {
@@ -4793,31 +4993,69 @@ function App() {
     }
   }
 
-  async function confirmDeleteChat() {
+  function clearDeletedActiveChat() {
+    suppressDraftSaveBriefly();
+    setActiveChatId(null);
+    setVisibleTask(null);
+    setEvents([]);
+    setAssistantText("");
+    setApprovalChecks([]);
+    setExpandedCommandId(null);
+    setExpandedReasoningIds(new Set());
+    setAutoExpandedReasoningIds(new Set());
+    setCollapsedReasoningIds(new Set());
+    setPendingPermission(null);
+    setExpandedReviewPaths(new Set());
+    closeReviewPanel();
+    setAttachedFiles([]);
+    setMention(null);
+    setFileMatches([]);
+    setPrompt("");
+  }
+
+  function chatProjectTarget(group: ChatProjectGroup): ProjectDeleteTarget | null {
+    if (!group.path) return null;
+    return {
+      key: group.key,
+      name: group.name,
+      path: group.path,
+      chatCount: group.chats.length,
+    };
+  }
+
+  function removeDeletedChats(deletedChatIds: string[]) {
+    if (!deletedChatIds.length) return;
+    const deleted = new Set(deletedChatIds);
+    setChats((current) => current.filter((chat) => !deleted.has(chat.id)));
+    if (activeChatId && deleted.has(activeChatId)) {
+      clearDeletedActiveChat();
+    }
+  }
+
+  function projectMatchesRepository(project: ProjectDeleteTarget, selectedRepository: RepositoryInfo | null): boolean {
+    return !!selectedRepository && selectedRepository.rootPath === project.path;
+  }
+
+  async function confirmDeleteCandidate() {
     if (!deleteCandidate) return;
     const target = deleteCandidate;
     setDeleteCandidate(null);
     try {
-      await api.deleteChat({ chatId: target.id });
-      setChats((current) => current.filter((chat) => chat.id !== target.id));
-      if (activeChatId === target.id) {
-        suppressDraftSaveBriefly();
-        setActiveChatId(null);
-        setVisibleTask(null);
-        setEvents([]);
-        setAssistantText("");
-        setApprovalChecks([]);
-        setExpandedCommandId(null);
-        setExpandedReasoningIds(new Set());
-        setAutoExpandedReasoningIds(new Set());
-        setCollapsedReasoningIds(new Set());
-        setPendingPermission(null);
-        setExpandedReviewPaths(new Set());
-        closeReviewPanel();
-        setAttachedFiles([]);
-        setMention(null);
-        setFileMatches([]);
-        setPrompt("");
+      if (target.kind === "chat") {
+        await api.deleteChat({ chatId: target.chat.id });
+        removeDeletedChats([target.chat.id]);
+      } else if (target.kind === "projectChats") {
+        const result = await api.deleteProjectChats({ repositoryPath: target.project.path });
+        const localDeletedChatIds = chats.filter((chat) => chat.repositoryPath === target.project.path).map((chat) => chat.id);
+        removeDeletedChats(Array.from(new Set([...result.deletedChatIds, ...localDeletedChatIds])));
+      } else {
+        const result = await api.deleteProject({ repositoryPath: target.project.path });
+        const localDeletedChatIds = chats.filter((chat) => chat.repositoryPath === target.project.path).map((chat) => chat.id);
+        removeDeletedChats(Array.from(new Set([...result.deletedChatIds, ...localDeletedChatIds])));
+        setProjects((current) => current.filter((project) => project.rootPath !== target.project.path));
+        if (projectMatchesRepository(target.project, repository)) {
+          setRepository(null);
+        }
       }
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
@@ -4891,10 +5129,16 @@ function App() {
       <aside className="sidebar">
         <div className="sidebarResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginSidebarResize} />
         <div className="sidebarHeader">
-          <button className="newChatButton" type="button" onClick={newChat}>
-            <Plus size={16} />
-            <span>New chat</span>
-          </button>
+          <div className="newActionSplit" role="group" aria-label="Create">
+            <button className="newActionButton" type="button" onClick={newChat}>
+              <Plus size={16} />
+              <span>New chat</span>
+            </button>
+            <button className="newActionButton" type="button" onClick={() => void newProject()} disabled={busy}>
+              <FolderOpen size={15} />
+              <span>New project</span>
+            </button>
+          </div>
         </div>
         <div className="sidebarStack">
           <section className="chatArchive">
@@ -4902,9 +5146,10 @@ function App() {
               <h2>Chats</h2>
             </div>
             <div className="chatList">
-              {chats.length ? (
+              {chatProjectGroups.length ? (
                 chatProjectGroups.map((group) => {
                   const collapsed = collapsedProjectKeys.has(group.key);
+                  const projectTarget = chatProjectTarget(group);
                   return (
                     <section className="chatProject" key={group.key}>
                       <div className="chatProjectHeader">
@@ -4930,35 +5175,84 @@ function App() {
                             <SquarePen size={14} />
                           </button>
                         ) : null}
+                        {projectTarget ? (
+                          <div className="chatProjectActions">
+                            <button
+                              className="chatProjectActionButton"
+                              type="button"
+                              onClick={() => {
+                                setProjectActionMenuKey((current) => (current === group.key ? null : group.key));
+                              }}
+                              aria-expanded={projectActionMenuKey === group.key}
+                              aria-haspopup="menu"
+                              title={`Project actions for "${group.name}"`}
+                            >
+                              <Ellipsis size={14} />
+                            </button>
+                            {projectActionMenuKey === group.key ? (
+                              <div className="chatProjectMenu" role="menu">
+                                {projectTarget.chatCount > 0 ? (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setProjectActionMenuKey(null);
+                                      setDeleteCandidate({ kind: "projectChats", project: projectTarget });
+                                    }}
+                                  >
+                                    <MessageSquareX size={14} />
+                                    <span>Delete all chats</span>
+                                  </button>
+                                ) : null}
+                                <button
+                                  className="danger"
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setProjectActionMenuKey(null);
+                                    setDeleteCandidate({ kind: "project", project: projectTarget });
+                                  }}
+                                >
+                                  <FolderX size={14} />
+                                  <span>Delete project</span>
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                       {!collapsed ? (
                         <div className="chatProjectChats">
-                          {group.chats.map((chat) => (
-                            <div
-                              className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
-                                closedChatMessage(chat.taskState) ? "closed" : ""
-                              }`}
-                              key={chat.id}
-                            >
-                              <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-                                <span>
-                                  <strong>{chatDisplayTitle(chat)}</strong>
-                                  <em>{chatSubline(chat)}</em>
-                                </span>
-                              </button>
-                              <button
-                                className="chatDeleteButton"
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setDeleteCandidate(chat);
-                                }}
-                                title="Delete chat"
+                          {group.chats.length ? (
+                            group.chats.map((chat) => (
+                              <div
+                                className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
+                                  closedChatMessage(chat.taskState) ? "closed" : ""
+                                }`}
+                                key={chat.id}
                               >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          ))}
+                                <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
+                                  <span>
+                                    <strong>{chatDisplayTitle(chat)}</strong>
+                                    <em>{chatSubline(chat)}</em>
+                                  </span>
+                                </button>
+                                <button
+                                  className="chatDeleteButton"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setDeleteCandidate({ kind: "chat", chat });
+                                  }}
+                                  title="Delete chat"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="chatProjectEmpty">No chats yet.</div>
+                          )}
                         </div>
                       ) : null}
                     </section>
@@ -6089,6 +6383,9 @@ function App() {
                                   <div className="skillRowText">
                                     <strong>{skill.name}</strong>
                                     <em>{skill.description || skillMention(skill)}</em>
+                                    <span className={`skillGovernance ${skill.modified ? "isModified" : ""}`}>
+                                      {skillGovernanceLabel(skill)}
+                                    </span>
                                   </div>
                                 </button>
                                 <button
@@ -6107,6 +6404,17 @@ function App() {
                                   <div className="skillPreviewHeader">
                                     <span>{skillPreviewLoading ? "Loading preview" : "Preview"}</span>
                                     <div className="skillPreviewActions">
+                                      {skillDocument?.source === "system" && skillDocument.modified ? (
+                                        <button
+                                          type="button"
+                                          className="settingsInlineButton"
+                                          onClick={() => void resetSelectedSystemSkill()}
+                                          disabled={skillPreviewLoading}
+                                        >
+                                          <Undo2 size={13} />
+                                          <span>Reset</span>
+                                        </button>
+                                      ) : null}
                                       <button
                                         type="button"
                                         className="settingsInlineButton"
@@ -6147,12 +6455,93 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
                       <p>
-                        Redacted run events are stored on your company server when policy enables telemetry.
-                        Umbratic does not have access unless your organization explicitly grants it.
+                        Umbratic collects redacted run telemetry for organization-managed audit and reliability review.
+                        The page below shows what is included in the telemetry bundle.
                       </p>
                     </div>
+
+                    <div className="settingsGroup">
+                      <h4>Collected</h4>
+                      <div className="settingsList telemetryDisclosureList">
+                        <div className="settingsListRow">
+                          <span>Run facts</span>
+                          <p>
+                            Task, chat, repository, status, timestamps, workspace mode, permission mode, reasoning mode,
+                            runner, policy, provider, and model identifiers.
+                          </p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Repository context</span>
+                          <p>
+                            Base branch, short commit IDs, agent branch, relative changed-file paths, diff statistics,
+                            patch hashes, and latest test result.
+                          </p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Run events</span>
+                          <p>
+                            Redacted message lengths, command classes, redacted command text, trimmed output summaries,
+                            exit codes, permission decisions, review state, merge state, and feedback ratings.
+                          </p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Runtime health</span>
+                          <p>
+                            Runtime profile, capability probe IDs, availability status, importance, affected workflows,
+                            and whether missing capabilities affected the current run.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Protected</h4>
+                      <div className="settingsList telemetryDisclosureList">
+                        <div className="settingsListRow">
+                          <span>Text content</span>
+                          <p>Prompts, assistant responses, and full command output are not stored as raw transcript text.</p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Local paths</span>
+                          <p>Repository roots, worktree paths, and command working directories are stored as short hashes.</p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Secrets</span>
+                          <p>Private keys, API keys, tokens, passwords, and common secret values are redacted before export or sync.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>Policy</h4>
+                      <div className="settingsList">
+                        <div className="settingsListRow">
+                          <span>Sync</span>
+                          <strong>{telemetryPolicy ? (telemetryPolicy.syncEnabled ? "Enabled" : "Disabled") : "Unavailable"}</strong>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Retention</span>
+                          <strong>{telemetryPolicy ? `${telemetryPolicy.retentionDays} days` : "Unavailable"}</strong>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Format</span>
+                          <strong>{telemetryPolicy?.exportFormat ?? "redacted-json"}</strong>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Storage</span>
+                          <strong>
+                            {telemetryPolicy
+                              ? telemetryPolicy.storage === "company-managed-telemetry"
+                                ? "Company-managed telemetry"
+                                : "Task event snapshots"
+                              : "Unavailable"}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+
                     <p className="settingsMessage">
-                      Sync runs automatically in the background. There is nothing to configure here.
+                      Sync runs automatically in the background when enabled by policy. Umbratic does not have access unless your organization explicitly grants it.
                     </p>
                   </div>
                 ) : null}
@@ -6186,24 +6575,33 @@ function App() {
 
       {deleteCandidate ? (
         <div className="modalScrim" role="presentation">
-          <section className="bypassDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-chat-title">
+          <section className="bypassDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
             <div className="dialogIcon deleteIcon">
-              <Trash2 size={18} />
+              {deleteCandidate.kind === "project" ? (
+                <FolderX size={18} />
+              ) : deleteCandidate.kind === "projectChats" ? (
+                <MessageSquareX size={18} />
+              ) : (
+                <Trash2 size={18} />
+              )}
             </div>
             <div>
-              <h3 id="delete-chat-title">Delete chat?</h3>
-              <p>
-                This removes "{chatDisplayTitle(deleteCandidate)}" from the chat archive and deletes app-managed chat files.
-                Project folders and task worktrees are left alone.
-              </p>
+              <h3 id="delete-title">{deleteCandidateTitle(deleteCandidate)}</h3>
+              <p>{deleteCandidateDescription(deleteCandidate)}</p>
             </div>
             <div className="dialogActions">
               <button className="secondaryAction" type="button" onClick={() => setDeleteCandidate(null)}>
                 Cancel
               </button>
-              <button className="dangerAction" type="button" onClick={confirmDeleteChat}>
-                <Trash2 size={14} />
-                Delete chat
+              <button className="dangerAction" type="button" onClick={confirmDeleteCandidate}>
+                {deleteCandidate.kind === "project" ? (
+                  <FolderX size={14} />
+                ) : deleteCandidate.kind === "projectChats" ? (
+                  <MessageSquareX size={14} />
+                ) : (
+                  <Trash2 size={14} />
+                )}
+                {deleteCandidateActionLabel(deleteCandidate)}
               </button>
             </div>
           </section>

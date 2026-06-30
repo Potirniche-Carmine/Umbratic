@@ -237,13 +237,27 @@ test("runTool gates disabled tools, emits lifecycle events, and forwards tool ou
 
   assert.equal(result.title, "README.md");
   assert.equal(result.status, "success");
-  assert.deepEqual(events.map((event) => event.type), ["tool.requested", "tool.finished"]);
-  assert.equal(events[0].summary, "read README.md --limit 1");
-  assert.equal(events[1].status, "success");
-  assert.equal(events[1].exitCode, 0);
-  assert.equal(typeof events[1].durationMs, "number");
-  assert.match(events[1].startedAt, /^\d{4}-\d{2}-\d{2}T/);
-  assert.match(events[1].finishedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const lifecycle = events.filter((event) => event.type === "tool.requested" || event.type === "tool.finished");
+  const stages = events.filter((event) => event.type === "tool.policy.stage");
+  assert.deepEqual(lifecycle.map((event) => event.type), ["tool.requested", "tool.finished"]);
+  assert.deepEqual(stages.map((event) => event.stage), [
+    "normalize_tool_call",
+    "normalize_tool_call",
+    "resolve_workspace_paths",
+    "classify_action",
+    "apply_static_deny_rules",
+    "request_permission",
+    "execute_backend",
+    "execute_backend",
+    "redact_and_summarize_output",
+    "emit_audit_telemetry",
+  ]);
+  assert.equal(lifecycle[0].summary, "read README.md --limit 1");
+  assert.equal(lifecycle[1].status, "success");
+  assert.equal(lifecycle[1].exitCode, 0);
+  assert.equal(typeof lifecycle[1].durationMs, "number");
+  assert.match(lifecycle[1].startedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(lifecycle[1].finishedAt, /^\d{4}-\d{2}-\d{2}T/);
 
   const disabled = context(root, { enabledTools: ["read"] });
   const disabledEvents = [];
@@ -251,9 +265,12 @@ test("runTool gates disabled tools, emits lifecycle events, and forwards tool ou
     () => runTool(disabled.ctx, (event) => disabledEvents.push(event), { id: "call-write", name: "write", arguments: { filePath: "x.txt", content: "x" } }),
     /disabled/,
   );
-  assert.deepEqual(disabledEvents.map((event) => event.type), ["tool.requested", "tool.finished"]);
-  assert.equal(disabledEvents[1].status, "validation_error");
-  assert.equal(disabledEvents[1].errorCode, "tool_disabled");
+  const disabledLifecycle = disabledEvents.filter((event) => event.type === "tool.requested" || event.type === "tool.finished");
+  const disabledBlocked = disabledEvents.find((event) => event.type === "tool.policy.stage" && event.stage === "apply_static_deny_rules" && event.outcome === "blocked");
+  assert.deepEqual(disabledLifecycle.map((event) => event.type), ["tool.requested", "tool.finished"]);
+  assert.equal(disabledBlocked.code, "tool_disabled");
+  assert.equal(disabledLifecycle[1].status, "validation_error");
+  assert.equal(disabledLifecycle[1].errorCode, "tool_disabled");
 });
 
 test("runTool applies edit patch mode and emits patch summaries", async () => {
@@ -274,8 +291,9 @@ test("runTool applies edit patch mode and emits patch summaries", async () => {
   });
 
   assert.equal(result.status, "success");
-  assert.equal(events[0].summary, "edit patch");
-  assert.equal(events[0].commandClass, "edit");
+  const requested = events.find((event) => event.type === "tool.requested");
+  assert.equal(requested.summary, "edit patch");
+  assert.equal(requested.commandClass, "edit");
   assert.equal(toolContext.outputs.some((output) => output.toolCallId === "call-patch" && output.text.includes("added notes/run-tool.md")), true);
   assert.equal(fs.readFileSync(path.join(root, "notes", "run-tool.md"), "utf8"), "created through runTool");
 });
@@ -288,9 +306,12 @@ test("runTool marks malformed model tool arguments as validation errors", async 
     /valid JSON/,
   );
 
-  assert.deepEqual(events.map((event) => event.type), ["tool.requested", "tool.finished"]);
-  assert.equal(events[1].status, "validation_error");
-  assert.equal(events[1].errorCode, "invalid_arguments");
+  const lifecycle = events.filter((event) => event.type === "tool.requested" || event.type === "tool.finished");
+  const normalizeBlocked = events.find((event) => event.type === "tool.policy.stage" && event.stage === "normalize_tool_call" && event.outcome === "blocked");
+  assert.deepEqual(lifecycle.map((event) => event.type), ["tool.requested", "tool.finished"]);
+  assert.equal(normalizeBlocked.code, "invalid_arguments");
+  assert.equal(lifecycle[1].status, "validation_error");
+  assert.equal(lifecycle[1].errorCode, "invalid_arguments");
 });
 
 test("enabledToolSpecs returns only configured tool definitions in canonical order", () => {

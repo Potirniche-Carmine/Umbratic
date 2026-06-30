@@ -57,6 +57,10 @@ function chatsPath(): string {
   return dataFile("chats.json");
 }
 
+function projectChatsPath(rootPath: string): string {
+  return path.join(rootPath, ".umbratic", "chats.json");
+}
+
 function settingsPath(): string {
   return dataFile("settings.json");
 }
@@ -70,6 +74,10 @@ function cloneJsonValue<T>(value: T): T {
     return structuredClone(value);
   }
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function readJsonFile<T>(filePath: string, fallback: T): T {
@@ -220,28 +228,112 @@ export function writeTasks(tasks: TaskRecord[]) {
   writeJsonFile(tasksPath(), tasks);
 }
 
-export function readChats(): ChatRecord[] {
-  return readJsonFile<ChatRecord[]>(chatsPath(), [])
-    .filter(
-      (chat) =>
-        chat &&
-        typeof chat.id === "string" &&
-        typeof chat.title === "string" &&
-        typeof chat.createdAt === "string" &&
-        typeof chat.updatedAt === "string",
-    )
-    .map((chat) => ({
-      ...chat,
-      draftPrompt: typeof chat.draftPrompt === "string" ? chat.draftPrompt : "",
-      attachedFiles: Array.isArray(chat.attachedFiles)
-        ? chat.attachedFiles.filter((file) => file && typeof file.path === "string" && typeof file.name === "string")
-        : [],
-    }))
+function pathKey(pathValue: string): string {
+  const resolved = path.resolve(pathValue);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function normalizeChatRecord(chat: unknown): ChatRecord | null {
+  if (
+    !isRecord(chat) ||
+    typeof chat.id !== "string" ||
+    typeof chat.title !== "string" ||
+    typeof chat.createdAt !== "string" ||
+    typeof chat.updatedAt !== "string"
+  ) {
+    return null;
+  }
+  const repositoryPath =
+    typeof chat.repositoryPath === "string" && chat.repositoryPath.trim()
+      ? path.resolve(chat.repositoryPath)
+      : undefined;
+  return {
+    ...chat,
+    repositoryName:
+      typeof chat.repositoryName === "string" && chat.repositoryName.trim()
+        ? chat.repositoryName.trim().slice(0, 120)
+        : undefined,
+    repositoryPath,
+    draftPrompt: typeof chat.draftPrompt === "string" ? chat.draftPrompt : "",
+    attachedFiles: Array.isArray(chat.attachedFiles)
+      ? chat.attachedFiles.filter((file) => file && typeof file.path === "string" && typeof file.name === "string")
+      : [],
+  } as ChatRecord;
+}
+
+function normalizeChats(chats: unknown[]): ChatRecord[] {
+  return chats
+    .map((chat) => normalizeChatRecord(chat))
+    .filter((chat): chat is ChatRecord => !!chat)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+function putNewestChat(chats: Map<string, ChatRecord>, chat: ChatRecord) {
+  const existing = chats.get(chat.id);
+  if (!existing || chat.updatedAt.localeCompare(existing.updatedAt) >= 0) {
+    chats.set(chat.id, chat);
+  }
+}
+
+export function readChats(): ChatRecord[] {
+  const chats = new Map<string, ChatRecord>();
+  for (const chat of normalizeChats(readJsonFile<ChatRecord[]>(chatsPath(), []))) {
+    putNewestChat(chats, chat);
+  }
+  for (const project of readProjects()) {
+    const projectKey = pathKey(project.rootPath);
+    for (const chat of normalizeChats(readJsonFile<ChatRecord[]>(projectChatsPath(project.rootPath), []))) {
+      if (chat.repositoryPath && pathKey(chat.repositoryPath) !== projectKey) {
+        continue;
+      }
+      putNewestChat(chats, {
+        ...chat,
+        repositoryName: chat.repositoryName ?? project.name,
+        repositoryPath: project.rootPath,
+      });
+    }
+  }
+  return Array.from(chats.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
 export function writeChats(chats: ChatRecord[]) {
-  writeJsonFile(chatsPath(), chats);
+  const projects = readProjects();
+  const projectsByPath = new Map(projects.map((project) => [pathKey(project.rootPath), project]));
+  const projectChats = new Map<string, ChatRecord[]>();
+  const appChats: ChatRecord[] = [];
+
+  for (const chat of normalizeChats(chats)) {
+    const project = chat.repositoryPath ? projectsByPath.get(pathKey(chat.repositoryPath)) : undefined;
+    if (!project) {
+      appChats.push(chat);
+      continue;
+    }
+    const key = pathKey(project.rootPath);
+    const rows = projectChats.get(key) ?? [];
+    rows.push({
+      ...chat,
+      repositoryName: chat.repositoryName ?? project.name,
+      repositoryPath: project.rootPath,
+    });
+    projectChats.set(key, rows);
+  }
+
+  for (const project of projects) {
+    const localPath = projectChatsPath(project.rootPath);
+    const rows = projectChats.get(pathKey(project.rootPath)) ?? [];
+    try {
+      if (rows.length) {
+        writeJsonFile(localPath, rows);
+      } else {
+        jsonFileCache.delete(localPath);
+        fs.rmSync(localPath, { force: true });
+      }
+    } catch {
+      appChats.push(...rows);
+    }
+  }
+
+  writeJsonFile(chatsPath(), appChats);
 }
 
 type RawSettings = {
@@ -264,10 +356,6 @@ type StoredModelEndpointSettings = Omit<ModelEndpointSettings, "headers" | "secr
   secret: "" | StoredProtectedString;
   headers: Array<{ name: string; value: "" | StoredProtectedString }>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function readProtectedString(value: unknown): string | undefined {
   if (typeof value === "string") return value;

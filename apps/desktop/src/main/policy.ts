@@ -316,6 +316,35 @@ export function isHttpModelUrl(value: string): boolean {
   }
 }
 
+export function configuredEndpointUrl(baseUrl: string, endpointPath?: string): string {
+  const base = baseUrl.replace(/\/+$/, "");
+  const defaultPath = base.endsWith("/v1") ? "chat/completions" : "v1/chat/completions";
+  const rawPath = endpointPath?.trim() ? endpointPath.trim() : defaultPath;
+  if (/^https?:\/\//i.test(rawPath)) return rawPath;
+  let normalizedPath = rawPath.replace(/^\/+/, "");
+  if (/\/v\d+$/i.test(new URL(base).pathname) && /^v\d+\//i.test(normalizedPath)) {
+    normalizedPath = normalizedPath.replace(/^v\d+\//i, "");
+  }
+  const baseSegment = new URL(base).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
+  const routeSegment = normalizedPath.split("/").filter(Boolean)[0];
+  if (baseSegment && baseSegment === routeSegment) {
+    normalizedPath = normalizedPath.split("/").filter(Boolean).slice(1).join("/");
+  }
+  return new URL(normalizedPath, `${base}/`).toString();
+}
+
+export function isApprovedVeilChatRoute(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      /^\/api\/(?:engineering|marketing|sales)\/chat\/?$/i.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(`Umbratic runner hardening assertion failed: ${message}`);
@@ -333,10 +362,18 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic AI private endpoint allowlist");
 
   const provider = config.provider as Record<string, unknown> | undefined;
+  assert(provider, "provider must be configured");
   assert(isHttpModelUrl(selectedModel.baseUrl), "model base URL must be an HTTP(S) endpoint");
-  assert(provider?.id === selectedModel.providerId, "provider id must match the selected endpoint");
-  assert(provider?.modelId === selectedModel.modelId, "provider model token must match the selected endpoint");
-  assert(provider?.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
+  assert(provider.id === selectedModel.providerId, "provider id must match the selected endpoint");
+  assert(provider.modelId === selectedModel.modelId, "provider model token must match the selected endpoint");
+  assert(provider.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
+  assert(config.modelBoundary === "managed", "runner model boundary must be managed");
+  assert(typeof provider.chatEndpointPath === "string", "provider must use an explicit Veil chat route");
+  assert(
+    isApprovedVeilChatRoute(configuredEndpointUrl(selectedModel.baseUrl, provider.chatEndpointPath)),
+    "provider route must be an approved Veil chat API",
+  );
+  assert(!("system" in config), "protected system prompts must stay inside Veil");
 }
 
 export function umbraticRunnerHardeningEnvironment(): NodeJS.ProcessEnv {

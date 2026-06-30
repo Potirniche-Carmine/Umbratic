@@ -320,12 +320,20 @@ test("skill document editing validates ids, size, and real files", async () => {
   assert.equal(systemSaved.ok, true);
   assert.equal(systemSaved.skill.name, "Markdown Custom");
   assert.equal(systemSaved.skill.description, "Custom markdown guidance.");
+  assert.equal(systemSaved.skill.modified, true);
+  assert.equal(systemSaved.skill.checksumStatus, "modified");
   assert.equal(fs.readFileSync(systemDocument.skill.path, "utf8"), systemContent);
 
   const selectedSystem = skills.systemSkillsForProfile("sales", "Write a Markdown table.", {}, {}, directory);
   const markdownSkill = selectedSystem.find((skill) => skill.id === "umbratic-markdown");
   assert.equal(markdownSkill.name, "Markdown Custom");
   assert.match(markdownSkill.content, /Prefer very short tables/);
+
+  const resetSystem = await skills.resetSystemSkill({ id: "umbratic-markdown" }, directory);
+  assert.equal(resetSystem.ok, true);
+  assert.equal(resetSystem.skill.modified, false);
+  assert.equal(resetSystem.skill.checksumStatus, "known_good");
+  assert.doesNotMatch(resetSystem.skill.content, /Prefer very short tables/);
 
   const updatedContent = "---\nname: Engineering Review\ndescription: Updated.\n---\n\nRun tests and inspect changed files.";
   const saved = await skills.saveSkillDocument({ id: "engineering-review", content: updatedContent }, directory);
@@ -377,8 +385,16 @@ test("importSkill imports a real folder skill with referenced resources and reje
   const imported = await skills.importSkill({ sourcePath: source }, directory);
   assert.equal(imported.ok, true);
   assert.equal(imported.skill.id, "imported-deal-review");
+  assert.equal(imported.skill.checksumStatus, "known_good");
+  assert.equal(imported.skill.provenance, "imported");
   assert.equal(fs.existsSync(path.join(directory, "imported-deal-review", "SKILL.md")), true);
   assert.equal(fs.readFileSync(path.join(directory, "imported-deal-review", "references", "source.md"), "utf8"), "Imported resource text.");
+
+  fs.writeFileSync(path.join(directory, "imported-deal-review", "references", "source.md"), "Changed resource text.", "utf8");
+  const modifiedListing = await skills.listSkills(directory, {});
+  const modifiedSkill = modifiedListing.skills.find((skill) => skill.id === "imported-deal-review");
+  assert.equal(modifiedSkill.modified, true);
+  assert.equal(modifiedSkill.checksumStatus, "modified");
 
   const duplicate = await skills.importSkill({ sourcePath: source }, directory);
   assert.equal(duplicate.ok, false);

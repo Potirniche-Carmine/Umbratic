@@ -104,6 +104,7 @@ import {
   importSkill as importSkillService,
   listSkills as listSkillsService,
   promptSkillsForRequest as promptSkillsForRequestService,
+  resetSystemSkill as resetSystemSkillService,
   saveSkillDocument as saveSkillDocumentService,
   saveSkillSettings as saveSkillSettingsService,
   skillsDirectoryPath as skillsDirectoryPathService,
@@ -804,6 +805,27 @@ function updateChatDraft(input: unknown): ChatRecord {
   return next;
 }
 
+function updateChatProject(input: unknown): ChatRecord {
+  if (!isRecord(input)) {
+    throw new Error("Invalid chat project input.");
+  }
+  const id = requiredString(input.chatId, "chatId");
+  const repositoryName = requiredString(input.repositoryName, "repositoryName").slice(0, 120);
+  const repositoryPath = path.resolve(requiredString(input.repositoryPath, "repositoryPath"));
+  const chats = readChats();
+  const existing = chats.find((chat) => chat.id === id);
+  if (!existing) {
+    throw new Error("Chat was not found.");
+  }
+  const next: ChatRecord = {
+    ...existing,
+    repositoryName,
+    repositoryPath,
+  };
+  writeChats([next, ...chats.filter((chat) => chat.id !== id)]);
+  return next;
+}
+
 function deleteChat(input: unknown): { ok: true } {
   if (!isRecord(input)) {
     throw new Error("Invalid chat delete input.");
@@ -813,9 +835,50 @@ function deleteChat(input: unknown): { ok: true } {
     throw new Error("Invalid chat id.");
   }
   writeChats(readChats().filter((chat) => chat.id !== id));
-  fs.rmSync(hiddenChatWorkspacePath(id), { recursive: true, force: true });
-  fs.rmSync(chatAttachmentDirectory(id), { recursive: true, force: true });
+  deleteChatManagedFiles(id);
   return { ok: true };
+}
+
+function pathKey(pathValue: string): string {
+  const resolved = path.resolve(pathValue);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function repositoryPathFromInput(input: unknown, action: string): string {
+  if (!isRecord(input)) {
+    throw new Error(`Invalid ${action} input.`);
+  }
+  return path.resolve(requiredString(input.repositoryPath, "repositoryPath"));
+}
+
+function deleteChatManagedFiles(chatIdValue: string) {
+  fs.rmSync(hiddenChatWorkspacePath(chatIdValue), { recursive: true, force: true });
+  fs.rmSync(chatAttachmentDirectory(chatIdValue), { recursive: true, force: true });
+}
+
+function deleteChatsForRepositoryPath(repositoryPath: string): string[] {
+  const targetKey = pathKey(repositoryPath);
+  const chats = readChats();
+  const deleted = chats.filter((chat) => chat.repositoryPath && pathKey(chat.repositoryPath) === targetKey);
+  if (!deleted.length) return [];
+  writeChats(chats.filter((chat) => !chat.repositoryPath || pathKey(chat.repositoryPath) !== targetKey));
+  for (const chat of deleted) {
+    deleteChatManagedFiles(chat.id);
+  }
+  return deleted.map((chat) => chat.id);
+}
+
+function deleteProjectChats(input: unknown): { ok: true; deletedChatIds: string[] } {
+  const repositoryPath = repositoryPathFromInput(input, "project chat delete");
+  return { ok: true, deletedChatIds: deleteChatsForRepositoryPath(repositoryPath) };
+}
+
+function deleteProject(input: unknown): { ok: true; deletedChatIds: string[] } {
+  const repositoryPath = repositoryPathFromInput(input, "project delete");
+  const repositoryKey = pathKey(repositoryPath);
+  const deletedChatIds = deleteChatsForRepositoryPath(repositoryPath);
+  writeProjects(readProjects().filter((project) => pathKey(project.rootPath) !== repositoryKey));
+  return { ok: true, deletedChatIds };
 }
 
 function getNotes(): UserNotes {
@@ -4140,10 +4203,14 @@ async function createWindow() {
 app.whenReady().then(async () => {
   finishInterruptedRunningTasks();
   compactClosedTaskStorage();
+  handleIpc("umbratic:list-projects", () => readProjects());
   handleIpc("umbratic:list-chats", () => readChats());
   handleIpc("umbratic:create-chat", (input) => createChat(input));
   handleIpc("umbratic:update-chat-draft", (input) => updateChatDraft(input));
+  handleIpc("umbratic:update-chat-project", (input) => updateChatProject(input));
   handleIpc("umbratic:delete-chat", (input) => deleteChat(input));
+  handleIpc("umbratic:delete-project-chats", (input) => deleteProjectChats(input));
+  handleIpc("umbratic:delete-project", (input) => deleteProject(input));
   handleIpc("umbratic:get-notes", () => getNotes());
   handleIpc("umbratic:update-notes", (input) => updateNotes(input));
   handleIpc("umbratic:get-task", (input) => publicTaskById(input));
@@ -4173,6 +4240,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:create-skill", (input) => createSkillService(input as { name?: string }));
   handleIpc("umbratic:get-skill-document", (input) => getSkillDocumentService(input as { id?: string }));
   handleIpc("umbratic:save-skill-document", (input) => saveSkillDocumentService(input as { id?: string; content?: string }));
+  handleIpc("umbratic:reset-system-skill", (input) => resetSystemSkillService(input as { id?: string }));
   handleIpc("umbratic:set-permission-mode", (mode) => setPermissionMode(mode));
   handleIpc("umbratic:list-available-ides", () => listAvailableIdes());
   handleIpc("umbratic:open-repository-in-ide", (input) => openRepositoryInIde(input));

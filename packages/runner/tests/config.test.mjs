@@ -54,6 +54,7 @@ test("loadRunnerConfig normalizes enabled tools, runtime profiles, headers, and 
   assert.equal(loaded.taskId, "task-1");
   assert.equal(loaded.cwd, "C:/workspace");
   assert.equal(loaded.workspaceMode, "worktree");
+  assert.equal(loaded.modelBoundary, "development");
   assert.deepEqual(plain(loaded.runtimeProfiles), ["python", "git"]);
   assert.equal(loaded.permissionMode, "bypass");
   assert.deepEqual(plain(loaded.enabledTools), ["read", "command"]);
@@ -104,4 +105,40 @@ test("loadRunnerConfig rejects missing config, malformed shapes, and unsupported
   } else {
     process.env.UMBRATIC_RUNNER_CONFIG = previous;
   }
+});
+
+test("loadRunnerConfig enforces managed Veil boundary in managed mode", () => {
+  const managed = {
+    cwd: "/repo",
+    modelBoundary: "managed",
+    provider: {
+      id: "company-endpoint",
+      name: "Veil",
+      baseURL: "https://veil.example.internal",
+      chatEndpointPath: "/api/engineering/chat",
+      modelId: "veil-managed",
+    },
+  };
+
+  const loaded = withRunnerConfig(managed, (config) => config.loadRunnerConfig());
+  assert.equal(loaded.modelBoundary, "managed");
+  assert.equal(loaded.provider.id, "company-endpoint");
+  assert.equal(loaded.provider.chatEndpointPath, "/api/engineering/chat");
+
+  assert.throws(
+    () => withRunnerConfig({ ...managed, provider: { ...managed.provider, id: "ollama" } }, (config) => config.loadRunnerConfig()),
+    /company-endpoint/,
+  );
+  assert.throws(
+    () => withRunnerConfig({ ...managed, provider: { ...managed.provider, chatEndpointPath: "/api/chat" } }, (config) => config.loadRunnerConfig()),
+    /approved Veil chat route/,
+  );
+  assert.throws(
+    () => withRunnerConfig({ ...managed, provider: { ...managed.provider, chatEndpointPath: "/v1/chat/completions" } }, (config) => config.loadRunnerConfig()),
+    /approved Veil chat route/,
+  );
+  assert.throws(
+    () => withRunnerConfig({ ...managed, system: "client-side protected prompt" }, (config) => config.loadRunnerConfig()),
+    /client system prompt/,
+  );
 });

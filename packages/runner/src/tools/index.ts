@@ -1,4 +1,4 @@
-import { nowIso, type UmbraticRunnerEvent } from "../events.js";
+import { nowIso, type ToolPolicyStage, type UmbraticRunnerEvent } from "../events.js";
 import { classifyCommandText, redactText } from "../policy.js";
 import { commandTool } from "./command.js";
 import { editTool } from "./edit.js";
@@ -180,6 +180,15 @@ export function schemaHasAdapterHostileShapes(value: unknown): boolean {
   return Object.values(value).some(schemaHasAdapterHostileShapes);
 }
 
+function staticCommandDenyReason(classification: ReturnType<typeof classifyCommandText>): string | null {
+  if (classification.commandClass === "network" || classification.commandClass === "external-directory") {
+    return `Command blocked by policy: ${classification.reason ?? classification.commandClass}`;
+  }
+  if (classification.commandClass === "python-runtime" && classification.risky) {
+    return "Bare python commands are blocked; use uv or a workspace virtual environment.";
+  }
+  return null;
+}
 
 function parseArguments(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -200,12 +209,36 @@ function parseArguments(value: unknown): Record<string, unknown> {
 export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEvent) => void, toolCall: { id: string; name: string; arguments: unknown }): Promise<ToolResult> {
   const startedAt = nowIso();
   const startedMs = Date.now();
+  const emitStage = (
+    stage: ToolPolicyStage,
+    outcome: "started" | "passed" | "blocked" | "skipped",
+    summary?: string,
+    code?: ToolResult["errorCode"],
+  ) => {
+    emit({
+      type: "tool.policy.stage",
+      taskId: ctx.taskId,
+      toolCallId: toolCall.id,
+      stage,
+      outcome,
+      ...(summary ? { summary: redactText(summary, 320) } : {}),
+      ...(code ? { code } : {}),
+      at: nowIso(),
+    });
+  };
   let input: Record<string, unknown> = {};
   let argumentError: unknown;
+  emitStage("normalize_tool_call", "started");
   try {
     input = parseArguments(toolCall.arguments);
   } catch (error) {
     argumentError = error;
+  }
+  if (argumentError) {
+    const failure = toolFailureDetails(argumentError);
+    emitStage("normalize_tool_call", "blocked", failure.message, failure.errorCode);
+  } else {
+    emitStage("normalize_tool_call", "passed");
   }
   const commandSummary =
     argumentError ? toolCall.name :
@@ -224,6 +257,12 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
     cwd: ctx.cwd,
     at: startedAt,
   });
+  emitStage(
+    "resolve_workspace_paths",
+    toolCall.name === "command" || argumentError ? "skipped" : "passed",
+    toolCall.name === "command" ? "command policy does not resolve a file path" : commandSummary,
+  );
+  emitStage("classify_action", "passed", classification.commandClass);
 
   const finish = (result: Pick<ToolResult, "status" | "errorCode" | "errorMessage" | "exitCode">) => {
     const finishedAt = nowIso();
@@ -245,11 +284,27 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
   try {
     if (argumentError) throw argumentError;
     if (!isRunnerToolName(toolCall.name)) {
+      emitStage("apply_static_deny_rules", "blocked", `Unknown tool: ${toolCall.name}`, "unknown_tool");
       throw toolError("validation_error", "unknown_tool", `Unknown tool: ${toolCall.name}`);
     }
     if (!ctx.enabledTools.includes(toolCall.name)) {
+      emitStage("apply_static_deny_rules", "blocked", `Tool "${toolCall.name}" is disabled`, "tool_disabled");
       throw toolError("validation_error", "tool_disabled", `Tool "${toolCall.name}" is disabled by the current tool settings.`);
     }
+    if (toolCall.name === "command") {
+      const deny = staticCommandDenyReason(classification);
+      if (deny) {
+        emitStage("apply_static_deny_rules", "blocked", deny, "policy_blocked");
+        throw toolError("policy_blocked", "policy_blocked", deny);
+      }
+    }
+    emitStage("apply_static_deny_rules", "passed");
+    emitStage(
+      "request_permission",
+      toolCall.name === "read" || toolCall.name === "search" ? "skipped" : "started",
+      toolCall.name === "read" || toolCall.name === "search" ? "read-only tool" : commandSummary,
+    );
+    emitStage("execute_backend", "started");
     const result =
       toolCall.name === "read" ? await readTool(ctx, input) :
       toolCall.name === "write" ? await writeTool(ctx, input) :
@@ -257,14 +312,19 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
       toolCall.name === "search" ? await searchTool(ctx, input) :
       toolCall.name === "command" ? await commandTool(ctx, input, toolCall.id) :
       (() => { throw toolError("validation_error", "unknown_tool", `Unknown tool: ${toolCall.name}`); })();
+    emitStage("execute_backend", "passed");
     if (toolCall.name !== "command" && result.output) {
       ctx.emitToolOutput(toolCall.id, "stdout", `${result.output}\n`);
     }
+    emitStage("redact_and_summarize_output", "passed", result.title);
     finish(result);
+    emitStage("emit_audit_telemetry", "passed", result.status);
     return result;
   } catch (error) {
     const failure = toolFailureDetails(error);
+    emitStage("execute_backend", "blocked", failure.message, failure.errorCode);
     finish({ status: failure.status, errorCode: failure.errorCode, errorMessage: failure.message, exitCode: 1 });
+    emitStage("emit_audit_telemetry", "passed", failure.status);
     throw error;
   }
 }

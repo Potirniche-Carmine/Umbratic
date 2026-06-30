@@ -6,23 +6,67 @@ import type { InputPart } from "./session.js";
 import { SessionStore } from "./session.js";
 
 const localProtocol = "http";
+const maxLocalJsonBodyBytes = 512 * 1024;
+
+class HttpBoundaryError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly publicMessage: string;
+
+  constructor(status: number, code: string, publicMessage: string) {
+    super(publicMessage);
+    this.name = "HttpBoundaryError";
+    this.status = status;
+    this.code = code;
+    this.publicMessage = publicMessage;
+  }
+}
 
 async function readJson(request: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let totalBytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > maxLocalJsonBodyBytes) {
+      throw new HttpBoundaryError(413, "request_too_large", "Request body is too large.");
+    }
+    chunks.push(buffer);
+  }
   if (chunks.length === 0) return {};
   const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) as Record<string, unknown> : {};
+  try {
+    const parsed = text ? JSON.parse(text) as unknown : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new HttpBoundaryError(400, "invalid_json_shape", "Request body must be a JSON object.");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof HttpBoundaryError) throw error;
+    throw new HttpBoundaryError(400, "invalid_json", "Request body must be valid JSON.");
+  }
 }
 
-function sendJson(response: http.ServerResponse, status: number, value: unknown) {
-  response.writeHead(status, { "Content-Type": "application/json" });
+function noStoreHeaders(headers: http.OutgoingHttpHeaders = {}): http.OutgoingHttpHeaders {
+  return {
+    "Cache-Control": "no-store",
+    Pragma: "no-cache",
+    ...headers,
+  };
+}
+
+function sendJson(response: http.ServerResponse, status: number, value: unknown, headers: http.OutgoingHttpHeaders = {}) {
+  response.writeHead(status, noStoreHeaders({ "Content-Type": "application/json", ...headers }));
   response.end(JSON.stringify(value));
 }
 
 function sendNoContent(response: http.ServerResponse) {
-  response.writeHead(204);
+  response.writeHead(204, noStoreHeaders());
   response.end();
+}
+
+function sendError(response: http.ServerResponse, status: number, code: string, message: string, headers: http.OutgoingHttpHeaders = {}) {
+  sendJson(response, status, { error: message, code }, headers);
 }
 
 function isAuthorized(request: http.IncomingMessage, password: string): boolean {
@@ -68,17 +112,15 @@ export async function listen(opts: { hostname: string; port: number; password: s
     try {
       const url = new URL(request.url ?? "/", `${localProtocol}://${opts.hostname}:${opts.port}`);
       if (!isAuthorized(request, opts.password)) {
-        response.writeHead(401, { "WWW-Authenticate": "Basic" });
-        response.end("Unauthorized");
+        sendError(response, 401, "unauthorized", "Unauthorized", { "WWW-Authenticate": "Basic" });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/event") {
-        response.writeHead(200, {
+        response.writeHead(200, noStoreHeaders({
           "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
           Connection: "keep-alive",
-        });
+        }));
         response.flushHeaders?.();
         response.write(": connected\n\n");
         const heartbeat = setInterval(() => {
@@ -102,6 +144,10 @@ export async function listen(opts: { hostname: string; port: number; password: s
       if (request.method === "POST" && promptMatch) {
         const session = store.get(decodeURIComponent(promptMatch[1]));
         const body = await readJson(request);
+        if (store.config.modelBoundary === "managed" && Object.hasOwn(body, "system")) {
+          sendError(response, 400, "protected_system_prompt", "System prompts are managed by Veil.");
+          return;
+        }
         const parts = inputPartsFromBody(body);
         const system = typeof body.system === "string" ? body.system : "";
         if (system && !session.messages.some((message) => message.role === "system")) {
@@ -118,7 +164,8 @@ export async function listen(opts: { hostname: string; port: number; password: s
               type: "runner.error",
               taskId: session.taskId,
               category: "loop",
-              message: error instanceof Error ? error.message : String(error),
+              code: "loop_error",
+              message: "Runner turn failed.",
               at: nowIso(),
             });
           });
@@ -143,9 +190,17 @@ export async function listen(opts: { hostname: string; port: number; password: s
         return;
       }
 
-      sendJson(response, 404, { error: "Not found" });
+      sendError(response, 404, "not_found", "Not found");
     } catch (error) {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      if (error instanceof HttpBoundaryError) {
+        sendError(response, error.status, error.code, error.publicMessage);
+        return;
+      }
+      if (error instanceof Error && error.message === "Session not found") {
+        sendError(response, 404, "session_not_found", "Session not found.");
+        return;
+      }
+      sendError(response, 500, "internal_error", "Internal runner error.");
     }
   });
 

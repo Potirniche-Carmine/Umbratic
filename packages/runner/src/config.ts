@@ -1,4 +1,4 @@
-import { assertAllowedProvider, type UmbraticProviderConfig } from "./provider/local.js";
+import { assertAllowedProvider, type RunnerModelBoundary, type UmbraticProviderConfig } from "./provider/local.js";
 
 export type PermissionMode = "normal" | "bypass";
 export const runnerToolNames = ["read", "write", "edit", "search", "command"] as const;
@@ -8,6 +8,7 @@ export type RunnerConfig = {
   taskId?: string;
   cwd: string;
   workspaceMode?: "local" | "worktree";
+  modelBoundary: RunnerModelBoundary;
   runtimeProfiles?: string[];
   permissionMode: PermissionMode;
   enabledTools: RunnerToolName[];
@@ -64,16 +65,31 @@ function runtimeProfilesValue(value: unknown): string[] | undefined {
   return seen.size ? [...seen] : undefined;
 }
 
+function modelBoundaryValue(value: unknown): RunnerModelBoundary {
+  if (value === "managed") return "managed";
+  if (value === "development") return "development";
+  return process.env.NODE_ENV === "production" ? "managed" : "development";
+}
+
 export function loadRunnerConfig(): RunnerConfig {
   const raw = process.env.UMBRATIC_RUNNER_CONFIG;
   if (!raw) throw new Error("UMBRATIC_RUNNER_CONFIG is required");
   const config = asRecord(JSON.parse(raw) as unknown);
   const provider = asRecord(config.provider);
   const mtls = "mtls" in provider && provider.mtls ? asRecord(provider.mtls) : undefined;
+  const modelBoundary = modelBoundaryValue(config.modelBoundary);
+  const providerId = optionalString(provider.id);
+  if (modelBoundary === "managed" && providerId !== "company-endpoint") {
+    throw new Error("managed runner config requires provider.id company-endpoint");
+  }
+  if (modelBoundary === "managed" && typeof config.system === "string" && config.system.trim()) {
+    throw new Error("managed runner config must not include a client system prompt");
+  }
   return {
     taskId: typeof config.taskId === "string" && config.taskId.trim() ? config.taskId.trim() : undefined,
     cwd: stringValue(config.cwd, "cwd"),
     workspaceMode: config.workspaceMode === "worktree" ? "worktree" : "local",
+    modelBoundary,
     runtimeProfiles: runtimeProfilesValue(config.runtimeProfiles),
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     enabledTools: enabledToolsValue(config.enabledTools),
@@ -95,8 +111,8 @@ export function loadRunnerConfig(): RunnerConfig {
             passphrase: optionalString(mtls.passphrase),
             serverName: optionalString(mtls.serverName),
             pinnedServerCertificateSha256: optionalString(mtls.pinnedServerCertificateSha256),
-          }
+        }
         : undefined,
-    }),
+    }, { modelBoundary }),
   };
 }

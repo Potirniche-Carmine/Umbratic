@@ -20,11 +20,16 @@ type PastedAttachmentInput = {
 };
 
 const umbraticApi = {
+  listProjects: () => ipcRenderer.invoke("umbratic:list-projects"),
   listChats: () => ipcRenderer.invoke("umbratic:list-chats"),
   createChat: (input?: ChatInput) => ipcRenderer.invoke("umbratic:create-chat", input ?? {}),
   updateChatDraft: (input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }) =>
     ipcRenderer.invoke("umbratic:update-chat-draft", input),
+  updateChatProject: (input: { chatId: string; repositoryName: string; repositoryPath: string }) =>
+    ipcRenderer.invoke("umbratic:update-chat-project", input),
   deleteChat: (input: { chatId: string }) => ipcRenderer.invoke("umbratic:delete-chat", input),
+  deleteProjectChats: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:delete-project-chats", input),
+  deleteProject: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:delete-project", input),
   getNotes: () => ipcRenderer.invoke("umbratic:get-notes"),
   updateNotes: (input: { content: string }) => ipcRenderer.invoke("umbratic:update-notes", input),
   getTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:get-task", input),
@@ -64,6 +69,7 @@ const umbraticApi = {
   createSkill: (input: { name: string }) => ipcRenderer.invoke("umbratic:create-skill", input),
   getSkillDocument: (input: { id: string }) => ipcRenderer.invoke("umbratic:get-skill-document", input),
   saveSkillDocument: (input: { id: string; content: string }) => ipcRenderer.invoke("umbratic:save-skill-document", input),
+  resetSystemSkill: (input: { id: string }) => ipcRenderer.invoke("umbratic:reset-system-skill", input),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("umbratic:set-permission-mode", mode),
   listAvailableIdes: () => ipcRenderer.invoke("umbratic:list-available-ides"),
   startTask: (input: {
