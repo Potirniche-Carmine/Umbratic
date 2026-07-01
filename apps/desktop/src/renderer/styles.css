@@ -230,14 +230,12 @@
     0 14px 34px rgba(40, 48, 58, 0.12);
 }
 
-:root[data-theme="light"] .newActionSplit,
 :root[data-theme="light"] .settingsPlaceholder {
   border-color: rgba(40, 48, 58, 0.14);
   color: color-mix(in srgb, var(--text) 78%, var(--muted));
   background: var(--control-bg);
 }
 
-:root[data-theme="light"] .newActionButton:hover,
 :root[data-theme="light"] .settingsPlaceholder:hover {
   border-color: rgba(40, 48, 58, 0.24);
   color: var(--text);
@@ -573,11 +571,6 @@ pre {
   transition: none;
 }
 
-.sidebarHeader {
-  flex-shrink: 0;
-  padding-bottom: 4px;
-}
-
 .sidebarStack {
   display: flex;
   flex: 1 1 auto;
@@ -596,57 +589,54 @@ pre {
 }
 
 .newActionSplit {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  width: 100%;
-  min-height: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  color: var(--text);
-  background: var(--control-bg);
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  max-width: 100%;
+  min-height: 26px;
 }
 
 .newActionButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 32px;
-  min-width: 0;
-  padding: 0 9px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: var(--text);
-  font-weight: 500;
-  font-size: 12.5px;
-  letter-spacing: 0;
+  background: transparent;
+  line-height: 0;
   transition:
+    border-color 120ms ease,
     background 120ms ease,
     color 120ms ease;
 }
 
-.newActionButton + .newActionButton {
-  border-left: 1px solid var(--line);
-}
-
-.newActionButton span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .newActionButton svg {
-  flex: 0 0 auto;
   color: var(--muted);
   transition: color 120ms ease;
 }
 
-.newActionButton:hover {
+.newActionButton:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--control-hover-soft);
+}
+
+.newActionButton:hover:not(:disabled) svg {
+  color: var(--text);
+}
+
+.newActionButton:focus-visible {
+  border-color: var(--line-strong);
   background: var(--control-hover);
 }
 
-.newActionButton:hover svg {
-  color: var(--text);
+.newActionButton:disabled {
+  color: var(--faint);
+  cursor: default;
+  opacity: 0.55;
 }
 
 .chatArchive {
@@ -659,8 +649,14 @@ pre {
 }
 
 .chatArchive .sideHeader {
-  padding: 2px 4px;
-  min-height: 22px;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 2px 4px;
+  min-height: 26px;
+}
+
+.chatArchive .newActionSplit {
+  margin-left: auto;
 }
 
 .chatList {
@@ -849,6 +845,128 @@ pre {
 }
 
 .chatProjectChats::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 1px;
+  background: var(--line);
+}
+
+.chatProjectChats.hasWorktrees {
+  gap: 4px;
+}
+
+.chatWorktree {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chatWorktreeHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chatWorktreeToggle {
+  display: grid;
+  grid-template-columns: 13px 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  min-height: 27px;
+  padding: 2px 5px 2px 2px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.chatWorktreeToggle:hover {
+  color: var(--text);
+}
+
+.chatWorktreeToggle > svg {
+  color: var(--faint);
+}
+
+.chatWorktreeToggle > svg:first-child {
+  transition: transform 120ms ease;
+}
+
+.chatWorktreeToggle > svg:first-child.collapsed {
+  transform: rotate(-90deg);
+}
+
+.chatWorktreeToggle span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chatWorktreeToggle strong,
+.chatWorktreeToggle em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatWorktreeToggle strong {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.chatWorktreeToggle em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 9.5px;
+}
+
+.chatWorktreeNewButton {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--faint);
+  line-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background 100ms ease,
+    color 100ms ease,
+    opacity 100ms ease;
+}
+
+.chatWorktreeNewButton:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.chatWorktreeNewButton:disabled {
+  opacity: 0.35;
+}
+
+.chatWorktree:hover .chatWorktreeNewButton,
+.chatWorktree:focus-within .chatWorktreeNewButton {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chatWorktreeChats {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  margin-left: 17px;
+  padding-left: 8px;
+}
+
+.chatWorktreeChats::before {
   content: "";
   position: absolute;
   top: 2px;

@@ -4,7 +4,7 @@ type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type BackendUiEvent = Record<string, unknown>;
-type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean };
+type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean };
 type ChatAttachment = {
   path: string;
   name: string;
@@ -79,6 +79,7 @@ const umbraticApi = {
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
+    worktreeTaskId?: string;
   }) =>
     ipcRenderer.invoke("umbratic:start-task", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>

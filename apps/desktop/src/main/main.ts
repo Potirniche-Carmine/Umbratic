@@ -480,6 +480,7 @@ function publicTask(task: TaskRecord): TaskInfo {
   const {
     id,
     chatId,
+    worktreeRootTaskId,
     repositoryId,
     prompt,
     workspaceKind,
@@ -506,6 +507,7 @@ function publicTask(task: TaskRecord): TaskInfo {
   return {
     id,
     chatId,
+    worktreeRootTaskId,
     repositoryId,
     prompt,
     workspaceKind,
@@ -541,6 +543,59 @@ function getTask(taskId: string): TaskRecord {
 
 function taskUsesIsolatedWorktree(task: TaskRecord): boolean {
   return task.workspaceKind === "git" && task.workspaceMode === "worktree" && !!task.agentBranch;
+}
+
+function taskCanHostWorktreeChats(task: TaskRecord): boolean {
+  return (
+    taskUsesIsolatedWorktree(task) &&
+    task.state !== "merged" &&
+    task.state !== "rejected" &&
+    !!task.worktreePath &&
+    fs.existsSync(task.worktreePath) &&
+    pathInside(worktreeRootForRepo(task.originalRepoPath), task.worktreePath)
+  );
+}
+
+function worktreeRootTaskId(task: TaskRecord): string {
+  return task.worktreeRootTaskId ?? task.id;
+}
+
+function findReusableWorktreeTask(taskIdValue?: string): TaskRecord | undefined {
+  if (!taskIdValue || !/^task-[A-Za-z0-9_-]+$/.test(taskIdValue)) return undefined;
+  return readTasks().find((row) => (row.id === taskIdValue || row.worktreeRootTaskId === taskIdValue) && taskCanHostWorktreeChats(row));
+}
+
+function worktreeHasActiveRun(worktreePath: string): boolean {
+  const target = pathKey(worktreePath);
+  for (const task of readTasks()) {
+    if (!task.worktreePath || pathKey(task.worktreePath) !== target) continue;
+    if (activeRunnerProcesses.has(task.id) || task.state === "running" || task.state === "awaiting_worktree_approval" || task.state === "approving") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function assertReusableWorktreeForRepository(task: TaskRecord, repository: RepositoryInfo) {
+  if (!taskCanHostWorktreeChats(task)) {
+    throw new Error("This worktree is no longer open. Start a new worktree chat from the project.");
+  }
+  if (pathKey(task.originalRepoPath) !== pathKey(repository.rootPath)) {
+    throw new Error("This worktree belongs to a different project.");
+  }
+  if (worktreeHasActiveRun(task.worktreePath)) {
+    throw new Error("This worktree already has a chat in progress.");
+  }
+}
+
+function chatWorktreeTaskId(chat?: ChatRecord): string | undefined {
+  if (chat?.worktreeRootTaskId && /^task-[A-Za-z0-9_-]+$/.test(chat.worktreeRootTaskId)) {
+    return chat.worktreeRootTaskId;
+  }
+  if (chat?.taskId && /^task-[A-Za-z0-9_-]+$/.test(chat.taskId)) {
+    return chat.taskId;
+  }
+  return undefined;
 }
 
 function taskEnabledTools(task: TaskRecord): RunnerToolId[] {
@@ -748,6 +803,16 @@ function createChat(input: unknown): ChatRecord {
     isRecord(input) && typeof input.repositoryPath === "string" && input.repositoryPath.trim()
       ? path.resolve(input.repositoryPath.trim())
       : undefined;
+  const requestedWorktreeTaskId =
+    isRecord(input) && typeof input.worktreeTaskId === "string" && input.worktreeTaskId.trim()
+      ? input.worktreeTaskId.trim()
+      : isRecord(input)
+        ? chatWorktreeTaskId(input as ChatRecord)
+        : undefined;
+  const reusableWorktree = findReusableWorktreeTask(requestedWorktreeTaskId);
+  if (requestedWorktreeTaskId && !reusableWorktree) {
+    throw new Error("This worktree is no longer open. Start a new worktree chat from the project.");
+  }
   const now = new Date().toISOString();
   const chat: ChatRecord = {
     id: requestedId ?? chatId(),
@@ -756,6 +821,10 @@ function createChat(input: unknown): ChatRecord {
     updatedAt: now,
     repositoryName,
     repositoryPath,
+    worktreeRootTaskId: reusableWorktree ? worktreeRootTaskId(reusableWorktree) : undefined,
+    worktreePath: reusableWorktree?.worktreePath,
+    worktreeBranch: reusableWorktree?.agentBranch,
+    worktreeBaseCommit: reusableWorktree?.baseCommit,
     draftPrompt: "",
     attachedFiles: [],
   };
@@ -900,6 +969,7 @@ function updateChatFromTask(task: TaskRecord) {
   const chats = readChats();
   const existing = chats.find((chat) => chat.id === task.chatId);
   const repository = task.hiddenWorkspace ? undefined : readProjects().find((project) => project.id === task.repositoryId);
+  const isolatedWorktree = taskUsesIsolatedWorktree(task);
   const next: ChatRecord = {
     id: task.chatId,
     title: chatTitleFromPrompt(task.prompt),
@@ -910,6 +980,10 @@ function updateChatFromTask(task: TaskRecord) {
     repositoryName: repository?.name ?? existing?.repositoryName,
     repositoryPath: repository?.rootPath ?? existing?.repositoryPath,
     changedFiles: task.changedFiles.length,
+    worktreeRootTaskId: isolatedWorktree ? worktreeRootTaskId(task) : undefined,
+    worktreePath: isolatedWorktree ? task.worktreePath : undefined,
+    worktreeBranch: isolatedWorktree ? task.agentBranch : undefined,
+    worktreeBaseCommit: isolatedWorktree ? task.baseCommit : undefined,
     draftPrompt: existing?.draftPrompt ?? "",
     attachedFiles: existing?.attachedFiles ?? [],
   };
@@ -3401,6 +3475,7 @@ function startTaskRequestKey(input: Record<string, unknown>): string {
     : [];
   return JSON.stringify({
     repositoryId: typeof input.repositoryId === "string" ? input.repositoryId.trim() : "",
+    worktreeTaskId: typeof input.worktreeTaskId === "string" ? input.worktreeTaskId.trim() : "",
     prompt: typeof input.prompt === "string" ? input.prompt.trim() : "",
     attachedFiles,
     reasoningMode: input.reasoningMode === "fast" ? "fast" : "reasoning",
@@ -3459,8 +3534,11 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const prompt = requiredString(input.prompt, "prompt");
   const reasoningMode = parseReasoningMode(input.reasoningMode);
   const requestedChatId = typeof input.chatId === "string" && input.chatId.trim() ? input.chatId.trim() : undefined;
+  const inputWorktreeTaskId =
+    typeof input.worktreeTaskId === "string" && input.worktreeTaskId.trim() ? input.worktreeTaskId.trim() : undefined;
   const hiddenWorkspace = !requestedRepositoryId;
   const existingChat = requestedChatId ? readChats().find((row) => row.id === requestedChatId) : undefined;
+  const requestedWorktreeTaskId = inputWorktreeTaskId ?? chatWorktreeTaskId(existingChat);
   const nextChatId = existingChat?.id ?? requestedChatId ?? chatId();
   const repositoryForChat = hiddenWorkspace
     ? hiddenChatRepository(nextChatId)
@@ -3480,8 +3558,12 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const repositoryId = refreshed.id;
   const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
   const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
+  const reusableWorktreeTask = requestedWorktreeTaskId ? findReusableWorktreeTask(requestedWorktreeTaskId) : undefined;
   const requestedWorkspaceMode: WorkspaceMode =
     !hiddenWorkspace && refreshed.kind === "git" && input.useWorktree === true ? "worktree" : "local";
+  if (requestedWorktreeTaskId && requestedWorkspaceMode === "worktree" && !reusableWorktreeTask) {
+    throw new Error("This worktree is no longer open. Start a new worktree chat from the project.");
+  }
   const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt));
@@ -3545,6 +3627,45 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     appendUserMessage(existingTask, prompt, attachments);
     void runRunnerTask(existingTask.id, undefined, prompt, attachments);
     return publicTask(existingTask);
+  }
+
+  if (reusableWorktreeTask && requestedWorkspaceMode === "worktree") {
+    assertReusableWorktreeForRepository(reusableWorktreeTask, refreshed);
+    const id = taskId();
+    const task: TaskRecord = {
+      id,
+      chatId: chat?.id,
+      worktreeRootTaskId: worktreeRootTaskId(reusableWorktreeTask),
+      repositoryId,
+      prompt,
+      workspaceKind: "git",
+      workspaceMode: "worktree",
+      hiddenWorkspace,
+      state: "running",
+      originalBranch: reusableWorktreeTask.originalBranch,
+      baseCommit: reusableWorktreeTask.baseCommit,
+      agentBranch: reusableWorktreeTask.agentBranch,
+      worktreePath: reusableWorktreeTask.worktreePath,
+      permissionMode,
+      reasoningMode,
+      runnerName: umbraticRunnerName,
+      runnerVersion: umbraticRunnerVersion,
+      policyVersion: umbraticPolicyVersion,
+      runtimeProfile: runtimeProfileForCurrentHarness(prompt),
+      createdAt: new Date().toISOString(),
+      changedFiles: [],
+      reviewFiles: [],
+      events: [],
+      originalRepoPath: reusableWorktreeTask.originalRepoPath,
+      originalWasDirty: reusableWorktreeTask.originalWasDirty,
+      baselineFiles: undefined,
+      enabledTools: requestedEnabledTools,
+      capabilityProbes: taskCapabilityProbes,
+    };
+    saveTask(task);
+    appendUserMessage(task, prompt, attachments);
+    void runRunnerTask(task.id, undefined, prompt, attachments);
+    return publicTask(task);
   }
 
   const id = taskId();

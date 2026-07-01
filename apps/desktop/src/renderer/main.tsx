@@ -15,6 +15,7 @@ import {
   ExternalLink,
   File,
   FileText,
+  FolderPlus,
   FolderX,
   FolderOpen,
   GitBranch,
@@ -285,6 +286,7 @@ type FileSearchResult = ChatAttachment & {
 type TaskInfo = {
   id: string;
   chatId?: string;
+  worktreeRootTaskId?: string;
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
@@ -320,8 +322,21 @@ type ChatRecord = {
   taskId?: string;
   taskState?: TaskState;
   changedFiles?: number;
+  worktreeRootTaskId?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  worktreeBaseCommit?: string;
   draftPrompt?: string;
   attachedFiles?: ChatAttachment[];
+};
+
+type WorktreeChatGroup = {
+  key: string;
+  rootTaskId: string;
+  branch: string;
+  path: string;
+  baseCommit?: string;
+  chats: ChatRecord[];
 };
 
 type ChatProjectGroup = {
@@ -329,6 +344,7 @@ type ChatProjectGroup = {
   name: string;
   path?: string;
   chats: ChatRecord[];
+  worktrees: WorktreeChatGroup[];
 };
 type ProjectDeleteTarget = {
   key: string;
@@ -449,7 +465,7 @@ type PromptMention = { kind: "file" | "skill"; query: string; start: number; end
 type DesktopApi = {
   listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
-  createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean }): Promise<ChatRecord>;
+  createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean }): Promise<ChatRecord>;
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
   updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
@@ -517,6 +533,7 @@ type DesktopApi = {
     attachedFiles?: ChatAttachment[];
     reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
+    worktreeTaskId?: string;
   }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
@@ -1676,6 +1693,21 @@ function chatProjectKey(chat: ChatRecord): string {
   return chat.repositoryPath || "__unassigned__";
 }
 
+function chatWorktreeKey(chat: ChatRecord): string {
+  if (!chat.worktreePath) return "";
+  return `worktree:${chat.worktreeRootTaskId || chat.worktreePath}`;
+}
+
+function worktreeTitle(group: WorktreeChatGroup): string {
+  return group.branch || folderName(group.path);
+}
+
+function worktreeSubline(group: WorktreeChatGroup): string {
+  const count = chatCountLabel(group.chats.length);
+  const base = group.baseCommit ? `base ${group.baseCommit.slice(0, 7)}` : folderName(group.path);
+  return `${count} - ${base}`;
+}
+
 function chatCountLabel(count: number): string {
   return `${count} chat${count === 1 ? "" : "s"}`;
 }
@@ -2833,6 +2865,7 @@ function App() {
   const [promptScrollTop, setPromptScrollTop] = useState(0);
   const [deleteCandidate, setDeleteCandidate] = useState<DeleteCandidate | null>(null);
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
+  const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(composerTestMode ? composerTestEvents : []);
   const [assistantText, setAssistantText] = useState("");
@@ -2995,7 +3028,8 @@ function App() {
   const canAttachFiles = !busy && !closedChatNotice;
   const canUseWorktreeMode = repository?.kind === "git";
   const activeTaskWorkspaceMode = task?.chatId === activeChatId ? task.workspaceMode : undefined;
-  const workspaceModeLocked = activeTaskWorkspaceMode === "worktree";
+  const activeChatWorktreeTaskId = activeChat?.worktreeRootTaskId || (activeChat?.worktreePath ? activeChat.taskId : undefined);
+  const workspaceModeLocked = activeTaskWorkspaceMode === "worktree" || !!activeChatWorktreeTaskId;
   const useWorktreeForNextRun = canUseWorktreeMode && (workspaceModeLocked || workspaceMode === "worktree");
   const visibleEvents = events;
   const responseFeedback = useMemo(() => {
@@ -3013,33 +3047,67 @@ function App() {
   );
   const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
-    const groups = new Map<string, ChatProjectGroup>();
+    type ChatProjectGroupBuilder = ChatProjectGroup & { worktreeMap: Map<string, WorktreeChatGroup> };
+    const groups = new Map<string, ChatProjectGroupBuilder>();
     for (const project of projects) {
       groups.set(project.rootPath, {
         key: project.rootPath,
         name: project.name,
         path: project.rootPath,
         chats: [],
+        worktrees: [],
+        worktreeMap: new Map(),
       });
     }
     for (const chat of chats) {
       const key = chatProjectKey(chat);
-      const existing = groups.get(key);
-      if (existing) {
-        existing.chats.push(chat);
-        continue;
+      let existing = groups.get(key);
+      if (!existing) {
+        existing = {
+          key,
+          name: chat.repositoryName || folderName(chat.repositoryPath),
+          path: chat.repositoryPath,
+          chats: [],
+          worktrees: [],
+          worktreeMap: new Map(),
+        };
+        groups.set(key, existing);
       }
-      groups.set(key, {
-        key,
-        name: chat.repositoryName || folderName(chat.repositoryPath),
-        path: chat.repositoryPath,
-        chats: [chat],
-      });
+      const worktreeKey = chatWorktreeKey(chat);
+      if (worktreeKey && chat.worktreePath) {
+        let worktree = existing.worktreeMap.get(worktreeKey);
+        if (!worktree) {
+          worktree = {
+            key: worktreeKey,
+            rootTaskId: chat.worktreeRootTaskId || chat.taskId || worktreeKey,
+            branch: chat.worktreeBranch || folderName(chat.worktreePath),
+            path: chat.worktreePath,
+            baseCommit: chat.worktreeBaseCommit,
+            chats: [],
+          };
+          existing.worktreeMap.set(worktreeKey, worktree);
+        }
+        worktree.chats.push(chat);
+      } else {
+        existing.chats.push(chat);
+      }
     }
     return Array.from(groups.values())
       .map((group) => ({
-        ...group,
+        key: group.key,
+        name: group.name,
+        path: group.path,
         chats: [...group.chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        worktrees: Array.from(group.worktreeMap.values())
+          .map((worktree) => ({
+            ...worktree,
+            chats: [...worktree.chats].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+          }))
+          .sort((left, right) => {
+            const leftUpdated = left.chats[0]?.updatedAt ?? "";
+            const rightUpdated = right.chats[0]?.updatedAt ?? "";
+            return rightUpdated.localeCompare(leftUpdated) || worktreeTitle(left).localeCompare(worktreeTitle(right));
+          }),
       }))
       .sort((left, right) => {
         if (left.key === "__unassigned__") return 1;
@@ -3214,6 +3282,7 @@ function App() {
                 : current,
             );
           }
+          void loadChats();
         }
         if (event.type === "review.ready") {
           if (isVisibleTaskEvent) {
@@ -3544,6 +3613,10 @@ function App() {
       repositoryName: repository?.id === nextTask.repositoryId ? repository.name : undefined,
       repositoryPath: repository?.id === nextTask.repositoryId ? repository.rootPath : undefined,
       changedFiles: nextTask.changedFiles.length,
+      worktreeRootTaskId: nextTask.workspaceMode === "worktree" ? nextTask.worktreeRootTaskId ?? nextTask.id : undefined,
+      worktreePath: nextTask.workspaceMode === "worktree" ? nextTask.worktreePath : undefined,
+      worktreeBranch: nextTask.workspaceMode === "worktree" ? nextTask.agentBranch : undefined,
+      worktreeBaseCommit: nextTask.workspaceMode === "worktree" ? nextTask.baseCommit : undefined,
       draftPrompt: "",
       attachedFiles: [],
     };
@@ -3557,6 +3630,10 @@ function App() {
           createdAt: existing?.createdAt ?? chat.createdAt,
           repositoryName: chat.repositoryName ?? existing?.repositoryName,
           repositoryPath: chat.repositoryPath ?? existing?.repositoryPath,
+          worktreeRootTaskId: chat.worktreeRootTaskId ?? existing?.worktreeRootTaskId,
+          worktreePath: chat.worktreePath ?? existing?.worktreePath,
+          worktreeBranch: chat.worktreeBranch ?? existing?.worktreeBranch,
+          worktreeBaseCommit: chat.worktreeBaseCommit ?? existing?.worktreeBaseCommit,
           draftPrompt: nextDraft,
           attachedFiles: nextDraft ? (existing?.attachedFiles ?? chat.attachedFiles) : [],
         },
@@ -3659,6 +3736,18 @@ function App() {
         next.delete(projectKey);
       } else {
         next.add(projectKey);
+      }
+      return next;
+    });
+  }
+
+  function toggleWorktreeGroup(worktreeKey: string) {
+    setCollapsedWorktreeKeys((current) => {
+      const next = new Set(current);
+      if (next.has(worktreeKey)) {
+        next.delete(worktreeKey);
+      } else {
+        next.add(worktreeKey);
       }
       return next;
     });
@@ -4348,6 +4437,7 @@ function App() {
         attachedFiles: attachedFiles.map(normalizeAttachment),
         reasoningMode,
         useWorktree: useWorktreeForNextRun,
+        worktreeTaskId: activeChatWorktreeTaskId,
       });
       setVisibleTask(nextTask);
       const nextVisibleEvents = visibleEventsForTask(nextTask);
@@ -4901,6 +4991,44 @@ function App() {
     }
   }
 
+  async function newChatForWorktree(project: { name: string; path?: string }, worktree: WorktreeChatGroup) {
+    if (!project.path || !worktree.rootTaskId) return;
+    setError(null);
+    try {
+      if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
+      resetUnsavedChat();
+      const nextRepository = await api.getRepository({ repositoryPath: project.path });
+      if (nextRepository) {
+        mergeProject(nextRepository);
+        setRepository(nextRepository);
+      }
+      const chat = await api.createChat({
+        title: "New chat",
+        repositoryName: project.name,
+        repositoryPath: project.path,
+        worktreeTaskId: worktree.rootTaskId,
+      });
+      mergeChat(chat);
+      suppressDraftSaveBriefly();
+      setActiveChatId(chat.id);
+      setPrompt("");
+      setCollapsedProjectKeys((current) => {
+        if (!current.has(project.path ?? "")) return current;
+        const next = new Set(current);
+        next.delete(project.path ?? "");
+        return next;
+      });
+      setCollapsedWorktreeKeys((current) => {
+        if (!current.has(worktree.key)) return current;
+        const next = new Set(current);
+        next.delete(worktree.key);
+        return next;
+      });
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
   async function selectChat(chat: ChatRecord) {
     if (activeChatId === chat.id) {
       const node = streamRef.current;
@@ -5015,11 +5143,12 @@ function App() {
 
   function chatProjectTarget(group: ChatProjectGroup): ProjectDeleteTarget | null {
     if (!group.path) return null;
+    const worktreeChatCount = group.worktrees.reduce((count, worktree) => count + worktree.chats.length, 0);
     return {
       key: group.key,
       name: group.name,
       path: group.path,
-      chatCount: group.chats.length,
+      chatCount: group.chats.length + worktreeChatCount,
     };
   }
 
@@ -5111,6 +5240,35 @@ function App() {
     window.addEventListener("pointerup", stop, { once: true });
   }
 
+  function renderChatRow(chat: ChatRecord) {
+    return (
+      <div
+        className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
+          closedChatMessage(chat.taskState) ? "closed" : ""
+        }`}
+        key={chat.id}
+      >
+        <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
+          <span>
+            <strong>{chatDisplayTitle(chat)}</strong>
+            <em>{chatSubline(chat)}</em>
+          </span>
+        </button>
+        <button
+          className="chatDeleteButton"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setDeleteCandidate({ kind: "chat", chat });
+          }}
+          title="Delete chat"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`appShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
@@ -5128,22 +5286,25 @@ function App() {
 
       <aside className="sidebar">
         <div className="sidebarResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginSidebarResize} />
-        <div className="sidebarHeader">
-          <div className="newActionSplit" role="group" aria-label="Create">
-            <button className="newActionButton" type="button" onClick={newChat}>
-              <Plus size={16} />
-              <span>New chat</span>
-            </button>
-            <button className="newActionButton" type="button" onClick={() => void newProject()} disabled={busy}>
-              <FolderOpen size={15} />
-              <span>New project</span>
-            </button>
-          </div>
-        </div>
         <div className="sidebarStack">
           <section className="chatArchive">
             <div className="sideHeader">
               <h2>Chats</h2>
+              <div className="newActionSplit" role="toolbar" aria-label="Create">
+                <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat" title="New chat">
+                  <SquarePen size={13} />
+                </button>
+                <button
+                  className="newActionButton"
+                  type="button"
+                  onClick={() => void newProject()}
+                  disabled={busy}
+                  aria-label="New project"
+                  title="New project"
+                >
+                  <FolderPlus size={13} />
+                </button>
+              </div>
             </div>
             <div className="chatList">
               {chatProjectGroups.length ? (
@@ -5222,37 +5383,47 @@ function App() {
                         ) : null}
                       </div>
                       {!collapsed ? (
-                        <div className="chatProjectChats">
-                          {group.chats.length ? (
-                            group.chats.map((chat) => (
-                              <div
-                                className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
-                                  closedChatMessage(chat.taskState) ? "closed" : ""
-                                }`}
-                                key={chat.id}
-                              >
-                                <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-                                  <span>
-                                    <strong>{chatDisplayTitle(chat)}</strong>
-                                    <em>{chatSubline(chat)}</em>
-                                  </span>
-                                </button>
-                                <button
-                                  className="chatDeleteButton"
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setDeleteCandidate({ kind: "chat", chat });
-                                  }}
-                                  title="Delete chat"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            ))
-                          ) : (
-                            <div className="chatProjectEmpty">No chats yet.</div>
-                          )}
+                        <div className={`chatProjectChats ${group.worktrees.length ? "hasWorktrees" : ""}`}>
+                          {group.chats.map((chat) => renderChatRow(chat))}
+                          {group.worktrees.map((worktree) => {
+                            const worktreeCollapsed = collapsedWorktreeKeys.has(worktree.key);
+                            const canCreateWorktreeChat = /^task-[A-Za-z0-9_-]+$/.test(worktree.rootTaskId);
+                            return (
+                              <section className="chatWorktree" key={worktree.key}>
+                                <div className="chatWorktreeHeader">
+                                  <button
+                                    className="chatWorktreeToggle"
+                                    type="button"
+                                    onClick={() => toggleWorktreeGroup(worktree.key)}
+                                    aria-expanded={!worktreeCollapsed}
+                                    title={worktree.path}
+                                  >
+                                    <ChevronDown className={worktreeCollapsed ? "collapsed" : ""} size={13} />
+                                    <GitBranch size={13} />
+                                    <span>
+                                      <strong>{worktreeTitle(worktree)}</strong>
+                                      <em>{worktreeSubline(worktree)}</em>
+                                    </span>
+                                  </button>
+                                  <button
+                                    className="chatWorktreeNewButton"
+                                    type="button"
+                                    onClick={() => void newChatForWorktree(group, worktree)}
+                                    disabled={!canCreateWorktreeChat}
+                                    title={`Start a new chat in "${worktreeTitle(worktree)}"`}
+                                  >
+                                    <SquarePen size={13} />
+                                  </button>
+                                </div>
+                                {!worktreeCollapsed ? (
+                                  <div className="chatWorktreeChats">
+                                    {worktree.chats.map((chat) => renderChatRow(chat))}
+                                  </div>
+                                ) : null}
+                              </section>
+                            );
+                          })}
+                          {!group.chats.length && !group.worktrees.length ? <div className="chatProjectEmpty">No chats yet.</div> : null}
                         </div>
                       ) : null}
                     </section>

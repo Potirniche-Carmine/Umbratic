@@ -265,6 +265,7 @@ export type FileSearchResult = ChatAttachment & {
 export type TaskInfo = {
   id: string;
   chatId?: string;
+  worktreeRootTaskId?: string;
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
@@ -300,6 +301,10 @@ export type ChatRecord = {
   taskId?: string;
   taskState?: TaskState;
   changedFiles?: number;
+  worktreeRootTaskId?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  worktreeBaseCommit?: string;
   draftPrompt?: string;
   attachedFiles?: ChatAttachment[];
 };

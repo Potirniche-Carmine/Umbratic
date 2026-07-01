@@ -73,7 +73,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["resetSystemSkill", [{ id: "umbratic-markdown" }], "umbratic:reset-system-skill"],
     ["setPermissionMode", ["bypass"], "umbratic:set-permission-mode"],
     ["listAvailableIdes", [], "umbratic:list-available-ides", undefined],
-    ["startTask", [{ prompt: "go" }], "umbratic:start-task"],
+    ["startTask", [{ prompt: "go", worktreeTaskId: "task-root" }], "umbratic:start-task"],
     ["approveWorktreeCreation", [{ taskId: "task-1", approved: true }], "umbratic:approve-worktree-creation"],
     ["respondToToolPermission", [{ taskId: "task-1", id: "perm", decision: "allow" }], "umbratic:respond-tool-permission"],
     ["openRepositoryInIde", [{ repositoryId: "repo", ideId: "vscode" }], "umbratic:open-repository-in-ide"],

@@ -275,6 +275,10 @@ type UmbraticChatRecord = {
   taskId?: string;
   taskState?: UmbraticTaskInfo["state"];
   changedFiles?: number;
+  worktreeRootTaskId?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  worktreeBaseCommit?: string;
   draftPrompt?: string;
   attachedFiles?: UmbraticChatAttachment[];
 };
@@ -287,6 +291,7 @@ type UmbraticUserNotes = {
 type UmbraticTaskInfo = {
   id: string;
   chatId?: string;
+  worktreeRootTaskId?: string;
   repositoryId: string;
   prompt: string;
   workspaceKind: UmbraticWorkspaceKind;
@@ -351,7 +356,7 @@ declare global {
     umbratic?: {
       listProjects(): Promise<UmbraticRepositoryInfo[]>;
       listChats(): Promise<UmbraticChatRecord[]>;
-      createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; persist?: boolean }): Promise<UmbraticChatRecord>;
+      createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean }): Promise<UmbraticChatRecord>;
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: UmbraticChatAttachment[] }): Promise<UmbraticChatRecord>;
       updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<UmbraticChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
@@ -448,6 +453,7 @@ declare global {
         attachedFiles?: UmbraticChatAttachment[];
         reasoningMode?: UmbraticReasoningMode;
         useWorktree?: boolean;
+        worktreeTaskId?: string;
       }): Promise<UmbraticTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: UmbraticPermissionDecision): Promise<void>;

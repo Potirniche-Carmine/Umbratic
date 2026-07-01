@@ -1,6 +1,7 @@
 import { app, safeStorage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import {
   defaultEndpointApiKey,
@@ -33,71 +34,20 @@ import type {
   UserNotes,
 } from "./types";
 
-type JsonCacheEntry = {
-  mtimeMs: number;
-  size: number;
-  value: unknown;
-};
-
-const jsonFileCache = new Map<string, JsonCacheEntry>();
-
 function dataFile(name: string): string {
   return path.join(app.getPath("userData"), name);
 }
 
-function projectsPath(): string {
-  return dataFile("projects.json");
+function appDatabasePath(): string {
+  return dataFile("umbratic.sqlite");
 }
 
-function tasksPath(): string {
-  return dataFile("tasks.json");
-}
-
-function chatsPath(): string {
-  return dataFile("chats.json");
-}
-
-function projectChatsPath(rootPath: string): string {
-  return path.join(rootPath, ".umbratic", "chats.json");
-}
-
-function settingsPath(): string {
-  return dataFile("settings.json");
-}
-
-function notesPath(): string {
-  return dataFile("notes.json");
-}
-
-function cloneJsonValue<T>(value: T): T {
-  if (typeof structuredClone === "function") {
-    return structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
+function projectDatabasePath(rootPath: string): string {
+  return path.join(rootPath, ".umbratic", "umbratic.sqlite");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function readJsonFile<T>(filePath: string, fallback: T): T {
-  try {
-    const stats = fs.statSync(filePath);
-    const cached = jsonFileCache.get(filePath);
-    if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
-      return cloneJsonValue(cached.value as T);
-    }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
-    jsonFileCache.set(filePath, {
-      mtimeMs: stats.mtimeMs,
-      size: stats.size,
-      value: cloneJsonValue(parsed),
-    });
-    return parsed;
-  } catch {
-    jsonFileCache.delete(filePath);
-    return fallback;
-  }
 }
 
 export function writeJsonFile(filePath: string, value: unknown) {
@@ -109,34 +59,181 @@ export function writeJsonFile(filePath: string, value: unknown) {
   try {
     fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`);
     fs.renameSync(temporaryPath, filePath);
-    const stats = fs.statSync(filePath);
-    jsonFileCache.set(filePath, {
-      mtimeMs: stats.mtimeMs,
-      size: stats.size,
-      value: cloneJsonValue(value),
-    });
   } catch (error) {
-    jsonFileCache.delete(filePath);
     fs.rmSync(temporaryPath, { force: true });
     throw error;
   }
 }
 
+type PayloadRow = {
+  payload: string;
+};
+
+type RecordTableName = "projects" | "tasks" | "chats";
+
+function withStorageDatabase<T>(filePath: string, action: (db: DatabaseSync) => T): T {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const db = new DatabaseSync(filePath);
+  try {
+    db.exec("PRAGMA foreign_keys = ON;");
+    ensureStorageSchema(db);
+    return action(db);
+  } finally {
+    db.close();
+  }
+}
+
+function withAppDatabase<T>(action: (db: DatabaseSync) => T): T {
+  return withStorageDatabase(appDatabasePath(), action);
+}
+
+function ensureStorageSchema(db: DatabaseSync) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      root_path TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      original_branch TEXT NOT NULL,
+      base_commit TEXT NOT NULL,
+      dirty INTEGER NOT NULL,
+      status_summary TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      repository_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS chats (
+      id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      repository_path TEXT,
+      payload TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY NOT NULL,
+      content TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS chats_updated_at_index ON chats(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS chats_repository_path_index ON chats(repository_path);
+    CREATE INDEX IF NOT EXISTS tasks_created_at_index ON tasks(created_at DESC);
+    CREATE INDEX IF NOT EXISTS tasks_repository_id_index ON tasks(repository_id);
+    PRAGMA user_version = 1;
+  `);
+}
+
+function runTransaction(db: DatabaseSync, action: () => void) {
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    action();
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
+
+function parsePayload(payload: string): unknown {
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
+}
+
+function readPayloads(db: DatabaseSync, tableName: RecordTableName): unknown[] {
+  const orderBy = tableName === "chats" ? "updated_at DESC, position ASC" : "position ASC";
+  return (db.prepare(`SELECT payload FROM ${tableName} ORDER BY ${orderBy}`).all() as PayloadRow[]).map((row) =>
+    parsePayload(row.payload),
+  );
+}
+
+function normalizeProjectRecord(project: unknown): RepositoryInfo | null {
+  if (
+    !isRecord(project) ||
+    typeof project.id !== "string" ||
+    typeof project.name !== "string" ||
+    typeof project.rootPath !== "string" ||
+    typeof project.originalBranch !== "string" ||
+    typeof project.baseCommit !== "string" ||
+    typeof project.dirty !== "boolean" ||
+    typeof project.statusSummary !== "string" ||
+    !fs.existsSync(project.rootPath)
+  ) {
+    return null;
+  }
+  const kind = project.kind === "folder" || project.kind === "git" || project.kind === undefined ? (project.kind ?? "git") : null;
+  if (!kind) return null;
+  return {
+    ...(project as RepositoryInfo),
+    kind,
+  };
+}
+
+function normalizeProjects(projects: unknown[]): RepositoryInfo[] {
+  return projects
+    .map((project) => normalizeProjectRecord(project))
+    .filter((project): project is RepositoryInfo => !!project);
+}
+
+function replaceProjectsInDatabase(db: DatabaseSync, projects: RepositoryInfo[]) {
+  runTransaction(db, () => {
+    db.prepare("DELETE FROM projects").run();
+    const insert = db.prepare(`
+      INSERT INTO projects (
+        id,
+        name,
+        root_path,
+        kind,
+        original_branch,
+        base_commit,
+        dirty,
+        status_summary,
+        payload,
+        position
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    projects.forEach((project, index) => {
+      insert.run(
+        project.id,
+        project.name,
+        project.rootPath,
+        project.kind,
+        project.originalBranch,
+        project.baseCommit,
+        project.dirty ? 1 : 0,
+        project.statusSummary,
+        JSON.stringify(project),
+        index,
+      );
+    });
+  });
+}
+
 export function readProjects(): RepositoryInfo[] {
-  return readJsonFile<RepositoryInfo[]>(projectsPath(), [])
-    .filter(
-      (project) =>
-        project &&
-        typeof project.id === "string" &&
-        typeof project.rootPath === "string" &&
-        (project.kind === "git" || project.kind === "folder" || project.kind === undefined) &&
-        fs.existsSync(project.rootPath),
-    )
-    .map((project) => ({ ...project, kind: project.kind ?? "git" }));
+  return withAppDatabase((db) => normalizeProjects(readPayloads(db, "projects")));
 }
 
 export function writeProjects(projects: RepositoryInfo[]) {
-  writeJsonFile(projectsPath(), projects);
+  withAppDatabase((db) => replaceProjectsInDatabase(db, normalizeProjects(projects)));
 }
 
 function normalizeStoredEnabledTools(value: unknown): RunnerToolId[] | undefined {
@@ -190,42 +287,78 @@ function normalizeStoredCapabilityProbes(value: unknown): CapabilityTelemetryPro
   return probes;
 }
 
+function normalizeTaskRecord(task: unknown): TaskRecord | null {
+  if (
+    !isRecord(task) ||
+    typeof task.id !== "string" ||
+    typeof task.originalRepoPath !== "string" ||
+    typeof task.worktreePath !== "string"
+  ) {
+    return null;
+  }
+  return {
+    ...(task as TaskRecord),
+    workspaceKind: task.workspaceKind === "folder" ? "folder" : "git",
+    workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
+    reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
+    runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
+    runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
+    policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
+    runtimeProfile:
+      task.runtimeProfile === "python" ||
+      task.runtimeProfile === "markdown" ||
+      task.runtimeProfile === "cmake" ||
+      task.runtimeProfile === "powershell" ||
+      task.runtimeProfile === "posix-shell" ||
+      task.runtimeProfile === "node" ||
+      task.runtimeProfile === "none"
+        ? task.runtimeProfile
+        : runtimeProfileForPrompt(typeof task.prompt === "string" ? task.prompt : ""),
+    enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
+    capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
+    reviewFiles: Array.isArray(task.reviewFiles) ? (task.reviewFiles as TaskRecord["reviewFiles"]) : [],
+    events: Array.isArray(task.events) ? (task.events as TaskRecord["events"]) : [],
+  };
+}
+
+function normalizeTasks(tasks: unknown[]): TaskRecord[] {
+  return tasks
+    .map((task) => normalizeTaskRecord(task))
+    .filter((task): task is TaskRecord => !!task);
+}
+
+function replaceTasksInDatabase(db: DatabaseSync, tasks: TaskRecord[]) {
+  runTransaction(db, () => {
+    db.prepare("DELETE FROM tasks").run();
+    const insert = db.prepare(`
+      INSERT INTO tasks (
+        id,
+        repository_id,
+        state,
+        created_at,
+        payload,
+        position
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    tasks.forEach((task, index) => {
+      insert.run(
+        task.id,
+        typeof task.repositoryId === "string" ? task.repositoryId : "",
+        typeof task.state === "string" ? task.state : "",
+        typeof task.createdAt === "string" ? task.createdAt : "",
+        JSON.stringify(task),
+        index,
+      );
+    });
+  });
+}
+
 export function readTasks(): TaskRecord[] {
-  return readJsonFile<TaskRecord[]>(tasksPath(), [])
-    .filter(
-      (task) =>
-        task &&
-        typeof task.id === "string" &&
-        typeof task.originalRepoPath === "string" &&
-        typeof task.worktreePath === "string",
-    )
-    .map((task) => ({
-      ...task,
-      workspaceKind: task.workspaceKind ?? "git",
-      workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
-      reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
-      runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
-      runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
-      policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
-      runtimeProfile:
-        task.runtimeProfile === "python" ||
-        task.runtimeProfile === "markdown" ||
-        task.runtimeProfile === "cmake" ||
-        task.runtimeProfile === "powershell" ||
-        task.runtimeProfile === "posix-shell" ||
-        task.runtimeProfile === "node" ||
-        task.runtimeProfile === "none"
-          ? task.runtimeProfile
-          : runtimeProfileForPrompt(task.prompt ?? ""),
-      enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
-      capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
-      reviewFiles: Array.isArray(task.reviewFiles) ? task.reviewFiles : [],
-      events: Array.isArray(task.events) ? task.events : [],
-    }));
+  return withAppDatabase((db) => normalizeTasks(readPayloads(db, "tasks")));
 }
 
 export function writeTasks(tasks: TaskRecord[]) {
-  writeJsonFile(tasksPath(), tasks);
+  withAppDatabase((db) => replaceTasksInDatabase(db, normalizeTasks(tasks)));
 }
 
 function pathKey(pathValue: string): string {
@@ -247,6 +380,10 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
     typeof chat.repositoryPath === "string" && chat.repositoryPath.trim()
       ? path.resolve(chat.repositoryPath)
       : undefined;
+  const worktreePath =
+    typeof chat.worktreePath === "string" && chat.worktreePath.trim()
+      ? path.resolve(chat.worktreePath)
+      : undefined;
   return {
     ...chat,
     repositoryName:
@@ -254,6 +391,19 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
         ? chat.repositoryName.trim().slice(0, 120)
         : undefined,
     repositoryPath,
+    worktreeRootTaskId:
+      typeof chat.worktreeRootTaskId === "string" && /^task-[A-Za-z0-9_-]+$/.test(chat.worktreeRootTaskId)
+        ? chat.worktreeRootTaskId
+        : undefined,
+    worktreePath,
+    worktreeBranch:
+      typeof chat.worktreeBranch === "string" && chat.worktreeBranch.trim()
+        ? chat.worktreeBranch.trim().slice(0, 160)
+        : undefined,
+    worktreeBaseCommit:
+      typeof chat.worktreeBaseCommit === "string" && /^[A-Fa-f0-9]{7,64}$/.test(chat.worktreeBaseCommit)
+        ? chat.worktreeBaseCommit
+        : undefined,
     draftPrompt: typeof chat.draftPrompt === "string" ? chat.draftPrompt : "",
     attachedFiles: Array.isArray(chat.attachedFiles)
       ? chat.attachedFiles.filter((file) => file && typeof file.path === "string" && typeof file.name === "string")
@@ -275,14 +425,62 @@ function putNewestChat(chats: Map<string, ChatRecord>, chat: ChatRecord) {
   }
 }
 
+function replaceChatsInDatabase(db: DatabaseSync, chats: ChatRecord[]) {
+  runTransaction(db, () => {
+    db.prepare("DELETE FROM chats").run();
+    const insert = db.prepare(`
+      INSERT INTO chats (
+        id,
+        title,
+        created_at,
+        updated_at,
+        repository_path,
+        payload,
+        position
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    chats.forEach((chat, index) => {
+      insert.run(
+        chat.id,
+        chat.title,
+        chat.createdAt,
+        chat.updatedAt,
+        chat.repositoryPath ?? null,
+        JSON.stringify(chat),
+        index,
+      );
+    });
+  });
+}
+
+function readAppChatsFromDatabase(): ChatRecord[] {
+  return withAppDatabase((db) => normalizeChats(readPayloads(db, "chats")));
+}
+
+function readProjectChatsFromDatabase(project: RepositoryInfo): ChatRecord[] {
+  const dbPath = projectDatabasePath(project.rootPath);
+  if (!fs.existsSync(dbPath)) return [];
+  return withStorageDatabase(dbPath, (db) => normalizeChats(readPayloads(db, "chats")));
+}
+
+function writeAppChatsToDatabase(chats: ChatRecord[]) {
+  withAppDatabase((db) => replaceChatsInDatabase(db, chats));
+}
+
+function writeProjectChatsToDatabase(project: RepositoryInfo, chats: ChatRecord[]) {
+  const dbPath = projectDatabasePath(project.rootPath);
+  if (chats.length === 0 && !fs.existsSync(dbPath)) return;
+  withStorageDatabase(dbPath, (db) => replaceChatsInDatabase(db, chats));
+}
+
 export function readChats(): ChatRecord[] {
   const chats = new Map<string, ChatRecord>();
-  for (const chat of normalizeChats(readJsonFile<ChatRecord[]>(chatsPath(), []))) {
+  for (const chat of readAppChatsFromDatabase()) {
     putNewestChat(chats, chat);
   }
   for (const project of readProjects()) {
     const projectKey = pathKey(project.rootPath);
-    for (const chat of normalizeChats(readJsonFile<ChatRecord[]>(projectChatsPath(project.rootPath), []))) {
+    for (const chat of readProjectChatsFromDatabase(project)) {
       if (chat.repositoryPath && pathKey(chat.repositoryPath) !== projectKey) {
         continue;
       }
@@ -319,21 +517,15 @@ export function writeChats(chats: ChatRecord[]) {
   }
 
   for (const project of projects) {
-    const localPath = projectChatsPath(project.rootPath);
     const rows = projectChats.get(pathKey(project.rootPath)) ?? [];
     try {
-      if (rows.length) {
-        writeJsonFile(localPath, rows);
-      } else {
-        jsonFileCache.delete(localPath);
-        fs.rmSync(localPath, { force: true });
-      }
+      writeProjectChatsToDatabase(project, rows);
     } catch {
       appChats.push(...rows);
     }
   }
 
-  writeJsonFile(chatsPath(), appChats);
+  writeAppChatsToDatabase(appChats);
 }
 
 type RawSettings = {
@@ -346,6 +538,32 @@ type RawSettings = {
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
 };
+
+type SettingsRow = {
+  payload: string;
+};
+
+type NoteRow = {
+  content: string;
+  updated_at: string;
+};
+
+const appSettingsKey = "app";
+const userNotesId = "user";
+
+function readRawSettings(): RawSettings {
+  return withAppDatabase((db) => {
+    const row = db.prepare("SELECT payload FROM settings WHERE key = ?").get(appSettingsKey) as SettingsRow | undefined;
+    const settings = row ? parsePayload(row.payload) : {};
+    return isRecord(settings) ? (settings as RawSettings) : {};
+  });
+}
+
+function writeRawSettings(settings: RawSettings) {
+  withAppDatabase((db) => {
+    db.prepare("INSERT OR REPLACE INTO settings (key, payload) VALUES (?, ?)").run(appSettingsKey, JSON.stringify(settings));
+  });
+}
 
 type StoredProtectedString = {
   encoding: "electron-safe-storage-v1";
@@ -397,12 +615,12 @@ function defaultModelEndpointMode(): ModelEndpointMode {
 }
 
 export function hasStoredModelEndpointSettings(): boolean {
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const settings = readRawSettings();
   return !!settings.modelEndpoint;
 }
 
 export function readModelEndpointSettings(): ModelEndpointSettings {
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const settings = readRawSettings();
   const endpoint = settings.modelEndpoint ?? {};
   const managed = managedModelEndpointDefaults();
   const mode =
@@ -460,8 +678,8 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
     secret: managed?.secret ?? (typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret),
     headers: normalizeEndpointHeaders(input.headers ?? current.headers),
   };
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
-  writeJsonFile(settingsPath(), {
+  const settings = readRawSettings();
+  writeRawSettings({
     ...settings,
     selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
     modelEndpoint: protectEndpointSettings(next),
@@ -470,7 +688,7 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
 }
 
 export function readToolSettings(): Record<RunnerToolId, boolean> {
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const settings = readRawSettings();
   const rawTools = settings.tools && typeof settings.tools === "object" ? settings.tools : {};
   return {
     ...defaultToolSettings(),
@@ -492,8 +710,8 @@ export function writeToolSettings(input: Partial<Record<RunnerToolId, boolean>>)
     ...current,
     ...sanitized,
   };
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
-  writeJsonFile(settingsPath(), {
+  const settings = readRawSettings();
+  writeRawSettings({
     ...settings,
     tools: toolSettingsFromEnabledTools(enabledToolsFromSettings(next)),
   });
@@ -501,7 +719,7 @@ export function writeToolSettings(input: Partial<Record<RunnerToolId, boolean>>)
 }
 
 export function readSkillSettings(): Record<string, boolean> {
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const settings = readRawSettings();
   const rawSkills = settings.skills && typeof settings.skills === "object" ? settings.skills : {};
   return Object.fromEntries(
     Object.entries(rawSkills).filter(([id, value]) => /^[A-Za-z0-9_-]{1,96}$/.test(id) && typeof value === "boolean"),
@@ -517,8 +735,8 @@ export function writeSkillSettings(input: Record<string, boolean>): Record<strin
     }
   }
   const next = { ...current, ...sanitized };
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
-  writeJsonFile(settingsPath(), {
+  const settings = readRawSettings();
+  writeRawSettings({
     ...settings,
     skills: next,
   });
@@ -526,14 +744,14 @@ export function writeSkillSettings(input: Record<string, boolean>): Record<strin
 }
 
 export function readHarnessProfileSetting(): HarnessProfileId {
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
+  const settings = readRawSettings();
   return isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId;
 }
 
 export function writeHarnessProfileSetting(profileId: HarnessProfileId): HarnessProfileId {
   const next = isHarnessProfileId(profileId) ? profileId : defaultHarnessProfileId;
-  const settings = readJsonFile<RawSettings>(settingsPath(), {});
-  writeJsonFile(settingsPath(), {
+  const settings = readRawSettings();
+  writeRawSettings({
     ...settings,
     harnessProfile: next,
   });
@@ -550,10 +768,10 @@ export function readSettings(): { selectedModel?: { providerId: LocalProviderId;
 }
 
 export function readNotes(): UserNotes {
-  const notes = readJsonFile<{ content?: unknown; updatedAt?: unknown }>(notesPath(), {});
+  const notes = withAppDatabase((db) => db.prepare("SELECT content, updated_at FROM notes WHERE id = ?").get(userNotesId) as NoteRow | undefined);
   return {
-    content: typeof notes.content === "string" ? notes.content : "",
-    updatedAt: typeof notes.updatedAt === "string" ? notes.updatedAt : "",
+    content: typeof notes?.content === "string" ? notes.content : "",
+    updatedAt: typeof notes?.updated_at === "string" ? notes.updated_at : "",
   };
 }
 
@@ -562,6 +780,8 @@ export function writeNotes(content: string): UserNotes {
     content,
     updatedAt: new Date().toISOString(),
   };
-  writeJsonFile(notesPath(), notes);
+  withAppDatabase((db) => {
+    db.prepare("INSERT OR REPLACE INTO notes (id, content, updated_at) VALUES (?, ?, ?)").run(userNotesId, notes.content, notes.updatedAt);
+  });
   return notes;
 }
