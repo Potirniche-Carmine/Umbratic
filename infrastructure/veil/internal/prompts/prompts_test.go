@@ -72,6 +72,34 @@ func TestEngineeringPromptDoesNotAlwaysIncludePythonPolicy(t *testing.T) {
 	}
 }
 
+func TestWorkspaceToolPromptUsesAvailableToolsWithoutSpecificShellSearchCommands(t *testing.T) {
+	prompt, ok := RuntimePrompt(RuntimeWorkspaceToolchain)
+	if !ok {
+		t.Fatal("missing workspace tool prompt")
+	}
+	lower := strings.ToLower(prompt)
+	for _, want := range []string{
+		"bounded preview",
+		"not a complete filesystem inventory",
+		"existing",
+		"subfolders",
+		"project structure",
+		"read tool",
+		"nested directory inventories",
+		"search tool",
+		"file-changing tools",
+	} {
+		if !strings.Contains(lower, want) {
+			t.Fatalf("workspace tool prompt missing %q: %q", want, prompt)
+		}
+	}
+	for _, blocked := range []string{"rg", "fd", "fdfind", "ripgrep", "tree-sitter", "batcat"} {
+		if strings.Contains(lower, blocked) {
+			t.Fatalf("workspace tool prompt should not prescribe %q: %q", blocked, prompt)
+		}
+	}
+}
+
 func TestBuildRejectsUnknownRoute(t *testing.T) {
 	_, err := Build(Route("provider/passthrough"), []model.Message{{Role: "user", Content: "hello"}})
 	if err == nil {

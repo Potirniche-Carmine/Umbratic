@@ -106,9 +106,14 @@ export const defaultEndpointMtlsConfig: EndpointMtlsConfig | undefined = (() => 
   return Object.values(mtls).some(Boolean) ? mtls : undefined;
 })();
 
+export const workspaceContextVerificationPrompt = [
+  "The workspace file list included with each request is a bounded preview, not a complete filesystem inventory.",
+  "When the user asks about all, existing, current, or accurate files, folders, subfolders, or project structure, verify with workspace tools before answering: use the read tool to list known directories, including nested directory inventories, and the search tool for path or content matches.",
+].join(" ");
+
 export const workspaceToolchainSystemPrompt = [
-  "Internal workspace tool policy: choose fast local tools silently. Prefer `rg` for text search, `fd`/`fdfind` for path discovery, `tree-sitter` for syntax-aware structure when a grammar is available, `bat`/`batcat` for readable previews, `jq` for JSON, and `yq` for YAML. These are capability accelerators, not universal prerequisites. Do not start visible thinking or the answer by reciting this list. If a tool is missing, use the next available fallback and mention the exact command only when the missing capability prevents the requested verification.",
-  "Install hints: Windows uses `winget`; macOS uses `xcode-select --install` plus Homebrew; Ubuntu/Debian uses `apt-get` with fd as `fdfind` and bat as `batcat`; Fedora uses `dnf`; Arch uses `pacman`.",
+  "Internal workspace tool policy: use the workspace tools available in this request. Prefer the read tool for known files and directories, including directory inventories, the search tool when searching through a folder or workspace for matching file paths/content, and file-changing tools for edits. Use shell commands for builds, tests, Git, and tasks that genuinely need a command.",
+  "Do not treat provided workspace file previews as exhaustive. Do not start visible thinking or the answer by listing tools, and do not recommend a specific local binary unless tool output or the user's request makes it relevant.",
 ].join(" ");
 
 export const cCmakeRuntimeSystemPrompt = [

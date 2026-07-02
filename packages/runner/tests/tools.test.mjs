@@ -26,9 +26,11 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 function workspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-tools-"));
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.mkdirSync(path.join(root, "src", "components"), { recursive: true });
   fs.mkdirSync(path.join(root, "node_modules", "skip-me"), { recursive: true });
   fs.writeFileSync(path.join(root, "README.md"), "Intro\nTarget phrase\nFinal\n", "utf8");
   fs.writeFileSync(path.join(root, "src", "app.ts"), "export const answer = 41;\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "components", "Button.ts"), "export const Button = 'ok';\n", "utf8");
   fs.writeFileSync(path.join(root, "node_modules", "skip-me", "ignored.js"), "Target phrase\n", "utf8");
   return root;
 }
@@ -76,7 +78,13 @@ test("readTool reads file ranges and lists directories while skipping generated 
   const listing = await readTool(ctx, { filePath: ".", limit: 10 });
   assert.match(listing.output, /README\.md/);
   assert.match(listing.output, /src\//);
+  assert.doesNotMatch(listing.output, /Button\.ts/);
   assert.doesNotMatch(listing.output, /node_modules/);
+
+  const recursive = await readTool(ctx, { filePath: ".", depth: 3, limit: 20 });
+  assert.match(recursive.output, /src\/components\//);
+  assert.match(recursive.output, /src\/components\/Button\.ts/);
+  assert.doesNotMatch(recursive.output, /node_modules/);
 });
 
 test("writeTool and editTool enforce permission and make real workspace changes", async () => {
@@ -373,6 +381,14 @@ test("normalizeModelToolSpec removes schema shapes local model adapters handle p
 
 test("toolSpecs keep small stable schemas for local model tool calling", () => {
   assert.deepEqual(plain(toolSpecs.map((spec) => spec.function.name)), ["read", "write", "edit", "search", "command"]);
+  const readSpec = toolSpecs.find((spec) => spec.function.name === "read");
+  const searchSpec = toolSpecs.find((spec) => spec.function.name === "search");
+  assert.match(readSpec.function.description, /known workspace file/i);
+  assert.match(readSpec.function.description, /subfolder inventories/i);
+  assert.equal(readSpec.function.parameters.properties.depth.type, "number");
+  assert.match(searchSpec.function.description, /file paths and small text-file contents/i);
+  assert.match(searchSpec.function.description, /before reading exact files/i);
+  assert.match(searchSpec.function.description, /not a complete directory inventory/i);
   const editSpec = toolSpecs.find((spec) => spec.function.name === "edit");
   assert.deepEqual(plain(editSpec.function.parameters.properties.mode.enum), ["replace", "patch"]);
   assert.equal(editSpec.function.parameters.properties.patch.type, "string");

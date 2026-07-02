@@ -15,8 +15,8 @@ export type RunnerHandle = {
 };
 
 export type UmbraticRunnerEvent =
-  | { type: "assistant.delta"; taskId: string; text: string; at: string }
-  | { type: "assistant.reasoning.delta"; taskId: string; text: string; at: string }
+  | { type: "assistant.delta"; taskId: string; text: string; at: string; endedAt?: string }
+  | { type: "assistant.reasoning.delta"; taskId: string; text: string; at: string; endedAt?: string }
   | {
       type: "tool.requested";
       taskId: string;
@@ -35,6 +35,7 @@ export type UmbraticRunnerEvent =
       text: string;
       redacted: boolean;
       at: string;
+      endedAt?: string;
     }
   | {
       type: "tool.policy.stage";

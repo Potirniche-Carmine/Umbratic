@@ -734,13 +734,13 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
 
   const rg = capabilityById(report, "rg");
   const fd = capabilityById(report, "fd");
-  lines.push(`- text search helper rg: ${statusLabel(rg)}`);
-  lines.push(`- path discovery helper fd/fdfind: ${statusLabel(fd)}`);
+  lines.push(`- workspace text search helper: ${statusLabel(rg)}`);
+  lines.push(`- workspace path discovery helper: ${statusLabel(fd)}`);
   if (rg?.status !== "available") {
-    lines.push("- if rg is missing, search still works through runner fallbacks but may be slower.");
+    lines.push("- if the text search helper is missing, search still works through runner fallbacks but may be slower.");
   }
   if (fd?.status !== "available") {
-    lines.push("- if fd/fdfind is missing, path discovery may use slower fallback search.");
+    lines.push("- if the path discovery helper is missing, path discovery may use slower fallback search.");
   }
 
   if (needs.python) {

@@ -145,7 +145,10 @@ test("skill previews render markdown content and source filters split system fro
 test("diff parsing, command aggregation, pending permissions, and timelines reflect real event streams", () => {
   const {
     assistantTextFromEvents,
+    commandDetailLabel,
+    commandLabel,
     commandRunsFromEvents,
+    commandShellText,
     commandSummary,
     compactBackendEvents,
     composerTimelineFromEvents,
@@ -197,6 +200,47 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     JSON.parse(JSON.stringify(compactBackendEvents(duplicateDelivery).filter((event) => event.type === "user.message").map((event) => event.text))),
     ["Run tests", "Run tests"],
   );
+
+  const searchRun = {
+    id: "tool-1",
+    command: 'search "composer"',
+    kind: "read",
+    commandClass: "read",
+    cwd: "C:/repo",
+    stdout: "apps/desktop/src/renderer/main.tsx: content\n",
+    stderr: "",
+    exitCode: 0,
+    status: "passed",
+  };
+  assert.equal(commandLabel(searchRun.command), "Search workspace");
+  assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
+  assert.match(commandShellText(searchRun), /Search workspace: search "composer"/);
+  assert.match(commandShellText(searchRun), /Results:\napps\/desktop\/src\/renderer\/main\.tsx: content/);
+});
+
+test("stream batching drains queued assistant text without throughput capping", () => {
+  const {
+    nextAnimatedStreamingLength,
+    streamingMarkdownRenderBatchIntervalMs,
+    streamingTextAnimationCharsPerSecond,
+    takeBatchedBackendEvents,
+  } = loadRenderer();
+
+  assert.equal(streamingMarkdownRenderBatchIntervalMs, 33);
+  assert.equal(streamingTextAnimationCharsPerSecond, 500);
+  const queue = [
+    { type: "assistant.delta", taskId: "task-1", text: "abcdefghijklmnopqrstuvwxyz", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:01.000Z" },
+  ];
+
+  const batch = takeBatchedBackendEvents(queue);
+  assert.deepEqual(JSON.parse(JSON.stringify(batch.map((event) => event.type))), ["assistant.delta", "assistant.done"]);
+  assert.equal(batch[0].text, "abcdefghijklmnopqrstuvwxyz");
+  assert.equal(queue.length, 0);
+
+  assert.equal(nextAnimatedStreamingLength("x".repeat(100), 0, 16), 8);
+  assert.equal(nextAnimatedStreamingLength("hello world", 10, 16), 11);
+  assert.equal(nextAnimatedStreamingLength("x".repeat(1000), 0, 33), 17);
 });
 
 test("prompt mention parsing supports file and skill completion triggers", () => {

@@ -1778,6 +1778,17 @@ pre {
   white-space: pre-wrap;
 }
 
+.streamingTextCaret {
+  display: inline-block;
+  width: 0;
+  height: 1em;
+  margin-left: 2px;
+  border-right: 2px solid currentColor;
+  opacity: 0.45;
+  transform: translateY(2px);
+  animation: streamingCaretBlink 1s steps(2, start) infinite;
+}
+
 .messageActions {
   position: absolute;
   top: 0;
@@ -5381,6 +5392,18 @@ button.attachmentPreview:focus-visible {
   }
 }
 
+@keyframes streamingCaretBlink {
+  0%,
+  48% {
+    opacity: 0.45;
+  }
+
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
 @keyframes menuRise {
   from {
     opacity: 0;
@@ -5449,6 +5472,11 @@ button.attachmentPreview:focus-visible {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
+  }
+
+  .streamingTextCaret {
+    animation: none !important;
+    opacity: 0.35;
   }
 }
 

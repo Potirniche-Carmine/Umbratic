@@ -17,7 +17,8 @@ function toolInvocationSummary(name: string, input: Record<string, unknown>): st
     const filePath = typeof input.filePath === "string" ? input.filePath : typeof input.path === "string" ? input.path : "";
     const offset = typeof input.offset === "number" ? ` --offset ${Math.floor(input.offset)}` : "";
     const limit = typeof input.limit === "number" ? ` --limit ${Math.floor(input.limit)}` : "";
-    return `read ${quoteToolArg(filePath)}${offset}${limit}`.trim();
+    const depth = typeof input.depth === "number" ? ` --depth ${Math.floor(input.depth)}` : "";
+    return `read ${quoteToolArg(filePath)}${offset}${limit}${depth}`.trim();
   }
   if (name === "search") {
     const query = typeof input.query === "string" ? quoteToolArg(input.query) : "";
@@ -52,8 +53,8 @@ export const toolSpecs: ModelToolSpec[] = [
     type: "function",
     function: {
       name: "read",
-      description: "Read a workspace file or list a workspace directory.",
-      parameters: { type: "object", properties: { filePath: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } }, required: ["filePath"] },
+      description: "Read a known workspace file, or list a known workspace directory. Use depth for nested folder/subfolder inventories.",
+      parameters: { type: "object", properties: { filePath: { type: "string" }, offset: { type: "number" }, limit: { type: "number" }, depth: { type: "number" } }, required: ["filePath"] },
     },
   },
   {
@@ -86,7 +87,7 @@ export const toolSpecs: ModelToolSpec[] = [
     type: "function",
     function: {
       name: "search",
-      description: "Search workspace file paths and small text files.",
+      description: "Search workspace file paths and small text-file contents before reading exact files. This finds path/content matches, not a complete directory inventory.",
       parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
     },
   },

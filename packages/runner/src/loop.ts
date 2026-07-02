@@ -31,6 +31,83 @@ const maxToolContextBytes = 56 * 1024;
 const maxToolResultBytes = 24 * 1024;
 const maxStructuredToolHistorySegments = 4;
 const maxCompactedToolHistoryBytes = 12 * 1024;
+const streamEventCoalesceIntervalMs = 40;
+const maxCoalescedTextChars = 2048;
+
+type CoalescibleRunnerEvent = Extract<
+  UmbraticRunnerEvent,
+  { type: "assistant.delta" | "assistant.reasoning.delta" | "tool.output" }
+>;
+
+function coalescibleEventKey(event: CoalescibleRunnerEvent): string {
+  if (event.type === "tool.output") {
+    return `${event.type}:${event.taskId}:${event.toolCallId}:${event.stream}`;
+  }
+  return `${event.type}:${event.taskId}`;
+}
+
+function isCoalescibleRunnerEvent(event: UmbraticRunnerEvent): event is CoalescibleRunnerEvent {
+  return event.type === "assistant.delta" || event.type === "assistant.reasoning.delta" || event.type === "tool.output";
+}
+
+export function createRunnerEventCoalescer(
+  emit: (event: UmbraticRunnerEvent) => void,
+  options: { intervalMs?: number; maxTextChars?: number } = {},
+): { emit(event: UmbraticRunnerEvent): void; flush(): void } {
+  const intervalMs = options.intervalMs ?? streamEventCoalesceIntervalMs;
+  const maxTextChars = options.maxTextChars ?? maxCoalescedTextChars;
+  let pending: CoalescibleRunnerEvent | null = null;
+  let pendingKey = "";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearFlushTimer = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+  };
+
+  const flush = () => {
+    clearFlushTimer();
+    if (!pending) return;
+    emit(pending);
+    pending = null;
+    pendingKey = "";
+  };
+
+  const scheduleFlush = () => {
+    if (timer || intervalMs <= 0) return;
+    timer = setTimeout(flush, intervalMs);
+  };
+
+  const coalescedEmit = (event: UmbraticRunnerEvent) => {
+    if (!isCoalescibleRunnerEvent(event)) {
+      flush();
+      emit(event);
+      return;
+    }
+
+    const key = coalescibleEventKey(event);
+    if (pending && pendingKey === key && pending.text.length + event.text.length <= maxTextChars) {
+      pending = {
+        ...pending,
+        text: `${pending.text}${event.text}`,
+        endedAt: event.endedAt ?? event.at ?? pending.endedAt ?? pending.at,
+      };
+      scheduleFlush();
+      return;
+    }
+
+    flush();
+    pending = event;
+    pendingKey = key;
+    scheduleFlush();
+    if (pending.text.length >= maxTextChars) {
+      flush();
+    }
+  };
+
+  return { emit: coalescedEmit, flush };
+}
 
 function clipUtf8(value: string, byteLimit: number): string {
   const buffer = Buffer.from(value, "utf8");
@@ -429,59 +506,65 @@ async function readOpenAIStream(
 }
 
 export async function runTurn(session: Session, parts: InputPart[], emit: (event: UmbraticRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
-  session.messages.push({ role: "user", content: messageContentFromParts(parts) });
-  for (let turn = 0; turn < 12; turn++) {
-    const acc = await streamModel(session, emit);
-    const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
-    if (toolCalls.length === 0) {
-      session.messages.push({ role: "assistant", content: acc.content || null });
-      if (acc.reasoning && !acc.emittedReasoning) {
-        emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: acc.reasoning, at: nowIso() });
+  const events = createRunnerEventCoalescer(emit);
+  try {
+    session.messages.push({ role: "user", content: messageContentFromParts(parts) });
+    for (let turn = 0; turn < 12; turn++) {
+      const acc = await streamModel(session, events.emit);
+      events.flush();
+      const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
+      if (toolCalls.length === 0) {
+        session.messages.push({ role: "assistant", content: acc.content || null });
+        if (acc.reasoning && !acc.emittedReasoning) {
+          events.emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: acc.reasoning, at: nowIso() });
+        }
+        if (acc.content && !acc.emittedContent) {
+          events.emit({ type: "assistant.delta", taskId: session.taskId, text: acc.content, at: nowIso() });
+        }
+        return;
       }
-      if (acc.content && !acc.emittedContent) {
-        emit({ type: "assistant.delta", taskId: session.taskId, text: acc.content, at: nowIso() });
+      const ctx: ToolContext = {
+        taskId: session.taskId,
+        cwd: session.config.cwd,
+        permissionMode: session.config.permissionMode,
+        enabledTools: session.config.enabledTools,
+        askPermission: replyPermission,
+        emitToolOutput(toolCallId, stream, text) {
+          events.emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
+        },
+      };
+      const structuredToolHistory = toolRoleHistorySupported(session);
+      if (structuredToolHistory) {
+        session.messages.push(assistantToolMessage(acc.content, toolCalls));
+      } else if (acc.content.trim()) {
+        session.messages.push({ role: "assistant", content: acc.content });
       }
-      return;
-    }
-    const ctx: ToolContext = {
-      taskId: session.taskId,
-      cwd: session.config.cwd,
-      permissionMode: session.config.permissionMode,
-      enabledTools: session.config.enabledTools,
-      askPermission: replyPermission,
-      emitToolOutput(toolCallId, stream, text) {
-        emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
-      },
-    };
-    const structuredToolHistory = toolRoleHistorySupported(session);
-    if (structuredToolHistory) {
-      session.messages.push(assistantToolMessage(acc.content, toolCalls));
-    } else if (acc.content.trim()) {
-      session.messages.push({ role: "assistant", content: acc.content });
-    }
-    const toolResults: ToolContextResult[] = [];
-    for (const toolCall of toolCalls) {
-      try {
-        const result = await runTool(ctx, emit, toolCall);
-        toolResults.push({ call: toolCall, title: result.title, output: result.output, status: result.status });
-      } catch (error) {
-        const failure = toolFailureDetails(error);
-        const message = redactText(`Tool failed: ${failure.message}`);
-        emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
-        toolResults.push({ call: toolCall, title: toolCall.name, output: message, status: failure.status });
+      const toolResults: ToolContextResult[] = [];
+      for (const toolCall of toolCalls) {
+        try {
+          const result = await runTool(ctx, events.emit, toolCall);
+          toolResults.push({ call: toolCall, title: result.title, output: result.output, status: result.status });
+        } catch (error) {
+          const failure = toolFailureDetails(error);
+          const message = redactText(`Tool failed: ${failure.message}`);
+          events.emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
+          toolResults.push({ call: toolCall, title: toolCall.name, output: message, status: failure.status });
+        }
+      }
+      if (structuredToolHistory) {
+        for (const result of toolResults) {
+          session.messages.push({
+            role: "tool",
+            tool_call_id: result.call.id,
+            content: formatToolResultContent(result),
+          });
+        }
+      } else {
+        session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });
       }
     }
-    if (structuredToolHistory) {
-      for (const result of toolResults) {
-        session.messages.push({
-          role: "tool",
-          tool_call_id: result.call.id,
-          content: formatToolResultContent(result),
-        });
-      }
-    } else {
-      session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });
-    }
+    throw new Error("model exceeded maximum tool turns");
+  } finally {
+    events.flush();
   }
-  throw new Error("model exceeded maximum tool turns");
 }

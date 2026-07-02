@@ -559,6 +559,7 @@ const workspaceModeKey = "umbratic-ui-workspace-mode";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
+export const streamingMarkdownRenderBatchIntervalMs = 33;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
@@ -1590,6 +1591,10 @@ export function compactBackendEvents(events: BackendUiEvent[], limit = 500): Bac
   return events.reduce<BackendUiEvent[]>((current, event) => appendBackendEvent(current, event, limit), []);
 }
 
+export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): BackendUiEvent[] {
+  return pendingEvents.splice(0);
+}
+
 function eventTimelineTime(event: BackendUiEvent): string {
   return event.endedAt ?? event.at ?? "";
 }
@@ -2219,9 +2224,13 @@ function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
   return <Loader2 className="spin" size={15} />;
 }
 
-function commandLabel(command: string): string {
+export function commandLabel(command: string): string {
   const trimmed = command.trim();
-  if (!trimmed) return "Tool call";
+  if (!trimmed) return "Workspace action";
+  if (/^search(?:\s|$)/i.test(trimmed)) return "Search workspace";
+  if (/^read(?:\s|$)/i.test(trimmed)) return "Read workspace";
+  if (/^write(?:\s|$)/i.test(trimmed)) return "Write file";
+  if (/^edit(?:\s|$)/i.test(trimmed)) return "Edit files";
   if (/^(rg|grep|find|fd)\b/i.test(trimmed)) return "Search";
   if (/^npm\b.+\brun\b/i.test(trimmed)) return "Run script";
   if (/^git\b/i.test(trimmed)) return "Git";
@@ -2242,6 +2251,11 @@ function isShellLikeCommand(command: string): boolean {
   return !/^(read|search|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
 }
 
+function workspaceActivityLabel(command: string): string {
+  const label = commandLabel(command);
+  return label;
+}
+
 export function commandSummary(run: CommandRun): string {
   if (run.status === "running") return "running";
   const outputPreview = previewTail(run.stdout || run.stderr, commandOutputPreviewCharacterLimit);
@@ -2254,19 +2268,22 @@ export function commandSummary(run: CommandRun): string {
   return output ? output.split(/\r?\n/).filter(Boolean).slice(-1)[0] : `exit ${run.exitCode ?? 0}`;
 }
 
-function commandShellText(run: CommandRun): string {
-  const parts = [run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command) ? `tool ${run.command}` : `$ ${run.command}`];
+export function commandShellText(run: CommandRun): string {
+  const isTool = !!run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command);
+  const label = isTool ? workspaceActivityLabel(run.command) : "Shell";
+  const parts = [isTool ? `${label}: ${run.command}` : `$ ${run.command}`];
   const outputPreview = previewTail([run.stdout, run.stderr].filter(Boolean).join("\n"), commandOutputPreviewCharacterLimit);
   const output = stripAnsi(outputPreview.text).trimEnd();
   if (outputPreview.truncated) {
     parts.push(`[Showing the last ${commandOutputPreviewCharacterLimit.toLocaleString()} characters of command output.]`);
   }
-  if (output) parts.push(output);
+  if (output) parts.push(isTool ? `Results:\n${output}` : output);
   return parts.join("\n\n");
 }
 
-function commandDetailLabel(run: CommandRun): string {
-  const label = run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command) ? "Tool" : "Shell";
+export function commandDetailLabel(run: CommandRun): string {
+  const isTool = !!run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command);
+  const label = isTool ? `${workspaceActivityLabel(run.command)} results` : "Shell";
   return run.commandClass ? `${label} - ${run.commandClass}` : label;
 }
 
@@ -2751,11 +2768,92 @@ export function LongMarkdownContent({
 }
 
 function StreamingTextContent({ content }: { content: string }) {
+  const animatedContent = useAnimatedStreamingText(content);
   return (
-    <div className="markdownContent streamingTextContent">
-      <p>{content}</p>
+    <div className="streamingTextContent">
+      <MarkdownContent
+        content={animatedContent || "\u200b"}
+        trailingInline={<span className="streamingTextCaret" aria-hidden="true" />}
+      />
     </div>
   );
+}
+
+export const streamingTextAnimationCharsPerSecond = 500;
+const streamingTextAnimationFrameIntervalMs = 33;
+
+export function nextAnimatedStreamingLength(content: string, visibleLength: number, elapsedMs: number): number {
+  const current = Math.min(Math.max(0, Math.floor(visibleLength)), content.length);
+  if (current >= content.length) return content.length;
+  const elapsed = Math.max(1, elapsedMs);
+  const advance = Math.max(1, Math.ceil((streamingTextAnimationCharsPerSecond * elapsed) / 1000));
+  return Math.min(content.length, current + advance);
+}
+
+function useAnimatedStreamingText(content: string): string {
+  const initialVisibleContent = prefersReducedMotion() ? content : "";
+  const [visibleContent, setVisibleContent] = useState(initialVisibleContent);
+  const contentRef = useRef(content);
+  const visibleContentRef = useRef(initialVisibleContent);
+  const visibleLengthRef = useRef(initialVisibleContent.length);
+  const animationFrameRef = useRef<number | null>(null);
+  const lastFrameAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    contentRef.current = content;
+    if (prefersReducedMotion()) {
+      visibleContentRef.current = content;
+      visibleLengthRef.current = content.length;
+      setVisibleContent(content);
+      return;
+    }
+    if (!content.startsWith(visibleContentRef.current)) {
+      visibleContentRef.current = content;
+      visibleLengthRef.current = content.length;
+      setVisibleContent(content);
+      return;
+    }
+    if (visibleLengthRef.current >= content.length || animationFrameRef.current !== null) return;
+
+    const animate = (now: number) => {
+      const previousFrameAt = lastFrameAtRef.current;
+      if (previousFrameAt === null) {
+        lastFrameAtRef.current = now;
+        animationFrameRef.current = window.requestAnimationFrame(animate);
+        return;
+      }
+      const elapsedMs = now - previousFrameAt;
+      if (elapsedMs < streamingTextAnimationFrameIntervalMs) {
+        animationFrameRef.current = window.requestAnimationFrame(animate);
+        return;
+      }
+      lastFrameAtRef.current = now;
+      const nextLength = nextAnimatedStreamingLength(contentRef.current, visibleLengthRef.current, elapsedMs);
+      if (nextLength !== visibleLengthRef.current) {
+        visibleLengthRef.current = nextLength;
+        const nextText = contentRef.current.slice(0, nextLength);
+        visibleContentRef.current = nextText;
+        setVisibleContent(nextText);
+      }
+      if (visibleLengthRef.current < contentRef.current.length) {
+        animationFrameRef.current = window.requestAnimationFrame(animate);
+      } else {
+        animationFrameRef.current = null;
+        lastFrameAtRef.current = null;
+      }
+    };
+
+    animationFrameRef.current = window.requestAnimationFrame(animate);
+    return () => {
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame?.(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      lastFrameAtRef.current = null;
+    };
+  }, [content]);
+
+  return visibleContent;
 }
 
 function normalizeSkillPreviewHeading(value: string): string {
@@ -3296,9 +3394,15 @@ function App() {
     const statusTimer = window.setInterval(() => void refreshStatus(), 30000);
     const pendingBackendEvents: BackendUiEvent[] = [];
     let backendEventFlushTimer: number | null = null;
+    let backendEventFlushDisposed = false;
+    const scheduleBackendEventFlush = () => {
+      if (backendEventFlushDisposed) return;
+      if (backendEventFlushTimer) return;
+      backendEventFlushTimer = window.setTimeout(flushBackendEvents, streamingMarkdownRenderBatchIntervalMs);
+    };
     const flushBackendEvents = () => {
       backendEventFlushTimer = null;
-      const batch = pendingBackendEvents.splice(0);
+      const batch = takeBatchedBackendEvents(pendingBackendEvents);
       if (batch.length === 0) return;
       const visibleBatch = batch.filter((event) => !(event.type === "assistant.delta" && isReviewReadyText(event.text)));
       cacheTaskEvents(visibleBatch);
@@ -3396,18 +3500,20 @@ function App() {
           void loadChats();
         }
       }
+      if (pendingBackendEvents.length) scheduleBackendEventFlush();
     };
     const unsubscribe = api.onBackendEvent((rawEvent) => {
       const event = asBackendEvent(rawEvent);
       if (!event) return;
       pendingBackendEvents.push(event);
-      if (backendEventFlushTimer) return;
-      backendEventFlushTimer = window.setTimeout(flushBackendEvents, 100);
+      scheduleBackendEventFlush();
     });
     return () => {
       window.clearInterval(statusTimer);
+      backendEventFlushDisposed = true;
       if (backendEventFlushTimer) {
         window.clearTimeout(backendEventFlushTimer);
+        backendEventFlushTimer = null;
         flushBackendEvents();
       }
       unsubscribe();

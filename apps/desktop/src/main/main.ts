@@ -25,6 +25,7 @@ import {
   managedModelEndpointDefaults,
   pythonRuntimeSystemPrompt,
   taskStatesThatCanOpen,
+  workspaceContextVerificationPrompt,
   workspaceToolchainSystemPrompt,
 } from "./config";
 import {
@@ -213,6 +214,7 @@ const pendingPermissions = new Map<string, PendingPermission>();
 const pendingTaskEvents = new Map<string, BackendUiEvent[]>();
 let pendingTaskEventFlushTimer: NodeJS.Timeout | null = null;
 let telemetrySyncTimer: NodeJS.Timeout | null = null;
+const streamingTaskEventFlushDelayMs = 2000;
 
 function finishInterruptedRunningTasks() {
   const now = new Date().toISOString();
@@ -468,9 +470,17 @@ function flushPendingTaskEvents() {
   }
 }
 
-function scheduleTaskEventFlush() {
-  if (pendingTaskEventFlushTimer) return;
-  pendingTaskEventFlushTimer = setTimeout(flushPendingTaskEvents, 250);
+function shouldDeferTaskEventFlush(event: BackendUiEvent): boolean {
+  return event.type === "assistant.delta" || event.type === "assistant.reasoning.delta" || event.type === "command.output";
+}
+
+function scheduleTaskEventFlush(delayMs = streamingTaskEventFlushDelayMs) {
+  if (pendingTaskEventFlushTimer) {
+    if (delayMs > 0) return;
+    clearTimeout(pendingTaskEventFlushTimer);
+    pendingTaskEventFlushTimer = null;
+  }
+  pendingTaskEventFlushTimer = setTimeout(flushPendingTaskEvents, delayMs);
 }
 
 function saveTask(task: TaskRecord) {
@@ -1641,7 +1651,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
         "- Umbratic AI created a private scratch workspace for attachments and any files produced during the conversation",
         `- scratch workspace: ${rootPath}`,
         "",
-        "Scratch workspace files:",
+        "Scratch workspace file preview (bounded, not exhaustive):",
         tree.length ? tree.join("\n") : "- (empty)",
       ]
     : [
@@ -1651,7 +1661,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
         `- workspace kind: ${task.workspaceKind}`,
         `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
         "",
-        "Visible workspace files:",
+        "Visible workspace file preview (bounded, not exhaustive):",
         tree.length ? tree.join("\n") : "- (no readable files found)",
       ];
   const systemSkillMatchText = [
@@ -1719,7 +1729,11 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       "",
       hiddenChat
         ? "Answer as a normal chat unless the user asks you to create or inspect files. Treat the scratch workspace as private working storage, not as a meaningful project folder."
-        : "Use the opened folder above as the current project. If answering about the codebase, summarize from the provided workspace context and inspect more files with tools only when needed.",
+        : [
+            "Use the opened folder above as the current project.",
+            workspaceContextVerificationPrompt,
+            "For high-level orientation, the provided workspace preview and key files are useful context. When accuracy or completeness matters, inspect the relevant files or directories with tools before answering.",
+          ].join("\n"),
       "Do not start visible thinking or the final answer by listing available tools, enabled tools, runtime profiles, or capability probes. Treat that context as understood; mention a tool or capability only when it directly affects an action, skill choice, verification result, or blocker.",
       "If the user asks you to create, write, edit, update, or otherwise change a file, you must call a workspace file-changing tool before saying the file was created or changed.",
       "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
@@ -1890,7 +1904,7 @@ function recordTaskEvent(event: BackendUiEvent) {
   if (isReviewReadyAssistantEvent(event)) return;
   const events = pendingTaskEvents.get(event.taskId) ?? [];
   pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
-  scheduleTaskEventFlush();
+  scheduleTaskEventFlush(shouldDeferTaskEventFlush(event) ? streamingTaskEventFlushDelayMs : 0);
 }
 
 function emit(event: BackendUiEvent) {
@@ -3115,16 +3129,19 @@ async function runRunnerTask(
     const eventAt = (event: Record<string, unknown>): string | undefined => (
       typeof event.at === "string" ? event.at : undefined
     );
+    const eventEndedAt = (event: Record<string, unknown>): string | undefined => (
+      typeof event.endedAt === "string" ? event.endedAt : undefined
+    );
 
-    const emitAssistantText = (text: string, at?: string) => {
+    const emitAssistantText = (text: string, at?: string, endedAt?: string) => {
       if (!text || text.trim() === "Ready for review.") return;
       assistantTextForCurrentAttempt += text;
-      emit({ type: "assistant.delta", taskId: task.id, text, at });
+      emit({ type: "assistant.delta", taskId: task.id, text, at, endedAt });
     };
 
-    const emitReasoningText = (text: string, at?: string) => {
+    const emitReasoningText = (text: string, at?: string, endedAt?: string) => {
       if (!text || task.reasoningMode !== "reasoning") return;
-      emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at });
+      emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at, endedAt });
     };
 
     const attemptedFileChangeTools = () => requiredFileChangeTools.filter((tool) => fileChangingToolsAttempted.has(tool));
@@ -3178,12 +3195,12 @@ async function runRunnerTask(
       if (eventTaskId !== task.id) return;
 
       if (type === "assistant.delta" && typeof event.text === "string") {
-        emitAssistantText(event.text, eventAt(event));
+        emitAssistantText(event.text, eventAt(event), eventEndedAt(event));
         return;
       }
 
       if (type === "assistant.reasoning.delta" && typeof event.text === "string") {
-        emitReasoningText(event.text, eventAt(event));
+        emitReasoningText(event.text, eventAt(event), eventEndedAt(event));
         return;
       }
 
@@ -3218,7 +3235,15 @@ async function runRunnerTask(
         const text = typeof event.text === "string" ? event.text : "";
         const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
         if (text) {
-          emit({ type: "command.output", taskId: task.id, id: current.commandId, stream, text: text.slice(0, 12000) });
+          emit({
+            type: "command.output",
+            taskId: task.id,
+            id: current.commandId,
+            stream,
+            text: text.slice(0, 12000),
+            at: eventAt(event),
+            endedAt: eventEndedAt(event),
+          });
         }
         return;
       }

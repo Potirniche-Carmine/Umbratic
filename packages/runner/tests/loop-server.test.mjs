@@ -68,6 +68,30 @@ function authHeader(password) {
   return `Basic ${Buffer.from(`umbratic-runner:${password}`).toString("base64")}`;
 }
 
+test("runner event coalescer merges adjacent stream text without crossing event boundaries", () => {
+  const { createRunnerEventCoalescer } = loadTypeScriptModule(loopPath, { cache: new Map() });
+  const emitted = [];
+  const events = createRunnerEventCoalescer((event) => emitted.push(event), { intervalMs: 0, maxTextChars: 100 });
+
+  events.emit({ type: "assistant.delta", taskId: "task-1", text: "Hel", at: "2026-01-01T00:00:00.000Z" });
+  events.emit({ type: "assistant.delta", taskId: "task-1", text: "lo", at: "2026-01-01T00:00:00.040Z" });
+  events.emit({ type: "assistant.reasoning.delta", taskId: "task-1", text: "Think", at: "2026-01-01T00:00:00.080Z" });
+  events.emit({ type: "assistant.delta", taskId: "task-1", text: " world", at: "2026-01-01T00:00:00.120Z" });
+  events.flush();
+
+  assert.deepEqual(plain(emitted), [
+    {
+      type: "assistant.delta",
+      taskId: "task-1",
+      text: "Hello",
+      at: "2026-01-01T00:00:00.000Z",
+      endedAt: "2026-01-01T00:00:00.040Z",
+    },
+    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Think", at: "2026-01-01T00:00:00.080Z" },
+    { type: "assistant.delta", taskId: "task-1", text: " world", at: "2026-01-01T00:00:00.120Z" },
+  ]);
+});
+
 function runnerConfig(cwd, baseURL, overrides = {}) {
   return {
     taskId: "task-1",
