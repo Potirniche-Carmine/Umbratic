@@ -2295,7 +2295,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
     providers,
     permissionMode,
     endpointConfig: {
-      source: managedEndpoint ? "managed" : hasStoredModelEndpointSettings() ? "stored" : "local-default",
+      source: managedEndpoint ? "managed" : hasStoredModelEndpointSettings() ? "stored" : "server-default",
       endpointEditingAllowed: endpointEditingAllowed() && !hasManagedEndpoint,
     },
     privacy: {

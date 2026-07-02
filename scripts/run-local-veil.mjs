@@ -102,7 +102,13 @@ function localEnv(args) {
 }
 
 function spawnChild(label, command, args, options) {
-  const child = spawn(command, args, options);
+  let child;
+  try {
+    child = spawn(command, args, options);
+  } catch (error) {
+    console.error(`${label} failed to start: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
   child.once("error", (error) => {
     console.error(`${label} failed to start: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -124,8 +130,11 @@ function main() {
   });
   children.push(veil);
 
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const desktop = spawnChild("Desktop", npmCommand, ["--workspace", "@umbratic/desktop", "run", "dev"], {
+  const desktopNpmArgs = ["--workspace", "@umbratic/desktop", "run", "dev"];
+  const desktopCommand = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
+  const desktopArgs =
+    process.platform === "win32" ? ["/d", "/s", "/c", ["npm", ...desktopNpmArgs].join(" ")] : desktopNpmArgs;
+  const desktop = spawnChild("Desktop", desktopCommand, desktopArgs, {
     cwd: repoRoot,
     env: desktopEnv,
     stdio: "inherit",

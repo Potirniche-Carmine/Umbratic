@@ -71,7 +71,7 @@ export type BackendStatus = {
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
   endpointConfig: {
-    source: "local-default" | "stored" | "managed";
+    source: "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
   };
   privacy: {

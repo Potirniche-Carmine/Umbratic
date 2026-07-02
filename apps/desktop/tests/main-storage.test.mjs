@@ -343,6 +343,44 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
 
+test("endpoint settings default to server and ignore legacy local defaults", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-default-"));
+  const storage = loadStorage(userData);
+
+  assert.equal(storage.hasStoredModelEndpointSettings(), false);
+  assert.equal(storage.readModelEndpointSettings().mode, "server");
+  assert.equal(storage.readModelEndpointSettings().software, "vllm");
+  assert.equal(storage.readModelEndpointSettings().baseUrl, "https://your-veil-server.example");
+
+  writeSettingsPayload(userData, {
+    modelEndpoint: {
+      mode: "local",
+      software: "ollama",
+      baseUrl: "http://127.0.0.1:8080",
+      modelId: "veil-managed",
+      secret: "",
+      headers: [
+        { name: "", value: "" },
+        { name: "", value: "" },
+      ],
+    },
+  });
+  assert.equal(storage.hasStoredModelEndpointSettings(), false);
+  assert.equal(storage.readModelEndpointSettings().mode, "server");
+
+  const savedLocal = storage.writeModelEndpointSettings({
+    mode: "local",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:8080",
+  });
+  assert.equal(savedLocal.mode, "local");
+  assert.equal(storage.hasStoredModelEndpointSettings(), true);
+  assert.equal(storage.readModelEndpointSettings().mode, "local");
+
+  const rawSettings = JSON.parse(readSettingsPayloadText(userData));
+  assert.equal(rawSettings.modelEndpoint.version, 2);
+});
+
 test("tool, skill, harness, and notes settings sanitize invalid input", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-settings-"));
   const storage = loadStorage(userData);

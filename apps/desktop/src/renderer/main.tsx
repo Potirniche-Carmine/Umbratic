@@ -169,7 +169,7 @@ type BackendStatus = {
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
   endpointConfig: {
-    source: "local-default" | "stored" | "managed";
+    source: "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
   };
   privacy: {
@@ -591,9 +591,9 @@ const defaultMonoFontChoices = [
 ];
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
-  mode: "local",
-  software: "ollama",
-  baseUrl: "http://127.0.0.1:8080",
+  mode: "server",
+  software: "vllm",
+  baseUrl: "https://your-veil-server.example",
   modelId: "veil-managed",
   secret: "",
   headers: [
@@ -750,12 +750,15 @@ function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultModelEndpointSettings };
   const settings = value as Partial<ModelEndpointSettings>;
   const baseUrl = typeof settings.baseUrl === "string" ? settings.baseUrl : defaultModelEndpointSettings.baseUrl;
+  const mode = settings.mode === "local" || settings.mode === "server" ? settings.mode : defaultModelEndpointSettings.mode;
   const software =
     settings.software === "ollama" || settings.software === "vllm"
       ? settings.software
-      : endpointSoftwareForBaseUrl(baseUrl);
+      : mode === defaultModelEndpointSettings.mode
+        ? defaultModelEndpointSettings.software
+        : endpointSoftwareForBaseUrl(baseUrl);
   return {
-    mode: settings.mode === "local" || settings.mode === "server" ? settings.mode : endpointModeForBaseUrl(baseUrl),
+    mode,
     software,
     baseUrl,
     modelId: typeof settings.modelId === "string" ? settings.modelId : defaultModelEndpointSettings.modelId,
@@ -1304,7 +1307,7 @@ const fallbackApi: DesktopApi = {
     providers: [],
     permissionMode: previewPermissionMode,
     endpointConfig: {
-      source: "local-default",
+      source: "server-default",
       endpointEditingAllowed: true,
     },
     privacy: {
@@ -2921,6 +2924,7 @@ function App() {
   const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
   const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
   const [endpointSaving, setEndpointSaving] = useState(false);
+  const [endpointRefreshing, setEndpointRefreshing] = useState(false);
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
@@ -3866,6 +3870,7 @@ function App() {
   function updateEndpointDraft(patch: Partial<ModelEndpointSettings>) {
     endpointSaveSequenceRef.current += 1;
     setEndpointSaving(false);
+    setEndpointRefreshing(false);
     setEndpointDraftSettings((current) => {
       const next = normalizeEndpointSettings({ ...current, ...patch });
       if ("mode" in patch) {
@@ -3893,6 +3898,7 @@ function App() {
   function updateEndpointHeader(index: number, patch: Partial<{ name: string; value: string }>) {
     endpointSaveSequenceRef.current += 1;
     setEndpointSaving(false);
+    setEndpointRefreshing(false);
     setEndpointDraftSettings((current) => {
       const headers = normalizeEndpointHeaders(current.headers);
       headers[index] = { ...headers[index], ...patch };
@@ -3908,19 +3914,21 @@ function App() {
   }
 
   async function refreshConnectionStatus() {
+    if (endpointSaving || endpointRefreshing) return;
     const requestId = endpointSaveSequenceRef.current + 1;
     endpointSaveSequenceRef.current = requestId;
-    setEndpointSaving(true);
+    setEndpointRefreshing(true);
     setAccountMessage(null);
     try {
       const status = await refreshStatus();
       if (requestId !== endpointSaveSequenceRef.current) return;
     } finally {
-      if (requestId === endpointSaveSequenceRef.current) setEndpointSaving(false);
+      if (requestId === endpointSaveSequenceRef.current) setEndpointRefreshing(false);
     }
   }
 
   async function saveEndpointSettings() {
+    if (endpointSaving || endpointRefreshing) return;
     const requestId = endpointSaveSequenceRef.current + 1;
     endpointSaveSequenceRef.current = requestId;
     const nextDraft = normalizeEndpointSettings({
@@ -6299,14 +6307,15 @@ function App() {
                               {connectionLabel}
                             </strong>
                             <button
-                              className="settingsIconButton"
+                              className="settingsIconButton connectionRefreshButton"
                               type="button"
                               onClick={() => void refreshConnectionStatus()}
-                              disabled={endpointSaving}
+                              disabled={endpointRefreshing}
                               title="Check connection"
                               aria-label="Check connection"
+                              aria-disabled={endpointSaving ? "true" : undefined}
                             >
-                              <RefreshCw className={endpointSaving ? "spin" : ""} size={14} />
+                              <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
                             </button>
                           </div>
                         </div>
@@ -6319,18 +6328,18 @@ function App() {
                         <span>Connection type</span>
                         <div className="segmented endpointSegmented" aria-label="Model connection type">
                           <button
-                            className={endpointDraftSettings.mode === "local" ? "active" : ""}
-                            type="button"
-                            onClick={() => updateEndpointDraft({ mode: "local", software: endpointDraftSettings.software })}
-                          >
-                            Local
-                          </button>
-                          <button
                             className={endpointDraftSettings.mode === "server" ? "active" : ""}
                             type="button"
                             onClick={() => updateEndpointDraft({ mode: "server", software: endpointDraftSettings.software })}
                           >
                             Server
+                          </button>
+                          <button
+                            className={endpointDraftSettings.mode === "local" ? "active" : ""}
+                            type="button"
+                            onClick={() => updateEndpointDraft({ mode: "local", software: endpointDraftSettings.software })}
+                          >
+                            Local
                           </button>
                         </div>
                       </div>
@@ -6401,10 +6410,11 @@ function App() {
                       ) : null}
                       <div className="settingsActions">
                         <button
-                          className="settingsInlineButton"
+                          className="settingsInlineButton connectionSaveButton"
                           type="button"
                           onClick={() => void saveEndpointSettings()}
                           disabled={endpointSaving}
+                          aria-disabled={endpointRefreshing ? "true" : undefined}
                         >
                           {endpointSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
                           <span>{endpointSaving ? "Saving" : "Save connection"}</span>

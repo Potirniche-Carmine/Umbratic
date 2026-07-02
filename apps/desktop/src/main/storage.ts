@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   defaultEndpointApiKey,
-  defaultEndpointBaseUrl,
   defaultEndpointBaseUrlForSoftware,
   defaultEndpointModelId,
   defaultEndpointSoftware,
@@ -17,7 +16,7 @@ import {
   isModelEndpointSoftware,
   managedModelEndpointDefaults,
 } from "./config";
-import { isLocalhostUrl, umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
+import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import type {
   CapabilityProbeCategory,
@@ -585,6 +584,7 @@ export function writeChats(chats: ChatRecord[]) {
 type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
   modelEndpoint?: Partial<Omit<ModelEndpointSettings, "headers" | "secret">> & {
+    version?: unknown;
     secret?: unknown;
     headers?: unknown;
   };
@@ -604,6 +604,7 @@ type NoteRow = {
 
 const appSettingsKey = "app";
 const userNotesId = "user";
+const modelEndpointSettingsVersion = 2;
 
 function readRawSettings(): RawSettings {
   return withAppDatabase((db) => {
@@ -625,6 +626,7 @@ type StoredProtectedString = {
 };
 
 type StoredModelEndpointSettings = Omit<ModelEndpointSettings, "headers" | "secret"> & {
+  version: typeof modelEndpointSettingsVersion;
   secret: "" | StoredProtectedString;
   headers: Array<{ name: string; value: "" | StoredProtectedString }>;
 };
@@ -665,17 +667,24 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
 }
 
 function defaultModelEndpointMode(): ModelEndpointMode {
-  return isLocalhostUrl(defaultEndpointBaseUrl) ? "local" : "server";
+  return "server";
+}
+
+function activeModelEndpointSettings(settings: RawSettings): RawSettings["modelEndpoint"] | undefined {
+  const endpoint = settings.modelEndpoint;
+  if (!endpoint) return undefined;
+  if (endpoint.version === modelEndpointSettingsVersion) return endpoint;
+  return endpoint.mode === "local" ? undefined : endpoint;
 }
 
 export function hasStoredModelEndpointSettings(): boolean {
   const settings = readRawSettings();
-  return !!settings.modelEndpoint;
+  return !!activeModelEndpointSettings(settings);
 }
 
 export function readModelEndpointSettings(): ModelEndpointSettings {
   const settings = readRawSettings();
-  const endpoint = settings.modelEndpoint ?? {};
+  const endpoint = activeModelEndpointSettings(settings) ?? {};
   const managed = managedModelEndpointDefaults();
   const mode =
     managed?.mode ??
@@ -698,6 +707,7 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
 function protectEndpointSettings(settings: ModelEndpointSettings): StoredModelEndpointSettings {
   return {
     ...settings,
+    version: modelEndpointSettingsVersion,
     secret: writeProtectedString(settings.secret),
     headers: settings.headers.map((header) => ({
       name: header.name,

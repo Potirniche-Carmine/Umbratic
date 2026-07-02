@@ -4502,7 +4502,7 @@ button.attachmentPreview:focus-visible {
 .serverHealthControl {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   min-width: 0;
 }
@@ -4528,6 +4528,11 @@ button.attachmentPreview:focus-visible {
 .settingsIconButton:disabled {
   opacity: 0.62;
   cursor: not-allowed;
+}
+
+.connectionRefreshButton:disabled {
+  opacity: 1;
+  cursor: default;
 }
 
 .serverStatusDot {
@@ -5173,6 +5178,15 @@ button.attachmentPreview:focus-visible {
 .settingsInlineButton:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.connectionSaveButton {
+  width: min(152px, 100%);
+}
+
+.connectionSaveButton:disabled {
+  opacity: 1;
+  cursor: default;
 }
 
 .settingsMessage {
