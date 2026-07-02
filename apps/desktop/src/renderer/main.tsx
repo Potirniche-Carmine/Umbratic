@@ -443,7 +443,7 @@ type CommandRun = {
 type ComposerTimelineItem =
   | { type: "user"; id: string; text: string; attachedFiles: ChatAttachment[] }
   | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
-  | { type: "assistant"; id: string; text: string }
+  | { type: "assistant"; id: string; text: string; streaming?: boolean }
   | { type: "command"; id: string; run: CommandRun };
 
 type SkillInfo = {
@@ -559,6 +559,7 @@ const workspaceModeKey = "umbratic-ui-workspace-mode";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
+const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
@@ -737,6 +738,12 @@ function endpointSoftwareForBaseUrl(baseUrl: string): ModelEndpointSoftware {
   const normalized = baseUrl.toLowerCase();
   if (normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
   return "ollama";
+}
+
+function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
+  if (mode === "local") return "http://127.0.0.1:8080";
+  if (software === "vllm") return "https://your-veil-server.example";
+  return "https://your-veil-server.example";
 }
 
 function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
@@ -1482,6 +1489,7 @@ function eventSignature(event: BackendUiEvent): string {
     return JSON.stringify({
       type: event.type,
       taskId: event.taskId,
+      at: event.at,
       text: event.text,
       attachedFiles: (event.attachedFiles ?? []).map((file) => ({
         path: file.path,
@@ -1517,11 +1525,25 @@ function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, lim
       event,
     ].slice(-limit);
   }
+  if (
+    event.type === "user.message" &&
+    event.at &&
+    events.some(
+      (existing) =>
+        existing.type === "user.message" &&
+        existing.at === event.at &&
+        eventSignature(existing) === eventSignature(event),
+    )
+  ) {
+    return events;
+  }
   const last = events.at(-1);
   if (
     last &&
     event.type === "user.message" &&
     last.type === "user.message" &&
+    event.at &&
+    last.at === event.at &&
     eventSignature(last) === eventSignature(event)
   ) {
     return events;
@@ -1561,25 +1583,12 @@ function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, lim
   return [...events, event].slice(-limit);
 }
 
-function compactBackendEvents(events: BackendUiEvent[], limit = 500): BackendUiEvent[] {
+export function compactBackendEvents(events: BackendUiEvent[], limit = 500): BackendUiEvent[] {
   return events.reduce<BackendUiEvent[]>((current, event) => appendBackendEvent(current, event, limit), []);
 }
 
-function mergeEventSnapshots(...groups: BackendUiEvent[][]): BackendUiEvent[] {
-  const merged: BackendUiEvent[] = [];
-  const mergedCounts = new Map<string, number>();
-  for (const group of groups) {
-    const groupCounts = new Map<string, number>();
-    for (const event of group) {
-      const signature = eventSignature(event);
-      const groupCount = (groupCounts.get(signature) ?? 0) + 1;
-      groupCounts.set(signature, groupCount);
-      if (groupCount <= (mergedCounts.get(signature) ?? 0)) continue;
-      mergedCounts.set(signature, groupCount);
-      merged.push(event);
-    }
-  }
-  return compactBackendEvents(merged, 500);
+function eventTimelineTime(event: BackendUiEvent): string {
+  return event.endedAt ?? event.at ?? "";
 }
 
 function shortHash(value: string): string {
@@ -1750,6 +1759,18 @@ function chatAttachmentsMatch(left: ChatAttachment[], right: ChatAttachment[]): 
       file.originalPath === other.originalPath
     );
   });
+}
+
+function chatAttachmentsSignature(files: ChatAttachment[]): string {
+  return JSON.stringify(
+    files.map((file) => ({
+      path: file.path,
+      name: file.name,
+      source: file.source,
+      storedPath: file.storedPath,
+      originalPath: file.originalPath,
+    })),
+  );
 }
 
 function attachmentDetail(file: ChatAttachment): string {
@@ -2425,14 +2446,14 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     items.push({ type: "user", id: "user-prompt", text: prompt, attachedFiles: [] });
   }
 
-  const flushAssistant = () => {
+  const flushAssistant = (streaming = false) => {
     const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
     if (!text) {
       assistantBuffer = "";
       return;
     }
     assistantIndex += 1;
-    items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text });
+    items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text, streaming: streaming || undefined });
     assistantBuffer = "";
   };
 
@@ -2555,7 +2576,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
   }
   flushReasoning(taskState !== "running");
-  flushAssistant();
+  flushAssistant(taskState === "running");
   return items;
 }
 
@@ -2726,6 +2747,14 @@ export function LongMarkdownContent({
   );
 }
 
+function StreamingTextContent({ content }: { content: string }) {
+  return (
+    <div className="markdownContent streamingTextContent">
+      <p>{content}</p>
+    </div>
+  );
+}
+
 function normalizeSkillPreviewHeading(value: string): string {
   return value.replace(/^#+\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -2868,7 +2897,6 @@ function App() {
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(composerTestMode ? composerTestEvents : []);
-  const [assistantText, setAssistantText] = useState("");
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
@@ -2930,6 +2958,7 @@ function App() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
+  const lastPersistedDraftRef = useRef<Map<string, { draftPrompt: string; filesSignature: string }>>(new Map());
   const reviewCloseTimerRef = useRef<number | null>(null);
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
@@ -2986,6 +3015,10 @@ function App() {
       : backend
         ? "Unavailable"
         : "Checking";
+  const endpointModeLabel = endpointDraftSettings.mode === "local" ? "Local Veil" : "Server Veil";
+  const endpointUrlLabel = endpointDraftSettings.mode === "local" ? "Local Veil URL" : "Server URL";
+  const endpointTokenLabel = endpointDraftSettings.mode === "local" ? "Local auth token" : "Bearer token";
+  const endpointTokenPlaceholder = endpointDraftSettings.mode === "local" ? "From local Veil env" : "Optional Authorization token";
   const endpointDirty = JSON.stringify(endpointDraftSettings) !== JSON.stringify(endpointSettings);
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
@@ -3141,9 +3174,21 @@ function App() {
 
   function cacheTaskEvents(nextEvents: BackendUiEvent[]) {
     if (!nextEvents.length) return;
+    const grouped = new Map<string, BackendUiEvent[]>();
     for (const event of nextEvents) {
-      const cached = taskEventsByTaskIdRef.current.get(event.taskId) ?? [];
-      taskEventsByTaskIdRef.current.set(event.taskId, appendBackendEvent(cached, event, 500));
+      const group = grouped.get(event.taskId) ?? [];
+      group.push(event);
+      grouped.set(event.taskId, group);
+    }
+    for (const [taskId, group] of grouped) {
+      const cached = taskEventsByTaskIdRef.current.get(taskId) ?? [];
+      taskEventsByTaskIdRef.current.delete(taskId);
+      taskEventsByTaskIdRef.current.set(taskId, compactBackendEvents([...cached, ...group], 500));
+    }
+    while (taskEventsByTaskIdRef.current.size > maxCachedTaskEventGroups) {
+      const oldestTaskId = taskEventsByTaskIdRef.current.keys().next().value;
+      if (!oldestTaskId) break;
+      taskEventsByTaskIdRef.current.delete(oldestTaskId);
     }
   }
 
@@ -3152,7 +3197,22 @@ function App() {
   }
 
   function visibleEventsForTask(nextTask: TaskInfo): BackendUiEvent[] {
-    return mergeEventSnapshots(nextTask.events ?? [], cachedEventsForTask(nextTask.id));
+    const cached = cachedEventsForTask(nextTask.id);
+    const persisted = nextTask.events ?? [];
+    if (nextTask.state === "running" && persisted.length && cached.length) {
+      const latestPersistedTime = persisted.reduce((latest, event) => {
+        const current = eventTimelineTime(event);
+        return current > latest ? current : latest;
+      }, "");
+      return compactBackendEvents([
+        ...persisted,
+        ...cached.filter((event) => eventTimelineTime(event) > latestPersistedTime),
+      ], 500);
+    }
+    if (persisted.length) {
+      return compactBackendEvents(persisted, 500);
+    }
+    return compactBackendEvents(cached, 500);
   }
 
   function setVisibleTask(nextTask: TaskInfo | null) {
@@ -3242,13 +3302,6 @@ function App() {
       const visibleTaskEvents = visibleTaskId ? visibleBatch.filter((event) => event.taskId === visibleTaskId) : [];
       if (visibleTaskEvents.length) {
         setEvents((current) => visibleTaskEvents.reduce((next, event) => appendBackendEvent(next, event, 500), current));
-      }
-      const assistantDelta = visibleTaskEvents
-        .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
-        .map((event) => event.text)
-        .join("");
-      if (assistantDelta) {
-        setAssistantText((current) => `${current}${assistantDelta}`);
       }
       for (const event of visibleBatch) {
         const isVisibleTaskEvent = event.taskId === visibleTaskIdRef.current;
@@ -3344,15 +3397,8 @@ function App() {
       const event = asBackendEvent(rawEvent);
       if (!event) return;
       pendingBackendEvents.push(event);
-      if (event.type === "assistant.reasoning.delta") {
-        if (backendEventFlushTimer) {
-          window.clearTimeout(backendEventFlushTimer);
-        }
-        flushBackendEvents();
-        return;
-      }
       if (backendEventFlushTimer) return;
-      backendEventFlushTimer = window.setTimeout(flushBackendEvents, 50);
+      backendEventFlushTimer = window.setTimeout(flushBackendEvents, 100);
     });
     return () => {
       window.clearInterval(statusTimer);
@@ -3498,7 +3544,7 @@ function App() {
     const draftPrompt = prompt;
     const files = attachedFiles;
     draftSaveRef.current = window.setTimeout(() => {
-      void persistDraft(chatId, draftPrompt, files);
+      void persistDraft(chatId, draftPrompt, files, { updateLocal: false });
     }, 250);
     return () => {
       if (draftSaveRef.current) window.clearTimeout(draftSaveRef.current);
@@ -3555,24 +3601,47 @@ function App() {
     setSkillDocument(null);
   }, [selectedSkillId, skills]);
 
-  async function persistDraft(chatId: string, draftPrompt: string, files: ChatAttachment[]) {
+  async function persistDraft(
+    chatId: string,
+    draftPrompt: string,
+    files: ChatAttachment[],
+    options: { updateLocal?: boolean } = {},
+  ) {
+    const filesSignature = chatAttachmentsSignature(files);
+    const lastPersisted = lastPersistedDraftRef.current.get(chatId);
+    if (lastPersisted?.draftPrompt === draftPrompt && lastPersisted.filesSignature === filesSignature) {
+      if (options.updateLocal !== false) {
+        setChats((current) =>
+          current.map((chat) =>
+            chat.id === chatId && ((chat.draftPrompt ?? "") !== draftPrompt || !chatAttachmentsMatch(chat.attachedFiles ?? [], files))
+              ? { ...chat, draftPrompt, attachedFiles: files }
+              : chat,
+          ),
+        );
+      }
+      return;
+    }
     const existing = chats.find((chat) => chat.id === chatId);
     if (
       existing &&
       (existing.draftPrompt ?? "") === draftPrompt &&
       chatAttachmentsMatch(existing.attachedFiles ?? [], files)
     ) {
+      lastPersistedDraftRef.current.set(chatId, { draftPrompt, filesSignature });
       return;
     }
     try {
       const next = await api.updateChatDraft({ chatId, draftPrompt, attachedFiles: files });
-      setChats((current) =>
-        current.map((chat) =>
-          chat.id === chatId
-            ? { ...chat, draftPrompt: next.draftPrompt, attachedFiles: next.attachedFiles, updatedAt: next.updatedAt }
-            : chat,
-        ),
-      );
+      lastPersistedDraftRef.current.set(chatId, { draftPrompt, filesSignature });
+      if (options.updateLocal !== false) {
+        setChats((current) =>
+          current.map((chat) =>
+            chat.id === chatId
+              ? { ...chat, draftPrompt: next.draftPrompt, attachedFiles: next.attachedFiles, updatedAt: next.updatedAt }
+              : chat,
+          ),
+        );
+      }
     } catch {
       /* Draft persistence should not interrupt typing. */
     }
@@ -3708,7 +3777,6 @@ function App() {
     closeReviewPanel();
     setPendingPermission(null);
     setApprovalChecks([]);
-    setAssistantText(message);
     setEvents((current) => nextEvents.reduce((events, event) => appendBackendEvent(events, event), current));
     await persistDraft(chatId, prompt, attachedFiles);
   }
@@ -3758,7 +3826,6 @@ function App() {
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
-    setAssistantText("");
     setApprovalChecks([]);
     setExpandedCommandId(null);
     setExpandedReasoningIds(new Set());
@@ -3801,6 +3868,16 @@ function App() {
     setEndpointSaving(false);
     setEndpointDraftSettings((current) => {
       const next = normalizeEndpointSettings({ ...current, ...patch });
+      if ("mode" in patch) {
+        const mode = patch.mode === "server" ? "server" : "local";
+        return normalizeEndpointSettings({
+          ...next,
+          mode,
+          baseUrl: defaultEndpointBaseUrlForMode(mode, next.software),
+          secret: next.secret,
+          headers: mode === "local" ? defaultModelEndpointSettings.headers : next.headers,
+        });
+      }
       if ("baseUrl" in patch) {
         return {
           ...next,
@@ -3848,8 +3925,7 @@ function App() {
     endpointSaveSequenceRef.current = requestId;
     const nextDraft = normalizeEndpointSettings({
       ...endpointDraftSettings,
-      mode: endpointModeForBaseUrl(endpointDraftSettings.baseUrl),
-      software: endpointSoftwareForBaseUrl(endpointDraftSettings.baseUrl),
+      headers: endpointDraftSettings.mode === "local" ? defaultModelEndpointSettings.headers : endpointDraftSettings.headers,
     });
     setEndpointSaving(true);
     setAccountMessage(null);
@@ -4412,7 +4488,6 @@ function App() {
     if (!isContinuingChat) {
       setVisibleTask(null);
       setEvents([]);
-      setAssistantText("");
       setApprovalChecks([]);
       setExpandedCommandId(null);
       setExpandedReasoningIds(new Set());
@@ -5052,7 +5127,6 @@ function App() {
         prepareVisibleTaskLoad(chat.taskId ?? null);
         setActiveChatId(chat.id);
         setEvents(cachedEvents);
-        setAssistantText("");
         setApprovalChecks([]);
         setExpandedCommandId(null);
         setExpandedReasoningIds(new Set());
@@ -5097,7 +5171,6 @@ function App() {
         setActiveChatId(chat.id);
         setVisibleTask(nextTask);
         setEvents(compactBackendEvents(nextEvents, 500));
-        setAssistantText("");
         setApprovalChecks([]);
         setExpandedCommandId(null);
         setExpandedReasoningIds(new Set());
@@ -5126,7 +5199,6 @@ function App() {
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
-    setAssistantText("");
     setApprovalChecks([]);
     setExpandedCommandId(null);
     setExpandedReasoningIds(new Set());
@@ -5512,11 +5584,15 @@ function App() {
                         const rating = responseFeedback.get(item.id);
                         return (
                           <article className="timelineMessage assistantMessage" key={item.id}>
-                            <LongMarkdownContent
-                              content={item.text}
-                              onReviewFileClick={openReviewReference}
-                              reviewFiles={reviewFiles}
-                            />
+                            {item.streaming ? (
+                              <StreamingTextContent content={item.text} />
+                            ) : (
+                              <LongMarkdownContent
+                                content={item.text}
+                                onReviewFileClick={openReviewReference}
+                                reviewFiles={reviewFiles}
+                              />
+                            )}
                             <div className="messageActions">
                               <button
                                 className="messageAction"
@@ -6176,7 +6252,7 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Account</h3>
-                      <p>Sign in is required to use Umbratic AI.</p>
+                      <p>Connect Umbratic AI to a local or server Veil endpoint.</p>
                     </div>
 
                     <button
@@ -6193,7 +6269,7 @@ function App() {
                       </div>
                       <div className="accountIdentity">
                         <strong>Developer</strong>
-                        <em>Sign in required</em>
+                        <em>{endpointModeLabel}</em>
                       </div>
                       <ChevronDown size={15} aria-hidden="true" />
                     </button>
@@ -6234,51 +6310,95 @@ function App() {
                             </button>
                           </div>
                         </div>
+                        <div className="settingsListRow">
+                          <span>Connection type</span>
+                          <strong>{endpointModeLabel}</strong>
+                        </div>
+                      </div>
+                      <div className="settingsField">
+                        <span>Connection type</span>
+                        <div className="segmented endpointSegmented" aria-label="Model connection type">
+                          <button
+                            className={endpointDraftSettings.mode === "local" ? "active" : ""}
+                            type="button"
+                            onClick={() => updateEndpointDraft({ mode: "local", software: endpointDraftSettings.software })}
+                          >
+                            Local
+                          </button>
+                          <button
+                            className={endpointDraftSettings.mode === "server" ? "active" : ""}
+                            type="button"
+                            onClick={() => updateEndpointDraft({ mode: "server", software: endpointDraftSettings.software })}
+                          >
+                            Server
+                          </button>
+                        </div>
+                      </div>
+                      <div className="settingsField">
+                        <span>Runtime</span>
+                        <div className="segmented endpointSegmented" aria-label="Model runtime">
+                          <button
+                            className={endpointDraftSettings.software === "ollama" ? "active" : ""}
+                            type="button"
+                            onClick={() => updateEndpointDraft({ software: "ollama" })}
+                          >
+                            Ollama
+                          </button>
+                          <button
+                            className={endpointDraftSettings.software === "vllm" ? "active" : ""}
+                            type="button"
+                            onClick={() => updateEndpointDraft({ software: "vllm" })}
+                          >
+                            vLLM
+                          </button>
+                        </div>
                       </div>
                       <label className="settingsField">
-                        <span>Server URL</span>
+                        <span>{endpointUrlLabel}</span>
                         <input
                           value={endpointDraftSettings.baseUrl}
                           onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                          placeholder="https://veil.umbratic.ai"
+                          placeholder={endpointDraftSettings.mode === "local" ? "http://127.0.0.1:8080" : "https://veil.umbratic.ai"}
                           spellCheck={false}
                         />
                       </label>
                       <label className="settingsField">
-                        <span>Bearer token</span>
+                        <span>{endpointTokenLabel}</span>
                         <input
                           value={endpointDraftSettings.secret}
                           onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
-                          placeholder="Optional Authorization token"
+                          placeholder={endpointTokenPlaceholder}
                           type="password"
                           spellCheck={false}
                         />
                       </label>
-                      <div className="endpointHeaders">
-                        {normalizeEndpointHeaders(endpointDraftSettings.headers).map((header, index) => (
-                          <div className="endpointHeaderRow" key={index}>
-                            <label className="settingsField">
-                              <span>{`Header ${index + 1}`}</span>
-                              <input
-                                value={header.name}
-                                onChange={(event) => updateEndpointHeader(index, { name: event.currentTarget.value })}
-                                placeholder="Header name"
-                                spellCheck={false}
-                              />
-                            </label>
-                            <label className="settingsField">
-                              <span>Token</span>
-                              <input
-                                value={header.value}
-                                onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
-                                placeholder="Security token"
-                                type="password"
-                                spellCheck={false}
-                              />
-                            </label>
-                          </div>
-                        ))}
-                      </div>
+                      {endpointDraftSettings.mode === "server" ? (
+                        <div className="endpointHeaders">
+                          {normalizeEndpointHeaders(endpointDraftSettings.headers).map((header, index) => (
+                            <div className="endpointHeaderRow" key={index}>
+                              <label className="settingsField">
+                                <span>{`Header ${index + 1}`}</span>
+                                <input
+                                  value={header.name}
+                                  onChange={(event) => updateEndpointHeader(index, { name: event.currentTarget.value })}
+                                  placeholder="Header name"
+                                  spellCheck={false}
+                                />
+                              </label>
+                              <label className="settingsField">
+                                <span>Token</span>
+                                <input
+                                  value={header.value}
+                                  onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
+                                  placeholder="Security token"
+                                  type="password"
+                                  spellCheck={false}
+                                />
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="settingsActions">
                         <button
                           className="settingsInlineButton"

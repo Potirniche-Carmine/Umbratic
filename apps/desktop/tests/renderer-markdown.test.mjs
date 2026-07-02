@@ -147,6 +147,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     assistantTextFromEvents,
     commandRunsFromEvents,
     commandSummary,
+    compactBackendEvents,
     composerTimelineFromEvents,
     formatDiffStats,
     parseUnifiedDiff,
@@ -179,6 +180,23 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "assistant",
     "command",
   ]);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(composerTimelineFromEvents([
+      { type: "assistant.delta", taskId: "task-1", text: "Streaming now", at: "2026-01-01T00:00:05.000Z" },
+    ], undefined, "running"))),
+    [{ type: "assistant", id: "assistant-1", text: "Streaming now", streaming: true }],
+  );
+
+  const duplicateDelivery = [
+    events[0],
+    events[1],
+    { ...events[0] },
+    { ...events[0], at: "2026-01-01T00:00:05.000Z" },
+  ];
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(compactBackendEvents(duplicateDelivery).filter((event) => event.type === "user.message").map((event) => event.text))),
+    ["Run tests", "Run tests"],
+  );
 });
 
 test("prompt mention parsing supports file and skill completion triggers", () => {

@@ -64,6 +64,7 @@ import {
 } from "./policy";
 import { getProviderJson } from "./providerClient";
 import {
+  readChat,
   readChats,
   hasStoredModelEndpointSettings,
   readHarnessProfileSetting,
@@ -73,6 +74,7 @@ import {
   readTasks,
   writeHarnessProfileSetting,
   writeModelEndpointSettings,
+  writeChat,
   writeChats,
   writeJsonFile,
   writeNotes,
@@ -279,8 +281,7 @@ function compactClosedTaskStorage() {
 }
 
 function saveChat(chat: ChatRecord) {
-  const chats = [chat, ...readChats().filter((row) => row.id !== chat.id)];
-  writeChats(chats);
+  writeChat(chat);
 }
 
 function isReviewReadyAssistantEvent(event: BackendUiEvent): boolean {
@@ -302,11 +303,25 @@ function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit:
       event,
     ].slice(-limit);
   }
+  if (
+    event.type === "user.message" &&
+    event.at &&
+    existing.some(
+      (storedEvent) =>
+        storedEvent.type === "user.message" &&
+        storedEvent.at === event.at &&
+        taskEventSignature(storedEvent) === taskEventSignature(event),
+    )
+  ) {
+    return existing;
+  }
   const last = existing.at(-1);
   if (
     last &&
     event.type === "user.message" &&
     last.type === "user.message" &&
+    event.at &&
+    last.at === event.at &&
     taskEventSignature(last) === taskEventSignature(event)
   ) {
     return existing;
@@ -355,6 +370,7 @@ function taskEventSignature(event: BackendUiEvent): string {
     return JSON.stringify({
       type: event.type,
       taskId: event.taskId,
+      at: event.at,
       text: event.text,
       attachedFiles: (event.attachedFiles ?? []).map((file) => ({
         path: file.path,
@@ -839,8 +855,7 @@ function updateChatDraft(input: unknown): ChatRecord {
     throw new Error("Invalid chat draft input.");
   }
   const id = requiredString(input.chatId, "chatId");
-  const chats = readChats();
-  const existing = chats.find((chat) => chat.id === id);
+  const existing = readChat(id);
   if (!existing) {
     throw new Error("Chat was not found.");
   }
@@ -870,7 +885,7 @@ function updateChatDraft(input: unknown): ChatRecord {
     attachedFiles,
     updatedAt: new Date().toISOString(),
   };
-  writeChats([next, ...chats.filter((chat) => chat.id !== id)]);
+  writeChat(next);
   return next;
 }
 
@@ -881,8 +896,7 @@ function updateChatProject(input: unknown): ChatRecord {
   const id = requiredString(input.chatId, "chatId");
   const repositoryName = requiredString(input.repositoryName, "repositoryName").slice(0, 120);
   const repositoryPath = path.resolve(requiredString(input.repositoryPath, "repositoryPath"));
-  const chats = readChats();
-  const existing = chats.find((chat) => chat.id === id);
+  const existing = readChat(id);
   if (!existing) {
     throw new Error("Chat was not found.");
   }
@@ -891,7 +905,7 @@ function updateChatProject(input: unknown): ChatRecord {
     repositoryName,
     repositoryPath,
   };
-  writeChats([next, ...chats.filter((chat) => chat.id !== id)]);
+  writeChat(next);
   return next;
 }
 
@@ -966,8 +980,7 @@ function updateChatFromTask(task: TaskRecord) {
   if (!task.chatId) {
     return;
   }
-  const chats = readChats();
-  const existing = chats.find((chat) => chat.id === task.chatId);
+  const existing = readChat(task.chatId);
   const repository = task.hiddenWorkspace ? undefined : readProjects().find((project) => project.id === task.repositoryId);
   const isolatedWorktree = taskUsesIsolatedWorktree(task);
   const next: ChatRecord = {
@@ -987,7 +1000,7 @@ function updateChatFromTask(task: TaskRecord) {
     draftPrompt: existing?.draftPrompt ?? "",
     attachedFiles: existing?.attachedFiles ?? [],
   };
-  writeChats([next, ...chats.filter((chat) => chat.id !== task.chatId)]);
+  writeChat(next);
 }
 
 const ignoredSnapshotDirectories = new Set([
@@ -3584,6 +3597,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       }
     }
     existingTask.permissionMode = permissionMode;
+    existingTask.prompt = prompt;
     existingTask.reasoningMode = reasoningMode;
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;

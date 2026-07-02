@@ -2,6 +2,7 @@ import * as http from "node:http";
 import { URL } from "node:url";
 import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import { runTurn } from "./loop.js";
+import { redactText } from "./policy.js";
 import type { InputPart } from "./session.js";
 import { SessionStore } from "./session.js";
 
@@ -101,6 +102,29 @@ function writeSse(response: http.ServerResponse, event: UmbraticRunnerEvent) {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+function publicErrorDetail(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+        ? error.message
+        : String(error);
+  return redactText(message.replace(/\s+/g, " "), 1000);
+}
+
+export function runnerErrorEvent(taskId: string, error: unknown): UmbraticRunnerEvent {
+  const detail = publicErrorDetail(error);
+  return {
+    type: "runner.error",
+    taskId,
+    category: "loop",
+    code: "loop_error",
+    message: detail ? `Runner turn failed: ${detail}` : "Runner turn failed.",
+    ...(detail ? { detail } : {}),
+    at: nowIso(),
+  };
+}
+
 export async function listen(opts: { hostname: string; port: number; password: string }): Promise<{ url: string; close(): Promise<void> }> {
   const store = new SessionStore();
   const streams = new Set<http.ServerResponse>();
@@ -160,14 +184,7 @@ export async function listen(opts: { hostname: string; port: number; password: s
             store.emit({ type: "session.idle", taskId: session.taskId, sessionId: session.id, at: nowIso() });
           })
           .catch((error) => {
-            store.emit({
-              type: "runner.error",
-              taskId: session.taskId,
-              category: "loop",
-              code: "loop_error",
-              message: "Runner turn failed.",
-              at: nowIso(),
-            });
+            store.emit(runnerErrorEvent(session.taskId, error));
           });
         sendNoContent(response);
         return;
@@ -192,6 +209,10 @@ export async function listen(opts: { hostname: string; port: number; password: s
 
       sendError(response, 404, "not_found", "Not found");
     } catch (error) {
+      if (response.headersSent) {
+        if (!response.writableEnded) response.end();
+        return;
+      }
       if (error instanceof HttpBoundaryError) {
         sendError(response, error.status, error.code, error.publicMessage);
         return;

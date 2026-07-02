@@ -256,7 +256,7 @@ function lastMessageIsToolContext(session: Session): boolean {
 
 function toolRoleHistorySupported(session: Session): boolean {
   const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
-  return !isOllamaChatUrl(url);
+  return !isOllamaChatUrl(url) && !isVeilChatUrl(url);
 }
 
 async function streamOllamaChat(

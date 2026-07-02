@@ -1,5 +1,6 @@
 import { app, safeStorage } from "electron";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -42,8 +43,8 @@ function appDatabasePath(): string {
   return dataFile("umbratic.sqlite");
 }
 
-function projectDatabasePath(rootPath: string): string {
-  return path.join(rootPath, ".umbratic", "umbratic.sqlite");
+function chatsDatabasePath(): string {
+  return path.join(os.homedir(), ".umbratic", "chats", "umbratic.sqlite");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -453,34 +454,67 @@ function replaceChatsInDatabase(db: DatabaseSync, chats: ChatRecord[]) {
   });
 }
 
-function readAppChatsFromDatabase(): ChatRecord[] {
-  return withAppDatabase((db) => normalizeChats(readPayloads(db, "chats")));
+function upsertChatInDatabase(db: DatabaseSync, chat: ChatRecord) {
+  db.prepare(`
+    INSERT OR REPLACE INTO chats (
+      id,
+      title,
+      created_at,
+      updated_at,
+      repository_path,
+      payload,
+      position
+    ) VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT position FROM chats WHERE id = ?), 0))
+  `).run(
+    chat.id,
+    chat.title,
+    chat.createdAt,
+    chat.updatedAt,
+    chat.repositoryPath ?? null,
+    JSON.stringify(chat),
+    chat.id,
+  );
 }
 
-function readProjectChatsFromDatabase(project: RepositoryInfo): ChatRecord[] {
-  const dbPath = projectDatabasePath(project.rootPath);
-  if (!fs.existsSync(dbPath)) return [];
-  return withStorageDatabase(dbPath, (db) => normalizeChats(readPayloads(db, "chats")));
+function readChatsFromDatabase(filePath: string): ChatRecord[] {
+  if (!fs.existsSync(filePath)) return [];
+  return withStorageDatabase(filePath, (db) => normalizeChats(readPayloads(db, "chats")));
 }
 
-function writeAppChatsToDatabase(chats: ChatRecord[]) {
-  withAppDatabase((db) => replaceChatsInDatabase(db, chats));
+function readChatFromDatabase(filePath: string, chatId: string): ChatRecord | null {
+  if (!fs.existsSync(filePath)) return null;
+  return withStorageDatabase(filePath, (db) => {
+    const row = db.prepare("SELECT payload FROM chats WHERE id = ?").get(chatId) as PayloadRow | undefined;
+    return row ? normalizeChatRecord(parsePayload(row.payload)) : null;
+  });
 }
 
-function writeProjectChatsToDatabase(project: RepositoryInfo, chats: ChatRecord[]) {
-  const dbPath = projectDatabasePath(project.rootPath);
-  if (chats.length === 0 && !fs.existsSync(dbPath)) return;
-  withStorageDatabase(dbPath, (db) => replaceChatsInDatabase(db, chats));
+function legacyProjectDatabasePath(rootPath: string): string {
+  return path.join(rootPath, ".umbratic", "umbratic.sqlite");
 }
 
-export function readChats(): ChatRecord[] {
+function readLegacyProjectChats(project: RepositoryInfo): ChatRecord[] {
+  return readChatsFromDatabase(legacyProjectDatabasePath(project.rootPath));
+}
+
+function writeChatsToDatabase(chats: ChatRecord[]) {
+  withStorageDatabase(chatsDatabasePath(), (db) => replaceChatsInDatabase(db, chats));
+}
+
+function readLegacyAppChats(): ChatRecord[] {
+  return readChatsFromDatabase(appDatabasePath());
+}
+
+function migrateLegacyChatsToHomeDatabase() {
+  const dbPath = chatsDatabasePath();
+  if (fs.existsSync(dbPath)) return;
   const chats = new Map<string, ChatRecord>();
-  for (const chat of readAppChatsFromDatabase()) {
+  for (const chat of readLegacyAppChats()) {
     putNewestChat(chats, chat);
   }
   for (const project of readProjects()) {
     const projectKey = pathKey(project.rootPath);
-    for (const chat of readProjectChatsFromDatabase(project)) {
+    for (const chat of readLegacyProjectChats(project)) {
       if (chat.repositoryPath && pathKey(chat.repositoryPath) !== projectKey) {
         continue;
       }
@@ -491,41 +525,61 @@ export function readChats(): ChatRecord[] {
       });
     }
   }
+  if (chats.size > 0) {
+    writeChatsToDatabase(Array.from(chats.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+  }
+}
+
+export function readChats(): ChatRecord[] {
+  migrateLegacyChatsToHomeDatabase();
+  const chats = new Map<string, ChatRecord>();
+  for (const chat of readChatsFromDatabase(chatsDatabasePath())) {
+    putNewestChat(chats, chat);
+  }
   return Array.from(chats.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function readChat(chatId: string): ChatRecord | null {
+  migrateLegacyChatsToHomeDatabase();
+  return readChatFromDatabase(chatsDatabasePath(), chatId);
+}
+
+function chatWithProjectMetadata(chat: ChatRecord): ChatRecord {
+  if (!chat.repositoryPath) return chat;
+  const project = readProjects().find((row) => pathKey(row.rootPath) === pathKey(chat.repositoryPath as string));
+  if (!project) return chat;
+  return {
+    ...chat,
+    repositoryName: chat.repositoryName ?? project.name,
+    repositoryPath: project.rootPath,
+  };
+}
+
+export function writeChat(chat: ChatRecord) {
+  const normalized = normalizeChatRecord(chat);
+  if (!normalized) return;
+  withStorageDatabase(chatsDatabasePath(), (db) => upsertChatInDatabase(db, chatWithProjectMetadata(normalized)));
 }
 
 export function writeChats(chats: ChatRecord[]) {
   const projects = readProjects();
   const projectsByPath = new Map(projects.map((project) => [pathKey(project.rootPath), project]));
-  const projectChats = new Map<string, ChatRecord[]>();
-  const appChats: ChatRecord[] = [];
+  const nextChats: ChatRecord[] = [];
 
   for (const chat of normalizeChats(chats)) {
     const project = chat.repositoryPath ? projectsByPath.get(pathKey(chat.repositoryPath)) : undefined;
     if (!project) {
-      appChats.push(chat);
+      nextChats.push(chat);
       continue;
     }
-    const key = pathKey(project.rootPath);
-    const rows = projectChats.get(key) ?? [];
-    rows.push({
+    nextChats.push({
       ...chat,
       repositoryName: chat.repositoryName ?? project.name,
       repositoryPath: project.rootPath,
     });
-    projectChats.set(key, rows);
   }
 
-  for (const project of projects) {
-    const rows = projectChats.get(pathKey(project.rootPath)) ?? [];
-    try {
-      writeProjectChatsToDatabase(project, rows);
-    } catch {
-      appChats.push(...rows);
-    }
-  }
-
-  writeAppChatsToDatabase(appChats);
+  writeChatsToDatabase(nextChats);
 }
 
 type RawSettings = {
@@ -636,7 +690,7 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
     software,
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
     modelId: defaultEndpointModelId,
-    secret: managed?.secret ?? readProtectedString(endpoint.secret) ?? (mode === "local" ? "" : defaultEndpointApiKey),
+    secret: managed?.secret ?? readProtectedString(endpoint.secret) ?? defaultEndpointApiKey,
     headers: normalizeEndpointHeaders(endpoint.headers),
   };
 }

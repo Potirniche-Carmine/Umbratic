@@ -273,6 +273,59 @@ test("runTurn executes model tool calls and feeds real tool output into the next
   });
 });
 
+test("runTurn sends managed Veil tool results as prose context", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-veil-tools-loop-"));
+  fs.writeFileSync(path.join(root, "README.md"), "Veil tool context\nSecond line\n", "utf8");
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (requests.length === 1) {
+      response.end(
+        sseData({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: "call-read",
+                function: {
+                  name: "read",
+                  arguments: JSON.stringify({ filePath: "README.md", limit: 1 }),
+                },
+              }],
+            },
+          }],
+        }) +
+          "data: [DONE]\n\n",
+      );
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Done through Veil prose context" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, {
+      enabledTools: ["read"],
+      chatEndpointPath: "/api/engineering/chat",
+      runtimeProfiles: ["workspace-toolchain", "markdown"],
+    });
+
+    await runTurn(activeSession, [{ type: "text", text: "Read through Veil" }], (event) => events.push(event), async () => "allow");
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, "/api/engineering/chat");
+    assert.equal(requests[0].body.model, undefined);
+    assert.deepEqual(plain(requests[1].body.messages.map((message) => message.role)), ["user", "user"]);
+    assert.match(requests[1].body.messages.at(-1).content, /Workspace tool results/);
+    assert.match(requests[1].body.messages.at(-1).content, /1: Veil tool context/);
+    assert.equal(JSON.stringify(requests[1].body.messages).includes("\"role\":\"tool\""), false);
+    assert.deepEqual(plain(requests[1].body.runtime_profiles), ["workspace-toolchain", "markdown"]);
+    assert.equal(activeSession.messages.at(-1).content, "Done through Veil prose context");
+    assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
+  });
+});
+
 test("runTurn accumulates partial tool-call argument chunks by stable index", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-tool-partials-"));
   fs.writeFileSync(path.join(root, "README.md"), "Partial chunks work\nSecond line\n", "utf8");
@@ -327,6 +380,16 @@ test("runTurn accumulates partial tool-call argument chunks by stable index", as
     assert.match(requests[1].body.messages[2].content, /1: Partial chunks work/);
     assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
   });
+});
+
+test("runner error events include sanitized failure details", () => {
+  const { runnerErrorEvent } = loadTypeScriptModule(serverPath, { cache: new Map() });
+  const event = runnerErrorEvent("task-1", new Error("model request failed: 500 Internal Server Error token=abcdefghijklmnop"));
+
+  assert.equal(event.type, "runner.error");
+  assert.equal(event.code, "loop_error");
+  assert.match(event.message, /Runner turn failed: model request failed: 500 Internal Server Error token=\[redacted\]/);
+  assert.equal(event.detail, "model request failed: 500 Internal Server Error token=[redacted]");
 });
 
 test("runTurn compacts old structured tool history before model requests", async () => {

@@ -11,6 +11,7 @@
     "desktop:build": "npm --workspace @umbratic/desktop run build",
     "runner:build": "npm --workspace @umbratic/runner run build",
     "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",
+    "local": "node scripts/run-local-veil.mjs",
     "veil:test": "cd infrastructure/veil && go test ./...",
     "supply-chain:check": "node scripts/check-supply-chain.mjs",
     "test:all": "npm run supply-chain:check && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test"

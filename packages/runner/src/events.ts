@@ -72,7 +72,7 @@ export type UmbraticRunnerEvent =
       at: string;
     }
   | { type: "session.idle"; taskId: string; sessionId: string; at: string }
-  | { type: "runner.error"; taskId: string; category: string; code?: string; message: string; at: string };
+  | { type: "runner.error"; taskId: string; category: string; code?: string; message: string; detail?: string; at: string };
 
 export function nowIso(): string {
   return new Date().toISOString();

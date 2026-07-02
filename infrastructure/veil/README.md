@@ -98,6 +98,19 @@ Do not expose Ollama or vLLM directly. Umbratic only needs the Veil tunnel URL a
 go run ./cmd/veil
 ```
 
+From the monorepo root, use the local helper to run Veil and the desktop app together:
+
+```sh
+npm run local
+```
+
+Veil reads `infrastructure/veil/.env` as usual. The helper passes the same local Veil URL and token through to the desktop process so Settings can connect without Cloudflare-specific secrets. Override values for one run when needed:
+
+```sh
+npm run local -- --model llama3.2
+npm run local -- --software vllm --base-url http://127.0.0.1:8000/v1 --model your-model
+```
+
 ## Test
 
 ```sh

@@ -37,10 +37,12 @@ function electronMock(userData) {
   };
 }
 
-function loadStorage(userData) {
+function loadStorage(userData, home = userData) {
   setEnv({
+    HOME: home,
     OLLAMA_BASE_URL: "",
     OLLAMA_API_KEY: "",
+    USERPROFILE: home,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: "true",
     UMBRATIC_MANAGED_ENDPOINT_MODE: undefined,
     UMBRATIC_MANAGED_MODEL_API_KEY: undefined,
@@ -64,6 +66,10 @@ function appDbPath(userData) {
 
 function projectDbPath(repo) {
   return path.join(repo, ".umbratic", "umbratic.sqlite");
+}
+
+function chatDbPath(home) {
+  return path.join(home, ".umbratic", "chats", "umbratic.sqlite");
 }
 
 function withDb(filePath, action) {
@@ -102,6 +108,26 @@ function insertTaskPayload(userData, task) {
   });
 }
 
+function insertLegacyChatPayload(filePath, chat, position = 0) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  withDb(filePath, (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        repository_path TEXT,
+        payload TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare(
+      "INSERT OR REPLACE INTO chats (id, title, created_at, updated_at, repository_path, payload, position) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(chat.id, chat.title, chat.createdAt, chat.updatedAt, chat.repositoryPath ?? null, JSON.stringify(chat), position);
+  });
+}
+
 test("projects and chats are normalized from SQLite storage", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-"));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
@@ -137,14 +163,16 @@ test("projects and chats are normalized from SQLite storage", () => {
   assert.equal(chats[0].worktreeBaseCommit, "abcdef1234567890");
   assert.deepEqual(plain(chats[1].attachedFiles), []);
   assert.equal(fs.existsSync(appDbPath(userData)), true);
+  assert.equal(fs.existsSync(chatDbPath(userData)), true);
   assert.equal(fs.existsSync(path.join(userData, "projects.json")), false);
   assert.equal(fs.existsSync(path.join(userData, "chats.json")), false);
 });
 
-test("project chats are stored under the project's .umbratic directory", () => {
+test("project chats are stored under the home chat database", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-project-chats-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-home-project-chats-"));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
-  const storage = loadStorage(userData);
+  const storage = loadStorage(userData, home);
   const project = {
     id: "repo",
     name: "Repo",
@@ -178,11 +206,10 @@ test("project chats are stored under the project's .umbratic directory", () => {
     },
   ]);
 
-  const appChats = readPayloads(appDbPath(userData), "chats");
-  assert.deepEqual(appChats.map((chat) => chat.id), ["chat-global"]);
-  const projectChats = readPayloads(projectDbPath(repo), "chats");
-  assert.deepEqual(projectChats.map((chat) => chat.id), ["chat-project"]);
+  const homeChats = readPayloads(chatDbPath(home), "chats");
+  assert.deepEqual(homeChats.map((chat) => chat.id), ["chat-project", "chat-global"]);
   assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), ["chat-project", "chat-global"]);
+  assert.equal(fs.existsSync(projectDbPath(repo)), false);
   assert.equal(fs.existsSync(path.join(repo, ".umbratic", "chats.json")), false);
 
   storage.writeChats([
@@ -198,8 +225,58 @@ test("project chats are stored under the project's .umbratic directory", () => {
     },
   ]);
 
-  assert.deepEqual(readPayloads(appDbPath(userData), "chats").map((chat) => chat.id), ["chat-global"]);
-  assert.deepEqual(readPayloads(projectDbPath(repo), "chats").map((chat) => chat.id), ["chat-new-project", "chat-project"]);
+  assert.deepEqual(readPayloads(chatDbPath(home), "chats").map((chat) => chat.id), [
+    "chat-new-project",
+    "chat-project",
+    "chat-global",
+  ]);
+  assert.equal(fs.existsSync(projectDbPath(repo)), false);
+
+  storage.writeChat({
+    ...storage.readChat("chat-global"),
+    draftPrompt: "updated global draft",
+    updatedAt: "2026-01-05T00:00:00.000Z",
+  });
+  assert.equal(storage.readChat("chat-global").draftPrompt, "updated global draft");
+  assert.deepEqual(new Set(readPayloads(chatDbPath(home), "chats").map((chat) => chat.id)), new Set([
+    "chat-new-project",
+    "chat-project",
+    "chat-global",
+  ]));
+});
+
+test("legacy project chat databases migrate once into the home chat database", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-legacy-project-chats-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-home-legacy-project-chats-"));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
+  const storage = loadStorage(userData, home);
+  const project = {
+    id: "repo",
+    name: "Repo",
+    rootPath: repo,
+    kind: "git",
+    originalBranch: "main",
+    baseCommit: "abc",
+    dirty: false,
+    statusSummary: "clean",
+  };
+  storage.writeProjects([project]);
+  insertLegacyChatPayload(projectDbPath(repo), {
+    id: "chat-legacy-project",
+    title: "Legacy project chat",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-03T00:00:00.000Z",
+    repositoryPath: repo,
+    draftPrompt: "legacy draft",
+    attachedFiles: [],
+  });
+
+  assert.equal(fs.existsSync(chatDbPath(home)), false);
+  assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), ["chat-legacy-project"]);
+  assert.deepEqual(readPayloads(chatDbPath(home), "chats").map((chat) => chat.id), ["chat-legacy-project"]);
+
+  storage.writeChats([]);
+  assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), []);
 });
 
 test("tasks normalize stored records with runtime profile, tool settings, and event defaults", () => {

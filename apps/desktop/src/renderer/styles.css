@@ -1349,6 +1349,14 @@ pre {
     0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+.endpointSegmented {
+  width: 100%;
+}
+
+.endpointSegmented button {
+  cursor: pointer;
+}
+
 .riskCallout {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -1764,6 +1772,10 @@ pre {
 
 .timelineMessage .markdownContent > :last-child {
   margin-bottom: 0;
+}
+
+.streamingTextContent p {
+  white-space: pre-wrap;
 }
 
 .messageActions {
