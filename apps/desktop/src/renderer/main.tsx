@@ -191,6 +191,7 @@ type BackendDiagnostics = {
   providerAllowlist: LocalProviderId[];
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
+  runnerDiagnosticsDirectory: string;
   telemetry: TelemetryPolicyInfo;
   runtimes: {
     python: {
@@ -438,13 +439,26 @@ type CommandRun = {
   stderr: string;
   exitCode: number | null;
   status: "running" | "passed" | "failed";
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
 };
+
+type ComposerActivitySegment =
+  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
+  | { type: "command"; id: string; run: CommandRun };
 
 type ComposerTimelineItem =
   | { type: "user"; id: string; text: string; attachedFiles: ChatAttachment[] }
-  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
-  | { type: "assistant"; id: string; text: string; streaming?: boolean }
-  | { type: "command"; id: string; run: CommandRun };
+  | {
+      type: "activity";
+      id: string;
+      segments: ComposerActivitySegment[];
+      startedAt?: string;
+      endedAt?: string;
+      finished: boolean;
+    }
+  | { type: "assistant"; id: string; text: string; streaming?: boolean };
 
 type SkillInfo = {
   id: string;
@@ -503,6 +517,7 @@ type DesktopApi = {
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   saveSkillSettings(input: Record<string, boolean>): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
+  openRunnerDiagnosticsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
   openSkillInEditor(input: { id: string }): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
   importSkill(input?: { sourcePath?: string }): Promise<
     | { ok: true; skill: SkillInfo; skills: SkillInfo[]; directory: string }
@@ -848,7 +863,7 @@ const composerTestEvents: BackendUiEvent[] = [
     type: "command.started",
     taskId: "composer-test",
     id: "composer-fixture-search",
-    command: 'rg -n "promptDock|timelineReasoning" apps/desktop/src/renderer/styles.css',
+    command: 'rg -n "promptDock|timelineActivity" apps/desktop/src/renderer/styles.css',
     cwd: "/Users/carminep/Projects/Umbratic",
     kind: "bash",
     commandClass: "read",
@@ -858,7 +873,7 @@ const composerTestEvents: BackendUiEvent[] = [
     taskId: "composer-test",
     id: "composer-fixture-search",
     stream: "stdout",
-    text: "apps/desktop/src/renderer/styles.css:1405:.timelineReasoning {\napps/desktop/src/renderer/styles.css:2073:.promptDock {\n",
+    text: "apps/desktop/src/renderer/styles.css:1405:.timelineActivity {\napps/desktop/src/renderer/styles.css:2073:.promptDock {\n",
   },
   {
     type: "command.finished",
@@ -1326,6 +1341,7 @@ const fallbackApi: DesktopApi = {
       providerAllowlist: ["company-endpoint"],
       localhostOnlyModels: false,
       commandClassifier: "enabled",
+      runnerDiagnosticsDirectory: "~/.umbratic/runner-diagnostics",
       telemetry: {
         mode: "managed_required",
         localEnabled: false,
@@ -1369,6 +1385,7 @@ const fallbackApi: DesktopApi = {
   listSkills: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
   saveSkillSettings: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
+  openRunnerDiagnosticsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
   openSkillInEditor: async () => ({ ok: false, message: "Electron preload is not available." }),
   importSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -2341,6 +2358,8 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
         stderr: "",
         exitCode: null,
         status: "running",
+        startedAt: event.at,
+        endedAt: event.at,
       });
       continue;
     }
@@ -2357,9 +2376,12 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
           stderr: "",
           exitCode: null,
           status: "running",
+          startedAt: event.at,
+          endedAt: event.at,
         };
         runs.set(event.id, run);
       }
+      run.endedAt = event.endedAt ?? event.at ?? run.endedAt;
       if (event.stream === "stdout") {
         run.stdout = `${run.stdout}${event.text}`;
       } else {
@@ -2380,11 +2402,15 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
           stderr: "",
           exitCode: null,
           status: "running",
+          startedAt: event.at,
+          endedAt: event.at,
         };
         runs.set(event.id, run);
       }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
+      run.endedAt = event.at ?? run.endedAt;
+      run.durationMs = event.durationMs;
     }
   }
   return Array.from(runs.values());
@@ -2427,13 +2453,19 @@ function formatDuration(value: number | null): string {
   return seconds ? `${minuteLabel} ${seconds} second${seconds === 1 ? "" : "s"}` : minuteLabel;
 }
 
-function thoughtSummary(item: Extract<ComposerTimelineItem, { type: "reasoning" }>): string {
+function activityDurationMs(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): number | null {
+  const start = eventTimeMs(item.startedAt);
+  if (start === undefined) return null;
+  const end = item.finished ? eventTimeMs(item.endedAt) ?? start : now;
+  return Math.max(0, end - start);
+}
+
+function activitySummary(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): string {
+  const duration = formatDuration(activityDurationMs(item, now));
   if (!item.finished) {
-    const duration = formatDuration(item.durationMs);
-    return duration ? `Thinking for ${duration}` : "Thinking";
+    return duration ? `Generating a response for ${duration}` : "Generating a response";
   }
-  const duration = formatDuration(item.durationMs);
-  return duration ? `Thought for ${duration}` : "Thought";
+  return duration ? `Generated a response in ${duration}` : "Response activity";
 }
 
 function stripAssistantSpeakerPrefix(text: string): string {
@@ -2455,6 +2487,11 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   const items: ComposerTimelineItem[] = [];
   let assistantBuffer = "";
   let assistantIndex = 0;
+  let activitySegments: ComposerActivitySegment[] = [];
+  let activityStartedAt: string | undefined;
+  let activityEndedAt: string | undefined;
+  let activityIndex = 0;
+  const commandSegmentIds = new Set<string>();
   let reasoningBuffer = "";
   let reasoningStartedAt: string | undefined;
   let reasoningEndedAt: string | undefined;
@@ -2477,6 +2514,48 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     assistantBuffer = "";
   };
 
+  const markActivityTime = (startedAt?: string, endedAt?: string) => {
+    if (startedAt && !activityStartedAt) {
+      activityStartedAt = startedAt;
+    }
+    const end = endedAt ?? startedAt;
+    if (end) {
+      activityEndedAt = end;
+    }
+  };
+
+  const activeCommandSegment = (id: string) =>
+    activitySegments.some((segment) => segment.type === "command" && segment.run.id === id);
+
+  const ensureCommandSegment = (run: CommandRun) => {
+    if (!commandSegmentIds.has(run.id)) {
+      commandSegmentIds.add(run.id);
+      activitySegments.push({ type: "command", id: run.id, run });
+      return true;
+    }
+    return activeCommandSegment(run.id);
+  };
+
+  const flushActivity = (finished = true) => {
+    if (!activitySegments.length) {
+      activityStartedAt = undefined;
+      activityEndedAt = undefined;
+      return;
+    }
+    activityIndex += 1;
+    items.push({
+      type: "activity",
+      id: `activity-${activityIndex}`,
+      segments: activitySegments,
+      startedAt: activityStartedAt,
+      endedAt: activityEndedAt,
+      finished,
+    });
+    activitySegments = [];
+    activityStartedAt = undefined;
+    activityEndedAt = undefined;
+  };
+
   const flushReasoning = (finished = true) => {
     if (!reasoningBuffer.trim()) {
       reasoningBuffer = "";
@@ -2485,7 +2564,8 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       return;
     }
     reasoningIndex += 1;
-    items.push({
+    markActivityTime(reasoningStartedAt, reasoningEndedAt);
+    activitySegments.push({
       type: "reasoning",
       id: `reasoning-${reasoningIndex}`,
       text: reasoningBuffer,
@@ -2500,6 +2580,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   for (const event of events) {
     if (event.type === "user.message") {
       flushReasoning();
+      flushActivity();
       flushAssistant();
       items.push({
         type: "user",
@@ -2512,6 +2593,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
       flushReasoning();
+      flushActivity();
       assistantBuffer = `${assistantBuffer}${event.text}`;
       continue;
     }
@@ -2524,6 +2606,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "assistant.done") {
       flushReasoning();
+      flushActivity();
       flushAssistant();
       continue;
     }
@@ -2534,7 +2617,13 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       if (existingRun) {
         existingRun.command = event.command;
         existingRun.kind = event.kind;
+        existingRun.commandClass = event.commandClass;
         existingRun.cwd = event.cwd;
+        existingRun.startedAt = existingRun.startedAt ?? event.at;
+        existingRun.endedAt = event.at ?? existingRun.endedAt;
+        if (ensureCommandSegment(existingRun)) {
+          markActivityTime(event.at, event.at);
+        }
         continue;
       }
       const run: CommandRun = {
@@ -2547,9 +2636,13 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
         stderr: "",
         exitCode: null,
         status: "running",
+        startedAt: event.at,
+        endedAt: event.at,
       };
       runs.set(event.id, run);
-      items.push({ type: "command", id: event.id, run });
+      if (ensureCommandSegment(run)) {
+        markActivityTime(event.at, event.at);
+      }
       continue;
     }
     if (event.type === "command.output") {
@@ -2564,9 +2657,14 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
           stderr: "",
           exitCode: null,
           status: "running",
+          startedAt: event.at,
+          endedAt: event.endedAt ?? event.at,
         };
         runs.set(event.id, run);
-        items.push({ type: "command", id: event.id, run });
+      }
+      run.endedAt = event.endedAt ?? event.at ?? run.endedAt;
+      if (ensureCommandSegment(run)) {
+        markActivityTime(event.at, event.endedAt ?? event.at);
       }
       if (event.stream === "stdout") {
         run.stdout = `${run.stdout}${event.text}`;
@@ -2587,15 +2685,22 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
           stderr: "",
           exitCode: null,
           status: "running",
+          startedAt: event.at,
+          endedAt: event.at,
         };
         runs.set(event.id, run);
-        items.push({ type: "command", id: event.id, run });
       }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
+      run.endedAt = event.at ?? run.endedAt;
+      run.durationMs = event.durationMs;
+      if (ensureCommandSegment(run)) {
+        markActivityTime(event.at, event.at);
+      }
     }
   }
   flushReasoning(taskState !== "running");
+  flushActivity(taskState !== "running");
   flushAssistant(taskState === "running");
   return items;
 }
@@ -3003,10 +3108,9 @@ function App() {
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
     composerTestMode ? new Set(composerTestReviewFiles.map((file) => file.path)) : new Set(),
   );
-  const [expandedCommandId, setExpandedCommandId] = useState<string | null>(null);
-  const [expandedReasoningIds, setExpandedReasoningIds] = useState<Set<string>>(() => new Set());
-  const [autoExpandedReasoningIds, setAutoExpandedReasoningIds] = useState<Set<string>>(() => new Set());
-  const [collapsedReasoningIds, setCollapsedReasoningIds] = useState<Set<string>>(() => new Set());
+  const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set());
+  const [expandedActivityToolIds, setExpandedActivityToolIds] = useState<Set<string>>(() => new Set());
+  const [activityClock, setActivityClock] = useState(() => Date.now());
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -3040,6 +3144,8 @@ function App() {
   const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
   const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
+  const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
+  const [localLogsOpening, setLocalLogsOpening] = useState(false);
   const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -3074,9 +3180,9 @@ function App() {
   const followComposerScrollRef = useRef(true);
   const forceComposerBottomScrollRef = useRef(false);
   const composerScrollInputRef = useRef(false);
-  const reasoningBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const reasoningFollowScrollRef = useRef<Map<string, boolean>>(new Map());
-  const reasoningScrollInputRef = useRef<Set<string>>(new Set());
+  const activityBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const activityFollowScrollRef = useRef<Map<string, boolean>>(new Map());
+  const activityScrollInputRef = useRef<Set<string>>(new Set());
   const visibleTaskIdRef = useRef<string | null>(composerTestMode ? composerTestTask.id : null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
@@ -3109,7 +3215,7 @@ function App() {
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
   const connectionState = backend?.endpoint ?? "checking";
-  const telemetryPolicy = backend?.diagnostics.telemetry;
+  const runnerDiagnosticsDirectory = backend?.diagnostics.runnerDiagnosticsDirectory ?? "~/.umbratic/runner-diagnostics";
   const connectionDisplayState = connectionState === "degraded" ? "ready" : connectionState;
   const connectionLabel =
     backend?.endpoint === "ready" || backend?.endpoint === "degraded"
@@ -3351,37 +3457,46 @@ function App() {
     return () => media.removeEventListener("change", sync);
   }, []);
 
+  const hasRunningActivity = composerItems.some((item) => item.type === "activity" && !item.finished);
+
   useEffect(() => {
-    const reasoningItems = composerItems.filter(
-      (item): item is Extract<ComposerTimelineItem, { type: "reasoning" }> => item.type === "reasoning",
-    );
-    setAutoExpandedReasoningIds((current) => {
-      let changed = false;
-      const next = new Set(current);
-      for (const item of reasoningItems) {
-        if (!item.finished && !next.has(item.id) && !collapsedReasoningIds.has(item.id) && !expandedReasoningIds.has(item.id)) {
-          next.add(item.id);
-          changed = true;
-          continue;
-        }
-        if (item.finished && next.delete(item.id)) {
-          changed = true;
+    if (!hasRunningActivity) return undefined;
+    const timer = window.setInterval(() => setActivityClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningActivity]);
+
+  useEffect(() => {
+    const activeActivityIds = new Set(composerItems.filter((item) => item.type === "activity").map((item) => item.id));
+    const activeActivityToolIds = new Set<string>();
+    for (const item of composerItems) {
+      if (item.type !== "activity") continue;
+      for (const segment of item.segments) {
+        if (segment.type === "command") {
+          activeActivityToolIds.add(`${item.id}:${segment.id}`);
         }
       }
-      return changed ? next : current;
-    });
-    setCollapsedReasoningIds((current) => {
+    }
+    setExpandedActivityIds((current) => {
       let changed = false;
-      const active = new Set(reasoningItems.filter((item) => !item.finished).map((item) => item.id));
       const next = new Set(current);
       for (const id of next) {
-        if (active.has(id)) continue;
+        if (activeActivityIds.has(id)) continue;
         next.delete(id);
         changed = true;
       }
       return changed ? next : current;
     });
-  }, [collapsedReasoningIds, composerItems, expandedReasoningIds]);
+    setExpandedActivityToolIds((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const id of next) {
+        if (activeActivityToolIds.has(id)) continue;
+        next.delete(id);
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [composerItems]);
 
   useEffect(() => {
     void refreshStatus();
@@ -3601,23 +3716,23 @@ function App() {
   }, [activeChat?.taskId, composerItems, task, reviewFiles.length, expandedReviewPaths, reviewOpen]);
 
   useLayoutEffect(() => {
-    const activeReasoningIds = new Set<string>();
+    const activeActivityIds = new Set<string>();
     for (const item of composerItems) {
-      if (item.type !== "reasoning") continue;
-      activeReasoningIds.add(item.id);
-      const expanded = autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
-      const node = reasoningBodyRefs.current.get(item.id);
+      if (item.type !== "activity") continue;
+      activeActivityIds.add(item.id);
+      const expanded = expandedActivityIds.has(item.id);
+      const node = activityBodyRefs.current.get(item.id);
       if (!node || !expanded || item.finished) continue;
-      if (reasoningFollowScrollRef.current.get(item.id) ?? true) {
+      if (activityFollowScrollRef.current.get(item.id) ?? true) {
         scrollElementToBottom(node, "smooth");
       }
     }
-    for (const id of reasoningFollowScrollRef.current.keys()) {
-      if (activeReasoningIds.has(id)) continue;
-      reasoningFollowScrollRef.current.delete(id);
-      reasoningScrollInputRef.current.delete(id);
+    for (const id of activityFollowScrollRef.current.keys()) {
+      if (activeActivityIds.has(id)) continue;
+      activityFollowScrollRef.current.delete(id);
+      activityScrollInputRef.current.delete(id);
     }
-  }, [autoExpandedReasoningIds, composerItems, expandedReasoningIds]);
+  }, [composerItems, expandedActivityIds]);
 
   useEffect(() => {
     const closeMenus = (event: PointerEvent) => {
@@ -3937,10 +4052,8 @@ function App() {
     setVisibleTask(null);
     setEvents([]);
     setApprovalChecks([]);
-    setExpandedCommandId(null);
-    setExpandedReasoningIds(new Set());
-    setAutoExpandedReasoningIds(new Set());
-    setCollapsedReasoningIds(new Set());
+    setExpandedActivityIds(new Set());
+    setExpandedActivityToolIds(new Set());
     setPendingPermission(null);
     setExpandedReviewPaths(new Set());
     closeReviewPanel();
@@ -4016,7 +4129,22 @@ function App() {
   function closeSettingsDialog() {
     setEndpointDraftSettings(endpointSettings);
     setAccountMessage(null);
+    setTelemetryMessage(null);
     setSettingsOpen(false);
+  }
+
+  async function openLocalRunnerLogs() {
+    if (localLogsOpening) return;
+    setLocalLogsOpening(true);
+    setTelemetryMessage(null);
+    try {
+      const result = await api.openRunnerDiagnosticsFolder();
+      setTelemetryMessage(result.ok ? `Opened local logs: ${result.directory}` : result.message);
+    } catch (cause) {
+      setTelemetryMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setLocalLogsOpening(false);
+    }
   }
 
   async function refreshConnectionStatus() {
@@ -4515,56 +4643,75 @@ function App() {
     noteComposerScrollInput(event.currentTarget, true);
   }
 
-  function setReasoningBodyRef(id: string, node: HTMLDivElement | null) {
+  function setActivityBodyRef(id: string, node: HTMLDivElement | null) {
     if (!node) {
-      reasoningBodyRefs.current.delete(id);
+      activityBodyRefs.current.delete(id);
       return;
     }
-    reasoningBodyRefs.current.set(id, node);
-    if (!reasoningFollowScrollRef.current.has(id)) {
-      reasoningFollowScrollRef.current.set(id, true);
+    activityBodyRefs.current.set(id, node);
+    if (!activityFollowScrollRef.current.has(id)) {
+      activityFollowScrollRef.current.set(id, true);
     }
   }
 
-  function noteReasoningScrollInput(id: string, node: HTMLElement, forcePause = false) {
-    reasoningScrollInputRef.current.add(id);
+  function noteActivityScrollInput(id: string, node: HTMLElement, forcePause = false) {
+    activityScrollInputRef.current.add(id);
     if (forcePause || !isElementNearBottom(node, 8)) {
-      reasoningFollowScrollRef.current.set(id, false);
+      activityFollowScrollRef.current.set(id, false);
     }
   }
 
-  function handleReasoningScroll(id: string, event: React.UIEvent<HTMLDivElement>) {
+  function handleActivityScroll(id: string, event: React.UIEvent<HTMLDivElement>) {
     const node = event.currentTarget;
     if (isElementAtBottom(node)) {
-      reasoningFollowScrollRef.current.set(id, true);
-      reasoningScrollInputRef.current.delete(id);
+      activityFollowScrollRef.current.set(id, true);
+      activityScrollInputRef.current.delete(id);
       return;
     }
-    if (isElementNearBottom(node, 18) && !reasoningScrollInputRef.current.has(id)) {
-      reasoningFollowScrollRef.current.set(id, true);
+    if (isElementNearBottom(node, 18) && !activityScrollInputRef.current.has(id)) {
+      activityFollowScrollRef.current.set(id, true);
       return;
     }
-    if (reasoningScrollInputRef.current.has(id)) {
-      reasoningFollowScrollRef.current.set(id, false);
+    if (activityScrollInputRef.current.has(id)) {
+      activityFollowScrollRef.current.set(id, false);
     }
   }
 
-  function handleReasoningWheel(id: string, event: React.WheelEvent<HTMLDivElement>) {
+  function handleActivityWheel(id: string, event: React.WheelEvent<HTMLDivElement>) {
+    const node = event.currentTarget;
+    const composerNode = streamRef.current;
+    const atTop = node.scrollTop <= 0;
+    const atBottom = isElementAtBottom(node);
+    const shouldPassToComposer = composerNode && ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom));
+    if (shouldPassToComposer) {
+      event.preventDefault();
+      event.stopPropagation();
+      composerScrollInputRef.current = true;
+      composerNode.scrollTop += event.deltaY;
+      if (isElementAtBottom(composerNode)) {
+        followComposerScrollRef.current = true;
+        composerScrollInputRef.current = false;
+      } else {
+        followComposerScrollRef.current = false;
+      }
+      activityFollowScrollRef.current.set(id, event.deltaY > 0);
+      return;
+    }
     const shouldPause = event.deltaY < 0 || !isElementNearBottom(event.currentTarget, 8);
     if (shouldPause) {
-      noteReasoningScrollInput(id, event.currentTarget, shouldPause);
+      noteActivityScrollInput(id, event.currentTarget, shouldPause);
     }
   }
 
-  function handleReasoningPointerDown(id: string, event: React.PointerEvent<HTMLDivElement>) {
+  function handleActivityPointerDown(id: string, event: React.PointerEvent<HTMLDivElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
     if (rect.right - event.clientX <= 14) {
-      noteReasoningScrollInput(id, event.currentTarget, true);
+      noteActivityScrollInput(id, event.currentTarget, true);
     }
   }
 
-  function handleReasoningTouchMove(id: string, event: React.TouchEvent<HTMLDivElement>) {
-    noteReasoningScrollInput(id, event.currentTarget, true);
+  function handleActivityTouchMove(id: string, event: React.TouchEvent<HTMLDivElement>) {
+    noteActivityScrollInput(id, event.currentTarget, true);
   }
 
   async function startTask() {
@@ -4603,10 +4750,8 @@ function App() {
       setVisibleTask(null);
       setEvents([]);
       setApprovalChecks([]);
-      setExpandedCommandId(null);
-      setExpandedReasoningIds(new Set());
-      setAutoExpandedReasoningIds(new Set());
-      setCollapsedReasoningIds(new Set());
+      setExpandedActivityIds(new Set());
+      setExpandedActivityToolIds(new Set());
       setExpandedReviewPaths(new Set());
       closeReviewPanel();
     }
@@ -5242,10 +5387,8 @@ function App() {
         setActiveChatId(chat.id);
         setEvents(cachedEvents);
         setApprovalChecks([]);
-        setExpandedCommandId(null);
-        setExpandedReasoningIds(new Set());
-        setAutoExpandedReasoningIds(new Set());
-        setCollapsedReasoningIds(new Set());
+        setExpandedActivityIds(new Set());
+        setExpandedActivityToolIds(new Set());
         setPendingPermission(null);
         setError(null);
         setExpandedReviewPaths(new Set());
@@ -5286,10 +5429,8 @@ function App() {
         setVisibleTask(nextTask);
         setEvents(compactBackendEvents(nextEvents, 500));
         setApprovalChecks([]);
-        setExpandedCommandId(null);
-        setExpandedReasoningIds(new Set());
-        setAutoExpandedReasoningIds(new Set());
-        setCollapsedReasoningIds(new Set());
+        setExpandedActivityIds(new Set());
+        setExpandedActivityToolIds(new Set());
         setPendingPermission(pendingPermissionFromEvents(nextEvents));
         setError(null);
         setPrompt(sentDraft ? "" : draftPrompt);
@@ -5314,10 +5455,8 @@ function App() {
     setVisibleTask(null);
     setEvents([]);
     setApprovalChecks([]);
-    setExpandedCommandId(null);
-    setExpandedReasoningIds(new Set());
-    setAutoExpandedReasoningIds(new Set());
-    setCollapsedReasoningIds(new Set());
+    setExpandedActivityIds(new Set());
+    setExpandedActivityToolIds(new Set());
     setPendingPermission(null);
     setExpandedReviewPaths(new Set());
     closeReviewPanel();
@@ -5738,36 +5877,22 @@ function App() {
                           </article>
                         );
                       })()
-                    ) : item.type === "reasoning" ? (
+                    ) : (
                       (() => {
-                        const expanded = autoExpandedReasoningIds.has(item.id) || expandedReasoningIds.has(item.id);
+                        const expanded = expandedActivityIds.has(item.id);
                         return (
                           <article
-                            className={`timelineReasoning ${item.finished ? "isFinished" : "isThinking"} ${
-                              expanded ? "isExpanded" : ""
-                            }`}
+                            className={`timelineActivity ${item.finished ? "isFinished" : "isGenerating"} ${expanded ? "isExpanded" : ""}`}
                             key={item.id}
                           >
                             <button
-                              className="reasoningHeader"
+                              className="activityHeader"
                               type="button"
                               onClick={() => {
-                                setAutoExpandedReasoningIds((current) => {
-                                  if (!current.has(item.id)) return current;
-                                  const next = new Set(current);
-                                  next.delete(item.id);
-                                  return next;
-                                });
-                                setCollapsedReasoningIds((current) => {
-                                  const next = new Set(current);
-                                  if (expanded && !item.finished) {
-                                    next.add(item.id);
-                                  } else {
-                                    next.delete(item.id);
-                                  }
-                                  return next;
-                                });
-                                setExpandedReasoningIds((current) => {
+                                if (!expanded) {
+                                  activityFollowScrollRef.current.set(item.id, true);
+                                }
+                                setExpandedActivityIds((current) => {
                                   const next = new Set(current);
                                   if (expanded) {
                                     next.delete(item.id);
@@ -5779,70 +5904,80 @@ function App() {
                               }}
                               aria-expanded={expanded}
                             >
-                              <span>{thoughtSummary(item)}</span>
-                              <ChevronRight className="reasoningChevron" size={13} />
+                              <span className="activityHeaderText">
+                                <strong>
+                                  {activitySummary(item, activityClock)}
+                                  {!item.finished ? (
+                                    <span className="activityDots" aria-hidden="true">
+                                      <span>.</span>
+                                      <span>.</span>
+                                      <span>.</span>
+                                    </span>
+                                  ) : null}
+                                </strong>
+                              </span>
+                              {expanded ? (
+                                <ChevronDown className="activityChevron" size={13} />
+                              ) : (
+                                <ChevronRight className="activityChevron" size={13} />
+                              )}
                             </button>
-                            <div className={`reasoningBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
+                            <div className={`activityBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
                               <div
-                                className="reasoningBodyInner"
-                                ref={(node) => setReasoningBodyRef(item.id, node)}
-                                onPointerDown={(event) => handleReasoningPointerDown(item.id, event)}
-                                onScroll={(event) => handleReasoningScroll(item.id, event)}
-                                onTouchMove={(event) => handleReasoningTouchMove(item.id, event)}
-                                onWheel={(event) => handleReasoningWheel(item.id, event)}
+                                className="activityBodyInner"
+                                ref={(node) => setActivityBodyRef(item.id, node)}
+                                onPointerDown={(event) => handleActivityPointerDown(item.id, event)}
+                                onScroll={(event) => handleActivityScroll(item.id, event)}
+                                onTouchMove={(event) => handleActivityTouchMove(item.id, event)}
+                                onWheel={(event) => handleActivityWheel(item.id, event)}
                               >
-                                <MarkdownContent content={item.text.trim()} />
+                                {item.segments.map((segment) =>
+                                  segment.type === "reasoning" ? (
+                                    <section className="activityLogEntry reasoningLog" key={segment.id}>
+                                      <div className="activityLogHeader">
+                                        <span>Thinking</span>
+                                      </div>
+                                      <pre>{segment.text.trim()}</pre>
+                                    </section>
+                                  ) : (() => {
+                                    const toolDisclosureId = `${item.id}:${segment.id}`;
+                                    const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
+                                    return (
+                                      <section
+                                        className={`activityLogEntry commandLog ${segment.run.status} ${
+                                          toolExpanded ? "isExpanded" : ""
+                                        }`}
+                                        key={segment.id}
+                                      >
+                                        <button
+                                          className="activityToolToggle"
+                                          type="button"
+                                          onClick={() => {
+                                            setExpandedActivityToolIds((current) => {
+                                              const next = new Set(current);
+                                              if (toolExpanded) {
+                                                next.delete(toolDisclosureId);
+                                              } else {
+                                                next.add(toolDisclosureId);
+                                              }
+                                              return next;
+                                            });
+                                          }}
+                                          aria-expanded={toolExpanded}
+                                        >
+                                          <span title={segment.run.command}>{commandLabel(segment.run.command)}</span>
+                                          {toolExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                        </button>
+                                        {toolExpanded ? <pre>{commandShellText(segment.run)}</pre> : null}
+                                      </section>
+                                    );
+                                  })(),
+                                )}
                               </div>
                             </div>
                           </article>
                         );
                       })()
-                    ) : (
-                      <article
-                        className={`timelineCommand commandCard ${item.run.status} ${
-                          expandedCommandId === item.run.id ? "isExpanded" : ""
-                        }`}
-                        key={item.id}
-                      >
-                        <button
-                          className="commandSummary"
-                          type="button"
-                          onClick={() => setExpandedCommandId((current) => (current === item.run.id ? null : item.run.id))}
-                          aria-expanded={expandedCommandId === item.run.id}
-                        >
-                          <span className="commandSummaryText">
-                            <strong title={item.run.command}>{commandLabel(item.run.command)}</strong>
-                            <em>{commandSummary(item.run)}</em>
-                          </span>
-                          {expandedCommandId === item.run.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                        </button>
-                        {expandedCommandId === item.run.id ? (
-                          <div className="commandDetails">
-                            <div className="shellBlock">
-                              <div className="shellHeader">
-                                <span>{commandDetailLabel(item.run)}</span>
-                                <span className={`shellResult ${item.run.status}`}>
-                                  {item.run.status === "running" ? (
-                                    <Loader2 className="spin" size={13} />
-                                  ) : item.run.status === "passed" ? (
-                                    <CheckCircle2 size={13} />
-                                  ) : (
-                                    <TriangleAlert size={13} />
-                                  )}
-                                  {item.run.status === "passed"
-                                    ? "Success"
-                                    : item.run.status === "failed"
-                                      ? `Exit ${item.run.exitCode ?? "unknown"}`
-                                      : "Running"}
-                                </span>
-                              </div>
-                              <pre>
-                                <code>{commandShellText(item.run)}</code>
-                              </pre>
-                            </div>
-                          </div>
-                        ) : null}
-                      </article>
                     ),
                   )}
                   {reviewFiles.length &&
@@ -6862,93 +6997,84 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
                       <p>
-                        Umbratic collects redacted run telemetry for organization-managed audit and reliability review.
-                        The page below shows what is included in the telemetry bundle.
+                        Umbratic syncs a compact run summary for reliability and future model tuning. Detailed runner logs
+                        stay on this machine for troubleshooting.
                       </p>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Collected</h4>
+                      <h4>Synced Summary</h4>
                       <div className="settingsList telemetryDisclosureList">
                         <div className="settingsListRow">
-                          <span>Run facts</span>
+                          <span>Outcome</span>
                           <p>
-                            Task, chat, repository, status, timestamps, workspace mode, permission mode, reasoning mode,
-                            runner, policy, provider, and model identifiers.
+                            Task and chat IDs, status, success or failure, start and completion times, model ID, runner
+                            version, workspace mode, and reasoning mode.
                           </p>
                         </div>
                         <div className="settingsListRow">
-                          <span>Repository context</span>
+                          <span>Work shape</span>
                           <p>
-                            Base branch, short commit IDs, agent branch, relative changed-file paths, diff statistics,
-                            patch hashes, and latest test result.
+                            Changed-file counts, review diff totals, and the latest test pass or fail result. File paths,
+                            patches, and branch details are not included.
                           </p>
                         </div>
                         <div className="settingsListRow">
-                          <span>Run events</span>
+                          <span>Activity</span>
                           <p>
-                            Redacted message lengths, command classes, redacted command text, trimmed output summaries,
-                            exit codes, permission decisions, review state, merge state, and feedback ratings.
+                            Aggregate message lengths, command counts, command classes, error-code counts, permission
+                            decisions, required-tool failures, review counts, and feedback totals.
                           </p>
                         </div>
                         <div className="settingsListRow">
                           <span>Runtime health</span>
                           <p>
-                            Runtime profile, capability probe IDs, availability status, importance, affected workflows,
-                            and whether missing capabilities affected the current run.
+                            Capability totals by status and importance, plus whether missing local capabilities affected
+                            the run. Individual probe details stay out of telemetry.
                           </p>
                         </div>
                       </div>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Protected</h4>
+                      <h4>Not Synced</h4>
                       <div className="settingsList telemetryDisclosureList">
                         <div className="settingsListRow">
-                          <span>Text content</span>
-                          <p>Prompts, assistant responses, and full command output are not stored as raw transcript text.</p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Local paths</span>
-                          <p>Repository roots, worktree paths, and command working directories are stored as short hashes.</p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Secrets</span>
-                          <p>Private keys, API keys, tokens, passwords, and common secret values are redacted before export or sync.</p>
+                          <span>Protected</span>
+                          <p>
+                            Prompts, assistant responses, command text, command output, repository paths, worktree paths,
+                            patch hashes, detailed runner logs, and common secret values are not synced as raw data.
+                          </p>
                         </div>
                       </div>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Policy</h4>
-                      <div className="settingsList">
+                      <h4>Local Runner Logs</h4>
+                      <div className="settingsList telemetryDisclosureList">
                         <div className="settingsListRow">
-                          <span>Sync</span>
-                          <strong>{telemetryPolicy ? (telemetryPolicy.syncEnabled ? "Enabled" : "Disabled") : "Unavailable"}</strong>
+                          <span>Folder</span>
+                          <strong className="settingsPathText">{runnerDiagnosticsDirectory}</strong>
                         </div>
                         <div className="settingsListRow">
-                          <span>Retention</span>
-                          <strong>{telemetryPolicy ? `${telemetryPolicy.retentionDays} days` : "Unavailable"}</strong>
+                          <span>Contents</span>
+                          <p>
+                            JSONL records for model errors, tool failures, blocked policy stages, permission outcomes,
+                            and stderr summaries. These files are for local troubleshooting.
+                          </p>
                         </div>
-                        <div className="settingsListRow">
-                          <span>Format</span>
-                          <strong>{telemetryPolicy?.exportFormat ?? "redacted-json"}</strong>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Storage</span>
-                          <strong>
-                            {telemetryPolicy
-                              ? telemetryPolicy.storage === "company-managed-telemetry"
-                                ? "Company-managed telemetry"
-                                : "Task event snapshots"
-                              : "Unavailable"}
-                          </strong>
-                        </div>
+                      </div>
+                      <div className="settingsActionRow">
+                        <button className="secondaryAction" type="button" onClick={openLocalRunnerLogs} disabled={localLogsOpening}>
+                          {localLogsOpening ? <Loader2 className="spin" size={13} /> : <FolderOpen size={13} />}
+                          <span>Show local logs</span>
+                        </button>
                       </div>
                     </div>
 
+                    {telemetryMessage ? <p className="settingsMessage">{telemetryMessage}</p> : null}
                     <p className="settingsMessage">
-                      Sync runs automatically in the background when enabled by policy. Umbratic does not have access unless your organization explicitly grants it.
+                      Sync runs automatically in the background when enabled by your organization.
                     </p>
                   </div>
                 ) : null}

@@ -86,8 +86,15 @@ func TestWorkspaceToolPromptUsesAvailableToolsWithoutSpecificShellSearchCommands
 		"project structure",
 		"read tool",
 		"nested directory inventories",
+		"complete or partial",
 		"search tool",
 		"file-changing tools",
+		"hidden configuration folders",
+		".ds_store",
+		"thumbs.db",
+		"desktop.ini",
+		".env",
+		"credentials",
 	} {
 		if !strings.Contains(lower, want) {
 			t.Fatalf("workspace tool prompt missing %q: %q", want, prompt)

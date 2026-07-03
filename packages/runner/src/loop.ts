@@ -118,7 +118,7 @@ function clipUtf8(value: string, byteLimit: number): string {
 function formatToolContextMessage(results: ToolContextResult[]): string {
   const lines = [
     "Workspace tool results:",
-    "Use these local workspace results to answer the user's request. Do not repeat the same read or search unless more specific context is still needed.",
+    "Use these local workspace results to answer the user's request. Do not repeat the same read or search unless more specific context is still needed. For directory reads, treat a complete listing as sufficient; continue from the reported offset only when the listing is partial and completeness matters.",
   ];
   for (const result of results) {
     const status = result.status === "success" ? "ok" : "failed";

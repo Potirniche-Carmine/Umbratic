@@ -65,6 +65,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["listSkills", [], "umbratic:list-skills", undefined],
     ["saveSkillSettings", [{ skill: false }], "umbratic:save-skill-settings"],
     ["openSkillsFolder", [], "umbratic:open-skills-folder", undefined],
+    ["openRunnerDiagnosticsFolder", [], "umbratic:open-runner-diagnostics-folder", undefined],
     ["openSkillInEditor", [{ id: "umbratic-marketing" }], "umbratic:open-skill-in-editor"],
     ["importSkill", [{ sourcePath: "/tmp/skill.zip" }], "umbratic:import-skill"],
     ["createSkill", [{ name: "Skill" }], "umbratic:create-skill"],

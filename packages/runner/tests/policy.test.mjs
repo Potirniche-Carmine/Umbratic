@@ -10,6 +10,8 @@ const policy = loadTypeScriptModule(new URL("../src/policy.ts", import.meta.url)
 test("generated and blocked paths cover real workspace artifacts and secrets", () => {
   assert.equal(policy.isGeneratedRuntimePath("node_modules/react/index.js"), true);
   assert.equal(policy.isGeneratedRuntimePath(".umbratic/build/CMakeCache.txt"), true);
+  assert.equal(policy.isGeneratedRuntimePath(".DS_Store"), true);
+  assert.equal(policy.isGeneratedRuntimePath("docs/Thumbs.db"), true);
   assert.equal(policy.isGeneratedRuntimePath("src/main.ts"), false);
 
   assert.equal(policy.isBlockedPath(".env.production"), true);

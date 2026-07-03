@@ -12,8 +12,16 @@ export type RunnerConfig = {
   runtimeProfiles?: string[];
   permissionMode: PermissionMode;
   enabledTools: RunnerToolName[];
+  diagnostics: RunnerDiagnosticsConfig;
   provider: UmbraticProviderConfig;
   system?: string;
+};
+
+export type RunnerDiagnosticsConfig = {
+  enabled: boolean;
+  logPath?: string;
+  directory?: string;
+  includeToolOutput: "stderr" | "all" | "none";
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -65,6 +73,25 @@ function runtimeProfilesValue(value: unknown): string[] | undefined {
   return seen.size ? [...seen] : undefined;
 }
 
+function diagnosticsValue(value: unknown): RunnerDiagnosticsConfig {
+  if (value === false) {
+    return { enabled: false, includeToolOutput: "stderr" };
+  }
+  const config = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const includeToolOutput =
+    config.includeToolOutput === "all" || config.includeToolOutput === "none" || config.includeToolOutput === "stderr"
+      ? config.includeToolOutput
+      : "stderr";
+  return {
+    enabled: config.enabled === false ? false : true,
+    logPath: optionalString(config.logPath),
+    directory: optionalString(config.directory),
+    includeToolOutput,
+  };
+}
+
 function modelBoundaryValue(value: unknown): RunnerModelBoundary {
   if (value === "managed") return "managed";
   if (value === "development") return "development";
@@ -93,6 +120,7 @@ export function loadRunnerConfig(): RunnerConfig {
     runtimeProfiles: runtimeProfilesValue(config.runtimeProfiles),
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     enabledTools: enabledToolsValue(config.enabledTools),
+    diagnostics: diagnosticsValue(config.diagnostics),
     system: typeof config.system === "string" ? config.system : undefined,
     provider: assertAllowedProvider({
       id: "company-endpoint",

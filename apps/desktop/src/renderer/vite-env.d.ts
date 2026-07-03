@@ -128,6 +128,7 @@ type UmbraticBackendDiagnostics = {
   providerAllowlist: UmbraticLocalProviderId[];
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
+  runnerDiagnosticsDirectory: string;
   telemetry: UmbraticTelemetryPolicyInfo;
   runtimes: {
     python: {
@@ -400,6 +401,7 @@ declare global {
         directory: string;
       }>;
       openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
+      openRunnerDiagnosticsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
       openSkillInEditor(input: { id: string }): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
       importSkill(input?: { sourcePath?: string }): Promise<
         | {

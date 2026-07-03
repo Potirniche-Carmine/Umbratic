@@ -6,6 +6,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { app } from "electron";
+
 import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
@@ -18,6 +20,15 @@ const nodeRequire = createRequire(__filename);
 type HarnessRouteConfig = {
   chatEndpointPath: string;
 };
+
+export function runnerDiagnosticsDirectory(userDataPath: string): string {
+  return path.join(userDataPath, "runner-diagnostics");
+}
+
+export function runnerDiagnosticLogPath(userDataPath: string, taskId: string): string {
+  const safeTaskId = taskId.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "task";
+  return path.join(runnerDiagnosticsDirectory(userDataPath), `${safeTaskId}.jsonl`);
+}
 
 export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteConfig {
   return {
@@ -48,6 +59,11 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
     enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
+    diagnostics: {
+      enabled: true,
+      logPath: runnerDiagnosticLogPath(app.getPath("userData"), task.id),
+      includeToolOutput: "stderr",
+    },
     provider: {
       id: selectedModel.providerId,
       name: selectedModel.providerName,
@@ -177,6 +193,9 @@ export async function startUmbraticRunnerServer(
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
   const config = buildUmbraticRunnerConfig(task, model);
+  const diagnostics = isRecord(config.diagnostics) && typeof config.diagnostics.logPath === "string"
+    ? { diagnosticLogPath: config.diagnostics.logPath }
+    : {};
   assertUmbraticRunnerConfig(config, model);
   const env: NodeJS.ProcessEnv = {
     ...runtimeEnv(task.worktreePath),
@@ -201,6 +220,7 @@ export async function startUmbraticRunnerServer(
         url: `http://127.0.0.1:${port}`,
         password,
         directory: task.worktreePath,
+        ...diagnostics,
         child,
         abortController: new AbortController(),
       });
@@ -245,6 +265,7 @@ export async function startUmbraticRunnerServer(
     url,
     password,
     directory: task.worktreePath,
+    ...diagnostics,
     child,
     abortController: new AbortController(),
   };

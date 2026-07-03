@@ -93,6 +93,7 @@ export type BackendDiagnostics = {
   providerAllowlist: LocalProviderId[];
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
+  runnerDiagnosticsDirectory: string;
   telemetry: TelemetryPolicyInfo;
   runtimes: RuntimeDiagnostics;
   capabilities: CapabilityProbeReport;
@@ -322,6 +323,7 @@ export type TaskRecord = TaskInfo & {
   enabledTools?: RunnerToolId[];
   capabilityProbes?: CapabilityTelemetryProbe[];
   runnerSessionId?: string;
+  diagnosticLogPath?: string;
   pendingPrompt?: string;
   metadataPath?: string;
   approvedAt?: string;
@@ -411,6 +413,7 @@ export type RunnerProcess = {
   url: string;
   password: string;
   directory: string;
+  diagnosticLogPath?: string;
   child: ChildProcess;
   abortController: AbortController;
   sessionId?: string;

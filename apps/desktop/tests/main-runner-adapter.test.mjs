@@ -81,6 +81,9 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.modelBoundary, "managed");
   assert.equal(config.permissionMode, "normal");
   assert.deepEqual(plain(config.enabledTools), ["read"]);
+  assert.equal(config.diagnostics.enabled, true);
+  assert.equal(config.diagnostics.includeToolOutput, "stderr");
+  assert.equal(config.diagnostics.logPath, path.join(userData, "runner-diagnostics", "task-1.jsonl"));
   assert.deepEqual(plain(config.capabilities), [
     {
       id: "uv",

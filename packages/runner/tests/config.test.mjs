@@ -29,6 +29,10 @@ test("loadRunnerConfig normalizes enabled tools, runtime profiles, headers, and 
       runtimeProfiles: ["python", "python", "", "git"],
       permissionMode: "bypass",
       enabledTools: ["read", "bogus", "command", "read"],
+      diagnostics: {
+        logPath: " C:/logs/task-1.jsonl ",
+        includeToolOutput: "all",
+      },
       system: "protected system prompt",
       provider: {
         name: " Veil ",
@@ -58,6 +62,11 @@ test("loadRunnerConfig normalizes enabled tools, runtime profiles, headers, and 
   assert.deepEqual(plain(loaded.runtimeProfiles), ["python", "git"]);
   assert.equal(loaded.permissionMode, "bypass");
   assert.deepEqual(plain(loaded.enabledTools), ["read", "command"]);
+  assert.deepEqual(plain(loaded.diagnostics), {
+    enabled: true,
+    logPath: "C:/logs/task-1.jsonl",
+    includeToolOutput: "all",
+  });
   assert.equal(loaded.provider.baseURL, "http://127.0.0.1:8080");
   assert.equal(loaded.provider.chatEndpointPath, "/api/engineering/chat");
   assert.deepEqual(plain(loaded.provider.headers), { "X-Trace": "trace-id" });
@@ -83,7 +92,25 @@ test("loadRunnerConfig defaults invalid modes and all tools when no explicit lis
   assert.equal(loaded.workspaceMode, "local");
   assert.equal(loaded.permissionMode, "normal");
   assert.deepEqual(plain(loaded.enabledTools), ["read", "write", "edit", "search", "command"]);
+  assert.deepEqual(plain(loaded.diagnostics), { enabled: true, includeToolOutput: "stderr" });
   assert.equal(loaded.provider.apiKey, "local");
+});
+
+test("loadRunnerConfig can disable diagnostics", () => {
+  const loaded = withRunnerConfig(
+    {
+      cwd: "/repo",
+      diagnostics: false,
+      provider: {
+        name: "Veil",
+        baseURL: "https://veil.example",
+        modelId: "model-a",
+      },
+    },
+    (config) => config.loadRunnerConfig(),
+  );
+
+  assert.deepEqual(plain(loaded.diagnostics), { enabled: false, includeToolOutput: "stderr" });
 });
 
 test("loadRunnerConfig rejects missing config, malformed shapes, and unsupported provider protocols", () => {

@@ -68,6 +68,20 @@ function authHeader(password) {
   return `Basic ${Buffer.from(`umbratic-runner:${password}`).toString("base64")}`;
 }
 
+async function waitForFileIncludes(filePath, pattern, timeoutMs = 2000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const text = fs.readFileSync(filePath, "utf8");
+      if (pattern.test(text)) return text;
+    } catch {
+      /* The async runner turn has not written diagnostics yet. */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for ${filePath} to match ${pattern}`);
+}
+
 test("runner event coalescer merges adjacent stream text without crossing event boundaries", () => {
   const { createRunnerEventCoalescer } = loadTypeScriptModule(loopPath, { cache: new Map() });
   const emitted = [];
@@ -127,8 +141,9 @@ function sseData(value) {
 
 test("listen protects local API and returns sessions through authenticated routes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-server-"));
+  const diagnosticLogPath = path.join(root, "runner-diagnostics.jsonl");
 
-  await withRunnerConfig(runnerConfig(root, "http://127.0.0.1:9"), async () => {
+  await withRunnerConfig({ ...runnerConfig(root, "http://127.0.0.1:9"), diagnostics: { logPath: diagnosticLogPath } }, async () => {
     const { listen } = loadTypeScriptModule(serverPath, { cache: new Map() });
     const run = await listen({ hostname: "127.0.0.1", port: 0, password: "secret" });
     try {
@@ -143,6 +158,32 @@ test("listen protects local API and returns sessions through authenticated route
       assert.match(sessionResponse.headers.get("cache-control"), /no-store/);
       const created = await sessionResponse.json();
       assert.match(created.id, /^session-/);
+
+      const promptResponse = await fetch(`${run.url}/session/${encodeURIComponent(created.id)}/prompt_async`, {
+        method: "POST",
+        headers: { Authorization: authHeader("secret"), "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: "do not log this token=abcdefghijklmnopqrstuvwxyz" }),
+      });
+      assert.equal(promptResponse.status, 204);
+      const diagnosticText = await waitForFileIncludes(diagnosticLogPath, /"eventType":"runner\.error"/);
+      assert.doesNotMatch(diagnosticText, /abcdefghijklmnopqrstuvwxyz/);
+
+      const diagnosticsResponse = await fetch(`${run.url}/diagnostics`, {
+        headers: { Authorization: authHeader("secret") },
+      });
+      assert.equal(diagnosticsResponse.status, 200);
+      const diagnostics = await diagnosticsResponse.json();
+      assert.equal(diagnostics.enabled, true);
+      assert.equal(diagnostics.logPath, diagnosticLogPath);
+      assert.equal(diagnostics.exists, true);
+      assert.equal(typeof diagnostics.sizeBytes, "number");
+
+      const exportResponse = await fetch(`${run.url}/diagnostics/export`, {
+        headers: { Authorization: authHeader("secret") },
+      });
+      assert.equal(exportResponse.status, 200);
+      assert.match(exportResponse.headers.get("content-type"), /application\/x-ndjson/);
+      assert.match(await exportResponse.text(), /"eventType":"runner\.error"/);
 
       const permissionResponse = await fetch(`${run.url}/permission/missing/reply`, {
         method: "POST",

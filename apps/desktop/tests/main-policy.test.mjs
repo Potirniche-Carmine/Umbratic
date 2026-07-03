@@ -14,6 +14,8 @@ test("desktop policy detects runtime profiles from realistic prompts", () => {
   assert.equal(policy.runtimeProfileForPrompt("Update README markdown tables"), "markdown");
   assert.equal(policy.runtimeProfileForPrompt("Debug a segfault in src/main.c with CMake"), "cmake");
   assert.equal(policy.runtimeProfileForPrompt("What is the app called?"), "none");
+  assert.equal(policy.isGeneratedRuntimePath(".DS_Store"), true);
+  assert.equal(policy.isGeneratedRuntimePath("notes/Desktop.ini"), true);
 });
 
 test("desktop command classifier blocks unsafe branches and allows expected tooling", () => {

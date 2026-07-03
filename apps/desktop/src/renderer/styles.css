@@ -1581,13 +1581,13 @@ pre {
   transform-origin: 50% 0;
 }
 
-.timelineReasoning {
+.timelineActivity {
   position: relative;
   width: min(calc(100% - 18px), 980px);
   max-width: 980px;
   margin-left: 18px;
   min-width: 0;
-  padding: 0 0 2px;
+  padding: 0 0 8px;
   border: 0;
   border-radius: 0;
   color: var(--muted);
@@ -1597,11 +1597,11 @@ pre {
   backdrop-filter: none;
 }
 
-.timelineReasoning::before {
+.timelineActivity::before {
   position: absolute;
   left: 0;
   right: 0;
-  top: 29px;
+  top: 31px;
   height: 1px;
   pointer-events: none;
   content: "";
@@ -1610,28 +1610,29 @@ pre {
   transform: none;
 }
 
-.timelineReasoning.isFinished {
+.timelineActivity.isFinished {
   background: transparent;
   opacity: 0.74;
 }
 
-.timelineReasoning.isThinking::before {
+.timelineActivity.isGenerating::before {
   opacity: 0.74;
   animation: none;
 }
 
-.timelineReasoning:hover,
-.timelineReasoning:focus-within {
+.timelineActivity:hover,
+.timelineActivity:focus-within {
   background: transparent;
   opacity: 1;
 }
 
-.reasoningHeader {
-  display: flex;
+.activityHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   width: 100%;
-  height: 27px;
+  min-height: 29px;
   padding: 0;
   color: color-mix(in srgb, var(--reasoning-text) 68%, var(--muted));
   text-align: left;
@@ -1641,7 +1642,17 @@ pre {
   letter-spacing: 0;
 }
 
-.reasoningHeader span {
+.activityHeader:hover {
+  color: color-mix(in srgb, var(--reasoning-text) 86%, var(--text));
+}
+
+.activityHeaderText {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.activityHeaderText strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1649,125 +1660,185 @@ pre {
   line-height: 1.4;
 }
 
-.reasoningHeader svg {
+.activityHeaderText strong {
+  display: inline-flex;
+  align-items: baseline;
+  color: inherit;
+  font-weight: 720;
+}
+
+.activityDots {
+  display: inline-flex;
+  width: 16px;
+  margin-left: 2px;
+}
+
+.activityDots span {
+  display: inline-block;
+  animation: activityDotPulse 1.2s ease-in-out infinite both;
+}
+
+.activityDots span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.activityDots span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+.activityChevron {
   display: block;
-  flex: 0 0 auto;
+  justify-self: end;
   color: var(--faint);
 }
 
-.reasoningHeader svg:last-child {
-  margin-left: auto;
-}
-
-.reasoningChevron {
-  transform: rotate(0deg);
-  transition:
-    transform 210ms cubic-bezier(0.16, 1, 0.3, 1),
-    color 140ms ease;
-}
-
-.timelineReasoning.isExpanded .reasoningChevron {
+.timelineActivity.isExpanded .activityChevron {
   color: color-mix(in srgb, var(--reasoning-text) 82%, var(--muted));
-  transform: rotate(90deg);
 }
 
-.reasoningBody {
-  max-height: 0;
+.activityBody {
+  display: grid;
+  grid-template-rows: 0fr;
   overflow: hidden;
   opacity: 0;
-  clip-path: inset(0 0 100% 0);
-  transform: translateY(-6px) scaleY(0.98);
+  transform: translateY(-5px);
   transform-origin: top;
   transition:
-    max-height 260ms cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 150ms ease,
-    clip-path 260ms cubic-bezier(0.16, 1, 0.3, 1),
-    transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: max-height, opacity, clip-path, transform;
+    grid-template-rows 320ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 180ms ease,
+    transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: grid-template-rows, opacity, transform;
 }
 
-.reasoningBody.open {
-  max-height: 92px;
+.activityBody.open {
+  grid-template-rows: 1fr;
   opacity: 1;
-  clip-path: inset(0 0 0 0);
   transform: translateY(0);
 }
 
-.reasoningBodyInner {
-  max-height: 92px;
+.activityBodyInner {
+  max-height: min(48vh, 420px);
   min-height: 0;
-  padding-right: 8px;
+  padding: 14px 10px 18px 0;
   overflow: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior: auto;
   scroll-behavior: smooth;
+  scroll-padding-bottom: 18px;
   scrollbar-color: color-mix(in srgb, var(--reasoning-text) 30%, transparent) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   transform: translateY(-5px);
-  transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.reasoningBody.open .reasoningBodyInner {
+.activityBody.open .activityBodyInner {
   overflow: auto;
   transform: translateY(0);
 }
 
-.reasoningBodyInner::-webkit-scrollbar {
+.activityBodyInner::-webkit-scrollbar {
   width: 8px;
 }
 
-.reasoningBodyInner::-webkit-scrollbar-track {
+.activityBodyInner::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.reasoningBodyInner::-webkit-scrollbar-thumb {
+.activityBodyInner::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: color-mix(in srgb, var(--reasoning-text) 28%, transparent);
   background-clip: content-box;
 }
 
-.reasoningBodyInner::-webkit-scrollbar-thumb:hover {
+.activityBodyInner::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--reasoning-text) 42%, transparent);
   background-clip: content-box;
 }
 
-.reasoningBody .markdownContent {
-  max-width: none;
-  padding: 8px 0 4px;
-  color: color-mix(in srgb, var(--muted) 86%, var(--text));
-  font-size: 11px;
-  line-height: 1.48;
+.activityLogEntry {
+  min-width: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 }
 
-.reasoningBody .markdownContent p,
-.reasoningBody .markdownContent ul,
-.reasoningBody .markdownContent ol,
-.reasoningBody .markdownTableWrapper,
-.reasoningBody .markdownContent h3,
-.reasoningBody .markdownContent h4,
-.reasoningBody .markdownContent h5 {
-  margin-bottom: 6px;
+.activityLogEntry.commandLog {
+  padding-top: 3px;
 }
 
-.reasoningBody .markdownContent p {
-  color: inherit;
+.activityLogEntry:first-child {
+  border-top: 0;
 }
 
-.reasoningBody .markdownContent h3,
-.reasoningBody .markdownContent h4,
-.reasoningBody .markdownContent h5 {
-  color: color-mix(in srgb, var(--text) 72%, var(--muted));
-  font-size: 11px;
+.activityLogEntry:last-child {
+  padding-bottom: 6px;
 }
 
-.reasoningBody .markdownContent ul,
-.reasoningBody .markdownContent ol {
-  padding-left: 17px;
+.activityLogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 5px;
+  color: color-mix(in srgb, var(--text) 68%, var(--muted));
 }
 
-.reasoningBody .markdownContent code {
+.activityLogHeader span {
+  min-width: 0;
+  overflow: hidden;
   font-size: 10.5px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityToolToggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 22px;
+  padding: 0;
+  color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.activityToolToggle:hover {
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+.activityToolToggle span {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 660;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityToolToggle svg {
+  display: block;
+  justify-self: end;
+  color: var(--faint);
+}
+
+.activityLogEntry pre {
+  margin: 0;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
+  font-family: var(--mono-font);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.commandLog pre {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.45;
 }
 
 .timelineMessage .markdownContent > :last-child {
@@ -4453,6 +4524,12 @@ button.attachmentPreview:focus-visible {
   text-transform: uppercase;
 }
 
+.settingsActionRow {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+}
+
 .settingsList {
   display: flex;
   flex-direction: column;
@@ -4502,6 +4579,15 @@ button.attachmentPreview:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+.settingsPathText {
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.4;
 }
 
 .serverHealthText {
@@ -5376,6 +5462,20 @@ button.attachmentPreview:focus-visible {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes activityDotPulse {
+  0%,
+  72%,
+  100% {
+    opacity: 0.22;
+    transform: translateY(0);
+  }
+
+  36% {
+    opacity: 1;
+    transform: translateY(-1px);
   }
 }
 

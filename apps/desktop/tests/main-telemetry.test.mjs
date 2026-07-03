@@ -66,6 +66,25 @@ function listen(server) {
 }
 
 test("telemetry bundle keeps workflow facts while redacting prompts, paths, command output, and secrets", () => {
+  const diagnosticDir = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-diagnostics-"));
+  const diagnosticLogPath = path.join(diagnosticDir, "task-1.jsonl");
+  fs.writeFileSync(
+    diagnosticLogPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      source: "umbratic-runner",
+      level: "error",
+      eventType: "runner.error",
+      taskId: "task-1",
+      at: "2026-01-01T00:00:07.000Z",
+      data: {
+        message: "model request failed token=abcdefghijklmnopqrstuvwxyz",
+        detail: "provider path C:/secret/model-cache",
+      },
+    })}\n`,
+    "utf8",
+  );
+
   const bundle = buildRedactedTelemetryBundle(
     [
       {
@@ -105,6 +124,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
           displayName: "Veil",
           baseUrl: "https://veil.example.internal",
         },
+        diagnosticLogPath,
         capabilityProbes: [
           {
             id: "pdftoppm",
@@ -195,44 +215,49 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   const serialized = JSON.stringify(bundle);
   assert.doesNotMatch(serialized, /password=abcdefghijklmnopqrstuvwxyz/);
   assert.doesNotMatch(serialized, /api_key=abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(serialized, /abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(serialized, /model request failed token=abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(serialized, /model-cache/);
+  assert.doesNotMatch(serialized, /umbratic-runner-diagnostics/);
+  assert.doesNotMatch(serialized, /npm run test/);
+  assert.doesNotMatch(serialized, /echo token/);
   assert.doesNotMatch(serialized, /C:\/secret/);
   assert.doesNotMatch(serialized, /executablePath/);
-  assert.match(serialized, /promptRedacted/);
-  assert.match(serialized, /outputRedacted/);
+  assert.equal(bundle.schemaVersion, 3);
+  assert.equal("policy" in bundle, false);
 
   const task = bundle.tasks[0];
-  assert.equal(task.review.additions, 2);
-  assert.equal(task.review.deletions, 1);
-  assert.deepEqual(plain(task.capabilityProbes), [
-    {
-      id: "pdftoppm",
-      status: "missing",
-      category: "optional-artifacts",
-      importance: "optional",
-      workflows: ["PDF artifact", "visual QA"],
-      versionFamily: "24.02",
-      affectedCurrentRun: true,
-    },
-  ]);
-  assert.equal(task.events[0].data.length, "password=abcdefghijklmnopqrstuvwxyz".length);
-  assert.equal(task.events[2].data.command, "echo token=[redacted]");
-  assert.equal(task.events[4].data.status, "runtime_error");
-  assert.equal(task.events[4].data.errorCode, "command_exit_nonzero");
-  assert.equal(task.events[4].data.errorMessage, "token=[redacted]");
-  assert.equal(task.events[4].data.durationMs, 42);
-  const requiredToolFailure = task.events.find((event) => event.type === "required_tool.failed");
-  assert.equal(requiredToolFailure.data.requirement, "file_change");
-  assert.equal(requiredToolFailure.data.reason, "attempted_tool_failed");
-  assert.deepEqual(requiredToolFailure.data.requiredTools, ["write", "edit", "command"]);
-  assert.deepEqual(requiredToolFailure.data.attemptedTools, ["edit"]);
-  assert.equal(requiredToolFailure.data.detail, "tool failed with token=[redacted]");
-  const skillSelected = task.events.find((event) => event.type === "skill.selected");
-  assert.equal(skillSelected.data.skillId, "deal-review");
-  assert.equal(skillSelected.data.source, "local");
-  assert.equal(skillSelected.data.reason, "explicit_request");
-  assert.equal(skillSelected.data.fullContent, true);
-  const reviewReady = task.events.find((event) => event.type === "review.ready");
-  assert.equal(reviewReady.data.latestTest.command, "npm run test -- --token=[redacted]");
+  assert.equal(task.outcome, "success");
+  assert.deepEqual(plain(task.workspace), { kind: "git", mode: "worktree" });
+  assert.deepEqual(plain(task.model), { providerId: "company-endpoint", modelId: "veil-managed" });
+  assert.deepEqual(plain(task.mode), { permission: "normal", reasoning: "reasoning" });
+  assert.equal(task.changes.fileCount, 1);
+  assert.deepEqual(plain(task.changes.review), { fileCount: 1, additions: 2, deletions: 1 });
+  assert.deepEqual(plain(task.changes.latestTest), { passed: true, exitCode: 0 });
+  assert.equal("runnerDiagnostics" in task, false);
+  assert.equal("capabilityProbes" in task, false);
+  assert.equal("events" in task, false);
+  assert.equal("changedFiles" in task, false);
+  assert.equal("patchHash" in task, false);
+  assert.deepEqual(plain(task.runtimeHealth), {
+    total: 1,
+    affectedCurrentRun: 1,
+    byStatus: { missing: 1 },
+    byImportance: { optional: 1 },
+  });
+  assert.equal(task.activity.eventCount, 8);
+  assert.equal(task.activity.messages.user, 1);
+  assert.equal(task.activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
+  assert.equal(task.activity.messages.assistantChars, "Here is the full answer".length);
+  assert.equal(task.activity.commands.started, 1);
+  assert.equal(task.activity.commands.finished, 1);
+  assert.equal(task.activity.commands.failed, 1);
+  assert.equal(task.activity.commands.outputEvents, 1);
+  assert.equal(task.activity.commands.outputChars, "api_key=abcdefghijklmnopqrstuvwxyz".length);
+  assert.equal(task.activity.commands.durationMs, 42);
+  assert.equal(task.activity.commands.byClass.shell, 1);
+  assert.equal(task.activity.commands.errors.command_exit_nonzero, 1);
+  assert.equal(task.activity.requiredToolFailures.attempted_tool_failed, 1);
 });
 
 test("telemetry spool files are unique and sorted for retry", async () => {
@@ -246,6 +271,9 @@ test("telemetry spool files are unique and sorted for retry", async () => {
 
   assert.notEqual(first, second);
   assert.deepEqual(plain(files), [first, second].sort());
+  const contents = fs.readFileSync(first, "utf8");
+  assert.equal(contents.trim(), JSON.stringify(bundle));
+  assert.doesNotMatch(contents, /\n\s+"/);
 });
 
 test("telemetry sync uploads redacted spool files with endpoint auth and keeps failed files for retry", async (t) => {
@@ -295,7 +323,13 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
   assert.equal(received[0].team, "engineering");
   assert.doesNotMatch(received[0].body, /password=abcdefghijklmnopqrstuvwxyz/);
   assert.doesNotMatch(received[0].body, /\/secret\/repo/);
-  assert.match(received[0].body, /promptRedacted/);
+  assert.doesNotMatch(received[0].body, /promptRedacted/);
+  const uploadedBundle = JSON.parse(received[0].body);
+  assert.equal(uploadedBundle.schemaVersion, 3);
+  assert.equal(uploadedBundle.tasks[0].outcome, "success");
+  assert.equal(uploadedBundle.tasks[0].activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
+  assert.equal("events" in uploadedBundle.tasks[0], false);
+  assert.equal("policy" in uploadedBundle, false);
 
   shouldFail = false;
   const retry = await uploadTelemetrySpool({ directory: spool, endpoint });

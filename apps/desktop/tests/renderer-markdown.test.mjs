@@ -165,10 +165,10 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   const events = [
     { type: "user.message", taskId: "task-1", text: "Run tests", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.reasoning.delta", taskId: "task-1", text: "Thinking", at: "2026-01-01T00:00:01.000Z", endedAt: "2026-01-01T00:00:03.000Z" },
-    { type: "assistant.delta", taskId: "task-1", text: "**Umbratic AI**: Done", at: "2026-01-01T00:00:04.000Z" },
-    { type: "command.started", taskId: "task-1", id: "cmd-1", command: "npm run test", cwd: "C:/repo", kind: "bash", commandClass: "package-manager" },
-    { type: "command.output", taskId: "task-1", id: "cmd-1", stream: "stdout", text: "ok\n" },
-    { type: "command.finished", taskId: "task-1", id: "cmd-1", exitCode: 0 },
+    { type: "command.started", taskId: "task-1", id: "cmd-1", command: "npm run test", cwd: "C:/repo", kind: "bash", commandClass: "package-manager", at: "2026-01-01T00:00:03.000Z" },
+    { type: "command.output", taskId: "task-1", id: "cmd-1", stream: "stdout", text: "ok\n", at: "2026-01-01T00:00:04.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "cmd-1", exitCode: 0, at: "2026-01-01T00:00:05.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "**Umbratic AI**: Done", at: "2026-01-01T00:00:06.000Z" },
     { type: "permission.requested", taskId: "task-1", request: { id: "perm-1", kind: "bash", summary: "git commit", command: "git commit", cwd: "C:/repo" } },
   ];
 
@@ -177,12 +177,13 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(run.status, "passed");
   assert.equal(commandSummary(run), "ok");
   assert.equal(pendingPermissionFromEvents(events).id, "perm-1");
-  assert.deepEqual(JSON.parse(JSON.stringify(composerTimelineFromEvents(events))).map((item) => item.type), [
+  const timeline = JSON.parse(JSON.stringify(composerTimelineFromEvents(events)));
+  assert.deepEqual(timeline.map((item) => item.type), [
     "user",
-    "reasoning",
+    "activity",
     "assistant",
-    "command",
   ]);
+  assert.deepEqual(timeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
   assert.deepEqual(
     JSON.parse(JSON.stringify(composerTimelineFromEvents([
       { type: "assistant.delta", taskId: "task-1", text: "Streaming now", at: "2026-01-01T00:00:05.000Z" },

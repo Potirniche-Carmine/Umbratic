@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { RunnerDiagnostics } from "./diagnostics.js";
 import { loadRunnerConfig, type RunnerConfig } from "./config.js";
 import type { UmbraticRunnerEvent } from "./events.js";
 import { PermissionBroker } from "./permission.js";
@@ -31,6 +32,7 @@ export class SessionStore {
   private readonly events = new EventEmitter();
   private readonly sessions = new Map<string, Session>();
   readonly config = loadRunnerConfig();
+  readonly diagnostics = new RunnerDiagnostics(this.config.diagnostics, { cwd: this.config.cwd, taskId: this.config.taskId });
   readonly permissions = new PermissionBroker((event) => this.emit(event));
 
   create(): Session {
@@ -53,6 +55,7 @@ export class SessionStore {
   }
 
   emit(event: UmbraticRunnerEvent) {
+    this.diagnostics.record(event);
     this.events.emit("event", event);
   }
 

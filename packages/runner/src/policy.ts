@@ -55,7 +55,7 @@ const generatedRuntimePrefixes = [
   "coverage/",
 ];
 
-const generatedRuntimeNames = new Set(["__pycache__", "cmakefiles"]);
+const generatedRuntimeNames = new Set(["__pycache__", "cmakefiles", ".ds_store", "thumbs.db", "desktop.ini"]);
 const generatedRuntimeExtensions = new Set([".pyc", ".pyo", ".o", ".obj", ".a", ".lib", ".so", ".dylib", ".dll", ".exe", ".pdb"]);
 
 export function isGeneratedRuntimePath(filePath: string): boolean {

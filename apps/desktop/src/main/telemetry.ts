@@ -2,22 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { BackendUiEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
-import { baseUrlHost, classifyCommandText, redactCommandText, redactText, shortHashValue, telemetryPolicyInfo } from "./policy";
-
-type RedactedTaskEvent = {
-  type: string;
-  at?: string;
-  durationMs?: number;
-  data: Record<string, unknown>;
-};
-
-function eventDurationMs(event: BackendUiEvent): number | undefined {
-  if (!event.at || !event.endedAt) return undefined;
-  const started = Date.parse(event.at);
-  const ended = Date.parse(event.endedAt);
-  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) return undefined;
-  return ended - started;
-}
+import { classifyCommandText, redactText } from "./policy";
 
 function diffStats(diff: string): { additions: number; deletions: number } {
   return diff.split(/\r?\n/).reduce(
@@ -41,249 +26,184 @@ function reviewSummary(files: ReviewFile[]) {
     { additions: 0, deletions: 0 },
   );
   return {
-    changedFileCount: files.length,
+    fileCount: files.length,
     additions: totals.additions,
     deletions: totals.deletions,
-    changedFiles: files.map((file) => ({
-      path: file.path,
-      status: file.status,
-      ...diffStats(file.diff),
-    })),
   };
 }
 
-function redactEvent(event: BackendUiEvent): RedactedTaskEvent {
-  const base = {
-    type: event.type,
-    at: event.at,
-    durationMs: eventDurationMs(event),
+function increment(map: Record<string, number>, key: string | undefined) {
+  if (!key) return;
+  map[key] = (map[key] ?? 0) + 1;
+}
+
+function taskOutcome(task: TaskRecord): "success" | "failure" | "in_progress" {
+  if (task.state === "completed" || task.state === "review_ready" || task.state === "approved" || task.state === "merged") {
+    return "success";
+  }
+  if (task.state === "failed" || task.state === "rejected") return "failure";
+  return "in_progress";
+}
+
+function capabilitySummary(task: TaskRecord) {
+  const probes = task.capabilityProbes ?? [];
+  const summary = {
+    total: probes.length,
+    affectedCurrentRun: 0,
+    byStatus: {} as Record<string, number>,
+    byImportance: {} as Record<string, number>,
   };
-  if (event.type === "user.message") {
-    return { ...base, data: { promptRedacted: true, length: event.text.length } };
+  for (const probe of probes) {
+    increment(summary.byStatus, probe.status);
+    increment(summary.byImportance, probe.importance);
+    if (probe.affectedCurrentRun) summary.affectedCurrentRun += 1;
   }
-  if (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") {
-    return { ...base, data: { textRedacted: true, length: event.text.length } };
-  }
-  if (event.type === "command.started") {
-    const classification = event.commandClass
-      ? { commandClass: event.commandClass }
-      : classifyCommandText(event.command, event.cwd);
-    return {
-      ...base,
-      data: {
-        id: event.id,
-        kind: event.kind,
-        commandClass: classification.commandClass,
-        command: redactCommandText(event.command),
-        cwdHash: shortHashValue(event.cwd),
-      },
-    };
-  }
-  if (event.type === "command.output") {
-    return {
-      ...base,
-      data: {
-        id: event.id,
-        stream: event.stream,
-        outputSummary: redactText(event.text.slice(-600), 600),
-        outputRedacted: true,
-        originalLength: event.text.length,
-      },
-    };
-  }
-  if (event.type === "command.finished") {
-    return {
-      ...base,
-      data: {
-        id: event.id,
-        exitCode: event.exitCode,
-        status: event.status,
-        errorCode: event.errorCode,
-        errorMessage: event.errorMessage ? redactText(event.errorMessage, 320) : undefined,
-        durationMs: event.durationMs,
-      },
-    };
-  }
-  if (event.type === "permission.requested") {
-    return {
-      ...base,
-      data: {
-        id: event.request.id,
-        kind: event.request.kind,
-        commandClass: event.request.commandClass,
-        summary: redactCommandText(event.request.summary),
-        cwdHash: shortHashValue(event.request.cwd),
-      },
-    };
-  }
-  if (event.type === "permission.resolved") {
-    return { ...base, data: { id: event.id, decision: event.decision } };
-  }
-  if (event.type === "review.ready") {
-    return {
-      ...base,
-      data: {
-        changedFiles: event.changedFiles,
-        review: reviewSummary(event.reviewFiles),
-        latestTest: event.latestTest
-          ? {
-              command: redactCommandText(event.latestTest.command),
-              passed: event.latestTest.passed,
-              exitCode: event.latestTest.exitCode,
-              completedAt: event.latestTest.completedAt,
-            }
-          : undefined,
-      },
-    };
-  }
-  if (event.type === "review.changed_since_ready") {
-    return {
-      ...base,
-      data: {
-        previousPatchHash: event.previousPatchHash,
-        currentPatchHash: event.currentPatchHash,
-        changedFileCount: event.changedFileCount,
-      },
-    };
-  }
-  if (event.type === "approval.check") {
-    return { ...base, data: { name: event.name, status: event.status, detail: event.detail ? redactText(event.detail, 320) : undefined } };
-  }
-  if (event.type === "merge.approval") {
-    return {
-      ...base,
-      data: {
-        decision: event.decision,
-        cleanup: event.cleanup,
-        reason: event.reason ? redactText(event.reason, 320) : undefined,
-      },
-    };
-  }
-  if (event.type === "approval.completed") {
-    return {
-      ...base,
-      data: {
-        target: event.target,
-        patchHash: event.patchHash,
-      },
-    };
-  }
-  if (event.type === "merge.completed") {
-    return {
-      ...base,
-      data: {
-        targetBranch: event.targetBranch,
-        commit: event.commit.slice(0, 16),
-        patchHash: event.patchHash,
-      },
-    };
-  }
-  if (event.type === "ide.opened") {
-    return {
-      ...base,
-      data: {
-        ideId: event.ideId,
-        target: event.target,
-        filePath: event.filePath,
-        result: event.result,
-        message: event.message ? redactText(event.message, 320) : undefined,
-      },
-    };
-  }
-  if (event.type === "response.feedback") {
-    return { ...base, data: { messageId: event.messageId, rating: event.rating } };
-  }
-  if (event.type === "skill.selected") {
-    return {
-      ...base,
-      data: {
-        skillId: event.skillId,
-        source: event.source,
-        reason: event.reason,
-        fullContent: event.fullContent,
-      },
-    };
-  }
-  if (event.type === "required_tool.failed") {
-    return {
-      ...base,
-      data: {
-        requirement: event.requirement,
-        reason: event.reason,
-        requiredTools: event.requiredTools,
-        attemptedTools: event.attemptedTools ?? [],
-        attempt: event.attempt,
-        detail: event.detail ? redactText(event.detail, 320) : undefined,
-      },
-    };
-  }
-  if (event.type === "task.error") {
-    return { ...base, data: { message: redactText(event.message, 320) } };
-  }
-  if (event.type === "worktree.requested") {
-    return {
-      ...base,
-      data: {
-        branch: event.branch,
-        pathHash: shortHashValue(event.path),
-        baseCommit: event.baseCommit.slice(0, 16),
-      },
-    };
-  }
-  if (event.type === "worktree.created") {
-    return { ...base, data: { branch: event.branch, pathHash: shortHashValue(event.path) } };
-  }
-  return { ...base, data: {} };
+  return summary;
 }
 
-function repositoryHash(task: TaskRecord, projects: RepositoryInfo[]): string {
-  const project = projects.find((row) => row.id === task.repositoryId);
-  return shortHashValue(project?.rootPath ?? task.originalRepoPath);
+function telemetryEventSummary(events: BackendUiEvent[]) {
+  const summary = {
+    eventCount: events.length,
+    messages: {
+      user: 0,
+      promptChars: 0,
+      assistantChars: 0,
+      reasoningChars: 0,
+    },
+    commands: {
+      started: 0,
+      finished: 0,
+      failed: 0,
+      outputEvents: 0,
+      outputChars: 0,
+      durationMs: 0,
+      byClass: {} as Record<string, number>,
+      errors: {} as Record<string, number>,
+    },
+    permissions: {
+      requested: 0,
+      allowed: 0,
+      denied: 0,
+    },
+    reviews: {
+      ready: 0,
+      changedSinceReady: 0,
+    },
+    requiredToolFailures: {} as Record<string, number>,
+    feedback: {
+      good: 0,
+      bad: 0,
+    },
+  };
+
+  for (const event of events) {
+    if (event.type === "user.message") {
+      summary.messages.user += 1;
+      summary.messages.promptChars += event.text.length;
+      continue;
+    }
+    if (event.type === "assistant.delta") {
+      summary.messages.assistantChars += event.text.length;
+      continue;
+    }
+    if (event.type === "assistant.reasoning.delta") {
+      summary.messages.reasoningChars += event.text.length;
+      continue;
+    }
+    if (event.type === "command.started") {
+      const commandClass = event.commandClass ?? classifyCommandText(event.command, event.cwd).commandClass;
+      summary.commands.started += 1;
+      increment(summary.commands.byClass, commandClass);
+      continue;
+    }
+    if (event.type === "command.output") {
+      summary.commands.outputEvents += 1;
+      summary.commands.outputChars += event.text.length;
+      continue;
+    }
+    if (event.type === "command.finished") {
+      summary.commands.finished += 1;
+      if (event.exitCode !== 0 || (event.status && event.status !== "success")) summary.commands.failed += 1;
+      if (typeof event.durationMs === "number" && Number.isFinite(event.durationMs)) {
+        summary.commands.durationMs += event.durationMs;
+      }
+      increment(summary.commands.errors, event.errorCode);
+      continue;
+    }
+    if (event.type === "permission.requested") {
+      summary.permissions.requested += 1;
+      continue;
+    }
+    if (event.type === "permission.resolved") {
+      if (event.decision === "allow") summary.permissions.allowed += 1;
+      if (event.decision === "deny") summary.permissions.denied += 1;
+      continue;
+    }
+    if (event.type === "review.ready") {
+      summary.reviews.ready += 1;
+      continue;
+    }
+    if (event.type === "review.changed_since_ready") {
+      summary.reviews.changedSinceReady += 1;
+      continue;
+    }
+    if (event.type === "required_tool.failed") {
+      increment(summary.requiredToolFailures, event.reason);
+      continue;
+    }
+    if (event.type === "response.feedback") {
+      summary.feedback[event.rating] += 1;
+    }
+  }
+  return summary;
 }
 
-export function buildRedactedTelemetryBundle(tasks: TaskRecord[], projects: RepositoryInfo[]) {
+export function buildRedactedTelemetryBundle(tasks: TaskRecord[], _projects: RepositoryInfo[]) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     exportedAt: new Date().toISOString(),
-    policy: telemetryPolicyInfo,
-    tasks: tasks.map((task) => ({
-      id: task.id,
-      chatId: task.chatId,
-      repoId: task.repositoryId,
-      repoRootHash: repositoryHash(task, projects),
-      workspaceKind: task.workspaceKind,
-      baseBranch: task.originalBranch,
-      baseCommit: task.baseCommit.slice(0, 16),
-      agentBranch: task.agentBranch || undefined,
-      worktreePathHash: task.worktreePath ? shortHashValue(task.worktreePath) : undefined,
-      providerId: task.providerId ?? task.model?.providerId,
-      modelId: task.modelId ?? task.model?.modelId,
-      modelBaseUrlHost: task.modelBaseUrlHost ?? (task.model?.baseUrl ? baseUrlHost(task.model.baseUrl) : undefined),
-      runnerName: task.runnerName,
-      runnerVersion: task.runnerVersion,
-      policyVersion: task.policyVersion,
-      runtimeProfile: task.runtimeProfile,
-      capabilityProbes: (task.capabilityProbes ?? []).map((probe) => ({
-        id: probe.id,
-        status: probe.status,
-        category: probe.category,
-        importance: probe.importance,
-        workflows: probe.workflows,
-        versionFamily: probe.versionFamily,
-        affectedCurrentRun: probe.affectedCurrentRun,
-      })),
-      permissionMode: task.permissionMode,
-      reasoningMode: task.reasoningMode,
-      status: task.state,
-      startedAt: task.createdAt,
-      completedAt: task.approvedAt ?? task.mergedAt ?? task.rejectedAt,
-      errorMessage: task.error ? redactText(task.error, 320) : undefined,
-      changedFiles: task.changedFiles,
-      reviewPatchHash: task.reviewPatchHash,
-      patchHash: task.patchHash,
-      review: reviewSummary(task.reviewFiles ?? []),
-      events: (task.events ?? []).map(redactEvent),
-    })),
+    tasks: tasks.map((task) => {
+      const events = task.events ?? [];
+      return {
+        id: task.id,
+        chatId: task.chatId,
+        repoId: task.repositoryId,
+        workspace: {
+          kind: task.workspaceKind,
+          mode: task.workspaceMode,
+        },
+        model: {
+          providerId: task.providerId ?? task.model?.providerId,
+          modelId: task.modelId ?? task.model?.modelId,
+        },
+        runner: {
+          name: task.runnerName,
+          version: task.runnerVersion,
+          runtimeProfile: task.runtimeProfile,
+        },
+        mode: {
+          permission: task.permissionMode,
+          reasoning: task.reasoningMode,
+        },
+        status: task.state,
+        outcome: taskOutcome(task),
+        startedAt: task.createdAt,
+        completedAt: task.approvedAt ?? task.mergedAt ?? task.rejectedAt,
+        errorMessage: task.error ? redactText(task.error, 320) : undefined,
+        changes: {
+          fileCount: task.changedFiles.length,
+          review: reviewSummary(task.reviewFiles ?? []),
+          latestTest: task.latestTest
+            ? {
+                passed: task.latestTest.passed,
+                exitCode: task.latestTest.exitCode,
+              }
+            : undefined,
+        },
+        runtimeHealth: capabilitySummary(task),
+        activity: telemetryEventSummary(events),
+      };
+    }),
   };
 }
 
@@ -304,7 +224,7 @@ export async function writeTelemetrySpoolFile(
     const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
     const filePath = path.join(directory, `${baseName}${suffix}.json`);
     try {
-      await fs.promises.writeFile(filePath, `${JSON.stringify(bundle, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      await fs.promises.writeFile(filePath, `${JSON.stringify(bundle)}\n`, { encoding: "utf8", flag: "wx" });
       return filePath;
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "EEXIST") continue;

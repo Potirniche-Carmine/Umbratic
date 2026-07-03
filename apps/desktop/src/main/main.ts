@@ -40,6 +40,7 @@ import {
   beginRunnerEventStream,
   runnerRequest,
   runnerBinaryPath,
+  runnerDiagnosticsDirectory,
   replyRunnerPermission,
   startUmbraticRunnerServer,
   stopRunnerProcess,
@@ -2327,6 +2328,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       providerAllowlist: allowedLocalProviderIds,
       localhostOnlyModels: models.every((model) => isLocalhostUrl(model.baseUrl)),
       commandClassifier: "enabled",
+      runnerDiagnosticsDirectory: runnerDiagnosticsDirectory(app.getPath("userData")),
       telemetry: telemetryPolicyInfo,
       runtimes: runtimeDiagnostics(),
       capabilities: capabilityReport,
@@ -2348,6 +2350,18 @@ async function openSkillsFolder(): Promise<{ ok: true; directory: string } | { o
     if (failure) {
       return { ok: false, message: failure };
     }
+    return { ok: true, directory };
+  } catch (cause) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+async function openRunnerDiagnosticsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }> {
+  const directory = runnerDiagnosticsDirectory(app.getPath("userData"));
+  try {
+    await fs.promises.mkdir(directory, { recursive: true });
+    const failure = await shell.openPath(directory);
+    if (failure) return { ok: false, message: failure };
     return { ok: true, directory };
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
@@ -2406,7 +2420,8 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
     return { ok: false, message: "Export canceled." };
   }
   const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects());
-  writeJsonFile(result.filePath, bundle);
+  fs.mkdirSync(path.dirname(result.filePath), { recursive: true });
+  fs.writeFileSync(result.filePath, `${JSON.stringify(bundle)}\n`, "utf8");
   return { ok: true, path: result.filePath };
 }
 
@@ -2993,6 +3008,7 @@ async function handleRunnerPermission(
     task.agentBranch = `umbratic/${task.id}-${slugify(intentPrompt)}`;
     task.worktreePath = path.join(worktreeRootForRepo(task.originalRepoPath), task.id);
     task.runnerSessionId = undefined;
+    task.diagnosticLogPath = undefined;
     task.pendingPrompt = runnerPromptText(promptForRun);
     pendingRunnerPrompts.set(task.id, runnerPromptParts(promptForRun));
     task.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
@@ -3084,6 +3100,8 @@ async function runRunnerTask(
     const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
     activeRunnerProcesses.set(task.id, run);
+    task.diagnosticLogPath = run.diagnosticLogPath;
+    saveTask(task);
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; toolKind?: RunnerToolId; finished: boolean }>();
     let delegatedToWorktree = false;
@@ -3488,6 +3506,7 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.policyVersion = umbraticPolicyVersion;
   task.runtimeProfile = runtimeProfileForCurrentHarness(task.prompt);
   task.runnerSessionId = undefined;
+  task.diagnosticLogPath = undefined;
   task.pendingPrompt = undefined;
   task.changedFiles = [];
   task.reviewFiles = [];
@@ -3641,6 +3660,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       existingTask.originalRepoPath = refreshed.rootPath;
       existingTask.originalWasDirty = refreshed.dirty;
       existingTask.runnerSessionId = undefined;
+      existingTask.diagnosticLogPath = undefined;
       existingTask.pendingPrompt = undefined;
       pendingRunnerPrompts.delete(existingTask.id);
       existingTask.state = "running";
@@ -3657,6 +3677,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       existingTask.baselineFiles = undefined;
     }
     existingTask.pendingPrompt = undefined;
+    existingTask.diagnosticLogPath = undefined;
     pendingRunnerPrompts.delete(existingTask.id);
     existingTask.originalBranch = existingTask.agentBranch ? existingTask.originalBranch : refreshed.originalBranch;
     existingTask.baseCommit = existingTask.agentBranch ? existingTask.baseCommit : refreshed.baseCommit;
@@ -4000,7 +4021,6 @@ async function setResponseFeedback(input: unknown): Promise<void> {
     (event) => !(event.type === "response.feedback" && event.messageId === messageId),
   );
   saveTask(task);
-  console.info("Recorded response feedback", { taskId: task.id, messageId, rating });
   emit({ type: "response.feedback", taskId: task.id, messageId, rating });
 }
 
@@ -4395,6 +4415,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:list-skills", () => listSkillsService());
   handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettingsService(input));
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
+  handleIpc("umbratic:open-runner-diagnostics-folder", () => openRunnerDiagnosticsFolder());
   handleIpc("umbratic:open-skill-in-editor", (input) => openSkillInEditor(input));
   handleIpc("umbratic:import-skill", (input) => importSkillFromDialog(input as { sourcePath?: string } | undefined));
   handleIpc("umbratic:create-skill", (input) => createSkillService(input as { name?: string }));

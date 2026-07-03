@@ -77,6 +77,10 @@ test("resolveWorkspacePath accepts root-prefixed relative paths and rejects esca
 
 test("readTool reads file ranges and lists directories while skipping generated entries", async () => {
   const root = workspace();
+  fs.mkdirSync(path.join(root, "empty-folder"), { recursive: true });
+  fs.mkdirSync(path.join(root, "nested-repo"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".DS_Store"), "finder metadata\n", "utf8");
+  fs.writeFileSync(path.join(root, "Credentials.md"), "private\n", "utf8");
   const { ctx } = context(root);
 
   const file = await readTool(ctx, { filePath: "README.md", offset: 2, limit: 1 });
@@ -84,11 +88,18 @@ test("readTool reads file ranges and lists directories while skipping generated 
   assert.equal(file.output, "2: Target phrase");
 
   const listing = await readTool(ctx, { filePath: ".", limit: 10 });
-  assert.match(listing.output, /^Directory: \.\nDepth: 1\nEntries:/);
+  assert.match(listing.output, /^Directory: \.\nDepth: 1\nEntries shown: 1-\d+ of \d+\nListing status: complete\nEntries:/);
   assert.match(listing.output, /README\.md/);
+  assert.match(listing.output, /empty-folder\//);
+  assert.match(listing.output, /nested-repo\//);
   assert.match(listing.output, /src\//);
   assert.doesNotMatch(listing.output, /Button\.ts/);
+  assert.doesNotMatch(listing.output, /\.DS_Store/);
+  assert.doesNotMatch(listing.output, /Credentials\.md/);
   assert.doesNotMatch(listing.output, /node_modules/);
+
+  const partial = await readTool(ctx, { filePath: ".", limit: 1 });
+  assert.match(partial.output, /Listing status: partial; continue with offset 2/);
 
   const recursive = await readTool(ctx, { filePath: ".", depth: 3, limit: 20 });
   assert.match(recursive.output, /src\/components\//);
@@ -219,6 +230,7 @@ test("workspace index excludes generated and blocked paths", () => {
   fs.mkdirSync(path.join(root, ".git", "objects"), { recursive: true });
   fs.mkdirSync(path.join(root, ".umbratic", "runtime"), { recursive: true });
   fs.mkdirSync(path.join(root, ".venv"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".DS_Store"), "skip\n", "utf8");
   fs.writeFileSync(path.join(root, ".git", "ignored.txt"), "skip\n", "utf8");
   fs.writeFileSync(path.join(root, ".umbratic", "runtime", "ignored.txt"), "skip\n", "utf8");
   fs.writeFileSync(path.join(root, ".venv", "ignored.py"), "skip\n", "utf8");
@@ -232,6 +244,7 @@ test("workspace index excludes generated and blocked paths", () => {
   assert.equal(relatives.some((relative) => relative.startsWith(".git/")), false);
   assert.equal(relatives.some((relative) => relative.startsWith(".umbratic/")), false);
   assert.equal(relatives.some((relative) => relative.startsWith(".venv/")), false);
+  assert.equal(relatives.includes(".DS_Store"), false);
   assert.equal(relatives.some((relative) => relative.includes("secret")), false);
   assert.equal(relatives.includes(".env"), false);
 });
@@ -502,6 +515,7 @@ test("toolSpecs keep small stable schemas for local model tool calling", () => {
   const searchSpec = toolSpecs.find((spec) => spec.function.name === "search");
   assert.match(readSpec.function.description, /workspace file/i);
   assert.match(readSpec.function.description, /folder overviews/i);
+  assert.match(readSpec.function.description, /completion metadata/i);
   assert.match(readSpec.function.description, /\/workspace/i);
   assert.equal(readSpec.function.parameters.properties.depth.type, "number");
   assert.match(searchSpec.function.description, /file paths and small text-file contents/i);

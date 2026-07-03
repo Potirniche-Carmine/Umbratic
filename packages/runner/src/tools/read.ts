@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
-import { ensureReadableText, resolveWorkspacePath, type ToolContext, type ToolResult } from "./common.js";
+import * as path from "node:path";
+import { ensureReadableText, resolveWorkspacePath, shouldSkipEntry, type ToolContext, type ToolResult } from "./common.js";
 import { parseLocationSuffix } from "./searchQuery.js";
-import { getWorkspaceIndex, listIndexedDirectoryEntries } from "./workspaceIndex.js";
+import { getWorkspaceIndex } from "./workspaceIndex.js";
 
 const maxReadOutputBytes = 60 * 1024;
 const maxDirectoryDepth = 6;
@@ -13,10 +14,47 @@ function limitReadOutput(output: string): string {
   return `${clipped}\n...[truncated: read output exceeded ${maxReadOutputBytes} bytes; use offset/limit to continue]`;
 }
 
-function directoryOutput(relative: string, depth: number, entries: string[]): string {
+function directoryOutput(relative: string, depth: number, entries: string[], offset: number, total: number): string {
   const title = relative || ".";
   const body = entries.join("\n") || "(empty directory)";
-  return `Directory: ${title}\nDepth: ${depth}\nEntries:\n${body}`;
+  const start = total === 0 ? 0 : offset;
+  const end = total === 0 ? 0 : offset + entries.length - 1;
+  const nextOffset = offset + entries.length;
+  const status = nextOffset <= total ? `partial; continue with offset ${nextOffset}` : "complete";
+  return `Directory: ${title}\nDepth: ${depth}\nEntries shown: ${start}-${end} of ${total}\nListing status: ${status}\nEntries:\n${body}`;
+}
+
+function listDirectoryEntries(cwd: string, directoryAbsolute: string, depth: number): string[] {
+  const root = path.resolve(cwd);
+  const maxDepth = Math.max(1, Math.floor(depth));
+  const rows = new Set<string>();
+
+  const walk = (current: string, displayParts: string[], level: number) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries
+      .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name))
+      .forEach((entry) => {
+        const absolute = path.join(current, entry.name);
+        const relative = path.relative(root, absolute).replace(/\\/g, "/");
+        const skipPath = entry.isDirectory() ? `${relative}/` : relative;
+        if (shouldSkipEntry(skipPath)) return;
+
+        const nextParts = [...displayParts, entry.name];
+        rows.add(`${nextParts.join("/")}${entry.isDirectory() ? "/" : ""}`);
+        if (entry.isDirectory() && level < maxDepth) {
+          walk(absolute, nextParts, level + 1);
+        }
+      });
+  };
+
+  walk(directoryAbsolute, [], 1);
+  return [...rows].sort((left, right) => left.localeCompare(right));
 }
 
 export async function readTool(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolResult> {
@@ -44,12 +82,11 @@ export async function readTool(ctx: ToolContext, input: Record<string, unknown>)
   const { absolute, relative } = resolveWorkspacePath(ctx.cwd, filePath);
   const stat = fs.statSync(absolute);
   if (stat.isDirectory()) {
-    const index = getWorkspaceIndex(ctx.cwd);
-    const entries = listIndexedDirectoryEntries(index, relative, depth);
+    const entries = listDirectoryEntries(ctx.cwd, absolute, depth);
     const selected = entries.slice(offset - 1, offset - 1 + limit);
     return {
       title: relative || ".",
-      output: limitReadOutput(directoryOutput(relative, depth, selected)),
+      output: limitReadOutput(directoryOutput(relative, depth, selected, offset, entries.length)),
       status: "success",
     };
   }

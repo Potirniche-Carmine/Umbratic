@@ -1,4 +1,6 @@
+import * as fs from "node:fs";
 import * as http from "node:http";
+import * as path from "node:path";
 import { URL } from "node:url";
 import { nowIso, type UmbraticRunnerEvent } from "./events.js";
 import { runTurn } from "./loop.js";
@@ -68,6 +70,48 @@ function sendNoContent(response: http.ServerResponse) {
 
 function sendError(response: http.ServerResponse, status: number, code: string, message: string, headers: http.OutgoingHttpHeaders = {}) {
   sendJson(response, status, { error: message, code }, headers);
+}
+
+async function diagnosticLogStatus(store: SessionStore) {
+  const metadata = store.diagnostics.metadata();
+  if (!metadata.logPath) return metadata;
+  try {
+    const stat = await fs.promises.stat(metadata.logPath);
+    return {
+      ...metadata,
+      exists: stat.isFile(),
+      sizeBytes: stat.size,
+      updatedAt: stat.mtime.toISOString(),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { ...metadata, exists: false, sizeBytes: 0 };
+    }
+    throw error;
+  }
+}
+
+async function sendDiagnosticLog(response: http.ServerResponse, store: SessionStore) {
+  const metadata = store.diagnostics.metadata();
+  if (!metadata.enabled || !metadata.logPath) {
+    sendError(response, 404, "diagnostics_unavailable", "Diagnostics are not available.");
+    return;
+  }
+  try {
+    await fs.promises.access(metadata.logPath, fs.constants.R_OK);
+  } catch {
+    sendError(response, 404, "diagnostics_not_found", "Diagnostics log has not been created yet.");
+    return;
+  }
+  response.writeHead(200, noStoreHeaders({
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${path.basename(metadata.logPath)}"`,
+  }));
+  const stream = fs.createReadStream(metadata.logPath, { encoding: "utf8" });
+  stream.once("error", () => {
+    if (!response.writableEnded) response.end();
+  });
+  stream.pipe(response);
 }
 
 function isAuthorized(request: http.IncomingMessage, password: string): boolean {
@@ -158,6 +202,16 @@ export async function listen(opts: { hostname: string; port: number; password: s
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/diagnostics") {
+        sendJson(response, 200, await diagnosticLogStatus(store));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/diagnostics/export") {
+        await sendDiagnosticLog(response, store);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/session") {
         const session = store.create();
         sendJson(response, 200, { id: session.id });
@@ -231,11 +285,13 @@ export async function listen(opts: { hostname: string; port: number; password: s
   const url = `${localProtocol}://${opts.hostname}:${port}`;
   return {
     url,
-    close: () =>
-      new Promise((resolve, reject) => {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
         unsubscribe();
         for (const stream of streams) stream.end();
         server.close((error) => error ? reject(error) : resolve());
-      }),
+      });
+      await store.diagnostics.close();
+    },
   };
 }
