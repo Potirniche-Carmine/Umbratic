@@ -91,10 +91,18 @@ export function pathInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function workspaceAliasRelativePath(filePath: string): string | null {
+  const normalized = filePath.replace(/\\/g, "/");
+  if (normalized === "/workspace" || normalized === "/workspace/") return ".";
+  if (normalized.startsWith("/workspace/")) return normalized.slice("/workspace/".length);
+  return null;
+}
+
 export function resolveWorkspacePath(cwd: string, filePath: string): { absolute: string; relative: string } {
-  let requestedPath = normalizeRelativePath(filePath);
-  let absolute = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(cwd, requestedPath);
-  if (!path.isAbsolute(filePath) && !fs.existsSync(absolute)) {
+  const aliasRelative = workspaceAliasRelativePath(filePath);
+  let requestedPath = normalizeRelativePath(aliasRelative ?? filePath);
+  let absolute = aliasRelative !== null ? path.resolve(cwd, requestedPath) : path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(cwd, requestedPath);
+  if (aliasRelative === null && !path.isAbsolute(filePath) && !fs.existsSync(absolute)) {
     const rootName = path.basename(path.resolve(cwd)).toLowerCase();
     const parts = requestedPath.split("/").filter(Boolean);
     if (parts[0]?.toLowerCase() === rootName) {

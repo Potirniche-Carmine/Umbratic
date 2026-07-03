@@ -12,6 +12,8 @@ const { readTool } = loadTypeScriptModule(new URL("../src/tools/read.ts", import
 const { writeTool } = loadTypeScriptModule(new URL("../src/tools/write.ts", import.meta.url).pathname, { cache: moduleCache });
 const { editTool } = loadTypeScriptModule(new URL("../src/tools/edit.ts", import.meta.url).pathname, { cache: moduleCache });
 const { searchTool } = loadTypeScriptModule(new URL("../src/tools/search.ts", import.meta.url).pathname, { cache: moduleCache });
+const { parseSearchQuery } = loadTypeScriptModule(new URL("../src/tools/searchQuery.ts", import.meta.url).pathname, { cache: moduleCache });
+const { getWorkspaceIndex } = loadTypeScriptModule(new URL("../src/tools/workspaceIndex.ts", import.meta.url).pathname, { cache: moduleCache });
 const { commandTool } = loadTypeScriptModule(new URL("../src/tools/command.ts", import.meta.url).pathname, { cache: moduleCache });
 const {
   enabledModelToolSpecs,
@@ -57,13 +59,19 @@ function context(cwd, options = {}) {
   };
 }
 
+function outputLines(result) {
+  return result.output.split(/\r?\n/).filter(Boolean);
+}
+
 test("resolveWorkspacePath accepts root-prefixed relative paths and rejects escapes and blocked files", () => {
   const root = workspace();
   const prefixed = path.join(path.basename(root), "README.md");
   const resolved = common.resolveWorkspacePath(root, prefixed);
   assert.equal(resolved.relative, "README.md");
+  assert.equal(common.resolveWorkspacePath(root, "/workspace/README.md").relative, "README.md");
 
   assert.throws(() => common.resolveWorkspacePath(root, "../outside.txt"), /outside workspace/);
+  assert.throws(() => common.resolveWorkspacePath(root, "/workspace/../outside.txt"), /outside workspace/);
   assert.throws(() => common.resolveWorkspacePath(root, ".env"), /blocked path/);
 });
 
@@ -76,6 +84,7 @@ test("readTool reads file ranges and lists directories while skipping generated 
   assert.equal(file.output, "2: Target phrase");
 
   const listing = await readTool(ctx, { filePath: ".", limit: 10 });
+  assert.match(listing.output, /^Directory: \.\nDepth: 1\nEntries:/);
   assert.match(listing.output, /README\.md/);
   assert.match(listing.output, /src\//);
   assert.doesNotMatch(listing.output, /Button\.ts/);
@@ -203,6 +212,114 @@ test("searchTool finds real path and content matches without returning generated
   assert.doesNotMatch(contentResult.output, /node_modules/);
 
   await assert.rejects(() => searchTool(ctx, { query: "   " }), /requires query/);
+});
+
+test("workspace index excludes generated and blocked paths", () => {
+  const root = workspace();
+  fs.mkdirSync(path.join(root, ".git", "objects"), { recursive: true });
+  fs.mkdirSync(path.join(root, ".umbratic", "runtime"), { recursive: true });
+  fs.mkdirSync(path.join(root, ".venv"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "ignored.txt"), "skip\n", "utf8");
+  fs.writeFileSync(path.join(root, ".umbratic", "runtime", "ignored.txt"), "skip\n", "utf8");
+  fs.writeFileSync(path.join(root, ".venv", "ignored.py"), "skip\n", "utf8");
+  fs.writeFileSync(path.join(root, ".env"), "SECRET=value\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "secret-note.txt"), "skip\n", "utf8");
+
+  const relatives = getWorkspaceIndex(root).files.map((file) => file.relative);
+
+  assert.match(relatives.join("\n"), /README\.md/);
+  assert.equal(relatives.some((relative) => relative.startsWith("node_modules/")), false);
+  assert.equal(relatives.some((relative) => relative.startsWith(".git/")), false);
+  assert.equal(relatives.some((relative) => relative.startsWith(".umbratic/")), false);
+  assert.equal(relatives.some((relative) => relative.startsWith(".venv/")), false);
+  assert.equal(relatives.some((relative) => relative.includes("secret")), false);
+  assert.equal(relatives.includes(".env"), false);
+});
+
+test("parseSearchQuery supports constraints, exclusions, globs, smart case, and locations", () => {
+  const parsed = parseSearchQuery("src/ src/**/*.tsx !test/ !*.min.js Button service.ts:42:7");
+
+  assert.deepEqual(plain(parsed.includeDirs), ["src/"]);
+  assert.deepEqual(plain(parsed.includeGlobs), ["src/**/*.tsx"]);
+  assert.deepEqual(plain(parsed.excludeDirs), ["test/"]);
+  assert.deepEqual(plain(parsed.excludeGlobs), ["*.min.js"]);
+  assert.deepEqual(plain(parsed.terms), ["Button"]);
+  assert.deepEqual(plain(parsed.location), { pathQuery: "service.ts", line: 42, column: 7 });
+  assert.equal(parsed.smartCase, true);
+  assert.equal(parseSearchQuery("button component").smartCase, false);
+});
+
+test("searchTool ranks exact path matches, tolerates typos, narrows tokens, and honors constraints", async () => {
+  const root = workspace();
+  fs.mkdirSync(path.join(root, "docs"), { recursive: true });
+  fs.mkdirSync(path.join(root, "src", "test"), { recursive: true });
+  fs.writeFileSync(path.join(root, "docs", "Button.md"), "button docs\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "components", "Button.test.ts"), "export const ButtonTest = true;\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "test", "TestButton.ts"), "export const TestButton = true;\n", "utf8");
+  const { ctx } = context(root);
+
+  const exact = await searchTool(ctx, { query: "Button.ts", limit: 5 });
+  assert.equal(outputLines(exact)[0], "src/components/Button.ts: path");
+
+  const typo = await searchTool(ctx, { query: "Buton.ts", limit: 5 });
+  assert.match(typo.output, /src\/components\/Button\.ts: path/);
+
+  const narrowed = await searchTool(ctx, { query: "src Button", limit: 10 });
+  assert.match(narrowed.output, /src\/components\/Button\.ts: path/);
+  assert.doesNotMatch(narrowed.output, /docs\/Button\.md/);
+
+  const scoped = await searchTool(ctx, { query: "src/ button", limit: 10 });
+  assert.match(scoped.output, /src\/components\/Button\.ts: path/);
+  assert.doesNotMatch(scoped.output, /docs\/Button\.md/);
+
+  const excluded = await searchTool(ctx, { query: "!test/ button", limit: 10 });
+  assert.match(excluded.output, /src\/components\/Button\.ts: path/);
+  assert.doesNotMatch(excluded.output, /src\/test\/TestButton\.ts/);
+});
+
+test("content search skips generated and blocked paths, ranks definitions, and respects limit", async () => {
+  const root = workspace();
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(root, ".umbratic", "runtime"), { recursive: true });
+  fs.mkdirSync(path.join(root, ".venv"), { recursive: true });
+  fs.writeFileSync(path.join(root, "node_modules", "skip-me", "hidden.js"), "HiddenNeedle\n", "utf8");
+  fs.writeFileSync(path.join(root, ".git", "hidden.txt"), "HiddenNeedle\n", "utf8");
+  fs.writeFileSync(path.join(root, ".umbratic", "runtime", "hidden.txt"), "HiddenNeedle\n", "utf8");
+  fs.writeFileSync(path.join(root, ".venv", "hidden.py"), "HiddenNeedle\n", "utf8");
+  fs.writeFileSync(path.join(root, ".env"), "HiddenNeedle\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "defs.ts"), "function Widget() {\n  return true;\n}\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "imports.ts"), "import { Widget } from './defs';\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "repeat-a.txt"), "LimitNeedle\nLimitNeedle\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "repeat-b.txt"), "LimitNeedle\n", "utf8");
+  const { ctx } = context(root);
+
+  const skipped = await searchTool(ctx, { query: "HiddenNeedle", limit: 10 });
+  assert.equal(skipped.output, "No matches.");
+
+  const ranked = await searchTool(ctx, { query: "Widget", limit: 5 });
+  assert.equal(outputLines(ranked)[0], "src/defs.ts:1: content");
+  assert.match(ranked.output, /src\/imports\.ts:1: content/);
+
+  const limited = await searchTool(ctx, { query: "LimitNeedle", limit: 1 });
+  assert.equal(outputLines(limited).length, 1);
+});
+
+test("readTool records recent reads for search ranking and supports line suffix offsets", async () => {
+  const root = workspace();
+  fs.mkdirSync(path.join(root, "a"), { recursive: true });
+  fs.mkdirSync(path.join(root, "z"), { recursive: true });
+  fs.writeFileSync(path.join(root, "a", "config.ts"), "export const config = 'a';\n", "utf8");
+  fs.writeFileSync(path.join(root, "z", "config.ts"), "export const config = 'z';\n", "utf8");
+  fs.writeFileSync(path.join(root, "src", "lines.ts"), Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n"), "utf8");
+  const { ctx } = context(root);
+
+  await readTool(ctx, { filePath: "z/config.ts", limit: 1 });
+  const ranked = await searchTool(ctx, { query: "config.ts", limit: 2 });
+  assert.equal(outputLines(ranked)[0], "z/config.ts: path");
+
+  const located = await readTool(ctx, { filePath: "src/lines.ts:10", limit: 3 });
+  assert.equal(located.title, "src/lines.ts");
+  assert.equal(located.output, "5: line 5\n6: line 6\n7: line 7");
 });
 
 test("commandTool blocks unsafe commands, asks permission for safe commands, and redacts emitted output", async () => {
@@ -383,8 +500,9 @@ test("toolSpecs keep small stable schemas for local model tool calling", () => {
   assert.deepEqual(plain(toolSpecs.map((spec) => spec.function.name)), ["read", "write", "edit", "search", "command"]);
   const readSpec = toolSpecs.find((spec) => spec.function.name === "read");
   const searchSpec = toolSpecs.find((spec) => spec.function.name === "search");
-  assert.match(readSpec.function.description, /known workspace file/i);
-  assert.match(readSpec.function.description, /subfolder inventories/i);
+  assert.match(readSpec.function.description, /workspace file/i);
+  assert.match(readSpec.function.description, /folder overviews/i);
+  assert.match(readSpec.function.description, /\/workspace/i);
   assert.equal(readSpec.function.parameters.properties.depth.type, "number");
   assert.match(searchSpec.function.description, /file paths and small text-file contents/i);
   assert.match(searchSpec.function.description, /before reading exact files/i);

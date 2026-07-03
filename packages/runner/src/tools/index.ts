@@ -53,7 +53,7 @@ export const toolSpecs: ModelToolSpec[] = [
     type: "function",
     function: {
       name: "read",
-      description: "Read a known workspace file, or list a known workspace directory. Use depth for nested folder/subfolder inventories.",
+      description: "Read a workspace file, or list a workspace directory. For folder overviews, read \".\" with depth 2 or 3 before reading individual files. /workspace/... aliases are accepted.",
       parameters: { type: "object", properties: { filePath: { type: "string" }, offset: { type: "number" }, limit: { type: "number" }, depth: { type: "number" } }, required: ["filePath"] },
     },
   },
