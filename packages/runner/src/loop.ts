@@ -1,8 +1,9 @@
-import { nowIso, type UmbraticRunnerEvent } from "./events.js";
+import { nowIso, type RunnerTurnSummary, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, ChatMessage, InputPart, Session } from "./session.js";
+import { compressToolResult } from "./context/contentRouter.js";
 import { redactText } from "./policy.js";
 import { enabledModelToolSpecs, runTool } from "./tools/index.js";
-import { toolFailureDetails, type ToolContext, type ToolResultStatus } from "./tools/common.js";
+import { toolFailureDetails, type ToolContext, type ToolErrorCode, type ToolResult, type ToolResultStatus } from "./tools/common.js";
 import { modelHttpRequest, readBodyText } from "./provider/http.js";
 import { configuredProviderEndpointUrl, isApprovedVeilChatUrl } from "./provider/local.js";
 
@@ -26,6 +27,8 @@ type ToolContextResult = {
   output: string;
   status: ToolResultStatus;
 };
+
+export type RunTurnSummary = RunnerTurnSummary;
 
 const maxToolContextBytes = 56 * 1024;
 const maxToolResultBytes = 24 * 1024;
@@ -134,6 +137,41 @@ function formatToolResultContent(result: ToolContextResult): string {
   const message = [`${result.call.name}: ${result.title || result.call.id} (${status})`, result.output].join("\n\n");
   if (Buffer.byteLength(message, "utf8") <= maxToolResultBytes) return message;
   return `${clipUtf8(message, maxToolResultBytes)}\n...[truncated: workspace tool result exceeded ${maxToolResultBytes} bytes]`;
+}
+
+function emptyRunTurnSummary(): RunTurnSummary {
+  return {
+    status: "completed",
+    turns: 0,
+    assistantTextChars: 0,
+    reasoningTextChars: 0,
+    toolCalls: 0,
+    failedToolCalls: 0,
+  };
+}
+
+function recordToolFailure(
+  summary: RunTurnSummary,
+  toolKind: string,
+  failure: { status: ToolResultStatus; errorCode?: ToolErrorCode; message: string },
+) {
+  summary.failedToolCalls += 1;
+  summary.lastToolFailure = {
+    toolKind,
+    status: failure.status,
+    ...(failure.errorCode ? { errorCode: failure.errorCode } : {}),
+    message: redactText(failure.message, 500),
+  };
+}
+
+function recordNonSuccessToolResult(summary: RunTurnSummary, toolKind: string, result: ToolResult) {
+  if (result.status === "success") return;
+  const firstOutputLine = result.output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  recordToolFailure(summary, toolKind, {
+    status: result.status,
+    errorCode: result.errorCode,
+    message: result.errorMessage || firstOutputLine || `${toolKind} returned ${result.status}.`,
+  });
 }
 
 function assistantToolMessage(content: string, toolCalls: ToolCall[]): ChatMessage {
@@ -418,7 +456,9 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
 }
 
 async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent) => void): Promise<StreamAccumulator> {
-  const tools = enabledModelToolSpecs(session.config.enabledTools);
+  const tools = enabledModelToolSpecs(session.config.enabledTools, {
+    includeContextRetrieval: session.contextStore.hasEntries(),
+  });
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -505,14 +545,19 @@ async function readOpenAIStream(
   return acc;
 }
 
-export async function runTurn(session: Session, parts: InputPart[], emit: (event: UmbraticRunnerEvent) => void, replyPermission: ToolContext["askPermission"]) {
+export async function runTurn(session: Session, parts: InputPart[], emit: (event: UmbraticRunnerEvent) => void, replyPermission: ToolContext["askPermission"]): Promise<RunTurnSummary> {
   const events = createRunnerEventCoalescer(emit);
+  const summary = emptyRunTurnSummary();
   try {
     session.messages.push({ role: "user", content: messageContentFromParts(parts) });
     for (let turn = 0; turn < 12; turn++) {
       const acc = await streamModel(session, events.emit);
+      summary.turns = turn + 1;
+      summary.assistantTextChars += acc.content.length;
+      summary.reasoningTextChars += acc.reasoning.length;
       events.flush();
       const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
+      summary.toolCalls += toolCalls.length;
       if (toolCalls.length === 0) {
         session.messages.push({ role: "assistant", content: acc.content || null });
         if (acc.reasoning && !acc.emittedReasoning) {
@@ -521,13 +566,14 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         if (acc.content && !acc.emittedContent) {
           events.emit({ type: "assistant.delta", taskId: session.taskId, text: acc.content, at: nowIso() });
         }
-        return;
+        return summary;
       }
       const ctx: ToolContext = {
         taskId: session.taskId,
         cwd: session.config.cwd,
         permissionMode: session.config.permissionMode,
         enabledTools: session.config.enabledTools,
+        contextStore: session.contextStore,
         askPermission: replyPermission,
         emitToolOutput(toolCallId, stream, text) {
           events.emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
@@ -543,9 +589,33 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
       for (const toolCall of toolCalls) {
         try {
           const result = await runTool(ctx, events.emit, toolCall);
-          toolResults.push({ call: toolCall, title: result.title, output: result.output, status: result.status });
+          const compressed = compressToolResult({
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            title: result.title,
+            output: result.output,
+            status: result.status,
+            contextStore: session.contextStore,
+          });
+          recordNonSuccessToolResult(summary, toolCall.name, result);
+          if (compressed.modified) {
+            events.emit({
+              type: "context.compressed",
+              taskId: session.taskId,
+              toolCallId: toolCall.id,
+              toolKind: toolCall.name,
+              kind: compressed.kind,
+              strategy: compressed.strategy,
+              ...(compressed.markerHash ? { hash: compressed.markerHash } : {}),
+              originalBytes: compressed.originalBytes,
+              outputBytes: compressed.outputBytes,
+              at: nowIso(),
+            });
+          }
+          toolResults.push({ call: toolCall, title: result.title, output: compressed.output, status: result.status });
         } catch (error) {
           const failure = toolFailureDetails(error);
+          recordToolFailure(summary, toolCall.name, failure);
           const message = redactText(`Tool failed: ${failure.message}`);
           events.emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
           toolResults.push({ call: toolCall, title: toolCall.name, output: message, status: failure.status });

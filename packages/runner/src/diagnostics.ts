@@ -118,6 +118,34 @@ function diagnosticRecordForEvent(
     };
   }
 
+  if (event.type === "context.compressed") {
+    return {
+      ...recordBase(event, "info"),
+      data: {
+        toolCallId: event.toolCallId,
+        toolKind: event.toolKind,
+        kind: event.kind,
+        strategy: event.strategy,
+        hash: event.hash,
+        originalBytes: event.originalBytes,
+        outputBytes: event.outputBytes,
+      },
+    };
+  }
+
+  if (event.type === "context.retrieved") {
+    return {
+      ...recordBase(event, "info"),
+      data: {
+        toolCallId: event.toolCallId,
+        hash: event.hash,
+        offset: event.offset,
+        bytesShown: event.bytesShown,
+        totalBytes: event.totalBytes,
+      },
+    };
+  }
+
   if (event.type === "permission.requested") {
     return {
       ...recordBase(event, "warn"),
@@ -144,6 +172,19 @@ function diagnosticRecordForEvent(
       ...recordBase(event, "info"),
       data: {
         sessionId: event.sessionId,
+        turns: event.summary?.turns,
+        assistantTextChars: event.summary?.assistantTextChars,
+        reasoningTextChars: event.summary?.reasoningTextChars,
+        toolCalls: event.summary?.toolCalls,
+        failedToolCalls: event.summary?.failedToolCalls,
+        lastToolFailure: event.summary?.lastToolFailure
+          ? {
+              toolKind: event.summary.lastToolFailure.toolKind,
+              status: event.summary.lastToolFailure.status,
+              errorCode: event.summary.lastToolFailure.errorCode,
+              message: redactText(event.summary.lastToolFailure.message, 500),
+            }
+          : undefined,
       },
     };
   }

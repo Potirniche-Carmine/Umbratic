@@ -9,6 +9,8 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.mjs";
 
 const loopPath = new URL("../src/loop.ts", import.meta.url).pathname;
 const serverPath = new URL("../src/server.ts", import.meta.url).pathname;
+const contextStorePath = new URL("../src/context/sessionContextStore.ts", import.meta.url).pathname;
+const diagnosticsPath = new URL("../src/diagnostics.ts", import.meta.url).pathname;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 function hasAdapterHostileSchemaShape(value) {
@@ -126,12 +128,14 @@ function runnerConfig(cwd, baseURL, overrides = {}) {
 }
 
 function session(cwd, baseURL, overrides = {}) {
+  const { SessionContextStore } = loadTypeScriptModule(contextStorePath, { cache: new Map() });
   return {
     id: "session-1",
     taskId: "task-1",
     config: runnerConfig(cwd, baseURL, overrides),
     messages: overrides.system ? [{ role: "system", content: overrides.system }] : [],
     abortController: new AbortController(),
+    contextStore: new SessionContextStore(),
   };
 }
 
@@ -264,7 +268,7 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
       runtimeProfiles: ["workspace-toolchain", "python"],
     });
 
-    await runTurn(activeSession, [{ type: "text", text: "Say hi" }], (event) => events.push(event), async () => "allow");
+    const summary = await runTurn(activeSession, [{ type: "text", text: "Say hi" }], (event) => events.push(event), async () => "allow");
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, "/api/engineering/chat");
@@ -273,6 +277,14 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["user"]);
     assert.equal(activeSession.messages.at(-1).content, "Hello");
     assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.delta", "assistant.reasoning.delta"]);
+    assert.deepEqual(plain(summary), {
+      status: "completed",
+      turns: 1,
+      assistantTextChars: 5,
+      reasoningTextChars: 8,
+      toolCalls: 0,
+      failedToolCalls: 0,
+    });
   });
 });
 
@@ -310,7 +322,7 @@ test("runTurn executes model tool calls and feeds real tool output into the next
     const events = [];
     const activeSession = session(root, baseURL, { enabledTools: ["read"] });
 
-    await runTurn(activeSession, [{ type: "text", text: "Read the notes" }], (event) => events.push(event), async () => "allow");
+    const summary = await runTurn(activeSession, [{ type: "text", text: "Read the notes" }], (event) => events.push(event), async () => "allow");
 
     assert.equal(requests.length, 2);
     assert.equal(requests[0].body.tool_choice, "auto");
@@ -335,6 +347,62 @@ test("runTurn executes model tool calls and feeds real tool output into the next
     assert.equal(finished.status, "success");
     assert.equal(finished.exitCode, 0);
     assert.equal(typeof finished.durationMs, "number");
+    assert.equal(summary.turns, 2);
+    assert.equal(summary.toolCalls, 1);
+    assert.equal(summary.failedToolCalls, 0);
+  });
+});
+
+test("runTurn compresses oversized tool output and exposes retrieve_context on the next request", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-context-loop-"));
+  fs.writeFileSync(
+    path.join(root, "BIG.md"),
+    Array.from({ length: 500 }, (_, index) => `line ${index + 1} ${"x".repeat(100)}`).join("\n"),
+    "utf8",
+  );
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (requests.length === 1) {
+      response.end(
+        sseData({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: "call-read-big",
+                function: {
+                  name: "read",
+                  arguments: JSON.stringify({ filePath: "BIG.md", limit: 500 }),
+                },
+              }],
+            },
+          }],
+        }) +
+          "data: [DONE]\n\n",
+      );
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Done after compacted read" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, { enabledTools: ["read"] });
+
+    await runTurn(activeSession, [{ type: "text", text: "Read the big file" }], (event) => events.push(event), async () => "allow");
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(plain(requests[0].body.tools.map((tool) => tool.function.name)), ["read"]);
+    assert.deepEqual(plain(requests[1].body.tools.map((tool) => tool.function.name)), ["read", "retrieve_context"]);
+    assert.match(requests[1].body.messages[2].content, /<<umbratic-context:/);
+    assert.match(requests[1].body.messages[2].content, /Use retrieve_context with hash/);
+    const compressed = events.find((event) => event.type === "context.compressed");
+    assert.equal(compressed.toolCallId, "call-read-big");
+    assert.equal(compressed.kind, "file");
+    assert.equal(compressed.strategy, "text_head_tail");
+    assert.equal(activeSession.contextStore.stats().entries, 1);
   });
 });
 
@@ -447,6 +515,53 @@ test("runTurn accumulates partial tool-call argument chunks by stable index", as
   });
 });
 
+test("runTurn summarizes failed tool calls for diagnostics", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-tool-failure-summary-"));
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (requests.length === 1) {
+      response.end(
+        sseData({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: "call-write-disabled",
+                function: {
+                  name: "write",
+                  arguments: JSON.stringify({ filePath: "out.md", content: "created" }),
+                },
+              }],
+            },
+          }],
+        }) +
+          "data: [DONE]\n\n",
+      );
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Reported the write failure" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, { enabledTools: ["read"] });
+
+    const summary = await runTurn(activeSession, [{ type: "text", text: "Write the file" }], (event) => events.push(event), async () => "allow");
+
+    assert.equal(requests.length, 2);
+    assert.equal(summary.turns, 2);
+    assert.equal(summary.toolCalls, 1);
+    assert.equal(summary.failedToolCalls, 1);
+    assert.equal(summary.lastToolFailure.toolKind, "write");
+    assert.equal(summary.lastToolFailure.status, "validation_error");
+    assert.equal(summary.lastToolFailure.errorCode, "tool_disabled");
+    assert.match(summary.lastToolFailure.message, /disabled/);
+    assert.match(events.find((event) => event.type === "tool.output" && event.stream === "stderr").text, /Tool failed/);
+  });
+});
+
 test("runner error events include sanitized failure details", () => {
   const { runnerErrorEvent } = loadTypeScriptModule(serverPath, { cache: new Map() });
   const event = runnerErrorEvent("task-1", new Error("model request failed: 500 Internal Server Error token=abcdefghijklmnop"));
@@ -455,6 +570,45 @@ test("runner error events include sanitized failure details", () => {
   assert.equal(event.code, "loop_error");
   assert.match(event.message, /Runner turn failed: model request failed: 500 Internal Server Error token=\[redacted\]/);
   assert.equal(event.detail, "model request failed: 500 Internal Server Error token=[redacted]");
+});
+
+test("diagnostics write session idle turn summaries with redacted tool failure details", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-idle-diagnostics-"));
+  const logPath = path.join(root, "runner.jsonl");
+  const { RunnerDiagnostics } = loadTypeScriptModule(diagnosticsPath, { cache: new Map() });
+  const diagnostics = new RunnerDiagnostics({ enabled: true, logPath, includeToolOutput: "stderr" }, { cwd: root, taskId: "task-1" });
+
+  diagnostics.record({
+    type: "session.idle",
+    taskId: "task-1",
+    sessionId: "session-1",
+    summary: {
+      status: "completed",
+      turns: 2,
+      assistantTextChars: 24,
+      reasoningTextChars: 0,
+      toolCalls: 1,
+      failedToolCalls: 1,
+      lastToolFailure: {
+        toolKind: "write",
+        status: "validation_error",
+        errorCode: "tool_disabled",
+        message: "Tool failed token=abcdefghijklmnopqrstuvwxyz",
+      },
+    },
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  await diagnostics.close();
+
+  const row = JSON.parse(fs.readFileSync(logPath, "utf8"));
+  assert.equal(row.eventType, "session.idle");
+  assert.equal(row.data.sessionId, "session-1");
+  assert.equal(row.data.turns, 2);
+  assert.equal(row.data.toolCalls, 1);
+  assert.equal(row.data.failedToolCalls, 1);
+  assert.equal(row.data.lastToolFailure.toolKind, "write");
+  assert.equal(row.data.lastToolFailure.errorCode, "tool_disabled");
+  assert.doesNotMatch(row.data.lastToolFailure.message, /abcdefghijklmnopqrstuvwxyz/);
 });
 
 test("runTurn compacts old structured tool history before model requests", async () => {

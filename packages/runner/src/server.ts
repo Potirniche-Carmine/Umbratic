@@ -234,8 +234,8 @@ export async function listen(opts: { hostname: string; port: number; password: s
         void runTurn(session, parts, (event) => store.emit(event), (input) =>
           store.permissions.request({ taskId: session.taskId, ...input }),
         )
-          .then(() => {
-            store.emit({ type: "session.idle", taskId: session.taskId, sessionId: session.id, at: nowIso() });
+          .then((summary) => {
+            store.emit({ type: "session.idle", taskId: session.taskId, sessionId: session.id, summary, at: nowIso() });
           })
           .catch((error) => {
             store.emit(runnerErrorEvent(session.taskId, error));

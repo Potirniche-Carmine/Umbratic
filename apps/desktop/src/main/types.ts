@@ -140,6 +140,25 @@ export type ToolErrorCode =
   | "missing_dependency"
   | "runtime_error";
 
+export type ContextContentKind =
+  | "search"
+  | "directory"
+  | "file"
+  | "command"
+  | "json"
+  | "log"
+  | "diff"
+  | "plain_text";
+
+export type ContextCompressionStrategy =
+  | "passthrough"
+  | "search_top_lines"
+  | "directory_grouped"
+  | "log_errors_tail"
+  | "json_array_sample"
+  | "text_head_tail"
+  | "tool_history_summary";
+
 export type RuntimeDiagnostics = {
   python: {
     profileVersion: string;
@@ -361,6 +380,26 @@ export type BackendUiEvent = BackendEventMeta &
       errorCode?: ToolErrorCode;
       errorMessage?: string;
       durationMs?: number;
+    }
+  | {
+      type: "context.compressed";
+      taskId: string;
+      toolCallId: string;
+      toolKind: string;
+      kind: ContextContentKind;
+      strategy: ContextCompressionStrategy;
+      hash?: string;
+      originalBytes: number;
+      outputBytes: number;
+    }
+  | {
+      type: "context.retrieved";
+      taskId: string;
+      toolCallId: string;
+      hash: string;
+      offset: number;
+      bytesShown: number;
+      totalBytes: number;
     }
   | { type: "permission.requested"; taskId: string; request: PermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }

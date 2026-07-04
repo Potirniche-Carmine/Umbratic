@@ -41,24 +41,31 @@ export function isFileChangingTool(toolKind: string): toolKind is RunnerToolId {
 }
 
 export function buildRequiredFileChangeRetryPrompt(input: {
+  originalUserRequest?: string;
   previousAssistantText: string;
   enabledTools: RunnerToolId[];
+  workspacePath?: string;
 }): string {
+  const originalUserRequest = input.originalUserRequest?.trim();
+  const previousAssistantText = input.previousAssistantText.trim();
+  const workspacePath = input.workspacePath?.trim();
   return [
-    "Harness check failed: the user asked for file changes, but your previous turn ended without any file-changing tool call.",
-    input.previousAssistantText ? `Your previous answer was:\n${input.previousAssistantText}` : "Your previous answer did not include a usable explanation.",
+    "Harness check failed: the user asked for file changes, but your previous turn ended without any file-changing tool call. Continue the original request; do not treat this retry prompt as a new standalone task.",
+    originalUserRequest ? `Original user request:\n${originalUserRequest}` : "Original user request was unavailable; use the prior conversation and any attached context.",
+    workspacePath ? `Workspace target directory: ${workspacePath}` : "",
+    previousAssistantText ? `Your previous answer was:\n${previousAssistantText}` : "Your previous answer did not include a usable explanation.",
     `Enabled tools for this run: ${input.enabledTools.join(", ") || "none"}.`,
     "Choose exactly one path now:",
-    "1. Create or modify the requested file by calling `write`, `edit`, or an approved workspace `command`, then reply briefly with the changed file path.",
-    "2. If you genuinely cannot create or modify the file, reply with `CANNOT_CREATE_FILE:` followed by the specific blocker. Do not claim the file was created.",
-  ].join(" ");
+    "1. Create or modify the requested file by calling `write`, `edit`, or an approved workspace `command`, then reply briefly with the changed file path. If your previous answer already contains the requested document, save that content into an appropriate file in the workspace.",
+    "2. Only if the original request is impossible to satisfy with the enabled tools, reply with exactly `CANNOT_CREATE_FILE:` followed by the specific blocker. Do not claim the file was created.",
+  ].filter(Boolean).join("\n\n");
 }
 
 export function cannotCreateFileBlocker(assistantText: string): string | null {
   const trimmed = assistantText.trim();
-  const prefix = "CANNOT_CREATE_FILE:";
-  if (!trimmed.startsWith(prefix)) return null;
-  return trimmed.slice(prefix.length).trim() || "The runner reported it could not create or modify files.";
+  const match = trimmed.match(/^CANNOT[_\s-]?CREATE[_\s-]?FILE\s*:\s*(.*)$/i);
+  if (!match) return null;
+  return match[1].trim() || "The runner reported it could not create or modify files.";
 }
 
 export function noReviewFailureSummary(input: {

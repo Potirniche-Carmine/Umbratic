@@ -25,19 +25,26 @@ test("file-change contract only accepts tools that can modify the workspace", ()
 
 test("retry prompt gives the model one explicit correction path and one explicit blocker path", () => {
   const prompt = contract.buildRequiredFileChangeRetryPrompt({
+    originalUserRequest: "Create docs/language-comparison.md with tables.",
     previousAssistantText: "I created src/app.ts.",
     enabledTools: ["read", "edit", "command"],
+    workspacePath: "C:/repo",
   });
 
   assert.match(prompt, /Harness check failed/);
+  assert.match(prompt, /Continue the original request/);
+  assert.match(prompt, /Create docs\/language-comparison\.md with tables/);
+  assert.match(prompt, /Workspace target directory: C:\/repo/);
   assert.match(prompt, /I created src\/app\.ts/);
   assert.match(prompt, /Enabled tools for this run: read, edit, command/);
   assert.match(prompt, /calling `write`, `edit`, or an approved workspace `command`/);
+  assert.match(prompt, /save that content into an appropriate file/);
   assert.match(prompt, /CANNOT_CREATE_FILE:/);
 });
 
 test("contract turns model-reported blockers and missing review diffs into concrete failure reasons", () => {
   assert.equal(contract.cannotCreateFileBlocker("CANNOT_CREATE_FILE: write tool is disabled"), "write tool is disabled");
+  assert.equal(contract.cannotCreateFileBlocker("CANNOTCREATEFILE: no target path was provided"), "no target path was provided");
   assert.equal(contract.cannotCreateFileBlocker("I cannot create that file."), null);
 
   assert.deepEqual(plain(contract.noReviewFailureSummary({ toolRequested: false, toolSucceeded: false })), {

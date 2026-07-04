@@ -125,6 +125,8 @@ import type {
   CommandClass,
   CommandOutput,
   CommandResult,
+  ContextCompressionStrategy,
+  ContextContentKind,
   FileSearchResult,
   HarnessProfileId,
   IdeInfo,
@@ -1527,6 +1529,9 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
       return `Required tool failed: ${event.requirement} (${event.reason}${event.detail ? `: ${compactHistoryText(event.detail, 300)}` : ""})`;
     case "task.error":
       return `Task error: ${compactHistoryText(event.message, 900)}`;
+    case "context.compressed":
+    case "context.retrieved":
+      return null;
     case "assistant.done":
     case "assistant.reasoning.delta":
     case "response.feedback":
@@ -1735,6 +1740,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
             workspaceContextVerificationPrompt,
             "For high-level orientation, the provided workspace preview and key files are useful context. When accuracy or completeness matters, inspect the relevant files or directories with tools before answering.",
           ].join("\n"),
+      "When a tool result contains an umbratic-context marker, use retrieve_context only if exact omitted output is necessary. Do not retrieve just to restate output.",
       "Do not start visible thinking or the final answer by listing available tools, enabled tools, runtime profiles, or capability probes. Treat that context as understood; mention a tool or capability only when it directly affects an action, skill choice, verification result, or blocker.",
       "If the user asks you to create, write, edit, update, or otherwise change a file, you must call a workspace file-changing tool before saying the file was created or changed.",
       "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
@@ -3097,6 +3103,7 @@ async function runRunnerTask(
       return;
     }
     const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
+    const workspacePathForRun = task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
     const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
     activeRunnerProcesses.set(task.id, run);
@@ -3306,6 +3313,47 @@ async function runRunnerTask(
         return;
       }
 
+      if (type === "context.compressed") {
+        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
+        const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
+        const kind = (typeof event.kind === "string" ? event.kind : "plain_text") as ContextContentKind;
+        const strategy = (typeof event.strategy === "string" ? event.strategy : "passthrough") as ContextCompressionStrategy;
+        const originalBytes = typeof event.originalBytes === "number" && Number.isFinite(event.originalBytes) ? event.originalBytes : 0;
+        const outputBytes = typeof event.outputBytes === "number" && Number.isFinite(event.outputBytes) ? event.outputBytes : 0;
+        emit({
+          type: "context.compressed",
+          taskId: task.id,
+          toolCallId,
+          toolKind,
+          kind,
+          strategy,
+          ...(typeof event.hash === "string" ? { hash: event.hash } : {}),
+          originalBytes,
+          outputBytes,
+          at: eventAt(event),
+        });
+        return;
+      }
+
+      if (type === "context.retrieved") {
+        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
+        const hash = typeof event.hash === "string" ? event.hash : "";
+        const offset = typeof event.offset === "number" && Number.isFinite(event.offset) ? event.offset : 0;
+        const bytesShown = typeof event.bytesShown === "number" && Number.isFinite(event.bytesShown) ? event.bytesShown : 0;
+        const totalBytes = typeof event.totalBytes === "number" && Number.isFinite(event.totalBytes) ? event.totalBytes : 0;
+        emit({
+          type: "context.retrieved",
+          taskId: task.id,
+          toolCallId,
+          hash,
+          offset,
+          bytesShown,
+          totalBytes,
+          at: eventAt(event),
+        });
+        return;
+      }
+
       if (type === "permission.requested") {
         const permission = {
           id: typeof event.permissionId === "string" ? event.permissionId : "",
@@ -3386,8 +3434,10 @@ async function runRunnerTask(
             {
               type: "text",
               text: buildRequiredFileChangeRetryPrompt({
+                originalUserRequest: compactHistoryText(intent, 1800),
                 previousAssistantText,
                 enabledTools: enabledToolsForRun,
+                workspacePath: workspacePathForRun,
               }),
             },
           ],

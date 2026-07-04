@@ -89,6 +89,16 @@ function telemetryEventSummary(events: BackendUiEvent[]) {
       ready: 0,
       changedSinceReady: 0,
     },
+    context: {
+      compressed: 0,
+      retrieved: 0,
+      originalBytes: 0,
+      outputBytes: 0,
+      bytesSaved: 0,
+      retrievedBytes: 0,
+      byKind: {} as Record<string, number>,
+      byStrategy: {} as Record<string, number>,
+    },
     requiredToolFailures: {} as Record<string, number>,
     feedback: {
       good: 0,
@@ -145,6 +155,20 @@ function telemetryEventSummary(events: BackendUiEvent[]) {
     }
     if (event.type === "review.changed_since_ready") {
       summary.reviews.changedSinceReady += 1;
+      continue;
+    }
+    if (event.type === "context.compressed") {
+      summary.context.compressed += 1;
+      summary.context.originalBytes += event.originalBytes;
+      summary.context.outputBytes += event.outputBytes;
+      summary.context.bytesSaved += Math.max(0, event.originalBytes - event.outputBytes);
+      increment(summary.context.byKind, event.kind);
+      increment(summary.context.byStrategy, event.strategy);
+      continue;
+    }
+    if (event.type === "context.retrieved") {
+      summary.context.retrieved += 1;
+      summary.context.retrievedBytes += event.bytesShown;
       continue;
     }
     if (event.type === "required_tool.failed") {

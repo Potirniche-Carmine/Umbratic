@@ -1,4 +1,12 @@
-import type { CommandClass, LocalModelInfo, TaskRecord, ToolErrorCode, ToolResultStatus } from "./types";
+import type {
+  CommandClass,
+  ContextCompressionStrategy,
+  ContextContentKind,
+  LocalModelInfo,
+  TaskRecord,
+  ToolErrorCode,
+  ToolResultStatus,
+} from "./types";
 
 type ToolPolicyStage =
   | "normalize_tool_call"
@@ -9,6 +17,21 @@ type ToolPolicyStage =
   | "execute_backend"
   | "redact_and_summarize_output"
   | "emit_audit_telemetry";
+
+type RunnerTurnSummary = {
+  status: "completed";
+  turns: number;
+  assistantTextChars: number;
+  reasoningTextChars: number;
+  toolCalls: number;
+  failedToolCalls: number;
+  lastToolFailure?: {
+    toolKind: string;
+    status: ToolResultStatus;
+    errorCode?: ToolErrorCode;
+    message: string;
+  };
+};
 
 export type RunnerHandle = {
   taskId: string;
@@ -61,6 +84,28 @@ export type UmbraticRunnerEvent =
       at: string;
     }
   | {
+      type: "context.compressed";
+      taskId: string;
+      toolCallId: string;
+      toolKind: string;
+      kind: ContextContentKind;
+      strategy: ContextCompressionStrategy;
+      hash?: string;
+      originalBytes: number;
+      outputBytes: number;
+      at: string;
+    }
+  | {
+      type: "context.retrieved";
+      taskId: string;
+      toolCallId: string;
+      hash: string;
+      offset: number;
+      bytesShown: number;
+      totalBytes: number;
+      at: string;
+    }
+  | {
       type: "permission.requested";
       taskId: string;
       permissionId: string;
@@ -75,7 +120,7 @@ export type UmbraticRunnerEvent =
       decision: "allow" | "deny";
       at: string;
     }
-  | { type: "session.idle"; taskId: string; sessionId: string; at: string }
+  | { type: "session.idle"; taskId: string; sessionId: string; summary?: RunnerTurnSummary; at: string }
   | { type: "runner.error"; taskId: string; category: string; code?: string; message: string; detail?: string; at: string };
 
 export interface UmbraticRunner {

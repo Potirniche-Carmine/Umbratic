@@ -168,6 +168,28 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
             at: "2026-01-01T00:00:04.000Z",
           },
           {
+            type: "context.compressed",
+            taskId: "task-1",
+            toolCallId: "cmd-1",
+            toolKind: "command",
+            kind: "log",
+            strategy: "log_errors_tail",
+            hash: "abcdef1234567890",
+            originalBytes: 48000,
+            outputBytes: 9000,
+            at: "2026-01-01T00:00:04.100Z",
+          },
+          {
+            type: "context.retrieved",
+            taskId: "task-1",
+            toolCallId: "cmd-2",
+            hash: "abcdef1234567890",
+            offset: 0,
+            bytesShown: 12000,
+            totalBytes: 48000,
+            at: "2026-01-01T00:00:04.200Z",
+          },
+          {
             type: "required_tool.failed",
             taskId: "task-1",
             requirement: "file_change",
@@ -245,7 +267,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
     byStatus: { missing: 1 },
     byImportance: { optional: 1 },
   });
-  assert.equal(task.activity.eventCount, 8);
+  assert.equal(task.activity.eventCount, 10);
   assert.equal(task.activity.messages.user, 1);
   assert.equal(task.activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
   assert.equal(task.activity.messages.assistantChars, "Here is the full answer".length);
@@ -257,6 +279,14 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.equal(task.activity.commands.durationMs, 42);
   assert.equal(task.activity.commands.byClass.shell, 1);
   assert.equal(task.activity.commands.errors.command_exit_nonzero, 1);
+  assert.equal(task.activity.context.compressed, 1);
+  assert.equal(task.activity.context.retrieved, 1);
+  assert.equal(task.activity.context.originalBytes, 48000);
+  assert.equal(task.activity.context.outputBytes, 9000);
+  assert.equal(task.activity.context.bytesSaved, 39000);
+  assert.equal(task.activity.context.retrievedBytes, 12000);
+  assert.equal(task.activity.context.byKind.log, 1);
+  assert.equal(task.activity.context.byStrategy.log_errors_tail, 1);
   assert.equal(task.activity.requiredToolFailures.attempted_tool_failed, 1);
 });
 

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { RunnerDiagnostics } from "./diagnostics.js";
 import { loadRunnerConfig, type RunnerConfig } from "./config.js";
+import { SessionContextStore } from "./context/sessionContextStore.js";
 import type { UmbraticRunnerEvent } from "./events.js";
 import { PermissionBroker } from "./permission.js";
 
@@ -26,6 +27,7 @@ export type Session = {
   config: RunnerConfig;
   messages: ChatMessage[];
   abortController: AbortController;
+  contextStore: SessionContextStore;
 };
 
 export class SessionStore {
@@ -43,6 +45,7 @@ export class SessionStore {
       config: this.config,
       messages: this.config.system ? [{ role: "system", content: this.config.system }] : [],
       abortController: new AbortController(),
+      contextStore: new SessionContextStore(),
     };
     this.sessions.set(id, session);
     return session;

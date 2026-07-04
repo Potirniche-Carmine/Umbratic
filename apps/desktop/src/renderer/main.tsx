@@ -2978,14 +2978,16 @@ export function filterSkillsBySource(skills: SkillInfo[], filter: SkillSourceFil
   return skills.filter((skill) => skill.source === filter);
 }
 
-function skillGovernanceLabel(skill: SkillInfo): string {
-  const source = skill.source === "system" ? "System" : "Personal";
-  const state =
-    skill.checksumStatus === "modified" || skill.modified ? "Modified" :
-    skill.checksumStatus === "known_good" ? "Verified" :
-    "Untracked";
-  const hash = skill.checksum?.startsWith("sha256:") ? skill.checksum.slice("sha256:".length, "sha256:".length + 8) : "";
-  return [source, state, hash ? `sha256:${hash}` : ""].filter(Boolean).join(" · ");
+export function skillGovernanceLabel(skill: SkillInfo): string {
+  if (skill.checksumStatus === "modified" || skill.modified) return "Modified";
+  if (skill.checksumStatus === "untracked") return "Untracked";
+  return "";
+}
+
+function SkillGovernance({ skill }: { skill: SkillInfo }) {
+  const label = skillGovernanceLabel(skill);
+  if (!label) return null;
+  return <span className={`skillGovernance ${skill.modified ? "isModified" : ""}`}>{label}</span>;
 }
 
 function ReviewSummaryCard({
@@ -6925,9 +6927,7 @@ function App() {
                                   <div className="skillRowText">
                                     <strong>{skill.name}</strong>
                                     <em>{skill.description || skillMention(skill)}</em>
-                                    <span className={`skillGovernance ${skill.modified ? "isModified" : ""}`}>
-                                      {skillGovernanceLabel(skill)}
-                                    </span>
+                                    <SkillGovernance skill={skill} />
                                   </div>
                                 </button>
                                 <button

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBlockedPath, isGeneratedRuntimePath } from "../policy.js";
 import type { RunnerToolName } from "../config.js";
+import type { SessionContextStore } from "../context/sessionContextStore.js";
 
 export type ToolResultStatus =
   | "success"
@@ -42,6 +43,7 @@ export type ToolContext = {
   cwd: string;
   permissionMode: "normal" | "bypass";
   enabledTools: readonly RunnerToolName[];
+  contextStore?: SessionContextStore;
   askPermission(input: { permissionKind: string; summary: string; autoAllow: boolean }): Promise<"allow" | "deny">;
   emitToolOutput(toolCallId: string, stream: "stdout" | "stderr", text: string): void;
 };

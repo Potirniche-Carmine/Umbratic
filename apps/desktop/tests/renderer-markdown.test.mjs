@@ -117,7 +117,7 @@ test("inline references render review buttons only for unambiguous review files"
 });
 
 test("skill previews render markdown content and source filters split system from personal skills", () => {
-  const { filterSkillsBySource, skillPreviewMarkdown } = loadRenderer();
+  const { filterSkillsBySource, skillGovernanceLabel, skillPreviewMarkdown } = loadRenderer();
   const skillFile = [
     "---",
     "name: Marketing",
@@ -140,6 +140,14 @@ test("skill previews render markdown content and source filters split system fro
   ];
   assert.deepEqual(filterSkillsBySource(skills, "system").map((skill) => skill.id), ["umbratic-marketing"]);
   assert.deepEqual(filterSkillsBySource(skills, "local").map((skill) => skill.id), ["personal-style"]);
+  assert.equal(
+    skillGovernanceLabel({ id: "umbratic-marketing", name: "Marketing", description: "", enabled: true, source: "system", checksumStatus: "known_good", checksum: "sha256:1a81a685cafebabe" }),
+    "",
+  );
+  assert.equal(
+    skillGovernanceLabel({ id: "umbratic-marketing", name: "Marketing", description: "", enabled: true, source: "system", checksumStatus: "modified", modified: true }),
+    "Modified",
+  );
 });
 
 test("diff parsing, command aggregation, pending permissions, and timelines reflect real event streams", () => {

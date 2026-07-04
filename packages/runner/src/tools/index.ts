@@ -7,6 +7,7 @@ import { searchTool } from "./search.js";
 import { writeTool } from "./write.js";
 import { toolError, toolFailureDetails, type ToolContext, type ToolResult } from "./common.js";
 import { isRunnerToolName, type RunnerToolName } from "../config.js";
+import type { RetrievedContextWindow } from "../context/sessionContextStore.js";
 
 function quoteToolArg(value: string): string {
   return /\s|["']/.test(value) ? JSON.stringify(value) : value;
@@ -25,6 +26,12 @@ function toolInvocationSummary(name: string, input: Record<string, unknown>): st
     const limit = typeof input.limit === "number" ? ` --limit ${Math.floor(input.limit)}` : "";
     return `search ${query}${limit}`.trim();
   }
+  if (name === "retrieve_context") {
+    const hash = typeof input.hash === "string" ? input.hash : "";
+    const offset = typeof input.offset === "number" ? ` --offset ${Math.floor(input.offset)}` : "";
+    const limit = typeof input.limit === "number" ? ` --limit ${Math.floor(input.limit)}` : "";
+    return `retrieve_context ${quoteToolArg(hash)}${offset}${limit}`.trim();
+  }
   if (name === "write" || name === "edit") {
     const filePath = typeof input.filePath === "string" ? input.filePath : "";
     if (name === "edit" && input.mode === "patch") return "edit patch";
@@ -34,6 +41,7 @@ function toolInvocationSummary(name: string, input: Record<string, unknown>): st
 }
 
 function toolCommandClass(name: string): ReturnType<typeof classifyCommandText>["commandClass"] {
+  if (name === "retrieve_context") return "read";
   if (name === "read" || name === "search") return "read";
   if (name === "write" || name === "edit") return "edit";
   return "unknown";
@@ -101,6 +109,27 @@ export const toolSpecs: ModelToolSpec[] = [
   },
 ];
 
+function internalToolSpecs(): ModelToolSpec[] {
+  return [
+    {
+      type: "function",
+      function: {
+        name: "retrieve_context",
+        description: "Retrieve a bounded window of exact local tool output previously compacted behind an umbratic-context marker. Use only when exact omitted output is necessary.",
+        parameters: {
+          type: "object",
+          properties: {
+            hash: { type: "string" },
+            offset: { type: "number" },
+            limit: { type: "number" },
+          },
+          required: ["hash"],
+        },
+      },
+    },
+  ];
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -167,8 +196,15 @@ export function enabledToolSpecs(enabledTools: readonly RunnerToolName[]) {
   return toolSpecs.filter((spec) => enabled.has(spec.function.name as RunnerToolName));
 }
 
-export function enabledModelToolSpecs(enabledTools: readonly RunnerToolName[]) {
-  return enabledToolSpecs(enabledTools).map((spec) => normalizeModelToolSpec(spec));
+export function enabledModelToolSpecs(
+  enabledTools: readonly RunnerToolName[],
+  options: { includeContextRetrieval?: boolean } = {},
+) {
+  const specs = [
+    ...enabledToolSpecs(enabledTools),
+    ...(options.includeContextRetrieval ? internalToolSpecs() : []),
+  ];
+  return specs.map((spec) => normalizeModelToolSpec(spec));
 }
 
 export function schemaHasAdapterHostileShapes(value: unknown): boolean {
@@ -205,6 +241,57 @@ function parseArguments(value: unknown): Record<string, unknown> {
     throw toolError("validation_error", "invalid_arguments", "Tool arguments must decode to a JSON object.");
   }
   return parsed as Record<string, unknown>;
+}
+
+function numberArgument(input: Record<string, unknown>, key: string): number | undefined {
+  const value = input[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function retrievalOutput(window: RetrievedContextWindow): string {
+  const endOffset = window.offset + window.bytesShown;
+  const lines = [
+    `Retrieved context ${window.entry.hash}`,
+    `Kind: ${window.entry.kind}`,
+    `Strategy: ${window.entry.strategy}`,
+    `Bytes shown: ${window.offset}-${endOffset} of ${window.entry.originalBytes}`,
+    ...(window.entry.originalTruncated ? [`Stored bytes: ${window.totalBytes}; original exceeded the per-session storage cap.`] : []),
+    ...(window.nextOffset !== undefined ? [`Next offset: ${window.nextOffset}`] : []),
+    "",
+    window.content,
+  ];
+  return lines.join("\n");
+}
+
+function retrieveContextTool(ctx: ToolContext, input: Record<string, unknown>, toolCallId: string, emit: (event: UmbraticRunnerEvent) => void): ToolResult {
+  const hash = typeof input.hash === "string" ? input.hash.trim() : "";
+  if (!hash) throw toolError("validation_error", "invalid_arguments", "retrieve_context requires hash");
+  if (!ctx.contextStore) {
+    throw toolError("validation_error", "invalid_arguments", "No session context store is available.");
+  }
+  const window = ctx.contextStore.retrieve(hash, {
+    offset: numberArgument(input, "offset"),
+    limit: numberArgument(input, "limit"),
+  });
+  if (!window) {
+    throw toolError("validation_error", "invalid_arguments", `No stored context found for hash ${hash}.`);
+  }
+  emit({
+    type: "context.retrieved",
+    taskId: ctx.taskId,
+    toolCallId,
+    hash: window.entry.hash,
+    offset: window.offset,
+    bytesShown: window.bytesShown,
+    totalBytes: window.entry.originalBytes,
+    at: nowIso(),
+  });
+  return {
+    title: hash,
+    output: retrievalOutput(window),
+    status: "success",
+    exitCode: 0,
+  };
 }
 
 export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEvent) => void, toolCall: { id: string; name: string; arguments: unknown }): Promise<ToolResult> {
@@ -284,6 +371,17 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
 
   try {
     if (argumentError) throw argumentError;
+    if (toolCall.name === "retrieve_context") {
+      emitStage("apply_static_deny_rules", "passed", "internal context retrieval");
+      emitStage("request_permission", "skipped", "internal read-only context retrieval");
+      emitStage("execute_backend", "started");
+      const result = retrieveContextTool(ctx, input, toolCall.id, emit);
+      emitStage("execute_backend", "passed");
+      emitStage("redact_and_summarize_output", "passed", result.title);
+      finish(result);
+      emitStage("emit_audit_telemetry", "passed", result.status);
+      return result;
+    }
     if (!isRunnerToolName(toolCall.name)) {
       emitStage("apply_static_deny_rules", "blocked", `Unknown tool: ${toolCall.name}`, "unknown_tool");
       throw toolError("validation_error", "unknown_tool", `Unknown tool: ${toolCall.name}`);
