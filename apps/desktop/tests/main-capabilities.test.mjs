@@ -84,6 +84,7 @@ test("probeLocalCapabilities records command, package, and Python package capabi
   assert.equal(byId.get("node-docx").status, "available");
   assert.equal(byId.get("node-pptx").status, "missing");
   assert.equal(byId.get("pdftoppm").status, "missing");
+  assert.equal(byId.get("tesseract").status, "missing");
   assert.equal(byId.get("pdfinfo").status, "available");
   assert.equal(report.summary.requiredMissing, 0);
   assert.ok(report.summary.recommendedMissing >= 1);
@@ -103,6 +104,7 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
     python: true,
     cmake: true,
     artifacts: true,
+    ocr: true,
   });
   assert.match(promptGuidance, /do not recite or summarize tool availability/);
   assert.match(promptGuidance, /if the text search helper is missing, search still works/);
@@ -110,6 +112,7 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
   assert.match(promptGuidance, /C\/C\+\+ build verification is unavailable/);
   assert.match(promptGuidance, /do not claim visual QA for generated artifacts/);
   assert.match(promptGuidance, /JS artifact authoring packages missing: node-pptx, node-xlsx/);
+  assert.match(promptGuidance, /local OCR digest generation is unavailable/);
 
   const skillGuidance = capabilities.harnessSkillCapabilityGuidance(report);
   assert.match(skillGuidance["umbratic-git-worktree"], /Git command: available/);
@@ -129,7 +132,7 @@ test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabil
     resolvePackage,
   });
 
-  const snapshot = capabilities.capabilityTelemetrySnapshot(report, { python: true, artifacts: true });
+  const snapshot = capabilities.capabilityTelemetrySnapshot(report, { python: true, artifacts: true, ocr: true });
   const serialized = JSON.stringify(snapshot);
   assert.doesNotMatch(serialized, /executablePath/);
   assert.doesNotMatch(serialized, /\/private\/app\/node/);
@@ -145,5 +148,6 @@ test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabil
   });
   assert.equal(byId.get("python").versionFamily, "3.12");
   assert.equal(byId.get("pdftoppm").affectedCurrentRun, true);
+  assert.equal(byId.get("tesseract").affectedCurrentRun, true);
   assert.equal(byId.get("node-runtime").versionFamily, "22.0");
 });

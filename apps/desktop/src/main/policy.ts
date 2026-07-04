@@ -399,7 +399,7 @@ export function runtimeDiagnostics(): RuntimeDiagnostics {
     },
     toolchain: {
       bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
-      optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend"],
+      optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend", "tesseract"],
     },
     shell: {
       platform: process.platform,

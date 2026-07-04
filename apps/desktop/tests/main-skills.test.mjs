@@ -115,6 +115,7 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
 
   const systemSkills = listing.skills.filter((skill) => skill.source === "system");
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-markdown" && skill.name === "Markdown" && !skill.readOnly && skill.enabled), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-ocr" && skill.name === "OCR"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-git-worktree" && skill.name === "Git Worktree"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
@@ -226,6 +227,7 @@ test("systemSkillsForProfile exposes system skill metadata and full instructions
   const marketing = skills.systemSkillsForProfile("marketing", "Create a PowerPoint launch deck and PDF one-pager.");
   assert.deepEqual(plain(marketing.map((skill) => skill.id)), [
     "umbratic-markdown",
+    "umbratic-ocr",
     "umbratic-pdf",
     "umbratic-presentations",
     "umbratic-documents",
@@ -233,6 +235,7 @@ test("systemSkillsForProfile exposes system skill metadata and full instructions
   ]);
   assert.deepEqual(plain(marketing.map((skill) => ({ id: skill.id, source: skill.source, fullContent: skill.fullContent, reason: skill.reason }))), [
     { id: "umbratic-markdown", source: "system", fullContent: false, reason: "metadata" },
+    { id: "umbratic-ocr", source: "system", fullContent: false, reason: "metadata" },
     { id: "umbratic-pdf", source: "system", fullContent: true, reason: "strong_match" },
     { id: "umbratic-presentations", source: "system", fullContent: true, reason: "strong_match" },
     { id: "umbratic-documents", source: "system", fullContent: false, reason: "metadata" },
@@ -243,6 +246,7 @@ test("systemSkillsForProfile exposes system skill metadata and full instructions
   assert.deepEqual(plain(engineering.map((skill) => ({ id: skill.id, fullContent: skill.fullContent, reason: skill.reason }))), [
     { id: "umbratic-git-worktree", fullContent: false, reason: "metadata" },
     { id: "umbratic-markdown", fullContent: false, reason: "metadata" },
+    { id: "umbratic-ocr", fullContent: false, reason: "metadata" },
   ]);
   assert.equal(engineering.some((skill) => skill.id === "umbratic-presentations"), false);
   assert.equal(engineering.some((skill) => skill.id === "umbratic-spreadsheets"), false);
@@ -250,6 +254,10 @@ test("systemSkillsForProfile exposes system skill metadata and full instructions
   const worktree = skills.systemSkillsForProfile("engineering", "workspace mode: git worktree isolated workspace");
   assert.equal(worktree.find((skill) => skill.id === "umbratic-git-worktree").fullContent, true);
   assert.equal(worktree.find((skill) => skill.id === "umbratic-git-worktree").reason, "strong_match");
+
+  const ocr = skills.systemSkillsForProfile("engineering", "Extract text from this screenshot.");
+  assert.equal(ocr.find((skill) => skill.id === "umbratic-ocr").fullContent, true);
+  assert.equal(ocr.find((skill) => skill.id === "umbratic-ocr").reason, "strong_match");
 
   const salesMarkdown = skills.systemSkillsForProfile("sales", "Write a Markdown table for this proposal.");
   assert.equal(salesMarkdown.some((skill) => skill.id === "umbratic-markdown"), true);

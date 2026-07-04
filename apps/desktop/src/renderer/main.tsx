@@ -1088,6 +1088,17 @@ function previewCapabilityReport(): CapabilityProbeReport {
       workflows: ["PDF artifact", "visual QA"],
       checkedAt,
     },
+    {
+      id: "tesseract",
+      label: "Tesseract OCR",
+      category: "optional-artifacts",
+      importance: "optional",
+      status: "unknown",
+      purpose: "Runs local OCR for image and scanned-PDF attachment digests.",
+      installHint: "Open the Electron app to run local command probes.",
+      workflows: ["OCR artifact", "image attachment", "scanned PDF"],
+      checkedAt,
+    },
   ];
   const summary = probes.reduce<CapabilityProbeReport["summary"]>(
     (total, probe) => {

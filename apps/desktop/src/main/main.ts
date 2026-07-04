@@ -35,7 +35,8 @@ import {
   probeLocalCapabilities,
   type CapabilityPromptNeeds,
 } from "./capabilities";
-import { artifactRuntimePromptGuidance, promptLooksLikeArtifactTask } from "./artifactRuntime";
+import { artifactRuntimePromptGuidance, promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
+import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
   runnerRequest,
@@ -174,6 +175,7 @@ const pdfAttachmentByteLimit = 25 * 1024 * 1024;
 const pdfImagePageLimit = 12;
 const pdfImageScale = 1.4;
 const pdfRenderTimeoutMs = 30000;
+const ocrDigestPromptByteLimit = 12000;
 const binarySnapshotPrefix = "__UMBRATIC_BINARY_FILE__:";
 const windowChromeDark = "#15161a";
 const windowChromeLight = "#ffffff";
@@ -1084,6 +1086,27 @@ function imageMimeType(filePath: string): string | null {
   }
 }
 
+function ocrInputKindForPath(filePath: string): OcrInputKind | null {
+  if (isPdfFile(filePath)) return "pdf";
+  return imageMimeType(filePath) ? "image" : null;
+}
+
+function attachmentPathHint(file: ChatAttachment): string {
+  if (file.source === "chat" && typeof file.storedPath === "string" && file.storedPath.trim()) {
+    return file.storedPath;
+  }
+  return file.path || file.name;
+}
+
+function ocrInputKindsForAttachments(attachments: ChatAttachment[]): OcrInputKind[] {
+  const kinds = new Set<OcrInputKind>();
+  for (const file of attachments) {
+    const kind = ocrInputKindForPath(attachmentPathHint(file));
+    if (kind) kinds.add(kind);
+  }
+  return [...kinds];
+}
+
 function imageDataUrlIfSafe(filePath: string): string | null {
   try {
     const stat = fs.statSync(filePath);
@@ -1226,6 +1249,106 @@ async function pdfAttachmentImageParts(filePath: string): Promise<{ pageCount: n
     return { pageCount: result.pageCount, rendered: pages.length, parts };
   } catch {
     return null;
+  } finally {
+    if (outputDir) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  }
+}
+
+type OcrAttachmentArtifactResult =
+  | {
+      status: "created";
+      jsonPath: string;
+      markdownPath: string;
+      markdown: string;
+      document: OcrDocument;
+    }
+  | { status: "missing" | "failed"; message: string };
+
+function ocrArtifactOutputDirectory(rootPath: string): string {
+  return path.join(rootPath, ".umbratic", "artifacts", "ocr");
+}
+
+function ocrArtifactBaseName(label: string, document: OcrDocument, fallback: string): string {
+  const stem = slugify(path.basename(label, path.extname(label)) || label);
+  const sourceHash = document.source.sha256?.replace(/^sha256:/, "").slice(0, 12) || shortHash(fallback);
+  return `${stem}-${sourceHash}`;
+}
+
+function ocrPromptDigest(markdown: string): string {
+  if (Buffer.byteLength(markdown, "utf8") <= ocrDigestPromptByteLimit) return markdown.trim();
+  const buffer = Buffer.from(markdown, "utf8").subarray(0, ocrDigestPromptByteLimit);
+  return `${buffer.toString("utf8").trimEnd()}\n\n...(OCR digest truncated for prompt size; full OCR artifact is saved locally)`;
+}
+
+function relativeArtifactPath(rootPath: string, artifactPath: string): string {
+  const resolved = path.resolve(artifactPath);
+  return pathInside(rootPath, resolved) ? normalizeRelativePath(path.relative(rootPath, resolved)) : path.basename(resolved);
+}
+
+async function ocrAttachmentArtifact(
+  rootPath: string,
+  label: string,
+  sourcePath: string,
+  kind: OcrInputKind,
+  capabilityReport: CapabilityProbeReport,
+): Promise<OcrAttachmentArtifactResult> {
+  const engineProbe = capabilityReport.probes.find((probe) => probe.id === "tesseract");
+  if (engineProbe?.status !== "available") {
+    return { status: "missing", message: "Local OCR engine is unavailable; no OCR artifact was generated." };
+  }
+
+  let outputDir: string | null = null;
+  try {
+    const pages: OcrPageInput[] = [];
+    let sourcePageCount: number | undefined;
+    if (kind === "pdf") {
+      outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-ocr-pdf-"));
+      const rendered = await renderPdfAttachmentInWorker(sourcePath, outputDir);
+      if (!rendered?.ok) {
+        return { status: "failed", message: "PDF pages could not be rendered for local OCR." };
+      }
+      sourcePageCount = rendered.pageCount;
+      for (const page of rendered.pages.slice().sort((left, right) => left.pageNumber - right.pageNumber)) {
+        const pagePath = path.resolve(page.filePath);
+        if (!pathInside(outputDir, pagePath) || !fs.existsSync(pagePath)) {
+          return { status: "failed", message: "Rendered PDF page was not available for local OCR." };
+        }
+        pages.push({ pageNumber: page.pageNumber, imagePath: pagePath });
+      }
+    } else {
+      pages.push({ pageNumber: 1, imagePath: sourcePath });
+      sourcePageCount = 1;
+    }
+
+    const document = await generateOcrDocument({
+      sourcePath,
+      pathLabel: label,
+      kind,
+      sourcePageCount,
+      pages,
+      engine: {
+        id: "tesseract",
+        command: engineProbe.detectedCommand ?? "tesseract",
+        version: engineProbe.version,
+      },
+      pageLimit: kind === "pdf" ? pdfImagePageLimit : 1,
+      imageScale: kind === "pdf" ? pdfImageScale : undefined,
+    });
+    const artifactDirectory = ocrArtifactOutputDirectory(rootPath);
+    const fileBase = ocrArtifactBaseName(label, document, `${sourcePath}:${Date.now()}`);
+    const artifactPaths = writeOcrArtifacts(document, artifactDirectory, fileBase);
+    return {
+      status: "created",
+      jsonPath: artifactPaths.jsonPath,
+      markdownPath: artifactPaths.markdownPath,
+      markdown: fs.readFileSync(artifactPaths.markdownPath, "utf8"),
+      document,
+    };
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return { status: "failed", message: message.replace(/\s+/g, " ").trim().slice(0, 240) || "Local OCR failed." };
   } finally {
     if (outputDir) {
       fs.rmSync(outputDir, { recursive: true, force: true });
@@ -1566,11 +1689,12 @@ function priorChatContext(events: BackendUiEvent[], currentUserPrompt = ""): str
   return compacted.join("\n");
 }
 
-function capabilityNeedsForPrompt(prompt: string): CapabilityPromptNeeds {
+function capabilityNeedsForPrompt(prompt: string, attachments: ChatAttachment[] = []): CapabilityPromptNeeds {
   return {
     python: promptLooksLikePythonTask(prompt) || promptLooksLikeArtifactTask(prompt),
     cmake: promptLooksLikeCmakeTask(prompt),
     artifacts: promptLooksLikeArtifactTask(prompt),
+    ocr: promptLooksLikeOcrTask(prompt) || ocrInputKindsForAttachments(attachments).length > 0,
   };
 }
 
@@ -1582,11 +1706,16 @@ function pushPromptText(parts: RunnerPromptPart[], lines: string[]) {
   lines.length = 0;
 }
 
-async function attachmentPromptParts(rootPath: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
+async function attachmentPromptParts(
+  rootPath: string,
+  attachments: ChatAttachment[],
+  options: { userPrompt: string; capabilityReport: CapabilityProbeReport },
+): Promise<RunnerPromptPart[]> {
   if (!attachments.length) return [];
   const parts: RunnerPromptPart[] = [];
   const lines = ["Attached file contents:"];
   let remaining = 30000;
+  const shouldGenerateOcr = promptLooksLikeOcrTask(options.userPrompt);
   for (const file of attachments) {
     const isChatAttachment = file.source === "chat" && typeof file.storedPath === "string";
     const absolute = isChatAttachment ? path.resolve(file.storedPath as string) : path.resolve(rootPath, file.path);
@@ -1599,6 +1728,21 @@ async function attachmentPromptParts(rootPath: string, attachments: ChatAttachme
     if (!allowed || !fs.existsSync(absolute)) {
       lines.push("(file is no longer available)");
       continue;
+    }
+    const ocrKind = ocrInputKindForPath(absolute);
+    if (shouldGenerateOcr && ocrKind) {
+      const ocr = await ocrAttachmentArtifact(rootPath, label, absolute, ocrKind, options.capabilityReport);
+      if (ocr.status === "created") {
+        lines.push(
+          `Local OCR artifact generated: ${relativeArtifactPath(rootPath, ocr.markdownPath)} and ${relativeArtifactPath(rootPath, ocr.jsonPath)}.`,
+          `OCR recognized ${ocr.document.metrics.recognizedLines} line${ocr.document.metrics.recognizedLines === 1 ? "" : "s"} with ${ocr.document.warnings.length} warning${ocr.document.warnings.length === 1 ? "" : "s"}.`,
+          "```markdown",
+          ocrPromptDigest(ocr.markdown),
+          "```",
+        );
+      } else {
+        lines.push(`Local OCR artifact was not generated: ${ocr.message}`);
+      }
     }
     if (isPdfFile(absolute)) {
       const rendered = await pdfAttachmentImageParts(absolute);
@@ -1646,7 +1790,8 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const harnessProfile = readHarnessProfileSetting();
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
-  const capabilityNeeds = capabilityNeedsForPrompt(userPrompt);
+  const capabilityNeeds = capabilityNeedsForPrompt(userPrompt, attachments);
+  const attachmentOcrInputKinds = ocrInputKindsForAttachments(attachments);
   const hiddenChat = isHiddenChatTask(task);
   const tree = repositoryTreePreview(rootPath);
   const keyFiles = hiddenChat ? [] : keyWorkspaceFiles(rootPath);
@@ -1672,6 +1817,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       ];
   const systemSkillMatchText = [
     userPrompt,
+    attachmentOcrInputKinds.length ? `attached ${attachmentOcrInputKinds.join(" and ")} input available for OCR` : "",
     task.workspaceMode === "worktree" ? "workspace mode: git worktree isolated workspace" : "",
     task.workspaceMode === "worktree" && task.agentBranch ? `task branch: ${task.agentBranch}` : "",
   ].filter(Boolean).join("\n");
@@ -1704,7 +1850,9 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
     );
   }
   lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
-  const artifactGuidance = artifactRuntimePromptGuidance(capabilityReport, userPrompt);
+  const artifactGuidance = artifactRuntimePromptGuidance(capabilityReport, userPrompt, {
+    ocrInputKinds: attachmentOcrInputKinds,
+  });
   if (artifactGuidance) {
     lines.push("", artifactGuidance);
   }
@@ -1726,7 +1874,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
     lines.push("", "Markdown runtime policy for this request:", markdownRuntimeSystemPrompt);
   }
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
-  parts.push(...(await attachmentPromptParts(rootPath, attachments)));
+  parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport })));
   parts.push({
     type: "text",
     text: [
@@ -3673,7 +3821,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   }
   const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
-  const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt));
+  const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
 
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);

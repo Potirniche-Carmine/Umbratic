@@ -38,6 +38,8 @@ test("artifactKindsForPrompt selects concrete artifact types from realistic requ
   assert.deepEqual(plain(artifactRuntime.artifactKindsForPrompt("Fix the login test.")), []);
   assert.equal(artifactRuntime.promptLooksLikeArtifactTask("Write a one-pager"), true);
   assert.equal(artifactRuntime.promptLooksLikeArtifactTask("Explain this function"), false);
+  assert.equal(artifactRuntime.promptLooksLikeOcrTask("Extract text from this screenshot."), true);
+  assert.equal(artifactRuntime.promptLooksLikeOcrTask("Refactor this parser."), false);
 });
 
 test("artifactRuntimePromptGuidance gives PDF output paths and refuses visual QA without render probes", () => {
@@ -74,4 +76,22 @@ test("artifactRuntimePromptGuidance gates Office artifacts by JS runtime and Lib
   assert.match(guidance, /PPTX JavaScript authoring runtime: available/);
   assert.match(guidance, /LibreOffice render\/export verification: missing/);
   assert.match(guidance, /do not claim PPTX render\/export QA/);
+});
+
+test("artifactRuntimePromptGuidance adds local OCR plan for OCR prompts and image attachments", () => {
+  const guidance = artifactRuntime.artifactRuntimePromptGuidance(
+    report({
+      tesseract: "missing",
+      "pdf-to-img": "available",
+    }),
+    "What does this say?",
+    { ocrInputKinds: ["image"] },
+  );
+
+  assert.match(guidance, /OCR:/);
+  assert.match(guidance, /\.umbratic\/artifacts\/ocr/);
+  assert.match(guidance, /local OCR engine \(Tesseract CLI\): missing/);
+  assert.match(guidance, /PDF page rendering for OCR attachments: available/);
+  assert.match(guidance, /do not use hosted OCR APIs/);
+  assert.match(guidance, /do not invent OCR text/);
 });

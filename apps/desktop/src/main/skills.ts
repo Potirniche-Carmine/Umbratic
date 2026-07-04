@@ -70,6 +70,11 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
     matchPattern: /\b(markdown|md|readme|docs?|documentation|table|formatted text|paste-ready|plain[-\s]?text)\b/i,
   },
   {
+    id: "umbratic-ocr",
+    profiles: ["engineering", "marketing", "sales"],
+    matchPattern: /\b(ocr|optical character recognition|extract text|read text|transcribe|scan(?:ned)? document|screenshot|image text|text from image|text from pdf|what does this say|attached image|attached pdf|form fields?|source-grounded extraction)\b/i,
+  },
+  {
     id: "umbratic-pdf",
     profiles: ["marketing", "sales"],
     matchPattern: /\b(pdf|one[-\s]?pager|report|whitepaper|white paper)\b/i,

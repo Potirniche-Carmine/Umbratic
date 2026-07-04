@@ -91,6 +91,7 @@ export type CapabilityPromptNeeds = {
   python?: boolean;
   cmake?: boolean;
   artifacts?: boolean;
+  ocr?: boolean;
 };
 
 let cachedReport: { expiresAt: number; report: CapabilityProbeReport } | null = null;
@@ -533,6 +534,16 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     workflows: ["PDF artifact", "visual QA"],
   },
   {
+    id: "tesseract",
+    label: "Tesseract OCR",
+    category: "optional-artifacts",
+    importance: "optional",
+    commands: ["tesseract"],
+    purpose: "Runs local OCR for image and scanned-PDF attachment digests.",
+    installHint: "Install Tesseract OCR locally and make the tesseract command available on PATH.",
+    workflows: ["OCR artifact", "image attachment", "scanned PDF"],
+  },
+  {
     id: "pdfinfo",
     label: "Poppler pdfinfo",
     category: "optional-artifacts",
@@ -779,6 +790,16 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     }
   }
 
+  if (needs.ocr) {
+    const tesseract = capabilityById(report, "tesseract");
+    const pdfToImg = capabilityById(report, "pdf-to-img");
+    lines.push(`- local OCR engine: ${statusLabel(tesseract)}`);
+    lines.push(`- PDF-to-image support for OCR: ${statusLabel(pdfToImg)}`);
+    if (tesseract?.status !== "available") {
+      lines.push("- local OCR digest generation is unavailable; do not invent OCR text, and use normal image/PDF context only when appropriate.");
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -876,6 +897,7 @@ function affectedCurrentRun(probe: CapabilityProbeResult, needs: CapabilityPromp
   if ((probe.id === "rg" || probe.id === "fd") && (needs.python || needs.cmake || needs.artifacts)) return true;
   if (needs.python && ["uv", "python"].includes(probe.id)) return true;
   if (needs.cmake && ["cmake", "ninja", "compiler"].includes(probe.id)) return true;
+  if (needs.ocr && ["tesseract", "pdf-to-img"].includes(probe.id)) return true;
   if (needs.artifacts && probe.category === "optional-artifacts") return true;
   return undefined;
 }

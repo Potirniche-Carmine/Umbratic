@@ -1,8 +1,12 @@
 import type { CapabilityProbeReport } from "./types";
 
 export type ArtifactKind = "pdf" | "docx" | "pptx" | "xlsx";
+export type OcrInputKind = "image" | "pdf";
 
 type ArtifactCapability = "available" | "missing";
+type ArtifactRuntimePromptOptions = {
+  ocrInputKinds?: OcrInputKind[];
+};
 
 const artifactFolders: Record<ArtifactKind, { output: string; template: string; label: string }> = {
   pdf: { output: ".umbratic/artifacts/pdf", template: ".umbratic/templates/pdf", label: "PDF" },
@@ -21,6 +25,10 @@ function capability(value: boolean): ArtifactCapability {
 
 export function promptLooksLikeArtifactTask(prompt: string): boolean {
   return /\b(pdf|docx|word document|powerpoint|pptx|presentation|deck|slides?|xlsx|excel|spreadsheet|workbook|artifact|one[-\s]?pager|report|whitepaper|white paper)\b/i.test(prompt);
+}
+
+export function promptLooksLikeOcrTask(prompt: string): boolean {
+  return /\b(ocr|optical character recognition|extract text|read text|text from (?:an? )?(?:image|screenshot|scan|scanned|pdf)|transcribe|scan(?:ned)? document|screenshot text|image text|what does this say|form fields?|source-grounded extraction)\b/i.test(prompt);
 }
 
 export function artifactKindsForPrompt(prompt: string): ArtifactKind[] {
@@ -64,9 +72,35 @@ function pushOfficePlan(lines: string[], kind: Extract<ArtifactKind, "docx" | "p
   }
 }
 
-export function artifactRuntimePromptGuidance(report: CapabilityProbeReport, prompt: string): string {
+function pushOcrPlan(lines: string[], report: CapabilityProbeReport, inputKinds: OcrInputKind[]) {
+  const engine = capability(isAvailable(report, "tesseract"));
+  const pdfRender = capability(isAvailable(report, "pdf-to-img"));
+  const inputLabel = inputKinds.length ? [...new Set(inputKinds)].join(", ") : "requested inputs";
+  lines.push(
+    "",
+    "OCR:",
+    "- output folder: .umbratic/artifacts/ocr",
+    `- local OCR engine (Tesseract CLI): ${engine}`,
+    `- PDF page rendering for OCR attachments: ${pdfRender}`,
+    `- input types in scope: ${inputLabel}`,
+    "- write durable JSON and Markdown OCR digests with text, page numbers, coordinates, confidence, warnings, and timing.",
+    "- keep OCR text, coordinates, image data, and debug details local; managed telemetry should stay to capability status and compact run facts.",
+    "- do not use hosted OCR APIs, runtime model downloads, training, RL, or automatic learning loops.",
+  );
+  if (engine === "missing") {
+    lines.push("- if local OCR is unavailable, do not invent OCR text; use normal image/PDF context if available or state the gap.");
+  }
+}
+
+export function artifactRuntimePromptGuidance(
+  report: CapabilityProbeReport,
+  prompt: string,
+  options: ArtifactRuntimePromptOptions = {},
+): string {
   const kinds = artifactKindsForPrompt(prompt);
-  if (!kinds.length) return "";
+  const ocrInputKinds = options.ocrInputKinds ?? [];
+  const includeOcr = promptLooksLikeOcrTask(prompt) || ocrInputKinds.length > 0;
+  if (!kinds.length && !includeOcr) return "";
 
   const lines = [
     "Artifact runtime plan:",
@@ -81,6 +115,9 @@ export function artifactRuntimePromptGuidance(report: CapabilityProbeReport, pro
     } else {
       pushOfficePlan(lines, kind, report);
     }
+  }
+  if (includeOcr) {
+    pushOcrPlan(lines, report, ocrInputKinds);
   }
   return lines.join("\n");
 }
