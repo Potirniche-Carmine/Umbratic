@@ -180,10 +180,10 @@ func TestChatRouteAddsRuntimeProfilePrompts(t *testing.T) {
 	if len(modelClient.req.Messages) != 5 {
 		t.Fatalf("got %d messages", len(modelClient.req.Messages))
 	}
-	if !strings.Contains(modelClient.req.Messages[2].Content.(string), "Python runtime policy") {
+	if !strings.Contains(modelClient.req.Messages[2].Content.(string), "Runtime profile: python") {
 		t.Fatalf("missing Python runtime prompt: %#v", modelClient.req.Messages)
 	}
-	if !strings.Contains(modelClient.req.Messages[3].Content.(string), "Git policy") {
+	if !strings.Contains(modelClient.req.Messages[3].Content.(string), "Runtime profile: git") {
 		t.Fatalf("missing Git runtime prompt: %#v", modelClient.req.Messages)
 	}
 	if modelClient.req.Messages[4].Role != "user" {

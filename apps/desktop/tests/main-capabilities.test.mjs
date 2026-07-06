@@ -106,15 +106,18 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
     artifacts: true,
     ocr: true,
   });
-  assert.match(promptGuidance, /do not recite or summarize tool availability/);
-  assert.match(promptGuidance, /if the text search helper is missing, search still works/);
-  assert.match(promptGuidance, /Python dependency-heavy verification is degraded until uv is available/);
-  assert.match(promptGuidance, /C\/C\+\+ build verification is unavailable/);
-  assert.match(promptGuidance, /do not claim visual QA for generated artifacts/);
+  assert.match(promptGuidance, /mention them only when they affect an action/);
+  assert.match(promptGuidance, /search fallbacks are available when rg is missing/);
+  assert.match(promptGuidance, /Python uv runtime: missing/);
+  assert.match(promptGuidance, /CMake: missing; Ninja: missing; compiler: available/);
+  assert.match(promptGuidance, /PDF render QA with Poppler: missing or incomplete/);
   assert.match(promptGuidance, /JS artifact authoring packages missing: node-pptx, node-xlsx/);
   assert.match(promptGuidance, /local OCR digest generation is unavailable/);
 
   const skillGuidance = capabilities.harnessSkillCapabilityGuidance(report);
+  assert.match(skillGuidance["umbratic-python"], /Do not claim Python verification/);
+  assert.match(skillGuidance["umbratic-cmake"], /state the verification gap/);
+  assert.match(skillGuidance["umbratic-ocr"], /do not invent OCR text/i);
   assert.match(skillGuidance["umbratic-git-worktree"], /Git command: available/);
   assert.match(skillGuidance["umbratic-pdf"], /do not claim PDF visual QA/);
   assert.match(skillGuidance["umbratic-presentations"], /PPTX JavaScript authoring runtime is missing/);

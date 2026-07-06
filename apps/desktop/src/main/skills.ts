@@ -75,6 +75,17 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
     matchPattern: /\b(ocr|optical character recognition|extract text|read text|transcribe|scan(?:ned)? document|screenshot|image text|text from image|text from pdf|what does this say|attached image|attached pdf|form fields?|source-grounded extraction)\b/i,
   },
   {
+    id: "umbratic-python",
+    profiles: ["engineering"],
+    matchPattern: /\b(python|\.py|pyproject|requirements\.txt|uv|venv|pytest|pip|python script)\b/i,
+  },
+  {
+    id: "umbratic-cmake",
+    profiles: ["engineering"],
+    matchPattern:
+      /\b(cmake|cmakelists\.txt|c code|c project|c harness|c toolchain|c\+\+|cpp|ctest|ninja|clang|gcc|msvc|makefile|asan|ubsan|segfault|buffer overflow|pointer|malloc|free)\b|(?:^|[\s\\/])[^.\s\\/]+\.(?:c|h|cc|cpp|cxx|hpp)\b/i,
+  },
+  {
     id: "umbratic-pdf",
     profiles: ["marketing", "sales"],
     matchPattern: /\b(pdf|one[-\s]?pager|report|whitepaper|white paper)\b/i,
@@ -507,12 +518,12 @@ export function systemSkillsForProfile(
   ensureSystemSkillFiles(directory);
   const requestedIds = requestedSkillIdsFromPrompt(userPrompt);
   return systemSkillDefinitions
-    .filter((skill) => skill.profiles.includes(profile))
     .filter((skill) => settings[skill.id] !== false)
     .map((skill) => {
       const info = systemSkillDisplayInfo(skill, settings, directory);
       const requested = requestedIds.has(skill.id);
       const matched = !!skill.matchPattern?.test(userPrompt) || skillStronglyMatchesPrompt(info, userPrompt);
+      const profileDefault = skill.profiles.includes(profile);
       const fullContent = requested || matched;
       return {
         id: skill.id,
@@ -523,8 +534,11 @@ export function systemSkillsForProfile(
         fullContent,
         source: "system" as const,
         reason: requested ? "explicit_request" as const : matched ? "strong_match" as const : "metadata" as const,
+        profileDefault,
       };
-    });
+    })
+    .filter((skill) => skill.profileDefault || skill.fullContent)
+    .map(({ profileDefault, ...skill }) => skill);
 }
 
 export function promptSkillsForRequest(

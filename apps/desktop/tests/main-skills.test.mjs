@@ -117,6 +117,8 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-markdown" && skill.name === "Markdown" && !skill.readOnly && skill.enabled), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-ocr" && skill.name === "OCR"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-git-worktree" && skill.name === "Git Worktree"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-python" && skill.name === "Python"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-cmake" && skill.name === "C/CMake"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-engineering"), false);
@@ -247,6 +249,8 @@ test("systemSkillsForProfile exposes system skill metadata and full instructions
     { id: "umbratic-git-worktree", fullContent: false, reason: "metadata" },
     { id: "umbratic-markdown", fullContent: false, reason: "metadata" },
     { id: "umbratic-ocr", fullContent: false, reason: "metadata" },
+    { id: "umbratic-python", fullContent: false, reason: "metadata" },
+    { id: "umbratic-cmake", fullContent: false, reason: "metadata" },
   ]);
   assert.equal(engineering.some((skill) => skill.id === "umbratic-presentations"), false);
   assert.equal(engineering.some((skill) => skill.id === "umbratic-spreadsheets"), false);
@@ -258,6 +262,18 @@ test("systemSkillsForProfile exposes system skill metadata and full instructions
   const ocr = skills.systemSkillsForProfile("engineering", "Extract text from this screenshot.");
   assert.equal(ocr.find((skill) => skill.id === "umbratic-ocr").fullContent, true);
   assert.equal(ocr.find((skill) => skill.id === "umbratic-ocr").reason, "strong_match");
+
+  const python = skills.systemSkillsForProfile("engineering", "Fix pytest in tests/test_api.py.");
+  assert.equal(python.find((skill) => skill.id === "umbratic-python").fullContent, true);
+  assert.equal(python.find((skill) => skill.id === "umbratic-python").reason, "strong_match");
+
+  const cmake = skills.systemSkillsForProfile("engineering", "Debug a segfault in src/main.c with CMake.");
+  assert.equal(cmake.find((skill) => skill.id === "umbratic-cmake").fullContent, true);
+  assert.equal(cmake.find((skill) => skill.id === "umbratic-cmake").reason, "strong_match");
+
+  const engineeringPdf = skills.systemSkillsForProfile("engineering", "Create a PDF report for this release.");
+  assert.equal(engineeringPdf.find((skill) => skill.id === "umbratic-pdf").fullContent, true);
+  assert.equal(engineeringPdf.find((skill) => skill.id === "umbratic-pdf").reason, "strong_match");
 
   const salesMarkdown = skills.systemSkillsForProfile("sales", "Write a Markdown table for this proposal.");
   assert.equal(salesMarkdown.some((skill) => skill.id === "umbratic-markdown"), true);

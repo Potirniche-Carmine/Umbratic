@@ -29,7 +29,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalPromptRequiresUmbraticIdentity(t *testing.T) {
 	lower := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic ai", "underlying model", "vendor", "runtime details"} {
+	for _, want := range []string{"umbratic ai", "underlying model", "provider", "model/runtime details"} {
 		if !strings.Contains(lower, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
@@ -51,10 +51,10 @@ func TestBuildAddsRequestedRuntimePrompts(t *testing.T) {
 	if len(messages) != 5 {
 		t.Fatalf("got %d messages, want 5", len(messages))
 	}
-	if !strings.Contains(messages[2].Content.(string), "Workspace tool policy") {
+	if !strings.Contains(messages[2].Content.(string), "Runtime profile: workspace-toolchain") {
 		t.Fatalf("missing workspace runtime prompt: %#v", messages[2])
 	}
-	if !strings.Contains(messages[3].Content.(string), "Python runtime policy") {
+	if !strings.Contains(messages[3].Content.(string), "Runtime profile: python") {
 		t.Fatalf("missing python runtime prompt: %#v", messages[3])
 	}
 	if messages[4].Role != "user" {
@@ -72,29 +72,17 @@ func TestEngineeringPromptDoesNotAlwaysIncludePythonPolicy(t *testing.T) {
 	}
 }
 
-func TestWorkspaceToolPromptUsesAvailableToolsWithoutSpecificShellSearchCommands(t *testing.T) {
+func TestWorkspaceToolPromptStaysCompactWithoutSpecificShellSearchCommands(t *testing.T) {
 	prompt, ok := RuntimePrompt(RuntimeWorkspaceToolchain)
 	if !ok {
 		t.Fatal("missing workspace tool prompt")
 	}
 	lower := strings.ToLower(prompt)
 	for _, want := range []string{
-		"bounded preview",
-		"not a complete filesystem inventory",
-		"existing",
-		"subfolders",
-		"project structure",
-		"read tool",
-		"nested directory inventories",
-		"complete or partial",
-		"search tool",
-		"file-changing tools",
-		"hidden configuration folders",
-		".ds_store",
-		"thumbs.db",
-		"desktop.ini",
-		".env",
-		"credentials",
+		"runtime profile: workspace-toolchain",
+		"available local workspace tools",
+		"fall back",
+		"missing optional tools",
 	} {
 		if !strings.Contains(lower, want) {
 			t.Fatalf("workspace tool prompt missing %q: %q", want, prompt)
@@ -123,10 +111,10 @@ func TestBuildDedupesRuntimePrompts(t *testing.T) {
 	countWorktree := 0
 	for _, message := range messages {
 		content, _ := message.Content.(string)
-		if strings.Contains(content, "Git policy") {
+		if strings.Contains(content, "Runtime profile: git") {
 			countGit++
 		}
-		if strings.Contains(content, "Worktree policy") {
+		if strings.Contains(content, "Runtime profile: worktree") {
 			countWorktree++
 		}
 	}

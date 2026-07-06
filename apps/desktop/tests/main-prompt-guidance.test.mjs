@@ -15,9 +15,4 @@ test("workspace prompt guidance treats file previews as partial and verifies str
   assert.match(previewGuidance, /read tool/);
   assert.match(previewGuidance, /search tool/);
   assert.match(previewGuidance, /partial/);
-
-  const toolchainPrompt = config.workspaceToolchainSystemPrompt.toLowerCase();
-  assert.match(toolchainPrompt, /directory inventories/);
-  assert.match(toolchainPrompt, /complete directory/);
-  assert.match(toolchainPrompt, /do not treat provided workspace file previews as exhaustive/);
 });

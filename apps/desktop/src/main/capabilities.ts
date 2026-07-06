@@ -735,7 +735,7 @@ function artifactRequested(needs: CapabilityPromptNeeds): boolean {
 export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: CapabilityPromptNeeds): string {
   const lines = [
     "Internal local capability context:",
-    "- use these facts for planning and verification choices, but do not recite or summarize tool availability at the start of visible thinking or the final answer.",
+    "- use these facts for planning and verification choices; mention them only when they affect an action, result, or blocker.",
     `- checked at ${report.checkedAt}`,
   ];
   const requiredMissing = missingRequiredLabels(report);
@@ -748,10 +748,10 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
   lines.push(`- workspace text search helper: ${statusLabel(rg)}`);
   lines.push(`- workspace path discovery helper: ${statusLabel(fd)}`);
   if (rg?.status !== "available") {
-    lines.push("- if the text search helper is missing, search still works through runner fallbacks but may be slower.");
+    lines.push("- search fallbacks are available when rg is missing.");
   }
   if (fd?.status !== "available") {
-    lines.push("- if the path discovery helper is missing, path discovery may use slower fallback search.");
+    lines.push("- path discovery fallbacks are available when fd/fdfind is missing.");
   }
 
   if (needs.python) {
@@ -759,9 +759,6 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     const python = capabilityById(report, "python");
     lines.push(`- Python uv runtime: ${statusLabel(uv)}`);
     lines.push(`- Python interpreter probe: ${statusLabel(python)}`);
-    if (uv?.status !== "available") {
-      lines.push("- Python dependency-heavy verification is degraded until uv is available; use non-uv Python only for simple inspection or when the user explicitly asks.");
-    }
   }
 
   if (needs.cmake) {
@@ -769,9 +766,6 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     const ninja = capabilityById(report, "ninja");
     const compiler = capabilityById(report, "compiler");
     lines.push(`- CMake: ${statusLabel(cmake)}; Ninja: ${statusLabel(ninja)}; compiler: ${statusLabel(compiler)}`);
-    if (cmake?.status !== "available" || compiler?.status !== "available") {
-      lines.push("- C/C++ build verification is unavailable unless CMake and a compiler are available; use source inspection or project-native fallbacks and state the gap.");
-    }
   }
 
   if (artifactRequested(needs)) {
@@ -782,11 +776,8 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     lines.push(`- PDF render QA with Poppler: ${popplerRenderAvailable ? "available" : "missing or incomplete"}`);
     lines.push(`- PDF Python packages: ${pdfPackageAvailable ? "available" : "missing or incomplete"}`);
     lines.push(`- DOCX/PPTX/XLSX render/export with LibreOffice: ${libreOfficeAvailable ? "available" : "missing"}`);
-    if (!popplerRenderAvailable || !libreOfficeAvailable) {
-      lines.push("- do not claim visual QA for generated artifacts unless the relevant render/export probe is available and the run actually renders or exports the artifact.");
-    }
     if (jsArtifactPackages.length) {
-      lines.push(`- JS artifact authoring packages missing: ${jsArtifactPackages.join(", ")}; provide structured source content or state the generation gap unless a configured runtime is available.`);
+      lines.push(`- JS artifact authoring packages missing: ${jsArtifactPackages.join(", ")}`);
     }
   }
 
@@ -809,6 +800,23 @@ function artifactSkillLine(report: CapabilityProbeReport, ids: string[], availab
 
 export function harnessSkillCapabilityGuidance(report: CapabilityProbeReport): Record<string, string> {
   return {
+    "umbratic-python": [
+      "Runtime capability gate:",
+      `- uv runtime: ${statusLabel(capabilityById(report, "uv"))}; Python interpreter: ${statusLabel(capabilityById(report, "python"))}`,
+      "If uv is unavailable, use a workspace-managed fallback only when it is safe and sufficient for the task.",
+      "Do not claim Python verification unless the verification command actually ran.",
+    ].join("\n"),
+    "umbratic-cmake": [
+      "Runtime capability gate:",
+      `- CMake: ${statusLabel(capabilityById(report, "cmake"))}; Ninja: ${statusLabel(capabilityById(report, "ninja"))}; compiler: ${statusLabel(capabilityById(report, "compiler"))}`,
+      "If local build tools are missing, use project-native fallbacks or source inspection and state the verification gap.",
+    ].join("\n"),
+    "umbratic-ocr": [
+      "Runtime capability gate:",
+      `- local OCR engine: ${statusLabel(capabilityById(report, "tesseract"))}; PDF-to-image support: ${statusLabel(capabilityById(report, "pdf-to-img"))}`,
+      "If local OCR is unavailable, do not invent OCR text; use normal image/PDF context only when it is available.",
+      "Do not claim OCR artifact generation unless JSON and Markdown OCR artifacts were actually created.",
+    ].join("\n"),
     "umbratic-git-worktree": [
       "Runtime capability gate:",
       `- Git command: ${statusLabel(capabilityById(report, "git"))}; rg search: ${statusLabel(capabilityById(report, "rg"))}; fd path discovery: ${statusLabel(capabilityById(report, "fd"))}`,

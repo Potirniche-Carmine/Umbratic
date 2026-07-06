@@ -1133,6 +1133,22 @@ const previewDefaultSkills: SkillInfo[] = [
     readOnly: false,
   },
   {
+    id: "umbratic-python",
+    name: "Python",
+    description: "Use for Python scripts, packages, tests, virtual environments, dependency setup, and Python-based verification.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
+    id: "umbratic-cmake",
+    name: "C/CMake",
+    description: "Use for C, C++, CMake, compiler diagnostics, native build setup, sanitizers, and C/C++ test verification.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
     id: "umbratic-pdf",
     name: "PDF",
     description: "Use for PDF reading, summarization, page-aware review, and PDF-backed business artifacts.",
@@ -1175,7 +1191,17 @@ const previewDefaultSkillGuidance: Record<string, string[]> = {
   "umbratic-markdown": [
     "Use clean Markdown when the user asks for docs, README content, tables, briefs, or paste-ready formatted text.",
     "Prefer simple headings, short paragraphs, bullets, and tables only when they improve scanning.",
-    "Keep Markdown portable: avoid custom components and renderer-specific formatting.",
+    "Inspect nearby docs and config before using repository-local Markdown tooling.",
+  ],
+  "umbratic-python": [
+    "Keep Python work inside the current workspace and prefer a workspace `.venv`.",
+    "Use `uv` when available and verify through `uv run` or the direct `.venv` interpreter.",
+    "State runtime or dependency gaps when they affect verification.",
+  ],
+  "umbratic-cmake": [
+    "Inspect the repository's own C/CMake build path before choosing commands.",
+    "Use presets when available; otherwise keep manual builds under `.umbratic/build`.",
+    "Treat compilers, build backends, and sanitizers as optional host capabilities and state verification gaps.",
   ],
   "umbratic-pdf": [
     "Use local PDFs as page-aware source material; use extraction for text checks and rendered pages for layout fidelity.",

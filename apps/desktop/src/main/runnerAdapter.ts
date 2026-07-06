@@ -8,7 +8,7 @@ import * as path from "node:path";
 
 import { app } from "electron";
 
-import { localProviderCatalog, pythonRuntimeSystemPrompt } from "./config";
+import { localProviderCatalog } from "./config";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
@@ -94,7 +94,6 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     [pathKey]: pathEntries.join(path.delimiter),
-    UMBRATIC_PYTHON_RUNTIME_GUIDE: pythonRuntimeSystemPrompt,
     UV_INSTALL_DIR: path.join(runtimeRoot, "uv"),
     UV_UNMANAGED_INSTALL: path.join(runtimeRoot, "uv"),
     UV_NO_MODIFY_PATH: "1",

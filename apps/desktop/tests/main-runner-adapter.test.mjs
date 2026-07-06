@@ -170,5 +170,4 @@ test("runtimeEnv prepends workspace-managed runtime directories and hardening va
   assert.match(env[pathKey], /\.umbratic[\\/]runtime/);
   assert.match(env.UV_INSTALL_DIR, /\.umbratic[\\/]runtime[\\/]uv$/);
   assert.equal(env.UV_NO_MODIFY_PATH, "1");
-  assert.match(env.UMBRATIC_PYTHON_RUNTIME_GUIDE, /Never verify by running bare `python`/);
 });

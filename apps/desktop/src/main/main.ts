@@ -18,15 +18,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
-  cCmakeRuntimeSystemPrompt,
   endpointEditingAllowed,
   localProviderCatalog,
-  markdownRuntimeSystemPrompt,
   managedModelEndpointDefaults,
-  pythonRuntimeSystemPrompt,
   taskStatesThatCanOpen,
   workspaceContextVerificationPrompt,
-  workspaceToolchainSystemPrompt,
 } from "./config";
 import {
   capabilityPromptGuidance,
@@ -35,7 +31,7 @@ import {
   probeLocalCapabilities,
   type CapabilityPromptNeeds,
 } from "./capabilities";
-import { artifactRuntimePromptGuidance, promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
+import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
@@ -1788,7 +1784,6 @@ async function attachmentPromptParts(
 async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
-  const harnessProfile = readHarnessProfileSetting();
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const capabilityNeeds = capabilityNeedsForPrompt(userPrompt, attachments);
   const attachmentOcrInputKinds = ocrInputKindsForAttachments(attachments);
@@ -1850,29 +1845,6 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
     );
   }
   lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
-  const artifactGuidance = artifactRuntimePromptGuidance(capabilityReport, userPrompt, {
-    ocrInputKinds: attachmentOcrInputKinds,
-  });
-  if (artifactGuidance) {
-    lines.push("", artifactGuidance);
-  }
-  if (harnessProfile === "engineering") {
-    lines.push("", "Workspace tool policy:", workspaceToolchainSystemPrompt);
-    if (promptLooksLikeCmakeTask(userPrompt)) {
-      lines.push("", "C/CMake runtime policy for this request:", cCmakeRuntimeSystemPrompt);
-    }
-    if (promptLooksLikePythonTask(userPrompt)) {
-      lines.push(
-        "",
-        "Python runtime policy for this request:",
-        pythonRuntimeSystemPrompt,
-        "Use `uv --version`, `uv python install 3.12` when needed, `uv venv .venv --python 3.12`, and then `uv run python <script.py>` or the direct `.venv` interpreter to verify. Do not run bare `python`, `python3`, or `py` as verification.",
-      );
-    }
-  }
-  if (promptLooksLikeMarkdownTask(userPrompt)) {
-    lines.push("", "Markdown runtime policy for this request:", markdownRuntimeSystemPrompt);
-  }
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
   parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport })));
   parts.push({
