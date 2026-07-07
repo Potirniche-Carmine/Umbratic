@@ -20,7 +20,6 @@ mac:
   category: public.app-category.developer-tools
   target:
     - dmg
-    - zip
 win:
   icon: assets/icons/icon.ico
   target:
