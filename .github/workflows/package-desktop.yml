@@ -49,15 +49,12 @@ jobs:
             artifact_name: umbratic-ai-macos
             artifact_paths: |
               apps/desktop/release/*.dmg
-              apps/desktop/release/*.blockmap
           - name: Windows
             os: windows-latest
-            package_args: "--win nsis zip"
+            package_args: "--win nsis --x64"
             artifact_name: umbratic-ai-windows
             artifact_paths: |
               apps/desktop/release/*.exe
-              apps/desktop/release/*.zip
-              apps/desktop/release/*.blockmap
 
     steps:
       - name: Check out repository
@@ -104,4 +101,7 @@ jobs:
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --title "$tag" --notes "Umbratic AI desktop harness release $tag"
           fi
+          while IFS= read -r asset; do
+            [ -n "$asset" ] && gh release delete-asset "$tag" "$asset" -y
+          done < <(gh release view "$tag" --json assets --jq '.assets[].name')
           gh release upload "$tag" release-artifacts/* --clobber

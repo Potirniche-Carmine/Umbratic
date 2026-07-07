@@ -1,6 +1,6 @@
 appId: ai.umbratic.desktop
 productName: Umbratic AI
-artifactName: umbratic-ai-${version}-${os}-${arch}.${ext}
+artifactName: Umbratic-${version}.${ext}
 asar: true
 asarUnpack:
   - "**/*.node"
@@ -24,7 +24,6 @@ win:
   icon: assets/icons/icon.ico
   target:
     - nsis
-    - zip
 nsis:
   oneClick: false
   perMachine: false
