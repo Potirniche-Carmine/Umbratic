@@ -2848,19 +2848,19 @@ async function checkoutRepositoryBranch(
   }
 }
 
-function requiresBypassToolApproval(classification: ReturnType<typeof classifyCommandText>): boolean {
+function requiresElevatedPermissionsApproval(classification: ReturnType<typeof classifyCommandText>): boolean {
   return classification.risky;
 }
 
 async function askPermission(
   task: TaskRecord,
-  request: Omit<PermissionRequest, "id"> & { bypassRequiresApproval?: boolean },
+  request: Omit<PermissionRequest, "id"> & { elevatedPermissionsRequiresApproval?: boolean },
 ): Promise<void> {
   const id = `perm-${crypto.randomBytes(6).toString("hex")}`;
-  const { bypassRequiresApproval = false, ...visibleRequest } = request;
+  const { elevatedPermissionsRequiresApproval = false, ...visibleRequest } = request;
   const fullRequest: PermissionRequest = { id, ...visibleRequest };
   emit({ type: "permission.requested", taskId: task.id, request: fullRequest });
-  if (task.permissionMode === "bypass" && !bypassRequiresApproval) {
+  if (task.permissionMode === "bypass" && !elevatedPermissionsRequiresApproval) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     return;
   }
@@ -2920,7 +2920,7 @@ async function runCommandForTask(
     command: displayCommand,
     commandClass: classification.commandClass,
     cwd: options.cwd,
-    bypassRequiresApproval: requiresBypassToolApproval(classification),
+    elevatedPermissionsRequiresApproval: requiresElevatedPermissionsApproval(classification),
   });
   const id = `cmd-${crypto.randomBytes(6).toString("hex")}`;
   emit({
@@ -3173,7 +3173,7 @@ async function handleRunnerPermission(
   if (
     task.permissionMode === "bypass" &&
     (type === "read" || type === "search" || type === "edit" || type === "bash") &&
-    !requiresBypassToolApproval(classification)
+    !requiresElevatedPermissionsApproval(classification)
   ) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     await replyRunnerPermission(run, id, true);

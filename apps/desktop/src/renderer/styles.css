@@ -247,7 +247,7 @@
   background: #596271;
 }
 
-:root[data-theme="light"] .bypassDialog {
+:root[data-theme="light"] .riskDialog {
   box-shadow: 0 12px 34px rgba(40, 48, 58, 0.12);
 }
 
@@ -2954,21 +2954,21 @@ pre {
   white-space: nowrap;
 }
 
-.permissionControl.isBypass .permissionTrigger {
+.permissionControl.isElevated .permissionTrigger {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 36%, transparent);
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
 
-.permissionControl.isBypass .permissionTrigger:hover {
+.permissionControl.isElevated .permissionTrigger:hover {
   background: color-mix(in srgb, var(--red) 18%, transparent);
 }
 
-.permissionControl.isBypass .permissionTrigger svg:first-child {
+.permissionControl.isElevated .permissionTrigger svg:first-child {
   color: var(--red);
 }
 
-.bypassIcon {
+.elevatedPermissionsIcon {
   color: var(--red);
 }
 
@@ -4888,96 +4888,6 @@ button.attachmentPreview:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.accountCard {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: var(--radius);
-  color: inherit;
-  background:
-    linear-gradient(135deg, rgba(178, 186, 197, 0.065), transparent 56%),
-    color-mix(in srgb, var(--surface-2) 52%, transparent);
-  text-align: left;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-
-.accountCard:hover,
-.accountCard.isOpen {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
-  background:
-    linear-gradient(135deg, rgba(178, 186, 197, 0.105), transparent 56%),
-    color-mix(in srgb, var(--surface-3) 50%, transparent);
-}
-
-.accountCard > svg {
-  margin-left: auto;
-  color: var(--faint);
-  transition: transform 140ms ease;
-}
-
-.accountCard.isOpen > svg {
-  transform: rotate(180deg);
-}
-
-.accountAvatar {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
-  color: var(--reference-token-text);
-  background: rgba(181, 196, 216, 0.08);
-}
-
-.accountIdentity {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.accountIdentity strong {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.accountIdentity em {
-  color: var(--faint);
-  font-style: normal;
-  font-size: 12px;
-}
-
-.ssoButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--line-strong) 84%, transparent);
-  border-radius: 6px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-
-.ssoButton:hover {
-  background: color-mix(in srgb, var(--surface-3) 62%, transparent);
-  border-color: var(--line-strong);
-}
-
-.ssoMark {
-  flex-shrink: 0;
-}
-
 .skillList {
   list-style: none;
   margin: 0;
@@ -5294,7 +5204,7 @@ button.attachmentPreview:focus-visible {
   line-height: 1.45;
 }
 
-.bypassDialog {
+.riskDialog {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
@@ -5355,12 +5265,12 @@ button.attachmentPreview:focus-visible {
   color: color-mix(in srgb, var(--red) 74%, var(--text));
 }
 
-.bypassDialog h3 {
+.riskDialog h3 {
   margin: 0 0 5px;
   font-size: 14px;
 }
 
-.bypassDialog p {
+.riskDialog p {
   margin: 0;
   color: var(--muted);
   line-height: 1.42;

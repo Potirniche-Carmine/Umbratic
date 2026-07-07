@@ -3160,7 +3160,6 @@ function App() {
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "skills" | "telemetry">("account");
-  const [accountAuthOpen, setAccountAuthOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
   const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
@@ -3183,8 +3182,6 @@ function App() {
   const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
   const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
-  const [telemetryMessage, setTelemetryMessage] = useState<string | null>(null);
-  const [localLogsOpening, setLocalLogsOpening] = useState(false);
   const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -3198,7 +3195,7 @@ function App() {
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
   const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
   const [reviewWidth, setReviewWidth] = useState(520);
-  const [showBypassDialog, setShowBypassDialog] = useState(false);
+  const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -3254,7 +3251,6 @@ function App() {
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
   const connectionState = backend?.endpoint ?? "checking";
-  const runnerDiagnosticsDirectory = backend?.diagnostics.runnerDiagnosticsDirectory ?? "~/.umbratic/runner-diagnostics";
   const connectionDisplayState = connectionState === "degraded" ? "ready" : connectionState;
   const connectionLabel =
     backend?.endpoint === "ready" || backend?.endpoint === "degraded"
@@ -4168,22 +4164,7 @@ function App() {
   function closeSettingsDialog() {
     setEndpointDraftSettings(endpointSettings);
     setAccountMessage(null);
-    setTelemetryMessage(null);
     setSettingsOpen(false);
-  }
-
-  async function openLocalRunnerLogs() {
-    if (localLogsOpening) return;
-    setLocalLogsOpening(true);
-    setTelemetryMessage(null);
-    try {
-      const result = await api.openRunnerDiagnosticsFolder();
-      setTelemetryMessage(result.ok ? `Opened local logs: ${result.directory}` : result.message);
-    } catch (cause) {
-      setTelemetryMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setLocalLogsOpening(false);
-    }
   }
 
   async function refreshConnectionStatus() {
@@ -4600,7 +4581,7 @@ function App() {
   async function updatePermissionMode(mode: PermissionMode) {
     setPermissionMenuOpen(false);
     if (mode === "bypass" && permissionMode !== "bypass") {
-      setShowBypassDialog(true);
+      setShowElevatedPermissionsDialog(true);
       return;
     }
     setError(null);
@@ -4614,8 +4595,8 @@ function App() {
     }
   }
 
-  async function confirmBypassMode() {
-    setShowBypassDialog(false);
+  async function confirmElevatedPermissionsMode() {
+    setShowElevatedPermissionsDialog(false);
     setError(null);
     setPermissionModeState("bypass");
     try {
@@ -6182,7 +6163,7 @@ function App() {
               </div>
             ) : null}
 
-            <div className={`permissionControl ${permissionMode === "bypass" ? "isBypass" : ""}`}>
+            <div className={`permissionControl ${permissionMode === "bypass" ? "isElevated" : ""}`}>
               <button
                 className="permissionTrigger"
                 type="button"
@@ -6198,14 +6179,14 @@ function App() {
                 }}
                 aria-expanded={permissionMenuOpen}
                 aria-haspopup="menu"
-                title={permissionMode === "bypass" ? "Bypass mode" : "Normal mode"}
+                title={permissionMode === "bypass" ? "Elevated permissions" : "Normal permissions"}
               >
                 {permissionMode === "bypass" ? (
-                  <ShieldAlert className="bypassIcon" size={14} />
+                  <ShieldAlert className="elevatedPermissionsIcon" size={14} />
                 ) : (
                   <Hand size={14} />
                 )}
-                <span className="permissionLabel">{permissionMode === "bypass" ? "Bypass" : "Normal"}</span>
+                <span className="permissionLabel">{permissionMode === "bypass" ? "Elevated" : "Normal"}</span>
                 <ChevronDown size={12} />
               </button>
               {permissionMenuOpen ? (
@@ -6229,8 +6210,8 @@ function App() {
                       void updatePermissionMode("bypass");
                     }}
                   >
-                    <ShieldAlert className="bypassIcon" size={14} />
-                    <span>Bypass</span>
+                    <ShieldAlert className="elevatedPermissionsIcon" size={14} />
+                    <span>Elevated</span>
                   </button>
                 </div>
               ) : null}
@@ -6499,7 +6480,7 @@ function App() {
                   onClick={() => setSettingsTab("account")}
                 >
                   <User size={15} />
-                  <span>Account</span>
+                  <span>Connection</span>
                 </button>
                 <button
                   type="button"
@@ -6539,45 +6520,12 @@ function App() {
                 {settingsTab === "account" ? (
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
-                      <h3>Account</h3>
-                      <p>Connect Umbratic AI to a local or server Veil endpoint.</p>
+                      <h3>Connection</h3>
+                      <p>Configure the Veil endpoint Umbratic uses for model requests and telemetry uploads.</p>
                     </div>
 
-                    <button
-                      className={`accountCard ${accountAuthOpen ? "isOpen" : ""}`}
-                      type="button"
-                      aria-expanded={accountAuthOpen}
-                      onClick={() => {
-                        setAccountAuthOpen((open) => !open);
-                        setAccountMessage(null);
-                      }}
-                    >
-                      <div className="accountAvatar" aria-hidden="true">
-                        <User size={22} />
-                      </div>
-                      <div className="accountIdentity">
-                        <strong>Developer</strong>
-                        <em>{endpointModeLabel}</em>
-                      </div>
-                      <ChevronDown size={15} aria-hidden="true" />
-                    </button>
-
-                    {accountAuthOpen ? (
-                      <div className="settingsGroup">
-                        <h4>Authentication</h4>
-                        <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
-                          <GoogleMark />
-                          <span>Continue with Google</span>
-                        </button>
-                        <button className="ssoButton" type="button" onClick={() => setAccountMessage("Sign-in support is coming soon.")}>
-                          <MicrosoftMark />
-                          <span>Continue with Microsoft</span>
-                        </button>
-                      </div>
-                    ) : null}
-
                     <div className="settingsGroup">
-                      <h4>Connection</h4>
+                      <h4>Veil endpoint</h4>
                       <div className="settingsList">
                         <div className="settingsListRow">
                           <span>Model server</span>
@@ -6700,6 +6648,7 @@ function App() {
                           <span>{endpointSaving ? "Saving" : "Save connection"}</span>
                         </button>
                       </div>
+                      {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
                     </div>
                   </div>
                 ) : null}
@@ -7033,86 +6982,41 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
-                      <p>
-                        Umbratic syncs a compact run summary for reliability and future model tuning. Detailed runner logs
-                        stay on this machine for troubleshooting.
-                      </p>
+                      <p>Umbratic sends redacted run summaries to your configured Veil server. Detailed logs stay local.</p>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Synced Summary</h4>
+                      <h4>Sent to your server</h4>
                       <div className="settingsList telemetryDisclosureList">
                         <div className="settingsListRow">
-                          <span>Outcome</span>
+                          <span>Run record</span>
                           <p>
-                            Task and chat IDs, status, success or failure, start and completion times, model ID, runner
-                            version, workspace mode, and reasoning mode.
+                            Task, chat, and repository IDs, timestamps, status, outcome, model, runner version, workspace
+                            mode, and reasoning mode.
                           </p>
                         </div>
                         <div className="settingsListRow">
-                          <span>Work shape</span>
+                          <span>Usage shape</span>
                           <p>
-                            Changed-file counts, review diff totals, and the latest test pass or fail result. File paths,
-                            patches, and branch details are not included.
-                          </p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Activity</span>
-                          <p>
-                            Aggregate message lengths, command counts, command classes, error-code counts, permission
-                            decisions, required-tool failures, review counts, and feedback totals.
-                          </p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Runtime health</span>
-                          <p>
-                            Capability totals by status and importance, plus whether missing local capabilities affected
-                            the run. Individual probe details stay out of telemetry.
+                            Counts for messages, commands, tests, changed files, reviews, permissions, feedback, and
+                            runtime capability health.
                           </p>
                         </div>
                       </div>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Not Synced</h4>
+                      <h4>Not sent</h4>
                       <div className="settingsList telemetryDisclosureList">
                         <div className="settingsListRow">
-                          <span>Protected</span>
+                          <span>Content</span>
                           <p>
-                            Prompts, assistant responses, command text, command output, repository paths, worktree paths,
-                            patch hashes, detailed runner logs, and common secret values are not synced as raw data.
+                            Prompts, assistant responses, command text, command output, file paths, diffs, patches,
+                            branch names, detailed logs, and raw secrets.
                           </p>
                         </div>
                       </div>
                     </div>
-
-                    <div className="settingsGroup">
-                      <h4>Local Runner Logs</h4>
-                      <div className="settingsList telemetryDisclosureList">
-                        <div className="settingsListRow">
-                          <span>Folder</span>
-                          <strong className="settingsPathText">{runnerDiagnosticsDirectory}</strong>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Contents</span>
-                          <p>
-                            JSONL records for model errors, tool failures, blocked policy stages, permission outcomes,
-                            and stderr summaries. These files are for local troubleshooting.
-                          </p>
-                        </div>
-                      </div>
-                      <div className="settingsActionRow">
-                        <button className="secondaryAction" type="button" onClick={openLocalRunnerLogs} disabled={localLogsOpening}>
-                          {localLogsOpening ? <Loader2 className="spin" size={13} /> : <FolderOpen size={13} />}
-                          <span>Show local logs</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {telemetryMessage ? <p className="settingsMessage">{telemetryMessage}</p> : null}
-                    <p className="settingsMessage">
-                      Sync runs automatically in the background when enabled by your organization.
-                    </p>
                   </div>
                 ) : null}
               </div>
@@ -7145,7 +7049,7 @@ function App() {
 
       {deleteCandidate ? (
         <div className="modalScrim" role="presentation">
-          <section className="bypassDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+          <section className="riskDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
             <div className="dialogIcon deleteIcon">
               {deleteCandidate.kind === "project" ? (
                 <FolderX size={18} />
@@ -7178,22 +7082,22 @@ function App() {
         </div>
       ) : null}
 
-      {showBypassDialog ? (
+      {showElevatedPermissionsDialog ? (
         <div className="modalScrim" role="presentation">
-          <section className="bypassDialog" role="dialog" aria-modal="true" aria-labelledby="bypass-title">
+          <section className="riskDialog" role="dialog" aria-modal="true" aria-labelledby="elevated-permissions-title">
             <div>
-              <h3 id="bypass-title">Enable bypass mode?</h3>
+              <h3 id="elevated-permissions-title">Enable elevated mode?</h3>
               <p>
-                Umbratic AI will run task commands without pausing for each approval. Commands still run inside the selected task
-                workspace and sandboxed runtime, but they can change files there.
+                Routine workspace commands can run without asking each time. The workspace sandbox still applies: file
+                tools stay in the task workspace, and network or external-path commands stay blocked.
               </p>
             </div>
             <div className="dialogActions">
-              <button className="secondaryAction" type="button" onClick={() => setShowBypassDialog(false)}>
+              <button className="secondaryAction" type="button" onClick={() => setShowElevatedPermissionsDialog(false)}>
                 Cancel
               </button>
-              <button className="dangerAction" type="button" onClick={confirmBypassMode}>
-                Enable bypass
+              <button className="dangerAction" type="button" onClick={confirmElevatedPermissionsMode}>
+                Enable elevated
               </button>
             </div>
           </section>
@@ -7227,28 +7131,6 @@ function ComposerGreeting({ label }: { label: string }) {
     <div className="composerGreeting">
       <span>{label}</span>
     </div>
-  );
-}
-
-function GoogleMark() {
-  return (
-    <svg className="ssoMark" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
-      <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.49h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.63z" />
-      <path fill="#34A853" d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.32A8.99 8.99 0 0 0 9 18z" />
-      <path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.96H.96A8.99 8.99 0 0 0 0 9c0 1.45.35 2.82.96 4.04l3.01-2.32z" />
-      <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A8.99 8.99 0 0 0 .96 4.96L3.97 7.28C4.68 5.16 6.66 3.58 9 3.58z" />
-    </svg>
-  );
-}
-
-function MicrosoftMark() {
-  return (
-    <svg className="ssoMark" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
-      <rect x="1" y="1" width="7.5" height="7.5" fill="#F25022" />
-      <rect x="9.5" y="1" width="7.5" height="7.5" fill="#7FBA00" />
-      <rect x="1" y="9.5" width="7.5" height="7.5" fill="#00A4EF" />
-      <rect x="9.5" y="9.5" width="7.5" height="7.5" fill="#FFB900" />
-    </svg>
   );
 }
 
