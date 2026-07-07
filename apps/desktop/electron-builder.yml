@@ -1,0 +1,32 @@
+appId: ai.umbratic.desktop
+productName: Umbratic AI
+artifactName: umbratic-ai-${version}-${os}-${arch}.${ext}
+asar: true
+asarUnpack:
+  - "**/*.node"
+npmRebuild: false
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - assets/**/*
+  - package.json
+extraResources:
+  - from: .package/runner
+    to: runner
+mac:
+  icon: assets/icons/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+win:
+  icon: assets/icons/icon.ico
+  target:
+    - nsis
+    - zip
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

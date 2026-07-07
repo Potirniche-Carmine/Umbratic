@@ -107,8 +107,15 @@ function existingRunnerCliPath(candidate: string): string | null {
   return fs.existsSync(candidate) ? candidate : null;
 }
 
+function packagedRunnerCliPath(): string | null {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  return resourcesPath ? path.join(resourcesPath, "runner", "bin", "umbratic-runner.cjs") : null;
+}
+
 export function runnerBinaryPath(): string | null {
   const candidates: string[] = [];
+  const packagedPath = packagedRunnerCliPath();
+  if (packagedPath) candidates.push(packagedPath);
   try {
     candidates.push(nodeRequire.resolve("@umbratic/runner/bin/umbratic-runner.cjs"));
   } catch {

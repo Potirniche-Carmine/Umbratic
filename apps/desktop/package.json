@@ -10,6 +10,8 @@
     "build:main": "tsc -p tsconfig.main.json && npm run copy:system-skills",
     "build:runner": "npm --workspace @umbratic/runner run build",
     "copy:system-skills": "node scripts/copy-system-skills.mjs",
+    "prepare:package": "node scripts/prepare-package.mjs",
+    "package": "npm run build && npm run prepare:package && electron-builder --config electron-builder.yml --publish never",
     "test:all": "npm run typecheck && npm run test:unit",
     "test:composer": "node tests/composer-text.test.mjs",
     "test:unit": "node --test tests/*.test.mjs",
@@ -17,7 +19,6 @@
   },
   "dependencies": {
     "@umbratic/runner": "file:../../packages/runner",
-    "electron": "42.4.1",
     "lucide-react": "1.20.0",
     "pdf-to-img": "6.2.0",
     "react": "19.2.7",
@@ -28,6 +29,8 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",
+    "electron": "42.4.1",
+    "electron-builder": "26.15.3",
     "typescript": "5.9.3",
     "vite": "8.0.16"
   }

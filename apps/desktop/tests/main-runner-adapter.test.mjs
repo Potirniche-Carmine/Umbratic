@@ -171,3 +171,28 @@ test("runtimeEnv prepends workspace-managed runtime directories and hardening va
   assert.match(env.UV_INSTALL_DIR, /\.umbratic[\\/]runtime[\\/]uv$/);
   assert.equal(env.UV_NO_MODIFY_PATH, "1");
 });
+
+test("runnerBinaryPath prefers the packaged runner resource", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-binary-"));
+  const resourcesPath = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-resources-"));
+  const runnerBin = path.join(resourcesPath, "runner", "bin");
+  const runnerDist = path.join(resourcesPath, "runner", "dist");
+  fs.mkdirSync(runnerBin, { recursive: true });
+  fs.mkdirSync(runnerDist, { recursive: true });
+  const cliPath = path.join(runnerBin, "umbratic-runner.cjs");
+  fs.writeFileSync(cliPath, "#!/usr/bin/env node\n");
+  fs.writeFileSync(path.join(runnerDist, "cli.js"), "export {};\n");
+
+  const originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+  Object.defineProperty(process, "resourcesPath", { configurable: true, value: resourcesPath });
+  try {
+    const { adapter } = loadRunnerAdapter(userData);
+    assert.equal(adapter.runnerBinaryPath(), cliPath);
+  } finally {
+    if (originalResourcesPath) {
+      Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+    } else {
+      delete process.resourcesPath;
+    }
+  }
+});
