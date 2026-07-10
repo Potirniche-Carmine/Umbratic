@@ -9,7 +9,9 @@ import * as path from "node:path";
 import { app } from "electron";
 
 import { localProviderCatalog } from "./config";
+import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
+import { enabledPromptSkills } from "./skills";
 import { readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type { HarnessProfileId, LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
@@ -36,18 +38,10 @@ export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteCon
   };
 }
 
-function runtimeProfilesForTask(task: TaskRecord, profileId: ReturnType<typeof readHarnessProfileSetting>): string[] {
-  if (profileId !== "engineering") return task.runtimeProfile === "markdown" ? ["markdown"] : [];
-  const profiles = new Set<string>(["workspace-toolchain"]);
-  if (task.workspaceKind === "git") profiles.add("git");
-  if (task.workspaceMode === "worktree") profiles.add("worktree");
-  if (task.runtimeProfile && task.runtimeProfile !== "none") profiles.add(task.runtimeProfile);
-  return [...profiles];
-}
-
 export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   const endpointSettings = readModelEndpointSettings();
+  const localVeil = endpointSettings.mode === "local" ? currentLocalVeilConnection() : null;
   const harnessProfile = readHarnessProfileSetting();
   const route = harnessRouteConfig(harnessProfile);
   return {
@@ -55,7 +49,13 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     cwd: task.worktreePath,
     workspaceMode: task.workspaceMode,
     modelBoundary: "managed",
-    runtimeProfiles: runtimeProfilesForTask(task, harnessProfile),
+    skills: enabledPromptSkills().map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      source: skill.source,
+      instructionPath: skill.instructionPath,
+    })),
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
     enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
@@ -69,10 +69,10 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
       chatEndpointPath: route.chatEndpointPath,
-      apiKey: endpointSettings.secret.trim(),
+      apiKey: localVeil?.authToken ?? endpointSettings.secret.trim(),
       modelId: selectedModel.modelId,
       headers: Object.fromEntries(
-        endpointSettings.headers
+        (endpointSettings.mode === "local" ? [] : endpointSettings.headers)
           .filter((header) => header.name.trim() && header.value)
           .map((header) => [header.name.trim(), header.value]),
       ),

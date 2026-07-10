@@ -37,6 +37,17 @@ function seedSkillsDirectory() {
   return directory;
 }
 
+test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skills layout", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-install-settings-"));
+  const skills = loadSkills(userData);
+  const directory = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-install-")), ".umbratic", "skills");
+
+  assert.equal(skills.skillsDirectoryPath(), path.join(os.homedir(), ".umbratic", "skills"));
+  assert.equal(skills.installBundledSystemSkills(directory), path.resolve(directory));
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-markdown", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-spreadsheets", "SKILL.md")), true);
+});
+
 function storedZip(entries) {
   const locals = [];
   const centrals = [];
@@ -152,173 +163,23 @@ test("listSkills removes obsolete skill storage and does not list reserved roots
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md")), true);
 });
 
-test("promptSkillsForRequest includes enabled skills and explicitly requested disabled skills first", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-prompt-"));
+test("enabledPromptSkills returns every enabled skill as metadata with a readable instruction path", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-enabled-skill-catalog-"));
   const skills = loadSkills(userData);
   const directory = seedSkillsDirectory();
 
-  const selected = skills.promptSkillsForRequest("Please use $marketing for the launch note.", directory, {
+  const catalog = skills.enabledPromptSkills(directory, {
     marketing: false,
     "engineering-review": true,
+    "umbratic-python": false,
   });
 
-  assert.deepEqual(plain(selected).map((skill) => ({ id: skill.id, enabled: skill.enabled, requested: skill.requested })), [
-    { id: "marketing", enabled: false, requested: true },
-    { id: "engineering-review", enabled: true, requested: false },
-  ]);
-  assert.equal(selected[0].fullContent, true);
-  assert.equal(selected[0].reason, "explicit_request");
-  assert.equal(selected[1].fullContent, false);
-  assert.equal(selected[1].reason, "metadata");
-});
-
-test("promptSkillsForRequest keeps local skills compact unless metadata strongly matches", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-compact-"));
-  const skills = loadSkills(userData);
-  const directory = seedSkillsDirectory();
-
-  const generic = skills.promptSkillsForRequest("Summarize this note.", directory, {
-    marketing: true,
-    "engineering-review": true,
-  });
-  assert.deepEqual(plain(generic.map((skill) => ({ id: skill.id, fullContent: skill.fullContent, reason: skill.reason }))), [
-    { id: "engineering-review", fullContent: false, reason: "metadata" },
-    { id: "marketing", fullContent: false, reason: "metadata" },
-  ]);
-
-  const matched = skills.promptSkillsForRequest("Please do an engineering review of these diffs.", directory, {
-    marketing: true,
-    "engineering-review": true,
-  });
-  assert.equal(matched.find((skill) => skill.id === "engineering-review").fullContent, true);
-  assert.equal(matched.find((skill) => skill.id === "engineering-review").reason, "strong_match");
-});
-
-test("promptSkillsForRequest loads explicitly referenced skill resources for full local skills", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-resources-"));
-  const skills = loadSkills(userData);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-resource-dir-"));
-  fs.mkdirSync(path.join(directory, "deal-review", "references"), { recursive: true });
-  fs.writeFileSync(
-    path.join(directory, "deal-review", "SKILL.md"),
-    [
-      "---",
-      "name: Deal Review",
-      "description: Use for deal review.",
-      "---",
-      "",
-      "# Deal Review",
-      "",
-      "Follow [the checklist](references/checklist.md) before writing.",
-    ].join("\n"),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(directory, "deal-review", "references", "checklist.md"), "Check buyer, blocker, value, and next step.", "utf8");
-
-  const selected = skills.promptSkillsForRequest("Use $deal-review for this account.", directory, { "deal-review": true });
-  assert.equal(selected[0].fullContent, true);
-  assert.match(selected[0].content, /Referenced skill resources/);
-  assert.match(selected[0].content, /references\/checklist\.md/);
-  assert.match(selected[0].content, /Check buyer, blocker, value, and next step/);
-});
-
-test("systemSkillsForProfile exposes system skill metadata and full instructions only for matched skills", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-system-skills-"));
-  const skills = loadSkills(userData);
-
-  const marketing = skills.systemSkillsForProfile("marketing", "Create a PowerPoint launch deck and PDF one-pager.");
-  assert.deepEqual(plain(marketing.map((skill) => skill.id)), [
-    "umbratic-markdown",
-    "umbratic-ocr",
-    "umbratic-pdf",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-  ]);
-  assert.deepEqual(plain(marketing.map((skill) => ({ id: skill.id, source: skill.source, fullContent: skill.fullContent, reason: skill.reason }))), [
-    { id: "umbratic-markdown", source: "system", fullContent: false, reason: "metadata" },
-    { id: "umbratic-ocr", source: "system", fullContent: false, reason: "metadata" },
-    { id: "umbratic-pdf", source: "system", fullContent: true, reason: "strong_match" },
-    { id: "umbratic-presentations", source: "system", fullContent: true, reason: "strong_match" },
-    { id: "umbratic-documents", source: "system", fullContent: false, reason: "metadata" },
-    { id: "umbratic-spreadsheets", source: "system", fullContent: false, reason: "metadata" },
-  ]);
-
-  const engineering = skills.systemSkillsForProfile("engineering", "Fix a failing test.");
-  assert.deepEqual(plain(engineering.map((skill) => ({ id: skill.id, fullContent: skill.fullContent, reason: skill.reason }))), [
-    { id: "umbratic-git-worktree", fullContent: false, reason: "metadata" },
-    { id: "umbratic-markdown", fullContent: false, reason: "metadata" },
-    { id: "umbratic-ocr", fullContent: false, reason: "metadata" },
-    { id: "umbratic-python", fullContent: false, reason: "metadata" },
-    { id: "umbratic-cmake", fullContent: false, reason: "metadata" },
-  ]);
-  assert.equal(engineering.some((skill) => skill.id === "umbratic-presentations"), false);
-  assert.equal(engineering.some((skill) => skill.id === "umbratic-spreadsheets"), false);
-
-  const worktree = skills.systemSkillsForProfile("engineering", "workspace mode: git worktree isolated workspace");
-  assert.equal(worktree.find((skill) => skill.id === "umbratic-git-worktree").fullContent, true);
-  assert.equal(worktree.find((skill) => skill.id === "umbratic-git-worktree").reason, "strong_match");
-
-  const ocr = skills.systemSkillsForProfile("engineering", "Extract text from this screenshot.");
-  assert.equal(ocr.find((skill) => skill.id === "umbratic-ocr").fullContent, true);
-  assert.equal(ocr.find((skill) => skill.id === "umbratic-ocr").reason, "strong_match");
-
-  const python = skills.systemSkillsForProfile("engineering", "Fix pytest in tests/test_api.py.");
-  assert.equal(python.find((skill) => skill.id === "umbratic-python").fullContent, true);
-  assert.equal(python.find((skill) => skill.id === "umbratic-python").reason, "strong_match");
-
-  const cmake = skills.systemSkillsForProfile("engineering", "Debug a segfault in src/main.c with CMake.");
-  assert.equal(cmake.find((skill) => skill.id === "umbratic-cmake").fullContent, true);
-  assert.equal(cmake.find((skill) => skill.id === "umbratic-cmake").reason, "strong_match");
-
-  const engineeringPdf = skills.systemSkillsForProfile("engineering", "Create a PDF report for this release.");
-  assert.equal(engineeringPdf.find((skill) => skill.id === "umbratic-pdf").fullContent, true);
-  assert.equal(engineeringPdf.find((skill) => skill.id === "umbratic-pdf").reason, "strong_match");
-
-  const salesMarkdown = skills.systemSkillsForProfile("sales", "Write a Markdown table for this proposal.");
-  assert.equal(salesMarkdown.some((skill) => skill.id === "umbratic-markdown"), true);
-  assert.equal(salesMarkdown.some((skill) => skill.id === "umbratic-sales"), false);
-  assert.equal(salesMarkdown.some((skill) => skill.id === "umbratic-git-worktree"), false);
-  assert.equal(salesMarkdown.find((skill) => skill.id === "umbratic-markdown").fullContent, true);
-  assert.equal(salesMarkdown.find((skill) => skill.id === "umbratic-pdf").fullContent, false);
-
-  const explicit = skills.systemSkillsForProfile("sales", "Use $umbratic-pdf to make this.", {});
-  assert.equal(explicit.find((skill) => skill.id === "umbratic-pdf").fullContent, true);
-  assert.equal(explicit.find((skill) => skill.id === "umbratic-pdf").reason, "explicit_request");
-
-  const disabled = skills.systemSkillsForProfile("sales", "Write a Markdown table.", { "umbratic-markdown": false });
-  assert.equal(disabled.some((skill) => skill.id === "umbratic-markdown"), false);
-
-  const document = skills.systemSkillsForProfile("sales", "Draft a Word document memo for this account.");
-  assert.equal(document.some((skill) => skill.id === "umbratic-documents"), true);
-  assert.equal(document.find((skill) => skill.id === "umbratic-documents").fullContent, true);
-
-  const spreadsheet = skills.systemSkillsForProfile("marketing", "Create an Excel campaign forecast workbook.");
-  assert.equal(spreadsheet.some((skill) => skill.id === "umbratic-spreadsheets"), true);
-  assert.equal(spreadsheet.find((skill) => skill.id === "umbratic-spreadsheets").fullContent, true);
-});
-
-test("systemSkillsForProfile appends capability gates to selected system skills", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-system-skill-gates-"));
-  const skills = loadSkills(userData);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-system-skill-gates-dir-"));
-
-  const selected = skills.systemSkillsForProfile(
-    "marketing",
-    "Create a PDF one-pager.",
-    {},
-    {
-      "umbratic-pdf": "Runtime capability gate:\n- Poppler render/inspect is missing; do not claim PDF visual QA.",
-    },
-    directory,
-  );
-
-  const pdfSkill = selected.find((skill) => skill.id === "umbratic-pdf");
-  assert.ok(pdfSkill);
-  assert.equal(pdfSkill.fullContent, true);
-  assert.match(pdfSkill.content, /Use `pdfplumber` or `pypdf` for extraction/);
-  assert.match(pdfSkill.content, /Runtime capability gate/);
-  assert.match(pdfSkill.content, /do not claim PDF visual QA/);
+  assert.equal(catalog.some((skill) => skill.id === "marketing"), false);
+  assert.equal(catalog.some((skill) => skill.id === "umbratic-python"), false);
+  assert.equal(catalog.some((skill) => skill.id === "engineering-review"), true);
+  assert.equal(catalog.some((skill) => skill.id === "umbratic-presentations"), true);
+  assert.equal(catalog.every((skill) => !("fullContent" in skill) && !("content" in skill) && !("reason" in skill)), true);
+  assert.equal(catalog.every((skill) => fs.existsSync(skill.instructionPath)), true);
 });
 
 test("skill document editing validates ids, size, and real files", async () => {
@@ -348,10 +209,10 @@ test("skill document editing validates ids, size, and real files", async () => {
   assert.equal(systemSaved.skill.checksumStatus, "modified");
   assert.equal(fs.readFileSync(systemDocument.skill.path, "utf8"), systemContent);
 
-  const selectedSystem = skills.systemSkillsForProfile("sales", "Write a Markdown table.", {}, {}, directory);
+  const selectedSystem = skills.enabledPromptSkills(directory, {});
   const markdownSkill = selectedSystem.find((skill) => skill.id === "umbratic-markdown");
   assert.equal(markdownSkill.name, "Markdown Custom");
-  assert.match(markdownSkill.content, /Prefer very short tables/);
+  assert.equal(fs.readFileSync(markdownSkill.instructionPath, "utf8"), systemContent);
 
   const resetSystem = await skills.resetSystemSkill({ id: "umbratic-markdown" }, directory);
   assert.equal(resetSystem.ok, true);
@@ -452,8 +313,8 @@ test("importSkill imports a zip skill archive with one skill folder", async () =
     assert.equal(imported.ok, true);
     assert.equal(imported.skill.id, "zip-skill");
     assert.equal(fs.readFileSync(path.join(directory, "zip-skill", "examples.md"), "utf8"), "Zip resource text.");
-    const selected = skills.promptSkillsForRequest("Use $zip-skill now.", directory, { "zip-skill": true });
-    assert.match(selected[0].content, /Zip resource text/);
+    const selected = skills.enabledPromptSkills(directory, { "zip-skill": true });
+    assert.equal(selected.find((skill) => skill.id === "zip-skill").instructionPath, path.join(directory, "zip-skill", "SKILL.md"));
   } finally {
     fs.rmSync(zipPath, { force: true });
   }

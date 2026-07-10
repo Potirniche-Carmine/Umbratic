@@ -40,7 +40,6 @@ export type CommandClass =
   | "network"
   | "external-directory"
   | "unknown";
-export type RuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 export type TaskState =
   | "awaiting_worktree_approval"
   | "running"
@@ -71,7 +70,7 @@ export type BackendStatus = {
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
   endpointConfig: {
-    source: "server-default" | "stored" | "managed";
+    source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
   };
   privacy: {
@@ -161,15 +160,15 @@ export type ContextCompressionStrategy =
 
 export type RuntimeDiagnostics = {
   python: {
-    profileVersion: string;
-    barePythonVerification: "denied";
+    runtimeVersion: string;
+    barePythonVerification: "allowed_uv_preferred";
     generatedPaths: string[];
   };
   markdown: {
     docsOnlyClassification: "enabled";
   };
   cmake: {
-    profileVersion: string;
+    runtimeVersion: string;
     buildDir: ".umbratic/build";
   };
   toolchain: {
@@ -300,7 +299,6 @@ export type TaskInfo = {
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
-  runtimeProfile?: RuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: ReviewFile[];

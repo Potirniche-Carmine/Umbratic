@@ -734,8 +734,7 @@ function artifactRequested(needs: CapabilityPromptNeeds): boolean {
 
 export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: CapabilityPromptNeeds): string {
   const lines = [
-    "Internal local capability context:",
-    "- use these facts for planning and verification choices; mention them only when they affect an action, result, or blocker.",
+    "Local capability facts:",
     `- checked at ${report.checkedAt}`,
   ];
   const requiredMissing = missingRequiredLabels(report);
@@ -787,109 +786,11 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     lines.push(`- local OCR engine: ${statusLabel(tesseract)}`);
     lines.push(`- PDF-to-image support for OCR: ${statusLabel(pdfToImg)}`);
     if (tesseract?.status !== "available") {
-      lines.push("- local OCR digest generation is unavailable; do not invent OCR text, and use normal image/PDF context only when appropriate.");
+      lines.push("- local OCR digest generation is unavailable.");
     }
   }
 
   return lines.join("\n");
-}
-
-function artifactSkillLine(report: CapabilityProbeReport, ids: string[], availableText: string, missingText: string): string {
-  return ids.every((id) => isAvailable(report, id)) ? availableText : missingText;
-}
-
-export function harnessSkillCapabilityGuidance(report: CapabilityProbeReport): Record<string, string> {
-  return {
-    "umbratic-python": [
-      "Runtime capability gate:",
-      `- uv runtime: ${statusLabel(capabilityById(report, "uv"))}; Python interpreter: ${statusLabel(capabilityById(report, "python"))}`,
-      "If uv is unavailable, use a workspace-managed fallback only when it is safe and sufficient for the task.",
-      "Do not claim Python verification unless the verification command actually ran.",
-    ].join("\n"),
-    "umbratic-cmake": [
-      "Runtime capability gate:",
-      `- CMake: ${statusLabel(capabilityById(report, "cmake"))}; Ninja: ${statusLabel(capabilityById(report, "ninja"))}; compiler: ${statusLabel(capabilityById(report, "compiler"))}`,
-      "If local build tools are missing, use project-native fallbacks or source inspection and state the verification gap.",
-    ].join("\n"),
-    "umbratic-ocr": [
-      "Runtime capability gate:",
-      `- local OCR engine: ${statusLabel(capabilityById(report, "tesseract"))}; PDF-to-image support: ${statusLabel(capabilityById(report, "pdf-to-img"))}`,
-      "If local OCR is unavailable, do not invent OCR text; use normal image/PDF context only when it is available.",
-      "Do not claim OCR artifact generation unless JSON and Markdown OCR artifacts were actually created.",
-    ].join("\n"),
-    "umbratic-git-worktree": [
-      "Runtime capability gate:",
-      `- Git command: ${statusLabel(capabilityById(report, "git"))}; rg search: ${statusLabel(capabilityById(report, "rg"))}; fd path discovery: ${statusLabel(capabilityById(report, "fd"))}`,
-      "If Git is missing or errors, do not claim branch, worktree, diff, or merge facts that were not verified.",
-      "Use missing search/path capabilities as verification gaps, not as reasons to invent successful checks.",
-    ].join("\n"),
-    "umbratic-pdf": [
-      "Runtime capability gate:",
-      artifactSkillLine(
-        report,
-        ["py-reportlab"],
-        "- PDF generation with reportlab is available.",
-        "- PDF generation is unavailable until reportlab is available in the Python artifact environment.",
-      ),
-      artifactSkillLine(
-        report,
-        ["py-pdfplumber"],
-        "- PDF extraction with pdfplumber is available.",
-        "- pdfplumber extraction is unavailable; use pypdf if available or rendered-page inspection.",
-      ),
-      artifactSkillLine(
-        report,
-        ["pdftoppm", "pdfinfo"],
-        "- Poppler render/inspect is available for PDF visual QA.",
-        "- Poppler render/inspect is missing or incomplete; do not claim PDF visual QA.",
-      ),
-    ].join("\n"),
-    "umbratic-presentations": [
-      "Runtime capability gate:",
-      artifactSkillLine(
-        report,
-        ["node-pptx"],
-        "- PPTX JavaScript authoring runtime is available.",
-        "- PPTX JavaScript authoring runtime is missing; provide deck-ready source or state the generation gap.",
-      ),
-      artifactSkillLine(
-        report,
-        ["libreoffice"],
-        "- LibreOffice export/render verification is available.",
-        "- LibreOffice is missing; do not claim slide render/export QA.",
-      ),
-    ].join("\n"),
-    "umbratic-documents": [
-      "Runtime capability gate:",
-      artifactSkillLine(
-        report,
-        ["node-docx"],
-        "- DOCX JavaScript authoring runtime is available.",
-        "- DOCX JavaScript authoring runtime is missing; provide document-ready source or state the generation gap.",
-      ),
-      artifactSkillLine(
-        report,
-        ["libreoffice"],
-        "- LibreOffice document rendering is available.",
-        "- LibreOffice is missing; do not claim DOCX visual QA.",
-      ),
-    ].join("\n"),
-    "umbratic-spreadsheets": [
-      "Runtime capability gate:",
-      artifactSkillLine(
-        report,
-        ["node-xlsx"],
-        "- XLSX JavaScript workbook runtime is available.",
-        "- XLSX JavaScript workbook runtime is missing; provide spreadsheet-ready tables/formulas or state the generation gap.",
-      ),
-      artifactSkillLine(
-        report,
-        ["libreoffice"],
-        "- LibreOffice spreadsheet export/render verification is available.",
-        "- LibreOffice is missing; do not claim workbook render/export QA.",
-      ),
-    ].join("\n"),
-  };
 }
 
 function versionFamily(version: string | undefined): string | undefined {

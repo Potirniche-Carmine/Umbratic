@@ -203,7 +203,6 @@ export function buildRedactedTelemetryBundle(tasks: TaskRecord[], _projects: Rep
         runner: {
           name: task.runnerName,
           version: task.runnerVersion,
-          runtimeProfile: task.runtimeProfile,
         },
         mode: {
           permission: task.permissionMode,

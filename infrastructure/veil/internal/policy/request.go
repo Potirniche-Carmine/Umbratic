@@ -23,16 +23,16 @@ type ChatInput struct {
 	Stream     bool
 	Tools      any
 	ToolChoice any
-	Profiles   []prompts.RuntimeProfile
+	Skills     []prompts.SkillMetadata
 }
 
 type chatRequest struct {
-	Input           string          `json:"input"`
-	Messages        []model.Message `json:"messages"`
-	Stream          bool            `json:"stream"`
-	Tools           any             `json:"tools"`
-	ToolChoice      any             `json:"tool_choice"`
-	RuntimeProfiles []string        `json:"runtime_profiles"`
+	Input      string                  `json:"input"`
+	Messages   []model.Message         `json:"messages"`
+	Stream     bool                    `json:"stream"`
+	Tools      any                     `json:"tools"`
+	ToolChoice any                     `json:"tool_choice"`
+	Skills     []prompts.SkillMetadata `json:"skills"`
 }
 
 func DecodeChatInput(r io.Reader) (ChatInput, error) {
@@ -50,7 +50,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "input", "messages", "stream", "tools", "tool_choice", "runtime_profiles":
+		case "input", "messages", "stream", "tools", "tool_choice", "skills":
 		case "model", "system":
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		default:
@@ -87,7 +87,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 			return ChatInput{}, fmt.Errorf("message %d is too large", i)
 		}
 	}
-	profiles, err := runtimeProfiles(req.RuntimeProfiles)
+	skills, err := skillCatalog(req.Skills)
 	if err != nil {
 		return ChatInput{}, err
 	}
@@ -97,33 +97,53 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 		Stream:     req.Stream,
 		Tools:      req.Tools,
 		ToolChoice: req.ToolChoice,
-		Profiles:   profiles,
+		Skills:     skills,
 	}, nil
 }
 
-func runtimeProfiles(values []string) ([]prompts.RuntimeProfile, error) {
+func skillCatalog(values []prompts.SkillMetadata) ([]prompts.SkillMetadata, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
-	if len(values) > 8 {
-		return nil, errors.New("too many runtime profiles")
-	}
-	profiles := make([]prompts.RuntimeProfile, 0, len(values))
-	seen := make(map[prompts.RuntimeProfile]bool, len(values))
-	for _, value := range values {
-		profile := prompts.RuntimeProfile(strings.TrimSpace(value))
-		if profile == "" {
+	result := make([]prompts.SkillMetadata, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for index, value := range values {
+		value.ID = strings.TrimSpace(value.ID)
+		value.Name = strings.Join(strings.Fields(value.Name), " ")
+		value.Description = strings.Join(strings.Fields(value.Description), " ")
+		value.Source = strings.TrimSpace(value.Source)
+		if !validSkillID(value.ID) {
+			return nil, fmt.Errorf("skill %d has invalid id", index)
+		}
+		if value.Name == "" || len(value.Name) > 160 {
+			return nil, fmt.Errorf("skill %q has invalid name", value.ID)
+		}
+		if len(value.Description) > 1000 {
+			return nil, fmt.Errorf("skill %q description is too long", value.ID)
+		}
+		if value.Source != "system" && value.Source != "local" {
+			return nil, fmt.Errorf("skill %q has invalid source", value.ID)
+		}
+		if seen[value.ID] {
 			continue
 		}
-		if !prompts.IsRuntimeProfile(profile) {
-			return nil, fmt.Errorf("runtime profile %q is not supported", value)
-		}
-		if !seen[profile] {
-			seen[profile] = true
-			profiles = append(profiles, profile)
-		}
+		seen[value.ID] = true
+		result = append(result, value)
 	}
-	return profiles, nil
+	return result, nil
+}
+
+func validSkillID(value string) bool {
+	if value == "" || len(value) > 96 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func contentIsBlank(content any) bool {

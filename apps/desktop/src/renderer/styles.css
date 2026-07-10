@@ -1100,7 +1100,8 @@ pre {
 
 .settingsPlaceholder {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 16px auto;
+  justify-content: center;
   gap: 8px;
   align-items: center;
   min-height: 32px;
@@ -1511,6 +1512,7 @@ pre {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: clamp(22px, 4vh, 44px) clamp(22px, 4vw, 64px) clamp(44px, 8vh, 96px);
   line-height: 1.65;
   scroll-behavior: auto;
@@ -3474,6 +3476,7 @@ button.attachmentPreview:focus-visible {
   border: 0;
   border-radius: var(--radius);
   overflow: hidden;
+  scrollbar-gutter: stable;
   color: var(--text);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -3498,6 +3501,7 @@ button.attachmentPreview:focus-visible {
   min-height: 58px;
   max-height: 108px;
   resize: none;
+  scrollbar-gutter: stable;
   padding: 14px 56px 14px 16px;
   border: 0;
   border-radius: var(--radius);
@@ -3618,16 +3622,20 @@ button.attachmentPreview:focus-visible {
   min-width: 0;
 }
 
-.floatingApproval strong,
-.floatingApproval span {
+.floatingApproval strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .floatingApproval span {
+  max-height: min(220px, calc(100vh - 220px));
+  overflow: auto;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .reviewPanel {
@@ -4484,7 +4492,9 @@ button.attachmentPreview:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  width: 100%;
   max-width: 520px;
+  margin: 0 auto;
 }
 
 .settingsPanelHead h3 {
@@ -4522,6 +4532,127 @@ button.attachmentPreview:focus-visible {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.connectionLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 360px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.connectionPanelHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.connectionPanelHead > div:first-child {
+  min-width: 0;
+}
+
+.connectionCompactStatus,
+.connectionActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connectionCompactStatus {
+  flex: 0 0 auto;
+  padding-top: 1px;
+}
+
+.connectionActions {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connectionModeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.connectionModeGrid > button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  min-height: 78px;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
+  text-align: center;
+  cursor: pointer;
+}
+
+.connectionModeGrid > button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.connectionModeGrid > button.isActive {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.12), rgba(178, 186, 197, 0.045)),
+    color-mix(in srgb, var(--surface-2) 56%, transparent);
+}
+
+.connectionModeGrid > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.connectionModeGrid > button > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.connectionModeGrid strong {
+  color: inherit;
+  font-size: 12.5px;
+}
+
+.connectionModeGrid em {
+  color: var(--faint);
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.connectionModeIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-3) 48%, transparent);
+}
+
+.connectionUnsaved {
+  color: var(--amber);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.connectionFeedback {
+  min-height: 18px;
+}
+
+.settingsMessageError {
+  color: var(--red);
 }
 
 .settingsActionRow {
@@ -4594,14 +4725,6 @@ button.attachmentPreview:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-}
-
-.serverHealthControl {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  min-width: 0;
 }
 
 .settingsIconButton {
@@ -4691,6 +4814,12 @@ button.attachmentPreview:focus-visible {
   color: var(--text);
   background: color-mix(in srgb, var(--surface-2) 60%, transparent);
   font-size: 12.5px;
+}
+
+.settingsField input:disabled,
+.settingsField select:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .appearanceOptionGrid {
@@ -5249,6 +5378,9 @@ button.attachmentPreview:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .connectionModeGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .dialogIcon {

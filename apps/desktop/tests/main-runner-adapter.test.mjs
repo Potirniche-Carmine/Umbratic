@@ -34,7 +34,7 @@ function loadRunnerAdapter(userData) {
   };
 }
 
-test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled tools, and runtime profiles", () => {
+test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled tools, and skill metadata", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-"));
   const { adapter, storage } = loadRunnerAdapter(userData);
 
@@ -60,7 +60,6 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     prompt: "Debug a segfault in the C harness",
     workspaceKind: "git",
     workspaceMode: "worktree",
-    runtimeProfile: "cmake",
     enabledTools: ["read", "legacy-tool", "bad"],
     capabilityProbes: [
       {
@@ -94,14 +93,17 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
       affectedCurrentRun: true,
     },
   ]);
-  assert.deepEqual(plain(config.runtimeProfiles), []);
+  assert.equal(config.runtimeProfiles, undefined);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-markdown" && skill.source === "system"), true);
+  assert.equal(config.skills.every((skill) => typeof skill.name === "string" && typeof skill.description === "string"), true);
+  assert.equal(config.skills.every((skill) => !("content" in skill) && !("fullContent" in skill)), true);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
   assert.equal("system" in config, false);
   assert.equal(config.provider.apiKey, "endpoint-token");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });
 });
 
-test("engineering harness mode receives engineering runtime profiles", () => {
+test("engineering harness mode uses its Veil route without runtime prompt profiles", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-engineering-"));
   const { adapter, storage } = loadRunnerAdapter(userData);
   storage.writeHarnessProfileSetting("engineering");
@@ -119,19 +121,20 @@ test("engineering harness mode receives engineering runtime profiles", () => {
     prompt: "Fix a CMake build",
     workspaceKind: "git",
     workspaceMode: "worktree",
-    runtimeProfile: "cmake",
     enabledTools: ["read", "command"],
     worktreePath: "/repo/.umbratic/worktree",
   };
 
   const config = adapter.buildUmbraticRunnerConfig(task, model);
-  assert.deepEqual(plain(config.runtimeProfiles), ["workspace-toolchain", "git", "worktree", "cmake"]);
+  assert.equal(config.runtimeProfiles, undefined);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-python"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
   assert.equal(config.modelBoundary, "managed");
   assert.equal("system" in config, false);
 });
 
-test("business harness modes can still request markdown runtime profile", () => {
+test("business harness modes use their Veil route with the same enabled skill catalog", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-markdown-"));
   const { adapter, storage } = loadRunnerAdapter(userData);
   storage.writeHarnessProfileSetting("marketing");
@@ -149,13 +152,13 @@ test("business harness modes can still request markdown runtime profile", () => 
     prompt: "Write a Markdown table for the launch brief",
     workspaceKind: "folder",
     workspaceMode: "local",
-    runtimeProfile: "markdown",
     enabledTools: ["read"],
     worktreePath: "/repo",
   };
 
   const config = adapter.buildUmbraticRunnerConfig(task, model);
-  assert.deepEqual(plain(config.runtimeProfiles), ["markdown"]);
+  assert.equal(config.runtimeProfiles, undefined);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-cmake"), true);
   assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
   assert.equal(config.modelBoundary, "managed");
   assert.equal("system" in config, false);

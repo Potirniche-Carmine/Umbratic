@@ -5,7 +5,6 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 
 import { readSkillSettings, writeSkillSettings } from "./storage";
-import type { HarnessProfileId } from "./types";
 import { pathInside } from "./utils";
 
 export type SkillSource = "system" | "local";
@@ -28,16 +27,11 @@ export type PromptSkillInfo = {
   name: string;
   description: string;
   instructionPath: string;
-  content: string;
-  fullContent: boolean;
   source: SkillSource;
-  reason: "explicit_request" | "strong_match" | "metadata";
 };
 
 type SystemSkillDefinition = {
   id: string;
-  profiles: HarnessProfileId[];
-  matchPattern?: RegExp;
 };
 
 type SkillManifestEntry = {
@@ -52,59 +46,20 @@ type SkillManifest = {
 };
 
 const skillFileByteLimit = 512 * 1024;
-const skillResourceByteLimit = 128 * 1024;
-const skillResourceTotalByteLimit = 512 * 1024;
 const skillImportTotalByteLimit = 10 * 1024 * 1024;
 const skillImportTempPrefix = "umbratic-skill-import-";
 const skillManifestFileName = ".manifest.json";
 
 const systemSkillDefinitions: SystemSkillDefinition[] = [
-  {
-    id: "umbratic-git-worktree",
-    profiles: ["engineering"],
-    matchPattern: /\b(git|worktree|branch|checkout|merge|rebase|diff|commit|stash|conflict|base commit|agent branch|isolated workspace)\b/i,
-  },
-  {
-    id: "umbratic-markdown",
-    profiles: ["engineering", "marketing", "sales"],
-    matchPattern: /\b(markdown|md|readme|docs?|documentation|table|formatted text|paste-ready|plain[-\s]?text)\b/i,
-  },
-  {
-    id: "umbratic-ocr",
-    profiles: ["engineering", "marketing", "sales"],
-    matchPattern: /\b(ocr|optical character recognition|extract text|read text|transcribe|scan(?:ned)? document|screenshot|image text|text from image|text from pdf|what does this say|attached image|attached pdf|form fields?|source-grounded extraction)\b/i,
-  },
-  {
-    id: "umbratic-python",
-    profiles: ["engineering"],
-    matchPattern: /\b(python|\.py|pyproject|requirements\.txt|uv|venv|pytest|pip|python script)\b/i,
-  },
-  {
-    id: "umbratic-cmake",
-    profiles: ["engineering"],
-    matchPattern:
-      /\b(cmake|cmakelists\.txt|c code|c project|c harness|c toolchain|c\+\+|cpp|ctest|ninja|clang|gcc|msvc|makefile|asan|ubsan|segfault|buffer overflow|pointer|malloc|free)\b|(?:^|[\s\\/])[^.\s\\/]+\.(?:c|h|cc|cpp|cxx|hpp)\b/i,
-  },
-  {
-    id: "umbratic-pdf",
-    profiles: ["marketing", "sales"],
-    matchPattern: /\b(pdf|one[-\s]?pager|report|whitepaper|white paper)\b/i,
-  },
-  {
-    id: "umbratic-presentations",
-    profiles: ["marketing", "sales"],
-    matchPattern: /\b(powerpoint|pptx|presentation|deck|slides?|speaker notes?)\b/i,
-  },
-  {
-    id: "umbratic-documents",
-    profiles: ["marketing", "sales"],
-    matchPattern: /\b(docx|word document|word|redline|memo|proposal document|document draft)\b/i,
-  },
-  {
-    id: "umbratic-spreadsheets",
-    profiles: ["marketing", "sales"],
-    matchPattern: /\b(xlsx|excel|spreadsheet|workbook|worksheet|forecast|formula|chart|csv)\b/i,
-  },
+  { id: "umbratic-git-worktree" },
+  { id: "umbratic-markdown" },
+  { id: "umbratic-ocr" },
+  { id: "umbratic-python" },
+  { id: "umbratic-cmake" },
+  { id: "umbratic-pdf" },
+  { id: "umbratic-presentations" },
+  { id: "umbratic-documents" },
+  { id: "umbratic-spreadsheets" },
 ];
 
 const retiredSystemSkillIds = ["umbratic-engineering", "umbratic-sales", "umbratic-marketing"];
@@ -308,6 +263,12 @@ function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {
   cleanupObsoleteSkillPaths(root);
 }
 
+export function installBundledSystemSkills(directory = skillsDirectoryPath()): string {
+  const root = path.resolve(directory);
+  ensureSystemSkillFiles(root);
+  return root;
+}
+
 function textFileIfSafe(filePath: string, byteLimit: number): string | null {
   try {
     const stat = fs.statSync(filePath);
@@ -318,52 +279,6 @@ function textFileIfSafe(filePath: string, byteLimit: number): string | null {
   } catch {
     return null;
   }
-}
-
-function referencedSkillResourcePaths(skillFile: string, content: string): string[] {
-  const root = path.dirname(path.resolve(skillFile));
-  const resources = new Set<string>();
-  const addReference = (rawValue: string) => {
-    const value = rawValue.trim().replace(/[.,;:!?]+$/g, "");
-    if (!value || value.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(value)) return;
-    const withoutAnchor = value.split("#")[0].split("?")[0];
-    if (!withoutAnchor || withoutAnchor === "SKILL.md") return;
-    const resolved = path.resolve(root, withoutAnchor);
-    if (!pathInside(root, resolved)) return;
-    resources.add(resolved);
-  };
-
-  for (const match of content.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
-    addReference(match[1]);
-  }
-  for (const match of content.matchAll(/(?:^|\s)@(\.\/[^\s)]+|\.\.\/[^\s)]+)/g)) {
-    addReference(match[1]);
-  }
-  return [...resources].slice(0, 8);
-}
-
-function skillContentWithReferencedResources(skillFile: string, content: string): string {
-  const resources = referencedSkillResourcePaths(skillFile, content);
-  if (!resources.length) return content;
-  const root = path.dirname(path.resolve(skillFile));
-  const sections: string[] = [];
-  let remaining = skillResourceTotalByteLimit;
-  for (const resourcePath of resources) {
-    if (remaining <= 0) break;
-    const text = textFileIfSafe(resourcePath, Math.min(skillResourceByteLimit, remaining));
-    if (text === null) continue;
-    remaining -= Buffer.byteLength(text, "utf8");
-    const relative = path.relative(root, resourcePath).replace(/\\/g, "/");
-    sections.push(`\n### ${relative}\n\`\`\`\n${text}\n\`\`\``);
-  }
-  if (!sections.length) return content;
-  return [
-    content,
-    "",
-    "Referenced skill resources:",
-    "The following local files were explicitly referenced by this skill and loaded from the same skill folder.",
-    ...sections,
-  ].join("\n");
 }
 
 export async function skillFilePathForId(id: string, directory = skillsDirectoryPath()): Promise<string | null> {
@@ -442,10 +357,7 @@ export function readPromptSkillInfo(id: string, nameFallback: string, skillFile:
     name: meta.name || nameFallback,
     description: meta.description || skillDescriptionFromMarkdown(content),
     instructionPath: skillFile,
-    content: skillContentWithReferencedResources(skillFile, content),
-    fullContent: false,
     source: "local",
-    reason: "metadata",
   };
 }
 
@@ -477,95 +389,26 @@ export function collectPromptSkillsFromDirectory(directory: string): PromptSkill
   return skills;
 }
 
-export function requestedSkillIdsFromPrompt(userPrompt: string): Set<string> {
-  const requested = new Set<string>();
-  const pattern = /(^|[\s([{])\$([A-Za-z0-9_-]{1,96})\b/g;
-  for (const match of userPrompt.matchAll(pattern)) {
-    requested.add(match[2]);
-  }
-  return requested;
-}
-
-function normalizedTerms(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((term) => term.length >= 4),
-  );
-}
-
-function skillStronglyMatchesPrompt(skill: Pick<PromptSkillInfo, "id" | "name" | "description">, userPrompt: string): boolean {
-  const promptTerms = normalizedTerms(userPrompt);
-  if (promptTerms.size === 0) return false;
-  const skillTerms = normalizedTerms(`${skill.id} ${skill.name} ${skill.description}`);
-  let matches = 0;
-  for (const term of skillTerms) {
-    if (promptTerms.has(term)) matches += 1;
-    if (matches >= 2) return true;
-  }
-  const name = skill.name.toLowerCase();
-  return name.length >= 4 && userPrompt.toLowerCase().includes(name);
-}
-
-export function systemSkillsForProfile(
-  profile: HarnessProfileId,
-  userPrompt: string,
-  settings = readSkillSettings(),
-  capabilityGuidance: Record<string, string> = {},
+export function enabledPromptSkills(
   directory = skillsDirectoryPath(),
+  settings = readSkillSettings(),
 ): PromptSkillInfo[] {
   ensureSystemSkillFiles(directory);
-  const requestedIds = requestedSkillIdsFromPrompt(userPrompt);
-  return systemSkillDefinitions
+  const systemSkills = systemSkillDefinitions
     .filter((skill) => settings[skill.id] !== false)
     .map((skill) => {
       const info = systemSkillDisplayInfo(skill, settings, directory);
-      const requested = requestedIds.has(skill.id);
-      const matched = !!skill.matchPattern?.test(userPrompt) || skillStronglyMatchesPrompt(info, userPrompt);
-      const profileDefault = skill.profiles.includes(profile);
-      const fullContent = requested || matched;
       return {
         id: skill.id,
         name: info.name,
         description: info.description,
         instructionPath: systemSkillFilePath(skill, directory),
-        content: fullContent ? [systemSkillContent(skill, directory), capabilityGuidance[skill.id]].filter(Boolean).join("\n\n") : "",
-        fullContent,
         source: "system" as const,
-        reason: requested ? "explicit_request" as const : matched ? "strong_match" as const : "metadata" as const,
-        profileDefault,
       };
-    })
-    .filter((skill) => skill.profileDefault || skill.fullContent)
-    .map(({ profileDefault, ...skill }) => skill);
-}
-
-export function promptSkillsForRequest(
-  userPrompt: string,
-  directory = skillsDirectoryPath(),
-  settings = readSkillSettings(),
-): Array<PromptSkillInfo & { enabled: boolean; requested: boolean }> {
-  const requestedIds = requestedSkillIdsFromPrompt(userPrompt);
-  return collectPromptSkillsFromDirectory(directory)
-    .map((skill) => ({
-      ...skill,
-      enabled: settings[skill.id] !== false,
-      requested: requestedIds.has(skill.id),
-      fullContent: requestedIds.has(skill.id) || skillStronglyMatchesPrompt(skill, userPrompt),
-      reason: requestedIds.has(skill.id)
-        ? "explicit_request" as const
-        : skillStronglyMatchesPrompt(skill, userPrompt)
-          ? "strong_match" as const
-          : "metadata" as const,
-    }))
-    .filter((skill) => skill.enabled || skill.requested)
-    .sort((left, right) =>
-      Number(right.requested) - Number(left.requested) ||
-      Number(right.fullContent) - Number(left.fullContent) ||
-      left.name.localeCompare(right.name)
-    )
-    .slice(0, 24);
+    });
+  const localSkills = collectPromptSkillsFromDirectory(directory)
+    .filter((skill) => settings[skill.id] !== false);
+  return [...systemSkills, ...localSkills];
 }
 
 export async function listSkills(
@@ -930,7 +773,7 @@ export async function createSkill(
     }
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
-  const template = `---\nname: ${rawName}\ndescription: Briefly describe when Umbratic AI should use this skill.\n---\n\n# ${rawName}\n\nReplace this with the guidance Umbratic AI should follow when this skill is relevant.\n`;
+  const template = `---\nname: ${rawName}\ndescription: Briefly describe when Umbratic should use this skill.\n---\n\n# ${rawName}\n\nReplace this with the guidance Umbratic should follow when this skill is relevant.\n`;
   await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), template, "utf8");
   recordSkillChecksum(root, id, checksumPath(skillDir) ?? sha256Hex(template), "created");
   writeSkillSettings({ [id]: true });
@@ -939,7 +782,7 @@ export async function createSkill(
     skill: {
       id,
       name: rawName,
-      description: "Briefly describe when Umbratic AI should use this skill.",
+      description: "Briefly describe when Umbratic should use this skill.",
       enabled: true,
       source: "local",
       readOnly: false,

@@ -2,7 +2,7 @@
 
 Umbratic is a private AI workbench for teams running local or company-managed model infrastructure. The desktop app talks to a local runner for workspace tools, and the runner talks to Veil, the authenticated model boundary in front of an admin-configured Ollama or vLLM runtime.
 
-Umbratic is not a public connector platform. The supported harness surface is intentionally small: local workspace tools, local skills, Veil runtime profiles, worktree review, approval flows, and redacted operational telemetry retained on company-managed servers.
+Umbratic is not a public connector platform. The supported harness surface is intentionally small: local workspace tools, local skills, Veil-owned prompts, worktree review, approval flows, and redacted operational telemetry retained on company-managed servers.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ In scope:
 - Veil as the only supported model endpoint path.
 - Admin-configured Ollama or vLLM runtimes hidden behind Veil.
 - Local skills stored under `~/.umbratic/skills`.
-- Runtime profiles for workspace toolchains, Python, CMake, Markdown, Git, and worktrees.
+- Veil-owned global, route, and skill-use prompts for both local and server modes.
 - Local document artifact workflows for PDF, DOCX, PPTX, and XLSX when installed runtime support is available.
 - Worktree-based review and approval before changes are accepted.
 - Redacted telemetry with useful workflow, tool, policy, permission, review, and failure facts.
@@ -41,7 +41,7 @@ Out of scope:
 
 Telemetry should capture everything operationally useful while avoiding raw sensitive data. Prompts, assistant text, full command output, full diffs, absolute paths, and secrets are redacted or summarized before export or sync. Managed deployments should store telemetry only on company-controlled servers.
 
-Harness modes select different local guidance. Engineering mode can add workspace, Git, worktree, Python, CMake, or Markdown runtime profiles when relevant. Marketing and sales mode avoid engineering profiles by default, but Markdown remains available across modes for Markdown-shaped requests. Those modes instead add system skills for PDFs, DOCX documents, PPTX presentations, XLSX spreadsheets, campaign content, and sales enablement. System and personal skills are visible in Skills settings, can be toggled, and can be edited; system skills are editable files under `~/.umbratic/skills/system/<id>/SKILL.md`, while personal skills remain stored under `~/.umbratic/skills`. Umbratic shows compact skill metadata by default and includes full skill instructions only when a skill is explicitly requested or strongly matched to the task.
+Harness modes select a Veil route, not a client-side system prompt. The desktop sends factual workspace context, and Veil adds the protected global and route guidance for both an app-launched local Veil and a hosted Veil server. System and personal skills are visible in Skills settings, can be toggled, and can be edited; system skills are editable files under `~/.umbratic/skills/system/<id>/SKILL.md`, while personal skills remain stored under `~/.umbratic/skills`. Every enabled skill is exposed to the model by id, name, description, and source only. When a skill is relevant, Veil requires the model to use the local `read_skill` tool and finish reading `SKILL.md` before applying it.
 
 ## Install Runtime Expectations
 
@@ -55,7 +55,7 @@ Recommended installer bundle:
 - DOCX/PPTX/XLSX artifacts: a bundled Node artifact runtime for Office files, plus LibreOffice or another local render/export path for visual QA.
 - Skills: system skills for Markdown, PDF, document, presentation, spreadsheet, marketing, sales, and engineering workflows under `~/.umbratic/skills/system/<id>/SKILL.md`, plus personal skills under `~/.umbratic/skills`.
 
-The app should probe these dependencies and expose the matching runtime profiles or artifact skills only when they can work. PDF text extraction is useful for quick checks, but final PDF, DOCX, PPTX, and XLSX work should use render/export verification before claiming visual QA.
+The app probes these dependencies as execution capabilities, not as prompt profiles. Actual runtimes are still needed when a tool must run Python, CMake, OCR, or artifact generation; they no longer inject behavioral guidance from the harness. PDF text extraction is useful for quick checks, but final PDF, DOCX, PPTX, and XLSX work should use render/export verification before claiming visual QA.
 
 ## Project Structure
 
@@ -83,7 +83,13 @@ Build the desktop app:
 npm run desktop:build
 ```
 
-Run Veil locally:
+Run the desktop app with its app-managed local Veil harness:
+
+```sh
+npm run local -- --model llama3.2
+```
+
+Run Veil by itself for server development:
 
 ```sh
 npm run veil:dev

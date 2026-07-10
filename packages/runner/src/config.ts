@@ -9,12 +9,19 @@ export type RunnerConfig = {
   cwd: string;
   workspaceMode?: "local" | "worktree";
   modelBoundary: RunnerModelBoundary;
-  runtimeProfiles?: string[];
+  skills: RunnerSkillConfig[];
   permissionMode: PermissionMode;
   enabledTools: RunnerToolName[];
   diagnostics: RunnerDiagnosticsConfig;
   provider: UmbraticProviderConfig;
-  system?: string;
+};
+
+export type RunnerSkillConfig = {
+  id: string;
+  name: string;
+  description: string;
+  source: "system" | "local";
+  instructionPath: string;
 };
 
 export type RunnerDiagnosticsConfig = {
@@ -64,13 +71,26 @@ function enabledToolsValue(value: unknown): RunnerToolName[] {
   return runnerToolNames.filter((name) => seen.has(name));
 }
 
-function runtimeProfilesValue(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const seen = new Set<string>();
+function skillsValue(value: unknown): RunnerSkillConfig[] {
+  if (!Array.isArray(value)) return [];
+  const skills = new Map<string, RunnerSkillConfig>();
   for (const item of value) {
-    if (typeof item === "string" && item.trim()) seen.add(item.trim());
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const skill = item as Record<string, unknown>;
+    const id = optionalString(skill.id);
+    const name = optionalString(skill.name);
+    const instructionPath = optionalString(skill.instructionPath);
+    if (!id || !/^[A-Za-z0-9_-]{1,96}$/.test(id) || !name || !instructionPath) continue;
+    if (skill.source !== "system" && skill.source !== "local") continue;
+    skills.set(id, {
+      id,
+      name,
+      description: typeof skill.description === "string" ? skill.description.trim() : "",
+      source: skill.source,
+      instructionPath,
+    });
   }
-  return seen.size ? [...seen] : undefined;
+  return [...skills.values()];
 }
 
 function diagnosticsValue(value: unknown): RunnerDiagnosticsConfig {
@@ -109,19 +129,18 @@ export function loadRunnerConfig(): RunnerConfig {
   if (modelBoundary === "managed" && providerId !== "company-endpoint") {
     throw new Error("managed runner config requires provider.id company-endpoint");
   }
-  if (modelBoundary === "managed" && typeof config.system === "string" && config.system.trim()) {
-    throw new Error("managed runner config must not include a client system prompt");
+  if (typeof config.system === "string" && config.system.trim()) {
+    throw new Error("runner config must not include a client system prompt");
   }
   return {
     taskId: typeof config.taskId === "string" && config.taskId.trim() ? config.taskId.trim() : undefined,
     cwd: stringValue(config.cwd, "cwd"),
     workspaceMode: config.workspaceMode === "worktree" ? "worktree" : "local",
     modelBoundary,
-    runtimeProfiles: runtimeProfilesValue(config.runtimeProfiles),
+    skills: skillsValue(config.skills),
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     enabledTools: enabledToolsValue(config.enabledTools),
     diagnostics: diagnosticsValue(config.diagnostics),
-    system: typeof config.system === "string" ? config.system : undefined,
     provider: assertAllowedProvider({
       id: "company-endpoint",
       name: stringValue(provider.name, "provider.name"),

@@ -46,6 +46,7 @@ function context(cwd, options = {}) {
       cwd,
       permissionMode: options.permissionMode ?? "normal",
       enabledTools: options.enabledTools ?? ["read", "write", "edit", "search", "command"],
+      skills: options.skills ?? [],
       async askPermission(input) {
         permissions.push(input);
         return options.decision ?? "allow";
@@ -353,6 +354,49 @@ test("commandTool blocks unsafe commands, asks permission for safe commands, and
   assert.equal(allowed.outputs.some((output) => output.stream === "stdout" && output.text.includes("runner-ok")), true);
 });
 
+test("runTool allows bare Python commands to reach normal permission handling", async () => {
+  const root = workspace();
+  const barePython = context(root, { decision: "deny" });
+
+  await assert.rejects(
+    () => runTool(barePython.ctx, () => undefined, {
+      id: "tool-bare-python",
+      name: "command",
+      arguments: { command: "python script.py" },
+    }),
+    /Command denied/,
+  );
+  assert.equal(barePython.permissions.length, 1);
+  assert.equal(barePython.permissions[0].summary, "python script.py");
+});
+
+test("commandTool preserves streamed newlines between output chunks", async () => {
+  const root = workspace();
+  const allowed = context(root);
+  const command = `node -e "process.stdout.write('line-1\\n'); setTimeout(() => process.stdout.write('line-2\\n'), 50)"`;
+  const result = await commandTool(allowed.ctx, { command }, "tool-stream-lines");
+
+  assert.equal(result.status, "success");
+  assert.equal(
+    allowed.outputs.filter((output) => output.stream === "stdout").map((output) => output.text).join(""),
+    "line-1\nline-2\n",
+  );
+  assert.match(result.output, /line-1\nline-2/);
+});
+
+test("commandTool terminates commands that exceed their bounded timeout", async () => {
+  const root = workspace();
+  const allowed = context(root);
+  const command = process.platform === "win32" ? "Start-Sleep -Seconds 5" : "sleep 5";
+  const startedAt = Date.now();
+  const result = await commandTool(allowed.ctx, { command, timeoutMs: 100 }, "tool-timeout");
+
+  assert.equal(result.status, "timeout");
+  assert.equal(result.errorCode, "process_timeout");
+  assert.match(result.errorMessage, /timed out after 100 ms/);
+  assert.ok(Date.now() - startedAt < 3000);
+});
+
 test("commandTool reports non-zero command exits as structured runtime errors", async () => {
   const root = workspace();
   const allowed = context(root);
@@ -465,6 +509,87 @@ test("enabledModelToolSpecs returns provider-facing schemas without adapter-host
     assert.equal(spec.function.parameters.type, "object", spec.function.name);
     assert.equal(Array.isArray(spec.function.parameters.required), true, spec.function.name);
   }
+  const command = specs.find((spec) => spec.function.name === "command");
+  assert.equal(command.function.parameters.properties.timeoutMs.type, "number");
+  assert.match(command.function.description, /PowerShell/);
+  assert.match(command.function.description, /uv run python/);
+  assert.match(command.function.description, /Bare python, python3, and py are allowed/);
+  assert.match(command.function.description, /retry it with uv/);
+});
+
+test("read_skill reads only enabled skill instructions and their bounded resources", async () => {
+  const root = workspace();
+  const skillRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-enabled-skill-"));
+  const instructionPath = path.join(skillRoot, "SKILL.md");
+  fs.mkdirSync(path.join(skillRoot, "references"), { recursive: true });
+  fs.writeFileSync(instructionPath, "# Review\n\nRead references/checklist.md.\n", "utf8");
+  fs.writeFileSync(path.join(skillRoot, "references", "checklist.md"), "Check facts and risks.\n", "utf8");
+  const toolContext = context(root, {
+    skills: [{ id: "review", name: "Review", description: "Use for reviews.", source: "local", instructionPath }],
+  });
+
+  const main = await runTool(toolContext.ctx, () => undefined, {
+    id: "call-skill",
+    name: "read_skill",
+    arguments: { skillId: "review" },
+  });
+  assert.match(main.output, /Read status: complete/);
+  assert.match(main.output, /Read references\/checklist\.md/);
+  assert.equal(toolContext.permissions.length, 0);
+
+  const resource = await runTool(toolContext.ctx, () => undefined, {
+    id: "call-resource",
+    name: "read_skill",
+    arguments: { skillId: "review", resource: "references/checklist.md" },
+  });
+  assert.match(resource.output, /Check facts and risks/);
+  await assert.rejects(
+    () => runTool(toolContext.ctx, () => undefined, {
+      id: "call-escape",
+      name: "read_skill",
+      arguments: { skillId: "review", resource: "../outside.md" },
+    }),
+    /outside its skill folder/,
+  );
+  await assert.rejects(
+    () => runTool(context(root).ctx, () => undefined, {
+      id: "call-disabled-skill",
+      name: "read_skill",
+      arguments: { skillId: "review" },
+    }),
+    /not enabled/,
+  );
+});
+
+test("enabledModelToolSpecs adds read_skill only when enabled skills exist", () => {
+  assert.deepEqual(plain(enabledModelToolSpecs(["read"], { includeSkillReader: true }).map((spec) => spec.function.name)), ["read", "read_skill"]);
+  assert.deepEqual(plain(enabledModelToolSpecs(["read"]).map((spec) => spec.function.name)), ["read"]);
+});
+
+test("read_skill reports continuation offsets until the complete skill has been read", async () => {
+  const root = workspace();
+  const skillRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-long-skill-"));
+  const instructionPath = path.join(skillRoot, "SKILL.md");
+  fs.writeFileSync(instructionPath, `# Long skill\n\n${"x".repeat(9000)}\n`, "utf8");
+  const { ctx } = context(root, {
+    skills: [{ id: "long", name: "Long", description: "Long instructions.", source: "local", instructionPath }],
+  });
+
+  const first = await runTool(ctx, () => undefined, {
+    id: "call-long-1",
+    name: "read_skill",
+    arguments: { skillId: "long" },
+  });
+  const nextOffset = Number(first.output.match(/Next offset: (\d+)/)?.[1]);
+  assert.equal(Number.isFinite(nextOffset), true);
+  assert.doesNotMatch(first.output, /Read status: complete/);
+
+  const second = await runTool(ctx, () => undefined, {
+    id: "call-long-2",
+    name: "read_skill",
+    arguments: { skillId: "long", offset: nextOffset },
+  });
+  assert.match(second.output, /Read status: complete/);
 });
 
 test("normalizeModelToolSpec removes schema shapes local model adapters handle poorly", () => {

@@ -227,6 +227,17 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.match(commandShellText(searchRun), /Results:\napps\/desktop\/src\/renderer\/main\.tsx: content/);
 });
 
+test("nested activity scrolling transfers only the boundary overflow to the composer", () => {
+  const { splitNestedScrollDelta } = loadRenderer();
+  const split = (scrollTop, maxScrollTop, delta) =>
+    JSON.parse(JSON.stringify(splitNestedScrollDelta(scrollTop, maxScrollTop, delta)));
+
+  assert.deepEqual(split(20, 45, -70), { innerDelta: -20, outerDelta: -50 });
+  assert.deepEqual(split(30, 45, 70), { innerDelta: 15, outerDelta: 55 });
+  assert.deepEqual(split(20, 45, 10), { innerDelta: 10, outerDelta: 0 });
+  assert.deepEqual(split(0, 45, -70), { innerDelta: 0, outerDelta: -70 });
+});
+
 test("stream batching drains queued assistant text without throughput capping", () => {
   const {
     nextAnimatedStreamingLength,

@@ -10,13 +10,15 @@ import {
   defaultEndpointModelId,
   defaultEndpointSoftware,
   defaultHarnessProfileId,
+  defaultLocalModelId,
+  defaultModelEndpointMode,
   endpointEditingAllowed,
   isHarnessProfileId,
   isModelEndpointMode,
   isModelEndpointSoftware,
   managedModelEndpointDefaults,
 } from "./config";
-import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion, runtimeProfileForPrompt } from "./policy";
+import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import type {
   CapabilityProbeCategory,
@@ -296,24 +298,16 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
   ) {
     return null;
   }
+  const { runtimeProfile: _legacyRuntimeProfile, ...storedTask } = task;
+  void _legacyRuntimeProfile;
   return {
-    ...(task as TaskRecord),
+    ...(storedTask as TaskRecord),
     workspaceKind: task.workspaceKind === "folder" ? "folder" : "git",
     workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
     reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
     runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
     runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
     policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
-    runtimeProfile:
-      task.runtimeProfile === "python" ||
-      task.runtimeProfile === "markdown" ||
-      task.runtimeProfile === "cmake" ||
-      task.runtimeProfile === "powershell" ||
-      task.runtimeProfile === "posix-shell" ||
-      task.runtimeProfile === "node" ||
-      task.runtimeProfile === "none"
-        ? task.runtimeProfile
-        : runtimeProfileForPrompt(typeof task.prompt === "string" ? task.prompt : ""),
     enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
     capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
     reviewFiles: Array.isArray(task.reviewFiles) ? (task.reviewFiles as TaskRecord["reviewFiles"]) : [],
@@ -604,7 +598,7 @@ type NoteRow = {
 
 const appSettingsKey = "app";
 const userNotesId = "user";
-const modelEndpointSettingsVersion = 2;
+const modelEndpointSettingsVersion = 3;
 
 function readRawSettings(): RawSettings {
   return withAppDatabase((db) => {
@@ -666,15 +660,18 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
   return headers;
 }
 
-function defaultModelEndpointMode(): ModelEndpointMode {
-  return "server";
-}
-
 function activeModelEndpointSettings(settings: RawSettings): RawSettings["modelEndpoint"] | undefined {
   const endpoint = settings.modelEndpoint;
   if (!endpoint) return undefined;
   if (endpoint.version === modelEndpointSettingsVersion) return endpoint;
-  return endpoint.mode === "local" ? undefined : endpoint;
+  if (endpoint.mode !== "local") return endpoint;
+  // Version 2 stored the local Veil URL in baseUrl. Version 3 stores the
+  // underlying Ollama/vLLM URL instead, so preserve the mode while resetting
+  // the fields whose meaning changed.
+  return {
+    mode: "local",
+    software: endpoint.software,
+  };
 }
 
 export function hasStoredModelEndpointSettings(): boolean {
@@ -694,13 +691,19 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
   const storedBaseUrl = typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : undefined;
   const software =
     managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
+  const modelId =
+    mode === "local"
+      ? typeof endpoint.modelId === "string" && endpoint.modelId.trim()
+        ? endpoint.modelId.trim()
+        : defaultLocalModelId
+      : defaultEndpointModelId;
   return {
     mode,
     software,
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
-    modelId: defaultEndpointModelId,
-    secret: managed?.secret ?? readProtectedString(endpoint.secret) ?? defaultEndpointApiKey,
-    headers: normalizeEndpointHeaders(endpoint.headers),
+    modelId,
+    secret: mode === "local" ? "" : managed?.secret ?? readProtectedString(endpoint.secret) ?? defaultEndpointApiKey,
+    headers: mode === "local" ? normalizeEndpointHeaders([]) : normalizeEndpointHeaders(endpoint.headers),
   };
 }
 
@@ -738,9 +741,22 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
         : typeof input.baseUrl === "string" && input.baseUrl.trim()
           ? input.baseUrl.trim()
           : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
-    modelId: defaultEndpointModelId,
-    secret: managed?.secret ?? (typeof input.secret === "string" ? input.secret : nextMode === "local" ? "" : current.secret),
-    headers: normalizeEndpointHeaders(input.headers ?? current.headers),
+    modelId:
+      nextMode === "local"
+        ? typeof input.modelId === "string"
+          ? input.modelId.trim()
+          : current.mode === "local"
+            ? current.modelId
+            : defaultLocalModelId
+        : defaultEndpointModelId,
+    secret:
+      nextMode === "local"
+        ? ""
+        : managed?.secret ?? (typeof input.secret === "string" ? input.secret : current.mode === "server" ? current.secret : ""),
+    headers:
+      nextMode === "local"
+        ? normalizeEndpointHeaders([])
+        : normalizeEndpointHeaders(input.headers ?? (current.mode === "server" ? current.headers : [])),
   };
   const settings = readRawSettings();
   writeRawSettings({

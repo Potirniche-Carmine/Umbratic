@@ -10,7 +10,7 @@ internal/config       .env and server configuration
 internal/http         API routes and auth
 internal/model        model runtime client and health checks
 internal/policy       request validation
-internal/prompts      global, route, and compact runtime-profile prompts
+internal/prompts      global, route, and skill-use prompts
 ```
 
 In the main Umbratic monorepo, the active desktop app lives at `apps/desktop/`.
@@ -29,7 +29,9 @@ POST /api/telemetry
 
 There is no unauthenticated health endpoint and no generic provider passthrough route.
 
-Engineering requests may include `runtime_profiles` so Veil can add short protected runtime hints only when they are relevant. Detailed procedural workflow guidance belongs in editable system skills. Supported values are `workspace-toolchain`, `python`, `cmake`, `markdown`, `git`, and `worktree`.
+Chat requests may include a validated `skills` catalog containing only each enabled skill's id, name, description, and source. Veil injects the protected rules that require the model to call `read_skill` and finish reading the relevant local `SKILL.md` before using it. Full skill bodies are never sent in the initial request, and `runtime_profiles` are not supported.
+
+Both desktop modes use this same boundary. Local mode starts a loopback Veil process bundled with the app; Server mode calls a hosted Veil deployment. The runner never injects or forwards a client system prompt in either mode.
 
 The health route checks that the model configured inside Veil is available from the runtime, but it does not return model names or runtime metadata.
 
@@ -98,13 +100,13 @@ Do not expose Ollama or vLLM directly. Umbratic only needs the Veil tunnel URL a
 go run ./cmd/veil
 ```
 
-From the monorepo root, use the local helper to run Veil and the desktop app together:
+From the monorepo root, use the local helper to start the desktop app in Local mode:
 
 ```sh
 npm run local
 ```
 
-Veil reads `infrastructure/veil/.env` as usual. The helper passes the same local Veil URL and token through to the desktop process so Settings can connect without Cloudflare-specific secrets. Override values for one run when needed:
+The desktop app starts and owns the local Veil process, just as the packaged app does. The helper reads the runtime software, base URL, and model from `infrastructure/veil/.env`, but users do not configure a Veil URL or token in Local mode. Veil binds to loopback, uses an app-generated transient credential, and starts with telemetry ingestion disabled. Override local runtime values for one run when needed:
 
 ```sh
 npm run local -- --model llama3.2
@@ -125,7 +127,15 @@ go fmt ./...
 
 ## Umbratic Desktop Settings
 
-Point Umbratic at Veil:
+Local mode configures the model runtime rather than Veil itself:
+
+```text
+Runtime:      Ollama or vLLM
+Runtime URL:  http://127.0.0.1:11434
+Model:        llama3.2
+```
+
+Packaged Umbratic includes the Veil executable and starts it on demand. Server mode instead points Umbratic at an existing Veil deployment:
 
 ```text
 Server URL:   https://veil.umbratic.ai

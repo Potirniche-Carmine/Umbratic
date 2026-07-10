@@ -279,7 +279,7 @@ test("legacy project chat databases migrate once into the home chat database", (
   assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), []);
 });
 
-test("tasks normalize stored records with runtime profile, tool settings, and event defaults", () => {
+test("tasks drop legacy runtime profiles and normalize tool settings and event defaults", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-tasks-"));
   const storage = loadStorage(userData);
 
@@ -304,7 +304,7 @@ test("tasks normalize stored records with runtime profile, tool settings, and ev
   });
 
   const [task] = storage.readTasks();
-  assert.equal(task.runtimeProfile, "python");
+  assert.equal("runtimeProfile" in task, false);
   assert.equal(task.workspaceMode, "local");
   assert.equal(task.reasoningMode, "reasoning");
   assert.deepEqual(plain(task.enabledTools), ["read", "command"]);
@@ -343,14 +343,15 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
 
-test("endpoint settings default to server and ignore legacy local defaults", () => {
+test("endpoint settings default to local and migrate the old local Veil URL semantics", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-default-"));
   const storage = loadStorage(userData);
 
   assert.equal(storage.hasStoredModelEndpointSettings(), false);
-  assert.equal(storage.readModelEndpointSettings().mode, "server");
-  assert.equal(storage.readModelEndpointSettings().software, "vllm");
-  assert.equal(storage.readModelEndpointSettings().baseUrl, "https://your-veil-server.example");
+  assert.equal(storage.readModelEndpointSettings().mode, "local");
+  assert.equal(storage.readModelEndpointSettings().software, "ollama");
+  assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
+  assert.equal(storage.readModelEndpointSettings().modelId, "");
 
   writeSettingsPayload(userData, {
     modelEndpoint: {
@@ -365,20 +366,29 @@ test("endpoint settings default to server and ignore legacy local defaults", () 
       ],
     },
   });
-  assert.equal(storage.hasStoredModelEndpointSettings(), false);
-  assert.equal(storage.readModelEndpointSettings().mode, "server");
+  assert.equal(storage.hasStoredModelEndpointSettings(), true);
+  assert.equal(storage.readModelEndpointSettings().mode, "local");
+  assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
+  assert.equal(storage.readModelEndpointSettings().modelId, "");
 
   const savedLocal = storage.writeModelEndpointSettings({
     mode: "local",
     software: "ollama",
-    baseUrl: "http://127.0.0.1:8080",
+    baseUrl: "http://127.0.0.1:11434",
+    modelId: "llama3.2",
+    secret: "must-not-be-stored",
+    headers: [{ name: "X-Ignored", value: "also-not-stored" }],
   });
   assert.equal(savedLocal.mode, "local");
+  assert.equal(savedLocal.modelId, "llama3.2");
+  assert.equal(savedLocal.secret, "");
+  assert.deepEqual(plain(savedLocal.headers), [{ name: "", value: "" }, { name: "", value: "" }]);
   assert.equal(storage.hasStoredModelEndpointSettings(), true);
   assert.equal(storage.readModelEndpointSettings().mode, "local");
 
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
-  assert.equal(rawSettings.modelEndpoint.version, 2);
+  assert.equal(rawSettings.modelEndpoint.version, 3);
+  assert.doesNotMatch(JSON.stringify(rawSettings), /must-not-be-stored|also-not-stored/);
 });
 
 test("tool, skill, harness, and notes settings sanitize invalid input", () => {

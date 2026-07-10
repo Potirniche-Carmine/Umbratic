@@ -157,7 +157,7 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	if modelClient.req.Messages[0].Role != "system" || modelClient.req.Messages[1].Role != "system" {
 		t.Fatalf("server prompts were not prepended: %#v", modelClient.req.Messages)
 	}
-	if !strings.Contains(modelClient.req.Messages[0].Content.(string), "Umbratic AI") {
+	if !strings.Contains(modelClient.req.Messages[0].Content.(string), "Umbratic") {
 		t.Fatalf("global identity prompt was not included: %#v", modelClient.req.Messages)
 	}
 	if modelClient.req.Messages[2].Content != "draft this" {
@@ -165,11 +165,11 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 }
 
-func TestChatRouteAddsRuntimeProfilePrompts(t *testing.T) {
+func TestChatRouteAddsServerOwnedSkillCatalogPrompt(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(testConfig(), modelClient)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"runtime_profiles":["python","git"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"skills":[{"id":"python","name":"Python","description":"Use for Python work.","source":"system"}]}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
 	server.ServeHTTP(rr, req)
@@ -177,17 +177,17 @@ func TestChatRouteAddsRuntimeProfilePrompts(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
 	}
-	if len(modelClient.req.Messages) != 5 {
+	if len(modelClient.req.Messages) != 4 {
 		t.Fatalf("got %d messages", len(modelClient.req.Messages))
 	}
-	if !strings.Contains(modelClient.req.Messages[2].Content.(string), "Runtime profile: python") {
-		t.Fatalf("missing Python runtime prompt: %#v", modelClient.req.Messages)
+	if !strings.Contains(modelClient.req.Messages[2].Content.(string), "read_skill") {
+		t.Fatalf("missing skill-use prompt: %#v", modelClient.req.Messages)
 	}
-	if !strings.Contains(modelClient.req.Messages[3].Content.(string), "Runtime profile: git") {
-		t.Fatalf("missing Git runtime prompt: %#v", modelClient.req.Messages)
+	if !strings.Contains(modelClient.req.Messages[2].Content.(string), `"id":"python"`) {
+		t.Fatalf("missing Python skill metadata: %#v", modelClient.req.Messages)
 	}
-	if modelClient.req.Messages[4].Role != "user" {
-		t.Fatalf("client message should follow runtime prompts: %#v", modelClient.req.Messages)
+	if modelClient.req.Messages[3].Role != "user" {
+		t.Fatalf("client message should follow skill prompt: %#v", modelClient.req.Messages)
 	}
 }
 

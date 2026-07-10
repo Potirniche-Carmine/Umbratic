@@ -12,7 +12,7 @@ Use this skill when the task involves Python source, packages, tests, virtual en
 - Keep Python work inside the current workspace. Prefer a workspace `.venv` and do not rely on shell activation.
 - Prefer `uv` when it is available. Check with `uv --version` before choosing Python setup commands.
 - When `uv` exists, use `uv python install 3.12` only if a suitable Python is missing, then `uv venv .venv --python 3.12`.
-- Verify with `uv run python <script.py>`, `uv run pytest`, or the direct `.venv` interpreter. Do not use bare `python`, `python3`, or `py` as verification commands.
+- Prefer verification with `uv run python <script.py>`, `uv run pytest`, or the direct `.venv` interpreter. Bare `python`, `python3`, and `py` are allowed; if a bare interpreter command fails because of interpreter discovery, environment, or dependency issues, retry it through `uv` before treating Python as unavailable.
 - If dependencies are needed, install them into the workspace environment with `uv add`, `uv pip install`, or `uv run --with <package> ...`.
 - If `uv` is unavailable, use an existing workspace-managed environment or create `.venv` with an available managed interpreter. State the capability gap when it affects verification.
 - Stop after a small number of distinct failed runtime attempts. Report the commands and errors instead of looping indefinitely.

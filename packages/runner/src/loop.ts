@@ -34,6 +34,9 @@ const maxToolContextBytes = 56 * 1024;
 const maxToolResultBytes = 24 * 1024;
 const maxStructuredToolHistorySegments = 4;
 const maxCompactedToolHistoryBytes = 12 * 1024;
+const maxToolTurns = 64;
+const maxConsecutiveFailedToolTurns = 8;
+const maxRepeatedToolTurns = 3;
 const streamEventCoalesceIntervalMs = 40;
 const maxCoalescedTextChars = 2048;
 
@@ -121,7 +124,6 @@ function clipUtf8(value: string, byteLimit: number): string {
 function formatToolContextMessage(results: ToolContextResult[]): string {
   const lines = [
     "Workspace tool results:",
-    "Use these local workspace results to answer the user's request. Do not repeat the same read or search unless more specific context is still needed. For directory reads, treat a complete listing as sufficient; continue from the reported offset only when the listing is partial and completeness matters.",
   ];
   for (const result of results) {
     const status = result.status === "success" ? "ok" : "failed";
@@ -199,7 +201,7 @@ function toolHistorySegmentSummary(assistant: ChatMessage, tools: ChatMessage[])
   return `- ${callSummary}: ${outputSummary || "completed"}`;
 }
 
-export function compactToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
+function compactStructuredToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
   const segments: Array<{ start: number; end: number; summary: string }> = [];
   for (let index = 0; index < messages.length; index++) {
     const assistant = messages[index];
@@ -256,6 +258,44 @@ export function compactToolHistoryMessages(messages: ChatMessage[]): ChatMessage
     index += 1;
   }
   return compacted;
+}
+
+function compactProseToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
+  const toolContextIndexes = messages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message.role === "user" && typeof message.content === "string" && message.content.startsWith("Workspace tool results:"))
+    .map(({ index }) => index);
+  if (toolContextIndexes.length <= maxStructuredToolHistorySegments) return messages;
+
+  const removed = new Set(toolContextIndexes.slice(0, -maxStructuredToolHistorySegments));
+  const summary = clipUtf8(
+    [
+      "Compacted earlier workspace tool context:",
+      ...toolContextIndexes.slice(0, -maxStructuredToolHistorySegments).map((index) => {
+        const content = messages[index]?.content;
+        return `- ${clipUtf8(typeof content === "string" ? content.replace(/\s+/g, " ").trim() : "tool completed", 360)}`;
+      }),
+      "Recent workspace tool results remain available in full.",
+    ].join("\n"),
+    maxCompactedToolHistoryBytes,
+  );
+  const compacted: ChatMessage[] = [];
+  let insertedSummary = false;
+  for (let index = 0; index < messages.length; index++) {
+    if (!removed.has(index)) {
+      compacted.push(messages[index]);
+      continue;
+    }
+    if (!insertedSummary) {
+      compacted.push({ role: "user", content: summary });
+      insertedSummary = true;
+    }
+  }
+  return compacted;
+}
+
+export function compactToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
+  return compactProseToolHistoryMessages(compactStructuredToolHistoryMessages(messages));
 }
 
 function messagesForModel(session: Session): ChatMessage[] {
@@ -455,10 +495,16 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
   }
 }
 
-async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent) => void): Promise<StreamAccumulator> {
+async function streamModel(
+  session: Session,
+  emit?: (event: UmbraticRunnerEvent) => void,
+  options: { includeTools?: boolean } = {},
+): Promise<StreamAccumulator> {
   const tools = enabledModelToolSpecs(session.config.enabledTools, {
     includeContextRetrieval: session.contextStore.hasEntries(),
+    includeSkillReader: session.config.skills.length > 0,
   });
+  const includeTools = options.includeTools !== false;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -480,16 +526,18 @@ async function streamModel(session: Session, emit?: (event: UmbraticRunnerEvent)
         ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
         messages,
         stream: true,
-        ...(routeIsVeil && session.config.runtimeProfiles?.length ? { runtime_profiles: session.config.runtimeProfiles } : {}),
+        ...(routeIsVeil && session.config.skills.length ? {
+          skills: session.config.skills.map(({ id, name, description, source }) => ({ id, name, description, source })),
+        } : {}),
         ...(includeTools && tools.length ? { tools, tool_choice: "auto" } : {}),
       }),
       mtls: session.config.provider.mtls,
       signal: session.abortController.signal,
     });
-  let response = await requestModel(true);
+  let response = await requestModel(includeTools);
   if (response.statusCode < 200 || response.statusCode >= 300) {
     const body = await readBodyText(response.body, 4096).catch(() => "");
-    if (tools.length && lastMessageIsToolContext(session)) {
+    if (includeTools && tools.length && lastMessageIsToolContext(session)) {
       response = await requestModel(false);
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return readOpenAIStream(session, response.body, emit);
@@ -545,34 +593,84 @@ async function readOpenAIStream(
   return acc;
 }
 
+function recordModelTurn(summary: RunTurnSummary, acc: StreamAccumulator) {
+  summary.turns += 1;
+  summary.assistantTextChars += acc.content.length;
+  summary.reasoningTextChars += acc.reasoning.length;
+}
+
+function appendAssistantCompletion(
+  session: Session,
+  acc: StreamAccumulator,
+  events: ReturnType<typeof createRunnerEventCoalescer>,
+  fallback = "",
+) {
+  const content = acc.content || fallback;
+  session.messages.push({ role: "assistant", content: content || null });
+  if (acc.reasoning && !acc.emittedReasoning) {
+    events.emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: acc.reasoning, at: nowIso() });
+  }
+  if (content && !acc.emittedContent) {
+    events.emit({ type: "assistant.delta", taskId: session.taskId, text: content, at: nowIso() });
+  }
+}
+
+async function finishWithoutTools(
+  session: Session,
+  summary: RunTurnSummary,
+  events: ReturnType<typeof createRunnerEventCoalescer>,
+  fallback: string,
+): Promise<RunTurnSummary> {
+  try {
+    const acc = await streamModel(session, events.emit, { includeTools: false });
+    recordModelTurn(summary, acc);
+    events.flush();
+    const content = acc.content || fallback;
+    if (!acc.content && content) summary.assistantTextChars += content.length;
+    appendAssistantCompletion(session, acc, events, content);
+  } catch {
+    summary.assistantTextChars += fallback.length;
+    appendAssistantCompletion(
+      session,
+      { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false },
+      events,
+      fallback,
+    );
+  }
+  return summary;
+}
+
 export async function runTurn(session: Session, parts: InputPart[], emit: (event: UmbraticRunnerEvent) => void, replyPermission: ToolContext["askPermission"]): Promise<RunTurnSummary> {
   const events = createRunnerEventCoalescer(emit);
   const summary = emptyRunTurnSummary();
   try {
     session.messages.push({ role: "user", content: messageContentFromParts(parts) });
-    for (let turn = 0; turn < 12; turn++) {
+    let consecutiveFailedToolTurns = 0;
+    let previousToolSignature = "";
+    let repeatedToolTurns = 0;
+    for (let turn = 0; turn < maxToolTurns; turn++) {
       const acc = await streamModel(session, events.emit);
-      summary.turns = turn + 1;
-      summary.assistantTextChars += acc.content.length;
-      summary.reasoningTextChars += acc.reasoning.length;
+      recordModelTurn(summary, acc);
       events.flush();
       const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
       summary.toolCalls += toolCalls.length;
       if (toolCalls.length === 0) {
-        session.messages.push({ role: "assistant", content: acc.content || null });
-        if (acc.reasoning && !acc.emittedReasoning) {
-          events.emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: acc.reasoning, at: nowIso() });
-        }
-        if (acc.content && !acc.emittedContent) {
-          events.emit({ type: "assistant.delta", taskId: session.taskId, text: acc.content, at: nowIso() });
-        }
+        appendAssistantCompletion(session, acc, events);
         return summary;
+      }
+      const toolSignature = toolCalls.map((call) => `${call.name}\u0000${call.arguments}`).join("\u0001");
+      if (toolSignature === previousToolSignature) {
+        repeatedToolTurns += 1;
+      } else {
+        previousToolSignature = toolSignature;
+        repeatedToolTurns = 1;
       }
       const ctx: ToolContext = {
         taskId: session.taskId,
         cwd: session.config.cwd,
         permissionMode: session.config.permissionMode,
         enabledTools: session.config.enabledTools,
+        skills: session.config.skills,
         contextStore: session.contextStore,
         askPermission: replyPermission,
         emitToolOutput(toolCallId, stream, text) {
@@ -632,8 +730,34 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
       } else {
         session.messages.push({ role: "user", content: formatToolContextMessage(toolResults) });
       }
+      if (toolResults.every((result) => result.status !== "success")) {
+        consecutiveFailedToolTurns += 1;
+      } else {
+        consecutiveFailedToolTurns = 0;
+      }
+      if (consecutiveFailedToolTurns >= maxConsecutiveFailedToolTurns) {
+        return await finishWithoutTools(
+          session,
+          summary,
+          events,
+          "I stopped after repeated workspace tool failures. Review the latest tool output above before trying a different approach.",
+        );
+      }
+      if (repeatedToolTurns >= maxRepeatedToolTurns) {
+        return await finishWithoutTools(
+          session,
+          summary,
+          events,
+          "I stopped after repeating the same workspace tool call without making progress. The latest tool output is available above.",
+        );
+      }
     }
-    throw new Error("model exceeded maximum tool turns");
+    return await finishWithoutTools(
+      session,
+      summary,
+      events,
+      "I reached the workspace tool safety limit before finishing. The latest tool output is available above.",
+    );
   } finally {
     events.flush();
   }

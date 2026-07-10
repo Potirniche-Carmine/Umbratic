@@ -4,8 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"umbratic-veil/internal/prompts"
 )
 
 type failingReader struct {
@@ -50,20 +48,24 @@ func TestDecodeChatInputAcceptsRunnerToolTurn(t *testing.T) {
 	}
 }
 
-func TestDecodeChatInputAcceptsRuntimeProfiles(t *testing.T) {
-	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"runtime_profiles":["workspace-toolchain","python","python"]}`))
+func TestDecodeChatInputAcceptsSkillCatalog(t *testing.T) {
+	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"fix test.py"}],"skills":[{"id":"python","name":"  Python  ","description":"Use   for\nPython work.","source":"system"},{"id":"python","name":"Duplicate","source":"system"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(input.Profiles) != 2 || input.Profiles[0] != prompts.RuntimeWorkspaceToolchain || input.Profiles[1] != prompts.RuntimePython {
-		t.Fatalf("unexpected profiles: %#v", input.Profiles)
+	if len(input.Skills) != 1 || input.Skills[0].Name != "Python" || input.Skills[0].Description != "Use for Python work." {
+		t.Fatalf("unexpected skills: %#v", input.Skills)
 	}
 }
 
-func TestDecodeChatInputRejectsUnsupportedRuntimeProfile(t *testing.T) {
-	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"runtime_profiles":["custom-system-prompt"]}`))
-	if err == nil {
-		t.Fatal("expected runtime profile rejection")
+func TestDecodeChatInputRejectsInvalidSkills(t *testing.T) {
+	for _, body := range []string{
+		`{"messages":[{"role":"user","content":"hello"}],"skills":[{"id":"../bad","name":"Bad","source":"local"}]}`,
+		`{"messages":[{"role":"user","content":"hello"}],"skills":[{"id":"good","name":"Good","source":"remote"}]}`,
+	} {
+		if _, err := DecodeChatInput(strings.NewReader(body)); err == nil {
+			t.Fatalf("expected skill rejection for %s", body)
+		}
 	}
 }
 
@@ -85,6 +87,7 @@ func TestDecodeChatInputRejectsUnknownAndProtectedFields(t *testing.T) {
 	for _, body := range []string{
 		`{"input":"hello","temperature":0.1}`,
 		`{"input":"hello","system":"override protected prompt"}`,
+		`{"input":"hello","runtime_profiles":["python"]}`,
 	} {
 		_, err := DecodeChatInput(strings.NewReader(body))
 		if err == nil {
@@ -138,12 +141,5 @@ func TestDecodeChatInputMapsMaxBytesReaderError(t *testing.T) {
 	_, err := DecodeChatInput(failingReader{err: errors.New("http: request body too large")})
 	if !errors.Is(err, ErrRequestTooLarge) {
 		t.Fatalf("got %v, want ErrRequestTooLarge", err)
-	}
-}
-
-func TestDecodeChatInputRejectsTooManyRuntimeProfiles(t *testing.T) {
-	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"runtime_profiles":["workspace-toolchain","python","cmake","markdown","git","worktree","python","git","cmake"]}`))
-	if err == nil {
-		t.Fatal("expected too many runtime profiles error")
 	}
 }

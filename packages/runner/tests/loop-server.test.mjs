@@ -115,8 +115,7 @@ function runnerConfig(cwd, baseURL, overrides = {}) {
     workspaceMode: "local",
     permissionMode: "normal",
     enabledTools: overrides.enabledTools ?? [],
-    runtimeProfiles: overrides.runtimeProfiles,
-    system: overrides.system,
+    skills: overrides.skills ?? [],
     provider: {
       name: "Veil",
       baseURL,
@@ -133,7 +132,7 @@ function session(cwd, baseURL, overrides = {}) {
     id: "session-1",
     taskId: "task-1",
     config: runnerConfig(cwd, baseURL, overrides),
-    messages: overrides.system ? [{ role: "system", content: overrides.system }] : [],
+    messages: [],
     abortController: new AbortController(),
     contextStore: new SessionContextStore(),
   };
@@ -249,8 +248,11 @@ test("listen rejects oversized bodies and managed system prompt overrides withou
   });
 });
 
-test("runTurn sends Veil runtime profiles and records streamed assistant content without client system prompts", async () => {
+test("runTurn sends Veil skill metadata and exposes read_skill without client system prompts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-loop-"));
+  const skillRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-skill-"));
+  const instructionPath = path.join(skillRoot, "SKILL.md");
+  fs.writeFileSync(instructionPath, "# Python\n\nUse uv.\n", "utf8");
   const requests = [];
 
   await withHttpServer(async (request, response) => {
@@ -265,7 +267,7 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     const events = [];
     const activeSession = session(root, baseURL, {
       chatEndpointPath: "/api/engineering/chat",
-      runtimeProfiles: ["workspace-toolchain", "python"],
+      skills: [{ id: "python", name: "Python", description: "Use for Python work.", source: "system", instructionPath }],
     });
 
     const summary = await runTurn(activeSession, [{ type: "text", text: "Say hi" }], (event) => events.push(event), async () => "allow");
@@ -273,7 +275,8 @@ test("runTurn sends Veil runtime profiles and records streamed assistant content
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, "/api/engineering/chat");
     assert.equal(requests[0].body.model, undefined);
-    assert.deepEqual(plain(requests[0].body.runtime_profiles), ["workspace-toolchain", "python"]);
+    assert.deepEqual(plain(requests[0].body.skills), [{ id: "python", name: "Python", description: "Use for Python work.", source: "system" }]);
+    assert.equal(requests[0].body.tools.some((tool) => tool.function.name === "read_skill"), true);
     assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["user"]);
     assert.equal(activeSession.messages.at(-1).content, "Hello");
     assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.delta", "assistant.reasoning.delta"]);
@@ -441,7 +444,6 @@ test("runTurn sends managed Veil tool results as prose context", async () => {
     const activeSession = session(root, baseURL, {
       enabledTools: ["read"],
       chatEndpointPath: "/api/engineering/chat",
-      runtimeProfiles: ["workspace-toolchain", "markdown"],
     });
 
     await runTurn(activeSession, [{ type: "text", text: "Read through Veil" }], (event) => events.push(event), async () => "allow");
@@ -453,7 +455,7 @@ test("runTurn sends managed Veil tool results as prose context", async () => {
     assert.match(requests[1].body.messages.at(-1).content, /Workspace tool results/);
     assert.match(requests[1].body.messages.at(-1).content, /1: Veil tool context/);
     assert.equal(JSON.stringify(requests[1].body.messages).includes("\"role\":\"tool\""), false);
-    assert.deepEqual(plain(requests[1].body.runtime_profiles), ["workspace-toolchain", "markdown"]);
+    assert.equal(requests[1].body.runtime_profiles, undefined);
     assert.equal(activeSession.messages.at(-1).content, "Done through Veil prose context");
     assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
   });
@@ -512,6 +514,96 @@ test("runTurn accumulates partial tool-call argument chunks by stable index", as
     assert.equal(requests[1].body.messages[1].tool_calls[0].function.arguments, "{\"filePath\":\"README.md\",\"limit\":1}");
     assert.match(requests[1].body.messages[2].content, /1: Partial chunks work/);
     assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
+  });
+});
+
+test("runTurn continues beyond the former twelve-tool-turn limit", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-long-loop-"));
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    const body = await readRequestJson(request);
+    requests.push(body);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (requests.length <= 13) {
+      response.end(sseData({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: `call-search-${requests.length}`,
+        function: { name: "search", arguments: JSON.stringify({ query: `missing-${requests.length}` }) },
+      }] } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Finished after thirteen tool turns" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const activeSession = session(root, baseURL, { enabledTools: ["search"] });
+    const summary = await runTurn(activeSession, [{ type: "text", text: "Keep working" }], () => undefined, async () => "allow");
+
+    assert.equal(requests.length, 14);
+    assert.equal(summary.turns, 14);
+    assert.equal(summary.toolCalls, 13);
+    assert.equal(activeSession.messages.at(-1).content, "Finished after thirteen tool turns");
+  });
+});
+
+test("runTurn reserves a tools-disabled final response after the 64-turn safety limit", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-tool-budget-"));
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    const body = await readRequestJson(request);
+    requests.push(body);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (body.tools) {
+      const index = requests.length;
+      response.end(sseData({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: `call-budget-${index}`,
+        function: { name: "search", arguments: JSON.stringify({ query: `budget-${index}` }) },
+      }] } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Final response without more tools" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const activeSession = session(root, baseURL, { enabledTools: ["search"] });
+    const summary = await runTurn(activeSession, [{ type: "text", text: "Use the full budget" }], () => undefined, async () => "allow");
+
+    assert.equal(requests.length, 65);
+    assert.equal(requests.at(-1).tools, undefined);
+    assert.equal(summary.turns, 65);
+    assert.equal(summary.toolCalls, 64);
+    assert.equal(activeSession.messages.at(-1).content, "Final response without more tools");
+  });
+});
+
+test("runTurn stops repeated identical tool calls and synthesizes without tools", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-repeated-tool-"));
+  fs.writeFileSync(path.join(root, "README.md"), "repeat guard\n", "utf8");
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    const body = await readRequestJson(request);
+    requests.push(body);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (body.tools) {
+      response.end(sseData({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: `call-repeat-${requests.length}`,
+        function: { name: "read", arguments: JSON.stringify({ filePath: "README.md" }) },
+      }] } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "Stopped repeating and answered" } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const activeSession = session(root, baseURL, { enabledTools: ["read"] });
+    const summary = await runTurn(activeSession, [{ type: "text", text: "Read once" }], () => undefined, async () => "allow");
+
+    assert.equal(requests.length, 4);
+    assert.equal(requests.at(-1).tools, undefined);
+    assert.equal(summary.toolCalls, 3);
+    assert.equal(activeSession.messages.at(-1).content, "Stopped repeating and answered");
   });
 });
 
@@ -653,6 +745,22 @@ test("runTurn compacts old structured tool history before model requests", async
     assert.equal(JSON.stringify(messages).includes("call-5"), true);
     assert.deepEqual(plain(messages.slice(-3).map((message) => message.role)), ["assistant", "tool", "user"]);
   });
+});
+
+test("compactToolHistoryMessages compacts prose tool context used by Veil and Ollama", () => {
+  const { compactToolHistoryMessages } = loadTypeScriptModule(loopPath, { cache: new Map() });
+  const messages = [{ role: "user", content: "Original request" }];
+  for (let index = 0; index < 7; index++) {
+    messages.push({ role: "user", content: `Workspace tool results:\n\n### search: result-${index} (ok)\n\n${index}` });
+  }
+
+  const compacted = compactToolHistoryMessages(messages);
+  const summary = compacted.find((message) => message.role === "user" && String(message.content).startsWith("Compacted earlier workspace tool context:"));
+  assert.ok(summary);
+  assert.match(summary.content, /result-0/);
+  assert.match(summary.content, /result-2/);
+  assert.equal(compacted.filter((message) => String(message.content).startsWith("Workspace tool results:")).length, 4);
+  assert.equal(compacted.at(-1).content.includes("result-6"), true);
 });
 
 test("runTurn keeps prose tool-result fallback for Ollama chat routes", async () => {

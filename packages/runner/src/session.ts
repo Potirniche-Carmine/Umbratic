@@ -43,7 +43,7 @@ export class SessionStore {
       id,
       taskId: this.config.taskId ?? id,
       config: this.config,
-      messages: this.config.system ? [{ role: "system", content: this.config.system }] : [],
+      messages: [],
       abortController: new AbortController(),
       contextStore: new SessionContextStore(),
     };

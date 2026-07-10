@@ -71,7 +71,6 @@ type UmbraticCommandClass =
   | "network"
   | "external-directory"
   | "unknown";
-type UmbraticRuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 type UmbraticToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
 type UmbraticToolErrorCode =
   | "tool_disabled"
@@ -132,15 +131,15 @@ type UmbraticBackendDiagnostics = {
   telemetry: UmbraticTelemetryPolicyInfo;
   runtimes: {
     python: {
-      profileVersion: string;
-      barePythonVerification: "denied";
+      runtimeVersion: string;
+      barePythonVerification: "allowed_uv_preferred";
       generatedPaths: string[];
     };
     markdown: {
       docsOnlyClassification: "enabled";
     };
   cmake: {
-    profileVersion: string;
+    runtimeVersion: string;
     buildDir: ".umbratic/build";
   };
   toolchain: {
@@ -307,7 +306,6 @@ type UmbraticTaskInfo = {
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
-  runtimeProfile?: UmbraticRuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: UmbraticReviewFile[];

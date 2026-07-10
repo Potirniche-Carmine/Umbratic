@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CheckCircle2,
   CircleDashed,
+  Cloud,
   Copy,
   Ellipsis,
   ExternalLink,
@@ -124,7 +125,6 @@ type CommandClass =
   | "network"
   | "external-directory"
   | "unknown";
-type RuntimeProfileId = "none" | "python" | "markdown" | "cmake" | "powershell" | "posix-shell" | "node";
 type ToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
 type ToolErrorCode =
   | "tool_disabled"
@@ -169,7 +169,7 @@ type BackendStatus = {
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
   endpointConfig: {
-    source: "server-default" | "stored" | "managed";
+    source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
   };
   privacy: {
@@ -195,15 +195,15 @@ type BackendDiagnostics = {
   telemetry: TelemetryPolicyInfo;
   runtimes: {
     python: {
-      profileVersion: string;
-      barePythonVerification: "denied";
+      runtimeVersion: string;
+      barePythonVerification: "allowed_uv_preferred";
       generatedPaths: string[];
     };
     markdown: {
       docsOnlyClassification: "enabled";
     };
     cmake: {
-      profileVersion: string;
+      runtimeVersion: string;
       buildDir: ".umbratic/build";
     };
     toolchain: {
@@ -302,7 +302,6 @@ type TaskInfo = {
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
-  runtimeProfile?: RuntimeProfileId;
   createdAt: string;
   changedFiles: string[];
   reviewFiles: ReviewFile[];
@@ -607,10 +606,10 @@ const defaultMonoFontChoices = [
 ];
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
-  mode: "server",
-  software: "vllm",
-  baseUrl: "https://your-veil-server.example",
-  modelId: "veil-managed",
+  mode: "local",
+  software: "ollama",
+  baseUrl: "http://127.0.0.1:11434",
+  modelId: "",
   secret: "",
   headers: [
     { name: "", value: "" },
@@ -741,46 +740,58 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
   return headers;
 }
 
-function endpointModeForBaseUrl(baseUrl: string): ModelEndpointMode {
-  try {
-    const url = new URL(baseUrl);
-    return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" ? "local" : "server";
-  } catch {
-    return defaultModelEndpointSettings.mode;
-  }
-}
-
-function endpointSoftwareForBaseUrl(baseUrl: string): ModelEndpointSoftware {
-  const normalized = baseUrl.toLowerCase();
-  if (normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
-  return "ollama";
-}
-
 function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
-  if (mode === "local") return "http://127.0.0.1:8080";
-  if (software === "vllm") return "https://your-veil-server.example";
+  if (mode === "local") return software === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:8000/v1";
   return "https://your-veil-server.example";
 }
 
 function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultModelEndpointSettings };
   const settings = value as Partial<ModelEndpointSettings>;
-  const baseUrl = typeof settings.baseUrl === "string" ? settings.baseUrl : defaultModelEndpointSettings.baseUrl;
   const mode = settings.mode === "local" || settings.mode === "server" ? settings.mode : defaultModelEndpointSettings.mode;
   const software =
     settings.software === "ollama" || settings.software === "vllm"
       ? settings.software
-      : mode === defaultModelEndpointSettings.mode
-        ? defaultModelEndpointSettings.software
-        : endpointSoftwareForBaseUrl(baseUrl);
+      : mode === "local"
+        ? "ollama"
+        : "vllm";
+  const baseUrl =
+    typeof settings.baseUrl === "string" ? settings.baseUrl : defaultEndpointBaseUrlForMode(mode, software);
   return {
     mode,
     software,
     baseUrl,
-    modelId: typeof settings.modelId === "string" ? settings.modelId : defaultModelEndpointSettings.modelId,
+    modelId: typeof settings.modelId === "string" ? settings.modelId : mode === "local" ? "" : "veil-managed",
     secret: typeof settings.secret === "string" ? settings.secret : "",
     headers: normalizeEndpointHeaders(settings.headers),
   };
+}
+
+function endpointDefaultsForMode(mode: ModelEndpointMode): ModelEndpointSettings {
+  const software: ModelEndpointSoftware = mode === "local" ? "ollama" : "vllm";
+  return {
+    mode,
+    software,
+    baseUrl: defaultEndpointBaseUrlForMode(mode, software),
+    modelId: mode === "local" ? "" : "veil-managed",
+    secret: "",
+    headers: normalizeEndpointHeaders([]),
+  };
+}
+
+function endpointValidationMessage(settings: ModelEndpointSettings): string | null {
+  try {
+    const url = new URL(settings.baseUrl.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "Use an HTTP or HTTPS URL.";
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (settings.mode === "local" && hostname !== "localhost" && hostname !== "::1" && !hostname.startsWith("127.")) {
+      return "Local mode only connects to a model runtime on this computer.";
+    }
+  } catch {
+    return `${settings.mode === "local" ? "Runtime" : "Server"} URL is invalid.`;
+  }
+  if (settings.mode === "local" && !settings.modelId.trim()) return "Enter the model name installed in your local runtime.";
+  return null;
 }
 
 function readPreviewEndpointSettings(): ModelEndpointSettings {
@@ -836,7 +847,7 @@ const composerTestPrompt =
   'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
 const composerTestRepository: RepositoryInfo = {
   id: "preview-umbratic",
-  name: "Umbratic AI",
+  name: "Umbratic",
   rootPath: "/Users/carminep/Projects/Umbratic",
   kind: "git",
   originalBranch: "main",
@@ -1195,7 +1206,7 @@ const previewDefaultSkillGuidance: Record<string, string[]> = {
   ],
   "umbratic-python": [
     "Keep Python work inside the current workspace and prefer a workspace `.venv`.",
-    "Use `uv` when available and verify through `uv run` or the direct `.venv` interpreter.",
+    "Prefer `uv` when available. Bare Python commands are allowed; if one fails because of the interpreter, environment, or dependencies, retry it through `uv run`.",
     "State runtime or dependency gaps when they affect verification.",
   ],
   "umbratic-cmake": [
@@ -1307,7 +1318,7 @@ const fallbackApi: DesktopApi = {
   pickRepository: async () => {
     const repository = {
       id: "preview-umbratic",
-      name: "Umbratic AI",
+      name: "Umbratic",
       rootPath: "C:\\Users\\potir\\Documents\\Umbratic",
       kind: "folder",
       originalBranch: "folder",
@@ -1360,7 +1371,7 @@ const fallbackApi: DesktopApi = {
     providers: [],
     permissionMode: previewPermissionMode,
     endpointConfig: {
-      source: "server-default",
+      source: "local-default",
       endpointEditingAllowed: true,
     },
     privacy: {
@@ -1380,21 +1391,21 @@ const fallbackApi: DesktopApi = {
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: "~/.umbratic/runner-diagnostics",
       telemetry: {
-        mode: "managed_required",
+        mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",
         localEnabled: false,
-        syncEnabled: true,
-        retentionDays: 30,
+        syncEnabled: readPreviewEndpointSettings().mode === "server",
+        retentionDays: readPreviewEndpointSettings().mode === "server" ? 30 : 0,
         exportFormat: "redacted-json",
-        storage: "company-managed-telemetry",
+        storage: readPreviewEndpointSettings().mode === "server" ? "company-managed-telemetry" : "task-event-snapshots",
       },
       runtimes: {
         python: {
-          profileVersion: "python-uv-venv-1",
-          barePythonVerification: "denied",
+          runtimeVersion: "python-uv-venv-1",
+          barePythonVerification: "allowed_uv_preferred",
           generatedPaths: [".venv", "__pycache__", ".pyc", ".umbratic/runtime"],
         },
         markdown: { docsOnlyClassification: "enabled" },
-        cmake: { profileVersion: "cmake-umbratic-build-1", buildDir: ".umbratic/build" },
+        cmake: { runtimeVersion: "cmake-umbratic-build-1", buildDir: ".umbratic/build" },
         toolchain: {
           bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
           optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend"],
@@ -2369,7 +2380,7 @@ function taskStatusDetail(task: TaskInfo): string {
   if (task.state === "rejected") return "Changes were undone.";
   if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
   if (task.error) return task.error;
-  if (task.state === "running") return "Umbratic AI is working.";
+  if (task.state === "running") return "Umbratic is working.";
   return task.workspaceMode === "worktree" ? task.agentBranch : task.worktreePath;
 }
 
@@ -2506,7 +2517,7 @@ function activitySummary(item: Extract<ComposerTimelineItem, { type: "activity" 
 }
 
 function stripAssistantSpeakerPrefix(text: string): string {
-  return text.replace(/^\s*(?:\*\*)?Umbratic AI(?:\*\*)?\s*:\s*/i, "");
+  return text.replace(/^\s*(?:\*\*)?Umbratic(?: AI)?(?:\*\*)?\s*:\s*/i, "");
 }
 
 export function assistantTextFromEvents(events: BackendUiEvent[]): string {
@@ -3100,6 +3111,12 @@ function isElementAtBottom(node: HTMLElement) {
   return elementDistanceFromBottom(node) < 4;
 }
 
+export function splitNestedScrollDelta(scrollTop: number, maxScrollTop: number, delta: number) {
+  const boundedScrollTop = clamp(scrollTop, 0, Math.max(0, maxScrollTop));
+  const innerDelta = clamp(delta, -boundedScrollTop, Math.max(0, maxScrollTop) - boundedScrollTop);
+  return { innerDelta, outerDelta: delta - innerDelta };
+}
+
 function scrollElementToBottom(node: HTMLElement, behavior: ScrollBehavior = "auto") {
   const scrollBehavior = behavior === "smooth" && prefersReducedMotion() ? "auto" : behavior;
   const scroll = () => {
@@ -3163,6 +3180,7 @@ function App() {
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
   const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
+  const [endpointSettingsLoaded, setEndpointSettingsLoaded] = useState(false);
   const [endpointSaving, setEndpointSaving] = useState(false);
   const [endpointRefreshing, setEndpointRefreshing] = useState(false);
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
@@ -3207,6 +3225,7 @@ function App() {
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const endpointSaveSequenceRef = useRef(0);
+  const endpointModeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({});
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
@@ -3252,17 +3271,13 @@ function App() {
   const selectedModel = backend?.model ?? null;
   const connectionState = backend?.endpoint ?? "checking";
   const connectionDisplayState = connectionState === "degraded" ? "ready" : connectionState;
-  const connectionLabel =
-    backend?.endpoint === "ready" || backend?.endpoint === "degraded"
-      ? "Connected"
-      : backend
-        ? "Unavailable"
-        : "Checking";
-  const endpointModeLabel = endpointDraftSettings.mode === "local" ? "Local Veil" : "Server Veil";
-  const endpointUrlLabel = endpointDraftSettings.mode === "local" ? "Local Veil URL" : "Server URL";
-  const endpointTokenLabel = endpointDraftSettings.mode === "local" ? "Local auth token" : "Bearer token";
-  const endpointTokenPlaceholder = endpointDraftSettings.mode === "local" ? "From local Veil env" : "Optional Authorization token";
+  const connectionStatusLabel =
+    backend?.endpoint === "ready" || backend?.endpoint === "degraded" ? "Connected" : backend ? "Unavailable" : "Checking";
   const endpointDirty = JSON.stringify(endpointDraftSettings) !== JSON.stringify(endpointSettings);
+  const endpointValidation = endpointValidationMessage(endpointDraftSettings);
+  const endpointEditingEnabled = backend?.endpointConfig.endpointEditingAllowed ?? true;
+  const endpointFormDisabled = endpointSaving || !endpointEditingEnabled;
+  const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
@@ -4115,9 +4130,12 @@ function App() {
       const settings = normalizeEndpointSettings(await api.getModelEndpointSettings());
       setEndpointSettings(settings);
       setEndpointDraftSettings(settings);
+      endpointModeDraftsRef.current = { [settings.mode]: settings };
       setAccountMessage(null);
     } catch (cause) {
       setAccountMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setEndpointSettingsLoaded(true);
     }
   }
 
@@ -4126,24 +4144,19 @@ function App() {
     setEndpointSaving(false);
     setEndpointRefreshing(false);
     setEndpointDraftSettings((current) => {
-      const next = normalizeEndpointSettings({ ...current, ...patch });
       if ("mode" in patch) {
         const mode = patch.mode === "server" ? "server" : "local";
-        return normalizeEndpointSettings({
-          ...next,
-          mode,
-          baseUrl: defaultEndpointBaseUrlForMode(mode, next.software),
-          secret: next.secret,
-          headers: mode === "local" ? defaultModelEndpointSettings.headers : next.headers,
-        });
+        endpointModeDraftsRef.current[current.mode] = current;
+        const next = endpointModeDraftsRef.current[mode] ?? endpointDefaultsForMode(mode);
+        endpointModeDraftsRef.current[mode] = next;
+        return next;
       }
-      if ("baseUrl" in patch) {
-        return {
-          ...next,
-          mode: endpointModeForBaseUrl(next.baseUrl),
-          software: endpointSoftwareForBaseUrl(next.baseUrl),
-        };
+      let next = normalizeEndpointSettings({ ...current, ...patch });
+      if ("software" in patch && current.mode === "local") {
+        const wasDefault = current.baseUrl === defaultEndpointBaseUrlForMode("local", current.software);
+        if (wasDefault) next = { ...next, baseUrl: defaultEndpointBaseUrlForMode("local", next.software) };
       }
+      endpointModeDraftsRef.current[next.mode] = next;
       return next;
     });
     setAccountMessage(null);
@@ -4156,25 +4169,33 @@ function App() {
     setEndpointDraftSettings((current) => {
       const headers = normalizeEndpointHeaders(current.headers);
       headers[index] = { ...headers[index], ...patch };
-      return normalizeEndpointSettings({ ...current, headers });
+      const next = normalizeEndpointSettings({ ...current, headers });
+      endpointModeDraftsRef.current[next.mode] = next;
+      return next;
     });
     setAccountMessage(null);
   }
 
   function closeSettingsDialog() {
     setEndpointDraftSettings(endpointSettings);
+    endpointModeDraftsRef.current = { [endpointSettings.mode]: endpointSettings };
     setAccountMessage(null);
     setSettingsOpen(false);
   }
 
   async function refreshConnectionStatus() {
-    if (endpointSaving || endpointRefreshing) return;
+    if (endpointSaving || endpointRefreshing || endpointDirty) return;
     const requestId = endpointSaveSequenceRef.current + 1;
     endpointSaveSequenceRef.current = requestId;
+    const startedAt = Date.now();
     setEndpointRefreshing(true);
     setAccountMessage(null);
     try {
-      const status = await refreshStatus();
+      await refreshStatus();
+      const remainingAnimationMs = Math.max(0, 300 - (Date.now() - startedAt));
+      if (remainingAnimationMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationMs));
+      }
       if (requestId !== endpointSaveSequenceRef.current) return;
     } finally {
       if (requestId === endpointSaveSequenceRef.current) setEndpointRefreshing(false);
@@ -4182,7 +4203,12 @@ function App() {
   }
 
   async function saveEndpointSettings() {
-    if (endpointSaving || endpointRefreshing) return;
+    if (endpointSaving || endpointRefreshing || !endpointDirty || !endpointEditingEnabled) return;
+    const validationMessage = endpointValidationMessage(endpointDraftSettings);
+    if (validationMessage) {
+      setAccountMessage(validationMessage);
+      return;
+    }
     const requestId = endpointSaveSequenceRef.current + 1;
     endpointSaveSequenceRef.current = requestId;
     const nextDraft = normalizeEndpointSettings({
@@ -4199,6 +4225,7 @@ function App() {
       setEndpointDraftSettings(normalized);
       setBackend(result.status);
       setPermissionModeState(result.status.permissionMode);
+      endpointModeDraftsRef.current[normalized.mode] = normalized;
     } catch (cause) {
       if (requestId !== endpointSaveSequenceRef.current) return;
       setAccountMessage(String(cause instanceof Error ? cause.message : cause));
@@ -4700,21 +4727,27 @@ function App() {
   function handleActivityWheel(id: string, event: React.WheelEvent<HTMLDivElement>) {
     const node = event.currentTarget;
     const composerNode = streamRef.current;
-    const atTop = node.scrollTop <= 0;
-    const atBottom = isElementAtBottom(node);
-    const shouldPassToComposer = composerNode && ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom));
-    if (shouldPassToComposer) {
+    const deltaY = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * node.clientHeight : event.deltaY;
+    const { innerDelta, outerDelta } = splitNestedScrollDelta(
+      node.scrollTop,
+      node.scrollHeight - node.clientHeight,
+      deltaY,
+    );
+    if (composerNode && Math.abs(outerDelta) > 0.5) {
       event.preventDefault();
       event.stopPropagation();
+      if (Math.abs(innerDelta) > 0.5) {
+        node.scrollTop += innerDelta;
+      }
       composerScrollInputRef.current = true;
-      composerNode.scrollTop += event.deltaY;
-      if (isElementAtBottom(composerNode)) {
-        followComposerScrollRef.current = true;
-        composerScrollInputRef.current = false;
-      } else {
+      if (outerDelta < 0 || !isElementNearBottom(composerNode)) {
         followComposerScrollRef.current = false;
       }
-      activityFollowScrollRef.current.set(id, event.deltaY > 0);
+      composerNode.scrollBy({
+        top: outerDelta,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+      activityFollowScrollRef.current.set(id, deltaY > 0);
       return;
     }
     const shouldPause = event.deltaY < 0 || !isElementNearBottom(event.currentTarget, 8);
@@ -5624,7 +5657,7 @@ function App() {
       <header className="topbar">
         <div className="topbarTitle" aria-hidden="true">
           <span className="topbarLogo" />
-          <span>Umbratic AI</span>
+          <span>Umbratic</span>
         </div>
         <div className="topbarSpacer" />
       </header>
@@ -6519,137 +6552,194 @@ function App() {
               <div className="settingsContent">
                 {settingsTab === "account" ? (
                   <div className="settingsPanel">
-                    <div className="settingsPanelHead">
-                      <h3>Connection</h3>
-                      <p>Configure the Veil endpoint Umbratic uses for model requests and telemetry uploads.</p>
+                    <div className="settingsPanelHead connectionPanelHead">
+                      <div>
+                        <h3>Connection</h3>
+                        <p>Run through Veil on this computer, or connect to a Veil server managed elsewhere.</p>
+                      </div>
+                      {endpointSettingsLoaded ? (
+                        <div className="connectionCompactStatus">
+                          <span
+                            className={`serverHealthText ${connectionDisplayState}`}
+                            role="status"
+                            aria-label={connectionStatusLabel}
+                            title={connectionStatusLabel}
+                          >
+                            <span className="serverStatusDot" aria-hidden="true" />
+                          </span>
+                          <button
+                            className="settingsIconButton connectionRefreshButton"
+                            type="button"
+                            onClick={() => void refreshConnectionStatus()}
+                            disabled={endpointRefreshing || endpointSaving || endpointDirty}
+                            title={endpointDirty ? "Save changes before checking" : "Check connection"}
+                            aria-label="Check connection"
+                          >
+                            <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
 
-                    <div className="settingsGroup">
-                      <h4>Veil endpoint</h4>
-                      <div className="settingsList">
-                        <div className="settingsListRow">
-                          <span>Model server</span>
-                          <div className="serverHealthControl">
-                            <strong className={`serverHealthText ${connectionDisplayState}`}>
-                              <span className="serverStatusDot" aria-hidden="true" />
-                              {connectionLabel}
-                            </strong>
+                    {!endpointSettingsLoaded ? (
+                      <div className="connectionLoading" aria-label="Loading connection settings">
+                        <Loader2 className="spin" size={16} />
+                        <span>Loading connection settings</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="settingsGroup">
+                          <h4>Run mode</h4>
+                          <div className="connectionModeGrid" aria-label="Model connection type">
                             <button
-                              className="settingsIconButton connectionRefreshButton"
+                              className={endpointDraftSettings.mode === "local" ? "isActive" : ""}
                               type="button"
-                              onClick={() => void refreshConnectionStatus()}
-                              disabled={endpointRefreshing}
-                              title="Check connection"
-                              aria-label="Check connection"
-                              aria-disabled={endpointSaving ? "true" : undefined}
+                              disabled={endpointFormDisabled}
+                              aria-pressed={endpointDraftSettings.mode === "local"}
+                              onClick={() => updateEndpointDraft({ mode: "local" })}
                             >
-                              <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
+                              <span className="connectionModeIcon"><Monitor size={16} /></span>
+                              <span>
+                                <strong>Local</strong>
+                                <em>Use Ollama or vLLM on this computer.</em>
+                              </span>
+                              {endpointDraftSettings.mode === "local" ? <Check size={14} /> : null}
+                            </button>
+                            <button
+                              className={endpointDraftSettings.mode === "server" ? "isActive" : ""}
+                              type="button"
+                              disabled={endpointFormDisabled}
+                              aria-pressed={endpointDraftSettings.mode === "server"}
+                              onClick={() => updateEndpointDraft({ mode: "server" })}
+                            >
+                              <span className="connectionModeIcon"><Cloud size={16} /></span>
+                              <span>
+                                <strong>Server</strong>
+                                <em>Connect to an existing Veil deployment.</em>
+                              </span>
+                              {endpointDraftSettings.mode === "server" ? <Check size={14} /> : null}
                             </button>
                           </div>
                         </div>
-                        <div className="settingsListRow">
-                          <span>Connection type</span>
-                          <strong>{endpointModeLabel}</strong>
-                        </div>
-                      </div>
-                      <div className="settingsField">
-                        <span>Connection type</span>
-                        <div className="segmented endpointSegmented" aria-label="Model connection type">
-                          <button
-                            className={endpointDraftSettings.mode === "server" ? "active" : ""}
-                            type="button"
-                            onClick={() => updateEndpointDraft({ mode: "server", software: endpointDraftSettings.software })}
-                          >
-                            Server
-                          </button>
-                          <button
-                            className={endpointDraftSettings.mode === "local" ? "active" : ""}
-                            type="button"
-                            onClick={() => updateEndpointDraft({ mode: "local", software: endpointDraftSettings.software })}
-                          >
-                            Local
-                          </button>
-                        </div>
-                      </div>
-                      <div className="settingsField">
-                        <span>Runtime</span>
-                        <div className="segmented endpointSegmented" aria-label="Model runtime">
-                          <button
-                            className={endpointDraftSettings.software === "ollama" ? "active" : ""}
-                            type="button"
-                            onClick={() => updateEndpointDraft({ software: "ollama" })}
-                          >
-                            Ollama
-                          </button>
-                          <button
-                            className={endpointDraftSettings.software === "vllm" ? "active" : ""}
-                            type="button"
-                            onClick={() => updateEndpointDraft({ software: "vllm" })}
-                          >
-                            vLLM
-                          </button>
-                        </div>
-                      </div>
-                      <label className="settingsField">
-                        <span>{endpointUrlLabel}</span>
-                        <input
-                          value={endpointDraftSettings.baseUrl}
-                          onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                          placeholder={endpointDraftSettings.mode === "local" ? "http://127.0.0.1:8080" : "https://veil.umbratic.ai"}
-                          spellCheck={false}
-                        />
-                      </label>
-                      <label className="settingsField">
-                        <span>{endpointTokenLabel}</span>
-                        <input
-                          value={endpointDraftSettings.secret}
-                          onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
-                          placeholder={endpointTokenPlaceholder}
-                          type="password"
-                          spellCheck={false}
-                        />
-                      </label>
-                      {endpointDraftSettings.mode === "server" ? (
-                        <div className="endpointHeaders">
-                          {normalizeEndpointHeaders(endpointDraftSettings.headers).map((header, index) => (
-                            <div className="endpointHeaderRow" key={index}>
+
+                        <div className="settingsGroup">
+                          <h4>{endpointDraftSettings.mode === "local" ? "Local model" : "Server connection"}</h4>
+                          {endpointDraftSettings.mode === "local" ? (
+                            <>
+                              <div className="settingsField">
+                                <span>Runtime</span>
+                                <div className="segmented endpointSegmented" aria-label="Local model runtime">
+                                  <button
+                                    className={endpointDraftSettings.software === "ollama" ? "active" : ""}
+                                    type="button"
+                                    disabled={endpointFormDisabled}
+                                    onClick={() => updateEndpointDraft({ software: "ollama" })}
+                                  >
+                                    Ollama
+                                  </button>
+                                  <button
+                                    className={endpointDraftSettings.software === "vllm" ? "active" : ""}
+                                    type="button"
+                                    disabled={endpointFormDisabled}
+                                    onClick={() => updateEndpointDraft({ software: "vllm" })}
+                                  >
+                                    vLLM
+                                  </button>
+                                </div>
+                              </div>
                               <label className="settingsField">
-                                <span>{`Header ${index + 1}`}</span>
+                                <span>Runtime URL</span>
                                 <input
-                                  value={header.name}
-                                  onChange={(event) => updateEndpointHeader(index, { name: event.currentTarget.value })}
-                                  placeholder="Header name"
+                                  value={endpointDraftSettings.baseUrl}
+                                  disabled={endpointFormDisabled}
+                                  onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
+                                  placeholder={defaultEndpointBaseUrlForMode("local", endpointDraftSettings.software)}
                                   spellCheck={false}
                                 />
                               </label>
                               <label className="settingsField">
-                                <span>Token</span>
+                                <span>Model</span>
                                 <input
-                                  value={header.value}
-                                  onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
-                                  placeholder="Security token"
+                                  value={endpointDraftSettings.modelId}
+                                  disabled={endpointFormDisabled}
+                                  onChange={(event) => updateEndpointDraft({ modelId: event.currentTarget.value })}
+                                  placeholder={endpointDraftSettings.software === "ollama" ? "llama3.2" : "your-model-name"}
+                                  spellCheck={false}
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <>
+                              <label className="settingsField">
+                                <span>Veil server URL</span>
+                                <input
+                                  value={endpointDraftSettings.baseUrl}
+                                  disabled={endpointFormDisabled}
+                                  onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
+                                  placeholder="https://veil.example.com"
+                                  spellCheck={false}
+                                />
+                              </label>
+                              <label className="settingsField">
+                                <span>Bearer token</span>
+                                <input
+                                  value={endpointDraftSettings.secret}
+                                  disabled={endpointFormDisabled}
+                                  onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
+                                  placeholder="Bearer token from your Veil server"
                                   type="password"
                                   spellCheck={false}
                                 />
                               </label>
-                            </div>
-                          ))}
+                              <div className="endpointHeaders">
+                                {normalizeEndpointHeaders(endpointDraftSettings.headers).map((header, index) => (
+                                  <div className="endpointHeaderRow" key={index}>
+                                    <label className="settingsField">
+                                      <span>{`Custom header ${index + 1}`}</span>
+                                      <input
+                                        value={header.name}
+                                        disabled={endpointFormDisabled}
+                                        onChange={(event) => updateEndpointHeader(index, { name: event.currentTarget.value })}
+                                        placeholder="Header name"
+                                        spellCheck={false}
+                                      />
+                                    </label>
+                                    <label className="settingsField">
+                                      <span>Value</span>
+                                      <input
+                                        value={header.value}
+                                        disabled={endpointFormDisabled}
+                                        onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
+                                        placeholder="Header value"
+                                        type="password"
+                                        spellCheck={false}
+                                      />
+                                    </label>
+                                  </div>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                          <div className="connectionActions">
+                            <button
+                              className="settingsInlineButton connectionSaveButton"
+                              type="button"
+                              onClick={() => void saveEndpointSettings()}
+                              disabled={endpointSaving || endpointRefreshing || !endpointDirty || !!endpointValidation || !endpointEditingEnabled}
+                            >
+                              {endpointSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                              <span>{endpointSaving ? "Connecting" : "Save & connect"}</span>
+                            </button>
+                            {endpointDirty ? <span className="connectionUnsaved">Unsaved changes</span> : null}
+                          </div>
+                          <div className="connectionFeedback" aria-live="polite">
+                            {!endpointEditingEnabled ? <p className="settingsMessage">This connection is managed by your organization.</p> : null}
+                            {endpointDirty && endpointValidation ? <p className="settingsMessage settingsMessageError">{endpointValidation}</p> : null}
+                            {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
+                          </div>
                         </div>
-                      ) : null}
-                      <div className="settingsActions">
-                        <button
-                          className="settingsInlineButton connectionSaveButton"
-                          type="button"
-                          onClick={() => void saveEndpointSettings()}
-                          disabled={endpointSaving}
-                          aria-disabled={endpointRefreshing ? "true" : undefined}
-                        >
-                          {endpointSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                          <span>{endpointSaving ? "Saving" : "Save connection"}</span>
-                        </button>
-                      </div>
-                      {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
-                    </div>
+                      </>
+                    )}
                   </div>
                 ) : null}
 
@@ -6657,7 +6747,7 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Harness</h3>
-                      <p>Choose the working profile Umbratic AI uses when it starts a new run.</p>
+                      <p>Choose the working profile Umbratic uses when it starts a new run.</p>
                     </div>
 
                     <div className="settingsGroup">
@@ -6700,7 +6790,7 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Appearance</h3>
-                      <p>Theme and typography used throughout Umbratic AI.</p>
+                      <p>Theme and typography used throughout Umbratic.</p>
                     </div>
 
                     <div className="settingsGroup">
@@ -6768,7 +6858,7 @@ function App() {
                           <span>Scan system fonts</span>
                         </button>
                         {!localFontAccessAvailable() ? (
-                          <p className="settingsMessage">System font scanning is unavailable here, so Umbratic AI is showing common system font choices.</p>
+                          <p className="settingsMessage">System font scanning is unavailable here, so Umbratic is showing common system font choices.</p>
                         ) : null}
                         {fontScanMessage ? <p className="settingsMessage">{fontScanMessage}</p> : null}
                       </div>
@@ -6982,26 +7072,39 @@ function App() {
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
                       <h3>Telemetry</h3>
-                      <p>Umbratic sends redacted run summaries to your configured Veil server. Detailed logs stay local.</p>
+                      <p>
+                        {telemetrySyncEnabled
+                          ? "Umbratic sends redacted run summaries to your configured Veil server. Detailed logs stay local."
+                          : "Local mode does not upload telemetry. Task history and detailed logs stay on this computer."}
+                      </p>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Sent to your server</h4>
+                      <h4>{telemetrySyncEnabled ? "Sent to your server" : "Local mode"}</h4>
                       <div className="settingsList telemetryDisclosureList">
-                        <div className="settingsListRow">
-                          <span>Run record</span>
-                          <p>
-                            Task, chat, and repository IDs, timestamps, status, outcome, model, runner version, workspace
-                            mode, and reasoning mode.
-                          </p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Usage shape</span>
-                          <p>
-                            Counts for messages, commands, tests, changed files, reviews, permissions, feedback, and
-                            runtime capability health.
-                          </p>
-                        </div>
+                        {telemetrySyncEnabled ? (
+                          <>
+                            <div className="settingsListRow">
+                              <span>Run record</span>
+                              <p>
+                                Task, chat, and repository IDs, timestamps, status, outcome, model, runner version, workspace
+                                mode, and reasoning mode.
+                              </p>
+                            </div>
+                            <div className="settingsListRow">
+                              <span>Usage shape</span>
+                              <p>
+                                Counts for messages, commands, tests, changed files, reviews, permissions, feedback, and
+                                runtime capability health.
+                              </p>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="settingsListRow">
+                            <span>Uploads</span>
+                            <p>Disabled. The desktop-managed Veil process also starts with telemetry ingestion turned off.</p>
+                          </div>
+                        )}
                       </div>
                     </div>
 

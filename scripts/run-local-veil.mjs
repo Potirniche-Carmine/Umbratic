@@ -31,8 +31,6 @@ function usage() {
     "  --software <name>    ollama or vllm. Overrides VEIL_PROVIDER_PROTOCOL.",
     "  --base-url <url>     Local model runtime URL. Overrides VEIL_PROVIDER_BASE_URL.",
     "  --model <name>       Runtime model name. Overrides VEIL_MODEL.",
-    "  --token <secret>     Veil bearer token. Overrides VEIL_AUTH_TOKEN.",
-    "  --addr <host:port>   Veil bind address. Overrides VEIL_ADDR.",
     "  --help              Show this message.",
   ].join("\n");
 }
@@ -56,8 +54,6 @@ function readDotEnv(filePath) {
 function envWithOverrides(args, baseEnv) {
   const env = { ...baseEnv };
   const overrides = {
-    VEIL_ADDR: readFlag(args, "--addr"),
-    VEIL_AUTH_TOKEN: readFlag(args, "--token"),
     VEIL_PROVIDER_PROTOCOL: readFlag(args, "--software"),
     VEIL_PROVIDER_BASE_URL: readFlag(args, "--base-url"),
     VEIL_MODEL: readFlag(args, "--model"),
@@ -75,14 +71,16 @@ function envWithOverrides(args, baseEnv) {
 }
 
 function desktopEnvFromVeil(veilEnv) {
-  const addr = veilEnv.VEIL_ADDR || "127.0.0.1:8080";
+  const software = veilEnv.VEIL_PROVIDER_PROTOCOL === "vllm" ? "vllm" : "ollama";
+  const runtimeBaseUrl =
+    veilEnv.VEIL_PROVIDER_BASE_URL || (software === "vllm" ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:11434");
   return {
     ...process.env,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
-    UMBRATIC_VEIL_BASE_URL: process.env.UMBRATIC_VEIL_BASE_URL || `http://${addr}`,
-    UMBRATIC_VEIL_TOKEN: process.env.UMBRATIC_VEIL_TOKEN || veilEnv.VEIL_AUTH_TOKEN || "",
-    UMBRATIC_MODEL_SOFTWARE:
-      process.env.UMBRATIC_MODEL_SOFTWARE || (veilEnv.VEIL_PROVIDER_PROTOCOL === "vllm" ? "vllm" : "ollama"),
+    UMBRATIC_DEFAULT_ENDPOINT_MODE: "local",
+    UMBRATIC_LOCAL_MODEL_ID: veilEnv.VEIL_MODEL || "",
+    UMBRATIC_LOCAL_RUNTIME_BASE_URL: runtimeBaseUrl,
+    UMBRATIC_MODEL_SOFTWARE: process.env.UMBRATIC_MODEL_SOFTWARE || software,
   };
 }
 
@@ -95,8 +93,6 @@ function localEnv(args) {
   const veilEnv = envWithOverrides(args, { ...process.env });
   const effectiveVeilEnv = { ...dotEnv, ...veilEnv };
   return {
-    veilEnv,
-    effectiveVeilEnv,
     desktopEnv: desktopEnvFromVeil(effectiveVeilEnv),
   };
 }
@@ -116,19 +112,12 @@ function spawnChild(label, command, args, options) {
 }
 
 function main() {
-  const { veilEnv, effectiveVeilEnv, desktopEnv } = localEnv(process.argv.slice(2));
-  console.log(`Starting local Veil at http://${effectiveVeilEnv.VEIL_ADDR || "127.0.0.1:8080"}`);
-  console.log(`Starting desktop app against ${desktopEnv.UMBRATIC_VEIL_BASE_URL}`);
-  console.log(veilEnvPath ? `Veil env file: ${veilEnvPath}` : "Veil env file: none");
+  const { desktopEnv } = localEnv(process.argv.slice(2));
+  console.log(`Starting desktop-managed local Veil for ${desktopEnv.UMBRATIC_LOCAL_RUNTIME_BASE_URL}`);
+  console.log(`Local model: ${desktopEnv.UMBRATIC_LOCAL_MODEL_ID || "configure in Settings > Connection"}`);
+  console.log(fs.existsSync(veilEnvPath) ? `Veil env file: ${veilEnvPath}` : "Veil env file: none");
 
   const children = [];
-  const veil = spawnChild("Veil", "go", ["run", "./cmd/veil"], {
-    cwd: veilRoot,
-    env: veilEnv,
-    stdio: "inherit",
-    windowsHide: true,
-  });
-  children.push(veil);
 
   const desktopNpmArgs = ["--workspace", "@umbratic/desktop", "run", "dev"];
   const desktopCommand = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";

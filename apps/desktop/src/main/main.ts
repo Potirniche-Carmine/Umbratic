@@ -22,12 +22,10 @@ import {
   localProviderCatalog,
   managedModelEndpointDefaults,
   taskStatesThatCanOpen,
-  workspaceContextVerificationPrompt,
 } from "./config";
 import {
   capabilityPromptGuidance,
   capabilityTelemetrySnapshot,
-  harnessSkillCapabilityGuidance,
   probeLocalCapabilities,
   type CapabilityPromptNeeds,
 } from "./capabilities";
@@ -50,18 +48,16 @@ import {
   allowedLocalProviderIds,
   baseUrlHost,
   classifyCommandText,
-  isBarePythonCommand,
   isBlockedPath,
   isGeneratedRuntimePath,
   isLocalhostUrl,
   promptLooksLikeCmakeTask,
-  promptLooksLikeMarkdownTask,
   promptLooksLikePythonTask,
   runtimeDiagnostics,
-  runtimeProfileForPrompt,
-  telemetryPolicyInfo,
+  telemetryPolicyForMode,
 } from "./policy";
 import { getProviderJson } from "./providerClient";
+import { ensureLocalVeil, stopLocalVeil, currentLocalVeilConnection } from "./localVeil";
 import {
   readChat,
   readChats,
@@ -103,14 +99,12 @@ import {
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
   importSkill as importSkillService,
+  installBundledSystemSkills as installBundledSystemSkillsService,
   listSkills as listSkillsService,
-  promptSkillsForRequest as promptSkillsForRequestService,
   resetSystemSkill as resetSystemSkillService,
   saveSkillDocument as saveSkillDocumentService,
   saveSkillSettings as saveSkillSettingsService,
   skillsDirectoryPath as skillsDirectoryPathService,
-  systemSkillsForProfile,
-  type PromptSkillInfo,
 } from "./skills";
 import type {
   ApproveResult,
@@ -195,10 +189,15 @@ function clearPendingPermissionsForTask(taskIdValue: string) {
 }
 
 app.enableSandbox();
-app.setName("Umbratic AI");
+app.setName("Umbratic");
 
-const cleanUserData = path.join(app.getPath("appData"), "Umbratic AI");
+const appDataDirectory = app.getPath("appData");
+const cleanUserData = path.join(appDataDirectory, "Umbratic");
+const legacyUserData = path.join(appDataDirectory, "Umbratic AI");
 try {
+  if (!fs.existsSync(cleanUserData) && fs.existsSync(legacyUserData)) {
+    fs.cpSync(legacyUserData, cleanUserData, { recursive: true });
+  }
   fs.mkdirSync(cleanUserData, { recursive: true });
   app.setPath("userData", cleanUserData);
   if (isDev) {
@@ -416,23 +415,15 @@ function mergeTaskEvents(...groups: BackendUiEvent[][]): BackendUiEvent[] {
   return compactTaskEvents(merged, 500);
 }
 
-function applyTaskPolicyMetadata(task: TaskRecord, intentPrompt = task.prompt) {
+function applyTaskPolicyMetadata(task: TaskRecord) {
   task.runnerName = task.runnerName || umbraticRunnerName;
   task.runnerVersion = task.runnerVersion || umbraticRunnerVersion;
   task.policyVersion = task.policyVersion || umbraticPolicyVersion;
-  if (!task.runtimeProfile || task.runtimeProfile === "none" || intentPrompt !== task.prompt) {
-    task.runtimeProfile = runtimeProfileForCurrentHarness(intentPrompt);
-  }
   if (task.model) {
     task.providerId = task.model.providerId;
     task.modelId = task.model.modelId;
     task.modelBaseUrlHost = baseUrlHost(task.model.baseUrl);
   }
-}
-
-function runtimeProfileForCurrentHarness(prompt: string) {
-  if (promptLooksLikeMarkdownTask(prompt)) return "markdown";
-  return readHarnessProfileSetting() === "engineering" ? runtimeProfileForPrompt(prompt) : "none";
 }
 
 function takePendingTaskEvents(taskIdValue: string): BackendUiEvent[] {
@@ -522,7 +513,6 @@ function publicTask(task: TaskRecord): TaskInfo {
     runnerName,
     runnerVersion,
     policyVersion,
-    runtimeProfile,
     createdAt,
     changedFiles,
     reviewFiles,
@@ -549,7 +539,6 @@ function publicTask(task: TaskRecord): TaskInfo {
     runnerName,
     runnerVersion,
     policyVersion,
-    runtimeProfile,
     createdAt,
     changedFiles,
     reviewFiles,
@@ -1529,81 +1518,14 @@ function findAgentInstructionFiles(rootPath: string): Array<{ path: string; text
 
 function pushAgentInstructionContext(lines: string[], rootPath: string) {
   const files = findAgentInstructionFiles(rootPath);
+  if (!files.length) return;
   lines.push(
     "",
-    "AGENTS.md instructions:",
-    files.length
-      ? "The following AGENTS.md files were discovered before this request. You must follow them as repository instructions. For files under nested directories, follow the nearest applicable AGENTS.md in addition to higher-level instructions."
-      : "No AGENTS.md file was found in the opened workspace. If one appears while working, read and follow it before making changes.",
+    "Repository instruction files discovered in the workspace:",
   );
   for (const file of files) {
     lines.push(`\n### ${file.path}`, "```", file.text, "```");
   }
-}
-
-type SelectedSkillSummary = Pick<PromptSkillInfo, "id" | "source" | "reason" | "fullContent">;
-
-function pushSkillContext(
-  lines: string[],
-  userPrompt: string,
-  capabilityReport?: CapabilityProbeReport,
-  systemSkillMatchText = userPrompt,
-): SelectedSkillSummary[] {
-  const harnessProfile = readHarnessProfileSetting();
-  const systemSkills = systemSkillsForProfile(
-    harnessProfile,
-    systemSkillMatchText,
-    undefined,
-    capabilityReport ? harnessSkillCapabilityGuidance(capabilityReport) : {},
-  );
-  const skills = promptSkillsForRequestService(userPrompt);
-  const fullSkills = [...systemSkills, ...skills].filter((skill) => skill.fullContent);
-  const metadataOnlySkills = [...systemSkills, ...skills].filter((skill) => !skill.fullContent);
-  const selectedSkillSummaries = [...systemSkills, ...skills].map((skill) => ({
-    id: skill.id,
-    source: skill.source,
-    reason: skill.reason,
-    fullContent: skill.fullContent,
-  }));
-  lines.push(
-    "",
-    "Skills:",
-    "Skills are editable procedural guidance. The available skill index gives the model only skill names and descriptions by default. Full skill instructions are included only when the user explicitly references $skill-id or the request strongly matches the skill metadata.",
-    "The model must not claim to have read or applied a metadata-only skill. When full instructions are included for a skill, the model must read the whole skill before applying it.",
-  );
-  if (systemSkills.length || skills.length) {
-    lines.push("", "Available skill index:");
-    for (const skill of [...systemSkills, ...skills]) {
-      const source = skill.source === "system" ? "system skill" : "personal skill";
-      const status = skill.fullContent ? "full instructions included" : "metadata only";
-      lines.push(`- ${skill.id}: ${skill.name} (${source}; ${status})${skill.description ? ` - ${skill.description}` : ""}`);
-    }
-  } else {
-    lines.push("No system or personal skills were selected for this request.");
-  }
-  if (metadataOnlySkills.length) {
-    lines.push(
-      "",
-      "Metadata-only skills:",
-      "These skills are available by name and description only. Do not apply them unless full instructions are included in this prompt.",
-    );
-  }
-  if (!fullSkills.length) return selectedSkillSummaries;
-  lines.push("", "Selected skill instructions:");
-  let remaining = 30000;
-  for (const skill of fullSkills) {
-    if (remaining <= 0) {
-      lines.push("\n...(additional selected skills omitted because the skill context limit was reached)");
-      break;
-    }
-    const content = skill.content.slice(0, remaining);
-    remaining -= content.length;
-    const description = skill.description ? `\nDescription: ${skill.description}` : "";
-    const status =
-      skill.reason === "explicit_request" ? "explicitly requested for this turn" : "selected by skill metadata match";
-    lines.push(`\n### ${skill.name}${description}\nStatus: ${status}\nSource: ${skill.instructionPath}`, "```", content, "```");
-  }
-  return selectedSkillSummaries;
 }
 
 function compactHistoryText(value: string, limit: number): string {
@@ -1786,22 +1708,21 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const capabilityNeeds = capabilityNeedsForPrompt(userPrompt, attachments);
-  const attachmentOcrInputKinds = ocrInputKindsForAttachments(attachments);
   const hiddenChat = isHiddenChatTask(task);
   const tree = repositoryTreePreview(rootPath);
   const keyFiles = hiddenChat ? [] : keyWorkspaceFiles(rootPath);
   const lines = hiddenChat
     ? [
-        "Umbratic AI chat context:",
+        "Umbratic chat context:",
         "- no project folder is selected for this chat",
-        "- Umbratic AI created a private scratch workspace for attachments and any files produced during the conversation",
+        "- Umbratic created a private scratch workspace for attachments and any files produced during the conversation",
         `- scratch workspace: ${rootPath}`,
         "",
         "Scratch workspace file preview (bounded, not exhaustive):",
         tree.length ? tree.join("\n") : "- (empty)",
       ]
     : [
-        "Umbratic AI workspace context:",
+        "Umbratic workspace context:",
         `- opened folder: ${rootPath}`,
         `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
         `- workspace kind: ${task.workspaceKind}`,
@@ -1810,23 +1731,6 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
         "Visible workspace file preview (bounded, not exhaustive):",
         tree.length ? tree.join("\n") : "- (no readable files found)",
       ];
-  const systemSkillMatchText = [
-    userPrompt,
-    attachmentOcrInputKinds.length ? `attached ${attachmentOcrInputKinds.join(" and ")} input available for OCR` : "",
-    task.workspaceMode === "worktree" ? "workspace mode: git worktree isolated workspace" : "",
-    task.workspaceMode === "worktree" && task.agentBranch ? `task branch: ${task.agentBranch}` : "",
-  ].filter(Boolean).join("\n");
-  const selectedSkills = pushSkillContext(lines, userPrompt, capabilityReport, systemSkillMatchText);
-  for (const skill of selectedSkills) {
-    emit({
-      type: "skill.selected",
-      taskId: task.id,
-      skillId: skill.id,
-      source: skill.source,
-      reason: skill.reason,
-      fullContent: skill.fullContent,
-    });
-  }
   if (keyFiles.length) {
     lines.push("", "Key workspace files:");
     for (const file of keyFiles) {
@@ -1840,8 +1744,6 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
       "",
       "Conversation so far, for reference only:",
       history,
-      "",
-      "Use the conversation above only as background. The next section is the current user request to answer now.",
     );
   }
   lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
@@ -1849,22 +1751,7 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport })));
   parts.push({
     type: "text",
-    text: [
-      "User request:",
-      userPrompt,
-      "",
-      hiddenChat
-        ? "Answer as a normal chat unless the user asks you to create or inspect files. Treat the scratch workspace as private working storage, not as a meaningful project folder."
-        : [
-            "Use the opened folder above as the current project.",
-            workspaceContextVerificationPrompt,
-            "For high-level orientation, the provided workspace preview and key files are useful context. When accuracy or completeness matters, inspect the relevant files or directories with tools before answering.",
-          ].join("\n"),
-      "When a tool result contains an umbratic-context marker, use retrieve_context only if exact omitted output is necessary. Do not retrieve just to restate output.",
-      "Do not start visible thinking or the final answer by listing available tools, enabled tools, runtime profiles, or capability probes. Treat that context as understood; mention a tool or capability only when it directly affects an action, skill choice, verification result, or blocker.",
-      "If the user asks you to create, write, edit, update, or otherwise change a file, you must call a workspace file-changing tool before saying the file was created or changed.",
-      "If you create or modify files, do not paste the full code in your final response. Refer to the changed file paths by name so Umbratic AI can open them in Review.",
-    ].join("\n"),
+    text: ["User request:", userPrompt].join("\n"),
   });
   return parts;
 }
@@ -2008,7 +1895,7 @@ async function removeGitWorktree(task: TaskRecord) {
   }
   const repoWorktreeRoot = worktreeRootForRepo(task.originalRepoPath);
   if (!pathInside(repoWorktreeRoot, task.worktreePath)) {
-    throw new Error("Worktree path is outside Umbratic AI control.");
+    throw new Error("Worktree path is outside Umbratic control.");
   }
   if (fs.existsSync(task.worktreePath)) {
     const result = await gitResult(task.originalRepoPath, ["worktree", "remove", "--force", task.worktreePath]);
@@ -2293,24 +2180,26 @@ function endpointProvider(): (typeof localProviderCatalog)[number] & {
 } {
   const provider = localProviderCatalog[0];
   const settings = readModelEndpointSettings();
+  const localConnection = settings.mode === "local" ? currentLocalVeilConnection() : null;
   return {
     ...provider,
     providerName: "Umbratic Veil",
     software: settings.software,
-    baseUrl: normalizeBaseUrl(settings.baseUrl),
-    apiKey: settings.secret.trim(),
-    headers: endpointHeaders(settings.headers),
+    baseUrl: normalizeBaseUrl(localConnection?.baseUrl ?? settings.baseUrl),
+    apiKey: localConnection?.authToken ?? settings.secret.trim(),
+    headers: settings.mode === "local" ? {} : endpointHeaders(settings.headers),
     mtls: settings.mode === "server" ? provider.mtls : undefined,
   };
 }
 
 function configuredEndpointModel(): LocalModelInfo {
   const provider = endpointProvider();
+  const settings = readModelEndpointSettings();
   return {
     providerId: provider.providerId,
     providerName: provider.providerName,
     modelId: veilManagedModelId,
-    displayName: provider.providerName,
+    displayName: settings.mode === "local" ? settings.modelId : provider.providerName,
     baseUrl: provider.baseUrl,
   };
 }
@@ -2383,6 +2272,27 @@ async function checkEndpointHealth(provider: ReturnType<typeof endpointProvider>
 }
 
 async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before changing the model connection.");
+  }
+  const current = readModelEndpointSettings();
+  const candidate = { ...current, ...input };
+  const baseUrl = typeof candidate.baseUrl === "string" ? candidate.baseUrl.trim() : "";
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(baseUrl);
+  } catch {
+    throw new Error(`${candidate.mode === "local" ? "Runtime" : "Server"} URL is invalid.`);
+  }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error(`${candidate.mode === "local" ? "Runtime" : "Server"} URL must use HTTP or HTTPS.`);
+  }
+  if (candidate.mode === "local" && !isLocalhostUrl(baseUrl)) {
+    throw new Error("Local mode only connects to a model runtime on this computer. Use Server mode for remote infrastructure.");
+  }
+  if (candidate.mode === "local" && !candidate.modelId?.trim()) {
+    throw new Error("Enter the local model name before connecting.");
+  }
   const settings = writeModelEndpointSettings(input);
   const status = await getBackendStatus();
   return { settings, status };
@@ -2395,10 +2305,32 @@ async function saveHarnessProfileSetting(input: unknown) {
 }
 
 async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
+  const settings = readModelEndpointSettings();
+  try {
+    if (settings.mode === "local") {
+      await ensureLocalVeil(settings);
+    } else {
+      stopLocalVeil();
+    }
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    return {
+      providers: [{
+        providerId: "company-endpoint",
+        providerName: "Local Veil",
+        baseUrl: settings.baseUrl,
+        status: "unavailable",
+        models: [],
+        message,
+      }],
+      models: [],
+      selected: null,
+    };
+  }
   const configured = configuredEndpointModel();
   const providerConfig = endpointProvider();
   const health = await checkEndpointHealth(providerConfig);
-  const models: LocalModelInfo[] = [];
+  const models: LocalModelInfo[] = health.status === "ready" ? [configured] : [];
   const selected = health.status === "ready" ? configured : null;
   const provider: LocalModelProvider = {
     providerId: configured.providerId,
@@ -2406,7 +2338,10 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
     baseUrl: configured.baseUrl,
     status: health.status,
     models,
-    message: health.message,
+    message:
+      health.status === "ready" && settings.mode === "local"
+        ? `Local Veil is running with ${settings.modelId}. Telemetry is off.`
+        : health.message,
   };
   return { providers: [provider], models, selected };
 }
@@ -2416,6 +2351,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
   const runnerPath = runnerBinaryPath();
   const capabilityReport = await probeLocalCapabilities({ runnerPath });
   const managedEndpoint = managedModelEndpointDefaults();
+  const endpointSettings = readModelEndpointSettings();
   const hasManagedEndpoint = !!(managedEndpoint?.baseUrl || managedEndpoint?.mode || managedEndpoint?.software);
   const endpointStatus = providers.some((provider) => provider.status === "ready")
     ? "ready"
@@ -2436,7 +2372,13 @@ async function getBackendStatus(): Promise<BackendStatus> {
     providers,
     permissionMode,
     endpointConfig: {
-      source: managedEndpoint ? "managed" : hasStoredModelEndpointSettings() ? "stored" : "server-default",
+      source: managedEndpoint
+        ? "managed"
+        : hasStoredModelEndpointSettings()
+          ? "stored"
+          : endpointSettings.mode === "local"
+            ? "local-default"
+            : "server-default",
       endpointEditingAllowed: endpointEditingAllowed() && !hasManagedEndpoint,
     },
     privacy: {
@@ -2455,7 +2397,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       localhostOnlyModels: models.every((model) => isLocalhostUrl(model.baseUrl)),
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: runnerDiagnosticsDirectory(app.getPath("userData")),
-      telemetry: telemetryPolicyInfo,
+      telemetry: telemetryPolicyForMode(endpointSettings.mode),
       runtimes: runtimeDiagnostics(),
       capabilities: capabilityReport,
     },
@@ -2533,12 +2475,12 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const result = mainWindow
     ? await dialog.showSaveDialog(mainWindow, {
-        title: "Export Umbratic AI Telemetry",
+        title: "Export Umbratic Telemetry",
         defaultPath: `umbratic-telemetry-${timestamp}.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       })
     : await dialog.showSaveDialog({
-        title: "Export Umbratic AI Telemetry",
+        title: "Export Umbratic Telemetry",
         defaultPath: `umbratic-telemetry-${timestamp}.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
@@ -2552,7 +2494,7 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
 }
 
 async function retryTelemetrySpoolQueue(): Promise<void> {
-  if (!telemetryPolicyInfo.syncEnabled) return;
+  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled) return;
   const provider = endpointProvider();
   await uploadTelemetrySpool({
     directory: telemetrySpoolDirectory(app.getPath("userData")),
@@ -2561,7 +2503,7 @@ async function retryTelemetrySpoolQueue(): Promise<void> {
 }
 
 async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
-  if (!telemetryPolicyInfo.syncEnabled) {
+  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled) {
     throw new Error("Telemetry sync is disabled by policy.");
   }
   const provider = endpointProvider();
@@ -2574,7 +2516,7 @@ async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
 }
 
 function scheduleManagedTelemetrySync() {
-  if (!telemetryPolicyInfo.syncEnabled || telemetrySyncTimer) return;
+  if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled || telemetrySyncTimer) return;
   telemetrySyncTimer = setTimeout(() => {
     telemetrySyncTimer = null;
     void syncTelemetryNow().catch(() => undefined);
@@ -2737,7 +2679,7 @@ async function openChatAttachment(input: unknown): Promise<{ ok: true } | { ok: 
   if (attachment.source === "chat" && typeof attachment.storedPath === "string" && attachment.storedPath.trim()) {
     const storedPath = path.resolve(attachment.storedPath);
     if (!pathInside(chatAttachmentRoot(), storedPath)) {
-      return { ok: false, message: "Attachment is outside Umbratic AI storage." };
+      return { ok: false, message: "Attachment is outside Umbratic storage." };
     }
     targetPath = storedPath;
   } else if (attachment.source === "workspace" && typeof attachment.path === "string" && attachment.path.trim() && repositoryId) {
@@ -3118,12 +3060,6 @@ async function handleRunnerPermission(
       ? ({ commandClass: "read" as const, risky: false })
     : classifyCommandText(title, task.worktreePath);
 
-  if (type === "bash" && isBarePythonCommand(title)) {
-    emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
-    await replyRunnerPermission(run, id, false);
-    return "resolved";
-  }
-
   if (type === "read" || type === "search") {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     await replyRunnerPermission(run, id, true);
@@ -3206,7 +3142,7 @@ async function runRunnerTask(
       return;
     }
     task.model = selected;
-    applyTaskPolicyMetadata(task, intent);
+    applyTaskPolicyMetadata(task);
     saveTask(task);
     if (expectsFileChanges && !canSatisfyFileChangeContract(enabledToolsForRun)) {
       emit({
@@ -3359,7 +3295,7 @@ async function runRunnerTask(
         const kind: PermissionRequest["kind"] =
           toolKind === "command"
             ? "bash"
-            : toolKind === "read" || toolKind === "search"
+            : toolKind === "read" || toolKind === "search" || toolKind === "read_skill"
               ? "read"
               : "edit";
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
@@ -3511,7 +3447,7 @@ async function runRunnerTask(
     });
     await stream.ready;
     // Runner sessions live only inside the runner process started above.
-    // Because Umbratic AI starts a fresh process for each task run, a persisted
+    // Because Umbratic starts a fresh process for each task run, a persisted
     // runnerSessionId from an earlier process is stale and cannot be reused.
     const session = await runnerRequest<{ id: string }>(run, "/session", {
       method: "POST",
@@ -3674,7 +3610,6 @@ function attachHiddenTaskToRepository(task: TaskRecord, repository: RepositoryIn
   task.runnerName = umbraticRunnerName;
   task.runnerVersion = umbraticRunnerVersion;
   task.policyVersion = umbraticPolicyVersion;
-  task.runtimeProfile = runtimeProfileForCurrentHarness(task.prompt);
   task.runnerSessionId = undefined;
   task.diagnosticLogPath = undefined;
   task.pendingPrompt = undefined;
@@ -3816,7 +3751,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
-    existingTask.runtimeProfile = runtimeProfileForCurrentHarness(prompt);
     existingTask.enabledTools = requestedEnabledTools;
     existingTask.capabilityProbes = taskCapabilityProbes;
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
@@ -3881,7 +3815,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       runnerName: umbraticRunnerName,
       runnerVersion: umbraticRunnerVersion,
       policyVersion: umbraticPolicyVersion,
-      runtimeProfile: runtimeProfileForCurrentHarness(prompt),
       createdAt: new Date().toISOString(),
       changedFiles: [],
       reviewFiles: [],
@@ -3920,7 +3853,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     runnerName: umbraticRunnerName,
     runnerVersion: umbraticRunnerVersion,
     policyVersion: umbraticPolicyVersion,
-    runtimeProfile: runtimeProfileForCurrentHarness(prompt),
     createdAt: new Date().toISOString(),
     changedFiles: [],
     reviewFiles: [],
@@ -4298,7 +4230,7 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
     return { ok: false, message: "Task folder no longer exists." };
   }
   if (taskUsesIsolatedWorktree(task) && !pathInside(worktreeRootForRepo(task.originalRepoPath), task.worktreePath)) {
-    return { ok: false, message: "Worktree path is outside Umbratic AI control." };
+    return { ok: false, message: "Worktree path is outside Umbratic control." };
   }
   if (relativeFilePath && path.isAbsolute(relativeFilePath)) {
     return { ok: false, message: "File path must be relative to the review folder." };
@@ -4493,7 +4425,7 @@ async function createWindow() {
     minHeight: 680,
     backgroundColor: "#101112",
     icon,
-    title: "Umbratic AI",
+    title: "Umbratic",
     titleBarStyle: isMac ? "hiddenInset" : isWin ? "hidden" : "default",
     titleBarOverlay: isWin
       ? {
@@ -4551,6 +4483,11 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  try {
+    installBundledSystemSkillsService();
+  } catch (error) {
+    console.error("Unable to install bundled skills.", error);
+  }
   finishInterruptedRunningTasks();
   compactClosedTaskStorage();
   handleIpc("umbratic:list-projects", () => readProjects());
@@ -4621,6 +4558,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopLocalVeil();
   flushPendingTaskEvents();
   for (const [id, pending] of pendingPermissions) {
     pendingPermissions.delete(id);

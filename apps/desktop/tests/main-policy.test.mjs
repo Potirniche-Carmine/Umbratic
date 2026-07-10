@@ -9,13 +9,22 @@ const policy = loadTypeScriptModule(new URL("../src/main/policy.ts", import.meta
 const tools = loadTypeScriptModule(new URL("../src/main/toolSettings.ts", import.meta.url));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-test("desktop policy detects runtime profiles from realistic prompts", () => {
-  assert.equal(policy.runtimeProfileForPrompt("Fix failing pytest in tests/test_api.py"), "python");
-  assert.equal(policy.runtimeProfileForPrompt("Update README markdown tables"), "markdown");
-  assert.equal(policy.runtimeProfileForPrompt("Debug a segfault in src/main.c with CMake"), "cmake");
-  assert.equal(policy.runtimeProfileForPrompt("What is the app called?"), "none");
+test("desktop policy identifies generated runtime artifacts without creating prompt profiles", () => {
   assert.equal(policy.isGeneratedRuntimePath(".DS_Store"), true);
   assert.equal(policy.isGeneratedRuntimePath("notes/Desktop.ini"), true);
+  assert.equal("runtimeProfileForPrompt" in policy, false);
+});
+
+test("local mode disables telemetry while server mode keeps managed redacted sync", () => {
+  const local = policy.telemetryPolicyForMode("local");
+  const server = policy.telemetryPolicyForMode("server");
+
+  assert.equal(local.mode, "managed_disabled");
+  assert.equal(local.syncEnabled, false);
+  assert.equal(local.storage, "task-event-snapshots");
+  assert.equal(server.mode, "managed_required");
+  assert.equal(server.syncEnabled, true);
+  assert.equal(server.storage, "company-managed-telemetry");
 });
 
 test("desktop command classifier blocks unsafe branches and allows expected tooling", () => {
@@ -28,7 +37,9 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     ["git clean -fd", "destructive-file", true],
     ["Remove-Item -Recurse build", "destructive-file", true],
     ["uv run python script.py", "python-runtime", false],
-    ["python script.py", "python-runtime", true],
+    ["python script.py", "python-runtime", false],
+    ["python3 script.py", "python-runtime", false],
+    ["py script.py", "python-runtime", false],
     ["cmake --build .umbratic/build --parallel", "cmake-build", false],
     ["npm install", "package-manager", true],
     ["curl http://127.0.0.1:8080/api/health", "network", true],
@@ -41,6 +52,7 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     assert.equal(got.commandClass, commandClass, command);
     assert.equal(got.risky, risky, command);
   }
+  assert.equal(policy.runtimeDiagnostics().python.barePythonVerification, "allowed_uv_preferred");
 });
 
 test("hardening config asserts provider, model, permission, and tool boundaries", () => {

@@ -16,82 +16,82 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 		t.Fatalf("got %d messages, want 3", len(messages))
 	}
 	if messages[0].Role != "system" || messages[0].Content != GlobalSystemPrompt {
-		t.Fatalf("first message should be the global system prompt")
+		t.Fatal("first message should be the global system prompt")
 	}
 	routePrompt, _ := RoutePrompt(EngineeringChat)
 	if messages[1].Role != "system" || messages[1].Content != routePrompt {
-		t.Fatalf("second message should be the route system prompt")
+		t.Fatal("second message should be the route system prompt")
 	}
 	if messages[2].Role != "user" {
-		t.Fatalf("client message should follow server prompts")
+		t.Fatal("client message should follow server prompts")
 	}
 }
 
-func TestGlobalPromptRequiresUmbraticIdentity(t *testing.T) {
-	lower := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic ai", "underlying model", "provider", "model/runtime details"} {
-		if !strings.Contains(lower, want) {
+func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
+	global := strings.ToLower(GlobalSystemPrompt)
+	for _, want := range []string{"umbratic", "general-purpose", "software and non-software", "workspace preview", "file-changing tool", "stop using tools", "materially different correction"} {
+		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
 	}
-}
-
-func TestIdentityPromptsDoNotExposeVeilName(t *testing.T) {
-	lower := strings.ToLower(GlobalSystemPrompt)
-	if strings.Contains(lower, "veil") {
-		t.Fatalf("identity prompts should not expose Veil name: %q", lower)
+	route, _ := RoutePrompt(EngineeringChat)
+	if !strings.Contains(strings.ToLower(route), "does not make you software-only") {
+		t.Fatalf("engineering route should preserve general scope: %q", route)
+	}
+	for _, blocked := range []string{"do not start visible thinking", "do not paste the full code"} {
+		if strings.Contains(global, blocked) || strings.Contains(strings.ToLower(route), blocked) {
+			t.Fatalf("prompt retained restrictive client wording %q", blocked)
+		}
 	}
 }
 
-func TestBuildAddsRequestedRuntimePrompts(t *testing.T) {
-	messages, err := Build(EngineeringChat, []model.Message{{Role: "user", Content: "fix script.py"}}, RuntimeWorkspaceToolchain, RuntimePython)
+func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testing.T) {
+	skills := []SkillMetadata{
+		{ID: "python", Name: "Python", Description: "Use for Python work.", Source: "system"},
+		{ID: "deal-review", Name: "Deal Review", Description: "Use for account reviews.", Source: "local"},
+	}
+	messages, err := BuildWithProtectedMessages(EngineeringChat, []model.Message{{Role: "user", Content: "Fix tests."}}, nil, skills)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 5 {
-		t.Fatalf("got %d messages, want 5", len(messages))
+	if len(messages) != 4 {
+		t.Fatalf("got %d messages, want 4", len(messages))
 	}
-	if !strings.Contains(messages[2].Content.(string), "Runtime profile: workspace-toolchain") {
-		t.Fatalf("missing workspace runtime prompt: %#v", messages[2])
-	}
-	if !strings.Contains(messages[3].Content.(string), "Runtime profile: python") {
-		t.Fatalf("missing python runtime prompt: %#v", messages[3])
-	}
-	if messages[4].Role != "user" {
-		t.Fatalf("client message should follow runtime prompts: %#v", messages[4])
-	}
-}
-
-func TestEngineeringPromptDoesNotAlwaysIncludePythonPolicy(t *testing.T) {
-	routePrompt, ok := RoutePrompt(EngineeringChat)
+	prompt, ok := messages[2].Content.(string)
 	if !ok {
-		t.Fatal("missing engineering prompt")
+		t.Fatalf("skill prompt should be text: %#v", messages[2])
 	}
-	if strings.Contains(strings.ToLower(routePrompt), "python") || strings.Contains(strings.ToLower(routePrompt), "uv") {
-		t.Fatalf("engineering route prompt should not contain runtime-specific Python policy: %q", routePrompt)
-	}
-}
-
-func TestWorkspaceToolPromptStaysCompactWithoutSpecificShellSearchCommands(t *testing.T) {
-	prompt, ok := RuntimePrompt(RuntimeWorkspaceToolchain)
-	if !ok {
-		t.Fatal("missing workspace tool prompt")
-	}
-	lower := strings.ToLower(prompt)
 	for _, want := range []string{
-		"runtime profile: workspace-toolchain",
-		"available local workspace tools",
-		"fall back",
-		"missing optional tools",
+		"optional task-specific playbooks",
+		"not an exhaustive capability list",
+		"If no skill would materially help, handle the request normally",
+		"Do not describe your general capabilities by enumerating enabled skills",
+		"Consider relevant skills when they are likely to improve the result",
+		"do not read or use a skill merely because its broad topic overlaps",
+		"you MUST first call read_skill",
+		"read its SKILL.md completely",
+		"Next offset",
+		"Never infer or apply instructions from only a skill's name or description",
+		`"id":"python"`,
+		`"description":"Use for account reviews."`,
 	} {
-		if !strings.Contains(lower, want) {
-			t.Fatalf("workspace tool prompt missing %q: %q", want, prompt)
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("skill prompt missing %q: %s", want, prompt)
 		}
 	}
-	for _, blocked := range []string{"rg", "fd", "fdfind", "ripgrep", "tree-sitter", "batcat"} {
-		if strings.Contains(lower, blocked) {
-			t.Fatalf("workspace tool prompt should not prescribe %q: %q", blocked, prompt)
-		}
+	if messages[3].Role != "user" {
+		t.Fatal("user message should follow skill prompt")
+	}
+}
+
+func TestBuildKeepsProtectedMessagesBeforeClientMessages(t *testing.T) {
+	protected := []model.Message{{Role: "system", Content: "Protected template metadata."}}
+	messages, err := BuildWithProtectedMessages(SalesChat, []model.Message{{Role: "user", Content: "Create a QBR."}}, protected, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 4 || messages[2].Content != "Protected template metadata." || messages[3].Role != "user" {
+		t.Fatalf("unexpected prompt order: %#v", messages)
 	}
 }
 
@@ -99,52 +99,5 @@ func TestBuildRejectsUnknownRoute(t *testing.T) {
 	_, err := Build(Route("provider/passthrough"), []model.Message{{Role: "user", Content: "hello"}})
 	if err == nil {
 		t.Fatal("expected unknown route error")
-	}
-}
-
-func TestBuildDedupesRuntimePrompts(t *testing.T) {
-	messages, err := Build(EngineeringChat, []model.Message{{Role: "user", Content: "fix git workflow"}}, RuntimeGit, RuntimeGit, RuntimeWorktree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	countGit := 0
-	countWorktree := 0
-	for _, message := range messages {
-		content, _ := message.Content.(string)
-		if strings.Contains(content, "Runtime profile: git") {
-			countGit++
-		}
-		if strings.Contains(content, "Runtime profile: worktree") {
-			countWorktree++
-		}
-	}
-	if countGit != 1 || countWorktree != 1 {
-		t.Fatalf("runtime prompts were not deduped: git=%d worktree=%d messages=%#v", countGit, countWorktree, messages)
-	}
-}
-
-func TestRouteAndRuntimeCatalogsContainExpectedProfiles(t *testing.T) {
-	for _, route := range []Route{EngineeringChat, MarketingChat, SalesChat} {
-		if prompt, ok := RoutePrompt(route); !ok || prompt == "" {
-			t.Fatalf("missing route prompt for %q", route)
-		}
-	}
-	for _, profile := range []RuntimeProfile{
-		RuntimeWorkspaceToolchain,
-		RuntimePython,
-		RuntimeCCmake,
-		RuntimeMarkdown,
-		RuntimeGit,
-		RuntimeWorktree,
-	} {
-		if !IsRuntimeProfile(profile) {
-			t.Fatalf("profile %q should be supported", profile)
-		}
-		if prompt, ok := RuntimePrompt(profile); !ok || prompt == "" {
-			t.Fatalf("missing runtime prompt for %q", profile)
-		}
-	}
-	if IsRuntimeProfile("custom-system-prompt") {
-		t.Fatal("unexpected custom runtime profile support")
 	}
 }

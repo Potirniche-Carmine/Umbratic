@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBlockedPath, isGeneratedRuntimePath } from "../policy.js";
-import type { RunnerToolName } from "../config.js";
+import type { RunnerSkillConfig, RunnerToolName } from "../config.js";
 import type { SessionContextStore } from "../context/sessionContextStore.js";
 
 export type ToolResultStatus =
@@ -43,6 +43,7 @@ export type ToolContext = {
   cwd: string;
   permissionMode: "normal" | "bypass";
   enabledTools: readonly RunnerToolName[];
+  skills?: readonly RunnerSkillConfig[];
   contextStore?: SessionContextStore;
   askPermission(input: { permissionKind: string; summary: string; autoAllow: boolean }): Promise<"allow" | "deny">;
   emitToolOutput(toolCallId: string, stream: "stdout" | "stderr", text: string): void;
@@ -75,7 +76,7 @@ export function toolFailureDetails(error: unknown): { status: ToolResultStatus; 
   if (/blocked path/i.test(message)) {
     return { status: "policy_blocked", errorCode: "blocked_path", message };
   }
-  if (/blocked by policy|bare python/i.test(message)) {
+  if (/blocked by policy/i.test(message)) {
     return { status: "policy_blocked", errorCode: "policy_blocked", message };
   }
   if (/requires|not found|not a file|too large|binary|text to replace/i.test(message)) {

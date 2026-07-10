@@ -3,6 +3,7 @@ import { classifyCommandText, redactText } from "../policy.js";
 import { commandTool } from "./command.js";
 import { editTool } from "./edit.js";
 import { readTool } from "./read.js";
+import { readSkillTool } from "./readSkill.js";
 import { searchTool } from "./search.js";
 import { writeTool } from "./write.js";
 import { toolError, toolFailureDetails, type ToolContext, type ToolResult } from "./common.js";
@@ -32,6 +33,12 @@ function toolInvocationSummary(name: string, input: Record<string, unknown>): st
     const limit = typeof input.limit === "number" ? ` --limit ${Math.floor(input.limit)}` : "";
     return `retrieve_context ${quoteToolArg(hash)}${offset}${limit}`.trim();
   }
+  if (name === "read_skill") {
+    const skillId = typeof input.skillId === "string" ? input.skillId : "";
+    const resource = typeof input.resource === "string" ? ` ${quoteToolArg(input.resource)}` : "";
+    const offset = typeof input.offset === "number" ? ` --offset ${Math.floor(input.offset)}` : "";
+    return `read_skill ${quoteToolArg(skillId)}${resource}${offset}`.trim();
+  }
   if (name === "write" || name === "edit") {
     const filePath = typeof input.filePath === "string" ? input.filePath : "";
     if (name === "edit" && input.mode === "patch") return "edit patch";
@@ -41,7 +48,7 @@ function toolInvocationSummary(name: string, input: Record<string, unknown>): st
 }
 
 function toolCommandClass(name: string): ReturnType<typeof classifyCommandText>["commandClass"] {
-  if (name === "retrieve_context") return "read";
+  if (name === "retrieve_context" || name === "read_skill") return "read";
   if (name === "read" || name === "search") return "read";
   if (name === "write" || name === "edit") return "edit";
   return "unknown";
@@ -103,15 +110,35 @@ export const toolSpecs: ModelToolSpec[] = [
     type: "function",
     function: {
       name: "command",
-      description: "Run a local workspace shell command after policy and permission checks. Use it for tests, builds, and Git operations such as status, diff, branch, restore, reset, and worktree commands when the user asks.",
-      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+      description: "Run a local workspace shell command after policy and permission checks. On Windows the shell is PowerShell, so use PowerShell syntax directly and do not nest powershell -Command. Prefer uv run python or a workspace .venv interpreter when available. Bare python, python3, and py are allowed; if a bare interpreter command fails because of interpreter, environment, or dependency issues, retry it with uv. Use timeoutMs only when a command legitimately needs a non-default timeout.",
+      parameters: { type: "object", properties: { command: { type: "string" }, timeoutMs: { type: "number" } }, required: ["command"] },
     },
   },
 ];
 
-function internalToolSpecs(): ModelToolSpec[] {
-  return [
-    {
+function internalToolSpecs(options: { includeContextRetrieval?: boolean; includeSkillReader?: boolean }): ModelToolSpec[] {
+  const specs: ModelToolSpec[] = [];
+  if (options.includeSkillReader) {
+    specs.push({
+      type: "function" as const,
+      function: {
+        name: "read_skill",
+        description: "Read the complete instructions for one enabled skill before applying it. Read SKILL.md first; if Next offset is reported, continue until Read status is complete. Use resource only for files explicitly referenced by SKILL.md.",
+        parameters: {
+          type: "object",
+          properties: {
+            skillId: { type: "string" },
+            resource: { type: "string" },
+            offset: { type: "number" },
+            limit: { type: "number" },
+          },
+          required: ["skillId"],
+        },
+      },
+    });
+  }
+  if (options.includeContextRetrieval) {
+    specs.push({
       type: "function",
       function: {
         name: "retrieve_context",
@@ -126,8 +153,9 @@ function internalToolSpecs(): ModelToolSpec[] {
           required: ["hash"],
         },
       },
-    },
-  ];
+    });
+  }
+  return specs;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -198,11 +226,11 @@ export function enabledToolSpecs(enabledTools: readonly RunnerToolName[]) {
 
 export function enabledModelToolSpecs(
   enabledTools: readonly RunnerToolName[],
-  options: { includeContextRetrieval?: boolean } = {},
+  options: { includeContextRetrieval?: boolean; includeSkillReader?: boolean } = {},
 ) {
   const specs = [
     ...enabledToolSpecs(enabledTools),
-    ...(options.includeContextRetrieval ? internalToolSpecs() : []),
+    ...internalToolSpecs(options),
   ];
   return specs.map((spec) => normalizeModelToolSpec(spec));
 }
@@ -220,9 +248,6 @@ export function schemaHasAdapterHostileShapes(value: unknown): boolean {
 function staticCommandDenyReason(classification: ReturnType<typeof classifyCommandText>): string | null {
   if (classification.commandClass === "network" || classification.commandClass === "external-directory") {
     return `Command blocked by policy: ${classification.reason ?? classification.commandClass}`;
-  }
-  if (classification.commandClass === "python-runtime" && classification.risky) {
-    return "Bare python commands are blocked; use uv or a workspace virtual environment.";
   }
   return null;
 }
@@ -371,11 +396,12 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
 
   try {
     if (argumentError) throw argumentError;
-    if (toolCall.name === "retrieve_context") {
-      emitStage("apply_static_deny_rules", "passed", "internal context retrieval");
-      emitStage("request_permission", "skipped", "internal read-only context retrieval");
+    if (toolCall.name === "retrieve_context" || toolCall.name === "read_skill") {
+      const internalLabel = toolCall.name === "read_skill" ? "enabled skill read" : "internal context retrieval";
+      emitStage("apply_static_deny_rules", "passed", internalLabel);
+      emitStage("request_permission", "skipped", `internal read-only ${internalLabel}`);
       emitStage("execute_backend", "started");
-      const result = retrieveContextTool(ctx, input, toolCall.id, emit);
+      const result = toolCall.name === "read_skill" ? readSkillTool(ctx, input) : retrieveContextTool(ctx, input, toolCall.id, emit);
       emitStage("execute_backend", "passed");
       emitStage("redact_and_summarize_output", "passed", result.title);
       finish(result);

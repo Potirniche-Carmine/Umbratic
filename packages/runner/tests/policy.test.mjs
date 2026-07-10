@@ -32,7 +32,9 @@ test("command classification distinguishes safe reads from risky mutations", () 
     ["npm install left-pad", "package-manager", true],
     ["npm run test", "package-manager", false],
     ["uv run python tests.py", "python-runtime", false],
-    ["python script.py", "python-runtime", true],
+    ["python script.py", "python-runtime", false],
+    ["python3 script.py", "python-runtime", false],
+    ["py script.py", "python-runtime", false],
     ["rg TODO src", "shell", false],
   ];
 

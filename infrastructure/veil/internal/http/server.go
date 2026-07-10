@@ -107,7 +107,7 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		}
 
 		templateMessages := s.templateData.ProtectedContext(string(route), input.Messages)
-		messages, err := prompts.BuildWithProtectedMessages(route, input.Messages, templateMessages, input.Profiles...)
+		messages, err := prompts.BuildWithProtectedMessages(route, input.Messages, templateMessages, input.Skills)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return

@@ -20,20 +20,22 @@ function withRunnerConfig(value, fn) {
   }
 }
 
-test("loadRunnerConfig normalizes enabled tools, runtime profiles, headers, and provider URL", () => {
+test("loadRunnerConfig normalizes enabled tools, skills, headers, and provider URL", () => {
   const loaded = withRunnerConfig(
     {
       taskId: " task-1 ",
       cwd: " C:/workspace ",
       workspaceMode: "worktree",
-      runtimeProfiles: ["python", "python", "", "git"],
+      skills: [
+        { id: "python", name: " Python ", description: " Python work ", source: "system", instructionPath: " C:/skills/python/SKILL.md " },
+        { id: "../bad", name: "Bad", source: "local", instructionPath: "C:/bad" },
+      ],
       permissionMode: "bypass",
       enabledTools: ["read", "bogus", "command", "read"],
       diagnostics: {
         logPath: " C:/logs/task-1.jsonl ",
         includeToolOutput: "all",
       },
-      system: "protected system prompt",
       provider: {
         name: " Veil ",
         baseURL: "http://127.0.0.1:8080///",
@@ -59,7 +61,13 @@ test("loadRunnerConfig normalizes enabled tools, runtime profiles, headers, and 
   assert.equal(loaded.cwd, "C:/workspace");
   assert.equal(loaded.workspaceMode, "worktree");
   assert.equal(loaded.modelBoundary, "development");
-  assert.deepEqual(plain(loaded.runtimeProfiles), ["python", "git"]);
+  assert.deepEqual(plain(loaded.skills), [{
+    id: "python",
+    name: "Python",
+    description: "Python work",
+    source: "system",
+    instructionPath: "C:/skills/python/SKILL.md",
+  }]);
   assert.equal(loaded.permissionMode, "bypass");
   assert.deepEqual(plain(loaded.enabledTools), ["read", "command"]);
   assert.deepEqual(plain(loaded.diagnostics), {
@@ -72,7 +80,6 @@ test("loadRunnerConfig normalizes enabled tools, runtime profiles, headers, and 
   assert.deepEqual(plain(loaded.provider.headers), { "X-Trace": "trace-id" });
   assert.equal(loaded.provider.mtls.caPath, "ca.pem");
   assert.equal(loaded.provider.mtls.passphrase, undefined);
-  assert.equal(loaded.system, "protected system prompt");
 });
 
 test("loadRunnerConfig defaults invalid modes and all tools when no explicit list is supplied", () => {
@@ -92,6 +99,7 @@ test("loadRunnerConfig defaults invalid modes and all tools when no explicit lis
   assert.equal(loaded.workspaceMode, "local");
   assert.equal(loaded.permissionMode, "normal");
   assert.deepEqual(plain(loaded.enabledTools), ["read", "write", "edit", "search", "command"]);
+  assert.deepEqual(plain(loaded.skills), []);
   assert.deepEqual(plain(loaded.diagnostics), { enabled: true, includeToolOutput: "stderr" });
   assert.equal(loaded.provider.apiKey, "local");
 });
@@ -168,4 +176,14 @@ test("loadRunnerConfig enforces managed Veil boundary in managed mode", () => {
     () => withRunnerConfig({ ...managed, system: "client-side protected prompt" }, (config) => config.loadRunnerConfig()),
     /client system prompt/,
   );
+});
+
+test("loadRunnerConfig rejects client system prompts in every model boundary", () => {
+  const config = {
+    cwd: "/repo",
+    modelBoundary: "development",
+    system: "client-side protected prompt",
+    provider: { name: "Veil", baseURL: "https://veil.example", modelId: "model-a" },
+  };
+  assert.throws(() => withRunnerConfig(config, (module) => module.loadRunnerConfig()), /client system prompt/);
 });

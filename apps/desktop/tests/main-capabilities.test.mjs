@@ -34,6 +34,7 @@ function fakeExecFile(file, args, _options, callback) {
       ["fdfind", "fdfind 9.0.0\n"],
       ["git", "git version 2.45.0\n"],
       ["python3", "Python 3.12.1\n"],
+      ["cl", "Microsoft (R) C/C++ Optimizing Compiler Version 19.40\n"],
       ["cc", "Apple clang version 15.0.0\n"],
       ["pdfinfo", "pdfinfo version 24.02.0\n"],
     ]);
@@ -106,21 +107,13 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
     artifacts: true,
     ocr: true,
   });
-  assert.match(promptGuidance, /mention them only when they affect an action/);
+  assert.match(promptGuidance, /Local capability facts/);
   assert.match(promptGuidance, /search fallbacks are available when rg is missing/);
   assert.match(promptGuidance, /Python uv runtime: missing/);
   assert.match(promptGuidance, /CMake: missing; Ninja: missing; compiler: available/);
   assert.match(promptGuidance, /PDF render QA with Poppler: missing or incomplete/);
   assert.match(promptGuidance, /JS artifact authoring packages missing: node-pptx, node-xlsx/);
   assert.match(promptGuidance, /local OCR digest generation is unavailable/);
-
-  const skillGuidance = capabilities.harnessSkillCapabilityGuidance(report);
-  assert.match(skillGuidance["umbratic-python"], /Do not claim Python verification/);
-  assert.match(skillGuidance["umbratic-cmake"], /state the verification gap/);
-  assert.match(skillGuidance["umbratic-ocr"], /do not invent OCR text/i);
-  assert.match(skillGuidance["umbratic-git-worktree"], /Git command: available/);
-  assert.match(skillGuidance["umbratic-pdf"], /do not claim PDF visual QA/);
-  assert.match(skillGuidance["umbratic-presentations"], /PPTX JavaScript authoring runtime is missing/);
 });
 
 test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabilities that affect a run", async () => {

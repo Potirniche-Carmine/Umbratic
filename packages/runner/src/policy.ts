@@ -207,7 +207,7 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
   if (commandTouchesExternalDirectory(trimmed, cwd)) return { commandClass: "external-directory", risky: true, reason: "external path" };
   if (commandLooksDestructive(trimmed)) return { commandClass: "destructive-file", risky: true, reason: "destructive command" };
   if (isBarePythonCommand(trimmed) || /\b(uv|pytest|pip|pip3|\.venv[\\/](scripts[\\/])?python)\b/i.test(trimmed)) {
-    return { commandClass: "python-runtime", risky: isBarePythonCommand(trimmed), reason: isBarePythonCommand(trimmed) ? "bare python" : undefined };
+    return { commandClass: "python-runtime", risky: false };
   }
   if (commandContainsGit(trimmed)) return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
   if (/\b(cmake|ctest|ninja|make|msbuild)\b/i.test(trimmed)) return { commandClass: "cmake-build", risky: false };
@@ -221,13 +221,21 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
   return { commandClass: "shell", risky: false };
 }
 
-export function redactText(value: string, limit = 600): string {
-  const text = value
+function redactSecrets(value: string): string {
+  return value
     .replace(/-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/g, "[redacted-private-key]")
     .replace(/\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{12,}/gi, "$1=[redacted]")
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[redacted-aws-key]")
-    .replace(/\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g, "[redacted-github-token]")
-    .trim();
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g, "[redacted-github-token]");
+}
+
+export function redactText(value: string, limit = 600): string {
+  const text = redactSecrets(value).trim();
+  return text.length > limit ? `${text.slice(0, limit)}...[truncated]` : text;
+}
+
+export function redactStreamText(value: string, limit = 64 * 1024): string {
+  const text = redactSecrets(value);
   return text.length > limit ? `${text.slice(0, limit)}...[truncated]` : text;
 }
 

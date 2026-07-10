@@ -2,7 +2,14 @@ import * as crypto from "node:crypto";
 import * as path from "node:path";
 
 import { isRunnerToolId } from "./toolSettings";
-import type { CommandClass, LocalModelInfo, LocalProviderId, RuntimeDiagnostics, RuntimeProfileId, TelemetryPolicyInfo } from "./types";
+import type {
+  CommandClass,
+  LocalModelInfo,
+  LocalProviderId,
+  ModelEndpointMode,
+  RuntimeDiagnostics,
+  TelemetryPolicyInfo,
+} from "./types";
 import { normalizeRelativePath, pathInside } from "./utils";
 
 export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
@@ -10,8 +17,8 @@ export const umbraticRunnerName = "UmbraticRunner";
 export const umbraticRunnerVersion = "fork-1";
 export const umbraticRunnerContractVersion = "umbratic-runner-1";
 export const allowedLocalProviderIds: LocalProviderId[] = ["company-endpoint"];
-export const pythonRuntimeProfileVersion = "python-uv-venv-1";
-export const cmakeRuntimeProfileVersion = "cmake-umbratic-build-1";
+export const pythonRuntimeVersion = "python-uv-venv-1";
+export const cmakeRuntimeVersion = "cmake-umbratic-build-1";
 
 export const telemetryPolicyInfo: TelemetryPolicyInfo = {
   mode: "managed_required",
@@ -21,6 +28,19 @@ export const telemetryPolicyInfo: TelemetryPolicyInfo = {
   exportFormat: "redacted-json",
   storage: "company-managed-telemetry",
 };
+
+export const localTelemetryPolicyInfo: TelemetryPolicyInfo = {
+  mode: "managed_disabled",
+  localEnabled: false,
+  syncEnabled: false,
+  retentionDays: 0,
+  exportFormat: "redacted-json",
+  storage: "task-event-snapshots",
+};
+
+export function telemetryPolicyForMode(mode: ModelEndpointMode): TelemetryPolicyInfo {
+  return mode === "local" ? localTelemetryPolicyInfo : telemetryPolicyInfo;
+}
 
 const generatedRuntimePrefixes = [
   ".umbratic/runtime/",
@@ -93,22 +113,11 @@ export function promptLooksLikePythonTask(prompt: string): boolean {
   return /\b(python|\.py|pyproject|requirements\.txt|uv|venv|pytest)\b/i.test(prompt);
 }
 
-export function promptLooksLikeMarkdownTask(prompt: string): boolean {
-  return /\b(markdown|readme|docs?|\.md|\.markdown)\b/i.test(prompt);
-}
-
 export function promptLooksLikeCmakeTask(prompt: string): boolean {
   return (
     /\b(cmake|cmakelists\.txt|c code|c project|c harness|c toolchain|c\+\+|cpp|ctest|ninja|clang|gcc|msvc|makefile|asan|ubsan|segfault|buffer overflow|pointer|malloc|free)\b/i.test(prompt) ||
     /(?:^|[\s\\/])[^.\s\\/]+\.(?:c|h|cc|cpp|cxx|hpp)\b/i.test(prompt)
   );
-}
-
-export function runtimeProfileForPrompt(prompt: string): RuntimeProfileId {
-  if (promptLooksLikeCmakeTask(prompt)) return "cmake";
-  if (promptLooksLikePythonTask(prompt)) return "python";
-  if (promptLooksLikeMarkdownTask(prompt)) return "markdown";
-  return "none";
 }
 
 export function isBarePythonCommand(command: string): boolean {
@@ -242,7 +251,7 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
     return { commandClass: "destructive-file", risky: true, reason: "destructive command" };
   }
   if (isBarePythonCommand(trimmed) || /\b(uv|pytest|pip|pip3|\.venv[\\/](scripts[\\/])?python)\b/i.test(trimmed)) {
-    return { commandClass: "python-runtime", risky: isBarePythonCommand(trimmed), reason: isBarePythonCommand(trimmed) ? "bare python" : undefined };
+    return { commandClass: "python-runtime", risky: false };
   }
   if (commandContainsGit(trimmed)) {
     return gitCommandIsReadOnly(trimmed) ? { commandClass: "git-read", risky: false } : { commandClass: "git-write", risky: true };
@@ -359,7 +368,7 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
     Array.isArray(config.enabledTools) && config.enabledTools.every((tool) => isRunnerToolId(tool)),
     "enabled tools must be explicit valid runner tool ids",
   );
-  assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic AI private endpoint allowlist");
+  assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic private endpoint allowlist");
 
   const provider = config.provider as Record<string, unknown> | undefined;
   assert(provider, "provider must be configured");
@@ -386,15 +395,15 @@ export function umbraticRunnerHardeningEnvironment(): NodeJS.ProcessEnv {
 export function runtimeDiagnostics(): RuntimeDiagnostics {
   return {
     python: {
-      profileVersion: pythonRuntimeProfileVersion,
-      barePythonVerification: "denied",
+      runtimeVersion: pythonRuntimeVersion,
+      barePythonVerification: "allowed_uv_preferred",
       generatedPaths: [".venv", "__pycache__", ".pyc", ".umbratic/runtime"],
     },
     markdown: {
       docsOnlyClassification: "enabled",
     },
     cmake: {
-      profileVersion: cmakeRuntimeProfileVersion,
+      runtimeVersion: cmakeRuntimeVersion,
       buildDir: ".umbratic/build",
     },
     toolchain: {
