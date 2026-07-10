@@ -44,6 +44,11 @@ test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skill
 
   assert.equal(skills.skillsDirectoryPath(), path.join(os.homedir(), ".umbratic", "skills"));
   assert.equal(skills.installBundledSystemSkills(directory), path.resolve(directory));
+  const creatorSkillPath = path.join(directory, "system", "umbratic-skill-creator", "SKILL.md");
+  assert.equal(fs.existsSync(creatorSkillPath), true);
+  const creatorSkill = fs.readFileSync(creatorSkillPath, "utf8");
+  assert.match(creatorSkill, /Umbratic Skill Model/);
+  assert.doesNotMatch(creatorSkill, /Claude|Cowork/i);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-markdown", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-spreadsheets", "SKILL.md")), true);
 });
@@ -125,6 +130,7 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   assert.equal(localSkills[1].enabled, false);
 
   const systemSkills = listing.skills.filter((skill) => skill.source === "system");
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-skill-creator" && skill.name === "Skill Creator" && skill.enabled), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-markdown" && skill.name === "Markdown" && !skill.readOnly && skill.enabled), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-ocr" && skill.name === "OCR"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-git-worktree" && skill.name === "Git Worktree"), true);
@@ -177,6 +183,7 @@ test("enabledPromptSkills returns every enabled skill as metadata with a readabl
   assert.equal(catalog.some((skill) => skill.id === "marketing"), false);
   assert.equal(catalog.some((skill) => skill.id === "umbratic-python"), false);
   assert.equal(catalog.some((skill) => skill.id === "engineering-review"), true);
+  assert.equal(catalog.some((skill) => skill.id === "umbratic-skill-creator"), true);
   assert.equal(catalog.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(catalog.every((skill) => !("fullContent" in skill) && !("content" in skill) && !("reason" in skill)), true);
   assert.equal(catalog.every((skill) => fs.existsSync(skill.instructionPath)), true);

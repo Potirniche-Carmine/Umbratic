@@ -51,6 +51,7 @@ const skillImportTempPrefix = "umbratic-skill-import-";
 const skillManifestFileName = ".manifest.json";
 
 const systemSkillDefinitions: SystemSkillDefinition[] = [
+  { id: "umbratic-skill-creator" },
   { id: "umbratic-git-worktree" },
   { id: "umbratic-markdown" },
   { id: "umbratic-ocr" },

@@ -1128,6 +1128,14 @@ function previewCapabilityReport(): CapabilityProbeReport {
 
 const previewDefaultSkills: SkillInfo[] = [
   {
+    id: "umbratic-skill-creator",
+    name: "Skill Creator",
+    description: "Use to create, revise, structure, and validate reusable Umbratic personal skills and their bundled resources.",
+    enabled: true,
+    source: "system",
+    readOnly: false,
+  },
+  {
     id: "umbratic-git-worktree",
     name: "Git Worktree",
     description: "Use for Git worktree isolation, branch/base awareness, review diffs, merge safety, and Umbratic task worktree behavior.",
@@ -1194,6 +1202,11 @@ const previewDefaultSkills: SkillInfo[] = [
 ];
 
 const previewDefaultSkillGuidance: Record<string, string[]> = {
+  "umbratic-skill-creator": [
+    "Capture the intended triggers, workflow, outputs, and success criteria before drafting a skill.",
+    "Keep SKILL.md concise, put detailed material in explicitly referenced resources, and validate the finished folder before handoff.",
+    "Draft personal skills in the current workspace, then explain how to import and enable them from Umbratic's Skills settings.",
+  ],
   "umbratic-git-worktree": [
     "Use the current worktree path as authoritative when an engineering run is isolated.",
     "Keep original branch, task branch, and base commit distinct when explaining Git state.",

@@ -53,7 +53,7 @@ Recommended installer bundle:
 - Engineering helpers: `rg`, `fd`, `uv`, CMake, Ninja, compiler toolchains, `jq`, `yq`, `tree-sitter`, and `bat` when engineering mode is enabled.
 - PDF artifacts: Poppler commands such as `pdftoppm` and `pdfinfo`, plus Python packages `reportlab`, `pdfplumber`, and `pypdf`.
 - DOCX/PPTX/XLSX artifacts: a bundled Node artifact runtime for Office files, plus LibreOffice or another local render/export path for visual QA.
-- Skills: system skills for Markdown, PDF, document, presentation, spreadsheet, marketing, sales, and engineering workflows under `~/.umbratic/skills/system/<id>/SKILL.md`, plus personal skills under `~/.umbratic/skills`.
+- Skills: system skills for skill creation, Markdown, PDF, document, presentation, spreadsheet, and engineering workflows under `~/.umbratic/skills/system/<id>/SKILL.md`, plus personal skills under `~/.umbratic/skills`.
 
 The app probes these dependencies as execution capabilities, not as prompt profiles. Actual runtimes are still needed when a tool must run Python, CMake, OCR, or artifact generation; they no longer inject behavioral guidance from the harness. PDF text extraction is useful for quick checks, but final PDF, DOCX, PPTX, and XLSX work should use render/export verification before claiming visual QA.
 

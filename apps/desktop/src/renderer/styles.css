@@ -4580,7 +4580,7 @@ button.attachmentPreview:focus-visible {
 
 .connectionModeGrid > button {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr) 14px;
   align-items: start;
   gap: 9px;
   min-height: 78px;
