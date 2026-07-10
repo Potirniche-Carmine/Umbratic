@@ -268,6 +268,13 @@ function parseArguments(value: unknown): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+export function canonicalToolName(name: string): string {
+  const normalized = name.toLowerCase();
+  return isRunnerToolName(normalized) || normalized === "read_skill" || normalized === "retrieve_context"
+    ? normalized
+    : name;
+}
+
 function numberArgument(input: Record<string, unknown>, key: string): number | undefined {
   const value = input[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -322,6 +329,7 @@ function retrieveContextTool(ctx: ToolContext, input: Record<string, unknown>, t
 export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEvent) => void, toolCall: { id: string; name: string; arguments: unknown }): Promise<ToolResult> {
   const startedAt = nowIso();
   const startedMs = Date.now();
+  const toolName = canonicalToolName(toolCall.name);
   const emitStage = (
     stage: ToolPolicyStage,
     outcome: "started" | "passed" | "blocked" | "skipped",
@@ -354,17 +362,17 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
     emitStage("normalize_tool_call", "passed");
   }
   const commandSummary =
-    argumentError ? toolCall.name :
-    toolCall.name === "command" && typeof input.command === "string" ? input.command :
-    toolInvocationSummary(toolCall.name, input);
+    argumentError ? toolName :
+    toolName === "command" && typeof input.command === "string" ? input.command :
+    toolInvocationSummary(toolName, input);
   const classification =
-    toolCall.name === "command" && typeof input.command === "string" ? classifyCommandText(input.command, ctx.cwd) :
-    { commandClass: toolCommandClass(toolCall.name), risky: false };
+    toolName === "command" && typeof input.command === "string" ? classifyCommandText(input.command, ctx.cwd) :
+    { commandClass: toolCommandClass(toolName), risky: false };
   emit({
     type: "tool.requested",
     taskId: ctx.taskId,
     toolCallId: toolCall.id,
-    toolKind: toolCall.name,
+    toolKind: toolName,
     commandClass: classification.commandClass,
     summary: redactText(commandSummary, 320),
     cwd: ctx.cwd,
@@ -372,8 +380,8 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
   });
   emitStage(
     "resolve_workspace_paths",
-    toolCall.name === "command" || argumentError ? "skipped" : "passed",
-    toolCall.name === "command" ? "command policy does not resolve a file path" : commandSummary,
+    toolName === "command" || argumentError ? "skipped" : "passed",
+    toolName === "command" ? "command policy does not resolve a file path" : commandSummary,
   );
   emitStage("classify_action", "passed", classification.commandClass);
 
@@ -396,27 +404,27 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
 
   try {
     if (argumentError) throw argumentError;
-    if (toolCall.name === "retrieve_context" || toolCall.name === "read_skill") {
-      const internalLabel = toolCall.name === "read_skill" ? "enabled skill read" : "internal context retrieval";
+    if (toolName === "retrieve_context" || toolName === "read_skill") {
+      const internalLabel = toolName === "read_skill" ? "enabled skill read" : "internal context retrieval";
       emitStage("apply_static_deny_rules", "passed", internalLabel);
       emitStage("request_permission", "skipped", `internal read-only ${internalLabel}`);
       emitStage("execute_backend", "started");
-      const result = toolCall.name === "read_skill" ? readSkillTool(ctx, input) : retrieveContextTool(ctx, input, toolCall.id, emit);
+      const result = toolName === "read_skill" ? readSkillTool(ctx, input) : retrieveContextTool(ctx, input, toolCall.id, emit);
       emitStage("execute_backend", "passed");
       emitStage("redact_and_summarize_output", "passed", result.title);
       finish(result);
       emitStage("emit_audit_telemetry", "passed", result.status);
       return result;
     }
-    if (!isRunnerToolName(toolCall.name)) {
+    if (!isRunnerToolName(toolName)) {
       emitStage("apply_static_deny_rules", "blocked", `Unknown tool: ${toolCall.name}`, "unknown_tool");
       throw toolError("validation_error", "unknown_tool", `Unknown tool: ${toolCall.name}`);
     }
-    if (!ctx.enabledTools.includes(toolCall.name)) {
-      emitStage("apply_static_deny_rules", "blocked", `Tool "${toolCall.name}" is disabled`, "tool_disabled");
-      throw toolError("validation_error", "tool_disabled", `Tool "${toolCall.name}" is disabled by the current tool settings.`);
+    if (!ctx.enabledTools.includes(toolName)) {
+      emitStage("apply_static_deny_rules", "blocked", `Tool "${toolName}" is disabled`, "tool_disabled");
+      throw toolError("validation_error", "tool_disabled", `Tool "${toolName}" is disabled by the current tool settings.`);
     }
-    if (toolCall.name === "command") {
+    if (toolName === "command") {
       const deny = staticCommandDenyReason(classification);
       if (deny) {
         emitStage("apply_static_deny_rules", "blocked", deny, "policy_blocked");
@@ -426,19 +434,19 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
     emitStage("apply_static_deny_rules", "passed");
     emitStage(
       "request_permission",
-      toolCall.name === "read" || toolCall.name === "search" ? "skipped" : "started",
-      toolCall.name === "read" || toolCall.name === "search" ? "read-only tool" : commandSummary,
+      toolName === "read" || toolName === "search" ? "skipped" : "started",
+      toolName === "read" || toolName === "search" ? "read-only tool" : commandSummary,
     );
     emitStage("execute_backend", "started");
     const result =
-      toolCall.name === "read" ? await readTool(ctx, input) :
-      toolCall.name === "write" ? await writeTool(ctx, input) :
-      toolCall.name === "edit" ? await editTool(ctx, input) :
-      toolCall.name === "search" ? await searchTool(ctx, input) :
-      toolCall.name === "command" ? await commandTool(ctx, input, toolCall.id) :
-      (() => { throw toolError("validation_error", "unknown_tool", `Unknown tool: ${toolCall.name}`); })();
+      toolName === "read" ? await readTool(ctx, input) :
+      toolName === "write" ? await writeTool(ctx, input) :
+      toolName === "edit" ? await editTool(ctx, input) :
+      toolName === "search" ? await searchTool(ctx, input) :
+      toolName === "command" ? await commandTool(ctx, input, toolCall.id) :
+      (() => { throw toolError("validation_error", "unknown_tool", `Unknown tool: ${toolName}`); })();
     emitStage("execute_backend", "passed");
-    if (toolCall.name !== "command" && result.output) {
+    if (toolName !== "command" && result.output) {
       ctx.emitToolOutput(toolCall.id, "stdout", `${result.output}\n`);
     }
     emitStage("redact_and_summarize_output", "passed", result.title);

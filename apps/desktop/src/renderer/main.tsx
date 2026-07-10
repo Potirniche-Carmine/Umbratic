@@ -35,6 +35,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Square,
   SquarePen,
   Sun,
   ThumbsDown,
@@ -838,7 +839,9 @@ const defaultIdeChoices: IdeChoice[] = [
   { id: "visualstudio", label: "Visual Studio", icon: "visualstudio" },
   { id: "explorer", label: isMacLike ? "Finder" : "Explorer", icon: isMacLike ? "finder" : "explorer" },
 ];
-const composerTestMode = new URLSearchParams(window.location.search).has("composerTest");
+const composerTestParams = new URLSearchParams(window.location.search);
+const composerTestMode = composerTestParams.has("composerTest");
+const composerTestRunning = composerTestParams.get("composerTest") === "running";
 const composerTestAttachments: ChatAttachment[] = [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
@@ -1026,7 +1029,7 @@ const composerTestTask: TaskInfo = {
   prompt: composerTestPrompt,
   workspaceKind: "git",
   workspaceMode: "local",
-  state: "review_ready",
+  state: composerTestRunning ? "running" : "review_ready",
   originalBranch: "main",
   baseCommit: "preview",
   agentBranch: "preview",
@@ -2112,7 +2115,6 @@ const sidebarMinWidth = 168;
 const sidebarMaxWidth = 230;
 const reviewMinWidth = 430;
 const reviewCloseThreshold = 260;
-const reviewCloseAnimationMs = 360;
 const reviewOverlayMaxWidth = 840;
 const reviewOpenRatio = 0.56;
 const sidebarMaxRatio = 0.28;
@@ -2758,6 +2760,18 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       if (ensureCommandSegment(run)) {
         markActivityTime(event.at, event.at);
       }
+      continue;
+    }
+    if (event.type === "task.error") {
+      flushReasoning();
+      flushActivity();
+      flushAssistant();
+      assistantIndex += 1;
+      items.push({
+        type: "assistant",
+        id: `assistant-${assistantIndex}`,
+        text: `I couldn't complete this request.\n\n${event.message}`,
+      });
     }
   }
   flushReasoning(taskState !== "running");
@@ -3048,7 +3062,7 @@ export function skillGovernanceLabel(skill: SkillInfo): string {
 function SkillGovernance({ skill }: { skill: SkillInfo }) {
   const label = skillGovernanceLabel(skill);
   if (!label) return null;
-  return <span className={`skillGovernance ${skill.modified ? "isModified" : ""}`}>{label}</span>;
+  return <span className={`skillGovernance ${label === "Modified" ? "isModified" : ""}`}>{label}</span>;
 }
 
 function ReviewSummaryCard({
@@ -3124,12 +3138,6 @@ function isElementAtBottom(node: HTMLElement) {
   return elementDistanceFromBottom(node) < 4;
 }
 
-export function splitNestedScrollDelta(scrollTop: number, maxScrollTop: number, delta: number) {
-  const boundedScrollTop = clamp(scrollTop, 0, Math.max(0, maxScrollTop));
-  const innerDelta = clamp(delta, -boundedScrollTop, Math.max(0, maxScrollTop) - boundedScrollTop);
-  return { innerDelta, outerDelta: delta - innerDelta };
-}
-
 function scrollElementToBottom(node: HTMLElement, behavior: ScrollBehavior = "auto") {
   const scrollBehavior = behavior === "smooth" && prefersReducedMotion() ? "auto" : behavior;
   const scroll = () => {
@@ -3182,6 +3190,7 @@ function App() {
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
+  const [reviewOffset, setReviewOffset] = useState(0);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -3228,13 +3237,18 @@ function App() {
   const [reviewWidth, setReviewWidth] = useState(520);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [stopPending, setStopPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
   const draftSaveRef = useRef<number | null>(null);
   const lastPersistedDraftRef = useRef<Map<string, { draftPrompt: string; filesSignature: string }>>(new Map());
-  const reviewCloseTimerRef = useRef<number | null>(null);
+  const reviewAnimationRef = useRef<number | null>(null);
+  const reviewOffsetRef = useRef(0);
+  const reviewVelocityRef = useRef(0);
+  const modalTriggerRef = useRef<HTMLElement | null>(null);
+  const modalRef = useRef<HTMLElement | null>(null);
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const endpointSaveSequenceRef = useRef(0);
@@ -3293,7 +3307,8 @@ function App() {
   const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
-  const canStart = prompt.trim().length > 0 && !busy && !closedChatNotice;
+  const isGenerating = task?.state === "running";
+  const canStart = prompt.trim().length > 0 && !busy && !isGenerating && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo =
     !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
@@ -3424,6 +3439,7 @@ function App() {
     "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
     "--sidebar-visual-gap": `${Math.max(0, sidebarDefaultWidth - sidebarWidth)}px`,
     "--review-width": `${reviewWidth}px`,
+    "--review-offset": `${reviewOffset}px`,
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
@@ -3749,12 +3765,59 @@ function App() {
 
   useEffect(
     () => () => {
-      if (reviewCloseTimerRef.current !== null) {
-        window.clearTimeout(reviewCloseTimerRef.current);
-      }
+      if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
     },
     [],
   );
+
+  useEffect(() => {
+    const hidePointerWhileTyping = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete" || event.key === "Enter") {
+        document.body.classList.add("isKeyboardTyping");
+      }
+    };
+    const restorePointer = () => document.body.classList.remove("isKeyboardTyping");
+    document.addEventListener("keydown", hidePointerWhileTyping);
+    document.addEventListener("pointermove", restorePointer);
+    document.addEventListener("focusout", restorePointer);
+    return () => {
+      restorePointer();
+      document.removeEventListener("keydown", hidePointerWhileTyping);
+      document.removeEventListener("pointermove", restorePointer);
+      document.removeEventListener("focusout", restorePointer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const isOpen = settingsOpen || !!previewAttachment?.previewDataUrl || !!deleteCandidate || showElevatedPermissionsDialog || approvalPending;
+    if (!isOpen) {
+      modalTriggerRef.current?.focus();
+      modalTriggerRef.current = null;
+      return;
+    }
+    if (!modalTriggerRef.current && document.activeElement instanceof HTMLElement) modalTriggerRef.current = document.activeElement;
+    const focusModal = () => {
+      const modal = modalRef.current;
+      if (!modal) return;
+      const target = modal.querySelector<HTMLElement>("[autofocus], button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
+      (target ?? modal).focus();
+    };
+    const frame = window.requestAnimationFrame(focusModal);
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !modalRef.current) return;
+      const focusable = Array.from(modalRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+      if (!focusable.length) { event.preventDefault(); modalRef.current.focus(); return; }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", trapFocus);
+    return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
+  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending]);
 
   useEffect(() => {
     if (!reviewOpen) return undefined;
@@ -3787,7 +3850,9 @@ function App() {
       const node = activityBodyRefs.current.get(item.id);
       if (!node || !expanded || item.finished) continue;
       if (activityFollowScrollRef.current.get(item.id) ?? true) {
-        scrollElementToBottom(node, "smooth");
+        // Streaming updates arrive many times per second; direct following avoids
+        // accumulating smooth-scroll animations beneath active wheel input.
+        scrollElementToBottom(node);
       }
     }
     for (const id of activityFollowScrollRef.current.keys()) {
@@ -4738,31 +4803,9 @@ function App() {
   }
 
   function handleActivityWheel(id: string, event: React.WheelEvent<HTMLDivElement>) {
-    const node = event.currentTarget;
-    const composerNode = streamRef.current;
-    const deltaY = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * node.clientHeight : event.deltaY;
-    const { innerDelta, outerDelta } = splitNestedScrollDelta(
-      node.scrollTop,
-      node.scrollHeight - node.clientHeight,
-      deltaY,
-    );
-    if (composerNode && Math.abs(outerDelta) > 0.5) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (Math.abs(innerDelta) > 0.5) {
-        node.scrollTop += innerDelta;
-      }
-      composerScrollInputRef.current = true;
-      if (outerDelta < 0 || !isElementNearBottom(composerNode)) {
-        followComposerScrollRef.current = false;
-      }
-      composerNode.scrollBy({
-        top: outerDelta,
-        behavior: prefersReducedMotion() ? "auto" : "smooth",
-      });
-      activityFollowScrollRef.current.set(id, deltaY > 0);
-      return;
-    }
+    // Keep wheel and trackpad input on Chromium's native scrolling path. The inner
+    // scroller already allows scroll chaining through `overscroll-behavior: auto`,
+    // so manually moving the composer here would apply the boundary delta twice.
     const shouldPause = event.deltaY < 0 || !isElementNearBottom(event.currentTarget, 8);
     if (shouldPause) {
       noteActivityScrollInput(id, event.currentTarget, shouldPause);
@@ -4860,6 +4903,20 @@ function App() {
     } finally {
       startTaskInFlightRef.current = false;
       setBusy(false);
+    }
+  }
+
+  async function stopTask() {
+    if (!task || task.state !== "running" || stopPending) return;
+    const taskId = task.id;
+    setStopPending(true);
+    setError(null);
+    try {
+      await api.cancelTask({ taskId });
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setStopPending(false);
     }
   }
 
@@ -4966,12 +5023,21 @@ function App() {
           <ChevronDown size={13} />
         </button>
         {expanded ? (
-          <div className="ideMenu" role="menu">
+          <div className="ideMenu" role="menu" onKeyDown={(event) => {
+            const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"));
+            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+            } else if (event.key === "Home") { event.preventDefault(); items[0]?.focus(); }
+            else if (event.key === "End") { event.preventDefault(); items.at(-1)?.focus(); }
+          }}>
             {availableIdes.map((ide) => (
               <button
                 className={ide.id === selectedIde.id ? "active" : ""}
                 key={ide.id}
                 type="button"
+                role="menuitem"
                 onClick={() => {
                   setSelectedIdeId(ide.id);
                   setIdeMenuOpen(null);
@@ -5000,30 +5066,51 @@ function App() {
   }
 
   function cancelReviewClose() {
-    if (reviewCloseTimerRef.current !== null) {
-      window.clearTimeout(reviewCloseTimerRef.current);
-      reviewCloseTimerRef.current = null;
-    }
+    if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
     setReviewClosing(false);
+  }
+
+  function animateReviewTo(target: number, initialVelocity = 0, onRest?: () => void) {
+    if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
+    let value = reviewOffsetRef.current;
+    let velocity = initialVelocity;
+    let previous = performance.now();
+    const tick = (now: number) => {
+      const elapsed = Math.min((now - previous) / 1000, 0.05);
+      previous = now;
+      // A critically damped spring: it starts from the presented position and can be retargeted at any time.
+      velocity += (target - value) * 420 * elapsed - velocity * 38 * elapsed;
+      value += velocity * elapsed;
+      reviewOffsetRef.current = value;
+      reviewVelocityRef.current = velocity;
+      setReviewOffset(value);
+      if (Math.abs(target - value) < 0.5 && Math.abs(velocity) < 3) {
+        reviewOffsetRef.current = target;
+        reviewVelocityRef.current = 0;
+        setReviewOffset(target);
+        reviewAnimationRef.current = null;
+        onRest?.();
+        return;
+      }
+      reviewAnimationRef.current = window.requestAnimationFrame(tick);
+    };
+    reviewAnimationRef.current = window.requestAnimationFrame(tick);
   }
 
   function closeReviewPanel() {
     if (!reviewOpen && !reviewClosing) return;
-    if (reviewCloseTimerRef.current !== null) {
-      window.clearTimeout(reviewCloseTimerRef.current);
-    }
-    setReviewOpen(false);
     setReviewClosing(true);
-    reviewCloseTimerRef.current = window.setTimeout(() => {
-      reviewCloseTimerRef.current = null;
+    animateReviewTo(reviewWidth + 18, reviewVelocityRef.current, () => {
+      setReviewOpen(false);
       setReviewClosing(false);
-    }, reviewCloseAnimationMs);
+    });
   }
 
   function openReviewPanel(filePath?: string) {
     cancelReviewClose();
     setReviewWidth(wideReviewWidth());
     setReviewOpen(true);
+    animateReviewTo(0, reviewVelocityRef.current);
     if (filePath) {
       setExpandedReviewPaths(new Set([filePath]));
     }
@@ -5584,6 +5671,7 @@ function App() {
 
   function beginSidebarResize(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
     const startWidth = sidebarWidth;
     document.body.classList.add("isResizing");
@@ -5594,41 +5682,53 @@ function App() {
     const stop = () => {
       setSidebarWidth((current) => clamp(current, sidebarMinWidth, sidebarMaxAvailableWidth()));
       document.body.classList.remove("isResizing");
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
+      event.currentTarget.removeEventListener("pointermove", move);
+      event.currentTarget.removeEventListener("pointerup", stop);
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop, { once: true });
+    event.currentTarget.addEventListener("pointermove", move);
+    event.currentTarget.addEventListener("pointerup", stop, { once: true });
   }
 
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    cancelReviewClose();
     const startX = event.clientX;
     const startWidth = reviewWidth;
     const maxWidth = reviewMaxWidth();
-    let closeAfterDrag = false;
+    let lastX = startX;
+    let lastTime = performance.now();
+    let velocity = 0;
+    let latestWidth = startWidth;
     document.body.classList.add("isResizing");
     const finish = () => {
       document.body.classList.remove("isResizing");
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
+      event.currentTarget.removeEventListener("pointermove", move);
+      event.currentTarget.removeEventListener("pointerup", stop);
     };
     const move = (moveEvent: PointerEvent) => {
-      const nextWidth = startWidth - (moveEvent.clientX - startX);
-      closeAfterDrag = nextWidth < reviewCloseThreshold;
-      setReviewWidth(clamp(nextWidth, reviewMinWidth, maxWidth));
+      const rawWidth = startWidth - (moveEvent.clientX - startX);
+      const overshoot = rawWidth < reviewMinWidth ? rawWidth - reviewMinWidth : rawWidth > maxWidth ? rawWidth - maxWidth : 0;
+      const resisted = overshoot ? (overshoot * 0.35) / (1 + Math.abs(overshoot) / 160) : 0;
+      latestWidth = clamp(rawWidth - overshoot + resisted, reviewMinWidth - 52, maxWidth + 52);
+      setReviewWidth(latestWidth);
+      const now = performance.now();
+      velocity = (moveEvent.clientX - lastX) / Math.max((now - lastTime) / 1000, 0.016);
+      lastX = moveEvent.clientX;
+      lastTime = now;
     };
     const stop = () => {
-      if (closeAfterDrag) {
+      const shouldClose = latestWidth < reviewCloseThreshold || velocity > 750;
+      if (shouldClose) {
         closeReviewPanel();
       } else {
-        cancelReviewClose();
         setReviewOpen(true);
+        setReviewWidth((current) => clamp(current, reviewMinWidth, reviewMaxWidth()));
       }
       finish();
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop, { once: true });
+    event.currentTarget.addEventListener("pointermove", move);
+    event.currentTarget.addEventListener("pointerup", stop, { once: true });
   }
 
   function renderChatRow(chat: ChatRecord) {
@@ -5676,7 +5776,7 @@ function App() {
       </header>
 
       <aside className="sidebar">
-        <div className="sidebarResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginSidebarResize} />
+        <div className="sidebarResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={sidebarMinWidth} aria-valuemax={sidebarMaxAvailableWidth()} aria-valuenow={Math.round(sidebarWidth)} aria-label="Sidebar width" onPointerDown={beginSidebarResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setSidebarWidth((width) => clamp(width - step, sidebarMinWidth, sidebarMaxAvailableWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setSidebarWidth((width) => clamp(width + step, sidebarMinWidth, sidebarMaxAvailableWidth())); } }} />
         <div className="sidebarStack">
           <section className="chatArchive">
             <div className="sideHeader">
@@ -5861,13 +5961,13 @@ function App() {
                 <span>{composerHeaderMeta}</span>
               </div>
               <div className="composerHeaderActions">
-                {!reviewOpen ? (
+                {(!reviewOpen || reviewClosing) ? (
                   <button
                     className="chromeButton composerReviewToggle"
                     type="button"
-                    onClick={toggleReviewPanel}
-                    aria-pressed={reviewOpen}
-                    title="Open review"
+                    onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
+                    aria-pressed={reviewOpen && !reviewClosing}
+                    title={reviewClosing ? "Keep review open" : "Open review"}
                   >
                     <PanelRight size={15} />
                   </button>
@@ -6068,7 +6168,7 @@ function App() {
         </section>
 
         {task?.state === "awaiting_worktree_approval" ? (
-          <section className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Create isolated worktree">
+          <section ref={modalRef} tabIndex={-1} className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Create isolated worktree" onKeyDown={(event) => { if (event.key === "Escape") void approveWorktree(false); }}>
             <div>
               <strong>Create isolated worktree?</strong>
               <span>{task.agentBranch} at {task.worktreePath}</span>
@@ -6083,7 +6183,7 @@ function App() {
             </button>
           </section>
         ) : pendingPermission ? (
-          <section className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Command permission request">
+          <section ref={modalRef} tabIndex={-1} className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Command permission request" onKeyDown={(event) => { if (event.key === "Escape") void resolvePermission("deny"); }}>
             <div>
               <strong>{pendingPermission.kind} permission</strong>
               <span>{pendingPermission.command}</span>
@@ -6364,15 +6464,28 @@ function App() {
                 }
               />
             </div>
-            <button className="sendButton" type="button" onClick={startTask} disabled={!canStart}>
-              {busy ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
-            </button>
+            {isGenerating ? (
+              <button
+                className="sendButton stopButton"
+                type="button"
+                onClick={() => void stopTask()}
+                disabled={stopPending}
+                aria-label={stopPending ? "Stopping generation" : "Stop generation"}
+                title={stopPending ? "Stopping generation" : "Stop generation"}
+              >
+                {stopPending ? <Loader2 className="spin" size={18} /> : <Square aria-hidden="true" fill="currentColor" size={14} />}
+              </button>
+            ) : (
+              <button className="sendButton" type="button" onClick={startTask} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
+                {busy ? <Loader2 className="spin" size={18} /> : <Send aria-hidden="true" size={18} />}
+              </button>
+            )}
           </div>
         </section>
       </main>
 
       <aside className="reviewSidebar">
-        <div className="reviewResizeHandle" role="separator" aria-orientation="vertical" onPointerDown={beginReviewResize} />
+        <div className="reviewResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={reviewMinWidth} aria-valuemax={reviewMaxWidth()} aria-valuenow={Math.round(reviewWidth)} aria-label="Review width" onPointerDown={beginReviewResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setReviewWidth((width) => clamp(width + step, reviewMinWidth, reviewMaxWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setReviewWidth((width) => clamp(width - step, reviewMinWidth, reviewMaxWidth())); } }} />
         <section className="panel reviewPanel">
           <div className="reviewTopbar">
             <button className="reviewTextButton reviewHideButton" type="button" onClick={closeReviewPanel} title="Hide review">
@@ -6507,7 +6620,7 @@ function App() {
 
       {settingsOpen ? (
         <div className="modalScrim" role="presentation">
-          <section className="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <section ref={modalRef} tabIndex={-1} className="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onKeyDown={(event) => { if (event.key === "Escape") closeSettingsDialog(); }}>
             <header className="settingsDialogHeader">
               <span>
                 <Settings size={17} />
@@ -6612,11 +6725,9 @@ function App() {
                               onClick={() => updateEndpointDraft({ mode: "local" })}
                             >
                               <span className="connectionModeIcon"><Monitor size={16} /></span>
-                              <span>
-                                <strong>Local</strong>
-                                <em>Use Ollama or vLLM on this computer.</em>
-                              </span>
+                              <strong>Local</strong>
                               {endpointDraftSettings.mode === "local" ? <Check size={14} /> : null}
+                              <em>Ollama or vLLM on this computer</em>
                             </button>
                             <button
                               className={endpointDraftSettings.mode === "server" ? "isActive" : ""}
@@ -6626,11 +6737,9 @@ function App() {
                               onClick={() => updateEndpointDraft({ mode: "server" })}
                             >
                               <span className="connectionModeIcon"><Cloud size={16} /></span>
-                              <span>
-                                <strong>Server</strong>
-                                <em>Connect to an existing Veil deployment.</em>
-                              </span>
+                              <strong>Server</strong>
                               {endpointDraftSettings.mode === "server" ? <Check size={14} /> : null}
+                              <em>Connect to an existing Veil deployment</em>
                             </button>
                           </div>
                         </div>
@@ -7144,11 +7253,14 @@ function App() {
       {previewAttachment?.previewDataUrl ? (
         <div className="modalScrim imagePreviewScrim" role="presentation" onClick={() => setPreviewAttachment(null)}>
           <section
+            ref={modalRef}
+            tabIndex={-1}
             className="imagePreviewDialog"
             role="dialog"
             aria-modal="true"
             aria-label={attachmentLabel(previewAttachment)}
             onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => { if (event.key === "Escape") setPreviewAttachment(null); }}
           >
             <div className="imagePreviewHeader">
               <strong>{attachmentLabel(previewAttachment)}</strong>
@@ -7165,7 +7277,7 @@ function App() {
 
       {deleteCandidate ? (
         <div className="modalScrim" role="presentation">
-          <section className="riskDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+          <section ref={modalRef} tabIndex={-1} className="riskDialog deleteDialog" role="dialog" aria-modal="true" aria-labelledby="delete-title" onKeyDown={(event) => { if (event.key === "Escape") setDeleteCandidate(null); }}>
             <div className="dialogIcon deleteIcon">
               {deleteCandidate.kind === "project" ? (
                 <FolderX size={18} />
@@ -7200,7 +7312,7 @@ function App() {
 
       {showElevatedPermissionsDialog ? (
         <div className="modalScrim" role="presentation">
-          <section className="riskDialog" role="dialog" aria-modal="true" aria-labelledby="elevated-permissions-title">
+          <section ref={modalRef} tabIndex={-1} className="riskDialog" role="dialog" aria-modal="true" aria-labelledby="elevated-permissions-title" onKeyDown={(event) => { if (event.key === "Escape") setShowElevatedPermissionsDialog(false); }}>
             <div>
               <h3 id="elevated-permissions-title">Enable elevated mode?</h3>
               <p>
