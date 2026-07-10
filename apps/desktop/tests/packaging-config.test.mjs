@@ -4,6 +4,7 @@ import test from "node:test";
 
 const configUrl = new URL("../electron-builder.yml", import.meta.url);
 const preparePackageUrl = new URL("../scripts/prepare-package.mjs", import.meta.url);
+const packageWorkflowUrl = new URL("../../../.github/workflows/package-desktop.yml", import.meta.url);
 
 test("desktop packages use the Umbratic product name without a version in Windows installed apps", () => {
   const config = fs.readFileSync(configUrl, "utf8");
@@ -23,4 +24,12 @@ test("desktop packages the Veil binary used by managed local mode", () => {
   assert.match(config, /- from: \.package\/veil\r?\n\s+to: veil/);
   assert.match(preparePackage, /spawnSync\("go", \["build", "-trimpath", "-o", veilBinary, "\.\/cmd\/veil"\]/);
   assert.match(preparePackage, /process\.platform === "win32" \? "veil\.exe" : "veil"/);
+});
+
+test("desktop packaging jobs install Go before building Veil", () => {
+  const workflow = fs.readFileSync(packageWorkflowUrl, "utf8");
+  const packageJob = workflow.slice(workflow.indexOf("\n  package:"), workflow.indexOf("\n  publish-release:"));
+
+  assert.match(packageJob, /uses: actions\/setup-go@v6/);
+  assert.ok(packageJob.indexOf("uses: actions/setup-go@v6") < packageJob.indexOf("npm --workspace @umbratic\/desktop run package"));
 });
