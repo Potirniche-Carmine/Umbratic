@@ -480,6 +480,27 @@ test("runTool applies edit patch mode and emits patch summaries", async () => {
   assert.equal(fs.readFileSync(path.join(root, "notes", "run-tool.md"), "utf8"), "created through runTool");
 });
 
+test("runTool canonicalizes case-only model tool name variations", async () => {
+  const root = workspace();
+  const events = [];
+  const toolContext = context(root);
+
+  const result = await runTool(toolContext.ctx, (event) => events.push(event), {
+    id: "call-edit-cased",
+    name: "Edit",
+    arguments: {
+      mode: "replace",
+      filePath: "README.md",
+      oldText: "Target phrase",
+      newText: "Updated phrase",
+    },
+  });
+
+  assert.equal(result.status, "success");
+  assert.equal(events.find((event) => event.type === "tool.requested").toolKind, "edit");
+  assert.equal(fs.readFileSync(path.join(root, "README.md"), "utf8"), "Intro\nUpdated phrase\nFinal\n");
+});
+
 test("runTool marks malformed model tool arguments as validation errors", async () => {
   const root = workspace();
   const events = [];

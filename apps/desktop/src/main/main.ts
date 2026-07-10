@@ -1947,6 +1947,10 @@ function failTask(task: TaskRecord, message: string) {
   emit({ type: "task.error", taskId: task.id, message });
 }
 
+function taskStillRunning(task: TaskRecord): boolean {
+  return task.state === "running";
+}
+
 function execFileOutput(
   command: string,
   args: string[],
@@ -3137,6 +3141,9 @@ async function runRunnerTask(
   const enabledToolsForRun = taskEnabledTools(task);
   try {
     const { providers, selected } = await resolveSelectedModel();
+    if (!taskStillRunning(task)) {
+      return;
+    }
     if (!selected) {
       failTask(task, providers[0]?.message ?? "Veil health check is not ready.");
       return;
@@ -3162,6 +3169,9 @@ async function runRunnerTask(
     const workspacePathForRun = task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
     const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
+    if (!taskStillRunning(task)) {
+      return;
+    }
     activeRunnerProcesses.set(task.id, run);
     task.diagnosticLogPath = run.diagnosticLogPath;
     saveTask(task);
@@ -3477,6 +3487,10 @@ async function runRunnerTask(
       return;
     }
 
+    if (run.abortController.signal.aborted || !taskStillRunning(task)) {
+      return;
+    }
+
     if (expectsFileChanges && !fileCreationToolRequested) {
       const previousAssistantText = compactHistoryText(assistantTextForCurrentAttempt.trim(), 1800);
       assistantTextForCurrentAttempt = "";
@@ -3500,6 +3514,10 @@ async function runRunnerTask(
         },
       });
       await waitForCompletion();
+
+      if (run.abortController.signal.aborted || !taskStillRunning(task)) {
+        return;
+      }
 
       if (delegatedToWorktree) {
         return;

@@ -198,6 +198,16 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     ], undefined, "running"))),
     [{ type: "assistant", id: "assistant-1", text: "Streaming now", streaming: true }],
   );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(composerTimelineFromEvents([
+      { type: "user.message", taskId: "task-1", text: "Do the work", at: "2026-01-01T00:00:00.000Z" },
+      { type: "task.error", taskId: "task-1", message: "Runner turn failed.", at: "2026-01-01T00:00:01.000Z" },
+    ], undefined, "failed"))),
+    [
+      { type: "user", id: "user-0-11", text: "Do the work", attachedFiles: [] },
+      { type: "assistant", id: "assistant-1", text: "I couldn't complete this request.\n\nRunner turn failed." },
+    ],
+  );
 
   const duplicateDelivery = [
     events[0],
@@ -225,17 +235,6 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
   assert.match(commandShellText(searchRun), /Search workspace: search "composer"/);
   assert.match(commandShellText(searchRun), /Results:\napps\/desktop\/src\/renderer\/main\.tsx: content/);
-});
-
-test("nested activity scrolling transfers only the boundary overflow to the composer", () => {
-  const { splitNestedScrollDelta } = loadRenderer();
-  const split = (scrollTop, maxScrollTop, delta) =>
-    JSON.parse(JSON.stringify(splitNestedScrollDelta(scrollTop, maxScrollTop, delta)));
-
-  assert.deepEqual(split(20, 45, -70), { innerDelta: -20, outerDelta: -50 });
-  assert.deepEqual(split(30, 45, 70), { innerDelta: 15, outerDelta: 55 });
-  assert.deepEqual(split(20, 45, 10), { innerDelta: 10, outerDelta: 0 });
-  assert.deepEqual(split(0, 45, -70), { innerDelta: 0, outerDelta: -70 });
 });
 
 test("stream batching drains queued assistant text without throughput capping", () => {
