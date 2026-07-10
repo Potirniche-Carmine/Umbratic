@@ -28,7 +28,8 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
   const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh";
   const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command] : ["-c", command];
   return await new Promise((resolve) => {
-    const child = spawn(shell, args, { cwd: ctx.cwd, windowsHide: true });
+    const useProcessGroup = process.platform !== "win32";
+    const child = spawn(shell, args, { cwd: ctx.cwd, detached: useProcessGroup, windowsHide: true });
     const timeoutMs = commandTimeoutMs(input);
     let stdout = "";
     let stderr = "";
@@ -36,6 +37,14 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
+      if (useProcessGroup && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+          return;
+        } catch {
+          // Fall back to killing the shell when the process group no longer exists.
+        }
+      }
       child.kill();
     }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
