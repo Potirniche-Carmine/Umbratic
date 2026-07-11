@@ -31,6 +31,8 @@ type Server struct {
 	templateData templates.Registry
 }
 
+const actionRequiredHeader = "X-Umbratic-Action-Required"
+
 func NewServer(cfg config.Config, modelClient ModelClient) http.Handler {
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
 	return &Server{cfg: cfg, model: modelClient, templateData: registry, templateErr: err}
@@ -100,6 +102,9 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			}
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		if requirement := policy.WorkspaceActionRequirement(input.Messages); route == prompts.EngineeringChat && requirement != policy.ActionNone {
+			w.Header().Set(actionRequiredHeader, requirement)
 		}
 		if s.templateErr != nil {
 			writeJSONError(w, http.StatusInternalServerError, "template registry unavailable")
@@ -197,7 +202,9 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, req mode
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	_ = model.WriteOpenAIChatSSE(s.cfg.ProviderProtocol, w, resp.Body)
+	if err := model.WriteOpenAIChatSSE(s.cfg.ProviderProtocol, w, resp.Body); err != nil {
+		_, _ = io.WriteString(w, "event: error\ndata: {\"error\":\"incomplete model stream\"}\n\n")
+	}
 }
 
 func (s *Server) authorized(header string) bool {

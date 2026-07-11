@@ -6,6 +6,13 @@ import * as tls from "node:tls";
 
 import type { EndpointMtlsConfig } from "./config";
 
+function assertSecureEndpoint(url: URL) {
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "localhost";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("Remote model endpoints must use HTTPS.");
+  }
+}
+
 function readOptionalFile(filePath?: string): Buffer | undefined {
   if (!filePath) return undefined;
   return fs.readFileSync(filePath);
@@ -73,6 +80,7 @@ async function requestProviderJson(
   options: { method: "GET" | "POST"; headers?: Record<string, string>; body?: string; mtls?: EndpointMtlsConfig; signal?: AbortSignal },
 ): Promise<{ statusCode: number; statusMessage: string; text: string; json: unknown | null }> {
   const url = new URL(rawUrl);
+  assertSecureEndpoint(url);
   const requestOptions: http.RequestOptions | https.RequestOptions = {
     protocol: url.protocol,
     hostname: url.hostname,

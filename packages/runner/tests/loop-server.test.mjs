@@ -287,6 +287,7 @@ test("runTurn sends Veil skill metadata and exposes read_skill without client sy
       reasoningTextChars: 8,
       toolCalls: 0,
       failedToolCalls: 0,
+      attempts: [],
     });
   });
 });
@@ -517,6 +518,41 @@ test("runTurn accumulates partial tool-call argument chunks by stable index", as
   });
 });
 
+test("runTurn rejects Veil action completions without required tool evidence", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-action-enforcement-"));
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      ...(requests.length === 1 ? { "X-Umbratic-Action-Required": "change-and-execute" } : {}),
+    });
+    response.end(sseData({ choices: [{ delta: { content: "I created it and ran it successfully." } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, {
+      enabledTools: ["edit", "command"],
+      chatEndpointPath: "/api/engineering/chat",
+    });
+
+    const summary = await runTurn(
+      activeSession,
+      [{ type: "text", text: "Create hello.py and verify it works" }],
+      (event) => events.push(event),
+      async () => "allow",
+    );
+
+    assert.equal(requests.length, 3);
+    assert.equal(summary.toolCalls, 0);
+    assert.equal(events.filter((event) => event.type === "assistant.delta").length, 1);
+    assert.doesNotMatch(events.find((event) => event.type === "assistant.delta").text, /created it/i);
+    assert.match(activeSession.messages.at(-1).content, /couldn't complete the requested workspace action/i);
+    assert.equal(fs.existsSync(path.join(root, "hello.py")), false);
+  });
+});
+
 test("runTurn continues beyond the former twelve-tool-turn limit", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-long-loop-"));
   const requests = [];
@@ -650,6 +686,14 @@ test("runTurn summarizes failed tool calls for diagnostics", async () => {
     assert.equal(summary.lastToolFailure.status, "validation_error");
     assert.equal(summary.lastToolFailure.errorCode, "tool_disabled");
     assert.match(summary.lastToolFailure.message, /disabled/);
+    assert.deepEqual(plain(summary.attempts), [{
+      attempt: 1,
+      phase: "tool-validate",
+      code: "tool_disabled",
+      repairable: false,
+      toolId: "write",
+      redactedSummary: summary.lastToolFailure.message,
+    }]);
     assert.match(events.find((event) => event.type === "tool.output" && event.stream === "stderr").text, /Tool failed/);
   });
 });

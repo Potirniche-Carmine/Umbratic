@@ -517,6 +517,18 @@ test("runTool marks malformed model tool arguments as validation errors", async 
   assert.equal(lifecycle[1].errorCode, "invalid_arguments");
 });
 
+test("runTool accepts a JSON object wrapped in a markdown fence", async () => {
+  const root = workspace();
+  const result = await runTool(context(root).ctx, () => undefined, {
+    id: "fenced-edit",
+    name: "edit",
+    arguments: '```json\n{"filePath":"src/app.ts","oldText":"41","newText":"42"}\n```',
+  });
+
+  assert.equal(result.status, "success");
+  assert.match(fs.readFileSync(path.join(root, "src", "app.ts"), "utf8"), /42/);
+});
+
 test("enabledToolSpecs returns only configured tool definitions in canonical order", () => {
   const specs = enabledToolSpecs(["command", "read"]);
   assert.deepEqual(plain(specs.map((spec) => spec.function.name)), ["read", "command"]);

@@ -12,6 +12,15 @@ export type ToolPolicyStage =
   | "redact_and_summarize_output"
   | "emit_audit_telemetry";
 
+export type AttemptRecord = {
+  attempt: number;
+  phase: "stream" | "tool-parse" | "tool-validate" | "permission" | "execute";
+  code: ToolErrorCode | "model_error";
+  repairable: boolean;
+  toolId?: string;
+  redactedSummary: string;
+};
+
 export type RunnerTurnSummary = {
   status: "completed";
   turns: number;
@@ -19,6 +28,7 @@ export type RunnerTurnSummary = {
   reasoningTextChars: number;
   toolCalls: number;
   failedToolCalls: number;
+  attempts: AttemptRecord[];
   lastToolFailure?: {
     toolKind: string;
     status: ToolResultStatus;
@@ -26,6 +36,11 @@ export type RunnerTurnSummary = {
     message: string;
   };
 };
+
+export function toolFailureRepairable(status: ToolResultStatus, code?: ToolErrorCode): boolean {
+  if (status === "permission_denied" || status === "policy_blocked") return false;
+  return code === "unknown_tool" || code === "invalid_arguments" || code === "missing_dependency";
+}
 
 export type UmbraticRunnerEvent =
   | { type: "assistant.delta"; taskId: string; text: string; at: string; endedAt?: string }

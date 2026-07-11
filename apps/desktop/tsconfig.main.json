@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": ["node", "electron"]
   },
-  "include": ["src/main", "src/preload"]
+  "include": ["src/main", "src/preload", "src/shared"]
 }

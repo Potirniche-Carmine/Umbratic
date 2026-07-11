@@ -317,6 +317,7 @@ func TestListModelsNormalizesOllamaPayloadsAndDedupes(t *testing.T) {
 func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 	src := strings.NewReader(strings.Join([]string{
 		`{"message":{"role":"assistant","content":"hi","tool_calls":[{"function":{"name":"read","arguments":{"filePath":"README.md"}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done":true}`,
 		"",
 	}, "\n"))
 	var dst bytes.Buffer
@@ -331,7 +332,14 @@ func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 		t.Fatalf("missing converted tool call: %q", body)
 	}
 	if !strings.Contains(body, "data: [DONE]") {
-		t.Fatalf("missing synthesized done marker: %q", body)
+		t.Fatalf("missing done marker: %q", body)
+	}
+}
+
+func TestWriteOpenAIChatSSERejectsTruncatedOllamaStream(t *testing.T) {
+	err := WriteOpenAIChatSSE(ProtocolOllama, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"))
+	if err == nil {
+		t.Fatal("expected truncated stream error")
 	}
 }
 

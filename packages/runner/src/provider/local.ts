@@ -54,6 +54,10 @@ export function isApprovedVeilChatUrl(value: string): boolean {
   }
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost";
+}
+
 export function assertAllowedProvider(
   config: UmbraticProviderConfig,
   options: { modelBoundary?: RunnerModelBoundary } = {},
@@ -65,6 +69,9 @@ export function assertAllowedProvider(
   const allowed = url.protocol === "http:" || url.protocol === "https:";
   if (!allowed) {
     throw new Error(`provider baseURL must be an HTTP(S) endpoint: ${config.baseURL}`);
+  }
+  if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
+    throw new Error("remote provider baseURL must use HTTPS");
   }
   if (options.modelBoundary === "managed") {
     const endpointUrl = configuredProviderEndpointUrl(config.baseURL, config.chatEndpointPath);

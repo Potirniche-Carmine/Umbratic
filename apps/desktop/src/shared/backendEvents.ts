@@ -1,0 +1,200 @@
+export const BACKEND_EVENT_VERSION = 1 as const;
+
+import type { ReviewFile as NormalizedReviewFile } from "./reviewDiff";
+
+export type BackendChatAttachment = {
+  path: string;
+  name: string;
+  source?: "workspace" | "chat";
+  storedPath?: string;
+  originalPath?: string;
+  previewDataUrl?: string;
+};
+
+export type BackendPermissionRequest = {
+  id: string;
+  kind: "read" | "edit" | "bash";
+  summary: string;
+  command: string;
+  commandClass?: BackendCommandClass;
+  cwd: string;
+};
+
+export type BackendCommandClass =
+  | "read" | "edit" | "shell" | "python-runtime" | "markdown" | "cmake-build" | "compiler"
+  | "package-manager" | "git-read" | "git-write" | "destructive-file" | "network"
+  | "external-directory" | "unknown";
+
+export type BackendTestResult = {
+  command: string;
+  output: string;
+  passed: boolean;
+  exitCode: number | null;
+  completedAt: string;
+};
+
+type BackendEventMeta = { version: typeof BACKEND_EVENT_VERSION; at?: string; endedAt?: string };
+
+export type BackendUiEventV1 = BackendEventMeta & (
+  | { type: "user.message"; taskId: string; text: string; attachedFiles?: BackendChatAttachment[] }
+  | { type: "assistant.delta"; taskId: string; text: string }
+  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
+  | { type: "assistant.done"; taskId: string }
+  | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
+  | { type: "worktree.created"; taskId: string; branch: string; path: string }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass }
+  | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
+  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number }
+  | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
+  | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
+  | { type: "permission.requested"; taskId: string; request: BackendPermissionRequest }
+  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
+  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; latestTest?: BackendTestResult }
+  | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
+  | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
+  | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
+  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
+  | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
+  | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
+  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
+  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
+  | { type: "required_tool.failed"; taskId: string; requirement: "file_change"; reason: string; requiredTools: string[]; attemptedTools?: string[]; attempt?: number; detail?: string }
+  | { type: "task.error"; taskId: string; message: string }
+);
+
+export type BackendUiEventInput = BackendUiEventV1 extends infer Event
+  ? Event extends unknown
+    ? Omit<Event, "version"> & { version?: typeof BACKEND_EVENT_VERSION }
+    : never
+  : never;
+
+export type BackendEventParseFailure = {
+  ok: false;
+  code: "not_an_object" | "unsupported_version" | "unknown_type" | "invalid_field";
+  message: string;
+  type?: string;
+};
+
+export type BackendEventParseResult =
+  | { ok: true; event: BackendUiEventV1 }
+  | BackendEventParseFailure;
+
+const eventTypes = new Set([
+  "user.message",
+  "assistant.delta",
+  "assistant.reasoning.delta",
+  "assistant.done",
+  "worktree.requested",
+  "worktree.created",
+  "command.started",
+  "command.output",
+  "command.finished",
+  "context.compressed",
+  "context.retrieved",
+  "permission.requested",
+  "permission.resolved",
+  "review.ready",
+  "review.changed_since_ready",
+  "approval.check",
+  "merge.approval",
+  "approval.completed",
+  "merge.completed",
+  "ide.opened",
+  "response.feedback",
+  "skill.selected",
+  "required_tool.failed",
+  "task.error",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasString(value: Record<string, unknown>, key: string): boolean {
+  return typeof value[key] === "string";
+}
+
+function hasNumber(value: Record<string, unknown>, key: string): boolean {
+  return typeof value[key] === "number" && Number.isFinite(value[key]);
+}
+
+function hasStringArray(value: Record<string, unknown>, key: string): boolean {
+  return Array.isArray(value[key]) && (value[key] as unknown[]).every((item) => typeof item === "string");
+}
+
+function validPayload(value: Record<string, unknown>, type: string): boolean {
+  switch (type) {
+    case "user.message":
+    case "assistant.delta":
+    case "assistant.reasoning.delta":
+    case "task.error":
+      return hasString(value, type === "task.error" ? "message" : "text");
+    case "assistant.done":
+      return true;
+    case "worktree.requested":
+      return hasString(value, "branch") && hasString(value, "path") && hasString(value, "baseCommit");
+    case "worktree.created":
+      return hasString(value, "branch") && hasString(value, "path");
+    case "command.started":
+      return hasString(value, "id") && hasString(value, "command") && hasString(value, "cwd");
+    case "command.output":
+      return hasString(value, "id") && (value.stream === "stdout" || value.stream === "stderr") && hasString(value, "text");
+    case "command.finished":
+      return hasString(value, "id") && (value.exitCode === null || hasNumber(value, "exitCode"));
+    case "context.compressed":
+      return hasString(value, "toolCallId") && hasString(value, "toolKind") && hasString(value, "kind")
+        && hasString(value, "strategy") && hasNumber(value, "originalBytes") && hasNumber(value, "outputBytes");
+    case "context.retrieved":
+      return hasString(value, "toolCallId") && hasString(value, "hash") && hasNumber(value, "offset")
+        && hasNumber(value, "bytesShown") && hasNumber(value, "totalBytes");
+    case "permission.requested":
+      return isRecord(value.request) && hasString(value.request, "id") && hasString(value.request, "kind")
+        && hasString(value.request, "summary") && hasString(value.request, "command") && hasString(value.request, "cwd");
+    case "permission.resolved":
+      return hasString(value, "id") && (value.decision === "allow" || value.decision === "deny");
+    case "review.ready":
+      return hasStringArray(value, "changedFiles") && Array.isArray(value.reviewFiles);
+    case "review.changed_since_ready":
+      return hasString(value, "previousPatchHash") && hasString(value, "currentPatchHash") && hasNumber(value, "changedFileCount");
+    case "approval.check":
+      return hasString(value, "name") && ["running", "passed", "failed"].includes(String(value.status));
+    case "merge.approval":
+      return value.decision === "approved" || value.decision === "rejected";
+    case "approval.completed":
+      return hasString(value, "target") && hasString(value, "patchHash");
+    case "merge.completed":
+      return hasString(value, "targetBranch") && hasString(value, "commit") && hasString(value, "patchHash");
+    case "ide.opened":
+      return hasString(value, "ideId") && ["workspace", "file"].includes(String(value.target))
+        && ["success", "failed"].includes(String(value.result));
+    case "response.feedback":
+      return hasString(value, "messageId") && (value.rating === "good" || value.rating === "bad");
+    case "skill.selected":
+      return hasString(value, "skillId") && hasString(value, "source") && hasString(value, "reason") && typeof value.fullContent === "boolean";
+    case "required_tool.failed":
+      return hasString(value, "requirement") && hasString(value, "reason") && hasStringArray(value, "requiredTools");
+    default:
+      return false;
+  }
+}
+
+export function parseBackendUiEvent(value: unknown): BackendEventParseResult {
+  if (!isRecord(value)) return { ok: false, code: "not_an_object", message: "Backend event must be an object." };
+  if (value.version !== undefined && value.version !== BACKEND_EVENT_VERSION) {
+    return { ok: false, code: "unsupported_version", message: `Unsupported backend event version: ${String(value.version)}.` };
+  }
+  if (!hasString(value, "type") || !eventTypes.has(value.type as string)) {
+    return { ok: false, code: "unknown_type", message: "Backend event type is missing or unknown.", ...(hasString(value, "type") ? { type: value.type as string } : {}) };
+  }
+  if (!hasString(value, "taskId") || !validPayload(value, value.type as string)) {
+    return { ok: false, code: "invalid_field", message: `Backend event ${String(value.type)} has invalid fields.`, type: value.type as string };
+  }
+  if ((value.at !== undefined && typeof value.at !== "string") || (value.endedAt !== undefined && typeof value.endedAt !== "string")) {
+    return { ok: false, code: "invalid_field", message: `Backend event ${String(value.type)} has invalid timestamps.`, type: value.type as string };
+  }
+  return { ok: true, event: { ...value, version: BACKEND_EVENT_VERSION } as BackendUiEventV1 };
+}
+
+export function backendEventDiagnostic(failure: BackendEventParseFailure): string {
+  return `[invalid-event:${failure.code}] ${failure.message}`;
+}

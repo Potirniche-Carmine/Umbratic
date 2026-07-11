@@ -20,6 +20,7 @@ import {
 } from "./config";
 import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
+import { normalizeReviewFile } from "../shared/reviewDiff";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -310,7 +311,14 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
     policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
     enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
     capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
-    reviewFiles: Array.isArray(task.reviewFiles) ? (task.reviewFiles as TaskRecord["reviewFiles"]) : [],
+    reviewFiles: Array.isArray(task.reviewFiles)
+      ? task.reviewFiles
+          .filter((file): file is Record<string, unknown> => isRecord(file) && typeof file.path === "string")
+          .map((file) => normalizeReviewFile(file as { path: string; diff?: string; patch?: string }))
+      : [],
+    reviewScope: task.reviewScope === "worktree" ? "worktree" : "task",
+    reviewBaselineLabel: typeof task.reviewBaselineLabel === "string" ? task.reviewBaselineLabel : undefined,
+    reviewBaselineOid: typeof task.reviewBaselineOid === "string" ? task.reviewBaselineOid : undefined,
     events: Array.isArray(task.events) ? (task.events as TaskRecord["events"]) : [],
   };
 }
@@ -752,11 +760,14 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
     secret:
       nextMode === "local"
         ? ""
-        : managed?.secret ?? (typeof input.secret === "string" ? input.secret : current.mode === "server" ? current.secret : ""),
+        : managed?.secret ?? (typeof input.secret === "string" && input.secret ? input.secret : current.mode === "server" ? current.secret : ""),
     headers:
       nextMode === "local"
         ? normalizeEndpointHeaders([])
-        : normalizeEndpointHeaders(input.headers ?? (current.mode === "server" ? current.headers : [])),
+        : normalizeEndpointHeaders(input.headers ?? (current.mode === "server" ? current.headers : [])).map((header) => ({
+            name: header.name,
+            value: header.value || current.headers.find((existing) => existing.name === header.name)?.value || "",
+          })),
   };
   const settings = readRawSettings();
   writeRawSettings({

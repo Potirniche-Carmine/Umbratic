@@ -15,6 +15,7 @@ import (
 
 	"umbratic-veil/internal/config"
 	"umbratic-veil/internal/model"
+	"umbratic-veil/internal/policy"
 )
 
 type fakeModelClient struct {
@@ -162,6 +163,23 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 	if modelClient.req.Messages[2].Content != "draft this" {
 		t.Fatalf("missing user input: %#v", modelClient.req.Messages)
+	}
+}
+
+func TestEngineeringChatSignalsRequiredWorkspaceEvidence(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"Can you create a hello world script and verify it works?"}],"tools":[{"type":"function","function":{"name":"edit"}},{"type":"function","function":{"name":"command"}}]}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get(actionRequiredHeader); got != policy.ActionChangeAndExecute {
+		t.Fatalf("got action requirement %q", got)
 	}
 }
 

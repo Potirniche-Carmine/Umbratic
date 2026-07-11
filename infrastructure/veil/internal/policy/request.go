@@ -26,6 +26,76 @@ type ChatInput struct {
 	Skills     []prompts.SkillMetadata
 }
 
+const (
+	ActionNone             = ""
+	ActionChange           = "change"
+	ActionExecute          = "execute"
+	ActionChangeAndExecute = "change-and-execute"
+)
+
+// WorkspaceActionRequirement identifies evidence required by an explicit
+// workspace request. Veil owns this classification so clients cannot weaken
+// the action policy by changing their prompts.
+func WorkspaceActionRequirement(messages []model.Message) string {
+	var latest string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		value, ok := messages[i].Content.(string)
+		if !ok {
+			return ActionNone
+		}
+		latest = strings.ToLower(strings.Join(strings.Fields(value), " "))
+		break
+	}
+	if latest == "" || strings.HasPrefix(latest, "workspace tool results:") {
+		return ActionNone
+	}
+
+	prefixes := []string{"please ", "can you ", "could you ", "would you ", "i need you to ", "i want you to "}
+	for changed := true; changed; {
+		changed = false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(latest, prefix) {
+				latest = strings.TrimSpace(strings.TrimPrefix(latest, prefix))
+				changed = true
+				break
+			}
+		}
+	}
+
+	changeVerbs := []string{
+		"add", "build", "change", "create", "delete", "edit", "fix", "implement",
+		"make", "modify", "move", "remove", "rename", "update", "write",
+	}
+	executeVerbs := []string{"execute", "run", "test", "verify"}
+	change := false
+	execute := false
+	for _, verb := range changeVerbs {
+		if latest == verb || strings.HasPrefix(latest, verb+" ") {
+			change = true
+			break
+		}
+	}
+	for _, verb := range executeVerbs {
+		if latest == verb || strings.HasPrefix(latest, verb+" ") || strings.Contains(latest, " and "+verb+" ") || strings.HasSuffix(latest, " and "+verb) {
+			execute = true
+			break
+		}
+	}
+	if change && execute {
+		return ActionChangeAndExecute
+	}
+	if change {
+		return ActionChange
+	}
+	if execute {
+		return ActionExecute
+	}
+	return ActionNone
+}
+
 type chatRequest struct {
 	Input      string                  `json:"input"`
 	Messages   []model.Message         `json:"messages"`

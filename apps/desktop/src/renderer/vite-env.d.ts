@@ -191,8 +191,24 @@ type UmbraticTestResult = {
 
 type UmbraticReviewFile = {
   path: string;
-  status: "added" | "modified" | "deleted";
+  oldPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "copied" | "binary";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  patch: string;
   diff: string;
+  contentHash: string;
+  hunks: Array<{
+    id: string;
+    header: string;
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+    lines: Array<{ origin: "context" | "addition" | "deletion"; content: string; oldLine: number | null; newLine: number | null }>;
+  }>;
+  tooLarge?: boolean;
 };
 
 type UmbraticChatAttachment = {
@@ -223,47 +239,7 @@ type UmbraticPermissionRequest = {
   cwd: string;
 };
 
-type UmbraticBackendEventMeta = { at?: string; endedAt?: string };
-type UmbraticBackendUiEvent = UmbraticBackendEventMeta &
-(
-  | { type: "user.message"; taskId: string; text: string; attachedFiles?: UmbraticChatAttachment[] }
-  | { type: "assistant.delta"; taskId: string; text: string }
-  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
-  | { type: "assistant.done"; taskId: string }
-  | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
-  | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: UmbraticPermissionRequest["kind"]; commandClass?: UmbraticCommandClass }
-  | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | {
-      type: "command.finished";
-      taskId: string;
-      id: string;
-      exitCode: number | null;
-      status?: UmbraticToolResultStatus;
-      errorCode?: UmbraticToolErrorCode;
-      errorMessage?: string;
-      durationMs?: number;
-    }
-  | { type: "permission.requested"; taskId: string; request: UmbraticPermissionRequest }
-  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: UmbraticReviewFile[]; latestTest?: UmbraticTestResult }
-  | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
-  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
-  | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
-  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
-  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
-  | {
-      type: "required_tool.failed";
-      taskId: string;
-      requirement: UmbraticRequiredToolContractRequirement;
-      reason: UmbraticRequiredToolContractReason;
-      requiredTools: UmbraticRunnerToolId[];
-      attemptedTools?: UmbraticRunnerToolId[];
-      attempt?: number;
-      detail?: string;
-    }
-  | { type: "task.error"; taskId: string; message: string }
-);
+type UmbraticBackendUiEvent = import("../shared/backendEvents").BackendUiEventV1;
 
 type UmbraticChatRecord = {
   id: string;
@@ -311,6 +287,10 @@ type UmbraticTaskInfo = {
   reviewFiles: UmbraticReviewFile[];
   events: UmbraticBackendUiEvent[];
   latestTest?: UmbraticTestResult;
+  reviewPatchHash?: string;
+  reviewScope?: "task" | "worktree";
+  reviewBaselineLabel?: string;
+  reviewBaselineOid?: string;
   patchHash?: string;
   error?: string;
 };
@@ -364,7 +344,8 @@ declare global {
       getNotes(): Promise<UmbraticUserNotes>;
       updateNotes(input: { content: string }): Promise<UmbraticUserNotes>;
       getTask(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
-      refreshTaskReview(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
+      refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<UmbraticTaskInfo | null>;
+      refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: UmbraticReviewFile[]; baselineOid: string }>;
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<UmbraticFileSearchResult[]>;
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: UmbraticRepositoryInfo }>;
       pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: UmbraticChatAttachment[] }>;
@@ -465,7 +446,7 @@ declare global {
       cancelTask(input: { taskId: string }): Promise<void>;
       setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
       setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
-      onBackendEvent(callback: (event: unknown) => void): () => void;
+      onBackendEvent(callback: (event: UmbraticBackendUiEvent) => void): () => void;
     };
     umbratic?: Window["umbratic"];
   }

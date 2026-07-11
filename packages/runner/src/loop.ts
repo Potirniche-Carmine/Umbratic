@@ -1,4 +1,4 @@
-import { nowIso, type RunnerTurnSummary, type UmbraticRunnerEvent } from "./events.js";
+import { nowIso, toolFailureRepairable, type AttemptRecord, type RunnerTurnSummary, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, ChatMessage, InputPart, Session } from "./session.js";
 import { compressToolResult } from "./context/contentRouter.js";
 import { redactText } from "./policy.js";
@@ -19,6 +19,7 @@ type StreamAccumulator = {
   toolCalls: Map<number, ToolCall>;
   emittedContent: boolean;
   emittedReasoning: boolean;
+  actionRequirement: "" | "change" | "execute" | "change-and-execute";
 };
 
 type ToolContextResult = {
@@ -149,6 +150,7 @@ function emptyRunTurnSummary(): RunTurnSummary {
     reasoningTextChars: 0,
     toolCalls: 0,
     failedToolCalls: 0,
+    attempts: [],
   };
 }
 
@@ -164,6 +166,19 @@ function recordToolFailure(
     ...(failure.errorCode ? { errorCode: failure.errorCode } : {}),
     message: redactText(failure.message, 500),
   };
+  const phase: AttemptRecord["phase"] = failure.status === "permission_denied"
+    ? "permission"
+    : failure.status === "validation_error"
+      ? "tool-validate"
+      : "execute";
+  summary.attempts.push({
+    attempt: summary.attempts.length + 1,
+    phase,
+    code: failure.errorCode ?? "runtime_error",
+    repairable: toolFailureRepairable(failure.status, failure.errorCode),
+    toolId: toolKind,
+    redactedSummary: redactText(failure.message, 500),
+  });
 }
 
 function recordNonSuccessToolResult(summary: RunTurnSummary, toolKind: string, result: ToolResult) {
@@ -329,6 +344,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function isSseDoneLine(line: string): boolean {
+  return line.startsWith("data:") && line.slice(5).trim() === "[DONE]";
+}
+
 function appendOllamaToolCalls(acc: StreamAccumulator, toolCalls: unknown) {
   if (!Array.isArray(toolCalls)) return;
   for (const raw of toolCalls) {
@@ -440,7 +459,7 @@ async function streamOllamaChat(
     );
   }
 
-  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false };
+  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" };
   let buffer = "";
   const processLine = (line: string) => {
     const trimmed = line.trim();
@@ -498,7 +517,7 @@ function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>)
 async function streamModel(
   session: Session,
   emit?: (event: UmbraticRunnerEvent) => void,
-  options: { includeTools?: boolean } = {},
+  options: { includeTools?: boolean; suppressOutput?: boolean } = {},
 ): Promise<StreamAccumulator> {
   const tools = enabledModelToolSpecs(session.config.enabledTools, {
     includeContextRetrieval: session.contextStore.hasEntries(),
@@ -552,7 +571,11 @@ async function streamModel(
     );
   }
 
-  return readOpenAIStream(session, response.body, emit);
+  const header = response.headers["x-umbratic-action-required"];
+  const actionRequirement = header === "change" || header === "execute" || header === "change-and-execute" ? header : "";
+  const acc = await readOpenAIStream(session, response.body, actionRequirement || options.suppressOutput ? undefined : emit);
+  acc.actionRequirement = actionRequirement;
+  return acc;
 }
 
 async function readOpenAIStream(
@@ -560,14 +583,16 @@ async function readOpenAIStream(
   body: AsyncIterable<Buffer | string>,
   emit?: (event: UmbraticRunnerEvent) => void,
 ): Promise<StreamAccumulator> {
-  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false };
+  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" };
   let buffer = "";
+  let completed = false;
   for await (const chunk of body) {
     buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : Buffer.from(chunk).toString("utf8");
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
       const line = buffer.slice(0, newline).trimEnd();
       buffer = buffer.slice(newline + 1);
+      if (isSseDoneLine(line)) completed = true;
       const parsed = parseSseLine(line);
       const delta = choiceDelta(parsed);
       const text = textContent(delta.content);
@@ -590,6 +615,7 @@ async function readOpenAIStream(
       newline = buffer.indexOf("\n");
     }
   }
+  if (!completed) throw new Error("model stream ended before the completion marker");
   return acc;
 }
 
@@ -632,7 +658,7 @@ async function finishWithoutTools(
     summary.assistantTextChars += fallback.length;
     appendAssistantCompletion(
       session,
-      { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false },
+      { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" },
       events,
       fallback,
     );
@@ -648,13 +674,36 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
     let consecutiveFailedToolTurns = 0;
     let previousToolSignature = "";
     let repeatedToolTurns = 0;
+    let actionRequirement: StreamAccumulator["actionRequirement"] = "";
+    let actionRetries = 0;
+    let changedWorkspace = false;
+    let executedCommand = false;
     for (let turn = 0; turn < maxToolTurns; turn++) {
-      const acc = await streamModel(session, events.emit);
+      const acc = await streamModel(session, events.emit, { suppressOutput: !!actionRequirement });
+      actionRequirement ||= acc.actionRequirement;
       recordModelTurn(summary, acc);
       events.flush();
       const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
       summary.toolCalls += toolCalls.length;
       if (toolCalls.length === 0) {
+        const changeSatisfied = (actionRequirement !== "change" && actionRequirement !== "change-and-execute") || changedWorkspace;
+        const executeSatisfied = (actionRequirement !== "execute" && actionRequirement !== "change-and-execute") || executedCommand;
+        if (actionRequirement && (!changeSatisfied || !executeSatisfied)) {
+          if (actionRetries < 2) {
+            actionRetries += 1;
+            const missing = [!changeSatisfied ? "a successful file edit" : "", !executeSatisfied ? "a successful command run" : ""].filter(Boolean).join(" and ");
+            session.messages.push({
+              role: "user",
+              content: `The requested workspace action is not complete. It still requires ${missing}. Use the available structured workspace tools now. Do not answer with code fences or simulated command output.`,
+            });
+            continue;
+          }
+          const missing = [!changeSatisfied ? "change the requested file" : "", !executeSatisfied ? "run the requested verification command" : ""].filter(Boolean).join(" or ");
+          const fallback = `I couldn't complete the requested workspace action because the model did not use a structured tool call to ${missing}. I won't claim that the remaining work succeeded.`;
+          summary.assistantTextChars += fallback.length;
+          appendAssistantCompletion(session, { ...acc, content: "", reasoning: "", emittedContent: false, emittedReasoning: false }, events, fallback);
+          return summary;
+        }
         appendAssistantCompletion(session, acc, events);
         return summary;
       }
@@ -696,6 +745,8 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
             contextStore: session.contextStore,
           });
           recordNonSuccessToolResult(summary, toolCall.name, result);
+          if (result.status === "success" && (toolCall.name === "edit" || toolCall.name === "write")) changedWorkspace = true;
+          if (result.status === "success" && toolCall.name === "command") executedCommand = true;
           if (compressed.modified) {
             events.emit({
               type: "context.compressed",

@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
+import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
 
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
-type BackendUiEvent = Record<string, unknown>;
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean };
 type ChatAttachment = {
   path: string;
@@ -33,7 +33,8 @@ const umbraticApi = {
   getNotes: () => ipcRenderer.invoke("umbratic:get-notes"),
   updateNotes: (input: { content: string }) => ipcRenderer.invoke("umbratic:update-notes", input),
   getTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:get-task", input),
-  refreshTaskReview: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:refresh-task-review", input),
+  refreshTaskReview: (input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }) => ipcRenderer.invoke("umbratic:refresh-task-review", input),
+  refreshWorkspaceReview: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:refresh-workspace-review", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("umbratic:search-files", input),
   pickRepository: () => ipcRenderer.invoke("umbratic:pick-repository"),
   pickAttachmentFiles: (input: { chatId: string; repositoryId?: string }) => ipcRenderer.invoke("umbratic:pick-attachment-files", input),
@@ -98,8 +99,15 @@ const umbraticApi = {
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
-  onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
-    const listener = (_event: IpcRendererEvent, event: BackendUiEvent) => callback(event);
+  onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {
+    const listener = (_event: IpcRendererEvent, value: unknown) => {
+      const parsed = parseBackendUiEvent(value);
+      if (!parsed.ok) {
+        console.warn(backendEventDiagnostic(parsed));
+        return;
+      }
+      callback(parsed.event);
+    };
     ipcRenderer.on("umbratic:backend-event", listener);
     return () => ipcRenderer.removeListener("umbratic:backend-event", listener);
   },

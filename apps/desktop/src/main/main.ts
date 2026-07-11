@@ -16,6 +16,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   endpointEditingAllowed,
@@ -85,17 +86,6 @@ import {
 } from "./telemetrySync";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import {
-  buildRequiredFileChangeRetryPrompt,
-  canSatisfyFileChangeContract,
-  cannotCreateFileBlocker,
-  isFileChangingTool,
-  noReviewFailureSummary,
-  promptLooksLikeFileChange,
-  requiredFileChangeTools,
-  requiredToolFailureMessage,
-  type RequiredToolContractReason,
-} from "./requiredToolContract";
-import {
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
   importSkill as importSkillService,
@@ -145,6 +135,8 @@ import type {
   WorkspaceMode,
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
+import { normalizeReviewFile } from "../shared/reviewDiff";
+import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 
 const isDev = !app.isPackaged;
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
@@ -516,6 +508,10 @@ function publicTask(task: TaskRecord): TaskInfo {
     createdAt,
     changedFiles,
     reviewFiles,
+    reviewPatchHash,
+    reviewScope,
+    reviewBaselineLabel,
+    reviewBaselineOid,
     events,
     latestTest,
     patchHash,
@@ -542,6 +538,10 @@ function publicTask(task: TaskRecord): TaskInfo {
     createdAt,
     changedFiles,
     reviewFiles,
+    reviewPatchHash,
+    reviewScope,
+    reviewBaselineLabel,
+    reviewBaselineOid,
     events: compactTaskEvents(events, 500),
     latestTest,
     patchHash,
@@ -1825,11 +1825,11 @@ function buildTextDiff(filePath: string, before: string | null, after: string | 
         ? beforeLines.map((line) => `-${line}`)
         : lcsLineDiff(beforeLines, afterLines);
   const hunk = `@@ -1,${beforeLines.length} +1,${afterLines.length} @@`;
-  return {
+  return normalizeReviewFile({
     path: filePath,
     status,
     diff: [...diffHeader(filePath, status), hunk, ...body].join("\n"),
-  };
+  });
 }
 
 function buildBinaryDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
@@ -1837,11 +1837,11 @@ function buildBinaryDiff(filePath: string, before: string | null, after: string 
     return null;
   }
   const status: ReviewFile["status"] = before === null ? "added" : after === null ? "deleted" : "modified";
-  return {
+  return normalizeReviewFile({
     path: filePath,
     status,
     diff: [...diffHeader(filePath, status), `Binary file ${status}: ${filePath}`].join("\n"),
-  };
+  });
 }
 
 function buildSnapshotDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
@@ -1922,7 +1922,7 @@ function recordTaskEvent(event: BackendUiEvent) {
 }
 
 function emit(event: BackendUiEvent) {
-  const stampedEvent = { ...event, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
+  const stampedEvent = { ...event, version: 1 as const, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
   recordTaskEvent(stampedEvent);
   mainWindow?.webContents.send("umbratic:backend-event", stampedEvent);
 }
@@ -2825,7 +2825,10 @@ async function respondToToolPermission(input: unknown) {
   }
   const taskIdValue = requiredString(input.taskId, "taskId");
   const id = requiredString(input.id, "permission id");
-  const decision = input.decision === "deny" ? "deny" : "allow";
+  if (input.decision !== "allow" && input.decision !== "deny") {
+    throw new Error("Invalid permission decision.");
+  }
+  const decision = input.decision;
   const pending = pendingPermissions.get(id);
   if (!pending || pending.taskId !== taskIdValue) {
     throw new Error("Permission request is no longer pending.");
@@ -2943,22 +2946,19 @@ function folderReviewFiles(task: TaskRecord): ReviewFile[] {
     .filter((file): file is ReviewFile => !!file);
 }
 
-async function gitReviewFiles(task: TaskRecord): Promise<ReviewFile[]> {
-  if (!taskUsesIsolatedWorktree(task)) {
-    return folderReviewFiles(task);
-  }
-  const changed = (await getChangedFiles(task.worktreePath, task.baseCommit))
+async function gitWorkspaceReviewFiles(repositoryPath: string, baseline: string): Promise<ReviewFile[]> {
+  const changed = (await getChangedFiles(repositoryPath, baseline))
     .filter((file) => !isGeneratedRuntimePath(file))
     .sort((a, b) => a.localeCompare(b));
   const files: ReviewFile[] = [];
   for (const file of changed) {
-    const absolute = path.join(task.worktreePath, file);
-    const status = await gitFileStatus(task, file);
-    const diff = await gitOutput(task.worktreePath, ["diff", "--no-ext-diff", "--unified=80", task.baseCommit, "--", file]).catch(
+    const absolute = path.join(repositoryPath, file);
+    const status = await gitFileStatus(repositoryPath, baseline, file);
+    const diff = await gitOutput(repositoryPath, ["diff", "--no-ext-diff", "--binary", "--find-renames", "--find-copies", "--unified=20", baseline, "--", file]).catch(
       () => "",
     );
     if (diff.trim()) {
-      files.push({ path: file, status, diff });
+      files.push(normalizeReviewFile({ path: file, status, diff }));
       continue;
     }
     const text = readTextFileIfSafe(absolute);
@@ -2981,10 +2981,17 @@ async function gitReviewFiles(task: TaskRecord): Promise<ReviewFile[]> {
   return files;
 }
 
-async function gitFileStatus(task: TaskRecord, file: string): Promise<ReviewFile["status"]> {
-  const absolute = path.join(task.worktreePath, file);
+async function gitReviewFiles(task: TaskRecord, baseline = task.baseCommit, repositoryPath = task.worktreePath): Promise<ReviewFile[]> {
+  if (!taskUsesIsolatedWorktree(task) && baseline !== "HEAD") {
+    return folderReviewFiles(task);
+  }
+  return gitWorkspaceReviewFiles(repositoryPath, baseline);
+}
+
+async function gitFileStatus(repositoryPath: string, baseline: string, file: string): Promise<ReviewFile["status"]> {
+  const absolute = path.join(repositoryPath, file);
   const afterExists = fs.existsSync(absolute);
-  const before = await gitResult(task.worktreePath, ["cat-file", "-e", `${task.baseCommit}:${file.replace(/\\/g, "/")}`]);
+  const before = await gitResult(repositoryPath, ["cat-file", "-e", `${baseline}:${file.replace(/\\/g, "/")}`]);
   if (!before.success && afterExists) {
     return "added";
   }
@@ -2994,10 +3001,32 @@ async function gitFileStatus(task: TaskRecord, file: string): Promise<ReviewFile
   return "modified";
 }
 
-async function refreshReview(task: TaskRecord): Promise<ReviewFile[]> {
-  const reviewFiles = task.workspaceKind === "folder" ? folderReviewFiles(task) : await gitReviewFiles(task);
+async function refreshReview(
+  task: TaskRecord,
+  scope: "task" | "worktree" = "task",
+  wholeDiffWorkspacePath?: string,
+): Promise<ReviewFile[]> {
+  const workspacePath = scope === "worktree" && wholeDiffWorkspacePath
+    ? wholeDiffWorkspacePath
+    : fs.existsSync(task.worktreePath)
+      ? task.worktreePath
+      : task.originalRepoPath;
+  const worktreeIsGit = scope === "worktree"
+    && (await gitResult(workspacePath, ["rev-parse", "--is-inside-work-tree"])).success;
+  const reviewFiles = task.workspaceKind === "folder" && !worktreeIsGit
+    ? folderReviewFiles(task)
+    : scope === "worktree"
+      ? await gitReviewFiles(task, "HEAD", workspacePath)
+      : await gitReviewFiles(task);
   task.reviewFiles = reviewFiles;
   task.changedFiles = reviewFiles.map((file) => file.path);
+  task.reviewScope = scope;
+  task.reviewBaselineLabel = scope === "worktree" ? "Whole diff" : "Chat changes";
+  task.reviewBaselineOid = scope === "worktree"
+    ? await gitOutput(workspacePath, ["rev-parse", "--short", "HEAD"]).catch(() => "HEAD")
+    : (task.workspaceKind === "folder" && !worktreeIsGit) || !taskUsesIsolatedWorktree(task)
+      ? "task start"
+      : task.baseCommit.slice(0, 10) || "task start";
   return reviewFiles;
 }
 
@@ -3029,15 +3058,44 @@ async function refreshTaskReview(input: unknown): Promise<TaskInfo | null> {
     throw new Error("Invalid review refresh input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
-  if (task.state === "approved" || task.state === "merged" || task.state === "rejected") {
+  const scope = input.scope === "worktree"
+    ? "worktree"
+    : input.scope === "task"
+      ? "task"
+      : task.reviewScope === "worktree"
+        ? "worktree"
+        : "task";
+  let requestedWholeDiffPath: string | undefined;
+  if (scope === "worktree" && typeof input.repositoryPath === "string" && input.repositoryPath.trim()) {
+    const selectedPath = path.resolve(input.repositoryPath.trim());
+    if (!fs.existsSync(selectedPath) || !fs.statSync(selectedPath).isDirectory()) {
+      throw new Error("The selected project folder is no longer available.");
+    }
+    requestedWholeDiffPath = path.resolve(
+      await gitOutput(selectedPath, ["rev-parse", "--show-toplevel"]).catch(() => selectedPath),
+    );
+  }
+  const wholeWorkspaceStillAvailable = scope === "worktree" && fs.existsSync(task.originalRepoPath);
+  if (!fs.existsSync(task.worktreePath) && !wholeWorkspaceStillAvailable && !requestedWholeDiffPath) {
     return publicTask(task);
   }
-  if (!fs.existsSync(task.worktreePath)) {
-    return publicTask(task);
-  }
-  await refreshReview(task);
+  await refreshReview(task, scope, requestedWholeDiffPath);
   saveTask(task);
   return publicTask(task);
+}
+
+async function refreshWorkspaceReview(input: unknown): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid workspace review input.");
+  }
+  const selectedPath = path.resolve(requiredString(input.repositoryPath, "repository path"));
+  if (!fs.existsSync(selectedPath) || !fs.statSync(selectedPath).isDirectory()) {
+    throw new Error("The selected project folder is no longer available.");
+  }
+  const repositoryPath = path.resolve(await gitOutput(selectedPath, ["rev-parse", "--show-toplevel"]));
+  const reviewFiles = await gitWorkspaceReviewFiles(repositoryPath, "HEAD");
+  const baselineOid = await gitOutput(repositoryPath, ["rev-parse", "--short", "HEAD"]).catch(() => "HEAD");
+  return { reviewFiles, baselineOid };
 }
 
 async function handleRunnerPermission(
@@ -3137,8 +3195,6 @@ async function runRunnerTask(
   const task = getTask(taskIdValue);
   let run: RunnerProcess | null = null;
   const intent = intentPrompt ?? task.prompt;
-  const expectsFileChanges = promptLooksLikeFileChange(intent);
-  const enabledToolsForRun = taskEnabledTools(task);
   try {
     const { providers, selected } = await resolveSelectedModel();
     if (!taskStillRunning(task)) {
@@ -3151,22 +3207,7 @@ async function runRunnerTask(
     task.model = selected;
     applyTaskPolicyMetadata(task);
     saveTask(task);
-    if (expectsFileChanges && !canSatisfyFileChangeContract(enabledToolsForRun)) {
-      emit({
-        type: "required_tool.failed",
-        taskId: task.id,
-        requirement: "file_change",
-        reason: "file_tools_disabled",
-        requiredTools: requiredFileChangeTools,
-        attemptedTools: [],
-        attempt: 0,
-        detail: "File creation tools are disabled for this run.",
-      });
-      failTask(task, "File creation tools are disabled for this run.");
-      return;
-    }
     const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
-    const workspacePathForRun = task.worktreePath && fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
     const promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(task, selected);
     if (!taskStillRunning(task)) {
@@ -3178,12 +3219,6 @@ async function runRunnerTask(
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; toolKind?: RunnerToolId; finished: boolean }>();
     let delegatedToWorktree = false;
-    let fileCreationToolRequested = false;
-    let fileCreationToolSucceeded = false;
-    let requiredToolAttempt = 1;
-    const fileChangingToolCallIds = new Set<string>();
-    const fileChangingToolsAttempted = new Set<RunnerToolId>();
-    let assistantTextForCurrentAttempt = "";
     let completed = false;
     let resolveCompletion!: () => void;
     let rejectCompletion!: (error: Error) => void;
@@ -3226,32 +3261,12 @@ async function runRunnerTask(
 
     const emitAssistantText = (text: string, at?: string, endedAt?: string) => {
       if (!text || text.trim() === "Ready for review.") return;
-      assistantTextForCurrentAttempt += text;
       emit({ type: "assistant.delta", taskId: task.id, text, at, endedAt });
     };
 
     const emitReasoningText = (text: string, at?: string, endedAt?: string) => {
       if (!text || task.reasoningMode !== "reasoning") return;
       emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at, endedAt });
-    };
-
-    const attemptedFileChangeTools = () => requiredFileChangeTools.filter((tool) => fileChangingToolsAttempted.has(tool));
-
-    const emitRequiredToolFailure = (
-      reason: RequiredToolContractReason,
-      detail: string,
-      attempt = requiredToolAttempt,
-    ) => {
-      emit({
-        type: "required_tool.failed",
-        taskId: task.id,
-        requirement: "file_change",
-        reason,
-        requiredTools: requiredFileChangeTools,
-        attemptedTools: attemptedFileChangeTools(),
-        attempt,
-        detail,
-      });
     };
 
     const ensureToolRun = (
@@ -3310,11 +3325,6 @@ async function runRunnerTask(
               : "edit";
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
-        if (runnerToolKind && isFileChangingTool(runnerToolKind)) {
-          fileCreationToolRequested = true;
-          fileChangingToolCallIds.add(toolCallId);
-          fileChangingToolsAttempted.add(runnerToolKind);
-        }
         ensureToolRun(toolCallId, command, kind, commandClass, runnerToolKind);
         return;
       }
@@ -3350,20 +3360,6 @@ async function runRunnerTask(
           const errorCode = typeof event.errorCode === "string" ? event.errorCode as ToolErrorCode : undefined;
           const errorMessage = typeof event.errorMessage === "string" ? event.errorMessage : undefined;
           const durationMs = typeof event.durationMs === "number" && Number.isFinite(event.durationMs) ? event.durationMs : undefined;
-          if (
-            (
-              fileChangingToolCallIds.has(toolCallId) ||
-              current.toolKind === "write" ||
-              current.toolKind === "edit" ||
-              current.toolKind === "command" ||
-              current.kind === "edit" ||
-              current.command.startsWith("write ") ||
-              current.command.startsWith("edit ")
-            ) &&
-            exitCode === 0
-          ) {
-            fileCreationToolSucceeded = true;
-          }
           emit({
             type: "command.finished",
             taskId: task.id,
@@ -3491,46 +3487,6 @@ async function runRunnerTask(
       return;
     }
 
-    if (expectsFileChanges && !fileCreationToolRequested) {
-      const previousAssistantText = compactHistoryText(assistantTextForCurrentAttempt.trim(), 1800);
-      assistantTextForCurrentAttempt = "";
-      armCompletion();
-      emitRequiredToolFailure("missing_tool_call", "The first runner attempt ended without a file-changing tool call.", requiredToolAttempt);
-      requiredToolAttempt = 2;
-      await runnerRequest<void>(run, `/session/${encodeURIComponent(session.id)}/prompt_async`, {
-        method: "POST",
-        body: {
-          parts: [
-            {
-              type: "text",
-              text: buildRequiredFileChangeRetryPrompt({
-                originalUserRequest: compactHistoryText(intent, 1800),
-                previousAssistantText,
-                enabledTools: enabledToolsForRun,
-                workspacePath: workspacePathForRun,
-              }),
-            },
-          ],
-        },
-      });
-      await waitForCompletion();
-
-      if (run.abortController.signal.aborted || !taskStillRunning(task)) {
-        return;
-      }
-
-      if (delegatedToWorktree) {
-        return;
-      }
-
-      const blocker = !fileCreationToolRequested ? cannotCreateFileBlocker(assistantTextForCurrentAttempt) : null;
-      if (blocker) {
-        emitRequiredToolFailure("agent_reported_blocker", blocker, requiredToolAttempt);
-        failTask(task, `Umbratic runner could not make requested file changes. ${blocker}`);
-        return;
-      }
-    }
-
     task.latestTest = {
       command: `umbratic runner session ${session.id}`,
       output: "Umbratic runner session completed",
@@ -3540,15 +3496,6 @@ async function runRunnerTask(
     };
     const reviewFiles = await refreshReview(task);
     if (reviewFiles.length === 0) {
-      if (expectsFileChanges) {
-        const summary = noReviewFailureSummary({
-          toolRequested: fileCreationToolRequested,
-          toolSucceeded: fileCreationToolSucceeded,
-        });
-        emitRequiredToolFailure(summary.reason, summary.detail, requiredToolAttempt);
-        failTask(task, requiredToolFailureMessage(summary));
-        return;
-      }
       task.state = "completed";
       saveTask(task);
       emit({ type: "assistant.done", taskId: task.id });
@@ -3796,7 +3743,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     if (!existingTask.agentBranch) {
       existingTask.workspaceMode = "local";
       existingTask.worktreePath = refreshed.rootPath;
-      existingTask.baselineFiles = undefined;
     }
     existingTask.pendingPrompt = undefined;
     existingTask.diagnosticLogPath = undefined;
@@ -4290,13 +4236,6 @@ async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
   return openPathInIde(ideId, repositoryPath, "folder");
 }
 
-function codeLikeIdeArgs(targetPath: string, targetKind: "file" | "folder", workspacePath?: string): string[] {
-  if (targetKind === "file" && workspacePath) {
-    return ["--reuse-window", workspacePath, "--goto", targetPath];
-  }
-  return targetKind === "file" ? [targetPath] : ["--new-window", targetPath];
-}
-
 async function openPathInIde(
   ideId: string,
   targetPath: string,
@@ -4322,14 +4261,7 @@ async function openPathInIde(
     return launchCommand(command, codeLikeIdeArgs(targetPath, targetKind, workspacePath));
   }
   if (ideId === "code" && macApplicationExists("Visual Studio Code")) {
-    return launchCommand(
-      "open",
-      targetKind === "file" && workspacePath
-        ? ["-a", "Visual Studio Code", workspacePath, "--args", "--reuse-window", "--goto", targetPath]
-        : targetKind === "file"
-          ? ["-a", "Visual Studio Code", targetPath]
-        : ["-na", "Visual Studio Code", "--args", "--new-window", targetPath],
-    );
+    return launchCommand("open", macCodeLikeIdeArgs(targetPath, targetKind, workspacePath));
   }
   const error = await shell.openPath(targetPath);
   return error ? { ok: false, message: error } : { ok: true };
@@ -4370,13 +4302,16 @@ function isTrustedDevUrl(url: URL): boolean {
 }
 
 function trustedSender(event: IpcMainInvokeEvent): boolean {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+    return false;
+  }
   const rawUrl = event.senderFrame?.url || event.sender.getURL();
   try {
     const url = new URL(rawUrl);
     if (isDev) {
       return isTrustedDevUrl(url);
     }
-    return url.protocol === "file:";
+    return url.href === pathToFileURL(path.resolve(__dirname, "../../dist/index.html")).href;
   } catch {
     return false;
   }
@@ -4411,7 +4346,7 @@ function allowedAppUrl(rawUrl: string): boolean {
     if (isDev) {
       return isTrustedDevUrl(url);
     }
-    return url.protocol === "file:";
+    return url.href === pathToFileURL(path.resolve(__dirname, "../../dist/index.html")).href;
   } catch {
     return false;
   }
@@ -4520,6 +4455,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:update-notes", (input) => updateNotes(input));
   handleIpc("umbratic:get-task", (input) => publicTaskById(input));
   handleIpc("umbratic:refresh-task-review", (input) => refreshTaskReview(input));
+  handleIpc("umbratic:refresh-workspace-review", (input) => refreshWorkspaceReview(input));
   handleIpc("umbratic:search-files", (input) => searchRepositoryFiles(input));
   handleIpc("umbratic:pick-repository", () => pickRepository());
   handleIpc("umbratic:pick-attachment-files", (input) => pickAttachmentFiles(input));
@@ -4530,7 +4466,10 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
   handleIpc("umbratic:get-backend-status", () => getBackendStatus());
   handleIpc("umbratic:get-capability-probes", (input) => getCapabilityProbes(input));
-  handleIpc("umbratic:get-model-endpoint-settings", () => readModelEndpointSettings());
+  handleIpc("umbratic:get-model-endpoint-settings", () => {
+    const settings = readModelEndpointSettings();
+    return { ...settings, secret: "", headers: settings.headers.map((header) => ({ name: header.name, value: "" })) };
+  });
   handleIpc("umbratic:save-model-endpoint-settings", (input) =>
     saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),
   );

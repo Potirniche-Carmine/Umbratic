@@ -271,6 +271,7 @@ async function editReplaceTool(ctx: ToolContext, input: Record<string, unknown>)
     typeof input.new_string === "string" ? input.new_string :
     "";
   if (!oldText) throw toolError("validation_error", "invalid_arguments", "edit replace mode requires oldText");
+  if (oldText === newText) throw toolError("validation_error", "invalid_arguments", "edit replacement must change the file");
   const { absolute, relative } = resolveWorkspacePath(ctx.cwd, filePath);
   const current = ensureReadableText(absolute);
   if (!current.includes(oldText)) {

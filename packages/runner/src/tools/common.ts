@@ -94,6 +94,13 @@ export function pathInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function realPathInside(root: string, candidate: string): boolean {
+  const realRoot = fs.realpathSync.native(path.resolve(root));
+  let existing = path.resolve(candidate);
+  while (!fs.existsSync(existing) && path.dirname(existing) !== existing) existing = path.dirname(existing);
+  return pathInside(realRoot, fs.realpathSync.native(existing));
+}
+
 function workspaceAliasRelativePath(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, "/");
   if (normalized === "/workspace" || normalized === "/workspace/") return ".";
@@ -119,6 +126,9 @@ export function resolveWorkspacePath(cwd: string, filePath: string): { absolute:
   }
   if (!pathInside(cwd, absolute)) {
     throw toolError("policy_blocked", "workspace_boundary", `Refusing path outside workspace: ${filePath}`);
+  }
+  if (!realPathInside(cwd, absolute)) {
+    throw toolError("policy_blocked", "workspace_boundary", `Refusing symlink or junction outside workspace: ${filePath}`);
   }
   const relative = normalizeRelativePath(path.relative(cwd, absolute));
   if (isBlockedPath(relative)) throw toolError("policy_blocked", "blocked_path", `Refusing blocked path: ${relative}`);

@@ -84,7 +84,7 @@ export const toolSpecs: ModelToolSpec[] = [
     type: "function",
     function: {
       name: "edit",
-      description: "Edit workspace files after permission. Use mode replace for one exact replacement, or mode patch for a strict multi-file patch using *** Begin Patch / *** Add File / *** Update File / *** Delete File / *** End Patch.",
+      description: "Edit workspace files after permission. Call with one valid JSON object, never prose or a raw patch. Prefer a focused replacement with filePath, oldText, and newText; oldText must exactly occur in the file. For a strict multi-file patch, set mode to patch and provide a complete patch in patch using *** Begin Patch / *** Add File / *** Update File / *** Delete File / *** End Patch.",
       parameters: {
         type: "object",
         properties: {
@@ -94,7 +94,7 @@ export const toolSpecs: ModelToolSpec[] = [
           newText: { type: "string" },
           patch: { type: "string" },
         },
-        required: ["mode"],
+        required: [],
       },
     },
   },
@@ -256,9 +256,10 @@ function parseArguments(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value !== "string") throw toolError("validation_error", "invalid_arguments", "Tool arguments must be a JSON object.");
+  const normalized = value.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1] ?? value;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(value) as unknown;
+    parsed = JSON.parse(normalized) as unknown;
   } catch {
     throw toolError("validation_error", "invalid_arguments", "Tool arguments must be valid JSON.");
   }
@@ -266,6 +267,44 @@ function parseArguments(value: unknown): Record<string, unknown> {
     throw toolError("validation_error", "invalid_arguments", "Tool arguments must decode to a JSON object.");
   }
   return parsed as Record<string, unknown>;
+}
+
+function validateToolArguments(name: string, input: Record<string, unknown>): void {
+  const allowed: Record<string, readonly string[]> = {
+    read: ["filePath", "offset", "limit", "depth"],
+    write: ["filePath", "content"],
+    edit: ["mode", "filePath", "oldText", "newText", "patch"],
+    search: ["query", "limit"],
+    command: ["command", "timeoutMs"],
+    read_skill: ["skillId", "resource", "offset", "limit"],
+    retrieve_context: ["hash", "offset", "limit"],
+  };
+  const keys = allowed[name];
+  if (!keys) return;
+  const unknown = Object.keys(input).find((key) => !keys.includes(key));
+  if (unknown) throw toolError("validation_error", "invalid_arguments", `${name} does not accept argument ${unknown}`);
+  const requireString = (key: string, allowEmpty = false) => {
+    if (typeof input[key] !== "string" || (!allowEmpty && !(input[key] as string).trim())) {
+      throw toolError("validation_error", "invalid_arguments", `${name} requires string argument ${key}`);
+    }
+  };
+  if (name === "read") requireString("filePath");
+  if (name === "write") { requireString("filePath"); requireString("content", true); }
+  if (name === "search") requireString("query");
+  if (name === "command") requireString("command");
+  if (name === "read_skill") requireString("skillId");
+  if (name === "retrieve_context") requireString("hash");
+  if (name === "edit") {
+    const mode = input.mode ?? "replace";
+    if (mode !== "replace" && mode !== "patch") throw toolError("validation_error", "invalid_arguments", "edit mode must be replace or patch");
+    if (mode === "patch") requireString("patch");
+    else { requireString("filePath"); requireString("oldText"); requireString("newText", true); }
+  }
+  for (const key of ["offset", "limit", "depth", "timeoutMs"]) {
+    if (input[key] !== undefined && (typeof input[key] !== "number" || !Number.isFinite(input[key]) || (input[key] as number) < 0)) {
+      throw toolError("validation_error", "invalid_arguments", `${name} argument ${key} must be a non-negative number`);
+    }
+  }
 }
 
 export function canonicalToolName(name: string): string {
@@ -352,6 +391,7 @@ export async function runTool(ctx: ToolContext, emit: (event: UmbraticRunnerEven
   emitStage("normalize_tool_call", "started");
   try {
     input = parseArguments(toolCall.arguments);
+    validateToolArguments(toolName, input);
   } catch (error) {
     argumentError = error;
   }

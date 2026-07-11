@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"umbratic-veil/internal/model"
 )
 
 type failingReader struct {
@@ -21,6 +23,26 @@ func TestDecodeChatInputAcceptsInput(t *testing.T) {
 	}
 	if len(input.Messages) != 1 || input.Messages[0].Role != "user" || input.Messages[0].Content != "hello" {
 		t.Fatalf("unexpected messages: %#v", input.Messages)
+	}
+}
+
+func TestWorkspaceActionRequirement(t *testing.T) {
+	tests := []struct {
+		message string
+		want    string
+	}{
+		{"Can you create a hello world script and verify it works?", ActionChangeAndExecute},
+		{"Please fix the parser", ActionChange},
+		{"run the tests", ActionExecute},
+		{"How do I create a Python script?", ActionNone},
+		{"Explain the failing test", ActionNone},
+		{"Workspace tool results:\ncommand: ok", ActionNone},
+	}
+	for _, tt := range tests {
+		got := WorkspaceActionRequirement([]model.Message{{Role: "user", Content: tt.message}})
+		if got != tt.want {
+			t.Errorf("WorkspaceActionRequirement(%q) = %q, want %q", tt.message, got, tt.want)
+		}
 	}
 }
 

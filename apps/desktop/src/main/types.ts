@@ -1,4 +1,6 @@
 import type { ChildProcess } from "node:child_process";
+import type { ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
+import type { BackendUiEventInput } from "../shared/backendEvents";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "bypass";
@@ -256,11 +258,9 @@ export type TestResult = {
   completedAt: string;
 };
 
-export type ReviewFile = {
-  path: string;
-  status: "added" | "modified" | "deleted";
-  diff: string;
-};
+export type ReviewFile = NormalizedReviewFile;
+
+export type ReviewScope = "task" | "worktree";
 
 export type ChatAttachment = {
   path: string;
@@ -305,6 +305,9 @@ export type TaskInfo = {
   events: BackendUiEvent[];
   latestTest?: TestResult;
   reviewPatchHash?: string;
+  reviewScope?: ReviewScope;
+  reviewBaselineLabel?: string;
+  reviewBaselineOid?: string;
   patchHash?: string;
   error?: string;
 };
@@ -357,71 +360,7 @@ export type PermissionRequest = {
   cwd: string;
 };
 
-export type BackendEventMeta = { at?: string; endedAt?: string };
-
-export type BackendUiEvent = BackendEventMeta &
-(
-  | { type: "user.message"; taskId: string; text: string; attachedFiles?: ChatAttachment[] }
-  | { type: "assistant.delta"; taskId: string; text: string }
-  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
-  | { type: "assistant.done"; taskId: string }
-  | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
-  | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
-  | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | {
-      type: "command.finished";
-      taskId: string;
-      id: string;
-      exitCode: number | null;
-      status?: ToolResultStatus;
-      errorCode?: ToolErrorCode;
-      errorMessage?: string;
-      durationMs?: number;
-    }
-  | {
-      type: "context.compressed";
-      taskId: string;
-      toolCallId: string;
-      toolKind: string;
-      kind: ContextContentKind;
-      strategy: ContextCompressionStrategy;
-      hash?: string;
-      originalBytes: number;
-      outputBytes: number;
-    }
-  | {
-      type: "context.retrieved";
-      taskId: string;
-      toolCallId: string;
-      hash: string;
-      offset: number;
-      bytesShown: number;
-      totalBytes: number;
-    }
-  | { type: "permission.requested"; taskId: string; request: PermissionRequest }
-  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
-  | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
-  | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
-  | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
-  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
-  | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
-  | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
-  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
-  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
-  | {
-      type: "required_tool.failed";
-      taskId: string;
-      requirement: RequiredToolContractRequirement;
-      reason: RequiredToolContractReason;
-      requiredTools: RunnerToolId[];
-      attemptedTools?: RunnerToolId[];
-      attempt?: number;
-      detail?: string;
-    }
-  | { type: "task.error"; taskId: string; message: string }
-);
+export type BackendUiEvent = BackendUiEventInput;
 
 export type ApproveResult =
   | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }

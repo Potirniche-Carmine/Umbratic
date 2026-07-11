@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -21,7 +22,14 @@ export function commandText(command: string, args: string[]): string {
 }
 
 export function pathInside(parent: string, child: string): boolean {
-  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  const resolvedParent = path.resolve(parent);
+  const resolvedChild = path.resolve(child);
+  const lexicalRelative = path.relative(resolvedParent, resolvedChild);
+  if (!(lexicalRelative === "" || (!!lexicalRelative && !lexicalRelative.startsWith("..") && !path.isAbsolute(lexicalRelative)))) return false;
+  if (!fs.existsSync(resolvedParent)) return true;
+  let existingChild = resolvedChild;
+  while (!fs.existsSync(existingChild) && path.dirname(existingChild) !== existingChild) existingChild = path.dirname(existingChild);
+  const relative = path.relative(fs.realpathSync.native(resolvedParent), fs.realpathSync.native(existingChild));
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 

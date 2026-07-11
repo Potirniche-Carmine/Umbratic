@@ -50,7 +50,11 @@ func DecodeBundle(reader io.Reader) (Bundle, []byte, error) {
 	if err := validateBundle(bundle); err != nil {
 		return Bundle{}, nil, err
 	}
-	return bundle, raw, nil
+	sanitized, err := json.Marshal(bundle)
+	if err != nil {
+		return Bundle{}, nil, fmt.Errorf("%w: cannot encode bundle", ErrInvalidBundle)
+	}
+	return bundle, sanitized, nil
 }
 
 func validateBundle(bundle Bundle) error {

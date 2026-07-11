@@ -331,7 +331,7 @@ func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 		}
 	}
 	if !sentDone {
-		return writeSSEDone(dst)
+		return ProviderError{}
 	}
 	return nil
 }

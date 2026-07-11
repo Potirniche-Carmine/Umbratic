@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { BackendUiEventInput } from "../shared/backendEvents";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
@@ -23,6 +24,7 @@ import {
   Hand,
   Loader2,
   MessageSquareX,
+  MessageSquareText,
   Monitor,
   Moon,
   PanelRight,
@@ -53,6 +55,9 @@ import {
   markdownPreview,
   parseMarkdown,
 } from "./composerText";
+import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
+import { ReviewPanel } from "./review/ReviewPanel";
+import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft } from "./review/reviewComments";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
@@ -254,11 +259,7 @@ type TestResult = {
   completedAt: string;
 };
 
-type ReviewFile = {
-  path: string;
-  status: "added" | "modified" | "deleted";
-  diff: string;
-};
+type ReviewFile = NormalizedReviewFile;
 
 type IdeChoice = {
   id: string;
@@ -309,6 +310,9 @@ type TaskInfo = {
   events: BackendUiEvent[];
   latestTest?: TestResult;
   reviewPatchHash?: string;
+  reviewScope?: "task" | "worktree";
+  reviewBaselineLabel?: string;
+  reviewBaselineOid?: string;
   patchHash?: string;
   error?: string;
 };
@@ -378,50 +382,7 @@ type PermissionRequest = {
   cwd: string;
 };
 
-type BackendEventMeta = { at?: string; endedAt?: string };
-type BackendUiEvent = BackendEventMeta &
-(
-  | { type: "user.message"; taskId: string; text: string; attachedFiles?: ChatAttachment[] }
-  | { type: "assistant.delta"; taskId: string; text: string }
-  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
-  | { type: "assistant.done"; taskId: string }
-  | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
-  | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: PermissionRequest["kind"]; commandClass?: CommandClass }
-  | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | {
-      type: "command.finished";
-      taskId: string;
-      id: string;
-      exitCode: number | null;
-      status?: ToolResultStatus;
-      errorCode?: ToolErrorCode;
-      errorMessage?: string;
-      durationMs?: number;
-    }
-  | { type: "permission.requested"; taskId: string; request: PermissionRequest }
-  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: ReviewFile[]; latestTest?: TestResult }
-  | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
-  | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
-  | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
-  | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
-  | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
-  | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
-  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
-  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
-  | {
-      type: "required_tool.failed";
-      taskId: string;
-      requirement: RequiredToolContractRequirement;
-      reason: RequiredToolContractReason;
-      requiredTools: RunnerToolId[];
-      attemptedTools?: RunnerToolId[];
-      attempt?: number;
-      detail?: string;
-    }
-  | { type: "task.error"; taskId: string; message: string }
-);
+type BackendUiEvent = BackendUiEventInput;
 
 type ApprovalCheck = {
   name: string;
@@ -488,7 +449,8 @@ type DesktopApi = {
   getNotes(): Promise<UserNotes>;
   updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
-  refreshTaskReview(input: { taskId: string }): Promise<TaskInfo | null>;
+  refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<TaskInfo | null>;
+  refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }>;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
   pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }>;
@@ -563,7 +525,7 @@ type DesktopApi = {
   cancelTask(input: { taskId: string }): Promise<void>;
   setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
-  onBackendEvent(callback: (event: unknown) => void): () => void;
+  onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
 };
 
 const previewProjectsKey = "umbratic-preview-projects";
@@ -1020,6 +982,24 @@ const composerTestReviewFiles: ReviewFile[] = [
       " }",
     ].join("\n"),
   },
+].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; diff: string }));
+
+const composerTestWholeDiffFiles: ReviewFile[] = [
+  ...composerTestReviewFiles,
+  normalizeReviewFile({
+    path: "apps/desktop/.env.example",
+    status: "modified",
+    diff: [
+      "diff --git a/apps/desktop/.env.example b/apps/desktop/.env.example",
+      "index 711bd13..fc94e20 100644",
+      "--- a/apps/desktop/.env.example",
+      "+++ b/apps/desktop/.env.example",
+      "@@ -2,2 +2,3 @@",
+      " UMBRATIC_LOG_LEVEL=info",
+      "+UMBRATIC_PREVIEW_PORT=5173",
+      " UMBRATIC_TELEMETRY=off",
+    ].join("\n"),
+  }),
 ];
 
 const composerTestTask: TaskInfo = {
@@ -1039,6 +1019,9 @@ const composerTestTask: TaskInfo = {
   createdAt: new Date(Date.now() - 20_000).toISOString(),
   changedFiles: composerTestReviewFiles.map((file) => file.path),
   reviewFiles: composerTestReviewFiles,
+  reviewScope: "task",
+  reviewBaselineLabel: "Chat changes",
+  reviewBaselineOid: "task start",
   events: composerTestEvents,
 };
 
@@ -1324,7 +1307,19 @@ const fallbackApi: DesktopApi = {
   getNotes: async () => readPreviewNotes(),
   updateNotes: async (input) => writePreviewNotes(input.content),
   getTask: async () => null,
-  refreshTaskReview: async () => null,
+  refreshTaskReview: async (input) => {
+    const scope = input.scope === "worktree" ? "worktree" : "task";
+    const reviewFiles = scope === "worktree" ? composerTestWholeDiffFiles : composerTestReviewFiles;
+    return {
+      ...composerTestTask,
+      changedFiles: reviewFiles.map((file) => file.path),
+      reviewFiles,
+      reviewScope: scope,
+      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Chat changes",
+      reviewBaselineOid: scope === "worktree" ? "HEAD" : "task start",
+    };
+  },
+  refreshWorkspaceReview: async () => ({ reviewFiles: composerTestWholeDiffFiles, baselineOid: "HEAD" }),
   searchFiles: async (input) =>
     [
       { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", match: "path" as const },
@@ -1557,12 +1552,6 @@ function IdeIcon({ icon }: { icon: IdeChoice["icon"] }) {
   if (icon === "finder") return <FinderLogo className="ideLogo" />;
   if (icon === "files") return <FolderOpen className="ideLogo" />;
   return <ExplorerLogo className="ideLogo" />;
-}
-
-function asBackendEvent(value: unknown): BackendUiEvent | null {
-  if (!value || typeof value !== "object" || !("type" in value)) return null;
-  const event = value as BackendUiEvent;
-  return typeof event.type === "string" ? event : null;
 }
 
 function isReviewReadyText(text: string): boolean {
@@ -2048,6 +2037,8 @@ function eventTitle(event: BackendUiEvent): string {
       return "required tool failed";
     case "task.error":
       return "task event";
+    default:
+      return "context";
   }
 }
 
@@ -2097,6 +2088,8 @@ function eventDetail(event: BackendUiEvent): string {
       return [event.requirement, event.reason, event.detail].filter(Boolean).join(" - ");
     case "task.error":
       return event.message;
+    default:
+      return "Workspace context updated.";
   }
 }
 
@@ -2113,10 +2106,7 @@ const emptyParsedDiff: ParsedDiff = { additions: 0, deletions: 0, rows: [] };
 const sidebarDefaultWidth = 230;
 const sidebarMinWidth = 168;
 const sidebarMaxWidth = 230;
-const reviewMinWidth = 430;
-const reviewCloseThreshold = 260;
-const reviewOverlayMaxWidth = 840;
-const reviewOpenRatio = 0.56;
+const reviewMinWidth = 360;
 const sidebarMaxRatio = 0.28;
 
 function parseHunkHeader(line: string): { oldStart: number; newStart: number } | null {
@@ -3168,6 +3158,7 @@ function App() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
   const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
+  const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(composerTestMode ? composerTestAttachments : []);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
@@ -3191,6 +3182,9 @@ function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
   const [reviewOffset, setReviewOffset] = useState(0);
+  const [reviewTargetPath, setReviewTargetPath] = useState<string | undefined>();
+  const [workspaceReview, setWorkspaceReview] = useState<{ reviewFiles: ReviewFile[]; baselineOid: string } | null>(null);
+  const [tasklessReviewScope, setTasklessReviewScope] = useState<"task" | "worktree">("task");
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
@@ -3235,6 +3229,7 @@ function App() {
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
   const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
   const [reviewWidth, setReviewWidth] = useState(520);
+  const [reviewHasSessionWidth, setReviewHasSessionWidth] = useState(false);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopPending, setStopPending] = useState(false);
@@ -3247,6 +3242,7 @@ function App() {
   const reviewAnimationRef = useRef<number | null>(null);
   const reviewOffsetRef = useRef(0);
   const reviewVelocityRef = useRef(0);
+  const reviewScopeRequestRef = useRef(0);
   const modalTriggerRef = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
   const skillsSaveSequenceRef = useRef(0);
@@ -3269,11 +3265,12 @@ function App() {
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
   const latestTaskId = task?.id;
-  const rawReviewFiles = task?.reviewFiles ?? emptyReviewFiles;
+  const rawReviewFiles = task?.reviewFiles ?? workspaceReview?.reviewFiles ?? emptyReviewFiles;
   const reviewFiles = useMemo(() => {
     const byPath = new Map<string, ReviewFile>();
     for (const file of rawReviewFiles) {
-      byPath.set(file.path, file);
+      const normalized = normalizeReviewFile(file);
+      byPath.set(normalized.path, normalized);
     }
     return Array.from(byPath.values());
   }, [rawReviewFiles]);
@@ -3308,7 +3305,7 @@ function App() {
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const isGenerating = task?.state === "running";
-  const canStart = prompt.trim().length > 0 && !busy && !isGenerating && !closedChatNotice;
+  const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo =
     !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
@@ -3504,13 +3501,21 @@ function App() {
 
   function setVisibleTask(nextTask: TaskInfo | null) {
     visibleTaskIdRef.current = nextTask?.id ?? null;
+    if (nextTask) setWorkspaceReview(null);
     setTask(nextTask);
   }
 
   function prepareVisibleTaskLoad(taskId: string | null) {
     visibleTaskIdRef.current = taskId;
+    setWorkspaceReview(null);
     setTask(null);
   }
+
+  useEffect(() => {
+    if (task) return;
+    setWorkspaceReview(null);
+    setTasklessReviewScope("task");
+  }, [repository?.rootPath]);
 
   useEffect(() => {
     writeAppearanceSettings(appearanceSettings);
@@ -3696,9 +3701,7 @@ function App() {
       }
       if (pendingBackendEvents.length) scheduleBackendEventFlush();
     };
-    const unsubscribe = api.onBackendEvent((rawEvent) => {
-      const event = asBackendEvent(rawEvent);
-      if (!event) return;
+    const unsubscribe = api.onBackendEvent((event) => {
       pendingBackendEvents.push(event);
       scheduleBackendEventFlush();
     });
@@ -3822,11 +3825,13 @@ function App() {
   useEffect(() => {
     if (!reviewOpen) return undefined;
     const resizeReview = () => {
-      setReviewWidth(wideReviewWidth());
+      setReviewWidth((current) => reviewHasSessionWidth
+        ? clamp(current, reviewMinWidthForViewport(), reviewMaxWidth())
+        : reviewMaxWidth());
     };
     window.addEventListener("resize", resizeReview);
     return () => window.removeEventListener("resize", resizeReview);
-  }, [reviewOpen]);
+  }, [reviewHasSessionWidth, reviewOpen]);
 
   useLayoutEffect(() => {
     const node = streamRef.current;
@@ -4540,11 +4545,16 @@ function App() {
     }
   }
 
-  async function refreshTaskReviewById(taskId: string, openWhenReady = false) {
+  async function refreshTaskReviewById(
+    taskId: string,
+    openWhenReady = false,
+    scope?: "task" | "worktree",
+    repositoryPath?: string,
+  ) {
     if (reviewRefreshRef.current) return;
     reviewRefreshRef.current = true;
     try {
-      const nextTask = await api.refreshTaskReview({ taskId });
+      const nextTask = await api.refreshTaskReview({ taskId, scope, repositoryPath });
       if (!nextTask) return;
       if (visibleTaskIdRef.current === nextTask.id) {
         setVisibleTask(nextTask);
@@ -4571,7 +4581,13 @@ function App() {
 
   async function refreshActiveReview() {
     if (!reviewOpen || !task || busy || task.state !== "review_ready") return;
-    await refreshTaskReviewById(task.id);
+    const scope = task.reviewScope ?? "task";
+    await refreshTaskReviewById(
+      task.id,
+      false,
+      scope,
+      scope === "worktree" ? repository?.rootPath : undefined,
+    );
   }
 
   async function pickRepository() {
@@ -4667,18 +4683,21 @@ function App() {
     }
   }
 
-  async function restoreChatRepository(chat: ChatRecord, repositoryId?: string) {
-    if (!chat.repositoryPath && !repositoryId) {
-      setRepository(null);
-      return;
-    }
+  async function restoreChatRepository(chat: ChatRecord, selectionSequence: number) {
+    // A chat's saved project is its only workspace authority. In particular, an
+    // unassigned chat must never inherit the project that was selected previously.
+    setRepository(null);
+    if (!chat.repositoryPath) return;
     try {
-      const nextRepository = await api.getRepository({ repositoryId, repositoryPath: chat.repositoryPath });
+      const nextRepository = await api.getRepository({ repositoryPath: chat.repositoryPath });
+      if (chatSelectionSequenceRef.current !== selectionSequence) return;
       if (nextRepository) {
         mergeProject(nextRepository);
         setRepository(nextRepository);
       }
     } catch (cause) {
+      if (chatSelectionSequenceRef.current !== selectionSequence) return;
+      setRepository(null);
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -4828,7 +4847,7 @@ function App() {
       setError(closedChatNotice);
       return;
     }
-    const trimmedPrompt = prompt.trim();
+    const trimmedPrompt = appendReviewFeedback(prompt, reviewPromptFeedback).trim();
     if (!trimmedPrompt) return;
     if (startTaskInFlightRef.current) return;
     startTaskInFlightRef.current = true;
@@ -4891,6 +4910,7 @@ function App() {
       upsertChatFromTask(nextTask);
       suppressDraftSaveBriefly();
       setPrompt("");
+      setReviewPromptFeedback([]);
       setAttachedFiles([]);
       setMention(null);
       setFileMatches([]);
@@ -5058,11 +5078,11 @@ function App() {
   }
 
   function reviewMaxWidth() {
-    return Math.max(reviewMinWidth, window.innerWidth - 32);
+    return Math.max(0, window.innerWidth - 32);
   }
 
-  function wideReviewWidth() {
-    return clamp(Math.round(window.innerWidth * reviewOpenRatio), reviewMinWidth, Math.min(reviewOverlayMaxWidth, reviewMaxWidth()));
+  function reviewMinWidthForViewport() {
+    return Math.min(reviewMinWidth, reviewMaxWidth());
   }
 
   function cancelReviewClose() {
@@ -5108,11 +5128,30 @@ function App() {
 
   function openReviewPanel(filePath?: string) {
     cancelReviewClose();
-    setReviewWidth(wideReviewWidth());
+    if (!reviewHasSessionWidth) setReviewWidth(reviewMaxWidth());
     setReviewOpen(true);
     animateReviewTo(0, reviewVelocityRef.current);
     if (filePath) {
+      setReviewTargetPath(filePath);
       setExpandedReviewPaths(new Set([filePath]));
+    }
+    if (task) {
+      const taskId = task.id;
+      const scope = task.reviewScope ?? "task";
+      const request = ++reviewScopeRequestRef.current;
+      void api.refreshTaskReview({ taskId, scope, repositoryPath: scope === "worktree" ? repository?.rootPath : undefined }).then((refreshed) => {
+        if (refreshed && visibleTaskIdRef.current === taskId && reviewScopeRequestRef.current === request) setTask(refreshed);
+      }).catch((cause) => {
+        if (reviewScopeRequestRef.current === request) setError(String(cause instanceof Error ? cause.message : cause));
+      });
+    } else if (repository?.kind === "git") {
+      const request = ++reviewScopeRequestRef.current;
+      setTasklessReviewScope("worktree");
+      void api.refreshWorkspaceReview({ repositoryPath: repository.rootPath }).then((refreshed) => {
+        if (reviewScopeRequestRef.current === request) setWorkspaceReview(refreshed);
+      }).catch((cause) => {
+        if (reviewScopeRequestRef.current === request) setError(String(cause instanceof Error ? cause.message : cause));
+      });
     }
   }
 
@@ -5145,6 +5184,69 @@ function App() {
 
   function openReviewReference(filePath: string) {
     openReviewPanel(filePath);
+  }
+
+  async function changeReviewScope(scope: "task" | "worktree") {
+    if (!task) {
+      if (tasklessReviewScope === scope && scope !== "worktree") return;
+      setTasklessReviewScope(scope);
+      if (scope === "task") {
+        setWorkspaceReview(null);
+        return;
+      }
+      if (!repository || repository.kind !== "git") return;
+      const request = ++reviewScopeRequestRef.current;
+      setError(null);
+      try {
+        const refreshed = await api.refreshWorkspaceReview({ repositoryPath: repository.rootPath });
+        if (reviewScopeRequestRef.current === request) setWorkspaceReview(refreshed);
+      } catch (cause) {
+        if (reviewScopeRequestRef.current === request) {
+          setTasklessReviewScope("task");
+          setError(String(cause instanceof Error ? cause.message : cause));
+        }
+      }
+      return;
+    }
+    if (task.reviewScope === scope && scope !== "worktree") return;
+    const previousTask = task;
+    const request = ++reviewScopeRequestRef.current;
+    setError(null);
+    setTask((current) => current && current.id === task.id ? {
+      ...current,
+      reviewScope: scope,
+      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Chat changes",
+      reviewBaselineOid: scope === "worktree" ? "HEAD" : "task start",
+    } : current);
+    try {
+      const refreshed = await api.refreshTaskReview({
+        taskId: task.id,
+        scope,
+        repositoryPath: scope === "worktree" ? repository?.rootPath : undefined,
+      });
+      if (refreshed && reviewScopeRequestRef.current === request) setTask(refreshed);
+    } catch (cause) {
+      if (reviewScopeRequestRef.current === request) {
+        setTask(previousTask);
+        setError(String(cause instanceof Error ? cause.message : cause));
+      }
+    }
+  }
+
+  function addReviewFeedbackToPrompt(comments: ReviewCommentDraft[]) {
+    const active = comments.filter((comment) => !comment.stale && comment.body.trim());
+    if (!active.length) return;
+    setReviewPromptFeedback((current) => {
+      const merged = new Map(current.map((comment) => [comment.id, comment]));
+      for (const comment of active) merged.set(comment.id, comment);
+      return [...merged.values()];
+    });
+    closeReviewPanel();
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const end = prompt.length;
+      textareaRef.current?.setSelectionRange(end, end);
+    });
   }
 
   async function approveMerge() {
@@ -5517,6 +5619,8 @@ function App() {
   }
 
   async function selectChat(chat: ChatRecord) {
+    const selectionSequence = chatSelectionSequenceRef.current + 1;
+    chatSelectionSequenceRef.current = selectionSequence;
     if (activeChatId === chat.id) {
       const node = streamRef.current;
       if (node) {
@@ -5524,11 +5628,10 @@ function App() {
         forceComposerBottomScrollRef.current = false;
         placeElementAtBottom(node);
       }
-      void restoreChatRepository(chat, task?.repositoryId);
+      void restoreChatRepository(chat, selectionSequence);
       return;
     }
-    const selectionSequence = chatSelectionSequenceRef.current + 1;
-    chatSelectionSequenceRef.current = selectionSequence;
+    void restoreChatRepository(chat, selectionSequence);
     if (activeChatId) void persistDraft(activeChatId, prompt, attachedFiles);
     suppressDraftSaveBriefly();
     const cachedEvents = chat.taskId ? compactBackendEvents(cachedEventsForTask(chat.taskId), 500) : [];
@@ -5562,7 +5665,6 @@ function App() {
         nextTask = (await api.refreshTaskReview({ taskId: nextTask.id })) ?? nextTask;
       }
       if (chatSelectionSequenceRef.current !== selectionSequence) return;
-      void restoreChatRepository(chat, nextTask?.repositoryId);
       if (!chat.taskId) {
         flushSync(() => {
           setVisibleTask(null);
@@ -5690,45 +5792,40 @@ function App() {
   }
 
   function beginReviewResize(event: React.PointerEvent<HTMLDivElement>) {
+    if (!event.isPrimary || event.button !== 0) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     cancelReviewClose();
+    setReviewHasSessionWidth(true);
     const startX = event.clientX;
     const startWidth = reviewWidth;
-    const maxWidth = reviewMaxWidth();
-    let lastX = startX;
-    let lastTime = performance.now();
-    let velocity = 0;
-    let latestWidth = startWidth;
     document.body.classList.add("isResizing");
-    const finish = () => {
+    const move = (moveEvent: PointerEvent) => {
+      if (!moveEvent.isPrimary || (moveEvent.buttons & 1) !== 1) {
+        stop();
+        return;
+      }
+      const nextWidth = startWidth - (moveEvent.clientX - startX);
+      setReviewWidth(clamp(nextWidth, reviewMinWidthForViewport(), reviewMaxWidth()));
+    };
+    const stop = () => {
+      setReviewWidth((current) => clamp(current, reviewMinWidthForViewport(), reviewMaxWidth()));
       document.body.classList.remove("isResizing");
       event.currentTarget.removeEventListener("pointermove", move);
       event.currentTarget.removeEventListener("pointerup", stop);
-    };
-    const move = (moveEvent: PointerEvent) => {
-      const rawWidth = startWidth - (moveEvent.clientX - startX);
-      const overshoot = rawWidth < reviewMinWidth ? rawWidth - reviewMinWidth : rawWidth > maxWidth ? rawWidth - maxWidth : 0;
-      const resisted = overshoot ? (overshoot * 0.35) / (1 + Math.abs(overshoot) / 160) : 0;
-      latestWidth = clamp(rawWidth - overshoot + resisted, reviewMinWidth - 52, maxWidth + 52);
-      setReviewWidth(latestWidth);
-      const now = performance.now();
-      velocity = (moveEvent.clientX - lastX) / Math.max((now - lastTime) / 1000, 0.016);
-      lastX = moveEvent.clientX;
-      lastTime = now;
-    };
-    const stop = () => {
-      const shouldClose = latestWidth < reviewCloseThreshold || velocity > 750;
-      if (shouldClose) {
-        closeReviewPanel();
-      } else {
-        setReviewOpen(true);
-        setReviewWidth((current) => clamp(current, reviewMinWidth, reviewMaxWidth()));
-      }
-      finish();
+      event.currentTarget.removeEventListener("pointercancel", stop);
     };
     event.currentTarget.addEventListener("pointermove", move);
     event.currentTarget.addEventListener("pointerup", stop, { once: true });
+    event.currentTarget.addEventListener("pointercancel", stop, { once: true });
+  }
+
+  function handleReviewResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const step = event.shiftKey ? 24 : 8;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setReviewHasSessionWidth(true);
+    setReviewWidth((width) => clamp(width + (event.key === "ArrowLeft" ? step : -step), reviewMinWidthForViewport(), reviewMaxWidth()));
   }
 
   function renderChatRow(chat: ChatRecord) {
@@ -5961,18 +6058,16 @@ function App() {
                 <span>{composerHeaderMeta}</span>
               </div>
               <div className="composerHeaderActions">
-                {(!reviewOpen || reviewClosing) ? (
-                  <button
-                    className="chromeButton composerReviewToggle"
-                    type="button"
-                    onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
-                    aria-pressed={reviewOpen && !reviewClosing}
-                    title={reviewClosing ? "Keep review open" : "Open review"}
-                  >
-                    <PanelRight size={15} />
-                  </button>
-                ) : null}
                 {renderIdePicker("composer")}
+                <button
+                  className="chromeButton composerReviewToggle"
+                  type="button"
+                  onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
+                  aria-pressed={reviewOpen && !reviewClosing}
+                  title={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                >
+                  <PanelRight size={15} />
+                </button>
               </div>
             </div>
             <div
@@ -6383,6 +6478,12 @@ function App() {
             </div>
           ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+            {reviewPromptFeedback.length ? (
+              <section className="composerReviewFeedback" aria-label="Review feedback attached to prompt">
+                <header><span><MessageSquareText size={14} /><strong>Review feedback</strong><small>{reviewPromptFeedback.length}</small></span><button type="button" onClick={() => setReviewPromptFeedback([])} aria-label="Remove all review feedback"><X size={13} /></button></header>
+                <div>{reviewPromptFeedback.map((comment) => <article key={comment.id}><span><span><strong>{comment.filePath}</strong><small>{reviewCommentLineLabel(comment)}</small></span><code>{comment.excerpt || "Blank line"}</code><p>{comment.body}</p></span><button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={12} /></button></article>)}</div>
+              </section>
+            ) : null}
             {promptReferenceMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
@@ -6485,137 +6586,27 @@ function App() {
       </main>
 
       <aside className="reviewSidebar">
-        <div className="reviewResizeHandle" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuemin={reviewMinWidth} aria-valuemax={reviewMaxWidth()} aria-valuenow={Math.round(reviewWidth)} aria-label="Review width" onPointerDown={beginReviewResize} onKeyDown={(event) => { const step = event.shiftKey ? 24 : 8; if (event.key === "ArrowLeft") { event.preventDefault(); setReviewWidth((width) => clamp(width + step, reviewMinWidth, reviewMaxWidth())); } if (event.key === "ArrowRight") { event.preventDefault(); setReviewWidth((width) => clamp(width - step, reviewMinWidth, reviewMaxWidth())); } }} />
-        <section className="panel reviewPanel">
-          <div className="reviewTopbar">
-            <button className="reviewTextButton reviewHideButton" type="button" onClick={closeReviewPanel} title="Hide review">
-              <span>Hide</span>
-              <PanelRight size={13} />
-            </button>
-            <span className="reviewChangeSummary">
-              <FileText size={15} />
-              <strong>Review</strong>
-              {reviewFiles.length ? (
-                <span className="reviewStats">
-                  <span>{reviewFiles.length} file{reviewFiles.length === 1 ? "" : "s"}</span>
-                  <span className="additions">+{reviewTotals.additions}</span>
-                  <span className="deletions">-{reviewTotals.deletions}</span>
-                </span>
-              ) : null}
-            </span>
-            <div className="reviewTopActions">
-              <button className="reviewTextButton" type="button" onClick={undoTask} disabled={!canUndo} title="Undo this chat's changes">
-                <span>Undo</span>
-                <Undo2 size={13} />
-              </button>
-            </div>
-          </div>
-
-          {reviewFiles.length ? (
-            <div className="diffWorkspace">
-              <div className="changedFiles">
-                {reviewFiles.map((file) => {
-                  const stats = reviewDiffs.get(file.path) ?? emptyParsedDiff;
-                  const expanded = expandedReviewPaths.has(file.path);
-                  return (
-                    <article className={`reviewFile status-${file.status} ${expanded ? "expanded" : ""}`} key={file.path}>
-                      <div className={`reviewFileHeader ${expanded ? "active" : ""}`}>
-                        <button
-                          className="reviewFileToggle"
-                          type="button"
-                          onClick={() => toggleReviewFile(file.path)}
-                          aria-expanded={expanded}
-                          aria-label={`${file.path} ${file.status} ${formatDiffStats(stats)}`}
-                        >
-                          <span className="changedFileMeta">
-                            <span className="changedFilePath">{file.path}</span>
-                          </span>
-                          <span className="changeStats" aria-label={formatDiffStats(stats)}>
-                            <span className="additions">+{stats.additions}</span>
-                            <span className="deletions">-{stats.deletions}</span>
-                          </span>
-                        </button>
-                        <button
-                          className="openReviewFileButton"
-                          type="button"
-                          onClick={() => openReviewFile(file.path)}
-                          disabled={!canOpenIde || file.status === "deleted"}
-                          title={
-                            file.status === "deleted"
-                              ? "Deleted files cannot be opened"
-                              : `Open ${file.path} in ${selectedIde.label}`
-                          }
-                        >
-                          <ExternalLink size={14} />
-                        </button>
-                        <button
-                          className="reviewFileChevronButton"
-                          type="button"
-                          onClick={() => toggleReviewFile(file.path)}
-                          aria-expanded={expanded}
-                          title={expanded ? "Collapse diff" : "Expand diff"}
-                        >
-                          <ChevronDown className="reviewFileChevron" size={15} />
-                        </button>
-                      </div>
-                      {expanded ? (
-                        <div className="reviewFileDiff">
-                          <div className="diffRows">
-                            {stats.rows.length ? (
-                              <div className="diffRowsInner">
-                                {stats.rows.map((row, index) => (
-                                  <div className={`diffRow ${row.kind}`} key={`${index}-${row.oldLine ?? ""}-${row.newLine ?? ""}`}>
-                                    <span className="diffLineNumber oldLine">{row.oldLine ?? ""}</span>
-                                    <span className="diffLineNumber newLine">{row.newLine ?? ""}</span>
-                                    <span className="diffMarker" aria-hidden="true" />
-                                    <code>{row.content || " "}</code>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <Empty label="No text diff available" />
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <Empty label={reviewEmptyLabel} />
-          )}
-
-          {task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged" ? (
-            <div className="reviewFooter">
-              <div className="approvalActions">
-                <button className="rejectAction" type="button" disabled={!canUndo} onClick={undoTask}>
-                  <X size={15} />
-                  Reject changes
-                </button>
-                <button className="primaryAction" type="button" disabled={!canApprove} onClick={approveMerge}>
-                  <Check size={15} />
-                  Accept
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {approvalChecks.length ? (
-            <div className="checkList">
-              {approvalChecks.map((check) => (
-                <div className={`checkRow ${check.status}`} key={check.name}>
-                  <ApprovalIcon status={check.status} />
-                  <span>
-                    <strong>{check.name}</strong>
-                    {check.detail ? <em>{check.detail}</em> : null}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          </section>
+        <ReviewPanel
+          files={reviewFiles}
+          initialSelectedPath={reviewTargetPath}
+          taskId={task?.id ?? `workspace:${repository?.rootPath ?? "none"}`}
+          patchHash={task?.reviewPatchHash}
+          scope={task?.reviewScope ?? tasklessReviewScope}
+          canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
+          canOpenIde={canOpenIde}
+          canUndo={canUndo}
+          canApprove={canApprove}
+          selectedIdeLabel={selectedIde.label}
+          approvalVisible={task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged"}
+          onClose={closeReviewPanel}
+          onUndo={undoTask}
+          onApprove={approveMerge}
+          onOpenFile={openReviewFile}
+          onScopeChange={changeReviewScope}
+          onResizePointerDown={beginReviewResize}
+          onResizeKeyDown={handleReviewResizeKeyDown}
+          onAddFeedback={addReviewFeedbackToPrompt}
+        />
       </aside>
 
       {settingsOpen ? (

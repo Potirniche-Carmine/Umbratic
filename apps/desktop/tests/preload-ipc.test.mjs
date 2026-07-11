@@ -46,7 +46,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getNotes", [], "umbratic:get-notes", undefined],
     ["updateNotes", [{ content: "notes" }], "umbratic:update-notes"],
     ["getTask", [{ taskId: "task-1" }], "umbratic:get-task"],
-    ["refreshTaskReview", [{ taskId: "task-1" }], "umbratic:refresh-task-review"],
+    ["refreshTaskReview", [{ taskId: "task-1", scope: "worktree" }], "umbratic:refresh-task-review"],
+    ["refreshWorkspaceReview", [{ repositoryPath: "/repo" }], "umbratic:refresh-workspace-review"],
     ["searchFiles", [{ repositoryId: "repo", query: "app" }], "umbratic:search-files"],
     ["pickRepository", [], "umbratic:pick-repository", undefined],
     ["pickAttachmentFiles", [{ chatId: "chat-1" }], "umbratic:pick-attachment-files"],
@@ -99,7 +100,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   const unsubscribe = exposedApi.onBackendEvent((event) => received.push(event));
   assert.equal(listeners.has("umbratic:backend-event"), true);
   listeners.get("umbratic:backend-event")({}, { type: "assistant.done", taskId: "task-1" });
-  assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1" }]);
+  listeners.get("umbratic:backend-event")({}, { version: 2, type: "assistant.done", taskId: "task-1" });
+  assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1", version: 1 }]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);
 });
