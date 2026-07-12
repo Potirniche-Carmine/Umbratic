@@ -71,7 +71,10 @@ export function ReviewPanel({
   onAddFeedback(comments: ReviewCommentDraft[]): void;
 }) {
   const [selectedPath, setSelectedPath] = useState(initialSelectedPath ?? files[0]?.path ?? "");
-  const [viewMode, setViewMode] = useState<"split" | "unified">(initialViewMode);
+  const [viewMode, setViewMode] = useState<"split" | "unified">(() => {
+    const initialFile = files.find((file) => file.path === initialSelectedPath) ?? files[0];
+    return initialFile?.status === "added" ? "unified" : initialViewMode();
+  });
   // Wrapped lines are the readable default. Preserve an explicit opt-out from a
   // prior session, but do not make new reviews start with horizontal scrolling.
   const [wrap, setWrap] = useState(() => window.localStorage.getItem(wrapKey) !== "false");
@@ -98,6 +101,10 @@ export function ReviewPanel({
   useEffect(() => {
     if (initialSelectedPath && files.some((file) => file.path === initialSelectedPath)) setSelectedPath(initialSelectedPath);
   }, [files, initialSelectedPath]);
+
+  useEffect(() => {
+    if (selectedFile?.status === "added") setViewMode("unified");
+  }, [selectedFile?.path, selectedFile?.status]);
 
   useEffect(() => {
     setComments([]);
@@ -197,10 +204,10 @@ export function ReviewPanel({
         <strong className="reviewChangeSummary">Review</strong>
         <div className="reviewTopActions">
           <div className="reviewScopePicker">
-            <button type="button" className="reviewControlButton" onClick={() => setScopeOpen((open) => !open)} aria-expanded={scopeOpen}><span>{selectedScope === "worktree" ? "Whole diff" : "Chat changes"}</span><ChevronDown size={13} /></button>
-            {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Chat changes</strong><small>Changes made in this chat</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button>{canUseWorktreeScope ? <button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button> : null}</div> : null}
+            <button type="button" className="reviewControlButton" onClick={() => setScopeOpen((open) => !open)} aria-expanded={scopeOpen}><span>{selectedScope === "worktree" ? "Whole diff" : "Turn changes"}</span><ChevronDown size={13} /></button>
+            {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Turn changes</strong><small>Changes made in this model turn</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button>{canUseWorktreeScope ? <button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button> : null}</div> : null}
           </div>
-          <button className="reviewIconButton" type="button" onClick={onUndo} disabled={!canUndo} title="Undo this chat's changes"><Undo2 size={15} /></button>
+          <button className="reviewIconButton" type="button" onClick={onUndo} disabled={!canUndo} title="Undo this turn's changes"><Undo2 size={15} /></button>
           <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>
         </div>
       </header>
@@ -208,7 +215,7 @@ export function ReviewPanel({
         <div className="reviewWorkspace">
           <aside className="reviewFileNavigator" aria-label="Changed files">
             <div className="reviewNavigatorSummary"><span>{files.length} file{files.length === 1 ? "" : "s"}</span><span className="additions">+{totals.additions}</span><span className="deletions">-{totals.deletions}</span></div>
-            <div className="reviewNavigatorList">{files.map((file) => <button type="button" className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`} onClick={() => { setSelectedPath(file.path); setSelection(null); }} key={file.path}><span>{file.path}</span><small><span>{statusLabel(file.status)}</span><span className="additions">+{file.additions}</span><span className="deletions">-{file.deletions}</span>{comments.some((comment) => comment.filePath === file.path) ? <span>{comments.filter((comment) => comment.filePath === file.path).length} note</span> : null}</small></button>)}</div>
+            <div className="reviewNavigatorList">{files.map((file) => <button type="button" className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`} onClick={() => { setSelectedPath(file.path); setSelection(null); }} key={file.path}><span>{file.path}</span><small><span>{statusLabel(file.status)}</span><span className="additions">+{file.additions}</span><span className="deletions">-{file.deletions}</span></small></button>)}</div>
           </aside>
           <main className="reviewFileCanvas">
             <header className="reviewFileToolbar">

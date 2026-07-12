@@ -57,7 +57,7 @@ import {
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { ReviewPanel } from "./review/ReviewPanel";
-import { appendReviewFeedback, reviewCommentLineLabel, type ReviewCommentDraft } from "./review/reviewComments";
+import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
 type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
@@ -410,7 +410,7 @@ type ComposerActivitySegment =
   | { type: "command"; id: string; run: CommandRun };
 
 type ComposerTimelineItem =
-  | { type: "user"; id: string; text: string; attachedFiles: ChatAttachment[] }
+  | { type: "user"; id: string; text: string; rawText: string; reviewFeedback: ReviewFeedbackReference[]; attachedFiles: ChatAttachment[] }
   | {
       type: "activity";
       id: string;
@@ -810,6 +810,9 @@ const composerTestAttachments: ChatAttachment[] = [
 ];
 const composerTestPrompt =
   'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
+const composerTestVisiblePrompt = composerTestParams.has("reviewFeedback")
+  ? `${composerTestPrompt}\n\nPlease address this review feedback:\n\n**apps/desktop/src/renderer/review-panel.tsx · Lines 14-16**\n\n> <h2>Review</h2>\n> <p className="reviewHint">Inspect focused changes before accepting.</p>\n\nKeep this feedback easy to revisit from the conversation.`
+  : composerTestPrompt;
 const composerTestRepository: RepositoryInfo = {
   id: "preview-umbratic",
   name: "Umbratic",
@@ -824,7 +827,7 @@ const composerTestEvents: BackendUiEvent[] = [
   {
     type: "user.message",
     taskId: "composer-test",
-    text: composerTestPrompt,
+    text: composerTestVisiblePrompt,
     attachedFiles: composerTestAttachments,
     at: new Date(Date.now() - 18_000).toISOString(),
   },
@@ -1006,7 +1009,7 @@ const composerTestTask: TaskInfo = {
   id: "composer-test",
   chatId: "composer-test-chat",
   repositoryId: composerTestRepository.id,
-  prompt: composerTestPrompt,
+  prompt: composerTestVisiblePrompt,
   workspaceKind: "git",
   workspaceMode: "local",
   state: composerTestRunning ? "running" : "review_ready",
@@ -1020,7 +1023,7 @@ const composerTestTask: TaskInfo = {
   changedFiles: composerTestReviewFiles.map((file) => file.path),
   reviewFiles: composerTestReviewFiles,
   reviewScope: "task",
-  reviewBaselineLabel: "Chat changes",
+  reviewBaselineLabel: "Turn changes",
   reviewBaselineOid: "task start",
   events: composerTestEvents,
 };
@@ -1315,7 +1318,7 @@ const fallbackApi: DesktopApi = {
       changedFiles: reviewFiles.map((file) => file.path),
       reviewFiles,
       reviewScope: scope,
-      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Chat changes",
+      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Turn changes",
       reviewBaselineOid: scope === "worktree" ? "HEAD" : "task start",
     };
   },
@@ -1758,9 +1761,6 @@ function relativeChatAge(value: string): string {
 }
 
 function chatSubline(chat: ChatRecord): string {
-  if (chat.taskState === "approved") return "Changes accepted";
-  if (chat.taskState === "merged") return "Closed after approved merge";
-  if (chat.taskState === "rejected") return "Changes undone";
   return chat.updatedAt ? relativeChatAge(chat.updatedAt) : "";
 }
 
@@ -2553,7 +2553,8 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   const hasUserMessages = events.some((event) => event.type === "user.message");
 
   if (prompt && !hasUserMessages) {
-    items.push({ type: "user", id: "user-prompt", text: prompt, attachedFiles: [] });
+    const visiblePrompt = visibleReviewPrompt(prompt);
+    items.push({ type: "user", id: "user-prompt", text: visiblePrompt.text, rawText: prompt, reviewFeedback: visiblePrompt.feedback, attachedFiles: [] });
   }
 
   const flushAssistant = (streaming = false) => {
@@ -2595,11 +2596,25 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       activityEndedAt = undefined;
       return;
     }
+    const reasoningSegments = activitySegments.filter((segment) => segment.type === "reasoning");
+    const commandSegments = activitySegments.filter((segment) => segment.type === "command");
+    const combinedReasoning = reasoningSegments.length
+      ? [{
+          ...reasoningSegments[0],
+          text: reasoningSegments.map((segment) => segment.text.trim()).filter(Boolean).join("\n\n"),
+          durationMs: reasoningSegments.reduce<number | null>((total, segment) => (
+            segment.durationMs === null ? total : (total ?? 0) + segment.durationMs
+          ), null),
+          finished: reasoningSegments.every((segment) => segment.finished),
+        }]
+      : [];
     activityIndex += 1;
     items.push({
       type: "activity",
       id: `activity-${activityIndex}`,
-      segments: activitySegments,
+      // Some providers deliver their reasoning summary after tool events. Keep the
+      // explanation at the top of the activity so the UI reads as intent, then action.
+      segments: [...combinedReasoning, ...commandSegments],
       startedAt: activityStartedAt,
       endedAt: activityEndedAt,
       finished,
@@ -2635,10 +2650,13 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       flushReasoning();
       flushActivity();
       flushAssistant();
+      const visiblePrompt = visibleReviewPrompt(event.text);
       items.push({
         type: "user",
         id: `user-${items.length}-${event.text.length}`,
-        text: event.text,
+        text: visiblePrompt.text,
+        rawText: event.text,
+        reviewFeedback: visiblePrompt.feedback,
         attachedFiles: (event.attachedFiles ?? []).map(normalizeAttachment),
       });
       continue;
@@ -3160,6 +3178,7 @@ function App() {
   const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
+  const [reviewFeedbackPreview, setReviewFeedbackPreview] = useState<ReviewFeedbackReference[] | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(composerTestMode ? composerTestAttachments : []);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
@@ -3178,6 +3197,7 @@ function App() {
     composerTestMode ? new Set(composerTestReviewFiles.map((file) => file.path)) : new Set(),
   );
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set());
+  const autoOpenedActivityIdsRef = useRef<Set<string>>(new Set());
   const [expandedActivityToolIds, setExpandedActivityToolIds] = useState<Set<string>>(() => new Set());
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -3204,7 +3224,10 @@ function App() {
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
-  const [appearanceSettings, setAppearanceSettings] = useState(() => readAppearanceSettings());
+  const [appearanceSettings, setAppearanceSettings] = useState(() => {
+    const saved = readAppearanceSettings();
+    return composerTestMode && composerTestParams.get("theme") === "light" ? { ...saved, theme: "light" as const } : saved;
+  });
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
   const [availableFontFamilies, setAvailableFontFamilies] = useState<string[]>(() =>
     uniqueFonts([...defaultUiFontChoices, ...defaultMonoFontChoices]),
@@ -3552,6 +3575,11 @@ function App() {
 
   useEffect(() => {
     const activeActivityIds = new Set(composerItems.filter((item) => item.type === "activity").map((item) => item.id));
+    const activityKey = (id: string) => `${task?.id ?? "no-task"}:${id}`;
+    const activeActivityKeys = new Set(Array.from(activeActivityIds, activityKey));
+    const runningActivityIds = composerItems
+      .filter((item): item is Extract<ComposerTimelineItem, { type: "activity" }> => item.type === "activity" && !item.finished)
+      .map((item) => item.id);
     const activeActivityToolIds = new Set<string>();
     for (const item of composerItems) {
       if (item.type !== "activity") continue;
@@ -3564,10 +3592,22 @@ function App() {
     setExpandedActivityIds((current) => {
       let changed = false;
       const next = new Set(current);
+      for (const id of runningActivityIds) {
+        const key = activityKey(id);
+        if (autoOpenedActivityIdsRef.current.has(key)) continue;
+        autoOpenedActivityIdsRef.current.add(key);
+        next.add(id);
+        activityFollowScrollRef.current.set(id, true);
+        changed = true;
+      }
       for (const id of next) {
         if (activeActivityIds.has(id)) continue;
         next.delete(id);
         changed = true;
+      }
+      for (const key of autoOpenedActivityIdsRef.current) {
+        if (activeActivityKeys.has(key)) continue;
+        autoOpenedActivityIdsRef.current.delete(key);
       }
       return changed ? next : current;
     });
@@ -3581,7 +3621,7 @@ function App() {
       }
       return changed ? next : current;
     });
-  }, [composerItems]);
+  }, [composerItems, task?.id]);
 
   useEffect(() => {
     void refreshStatus();
@@ -5216,7 +5256,7 @@ function App() {
     setTask((current) => current && current.id === task.id ? {
       ...current,
       reviewScope: scope,
-      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Chat changes",
+      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Turn changes",
       reviewBaselineOid: scope === "worktree" ? "HEAD" : "task start",
     } : current);
     try {
@@ -6080,10 +6120,25 @@ function App() {
                       <article className="timelineMessage userMessage" key={item.id}>
                         <AttachmentPreviewList files={item.attachedFiles} mode="message" onOpen={openMessageAttachment} />
                         <div className="userMessageBubble">
-                          <MarkdownContent content={item.text} />
+                          {item.text ? <MarkdownContent content={item.text} /> : null}
+                          {item.reviewFeedback.length ? (
+                            <button
+                              className="messageReviewFeedback"
+                              type="button"
+                              onClick={() => {
+                                setReviewFeedbackPreview(item.reviewFeedback);
+                                setReviewFeedbackDialogOpen(true);
+                              }}
+                              aria-haspopup="dialog"
+                            >
+                              <span className="messageReviewFeedbackIcon"><MessageSquareText size={13} /></span>
+                              <span><strong>Review feedback</strong><small>{item.reviewFeedback.length} {item.reviewFeedback.length === 1 ? "comment" : "comments"}</small></span>
+                              <ChevronRight size={13} aria-hidden="true" />
+                            </button>
+                          ) : null}
                         </div>
                         <div className="messageActions">
-                          <button className="messageAction" type="button" onClick={() => void copyText(item.text)} title="Copy prompt">
+                          <button className="messageAction" type="button" onClick={() => void copyText(item.rawText)} title="Copy prompt">
                             <Copy size={14} />
                           </button>
                         </div>
@@ -6292,7 +6347,7 @@ function App() {
         <section className="promptDock">
           <div className={`floatingAttachmentTray ${attachedFiles.length || reviewPromptFeedback.length ? "hasAttachments" : ""}`}>
             <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
-            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => setReviewFeedbackDialogOpen(true)} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><small>{reviewPromptFeedback.length}</small><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
+            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><small>{reviewPromptFeedback.length}</small><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
           </div>
           <div className="promptControls">
             <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
@@ -6599,7 +6654,25 @@ function App() {
         />
       </aside>
 
-      {reviewFeedbackDialogOpen ? <div className="modalScrim reviewFeedbackScrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReviewFeedbackDialogOpen(false); }}><section className="reviewFeedbackDialog" role="dialog" aria-modal="true" aria-labelledby="review-feedback-title" onKeyDown={(event) => { if (event.key === "Escape") setReviewFeedbackDialogOpen(false); }}><header><span><MessageSquareText size={16} /><strong id="review-feedback-title">Review feedback</strong><small>{reviewPromptFeedback.length}</small></span><button type="button" onClick={() => setReviewFeedbackDialogOpen(false)} aria-label="Close review feedback"><X size={15} /></button></header><div>{reviewPromptFeedback.map((comment) => <article key={comment.id}><div><strong>{comment.filePath}</strong><small>{reviewCommentLineLabel(comment)}</small></div><p>{comment.body}</p><button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={13} /></button></article>)}</div><footer><button type="button" onClick={() => { setReviewPromptFeedback([]); setReviewFeedbackDialogOpen(false); }}>Remove all</button><button className="primaryAction" type="button" onClick={() => setReviewFeedbackDialogOpen(false)}>Done</button></footer></section></div> : null}
+      {reviewFeedbackDialogOpen ? (() => {
+        const readOnly = reviewFeedbackPreview !== null;
+        const dialogFeedback = readOnly
+          ? reviewFeedbackPreview.map((comment, index) => ({ ...comment, id: `sent-${index}` }))
+          : reviewPromptFeedback.map((comment) => ({ ...comment, lineLabel: reviewCommentLineLabel(comment) }));
+        const closeDialog = () => {
+          setReviewFeedbackDialogOpen(false);
+          setReviewFeedbackPreview(null);
+        };
+        return (
+          <div className="modalScrim reviewFeedbackScrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
+            <section className="reviewFeedbackDialog" role="dialog" aria-modal="true" aria-labelledby="review-feedback-title" onKeyDown={(event) => { if (event.key === "Escape") closeDialog(); }}>
+              <header><span><MessageSquareText size={16} /><strong id="review-feedback-title">Review feedback</strong><small>{dialogFeedback.length}</small></span><button type="button" onClick={closeDialog} aria-label="Close review feedback"><X size={15} /></button></header>
+              <div>{dialogFeedback.map((comment) => <article key={comment.id}><div><button className="reviewFeedbackFileLink" type="button" onClick={() => { closeDialog(); openReviewReference(comment.filePath); }} title={`Open ${comment.filePath} in review`}><strong>{comment.filePath}</strong></button><small>{comment.lineLabel}</small></div><p>{comment.body}</p>{!readOnly ? <button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={13} /></button> : null}</article>)}</div>
+              <footer>{!readOnly ? <button type="button" onClick={() => { setReviewPromptFeedback([]); closeDialog(); }}>Remove all</button> : null}<button className="primaryAction" type="button" onClick={closeDialog}>Done</button></footer>
+            </section>
+          </div>
+        );
+      })() : null}
 
       {settingsOpen ? (
         <div className="modalScrim" role="presentation">

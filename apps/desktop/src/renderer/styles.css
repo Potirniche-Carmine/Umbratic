@@ -1553,10 +1553,60 @@ pre {
   margin-top: 0;
 }
 
+.messageReviewFeedback {
+  display: flex;
+  width: min(320px, 100%);
+  min-height: 48px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 6%, var(--control-bg));
+  text-align: left;
+  transition: background 140ms ease, border-color 140ms ease, transform 100ms ease-out;
+}
+
+.messageReviewFeedback:first-child { margin-top: 0; }
+.messageReviewFeedback:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent) 11%, var(--control-bg));
+}
+.messageReviewFeedback:active { transform: scale(0.985); }
+.messageReviewFeedback:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.messageReviewFeedbackIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.messageReviewFeedback > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+
+.messageReviewFeedback strong { font-size: 11.5px; font-weight: 680; }
+.messageReviewFeedback small { color: var(--faint); font-size: 10px; }
+.messageReviewFeedback > svg { flex: 0 0 auto; color: var(--faint); }
+
 .timelineMessage.assistantMessage {
   width: 100%;
   max-width: 980px;
   padding: 0 0 0 18px;
+}
+
+.timelineActivity + .timelineMessage.assistantMessage {
+  margin-top: clamp(-16px, -1.5vh, -10px);
 }
 
 .timelineMessage.assistantMessage::before {
@@ -1712,7 +1762,7 @@ pre {
 .activityBodyInner {
   max-height: min(48vh, 420px);
   min-height: 0;
-  padding: 14px 10px 18px 0;
+  padding: 0 10px 0 0;
   overflow: hidden;
   overscroll-behavior: auto;
   scroll-behavior: auto;
@@ -1724,6 +1774,7 @@ pre {
 }
 
 .activityBody.open .activityBodyInner {
+  padding: 14px 10px 18px 0;
   overflow: auto;
 }
 
@@ -2051,7 +2102,7 @@ pre {
 
 .reviewSummaryTitle strong {
   overflow: hidden;
-  line-height: 1;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3821,6 +3872,19 @@ button.attachmentPreview:focus-visible {
 }
 
 .reviewFeedbackDialog article > div { gap: 8px; }
+.reviewFeedbackFileLink {
+  min-width: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  overflow: hidden;
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--accent) 74%, var(--text));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reviewFeedbackFileLink:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.reviewFeedbackFileLink:active { transform: scale(0.98); }
+.reviewFeedbackFileLink:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .reviewFeedbackDialog article small {
   padding: 2px 6px;
   border-radius: 999px;
@@ -5971,18 +6035,6 @@ button.attachmentPreview:focus-visible {
 
 .reviewHunk {
   min-width: max-content;
-}
-
-.reviewHunkHeader {
-  position: sticky;
-  left: 0;
-  width: max(100%, 760px);
-  padding: 5px 12px;
-  color: color-mix(in srgb, var(--accent) 66%, var(--muted));
-  border-block: 1px solid color-mix(in srgb, var(--accent) 15%, var(--line));
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
-  font-size: 10px;
-  user-select: text;
 }
 
 .reviewDiffRow {

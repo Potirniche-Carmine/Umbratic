@@ -259,6 +259,13 @@ function lineSimilarity(left: string, right: string): number {
   return (2 * intersection) / Math.max(1, a.length + b.length - 2);
 }
 
+function shouldShowIntraLineDiff(left: string, right: string): boolean {
+  const longerLength = Math.max(left.trim().length, right.trim().length);
+  const shorterLength = Math.min(left.trim().length, right.trim().length);
+  if (!longerLength || shorterLength / longerLength < 0.5) return false;
+  return lineSimilarity(left, right) >= 0.5;
+}
+
 function tokenize(value: string): string[] {
   return value.match(/\s+|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[^\w\s]/g) ?? (value ? [value] : []);
 }
@@ -354,7 +361,9 @@ export function alignHunk(hunk: DiffHunk): SideBySideRow[] {
   const rows: SideBySideRow[] = [];
   let index = 0;
   const appendPair = (pair: Pair) => {
-    const spans = pair.left && pair.right ? intraLineDiff(pair.left.content, pair.right.content) : undefined;
+    const spans = pair.left && pair.right && shouldShowIntraLineDiff(pair.left.content, pair.right.content)
+      ? intraLineDiff(pair.left.content, pair.right.content)
+      : undefined;
     const kind = pair.left && pair.right ? "modification" : pair.left ? "deletion" : "addition";
     rows.push({
       id: `${hunk.id}-${rows.length}`,
@@ -377,13 +386,13 @@ export function alignHunk(hunk: DiffHunk): SideBySideRow[] {
       index += 1;
       continue;
     }
-    const deletions: DiffLine[] = [];
-    const additions: DiffLine[] = [];
-    while (hunk.lines[index]?.origin === "deletion") deletions.push(hunk.lines[index++]);
-    while (hunk.lines[index]?.origin === "addition") additions.push(hunk.lines[index++]);
-    if (!deletions.length && hunk.lines[index]?.origin === "addition") {
-      while (hunk.lines[index]?.origin === "addition") additions.push(hunk.lines[index++]);
-    }
+    // Structured review records are not guaranteed to preserve Git's usual
+    // deletion-before-addition ordering. Treat the entire changed block as one
+    // replacement so semantically matching lines still share a visual row.
+    const changedLines: DiffLine[] = [];
+    while (hunk.lines[index] && hunk.lines[index].origin !== "context") changedLines.push(hunk.lines[index++]);
+    const deletions = changedLines.filter((candidate) => candidate.origin === "deletion");
+    const additions = changedLines.filter((candidate) => candidate.origin === "addition");
     for (const pair of alignReplacementBlock(deletions, additions)) appendPair(pair);
   }
   return rows;

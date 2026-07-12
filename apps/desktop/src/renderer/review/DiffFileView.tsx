@@ -36,7 +36,6 @@ export function DiffFileView({
       </div>
       {hunks.map(({ hunk, rows }) => (
         <section className="reviewHunk" id={`review-hunk-${hunk.id}`} key={hunk.id}>
-          <div className="reviewHunkHeader">{hunk.header}</div>
           {viewMode === "split" ? rows.map((row) => (
             <React.Fragment key={row.id}>
               <DiffRow row={row} selection={selection} commenting={commenting} onSelect={onSelect} />

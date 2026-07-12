@@ -30,6 +30,22 @@ test("review feedback serialization uses visible source-side line labels and is 
   assert.equal(comments.appendReviewFeedback(output, [comment({ lineNumbers: [12, 14] })]), output);
 });
 
+test("serialized review feedback becomes display-only message metadata", () => {
+  const serialized = comments.appendReviewFeedback("Please tighten this loop.", [comment({ lineNumbers: [12, 14] })]);
+  const visible = comments.visibleReviewPrompt(serialized);
+  assert.equal(visible.text, "Please tighten this loop.");
+  assert.deepEqual(JSON.parse(JSON.stringify(visible.feedback)), [{
+    filePath: "src/app.ts",
+    lineLabel: "Lines 12, 14",
+    body: "Keep the gutters aligned when this wraps.",
+    excerpt: "const next = value;",
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(comments.visibleReviewPrompt("Please address this review feedback:\n\nordinary text"))), {
+    text: "Please address this review feedback:\n\nordinary text",
+    feedback: [],
+  });
+});
+
 test("review line labels collapse consecutive lines into ranges", () => {
   assert.equal(comments.reviewCommentLineLabel(comment({ lineNumbers: [4, 5, 6, 9] })), "Lines 4-6, 9");
 });

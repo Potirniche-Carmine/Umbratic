@@ -15,6 +15,18 @@ export type ReviewCommentDraft = {
   stale?: boolean;
 };
 
+export type ReviewFeedbackReference = {
+  filePath: string;
+  lineLabel: string;
+  body: string;
+  excerpt: string;
+};
+
+export type VisibleReviewPrompt = {
+  text: string;
+  feedback: ReviewFeedbackReference[];
+};
+
 export function reconcileReviewComments(comments: ReviewCommentDraft[], files: ReviewFile[], patchHash: string): ReviewCommentDraft[] {
   return comments.map((comment) => {
     const file = files.find((candidate) => candidate.path === comment.filePath);
@@ -72,4 +84,36 @@ export function appendReviewFeedback(prompt: string, comments: ReviewCommentDraf
   if (!feedback) return prompt;
   if (prompt.includes(feedback)) return prompt;
   return prompt.trim() ? `${prompt.trimEnd()}\n\n${feedback}` : feedback;
+}
+
+export function visibleReviewPrompt(value: string): VisibleReviewPrompt {
+  const marker = "Please address this review feedback:";
+  const markerIndex = value.lastIndexOf(marker);
+  if (markerIndex < 0 || (markerIndex > 0 && !value.slice(0, markerIndex).endsWith("\n\n"))) {
+    return { text: value, feedback: [] };
+  }
+  const serialized = value.slice(markerIndex + marker.length);
+  if (!serialized.startsWith("\n\n")) return { text: value, feedback: [] };
+  const rows = serialized.slice(2).split("\n\n---\n\n");
+  const feedback: ReviewFeedbackReference[] = [];
+  for (const row of rows) {
+    const firstBreak = row.indexOf("\n\n");
+    const heading = firstBreak >= 0 ? row.slice(0, firstBreak) : row;
+    const match = heading.match(/^\*\*(.+) · (Lines .+)\*\*$/);
+    if (!match || firstBreak < 0) return { text: value, feedback: [] };
+    let remainder = row.slice(firstBreak + 2);
+    let excerpt = "";
+    if (remainder.startsWith("> ")) {
+      const excerptEnd = remainder.indexOf("\n\n");
+      if (excerptEnd < 0) return { text: value, feedback: [] };
+      excerpt = remainder.slice(0, excerptEnd).replace(/^> ?/gm, "");
+      remainder = remainder.slice(excerptEnd + 2);
+    }
+    const body = remainder.trim();
+    if (!body) return { text: value, feedback: [] };
+    feedback.push({ filePath: match[1], lineLabel: match[2], body, excerpt });
+  }
+  return feedback.length
+    ? { text: value.slice(0, markerIndex).trimEnd(), feedback }
+    : { text: value, feedback: [] };
 }

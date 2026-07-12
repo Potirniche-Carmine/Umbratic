@@ -2848,7 +2848,8 @@ async function runnerPromptForTaskWithPermission(
   attachments: ChatAttachment[],
 ): Promise<RunnerPromptPart[]> {
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
-  if (task.workspaceMode === "local" && !task.agentBranch && !task.baselineFiles) {
+  const needsWorkspaceSnapshot = !task.agentBranch || !!task.worktreeRootTaskId;
+  if (needsWorkspaceSnapshot && !task.baselineFiles) {
     task.baselineFiles = snapshotFolder(rootPath);
     saveTask(task);
   }
@@ -2997,7 +2998,7 @@ async function gitWorkspaceReviewFiles(repositoryPath: string, baseline: string)
 }
 
 async function gitReviewFiles(task: TaskRecord, baseline = task.baseCommit, repositoryPath = task.worktreePath): Promise<ReviewFile[]> {
-  if (!taskUsesIsolatedWorktree(task) && baseline !== "HEAD") {
+  if (task.baselineFiles && baseline !== "HEAD") {
     return folderReviewFiles(task);
   }
   return gitWorkspaceReviewFiles(repositoryPath, baseline);
@@ -3036,7 +3037,7 @@ async function refreshReview(
   task.reviewFiles = reviewFiles;
   task.changedFiles = reviewFiles.map((file) => file.path);
   task.reviewScope = scope;
-  task.reviewBaselineLabel = scope === "worktree" ? "Whole diff" : "Chat changes";
+  task.reviewBaselineLabel = scope === "worktree" ? "Whole diff" : "Turn changes";
   task.reviewBaselineOid = scope === "worktree"
     ? await gitOutput(workspacePath, ["rev-parse", "--short", "HEAD"]).catch(() => "HEAD")
     : (task.workspaceKind === "folder" && !worktreeIsGit) || !taskUsesIsolatedWorktree(task)

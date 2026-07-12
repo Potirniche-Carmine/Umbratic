@@ -73,6 +73,22 @@ test("alignment pairs confident replacements, pads insertions, and reconstructs 
   assert.equal(rows[1].left.origin, "empty");
 });
 
+test("alignment pairs matching lines when structured hunks list additions first", () => {
+  const file = review.parseReviewPatch([
+    "diff --git a/hello.py b/hello.py",
+    "--- a/hello.py",
+    "+++ b/hello.py",
+    "@@ -1,1 +1,2 @@",
+    "+for _ in range(5):",
+    "+    print(\"Hello Carmine!\")",
+    "-print(\"Hello Carmine!\")",
+  ].join("\n"));
+  const rows = review.alignReviewFile(file);
+  assert.deepEqual(plain(rows.map((row) => row.kind)), ["addition", "modification"]);
+  assert.equal(rows[1].left.content, "print(\"Hello Carmine!\")");
+  assert.equal(rows[1].right.content, "    print(\"Hello Carmine!\")");
+});
+
 test("alignment keeps a blank-line replacement on one visual row", () => {
   const file = review.parseReviewPatch([
     "diff --git a/notes.md b/notes.md",
@@ -89,6 +105,21 @@ test("alignment keeps a blank-line replacement on one visual row", () => {
   assert.equal(rows[0].right.line, 10);
   assert.equal(rows[0].left.content, "");
   assert.equal(rows[0].right.content, "hello");
+});
+
+test("alignment avoids misleading intra-line fragments for asymmetric rewrites", () => {
+  const file = review.parseReviewPatch([
+    "diff --git a/plan.md b/plan.md",
+    "--- a/plan.md",
+    "+++ b/plan.md",
+    "@@ -1,1 +1,1 @@",
+    "-Title tag on every page",
+    "+The site already has solid SEO foundations in place: every content page carries a title tag and most pages include meta descriptions.",
+  ].join("\n"));
+  const rows = review.alignReviewFile(file);
+  assert.equal(rows[0].kind, "modification");
+  assert.equal(rows[0].left.spans, undefined);
+  assert.equal(rows[0].right.spans, undefined);
 });
 
 test("added, renamed, and binary metadata normalize safely", () => {

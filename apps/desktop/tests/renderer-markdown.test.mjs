@@ -192,6 +192,26 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "assistant",
   ]);
   assert.deepEqual(timeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  const delayedReasoningTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    events[2],
+    events[3],
+    events[4],
+    events[1],
+    events[5],
+  ])));
+  assert.deepEqual(delayedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  const repeatedReasoningTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.reasoning.delta", taskId: "task-1", text: "First thought.", at: "2026-01-01T00:00:01.000Z" },
+    events[2],
+    events[3],
+    events[4],
+    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Second thought.", at: "2026-01-01T00:00:05.500Z" },
+    events[5],
+  ])));
+  assert.deepEqual(repeatedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First thought.\n\nSecond thought.");
   const modelFacingPrompt = "Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nRun tests";
   const displayTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([events[0]], modelFacingPrompt)));
   assert.equal(displayTimeline.length, 1);
@@ -209,7 +229,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
       { type: "task.error", taskId: "task-1", message: "Runner turn failed.", at: "2026-01-01T00:00:01.000Z" },
     ], undefined, "failed"))),
     [
-      { type: "user", id: "user-0-11", text: "Do the work", attachedFiles: [] },
+      { type: "user", id: "user-0-11", text: "Do the work", rawText: "Do the work", reviewFeedback: [], attachedFiles: [] },
       { type: "assistant", id: "assistant-1", text: "I couldn't complete this request.\n\nRunner turn failed." },
     ],
   );
