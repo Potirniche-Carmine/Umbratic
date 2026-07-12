@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -166,20 +167,35 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 }
 
-func TestEngineeringChatSignalsRequiredWorkspaceEvidence(t *testing.T) {
-	modelClient := &fakeModelClient{}
-	server := NewServer(testConfig(), modelClient)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"Can you create a hello world script and verify it works?"}],"tools":[{"type":"function","function":{"name":"edit"}},{"type":"function","function":{"name":"command"}}]}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
+	tests := []struct {
+		path    string
+		message string
+		want    string
+	}{
+		{"/api/engineering/chat", "Can you create a hello world script and verify it works?", policy.ActionChangeAndExecute},
+		{"/api/engineering/chat", "can you write me a markdown with suggestions to improve it", policy.ActionChange},
+		{"/api/marketing/chat", "Create a launch brief file", policy.ActionChange},
+		{"/api/sales/chat", "Create a QBR deck", policy.ActionChange},
 	}
-	if got := rr.Header().Get(actionRequiredHeader); got != policy.ActionChangeAndExecute {
-		t.Fatalf("got action requirement %q", got)
+
+	for _, tt := range tests {
+		t.Run(tt.path+"/"+tt.want, func(t *testing.T) {
+			modelClient := &fakeModelClient{}
+			server := NewServer(testConfig(), modelClient)
+			body := fmt.Sprintf(`{"messages":[{"role":"user","content":%q}],"tools":[{"type":"function","function":{"name":"edit"}},{"type":"function","function":{"name":"command"}}]}`, tt.message)
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer test-token")
+			rr := httptest.NewRecorder()
+			server.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+			}
+			if got := rr.Header().Get(actionRequiredHeader); got != tt.want {
+				t.Fatalf("got action requirement %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

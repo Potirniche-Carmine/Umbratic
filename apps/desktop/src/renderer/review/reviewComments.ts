@@ -39,9 +39,21 @@ export function reviewCommentLines(comment: ReviewCommentDraft): number[] {
 }
 
 export function reviewCommentLineLabel(comment: ReviewCommentDraft): string {
-  const side = comment.side === "old" ? "old" : "new";
   const lines = reviewCommentLines(comment);
-  return lines.length === 1 ? `${side} line ${lines[0]}` : `${side} lines ${lines.join(", ")}`;
+  const groups: string[] = [];
+  let start = lines[0];
+  let end = lines[0];
+  for (const line of lines.slice(1)) {
+    if (line === end + 1) {
+      end = line;
+      continue;
+    }
+    groups.push(start === end ? String(start) : `${start}-${end}`);
+    start = line;
+    end = line;
+  }
+  if (start !== undefined) groups.push(start === end ? String(start) : `${start}-${end}`);
+  return `Lines ${groups.join(", ")}`;
 }
 
 export function serializeReviewComments(comments: ReviewCommentDraft[]): string {

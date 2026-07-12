@@ -77,11 +77,14 @@ export function ReviewPanel({
   const [wrap, setWrap] = useState(() => window.localStorage.getItem(wrapKey) !== "false");
   const [commenting, setCommenting] = useState(false);
   const [selection, setSelection] = useState<ReviewLineSelection | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [feedbackAdded, setFeedbackAdded] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const [comments, setComments] = useState<ReviewCommentDraft[]>([]);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [selectedScope, setSelectedScope] = useState(scope);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
+  const feedbackAddedTimerRef = useRef<number | null>(null);
   const actualPatchHash = patchHash || reviewPatchHash(files);
   const selectedIndex = Math.max(0, files.findIndex((file) => file.path === selectedPath));
   const selectedFile = files[selectedIndex] ?? files[0];
@@ -100,11 +103,16 @@ export function ReviewPanel({
     setComments([]);
     setSelection(null);
     setCommentBody("");
+    setFeedbackAdded(false);
   }, [taskId]);
 
+  useEffect(() => () => {
+    if (feedbackAddedTimerRef.current !== null) window.clearTimeout(feedbackAddedTimerRef.current);
+  }, []);
+
   useEffect(() => {
-    if (selection) commentRef.current?.focus();
-  }, [selection]);
+    if (editorOpen) commentRef.current?.focus();
+  }, [editorOpen]);
 
   useEffect(() => {
     setSelectedScope(scope);
@@ -141,8 +149,8 @@ export function ReviewPanel({
   const saveComment = () => {
     if (!selection || !selectedFile || !commentBody.trim()) return;
     const selectedLines = [...selection.lines].sort((left, right) => left - right);
-    setComments((current) => [...current, {
-      id: `review-${Date.now().toString(36)}-${current.length}`,
+    const comment: ReviewCommentDraft = {
+      id: `review-${Date.now().toString(36)}-${comments.length}`,
       taskId,
       patchHash: actualPatchHash,
       filePath: selectedFile.path,
@@ -153,19 +161,29 @@ export function ReviewPanel({
       lineNumbers: selectedLines,
       body: commentBody.trim(),
       excerpt: selectedExcerpt(selectedFile, selection),
-    }]);
+    };
+    setComments((current) => [...current, comment]);
+    onAddFeedback([comment]);
     setSelection(null);
+    setEditorOpen(false);
     setCommentBody("");
+    setFeedbackAdded(true);
+    if (feedbackAddedTimerRef.current !== null) window.clearTimeout(feedbackAddedTimerRef.current);
+    feedbackAddedTimerRef.current = window.setTimeout(() => {
+      setFeedbackAdded(false);
+      feedbackAddedTimerRef.current = null;
+    }, 1800);
   };
-  const editor = selection ? (
+  const editor = selection && editorOpen ? (
     <div className="inlineReviewComment">
       <textarea ref={commentRef} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="Leave feedback for the next prompt…" aria-label="Review comment" />
-      <div><button type="button" onClick={() => { setSelection(null); setCommentBody(""); }}>Cancel</button><button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button></div>
+      <div className="inlineReviewCommentActions"><button type="button" onClick={() => { setEditorOpen(false); setCommentBody(""); }}>Cancel</button><button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button></div>
     </div>
   ) : null;
 
   return (
     <section className="panel reviewPanel" aria-label="Code review">
+      {feedbackAdded ? <div className="reviewFeedbackAdded" role="status"><span><Check size={13} /></span><strong>Added</strong></div> : null}
       <div
         className="reviewResizeHandle"
         role="separator"
@@ -196,7 +214,10 @@ export function ReviewPanel({
             <header className="reviewFileToolbar">
               <span className="reviewSelectedFile"><strong title={selectedFile.path}>{selectedFile.path}</strong>{selectedFile.oldPath ? <small>from {selectedFile.oldPath}</small> : null}</span>
               <div className="reviewFileActions">
-                <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setCommentBody(""); }} title={commenting ? "Click lines to add or remove them from this comment" : "Select lines to leave feedback"}><MessageSquarePlus size={14} /><span>{commenting ? "Select lines" : "Leave feedback"}</span></button>
+                <span className="reviewFeedbackSelectionControls">
+                  <span className="reviewSelectionConfirmSlot">{selection && !editorOpen ? <button className="reviewSelectionConfirm" type="button" onClick={() => setEditorOpen(true)} aria-label={`Write feedback for ${selection.lines.length} selected ${selection.lines.length === 1 ? "line" : "lines"}`} title="Continue with selected lines"><Check size={14} /><span>{selection.lines.length}</span></button> : null}</span>
+                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setEditorOpen(false); setCommentBody(""); }} title={commenting ? "Click lines to add or remove them from this comment" : "Select lines to leave feedback"}><MessageSquarePlus size={14} /><span>{commenting ? "Select lines" : "Leave feedback"}</span></button>
+                </span>
                 <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span>
                 <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button>
                 <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
@@ -206,7 +227,6 @@ export function ReviewPanel({
           </main>
         </div>
       ) : <div className="reviewEmptyState"><FileText size={24} /><strong>No changes to review</strong><span>Refresh the task after files change.</span></div>}
-      {comments.length ? <section className="reviewFeedbackTray" aria-label="Pending review feedback"><div className="reviewFeedbackItems">{comments.map((comment) => <article className={comment.stale ? "isStale" : ""} key={comment.id}><span><strong title={comment.filePath}>{comment.filePath}</strong><code title={comment.excerpt}>{comment.excerpt || "Blank line"}</code><p title={comment.body}>{comment.body}</p></span><button type="button" onClick={() => setComments((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label="Remove feedback"><X size={12} /></button></article>)}</div><button className="primaryAction" type="button" disabled={!comments.some((comment) => !comment.stale)} onClick={() => onAddFeedback(comments)}>Add feedback</button></section> : null}
       {approvalVisible ? <footer className="reviewFooter"><span className="reviewEndLabel">End of changes</span><button className="rejectAction" type="button" disabled={!canUndo} onClick={onUndo}><X size={15} />Reject changes</button><button className="primaryAction" type="button" disabled={!canApprove} onClick={onApprove}><Check size={15} />Accept</button></footer> : null}
     </section>
   );

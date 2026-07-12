@@ -3159,6 +3159,7 @@ function App() {
   const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
   const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
+  const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(composerTestMode ? composerTestAttachments : []);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
@@ -5241,12 +5242,6 @@ function App() {
       for (const comment of active) merged.set(comment.id, comment);
       return [...merged.values()];
     });
-    closeReviewPanel();
-    window.requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      const end = prompt.length;
-      textareaRef.current?.setSelectionRange(end, end);
-    });
   }
 
   async function approveMerge() {
@@ -6295,8 +6290,9 @@ function App() {
         ) : null}
 
         <section className="promptDock">
-          <div className={`floatingAttachmentTray ${attachedFiles.length ? "hasAttachments" : ""}`}>
+          <div className={`floatingAttachmentTray ${attachedFiles.length || reviewPromptFeedback.length ? "hasAttachments" : ""}`}>
             <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
+            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => setReviewFeedbackDialogOpen(true)} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><small>{reviewPromptFeedback.length}</small><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
           </div>
           <div className="promptControls">
             <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>
@@ -6478,12 +6474,6 @@ function App() {
             </div>
           ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
-            {reviewPromptFeedback.length ? (
-              <section className="composerReviewFeedback" aria-label="Review feedback attached to prompt">
-                <header><span><MessageSquareText size={14} /><strong>Review feedback</strong><small>{reviewPromptFeedback.length}</small></span><button type="button" onClick={() => setReviewPromptFeedback([])} aria-label="Remove all review feedback"><X size={13} /></button></header>
-                <div>{reviewPromptFeedback.map((comment) => <article key={comment.id}><span><span><strong>{comment.filePath}</strong><small>{reviewCommentLineLabel(comment)}</small></span><code>{comment.excerpt || "Blank line"}</code><p>{comment.body}</p></span><button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={12} /></button></article>)}</div>
-              </section>
-            ) : null}
             {promptReferenceMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
@@ -6608,6 +6598,8 @@ function App() {
           onAddFeedback={addReviewFeedbackToPrompt}
         />
       </aside>
+
+      {reviewFeedbackDialogOpen ? <div className="modalScrim reviewFeedbackScrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReviewFeedbackDialogOpen(false); }}><section className="reviewFeedbackDialog" role="dialog" aria-modal="true" aria-labelledby="review-feedback-title" onKeyDown={(event) => { if (event.key === "Escape") setReviewFeedbackDialogOpen(false); }}><header><span><MessageSquareText size={16} /><strong id="review-feedback-title">Review feedback</strong><small>{reviewPromptFeedback.length}</small></span><button type="button" onClick={() => setReviewFeedbackDialogOpen(false)} aria-label="Close review feedback"><X size={15} /></button></header><div>{reviewPromptFeedback.map((comment) => <article key={comment.id}><div><strong>{comment.filePath}</strong><small>{reviewCommentLineLabel(comment)}</small></div><p>{comment.body}</p><button type="button" onClick={() => setReviewPromptFeedback((current) => current.filter((candidate) => candidate.id !== comment.id))} aria-label={`Remove feedback for ${comment.filePath}`}><X size={13} /></button></article>)}</div><footer><button type="button" onClick={() => { setReviewPromptFeedback([]); setReviewFeedbackDialogOpen(false); }}>Remove all</button><button className="primaryAction" type="button" onClick={() => setReviewFeedbackDialogOpen(false)}>Done</button></footer></section></div> : null}
 
       {settingsOpen ? (
         <div className="modalScrim" role="presentation">

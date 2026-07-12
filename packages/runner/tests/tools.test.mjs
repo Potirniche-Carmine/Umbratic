@@ -680,8 +680,8 @@ test("toolSpecs keep small stable schemas for local model tool calling", () => {
   assert.match(searchSpec.function.description, /before reading exact files/i);
   assert.match(searchSpec.function.description, /not a complete directory inventory/i);
   const editSpec = toolSpecs.find((spec) => spec.function.name === "edit");
-  assert.deepEqual(plain(editSpec.function.parameters.properties.mode.enum), ["replace", "patch"]);
-  assert.equal(editSpec.function.parameters.properties.patch.type, "string");
+  assert.deepEqual(plain(editSpec.function.parameters.required), ["filePath", "oldText", "newText"]);
+  assert.deepEqual(Object.keys(editSpec.function.parameters.properties), ["filePath", "oldText", "newText"]);
   for (const spec of toolSpecs) {
     const parameters = spec.function.parameters;
     assert.equal(parameters.type, "object", spec.function.name);

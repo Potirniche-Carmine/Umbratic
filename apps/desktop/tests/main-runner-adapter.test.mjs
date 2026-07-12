@@ -34,6 +34,15 @@ function loadRunnerAdapter(userData) {
   };
 }
 
+test("harnessRouteConfig maps every profile to its purpose-built Veil API", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-routes-"));
+  const { adapter } = loadRunnerAdapter(userData);
+
+  assert.equal(adapter.harnessRouteConfig("engineering").chatEndpointPath, "/api/engineering/chat");
+  assert.equal(adapter.harnessRouteConfig("marketing").chatEndpointPath, "/api/marketing/chat");
+  assert.equal(adapter.harnessRouteConfig("sales").chatEndpointPath, "/api/sales/chat");
+});
+
 test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled tools, and skill metadata", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-"));
   const { adapter, storage } = loadRunnerAdapter(userData);

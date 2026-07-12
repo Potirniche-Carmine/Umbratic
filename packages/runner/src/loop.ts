@@ -1,11 +1,15 @@
 import { nowIso, toolFailureRepairable, type AttemptRecord, type RunnerTurnSummary, type UmbraticRunnerEvent } from "./events.js";
 import type { ChatContentPart, ChatMessage, InputPart, Session } from "./session.js";
-import { compressToolResult } from "./context/contentRouter.js";
 import { redactText } from "./policy.js";
-import { enabledModelToolSpecs, runTool } from "./tools/index.js";
-import { toolFailureDetails, type ToolContext, type ToolErrorCode, type ToolResult, type ToolResultStatus } from "./tools/common.js";
-import { modelHttpRequest, readBodyText } from "./provider/http.js";
-import { configuredProviderEndpointUrl, isApprovedVeilChatUrl } from "./provider/local.js";
+import { buildToolPlan } from "./tools/planner.js";
+import { ToolScheduler } from "./tools/scheduler.js";
+import { executionResultText, finalizeToolExecution } from "./tools/results.js";
+import { toolNameFromProvider, type ToolCall as RuntimeToolCall, type ToolRuntimeContext } from "./tools/types.js";
+import type { ToolPlan } from "./tools/plan.js";
+import type { ToolContext, ToolErrorCode, ToolResult, ToolResultStatus } from "./tools/common.js";
+import { configuredProviderEndpointUrl } from "./provider/local.js";
+import { streamProviderChat } from "./provider/chat.js";
+import { providerCapabilities } from "./provider/historyEncoder.js";
 
 type ToolCall = {
   id: string;
@@ -20,6 +24,7 @@ type StreamAccumulator = {
   emittedContent: boolean;
   emittedReasoning: boolean;
   actionRequirement: "" | "change" | "execute" | "change-and-execute";
+  toolPlan?: ToolPlan;
 };
 
 type ToolContextResult = {
@@ -275,6 +280,19 @@ function compactStructuredToolHistoryMessages(messages: ChatMessage[]): ChatMess
   return compacted;
 }
 
+export function normalizedTurnToolCalls(calls: ReadonlyMap<number, ToolCall>, turnId: string): ToolCall[] {
+  const seen = new Set<string>();
+  return [...calls.entries()]
+    .filter(([, call]) => !!call.name)
+    .sort(([left], [right]) => left - right)
+    .map(([index, call]) => {
+      const supplied = call.id.trim();
+      const id = supplied && !seen.has(supplied) ? supplied : `${turnId}-tool-${index}`;
+      seen.add(id);
+      return { ...call, id };
+    });
+}
+
 function compactProseToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
   const toolContextIndexes = messages
     .map((message, index) => ({ message, index }))
@@ -317,101 +335,6 @@ function messagesForModel(session: Session): ChatMessage[] {
   return compactToolHistoryMessages(session.messages);
 }
 
-function isOllamaChatUrl(url: string): boolean {
-  try {
-    return new URL(url).pathname.replace(/\/+$/, "") === "/api/chat";
-  } catch {
-    return false;
-  }
-}
-
-function isVeilChatUrl(url: string): boolean {
-  return isApprovedVeilChatUrl(url);
-}
-
-function parseSseLine(line: string): unknown | null {
-  if (!line.startsWith("data:")) return null;
-  const data = line.slice(5).trim();
-  if (!data || data === "[DONE]") return null;
-  try {
-    return JSON.parse(data) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isSseDoneLine(line: string): boolean {
-  return line.startsWith("data:") && line.slice(5).trim() === "[DONE]";
-}
-
-function appendOllamaToolCalls(acc: StreamAccumulator, toolCalls: unknown) {
-  if (!Array.isArray(toolCalls)) return;
-  for (const raw of toolCalls) {
-    if (!isRecord(raw)) continue;
-    const fn = isRecord(raw.function) ? raw.function : {};
-    const name = typeof fn.name === "string" ? fn.name : "";
-    const args = typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {});
-    const index = acc.toolCalls.size;
-    acc.toolCalls.set(index, {
-      id: `tool-${index}`,
-      name,
-      arguments: args,
-    });
-  }
-}
-
-function choiceDelta(value: unknown): Record<string, unknown> {
-  const obj = isRecord(value) ? value : {};
-  const choices = Array.isArray(obj.choices) ? obj.choices : [];
-  const first = isRecord(choices[0]) ? choices[0] : {};
-  return isRecord(first.delta) ? first.delta : {};
-}
-
-function textContent(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return "";
-  return value
-    .map((part) => {
-      if (typeof part === "string") return part;
-      if (!isRecord(part)) return "";
-      return typeof part.text === "string" ? part.text : "";
-    })
-    .join("");
-}
-
-function reasoningContent(record: Record<string, unknown>): string {
-  return (
-    textContent(record.reasoning_content) ||
-    textContent(record.reasoning) ||
-    textContent(record.thinking)
-  );
-}
-
-function ollamaMessageContent(content: ChatMessage["content"]): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => {
-      if (part.type === "text") return part.text;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function ollamaMessages(messages: ChatMessage[]) {
-  return messages.map((message) => ({
-    role: message.role,
-    content: ollamaMessageContent(message.content),
-    ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
-    ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
-  }));
-}
-
 function messageContentFromParts(parts: InputPart[]): string | ChatContentPart[] {
   if (parts.every((part) => part.type === "text")) {
     return parts.map((part) => (part.type === "text" ? part.text : "")).join("\n\n");
@@ -430,193 +353,35 @@ function lastMessageIsToolContext(session: Session): boolean {
 
 function toolRoleHistorySupported(session: Session): boolean {
   const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
-  return !isOllamaChatUrl(url) && !isVeilChatUrl(url);
-}
-
-async function streamOllamaChat(
-  session: Session,
-  url: string,
-  headers: Record<string, string>,
-  tools: ReturnType<typeof enabledModelToolSpecs>,
-  emit?: (event: UmbraticRunnerEvent) => void,
-): Promise<StreamAccumulator> {
-  const response = await modelHttpRequest(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: session.config.provider.modelId,
-      messages: ollamaMessages(messagesForModel(session)),
-      stream: true,
-      ...(tools.length ? { tools } : {}),
-    }),
-    mtls: session.config.provider.mtls,
-    signal: session.abortController.signal,
-  });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    const body = await readBodyText(response.body, 4096).catch(() => "");
-    throw new Error(
-      `model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`,
-    );
-  }
-
-  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" };
-  let buffer = "";
-  const processLine = (line: string) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    const parsed = JSON.parse(trimmed) as unknown;
-    const row = isRecord(parsed) ? parsed : {};
-    const message = isRecord(row.message) ? row.message : {};
-    const text = textContent(message.content);
-    const reasoning = reasoningContent(message);
-    if (text) {
-      acc.content += text;
-      if (emit) {
-        acc.emittedContent = true;
-        emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
-      }
-    }
-    if (reasoning) {
-      acc.reasoning += reasoning;
-      if (emit) {
-        acc.emittedReasoning = true;
-        emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() });
-      }
-    }
-    appendOllamaToolCalls(acc, message.tool_calls);
-  };
-  for await (const chunk of response.body) {
-    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : Buffer.from(chunk).toString("utf8");
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
-      processLine(line);
-      newline = buffer.indexOf("\n");
-    }
-  }
-  processLine(buffer);
-  return acc;
-}
-
-function appendToolDelta(acc: StreamAccumulator, delta: Record<string, unknown>) {
-  const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
-  for (const raw of toolCalls) {
-    if (!isRecord(raw)) continue;
-    const index = typeof raw.index === "number" ? raw.index : 0;
-    const fn = isRecord(raw.function) ? raw.function : {};
-    const existing = acc.toolCalls.get(index) ?? { id: "", name: "", arguments: "" };
-    acc.toolCalls.set(index, {
-      id: typeof raw.id === "string" ? raw.id : existing.id || `tool-${index}`,
-      name: typeof fn.name === "string" ? fn.name : existing.name,
-      arguments: existing.arguments + (typeof fn.arguments === "string" ? fn.arguments : ""),
-    });
-  }
+  return providerCapabilities(url).structuredToolHistory;
 }
 
 async function streamModel(
   session: Session,
   emit?: (event: UmbraticRunnerEvent) => void,
-  options: { includeTools?: boolean; suppressOutput?: boolean } = {},
+  options: { includeTools?: boolean; requireToolCall?: boolean; suppressOutput?: boolean } = {},
 ): Promise<StreamAccumulator> {
-  const tools = enabledModelToolSpecs(session.config.enabledTools, {
+  const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
+  const capabilities = providerCapabilities(url);
+  const toolPlan = buildToolPlan({
+    enabledTools: session.config.enabledTools,
     includeContextRetrieval: session.contextStore.hasEntries(),
     includeSkillReader: session.config.skills.length > 0,
+    providerParallelToolCalls: capabilities.parallelToolCalls,
   });
   const includeTools = options.includeTools !== false;
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (session.config.provider.apiKey.trim()) {
-    headers.Authorization = `Bearer ${session.config.provider.apiKey}`;
-  }
-  Object.assign(headers, session.config.provider.headers ?? {});
-  const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
-  if (isOllamaChatUrl(url)) {
-    return streamOllamaChat(session, url, headers, tools, emit);
-  }
-  const routeIsVeil = isVeilChatUrl(url);
-  const messages = routeIsVeil ? messagesForModel(session).filter((message) => message.role !== "system") : messagesForModel(session);
-  const requestModel = (includeTools: boolean) =>
-    modelHttpRequest(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        ...(routeIsVeil ? {} : { model: session.config.provider.modelId }),
-        messages,
-        stream: true,
-        ...(routeIsVeil && session.config.skills.length ? {
-          skills: session.config.skills.map(({ id, name, description, source }) => ({ id, name, description, source })),
-        } : {}),
-        ...(includeTools && tools.length ? { tools, tool_choice: "auto" } : {}),
-      }),
-      mtls: session.config.provider.mtls,
-      signal: session.abortController.signal,
-    });
-  let response = await requestModel(includeTools);
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    const body = await readBodyText(response.body, 4096).catch(() => "");
-    if (includeTools && tools.length && lastMessageIsToolContext(session)) {
-      response = await requestModel(false);
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return readOpenAIStream(session, response.body, emit);
-      }
-      const retryBody = await readBodyText(response.body, 4096).catch(() => "");
-      throw new Error(
-        `model request failed: ${response.statusCode} ${response.statusMessage}${retryBody ? ` ${retryBody.slice(0, 400)}` : ""}`,
-      );
-    }
-    throw new Error(
-      `model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`,
-    );
-  }
-
-  const header = response.headers["x-umbratic-action-required"];
-  const actionRequirement = header === "change" || header === "execute" || header === "change-and-execute" ? header : "";
-  const acc = await readOpenAIStream(session, response.body, actionRequirement || options.suppressOutput ? undefined : emit);
-  acc.actionRequirement = actionRequirement;
-  return acc;
-}
-
-async function readOpenAIStream(
-  session: Session,
-  body: AsyncIterable<Buffer | string>,
-  emit?: (event: UmbraticRunnerEvent) => void,
-): Promise<StreamAccumulator> {
-  const acc: StreamAccumulator = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" };
-  let buffer = "";
-  let completed = false;
-  for await (const chunk of body) {
-    buffer += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : Buffer.from(chunk).toString("utf8");
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trimEnd();
-      buffer = buffer.slice(newline + 1);
-      if (isSseDoneLine(line)) completed = true;
-      const parsed = parseSseLine(line);
-      const delta = choiceDelta(parsed);
-      const text = textContent(delta.content);
-      const reasoning = reasoningContent(delta);
-      if (text) {
-        acc.content += text;
-        if (emit) {
-          acc.emittedContent = true;
-          emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
-        }
-      }
-      if (reasoning) {
-        acc.reasoning += reasoning;
-        if (emit) {
-          acc.emittedReasoning = true;
-          emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() });
-        }
-      }
-      appendToolDelta(acc, delta);
-      newline = buffer.indexOf("\n");
-    }
-  }
-  if (!completed) throw new Error("model stream ended before the completion marker");
-  return acc;
+  const acc = await streamProviderChat({
+    session,
+    messages: messagesForModel(session),
+    tools: toolPlan.modelSpecs,
+    includeTools,
+    requireToolCall: !!options.requireToolCall,
+    parallelToolCalls: toolPlan.parallelToolCalls,
+    suppressOutput: !!options.suppressOutput,
+    emit,
+    lastMessageIsToolContext: lastMessageIsToolContext(session),
+  });
+  return { ...acc, toolPlan };
 }
 
 function recordModelTurn(summary: RunTurnSummary, acc: StreamAccumulator) {
@@ -668,6 +433,7 @@ async function finishWithoutTools(
 
 export async function runTurn(session: Session, parts: InputPart[], emit: (event: UmbraticRunnerEvent) => void, replyPermission: ToolContext["askPermission"]): Promise<RunTurnSummary> {
   const events = createRunnerEventCoalescer(emit);
+  const scheduler = new ToolScheduler();
   const summary = emptyRunTurnSummary();
   try {
     session.messages.push({ role: "user", content: messageContentFromParts(parts) });
@@ -679,11 +445,14 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
     let changedWorkspace = false;
     let executedCommand = false;
     for (let turn = 0; turn < maxToolTurns; turn++) {
-      const acc = await streamModel(session, events.emit, { suppressOutput: !!actionRequirement });
+      const acc = await streamModel(session, events.emit, {
+        requireToolCall: !!actionRequirement && actionRetries > 0,
+        suppressOutput: !!actionRequirement,
+      });
       actionRequirement ||= acc.actionRequirement;
       recordModelTurn(summary, acc);
       events.flush();
-      const toolCalls = Array.from(acc.toolCalls.values()).filter((call) => call.name);
+      const toolCalls = normalizedTurnToolCalls(acc.toolCalls, `${session.id}-turn-${summary.turns}`);
       summary.toolCalls += toolCalls.length;
       if (toolCalls.length === 0) {
         const changeSatisfied = (actionRequirement !== "change" && actionRequirement !== "change-and-execute") || changedWorkspace;
@@ -714,15 +483,17 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         previousToolSignature = toolSignature;
         repeatedToolTurns = 1;
       }
-      const ctx: ToolContext = {
+      const ctx: ToolRuntimeContext = {
         taskId: session.taskId,
         cwd: session.config.cwd,
         permissionMode: session.config.permissionMode,
         enabledTools: session.config.enabledTools,
         skills: session.config.skills,
         contextStore: session.contextStore,
+        signal: session.abortController.signal,
         askPermission: replyPermission,
         emitToolOutput(toolCallId, stream, text) {
+          events.emit({ type: "tool.execution.update", taskId: session.taskId, toolCallId, stream, text: redactText(text), at: nowIso() });
           events.emit({ type: "tool.output", taskId: session.taskId, toolCallId, stream, text: redactText(text), redacted: true, at: nowIso() });
         },
       };
@@ -733,42 +504,38 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         session.messages.push({ role: "assistant", content: acc.content });
       }
       const toolResults: ToolContextResult[] = [];
-      for (const toolCall of toolCalls) {
-        try {
-          const result = await runTool(ctx, events.emit, toolCall);
-          const compressed = compressToolResult({
+      const plan = acc.toolPlan ?? buildToolPlan({
+        enabledTools: session.config.enabledTools,
+        includeContextRetrieval: session.contextStore.hasEntries(),
+        includeSkillReader: session.config.skills.length > 0,
+      });
+      const runtimeCalls: RuntimeToolCall[] = toolCalls.map((call, index) => ({
+        id: call.id,
+        name: toolNameFromProvider(call.name),
+        payload: { kind: "function", arguments: call.arguments },
+        index,
+      }));
+      const executionResults = await scheduler.execute(plan, ctx, events.emit, runtimeCalls);
+      for (let index = 0; index < toolCalls.length; index += 1) {
+          const toolCall = toolCalls[index];
+          const execution = executionResults[index];
+          const finalized = finalizeToolExecution({
+            taskId: session.taskId,
             toolName: toolCall.name,
             toolCallId: toolCall.id,
-            title: result.title,
-            output: result.output,
-            status: result.status,
+            result: execution,
             contextStore: session.contextStore,
+            emit: events.emit,
           });
+          const result = finalized.legacy;
           recordNonSuccessToolResult(summary, toolCall.name, result);
           if (result.status === "success" && (toolCall.name === "edit" || toolCall.name === "write")) changedWorkspace = true;
           if (result.status === "success" && toolCall.name === "command") executedCommand = true;
-          if (compressed.modified) {
-            events.emit({
-              type: "context.compressed",
-              taskId: session.taskId,
-              toolCallId: toolCall.id,
-              toolKind: toolCall.name,
-              kind: compressed.kind,
-              strategy: compressed.strategy,
-              ...(compressed.markerHash ? { hash: compressed.markerHash } : {}),
-              originalBytes: compressed.originalBytes,
-              outputBytes: compressed.outputBytes,
-              at: nowIso(),
-            });
+          toolResults.push({ call: toolCall, title: result.title, output: finalized.modelOutput, status: result.status });
+          if (execution.status !== "success") {
+            const message = redactText(executionResultText(execution));
+            events.emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
           }
-          toolResults.push({ call: toolCall, title: result.title, output: compressed.output, status: result.status });
-        } catch (error) {
-          const failure = toolFailureDetails(error);
-          recordToolFailure(summary, toolCall.name, failure);
-          const message = redactText(`Tool failed: ${failure.message}`);
-          events.emit({ type: "tool.output", taskId: session.taskId, toolCallId: toolCall.id, stream: "stderr", text: message, redacted: true, at: nowIso() });
-          toolResults.push({ call: toolCall, title: toolCall.name, output: message, status: failure.status });
-        }
       }
       if (structuredToolHistory) {
         for (const result of toolResults) {

@@ -24,10 +24,14 @@ function comment(overrides = {}) {
 
 test("review feedback serialization uses visible source-side line labels and is deterministic", () => {
   const output = comments.serializeReviewComments([comment({ lineNumbers: [12, 14] }), comment({ id: "c-2", side: "old", startLine: 8, endLine: 8, excerpt: "" })]);
-  assert.match(output, /\*\*src\/app\.ts · new lines 12, 14\*\*/);
-  assert.match(output, /\*\*src\/app\.ts · old line 8\*\*/);
+  assert.match(output, /\*\*src\/app\.ts · Lines 12, 14\*\*/);
+  assert.match(output, /\*\*src\/app\.ts · Lines 8\*\*/);
   assert.match(output, /> const next = value;/);
   assert.equal(comments.appendReviewFeedback(output, [comment({ lineNumbers: [12, 14] })]), output);
+});
+
+test("review line labels collapse consecutive lines into ranges", () => {
+  assert.equal(comments.reviewCommentLineLabel(comment({ lineNumbers: [4, 5, 6, 9] })), "Lines 4-6, 9");
 });
 
 test("comment reconciliation survives offset-only hunk movement and marks changed hunks stale", () => {

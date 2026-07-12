@@ -44,6 +44,7 @@ function loadStorage(userData, home = userData) {
     OLLAMA_API_KEY: "",
     USERPROFILE: home,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: "true",
+    UMBRATIC_FORCE_LOCAL_ENDPOINT: undefined,
     UMBRATIC_MANAGED_ENDPOINT_MODE: undefined,
     UMBRATIC_MANAGED_MODEL_API_KEY: undefined,
     UMBRATIC_MANAGED_MODEL_BASE_URL: undefined,
@@ -389,6 +390,36 @@ test("endpoint settings default to local and migrate the old local Veil URL sema
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
   assert.equal(rawSettings.modelEndpoint.version, 3);
   assert.doesNotMatch(JSON.stringify(rawSettings), /must-not-be-stored|also-not-stored/);
+});
+
+test("local launcher settings override a previously stored server endpoint for the session", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-forced-local-"));
+  loadStorage(userData).readModelEndpointSettings();
+  writeSettingsPayload(userData, {
+    modelEndpoint: {
+      version: 3,
+      mode: "server",
+      software: "vllm",
+      baseUrl: "https://veil.example.internal",
+      modelId: "veil-managed",
+      secret: "",
+      headers: [],
+    },
+  });
+  process.env.UMBRATIC_FORCE_LOCAL_ENDPOINT = "1";
+  process.env.UMBRATIC_LOCAL_RUNTIME_BASE_URL = "http://127.0.0.1:11434";
+  process.env.UMBRATIC_LOCAL_MODEL_ID = "gemma4:12b-it-q4_K_M";
+  process.env.UMBRATIC_MODEL_SOFTWARE = "ollama";
+  const storage = loadTypeScriptModule(storagePath, { cache: new Map(), mocks: { electron: electronMock(userData) } });
+
+  assert.deepEqual(plain(storage.readModelEndpointSettings()), {
+    mode: "local",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    modelId: "gemma4:12b-it-q4_K_M",
+    secret: "",
+    headers: [{ name: "", value: "" }, { name: "", value: "" }],
+  });
 });
 
 test("tool, skill, harness, and notes settings sanitize invalid input", () => {

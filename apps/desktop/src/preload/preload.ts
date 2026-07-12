@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
-import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
+import type { BackendUiEventV1 } from "../shared/backendEvents";
 
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
@@ -18,6 +18,14 @@ type PastedAttachmentInput = {
   mimeType?: string;
   dataUrl: string;
 };
+
+function normalizedBackendEvent(value: unknown): BackendUiEventV1 | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const event = value as Record<string, unknown>;
+  if (typeof event.type !== "string" || typeof event.taskId !== "string") return null;
+  if (event.version !== undefined && event.version !== 1) return null;
+  return { ...event, version: 1 } as BackendUiEventV1;
+}
 
 const umbraticApi = {
   listProjects: () => ipcRenderer.invoke("umbratic:list-projects"),
@@ -101,12 +109,8 @@ const umbraticApi = {
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {
     const listener = (_event: IpcRendererEvent, value: unknown) => {
-      const parsed = parseBackendUiEvent(value);
-      if (!parsed.ok) {
-        console.warn(backendEventDiagnostic(parsed));
-        return;
-      }
-      callback(parsed.event);
+      const event = normalizedBackendEvent(value);
+      if (event) callback(event);
     };
     ipcRenderer.on("umbratic:backend-event", listener);
     return () => ipcRenderer.removeListener("umbratic:backend-event", listener);

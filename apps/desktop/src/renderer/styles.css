@@ -3174,6 +3174,9 @@ pre {
   z-index: 32;
   width: var(--prompt-width);
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%) translateY(5px);
@@ -3189,6 +3192,7 @@ pre {
 }
 
 .composerAttachmentList {
+  flex: 0 1 auto;
   align-items: center;
   flex-wrap: nowrap;
   max-height: 40px;
@@ -3688,133 +3692,150 @@ button.attachmentPreview:focus-visible {
 }
 
 .composerReviewFeedback {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
-}
-
-.composerReviewFeedback > header,
-.composerReviewFeedback > header > span,
-.composerReviewFeedback article,
-.composerReviewFeedback article > span {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-
-.composerReviewFeedback > header {
+  display: inline-flex;
   flex: 0 0 auto;
-  gap: 3px;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 8px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 76%, transparent);
+  border-radius: 999px;
+  color: var(--reference-token-text);
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  box-shadow:
+    0 5px 16px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.065);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+  backdrop-filter: blur(16px) saturate(135%);
+  font-size: 11px;
+  font-weight: 660;
+  transition: transform 120ms ease-out, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
-.composerReviewFeedback > header > span {
-  gap: 5px;
-  color: var(--muted);
-}
-
-.composerReviewFeedback > header strong {
+.composerReviewFeedback:hover {
   color: var(--text);
-  font-size: 10.5px;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-strong));
+  background: color-mix(in srgb, var(--surface-2) 94%, transparent);
+  box-shadow:
+    0 7px 18px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.composerReviewFeedback > header small {
+.composerReviewFeedback:active {
+  transform: scale(0.97);
+}
+
+.composerReviewFeedbackIcon {
   display: grid;
-  min-width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   place-items: center;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--accent) 68%, var(--text));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.composerReviewFeedback small,
+.reviewFeedbackDialog header small {
+  display: inline-flex;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
   padding: 0 5px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 13%, transparent);
   font-size: 9px;
+  line-height: 1;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-.composerReviewFeedback button {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 6px;
+.composerReviewFeedbackChevron {
   color: var(--faint);
+  transition: transform 160ms ease-out, color 160ms ease;
 }
 
-.composerReviewFeedback button:hover {
-  color: var(--text);
-  background: var(--control-hover-soft);
+.composerReviewFeedback:hover .composerReviewFeedbackChevron {
+  color: var(--muted);
+  transform: translateX(1px);
 }
 
-.composerReviewFeedback > div {
+.reviewFeedbackDialog header,
+.reviewFeedbackDialog header > span,
+.reviewFeedbackDialog article > div,
+.reviewFeedbackDialog footer {
   display: flex;
-  flex: 1 1 auto;
-  gap: 5px;
-  min-height: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
+  align-items: center;
 }
 
-.composerReviewFeedback > div::-webkit-scrollbar {
-  display: none;
+.reviewFeedbackScrim {
+  z-index: 120;
 }
 
-.composerReviewFeedback article {
-  width: clamp(180px, 24vw, 248px);
-  flex: 0 0 auto;
-  gap: 4px;
-  padding: 4px 4px 4px 7px;
-  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: 6px;
+.reviewFeedbackDialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 97%, transparent);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+}
+
+.reviewFeedbackDialog header {
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reviewFeedbackDialog header > span { gap: 7px; }
+.reviewFeedbackDialog header button,
+.reviewFeedbackDialog article > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.reviewFeedbackDialog > div {
+  display: grid;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.reviewFeedbackDialog article {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding: 11px 40px 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   background: var(--control-bg);
 }
 
-.composerReviewFeedback article > span {
-  flex: 1 1 auto;
-  display: grid;
-  gap: 1px;
+.reviewFeedbackDialog article > div { gap: 8px; }
+.reviewFeedbackDialog article small {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 680;
 }
-
-.composerReviewFeedback article > span > span {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 5px;
-}
-
-.composerReviewFeedback article strong,
-.composerReviewFeedback article code,
-.composerReviewFeedback article p {
-  overflow: hidden;
-  margin: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composerReviewFeedback article strong {
-  min-width: 0;
-  flex: 1 1 auto;
-  font-size: 9.5px;
-}
-
-.composerReviewFeedback article small {
-  flex: 0 0 auto;
-  color: var(--faint);
-  font-size: 8.5px;
-}
-
-.composerReviewFeedback article code,
-.composerReviewFeedback article p {
-  color: var(--muted);
-  background: transparent;
-  font-size: 9px;
-  line-height: 1.15;
-}
-
-.composerReviewFeedback article code {
-  color: var(--faint);
-  font-family: var(--mono-font);
+.reviewFeedbackDialog article p { margin: 0; }
+.reviewFeedbackDialog article p { color: var(--text); font-size: 12px; line-height: 1.45; }
+.reviewFeedbackDialog article > button { position: absolute; top: 7px; right: 7px; }
+.reviewFeedbackDialog footer {
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
 }
 
 .reviewResizeHandle {
@@ -6124,7 +6145,51 @@ button.attachmentPreview:focus-visible {
   font: 12px/1.45 var(--app-font);
 }
 
-.inlineReviewComment > div {
+.reviewFeedbackAdded {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  min-height: 34px;
+  padding: 0 12px 0 7px;
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--green) 24%, var(--line-strong));
+  border-radius: 999px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  font-family: var(--app-font);
+  font-size: 10.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: reviewFeedbackAdded 1800ms ease both;
+}
+
+.reviewFeedbackAdded > span {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--green) 24%, var(--control-bg));
+}
+
+@keyframes reviewFeedbackAdded {
+  0% { opacity: 0; transform: translate(-50%, -4px) scale(0.97); }
+  10%, 84% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -2px) scale(0.99); }
+}
+
+.inlineReviewCommentActions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -6136,6 +6201,44 @@ button.attachmentPreview:focus-visible {
   border-radius: 6px;
   font-size: 11px;
   font-weight: 680;
+}
+
+.reviewFeedbackSelectionControls {
+  display: inline-grid;
+  grid-template-columns: 42px auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.reviewSelectionConfirmSlot {
+  display: grid;
+  width: 42px;
+  height: 30px;
+  place-items: center;
+}
+
+.reviewSelectionConfirm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 38px;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 7px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, var(--control-bg));
+  font-size: 10px;
+  font-weight: 720;
+  transition: transform 120ms ease, background 140ms ease;
+}
+
+.reviewSelectionConfirm:hover {
+  background: color-mix(in srgb, var(--accent) 26%, var(--control-bg));
+}
+
+.reviewSelectionConfirm:active {
+  transform: scale(0.96);
 }
 
 .reviewFeedbackTray {

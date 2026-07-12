@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ensureReadableText, resolveWorkspacePath, toolError, type ToolContext, type ToolResult } from "./common.js";
+import { ensureReadableText, resolveWorkspacePath, throwIfToolAborted, toolError, type ToolContext, type ToolResult } from "./common.js";
 
 type PatchLine = { kind: "context" | "remove" | "add"; text: string };
 type PatchChange = { lines: PatchLine[] };
@@ -239,6 +239,7 @@ function preparePatch(ctx: ToolContext, patch: string): { files: Map<string, str
 }
 
 async function editPatchTool(ctx: ToolContext, patch: string): Promise<ToolResult> {
+  throwIfToolAborted(ctx);
   if (!patch.trim()) throw toolError("validation_error", "invalid_arguments", "edit patch mode requires patch content");
   const prepared = preparePatch(ctx, patch);
   const decision = await ctx.askPermission({
@@ -249,6 +250,7 @@ async function editPatchTool(ctx: ToolContext, patch: string): Promise<ToolResul
   if (decision !== "allow") throw toolError("permission_denied", "permission_denied", "Patch edit denied");
 
   for (const [absolute, content] of prepared.files) {
+    throwIfToolAborted(ctx);
     if (content === null) {
       fs.rmSync(absolute, { force: true });
     } else {
@@ -261,6 +263,7 @@ async function editPatchTool(ctx: ToolContext, patch: string): Promise<ToolResul
 }
 
 async function editReplaceTool(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolResult> {
+  throwIfToolAborted(ctx);
   const filePath = typeof input.filePath === "string" ? input.filePath : typeof input.path === "string" ? input.path : "";
   const oldText =
     typeof input.oldText === "string" ? input.oldText :
@@ -283,6 +286,7 @@ async function editReplaceTool(ctx: ToolContext, input: Record<string, unknown>)
     autoAllow: ctx.permissionMode === "bypass",
   });
   if (decision !== "allow") throw toolError("permission_denied", "permission_denied", `Edit denied: ${relative}`);
+  throwIfToolAborted(ctx);
   fs.writeFileSync(absolute, current.replace(oldText, newText), "utf8");
   return { title: relative, output: "Edited file successfully.", status: "success" };
 }
@@ -297,4 +301,22 @@ export async function editTool(ctx: ToolContext, input: Record<string, unknown>)
     return editReplaceTool(ctx, input);
   }
   throw toolError("validation_error", "invalid_arguments", "edit mode must be replace or patch");
+}
+
+export function prepareEditIntent(ctx: ToolContext, input: Record<string, unknown>): { summary: string; affectedPaths: string[] } {
+  const mode = input.mode ?? "replace";
+  if (mode === "patch") {
+    const prepared = preparePatch(ctx, typeof input.patch === "string" ? input.patch : "");
+    return {
+      summary: patchPermissionSummary(prepared.summaries),
+      affectedPaths: prepared.summaries.flatMap((item) => item.to ? [item.path, item.to] : [item.path]),
+    };
+  }
+  const target = resolveWorkspacePath(ctx.cwd, typeof input.filePath === "string" ? input.filePath : "");
+  const oldText = typeof input.oldText === "string" ? input.oldText : "";
+  const newText = typeof input.newText === "string" ? input.newText : "";
+  if (!oldText) throw toolError("validation_error", "invalid_arguments", "edit replace mode requires oldText");
+  if (oldText === newText) throw toolError("validation_error", "invalid_arguments", "edit replacement must change the file");
+  if (!ensureReadableText(target.absolute).includes(oldText)) throw toolError("validation_error", "invalid_arguments", `Text to replace was not found in ${target.relative}`);
+  return { summary: `edit ${target.relative}`, affectedPaths: [target.relative] };
 }

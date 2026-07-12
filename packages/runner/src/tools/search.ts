@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { ensureReadableText, toolError, type ToolContext, type ToolResult } from "./common.js";
+import { ensureReadableText, throwIfToolAborted, toolError, type ToolContext, type ToolResult } from "./common.js";
 import { parseSearchQuery, type SearchQuery } from "./searchQuery.js";
 import { getWorkspaceIndex, type IndexedFile, type WorkspaceIndex } from "./workspaceIndex.js";
 
@@ -214,12 +214,14 @@ function lineClassRank(lineClass: ContentLineClass): number {
   return 2;
 }
 
-function contentMatchesWithIndex(cwd: string, index: WorkspaceIndex, query: SearchQuery, limit: number): string[] {
+function contentMatchesWithIndex(ctx: ToolContext, index: WorkspaceIndex, query: SearchQuery, limit: number): string[] {
+  const cwd = ctx.cwd;
   if (!query.terms.length) return [];
   const caseSensitive = query.smartCase;
   const matches: ContentHit[] = [];
 
   for (const file of index.files) {
+    throwIfToolAborted(ctx);
     if (!file.searchable || !filePassesConstraints(file, query)) continue;
     let text: string;
     try {
@@ -252,13 +254,14 @@ function contentMatchesWithIndex(cwd: string, index: WorkspaceIndex, query: Sear
 }
 
 export async function searchTool(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolResult> {
+  throwIfToolAborted(ctx);
   const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
   const limit = typeof input.limit === "number" ? Math.min(Math.max(Math.floor(input.limit), 1), 100) : 50;
   if (!rawQuery) throw toolError("validation_error", "invalid_arguments", "search requires query");
   const query = parseSearchQuery(rawQuery);
   const index = getWorkspaceIndex(ctx.cwd);
   const pathResults = pathMatchesWithIndex(index, query, limit);
-  const contentResults = pathResults.length >= limit ? [] : contentMatchesWithIndex(ctx.cwd, index, query, limit);
+  const contentResults = pathResults.length >= limit ? [] : contentMatchesWithIndex(ctx, index, query, limit);
   const results = [...pathResults, ...contentResults].slice(0, limit);
   return { title: "search", output: results.join("\n") || "No matches.", status: "success" };
 }

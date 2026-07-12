@@ -135,7 +135,7 @@ import type {
   WorkspaceMode,
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile } from "../shared/reviewDiff";
+import { normalizeReviewFile, parseGitPorcelainPaths } from "../shared/reviewDiff";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 
 const isDev = !app.isPackaged;
@@ -2924,6 +2924,21 @@ async function runCommandForTask(
 }
 
 async function getChangedFiles(worktreePath: string, baseCommit: string): Promise<string[]> {
+  if (baseCommit === "HEAD") {
+    const status = await gitResult(worktreePath, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+      "--ignore-submodules=none",
+    ]);
+    if (!status.success) {
+      throw new Error((status.stderr || "Failed to read repository status.").trim());
+    }
+    return parseGitPorcelainPaths(status.stdout)
+      .map((file) => normalizeRelativePath(file))
+      .filter(Boolean);
+  }
   const tracked = await gitOutput(worktreePath, ["diff", "--name-only", "--diff-filter=ACMRTD", baseCommit]);
   const untracked = await gitOutput(worktreePath, ["ls-files", "--others", "--exclude-standard"]);
   return Array.from(

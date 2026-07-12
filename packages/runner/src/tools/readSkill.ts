@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { isBlockedPath } from "../policy.js";
-import { ensureReadableText, pathInside, toolError, type ToolContext, type ToolResult } from "./common.js";
+import { ensureReadableText, pathInside, throwIfToolAborted, toolError, type ToolContext, type ToolResult } from "./common.js";
 
 const defaultChunkBytes = 6 * 1024;
 const maxChunkBytes = 8 * 1024;
@@ -42,6 +42,7 @@ function safeChunkEnd(buffer: Buffer, start: number, requestedEnd: number): numb
 }
 
 export function readSkillTool(ctx: ToolContext, input: Record<string, unknown>): ToolResult {
+  throwIfToolAborted(ctx);
   const skillId = typeof input.skillId === "string" ? input.skillId.trim() : "";
   if (!skillId) throw toolError("validation_error", "invalid_arguments", "read_skill requires skillId");
   const skill = ctx.skills?.find((entry) => entry.id === skillId);

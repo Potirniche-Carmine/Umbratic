@@ -47,6 +47,9 @@ func WorkspaceActionRequirement(messages []model.Message) string {
 			return ActionNone
 		}
 		latest = strings.ToLower(strings.Join(strings.Fields(value), " "))
+		if marker := strings.LastIndex(latest, "user request:"); marker >= 0 {
+			latest = strings.TrimSpace(latest[marker+len("user request:"):])
+		}
 		break
 	}
 	if latest == "" || strings.HasPrefix(latest, "workspace tool results:") {
@@ -66,7 +69,7 @@ func WorkspaceActionRequirement(messages []model.Message) string {
 	}
 
 	changeVerbs := []string{
-		"add", "build", "change", "create", "delete", "edit", "fix", "implement",
+		"add", "address", "build", "change", "create", "delete", "edit", "fix", "implement",
 		"make", "modify", "move", "remove", "rename", "update", "write",
 	}
 	executeVerbs := []string{"execute", "run", "test", "verify"}

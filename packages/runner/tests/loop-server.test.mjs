@@ -528,7 +528,10 @@ test("runTurn rejects Veil action completions without required tool evidence", a
       "Content-Type": "text/event-stream",
       ...(requests.length === 1 ? { "X-Umbratic-Action-Required": "change-and-execute" } : {}),
     });
-    response.end(sseData({ choices: [{ delta: { content: "I created it and ran it successfully." } }] }) + "data: [DONE]\n\n");
+    response.end(sseData({ choices: [{ delta: {
+      content: "I created it and ran it successfully.",
+      reasoning_content: `Planning workspace action ${requests.length}`,
+    } }] }) + "data: [DONE]\n\n");
   }, async (baseURL) => {
     const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
     const events = [];
@@ -547,6 +550,10 @@ test("runTurn rejects Veil action completions without required tool evidence", a
     assert.equal(requests.length, 3);
     assert.equal(summary.toolCalls, 0);
     assert.equal(events.filter((event) => event.type === "assistant.delta").length, 1);
+    assert.deepEqual(events.filter((event) => event.type === "assistant.reasoning.delta"), []);
+    assert.equal(requests[0].body.tool_choice, "auto");
+    assert.equal(requests[1].body.tool_choice, "required");
+    assert.equal(requests[2].body.tool_choice, "required");
     assert.doesNotMatch(events.find((event) => event.type === "assistant.delta").text, /created it/i);
     assert.match(activeSession.messages.at(-1).content, /couldn't complete the requested workspace action/i);
     assert.equal(fs.existsSync(path.join(root, "hello.py")), false);

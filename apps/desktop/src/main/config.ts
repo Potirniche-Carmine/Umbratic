@@ -79,6 +79,11 @@ export function endpointEditingAllowed(): boolean {
   return value !== "0" && value !== "false" && value !== "no" && value !== "off";
 }
 
+export function localEndpointForced(): boolean {
+  const value = env.UMBRATIC_FORCE_LOCAL_ENDPOINT?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
 export const defaultHarnessProfileId: HarnessProfileId = "engineering";
 
 export function isHarnessProfileId(value: unknown): value is HarnessProfileId {

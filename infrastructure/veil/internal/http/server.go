@@ -103,7 +103,7 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if requirement := policy.WorkspaceActionRequirement(input.Messages); route == prompts.EngineeringChat && requirement != policy.ActionNone {
+		if requirement := policy.WorkspaceActionRequirement(input.Messages); requirement != policy.ActionNone {
 			w.Header().Set(actionRequiredHeader, requirement)
 		}
 		if s.templateErr != nil {

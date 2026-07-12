@@ -32,11 +32,14 @@ func TestWorkspaceActionRequirement(t *testing.T) {
 		want    string
 	}{
 		{"Can you create a hello world script and verify it works?", ActionChangeAndExecute},
+		{"can you write me a markdown with suggestions to improve it", ActionChange},
 		{"Please fix the parser", ActionChange},
 		{"run the tests", ActionExecute},
 		{"How do I create a Python script?", ActionNone},
 		{"Explain the failing test", ActionNone},
 		{"Workspace tool results:\ncommand: ok", ActionNone},
+		{"Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nchange these to say hello Umbratic!", ActionChange},
+		{"Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nPlease address this review feedback:\n\nhello_world.py - Lines 1-3\nchange these to say hello Umbratic!", ActionChange},
 	}
 	for _, tt := range tests {
 		got := WorkspaceActionRequirement([]model.Message{{Role: "user", Content: tt.message}})

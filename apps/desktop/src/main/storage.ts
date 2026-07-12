@@ -16,6 +16,7 @@ import {
   isHarnessProfileId,
   isModelEndpointMode,
   isModelEndpointSoftware,
+  localEndpointForced,
   managedModelEndpointDefaults,
 } from "./config";
 import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from "./policy";
@@ -691,17 +692,20 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
   const settings = readRawSettings();
   const endpoint = activeModelEndpointSettings(settings) ?? {};
   const managed = managedModelEndpointDefaults();
+  const forceLocal = localEndpointForced();
   const mode =
-    managed?.mode ??
+    forceLocal ? "local" : managed?.mode ??
     (endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode());
-  const managedBaseUrl = managed?.baseUrl;
-  const managedSoftware = managed?.software;
-  const storedBaseUrl = typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : undefined;
+  const managedBaseUrl = forceLocal ? undefined : managed?.baseUrl;
+  const managedSoftware = forceLocal ? undefined : managed?.software;
+  const storedBaseUrl = !forceLocal && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : undefined;
   const software =
-    managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
+    forceLocal
+      ? defaultEndpointSoftware("local")
+      : managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
   const modelId =
     mode === "local"
-      ? typeof endpoint.modelId === "string" && endpoint.modelId.trim()
+      ? !forceLocal && typeof endpoint.modelId === "string" && endpoint.modelId.trim()
         ? endpoint.modelId.trim()
         : defaultLocalModelId
       : defaultEndpointModelId;

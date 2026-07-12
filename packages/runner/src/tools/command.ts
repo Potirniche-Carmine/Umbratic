@@ -34,9 +34,9 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let settled = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const terminate = () => {
       if (useProcessGroup && child.pid !== undefined) {
         try {
           process.kill(-child.pid, "SIGTERM");
@@ -46,7 +46,15 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
         }
       }
       child.kill();
-    }, timeoutMs);
+    };
+    const abort = () => { aborted = true; terminate(); };
+    ctx.signal?.addEventListener("abort", abort, { once: true });
+    if (ctx.signal?.aborted) abort();
+    const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", abort);
+    };
     child.stdout.on("data", (chunk: Buffer) => {
       const text = redactStreamText(chunk.toString("utf8"));
       stdout += text;
@@ -60,7 +68,7 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
     child.on("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       resolve({
         title: redactCommandText(command),
         output: [`exitCode=unknown`, stdout.trim(), stderr.trim(), error.message].filter(Boolean).join("\n"),
@@ -73,14 +81,16 @@ export async function commandTool(ctx: ToolContext, input: Record<string, unknow
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       const exitCode = code ?? null;
       resolve({
         title: redactCommandText(command),
         output: [`exitCode=${exitCode ?? "unknown"}`, stdout.trim(), stderr.trim()].filter(Boolean).join("\n"),
-        status: timedOut ? "timeout" : exitCode === 0 ? "success" : "runtime_error",
-        errorCode: timedOut ? "process_timeout" : exitCode === 0 ? undefined : "command_exit_nonzero",
-        errorMessage: timedOut
+        status: aborted ? "aborted" : timedOut ? "timeout" : exitCode === 0 ? "success" : "runtime_error",
+        errorCode: aborted ? "aborted" : timedOut ? "process_timeout" : exitCode === 0 ? undefined : "command_exit_nonzero",
+        errorMessage: aborted
+          ? "Command was aborted."
+          : timedOut
           ? `Command timed out after ${timeoutMs} ms.`
           : exitCode === 0 ? undefined : `Command exited with code ${exitCode ?? "unknown"}.`,
         exitCode,

@@ -192,6 +192,11 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "assistant",
   ]);
   assert.deepEqual(timeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  const modelFacingPrompt = "Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nRun tests";
+  const displayTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([events[0]], modelFacingPrompt)));
+  assert.equal(displayTimeline.length, 1);
+  assert.equal(displayTimeline[0].text, "Run tests");
+  assert.doesNotMatch(displayTimeline[0].text, /workspace context/i);
   assert.deepEqual(
     JSON.parse(JSON.stringify(composerTimelineFromEvents([
       { type: "assistant.delta", taskId: "task-1", text: "Streaming now", at: "2026-01-01T00:00:05.000Z" },

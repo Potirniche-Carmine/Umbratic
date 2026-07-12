@@ -6,6 +6,7 @@ import type { SessionContextStore } from "../context/sessionContextStore.js";
 
 export type ToolResultStatus =
   | "success"
+  | "aborted"
   | "permission_denied"
   | "policy_blocked"
   | "validation_error"
@@ -13,6 +14,7 @@ export type ToolResultStatus =
   | "timeout";
 
 export type ToolErrorCode =
+  | "aborted"
   | "tool_disabled"
   | "unknown_tool"
   | "invalid_arguments"
@@ -45,6 +47,7 @@ export type ToolContext = {
   enabledTools: readonly RunnerToolName[];
   skills?: readonly RunnerSkillConfig[];
   contextStore?: SessionContextStore;
+  signal?: AbortSignal;
   askPermission(input: { permissionKind: string; summary: string; autoAllow: boolean }): Promise<"allow" | "deny">;
   emitToolOutput(toolCallId: string, stream: "stdout" | "stderr", text: string): void;
 };
@@ -92,6 +95,10 @@ export function normalizeRelativePath(filePath: string): string {
 export function pathInside(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export function throwIfToolAborted(ctx: Pick<ToolContext, "signal">, message = "Tool call was aborted."): void {
+  if (ctx.signal?.aborted) throw toolError("aborted", "aborted", message);
 }
 
 function realPathInside(root: string, candidate: string): boolean {

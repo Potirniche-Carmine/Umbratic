@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.mjs";
@@ -30,4 +31,10 @@ test("managed local Veil receives runtime settings, loopback binding, transient 
   assert.equal(env.VEIL_TELEMETRY_ENABLED, "false");
   assert.equal(env.VEIL_TELEMETRY_STORE_PATH, "");
   assert.notEqual(env.VEIL_AUTH_TOKEN, "user-facing-token-is-ignored");
+});
+
+test("managed local Veil source keeps readiness independent of go run output and cleans up Windows process trees", () => {
+  const source = fs.readFileSync(new URL("../src/main/localVeil.ts", import.meta.url), "utf8");
+  assert.match(source, /probeLocalVeil\(baseUrl, authToken/);
+  assert.match(source, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);
 });

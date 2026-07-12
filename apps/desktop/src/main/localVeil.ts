@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -70,7 +71,33 @@ function localVeilCommand(): { command: string; args: string[]; cwd?: string } {
 }
 
 function stopChild(child: ChildProcess | null) {
-  if (child && child.exitCode === null && !child.killed) child.kill();
+  if (!child || child.exitCode !== null || child.killed) return;
+  if (process.platform === "win32" && child.pid) {
+    const terminator = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    terminator.unref();
+    return;
+  }
+  child.kill();
+}
+
+function probeLocalVeil(baseUrl: string, authToken: string, onReady: () => void): () => void {
+  const probe = () => {
+    const request = http.get(`${baseUrl}/api/health`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+      timeout: 1000,
+    }, (response) => {
+      response.resume();
+      onReady();
+    });
+    request.once("timeout", () => request.destroy());
+    request.once("error", () => undefined);
+  };
+  probe();
+  const interval = setInterval(probe, 150);
+  return () => clearInterval(interval);
 }
 
 export function localVeilEnvironment(
@@ -144,8 +171,10 @@ async function startLocalVeil(settings: ModelEndpointSettings, key: string): Pro
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => finish(new Error(`Timed out waiting for local Veil to start.${output.trim() ? ` ${output.trim()}` : ""}`)), 15000);
+    const stopProbing = probeLocalVeil(baseUrl, authToken, () => finish());
     const cleanup = () => {
       clearTimeout(timer);
+      stopProbing();
       child.stdout?.off("data", onData);
       child.stderr?.off("data", onData);
       child.off("error", onError);

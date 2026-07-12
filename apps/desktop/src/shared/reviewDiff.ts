@@ -20,6 +20,20 @@ export type DiffHunk = {
 
 export type ReviewFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "binary";
 
+export function parseGitPorcelainPaths(output: string): string[] {
+  const entries = output.split("\0");
+  const paths = new Set<string>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry.length < 4) continue;
+    const status = entry.slice(0, 2);
+    const filePath = entry.slice(3).replace(/\\/g, "/");
+    if (filePath) paths.add(filePath);
+    if (status.includes("R") || status.includes("C")) index += 1;
+  }
+  return Array.from(paths).sort((a, b) => a.localeCompare(b));
+}
+
 export type ReviewFile = {
   path: string;
   oldPath?: string;

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ensureReadableText, resolveWorkspacePath, shouldSkipEntry, type ToolContext, type ToolResult } from "./common.js";
+import { ensureReadableText, resolveWorkspacePath, shouldSkipEntry, throwIfToolAborted, type ToolContext, type ToolResult } from "./common.js";
 import { parseLocationSuffix } from "./searchQuery.js";
 import { getWorkspaceIndex } from "./workspaceIndex.js";
 
@@ -24,12 +24,14 @@ function directoryOutput(relative: string, depth: number, entries: string[], off
   return `Directory: ${title}\nDepth: ${depth}\nEntries shown: ${start}-${end} of ${total}\nListing status: ${status}\nEntries:\n${body}`;
 }
 
-function listDirectoryEntries(cwd: string, directoryAbsolute: string, depth: number): string[] {
+function listDirectoryEntries(ctx: ToolContext, directoryAbsolute: string, depth: number): string[] {
+  const cwd = ctx.cwd;
   const root = path.resolve(cwd);
   const maxDepth = Math.max(1, Math.floor(depth));
   const rows = new Set<string>();
 
   const walk = (current: string, displayParts: string[], level: number) => {
+    throwIfToolAborted(ctx);
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -58,6 +60,7 @@ function listDirectoryEntries(cwd: string, directoryAbsolute: string, depth: num
 }
 
 export async function readTool(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolResult> {
+  throwIfToolAborted(ctx);
   let filePath = typeof input.filePath === "string" ? input.filePath : typeof input.path === "string" ? input.path : "";
   const hasExplicitOffset = typeof input.offset === "number" && input.offset > 0;
   let offset = hasExplicitOffset ? Math.floor(input.offset as number) : 1;
@@ -82,7 +85,7 @@ export async function readTool(ctx: ToolContext, input: Record<string, unknown>)
   const { absolute, relative } = resolveWorkspacePath(ctx.cwd, filePath);
   const stat = fs.statSync(absolute);
   if (stat.isDirectory()) {
-    const entries = listDirectoryEntries(ctx.cwd, absolute, depth);
+    const entries = listDirectoryEntries(ctx, absolute, depth);
     const selected = entries.slice(offset - 1, offset - 1 + limit);
     return {
       title: relative || ".",
@@ -91,6 +94,7 @@ export async function readTool(ctx: ToolContext, input: Record<string, unknown>)
     };
   }
   const lines = ensureReadableText(absolute).replace(/\r\n/g, "\n").split("\n");
+  throwIfToolAborted(ctx);
   getWorkspaceIndex(ctx.cwd).recordRead(relative);
   const selected = lines.slice(offset - 1, offset - 1 + limit).map((line, index) => `${offset + index}: ${line}`);
   return { title: relative, output: limitReadOutput(selected.join("\n")), status: "success" };

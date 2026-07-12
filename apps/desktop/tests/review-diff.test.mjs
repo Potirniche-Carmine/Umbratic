@@ -6,6 +6,25 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.mjs";
 const review = loadTypeScriptModule(new URL("../src/shared/reviewDiff.ts", import.meta.url));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+test("HEAD status parsing includes only staged, unstaged, and untracked paths", () => {
+  const output = [
+    " M src/unstaged.ts",
+    "M  src/staged.ts",
+    "MM src/both.ts",
+    "?? notes/new file.md",
+    "R  src/renamed.ts",
+    "src/original.ts",
+    "",
+  ].join("\0");
+  assert.deepEqual(plain(review.parseGitPorcelainPaths(output)), [
+    "notes/new file.md",
+    "src/both.ts",
+    "src/renamed.ts",
+    "src/staged.ts",
+    "src/unstaged.ts",
+  ]);
+});
+
 test("normalized review patches preserve hunks, context, counters, and stable ids", () => {
   const patch = [
     "diff --git a/src/app.ts b/src/app.ts",

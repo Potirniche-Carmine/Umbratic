@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.mjs";
@@ -104,4 +105,9 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1", version: 1 }]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);
+});
+
+test("compiled sandboxed preload has no relative runtime dependencies", () => {
+  const source = fs.readFileSync(new URL("../dist-electron/preload/preload.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /require\(["']\.\.?\//);
 });

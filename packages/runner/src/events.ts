@@ -56,6 +56,15 @@ export type UmbraticRunnerEvent =
       at: string;
     }
   | {
+      type: "tool.started";
+      taskId: string;
+      toolCallId: string;
+      toolKind: string;
+      queueWaitMs?: number;
+      planFingerprint?: string;
+      at: string;
+    }
+  | {
       type: "tool.output";
       taskId: string;
       toolCallId: string;
@@ -64,6 +73,14 @@ export type UmbraticRunnerEvent =
       redacted: boolean;
       at: string;
       endedAt?: string;
+    }
+  | {
+      type: "tool.execution.update";
+      taskId: string;
+      toolCallId: string;
+      stream?: "stdout" | "stderr";
+      text: string;
+      at: string;
     }
   | {
       type: "tool.policy.stage";

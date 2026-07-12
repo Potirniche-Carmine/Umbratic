@@ -78,6 +78,7 @@ function desktopEnvFromVeil(veilEnv) {
     ...process.env,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
     UMBRATIC_DEFAULT_ENDPOINT_MODE: "local",
+    UMBRATIC_FORCE_LOCAL_ENDPOINT: "1",
     UMBRATIC_LOCAL_MODEL_ID: veilEnv.VEIL_MODEL || "",
     UMBRATIC_LOCAL_RUNTIME_BASE_URL: runtimeBaseUrl,
     UMBRATIC_MODEL_SOFTWARE: process.env.UMBRATIC_MODEL_SOFTWARE || software,
