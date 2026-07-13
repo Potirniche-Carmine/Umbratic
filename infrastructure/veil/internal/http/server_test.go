@@ -175,6 +175,7 @@ func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
 	}{
 		{"/api/engineering/chat", "Can you create a hello world script and verify it works?", policy.ActionChangeAndExecute},
 		{"/api/engineering/chat", "can you write me a markdown with suggestions to improve it", policy.ActionChange},
+		{"/api/engineering/chat", "I want you to look at each file and describe exactly what each is", policy.ActionInspect},
 		{"/api/marketing/chat", "Create a launch brief file", policy.ActionChange},
 		{"/api/sales/chat", "Create a QBR deck", policy.ActionChange},
 	}

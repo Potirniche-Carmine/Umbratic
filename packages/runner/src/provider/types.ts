@@ -17,7 +17,7 @@ export type ProviderStreamResult = {
   toolCalls: Map<number, ProviderToolCall>;
   emittedContent: boolean;
   emittedReasoning: boolean;
-  actionRequirement: "" | "change" | "execute" | "change-and-execute";
+  actionRequirement: "" | "change" | "execute" | "inspect" | "change-and-execute";
   truncatedToolArguments?: boolean;
 };
 
@@ -29,5 +29,7 @@ export type ProviderStreamInput = {
   requireToolCall?: boolean;
   parallelToolCalls?: boolean;
   suppressOutput: boolean;
+  actionRequirementKnown: boolean;
+  guardToolAnnouncements: boolean;
   emit?: (event: UmbraticRunnerEvent) => void;
 };

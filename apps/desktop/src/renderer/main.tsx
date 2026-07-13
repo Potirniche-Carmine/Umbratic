@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BackendUiEventInput } from "../shared/backendEvents";
+import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
@@ -804,6 +805,7 @@ const defaultIdeChoices: IdeChoice[] = [
 const composerTestParams = new URLSearchParams(window.location.search);
 const composerTestMode = composerTestParams.has("composerTest");
 const composerTestRunning = composerTestParams.get("composerTest") === "running";
+const composerTestToolIssue = composerTestParams.has("toolIssue");
 const composerTestAttachments: ChatAttachment[] = [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
@@ -858,7 +860,7 @@ const composerTestEvents: BackendUiEvent[] = [
     type: "command.finished",
     taskId: "composer-test",
     id: "composer-fixture-search",
-    exitCode: 0,
+    exitCode: composerTestToolIssue ? 1 : 0,
   },
   {
     type: "command.started",
@@ -1685,55 +1687,8 @@ function stateLabel(state?: TaskState): string {
   return state.replace(/_/g, " ");
 }
 
-const titleStopWords = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "be",
-  "can",
-  "could",
-  "for",
-  "i",
-  "in",
-  "is",
-  "it",
-  "let",
-  "lets",
-  "make",
-  "my",
-  "of",
-  "on",
-  "please",
-  "should",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "with",
-  "would",
-  "you",
-]);
-
-function titleWord(word: string): string {
-  if (!word) return word;
-  if (word === word.toUpperCase() || word.includes("_") || word.includes("-")) return word;
-  return `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`;
-}
-
 function titleFromPrompt(prompt: string): string {
-  const text = prompt
-    .split(/\n\s*\nAttached files:/i)[0]
-    .replace(/[`*_#[\]()>.,!?;:]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const words = text.match(/[A-Za-z0-9][A-Za-z0-9'_-]*/g) ?? [];
-  const summaryWords = words
-    .filter((word) => !titleStopWords.has(word.toLowerCase().replace(/'s$/, "")))
-    .slice(0, 5);
-  const title = (summaryWords.length >= 3 ? summaryWords : words.slice(0, 5)).map(titleWord).join(" ");
-  return title ? title.slice(0, 72) : "New chat";
+  return chatTitleFromFirstMessage(prompt);
 }
 
 function chatDisplayTitle(chat: ChatRecord): string {
@@ -2513,7 +2468,7 @@ function activityDurationMs(item: Extract<ComposerTimelineItem, { type: "activit
   return Math.max(0, end - start);
 }
 
-function activitySummary(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): string {
+export function activitySummary(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): string {
   const duration = formatDuration(activityDurationMs(item, now));
   if (!item.finished) {
     return duration ? `Generating a response for ${duration}` : "Generating a response";
@@ -2539,6 +2494,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   const runs = new Map<string, CommandRun>();
   const items: ComposerTimelineItem[] = [];
   let assistantBuffer = "";
+  let assistantNeedsSeparator = false;
   let assistantIndex = 0;
   let activitySegments: ComposerActivitySegment[] = [];
   let activityStartedAt: string | undefined;
@@ -2561,11 +2517,13 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
     if (!text) {
       assistantBuffer = "";
+      assistantNeedsSeparator = false;
       return;
     }
     assistantIndex += 1;
     items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text, streaming: streaming || undefined });
     assistantBuffer = "";
+    assistantNeedsSeparator = false;
   };
 
   const markActivityTime = (startedAt?: string, endedAt?: string) => {
@@ -2664,12 +2622,18 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
       flushReasoning();
-      flushActivity();
-      assistantBuffer = `${assistantBuffer}${event.text}`;
+      const separator = assistantNeedsSeparator
+        && assistantBuffer.trim()
+        && !/\s$/.test(assistantBuffer)
+        && !/^\s/.test(event.text)
+        ? "\n\n"
+        : "";
+      assistantBuffer = `${assistantBuffer}${separator}${event.text}`;
+      assistantNeedsSeparator = false;
       continue;
     }
     if (event.type === "assistant.reasoning.delta") {
-      flushAssistant();
+      if (assistantBuffer.trim()) assistantNeedsSeparator = true;
       reasoningStartedAt = reasoningStartedAt ?? event.at;
       reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
       reasoningBuffer = `${reasoningBuffer}${event.text}`;
@@ -2683,7 +2647,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "command.started") {
       flushReasoning();
-      flushAssistant();
+      if (assistantBuffer.trim()) assistantNeedsSeparator = true;
       const existingRun = runs.get(event.id);
       if (existingRun) {
         existingRun.command = event.command;
@@ -2773,19 +2737,53 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     if (event.type === "task.error") {
       flushReasoning();
       flushActivity();
+      assistantBuffer = `${assistantBuffer}${assistantBuffer.trim() ? "\n\n" : ""}I couldn't complete this request.\n\n${event.message}`;
       flushAssistant();
-      assistantIndex += 1;
-      items.push({
-        type: "assistant",
-        id: `assistant-${assistantIndex}`,
-        text: `I couldn't complete this request.\n\n${event.message}`,
-      });
     }
   }
   flushReasoning(taskState !== "running");
   flushActivity(taskState !== "running");
   flushAssistant(taskState === "running");
   return items;
+}
+
+export function reconcileActivityDisclosureState(
+  currentExpandedIds: Set<string>,
+  items: ComposerTimelineItem[],
+  taskId: string | undefined,
+  currentAutoOpenedKeys: Set<string>,
+): { expandedIds: Set<string>; autoOpenedKeys: Set<string>; newlyOpenedIds: string[] } {
+  const activities = items.filter(
+    (item): item is Extract<ComposerTimelineItem, { type: "activity" }> => item.type === "activity",
+  );
+  const activityKey = (id: string) => `${taskId ?? "no-task"}:${id}`;
+  const activeIds = new Set(activities.map((item) => item.id));
+  const activeKeys = new Set(activities.map((item) => activityKey(item.id)));
+  const nextExpandedIds = new Set(currentExpandedIds);
+  const nextAutoOpenedKeys = new Set(currentAutoOpenedKeys);
+  const newlyOpenedIds: string[] = [];
+
+  for (const activity of activities) {
+    const key = activityKey(activity.id);
+    if (!activity.finished && !nextAutoOpenedKeys.has(key)) {
+      nextAutoOpenedKeys.add(key);
+      nextExpandedIds.add(activity.id);
+      newlyOpenedIds.push(activity.id);
+      continue;
+    }
+    if (activity.finished && nextAutoOpenedKeys.delete(key)) {
+      nextExpandedIds.delete(activity.id);
+    }
+  }
+
+  for (const id of nextExpandedIds) {
+    if (!activeIds.has(id)) nextExpandedIds.delete(id);
+  }
+  for (const key of nextAutoOpenedKeys) {
+    if (!activeKeys.has(key)) nextAutoOpenedKeys.delete(key);
+  }
+
+  return { expandedIds: nextExpandedIds, autoOpenedKeys: nextAutoOpenedKeys, newlyOpenedIds };
 }
 
 export function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
@@ -3224,9 +3222,12 @@ function App() {
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
-  const [appearanceSettings, setAppearanceSettings] = useState(() => {
+  const [appearanceSettings, setAppearanceSettings] = useState<AppearanceSettings>(() => {
     const saved = readAppearanceSettings();
-    return composerTestMode && composerTestParams.get("theme") === "light" ? { ...saved, theme: "light" as const } : saved;
+    const fixtureTheme = composerTestParams.get("theme");
+    return composerTestMode && (fixtureTheme === "light" || fixtureTheme === "dark")
+      ? { ...saved, theme: fixtureTheme }
+      : saved;
   });
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
   const [availableFontFamilies, setAvailableFontFamilies] = useState<string[]>(() =>
@@ -3574,12 +3575,6 @@ function App() {
   }, [hasRunningActivity]);
 
   useEffect(() => {
-    const activeActivityIds = new Set(composerItems.filter((item) => item.type === "activity").map((item) => item.id));
-    const activityKey = (id: string) => `${task?.id ?? "no-task"}:${id}`;
-    const activeActivityKeys = new Set(Array.from(activeActivityIds, activityKey));
-    const runningActivityIds = composerItems
-      .filter((item): item is Extract<ComposerTimelineItem, { type: "activity" }> => item.type === "activity" && !item.finished)
-      .map((item) => item.id);
     const activeActivityToolIds = new Set<string>();
     for (const item of composerItems) {
       if (item.type !== "activity") continue;
@@ -3590,26 +3585,17 @@ function App() {
       }
     }
     setExpandedActivityIds((current) => {
-      let changed = false;
-      const next = new Set(current);
-      for (const id of runningActivityIds) {
-        const key = activityKey(id);
-        if (autoOpenedActivityIdsRef.current.has(key)) continue;
-        autoOpenedActivityIdsRef.current.add(key);
-        next.add(id);
+      const next = reconcileActivityDisclosureState(
+        current,
+        composerItems,
+        task?.id,
+        autoOpenedActivityIdsRef.current,
+      );
+      autoOpenedActivityIdsRef.current = next.autoOpenedKeys;
+      for (const id of next.newlyOpenedIds) {
         activityFollowScrollRef.current.set(id, true);
-        changed = true;
       }
-      for (const id of next) {
-        if (activeActivityIds.has(id)) continue;
-        next.delete(id);
-        changed = true;
-      }
-      for (const key of autoOpenedActivityIdsRef.current) {
-        if (activeActivityKeys.has(key)) continue;
-        autoOpenedActivityIdsRef.current.delete(key);
-      }
-      return changed ? next : current;
+      return next.expandedIds;
     });
     setExpandedActivityToolIds((current) => {
       let changed = false;
@@ -4095,6 +4081,7 @@ function App() {
       return [
         {
           ...chat,
+          title: stableChatTitle(existing?.title, nextTask.prompt),
           createdAt: existing?.createdAt ?? chat.createdAt,
           repositoryName: chat.repositoryName ?? existing?.repositoryName,
           repositoryPath: chat.repositoryPath ?? existing?.repositoryPath,

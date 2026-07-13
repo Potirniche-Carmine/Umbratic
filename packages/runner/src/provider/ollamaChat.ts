@@ -1,6 +1,7 @@
 import { nowIso } from "../events.js";
 import { modelHttpRequest, readBodyText } from "./http.js";
 import { appendOllamaToolCalls, isRecord, reasoningContent, textContent } from "./toolCallAssembler.js";
+import { createProviderStreamEmitter } from "./streamOutput.js";
 import type { ProviderStreamInput, ProviderStreamResult } from "./types.js";
 
 export async function streamOllamaChat(input: ProviderStreamInput & { url: string; headers: Record<string, string> }): Promise<ProviderStreamResult> {
@@ -15,6 +16,10 @@ export async function streamOllamaChat(input: ProviderStreamInput & { url: strin
     throw new Error(`model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`);
   }
   const acc: ProviderStreamResult = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" };
+  const stream = createProviderStreamEmitter(input.emit, {
+    suppressContent: input.suppressOutput,
+    guardToolAnnouncements: input.guardToolAnnouncements,
+  });
   let buffer = "";
   const processLine = (line: string) => {
     if (!line.trim()) return;
@@ -23,8 +28,14 @@ export async function streamOllamaChat(input: ProviderStreamInput & { url: strin
     const message = isRecord(row.message) ? row.message : {};
     const text = textContent(message.content);
     const reasoning = reasoningContent(message);
-    if (text) { acc.content += text; if (!input.suppressOutput && input.emit) { acc.emittedContent = true; input.emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() }); } }
-    if (reasoning) { acc.reasoning += reasoning; if (!input.suppressOutput && input.emit) { acc.emittedReasoning = true; input.emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() }); } }
+    if (text) {
+      acc.content += text;
+      if (input.emit) {
+        acc.emittedContent = true;
+        stream.emit({ type: "assistant.delta", taskId: session.taskId, text, at: nowIso() });
+      }
+    }
+    if (reasoning) { acc.reasoning += reasoning; if (input.emit) { acc.emittedReasoning = true; stream.emit({ type: "assistant.reasoning.delta", taskId: session.taskId, text: reasoning, at: nowIso() }); } }
     appendOllamaToolCalls(acc, message.tool_calls);
   };
   for await (const chunk of response.body) {
@@ -33,5 +44,6 @@ export async function streamOllamaChat(input: ProviderStreamInput & { url: strin
     while (newline >= 0) { processLine(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1); newline = buffer.indexOf("\n"); }
   }
   processLine(buffer);
+  stream.flush();
   return acc;
 }

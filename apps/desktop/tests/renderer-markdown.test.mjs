@@ -152,6 +152,7 @@ test("skill previews render markdown content and source filters split system fro
 
 test("diff parsing, command aggregation, pending permissions, and timelines reflect real event streams", () => {
   const {
+    activitySummary,
     assistantTextFromEvents,
     commandDetailLabel,
     commandLabel,
@@ -163,6 +164,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     formatDiffStats,
     parseUnifiedDiff,
     pendingPermissionFromEvents,
+    reconcileActivityDisclosureState,
   } = loadRenderer();
 
   const diff = ["diff --git a/src/app.ts b/src/app.ts", "@@ -2,2 +2,3 @@", " const a = 1;", "-old", "+new", "+next"].join("\n");
@@ -212,6 +214,44 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   ])));
   assert.deepEqual(repeatedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
   assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First thought.\n\nSecond thought.");
+  const interleavedTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.reasoning.delta", taskId: "task-1", text: "First thought.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
+    events[2],
+    events[3],
+    events[4],
+    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Second thought.", at: "2026-01-01T00:00:05.500Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(interleavedTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(interleavedTimeline.filter((item) => item.type === "activity").length, 1);
+  assert.equal(interleavedTimeline.filter((item) => item.type === "assistant").length, 1);
+  assert.equal(interleavedTimeline[1].segments[0].text, "First thought.\n\nSecond thought.");
+  assert.equal(interleavedTimeline[2].text, "I’ll inspect the project.\n\nHere is the complete answer.");
+
+  const failedToolTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    { type: "command.started", taskId: "task-1", id: "read-1", command: "read .", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "read-1", exitCode: 1, status: "validation_error", at: "2026-01-01T00:00:02.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Partial answer", at: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
+  ], undefined, "completed")));
+  assert.equal(activitySummary(failedToolTimeline[1]), "Generated a response in 1 second");
+
+  const runningActivity = { ...interleavedTimeline[1], finished: false };
+  const openedDisclosure = reconcileActivityDisclosureState(new Set(), [runningActivity], "task-1", new Set());
+  assert.deepEqual([...openedDisclosure.expandedIds], ["activity-1"]);
+  assert.deepEqual([...openedDisclosure.autoOpenedKeys], ["task-1:activity-1"]);
+  const closedDisclosure = reconcileActivityDisclosureState(
+    openedDisclosure.expandedIds,
+    [interleavedTimeline[1]],
+    "task-1",
+    openedDisclosure.autoOpenedKeys,
+  );
+  assert.deepEqual([...closedDisclosure.expandedIds], []);
+  assert.deepEqual([...closedDisclosure.autoOpenedKeys], []);
   const modelFacingPrompt = "Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nRun tests";
   const displayTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([events[0]], modelFacingPrompt)));
   assert.equal(displayTimeline.length, 1);

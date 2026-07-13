@@ -10,6 +10,7 @@ import type { ToolContext, ToolErrorCode, ToolResult, ToolResultStatus } from ".
 import { configuredProviderEndpointUrl } from "./provider/local.js";
 import { streamProviderChat } from "./provider/chat.js";
 import { providerCapabilities } from "./provider/historyEncoder.js";
+import { parseToolArguments } from "./tools/schema.js";
 
 type ToolCall = {
   id: string;
@@ -23,7 +24,7 @@ type StreamAccumulator = {
   toolCalls: Map<number, ToolCall>;
   emittedContent: boolean;
   emittedReasoning: boolean;
-  actionRequirement: "" | "change" | "execute" | "change-and-execute";
+  actionRequirement: "" | "change" | "execute" | "inspect" | "change-and-execute";
   toolPlan?: ToolPlan;
 };
 
@@ -293,6 +294,28 @@ export function normalizedTurnToolCalls(calls: ReadonlyMap<number, ToolCall>, tu
     });
 }
 
+function repairInspectionInventoryRead(calls: ToolCall[], required: boolean): ToolCall[] {
+  if (!required) return calls;
+  let repaired = false;
+  return calls.map((call) => {
+    if (repaired || toolNameFromProvider(call.name).name !== "read") return call;
+    try {
+      const input = parseToolArguments(call.arguments);
+      if (typeof input.filePath === "string" && input.filePath.trim()) return call;
+    } catch {
+      // A required exhaustive inspection has one unambiguous, read-only starting point.
+    }
+    repaired = true;
+    return { ...call, arguments: JSON.stringify({ filePath: ".", depth: 3 }) };
+  });
+}
+
+function announcesWorkspaceToolUseWithoutCalling(content: string): boolean {
+  const text = content.replace(/\s+/g, " ").trim();
+  if (!text || text.length > 600) return false;
+  return /\b(?:let me|i(?:'ll| will| need to| should))\s+(?:now\s+)?(?:read|inspect|check|search|open|list|look at|review|run|test|verify|edit|write|create|update|fetch|grab)\b/i.test(text);
+}
+
 function compactProseToolHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
   const toolContextIndexes = messages
     .map((message, index) => ({ message, index }))
@@ -359,7 +382,7 @@ function toolRoleHistorySupported(session: Session): boolean {
 async function streamModel(
   session: Session,
   emit?: (event: UmbraticRunnerEvent) => void,
-  options: { includeTools?: boolean; requireToolCall?: boolean; suppressOutput?: boolean } = {},
+  options: { includeTools?: boolean; requireToolCall?: boolean; suppressOutput?: boolean; actionRequirementKnown?: boolean; guardToolAnnouncements?: boolean } = {},
 ): Promise<StreamAccumulator> {
   const url = configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath);
   const capabilities = providerCapabilities(url);
@@ -379,6 +402,8 @@ async function streamModel(
     requireToolCall: !!options.requireToolCall,
     parallelToolCalls: toolPlan.parallelToolCalls,
     suppressOutput: !!options.suppressOutput,
+    actionRequirementKnown: !!options.actionRequirementKnown,
+    guardToolAnnouncements: !!options.guardToolAnnouncements,
     emit,
     lastMessageIsToolContext: lastMessageIsToolContext(session),
   });
@@ -443,36 +468,89 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
     let repeatedToolTurns = 0;
     let actionRequirement: StreamAccumulator["actionRequirement"] = "";
     let actionRetries = 0;
+    let announcedToolUseRetries = 0;
+    let finalAnswerPrompted = false;
     let changedWorkspace = false;
     let executedCommand = false;
+    let completedWorkspaceInventory = false;
+    const actionEvidenceSatisfied = () => {
+      if (actionRequirement === "change") return changedWorkspace;
+      if (actionRequirement === "execute") return executedCommand;
+      if (actionRequirement === "inspect") return completedWorkspaceInventory;
+      if (actionRequirement === "change-and-execute") return changedWorkspace && executedCommand;
+      return true;
+    };
     for (let turn = 0; turn < maxToolTurns; turn++) {
+      const readyForFinalAnswer = !!actionRequirement && actionEvidenceSatisfied();
+      if (readyForFinalAnswer && !finalAnswerPrompted) {
+        finalAnswerPrompted = true;
+        events.emit({ type: "assistant.answer.started", taskId: session.taskId, at: nowIso() });
+        session.messages.push({
+          role: "user",
+          content: "The required workspace evidence is now available. Provide the complete final answer to the original request. Do not announce additional work unless you make the structured tool call in this turn.",
+        });
+      }
       const acc = await streamModel(session, events.emit, {
-        requireToolCall: !!actionRequirement && actionRetries > 0,
-        suppressOutput: !!actionRequirement,
+        requireToolCall: !!actionRequirement && actionRetries > 0 && !actionEvidenceSatisfied(),
+        suppressOutput: !!actionRequirement && !readyForFinalAnswer,
+        actionRequirementKnown: !!actionRequirement,
+        guardToolAnnouncements: readyForFinalAnswer,
       });
       actionRequirement ||= acc.actionRequirement;
       recordModelTurn(summary, acc);
       events.flush();
-      const toolCalls = normalizedTurnToolCalls(acc.toolCalls, `${session.id}-turn-${summary.turns}`);
+      const toolCalls = repairInspectionInventoryRead(
+        normalizedTurnToolCalls(acc.toolCalls, `${session.id}-turn-${summary.turns}`),
+        actionRequirement === "inspect" && !completedWorkspaceInventory,
+      );
       summary.toolCalls += toolCalls.length;
       if (toolCalls.length === 0) {
         const changeSatisfied = (actionRequirement !== "change" && actionRequirement !== "change-and-execute") || changedWorkspace;
         const executeSatisfied = (actionRequirement !== "execute" && actionRequirement !== "change-and-execute") || executedCommand;
-        if (actionRequirement && (!changeSatisfied || !executeSatisfied)) {
+        const inspectionSatisfied = actionRequirement !== "inspect" || completedWorkspaceInventory;
+        if (actionRequirement && (!changeSatisfied || !executeSatisfied || !inspectionSatisfied)) {
           if (actionRetries < 2) {
             actionRetries += 1;
-            const missing = [!changeSatisfied ? "a successful file edit" : "", !executeSatisfied ? "a successful command run" : ""].filter(Boolean).join(" and ");
+            const missing = [
+              !changeSatisfied ? "a successful file edit" : "",
+              !executeSatisfied ? "a successful command run" : "",
+              !inspectionSatisfied ? "a complete workspace directory read of . (continue with offset if the listing is partial)" : "",
+            ].filter(Boolean).join(" and ");
             session.messages.push({
               role: "user",
               content: `The requested workspace action is not complete. It still requires ${missing}. Use the available structured workspace tools now. Do not answer with code fences or simulated command output.`,
             });
             continue;
           }
-          const missing = [!changeSatisfied ? "change the requested file" : "", !executeSatisfied ? "run the requested verification command" : ""].filter(Boolean).join(" or ");
+          const missing = [
+            !changeSatisfied ? "change the requested file" : "",
+            !executeSatisfied ? "run the requested verification command" : "",
+            !inspectionSatisfied ? "complete the workspace directory inventory" : "",
+          ].filter(Boolean).join(" or ");
           const fallback = `I couldn't complete the requested workspace action because the model did not use a structured tool call to ${missing}. I won't claim that the remaining work succeeded.`;
           summary.assistantTextChars += fallback.length;
           appendAssistantCompletion(session, { ...acc, content: "", reasoning: "", emittedContent: false, emittedReasoning: false }, events, fallback);
           return summary;
+        }
+        if (actionRequirement && announcesWorkspaceToolUseWithoutCalling(acc.content)) {
+          if (announcedToolUseRetries < 2) {
+            announcedToolUseRetries += 1;
+            session.messages.push({
+              role: "user",
+              content: "Your previous response only announced future workspace work. Either use a structured tool call now, or provide the complete final answer from the successful tool results already available. Do not end with a promise to read, inspect, check, or run something later.",
+            });
+            continue;
+          }
+          session.messages.push({
+            role: "user",
+            content: "Provide the complete final answer now using the successful workspace results already available. Do not announce more work.",
+          });
+          return await finishWithoutTools(
+            session,
+            summary,
+            events,
+            "The workspace inspection completed, but the final summary could not be generated.",
+          );
         }
         appendAssistantCompletion(session, acc, events);
         return summary;
@@ -534,6 +612,14 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
           recordNonSuccessToolResult(summary, toolCall.name, result);
           if (result.status === "success" && (toolCall.name === "edit" || toolCall.name === "write")) changedWorkspace = true;
           if (result.status === "success" && toolCall.name === "command") executedCommand = true;
+          if (
+            result.status === "success"
+            && toolCall.name === "read"
+            && result.title === "."
+            && /(?:^|\n)Listing status: complete(?:\n|$)/.test(result.output)
+          ) {
+            completedWorkspaceInventory = true;
+          }
           toolResults.push({ call: toolCall, title: result.title, output: finalized.modelOutput, status: result.status });
           if (execution.status !== "success") {
             const message = redactText(executionResultText(execution));

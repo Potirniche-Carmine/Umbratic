@@ -1,6 +1,7 @@
 import { nowIso, type UmbraticRunnerEvent } from "../events.js";
 import { modelHttpRequest, readBodyText } from "./http.js";
 import { appendOpenAIToolDelta, invalidateTruncatedToolArguments, isRecord, reasoningContent, textContent } from "./toolCallAssembler.js";
+import { createProviderStreamEmitter } from "./streamOutput.js";
 import type { ProviderStreamInput, ProviderStreamResult } from "./types.js";
 
 function parseSseLine(line: string): unknown | null {
@@ -68,10 +69,14 @@ export async function streamOpenAIChat(input: ProviderStreamInput & { url: strin
     throw new Error(`model request failed: ${response.statusCode} ${response.statusMessage}${body ? ` ${body.slice(0, 400)}` : ""}`);
   }
   const header = response.headers["x-umbratic-action-required"];
-  const actionRequirement = header === "change" || header === "execute" || header === "change-and-execute" ? header : "";
-  const suppress = !!actionRequirement || input.suppressOutput;
-  const streamEmit = suppress ? undefined : input.emit;
-  const acc = await readOpenAIStream(session.taskId, response.body, streamEmit);
+  const actionRequirement = header === "change" || header === "execute" || header === "inspect" || header === "change-and-execute" ? header : "";
+  const suppress = input.suppressOutput || (!!actionRequirement && !input.actionRequirementKnown);
+  const stream = createProviderStreamEmitter(input.emit, {
+    suppressContent: suppress,
+    guardToolAnnouncements: input.guardToolAnnouncements,
+  });
+  const acc = await readOpenAIStream(session.taskId, response.body, stream.emit);
+  stream.flush();
   acc.actionRequirement = actionRequirement;
   return acc;
 }

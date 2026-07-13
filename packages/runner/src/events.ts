@@ -45,6 +45,7 @@ export function toolFailureRepairable(status: ToolResultStatus, code?: ToolError
 export type UmbraticRunnerEvent =
   | { type: "assistant.delta"; taskId: string; text: string; at: string; endedAt?: string }
   | { type: "assistant.reasoning.delta"; taskId: string; text: string; at: string; endedAt?: string }
+  | { type: "assistant.answer.started"; taskId: string; at: string }
   | {
       type: "tool.requested";
       taskId: string;

@@ -30,8 +30,34 @@ const (
 	ActionNone             = ""
 	ActionChange           = "change"
 	ActionExecute          = "execute"
+	ActionInspect          = "inspect"
 	ActionChangeAndExecute = "change-and-execute"
 )
+
+func requiresCompleteWorkspaceInspection(request string) bool {
+	inspectionPrefixes := []string{
+		"describe ", "explain ", "give me ", "give us ", "inspect ", "list ", "look at ", "read ", "summarize ", "tell me ", "tell us ",
+	}
+	exhaustivePhrases := []string{
+		"all files", "all the files", "all the specific files", "each file", "entire folder", "every file", "everything in the folder", "everything in this folder", "whole folder",
+	}
+	hasInspectionIntent := false
+	for _, prefix := range inspectionPrefixes {
+		if strings.HasPrefix(request, prefix) {
+			hasInspectionIntent = true
+			break
+		}
+	}
+	if !hasInspectionIntent {
+		return false
+	}
+	for _, phrase := range exhaustivePhrases {
+		if strings.Contains(request, phrase) {
+			return true
+		}
+	}
+	return false
+}
 
 // WorkspaceActionRequirement identifies evidence required by an explicit
 // workspace request. Veil owns this classification so clients cannot weaken
@@ -66,6 +92,9 @@ func WorkspaceActionRequirement(messages []model.Message) string {
 				break
 			}
 		}
+	}
+	if requiresCompleteWorkspaceInspection(latest) {
+		return ActionInspect
 	}
 
 	changeVerbs := []string{

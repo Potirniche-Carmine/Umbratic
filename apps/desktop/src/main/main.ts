@@ -18,6 +18,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
+
 import {
   endpointEditingAllowed,
   localProviderCatalog,
@@ -85,6 +87,7 @@ import {
   type TelemetryUploadEndpoint,
 } from "./telemetrySync";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
+import { RunnerAssistantOutputBuffer, type BufferedRunnerAssistantOutput } from "./runnerAssistantOutput";
 import {
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
@@ -745,60 +748,9 @@ function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdValue: st
   };
 }
 
-const titleStopWords = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "be",
-  "can",
-  "could",
-  "for",
-  "i",
-  "in",
-  "is",
-  "it",
-  "let",
-  "lets",
-  "make",
-  "my",
-  "of",
-  "on",
-  "please",
-  "should",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "with",
-  "would",
-  "you",
-]);
-
 function parseReasoningMode(value: unknown): ReasoningMode {
   void value;
   return "reasoning";
-}
-
-function titleWord(word: string): string {
-  if (!word) return word;
-  if (word === word.toUpperCase() || word.includes("_") || word.includes("-")) return word;
-  return `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`;
-}
-
-function chatTitleFromPrompt(prompt: string): string {
-  const text = prompt
-    .split(/\n\s*\nAttached files:/i)[0]
-    .replace(/[`*_#[\]()>.,!?;:]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const words = text.match(/[A-Za-z0-9][A-Za-z0-9'_-]*/g) ?? [];
-  const summaryWords = words
-    .filter((word) => !titleStopWords.has(word.toLowerCase().replace(/'s$/, "")))
-    .slice(0, 5);
-  const title = (summaryWords.length >= 3 ? summaryWords : words.slice(0, 5)).map(titleWord).join(" ");
-  return title ? title.slice(0, 72) : "New chat";
 }
 
 function createChat(input: unknown): ChatRecord {
@@ -985,7 +937,7 @@ function updateChatFromTask(task: TaskRecord) {
   const isolatedWorktree = taskUsesIsolatedWorktree(task);
   const next: ChatRecord = {
     id: task.chatId,
-    title: chatTitleFromPrompt(task.prompt),
+    title: stableChatTitle(existing?.title, task.prompt),
     createdAt: existing?.createdAt ?? task.createdAt,
     updatedAt: new Date().toISOString(),
     taskId: task.id,
@@ -3234,6 +3186,7 @@ async function runRunnerTask(
     saveTask(task);
 
     const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; toolKind?: RunnerToolId; finished: boolean }>();
+    const assistantOutput = new RunnerAssistantOutputBuffer();
     let delegatedToWorktree = false;
     let completed = false;
     let resolveCompletion!: () => void;
@@ -3285,6 +3238,15 @@ async function runRunnerTask(
       emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at, endedAt });
     };
 
+    const emitBufferedAssistantOutput = (output: BufferedRunnerAssistantOutput | null) => {
+      if (!output) return;
+      if (output.kind === "assistant") {
+        emitAssistantText(output.text, output.at, output.endedAt);
+        return;
+      }
+      emitReasoningText(output.text, output.at, output.endedAt);
+    };
+
     const ensureToolRun = (
       toolCallId: string,
       command: string,
@@ -3317,16 +3279,23 @@ async function runRunnerTask(
       if (eventTaskId !== task.id) return;
 
       if (type === "assistant.delta" && typeof event.text === "string") {
-        emitAssistantText(event.text, eventAt(event), eventEndedAt(event));
+        emitBufferedAssistantOutput(assistantOutput.append(event.text, eventAt(event), eventEndedAt(event)));
+        return;
+      }
+
+      if (type === "assistant.answer.started") {
+        emitBufferedAssistantOutput(assistantOutput.startAnswer());
         return;
       }
 
       if (type === "assistant.reasoning.delta" && typeof event.text === "string") {
+        emitBufferedAssistantOutput(assistantOutput.continueWorking());
         emitReasoningText(event.text, eventAt(event), eventEndedAt(event));
         return;
       }
 
       if (type === "tool.requested") {
+        emitBufferedAssistantOutput(assistantOutput.continueWorking());
         const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : `tool-${toolRuns.size + 1}`;
         const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
         const runnerToolKind = (
@@ -3450,6 +3419,7 @@ async function runRunnerTask(
       }
 
       if (type === "runner.error") {
+        emitBufferedAssistantOutput(assistantOutput.fail());
         const message = typeof event.message === "string" && event.message.trim() ? event.message : "Umbratic runner failed.";
         fail(message);
         return;
@@ -3457,6 +3427,7 @@ async function runRunnerTask(
 
       if (type === "session.idle") {
         finishOpenToolRuns();
+        emitBufferedAssistantOutput(assistantOutput.complete());
         finish();
       }
     };
@@ -3464,6 +3435,7 @@ async function runRunnerTask(
     const stream = beginRunnerEventStream(run, onEvent);
     void stream.done.catch((error) => {
       if (!run?.abortController.signal.aborted) {
+        emitBufferedAssistantOutput(assistantOutput.fail());
         fail(String(error instanceof Error ? error.message : error));
       }
     });
@@ -3473,7 +3445,7 @@ async function runRunnerTask(
     // runnerSessionId from an earlier process is stale and cannot be reused.
     const session = await runnerRequest<{ id: string }>(run, "/session", {
       method: "POST",
-      body: { title: chatTitleFromPrompt(intent) },
+      body: { title: chatTitleFromFirstMessage(intent) },
     });
     run.sessionId = session.id;
     task.runnerSessionId = session.id;
@@ -3694,7 +3666,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     existingChat ??
     createChat({
       id: nextChatId,
-      title: chatTitleFromPrompt(prompt),
+      title: chatTitleFromFirstMessage(prompt),
       repositoryName: refreshed.name,
       repositoryPath: hiddenWorkspace ? undefined : refreshed.rootPath,
     });

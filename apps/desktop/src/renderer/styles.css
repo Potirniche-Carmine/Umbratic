@@ -2275,7 +2275,11 @@ pre {
   width: 100%;
   min-width: 560px;
   border-collapse: collapse;
-  table-layout: auto;
+  table-layout: fixed;
+}
+
+.markdownContent th:first-child {
+  width: 26%;
 }
 
 .markdownContent th,

@@ -550,13 +550,128 @@ test("runTurn rejects Veil action completions without required tool evidence", a
     assert.equal(requests.length, 3);
     assert.equal(summary.toolCalls, 0);
     assert.equal(events.filter((event) => event.type === "assistant.delta").length, 1);
-    assert.deepEqual(events.filter((event) => event.type === "assistant.reasoning.delta"), []);
+    const reasoningEvents = events.filter((event) => event.type === "assistant.reasoning.delta");
+    assert.equal(reasoningEvents.length, 3);
+    assert.equal(reasoningEvents.every((event) => /Planning workspace action/.test(event.text)), true);
+    assert.equal(reasoningEvents.some((event) => /created it/i.test(event.text)), false);
     assert.equal(requests[0].body.tool_choice, "auto");
     assert.equal(requests[1].body.tool_choice, "required");
     assert.equal(requests[2].body.tool_choice, "required");
     assert.doesNotMatch(events.find((event) => event.type === "assistant.delta").text, /created it/i);
     assert.match(activeSession.messages.at(-1).content, /couldn't complete the requested workspace action/i);
     assert.equal(fs.existsSync(path.join(root, "hello.py")), false);
+  });
+});
+
+test("runTurn requires a complete root directory read for exhaustive inspection", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-inspection-enforcement-"));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "README.md"), "Project overview\n");
+  fs.writeFileSync(path.join(root, "src", "app.ts"), "export const app = true;\n");
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      ...(requests.length === 1 ? { "X-Umbratic-Action-Required": "inspect" } : {}),
+    });
+    if (requests.length === 1) {
+      response.end(sseData({ choices: [{ delta: { reasoning_content: "Planning the complete folder inventory.", tool_calls: [{
+        index: 0,
+        id: "call-read-one",
+        function: { name: "read", arguments: JSON.stringify({ filePath: "README.md" }) },
+      }] } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    if (requests.length === 2) {
+      response.end(sseData({ choices: [{ delta: { content: "That covers every file." } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    if (requests.length === 3) {
+      response.end(sseData({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "call-read-root",
+        function: { name: "read", arguments: JSON.stringify({ filePath: ".", depth: 3 }) },
+      }] } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    response.end(sseData({ choices: [{ delta: { content: "I inspected the complete project inventory." } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, {
+      enabledTools: ["read"],
+      chatEndpointPath: "/api/engineering/chat",
+    });
+
+    const summary = await runTurn(
+      activeSession,
+      [{ type: "text", text: "Look at every file and describe what each does" }],
+      (event) => events.push(event),
+      async () => "allow",
+    );
+
+    assert.equal(requests.length, 4);
+    assert.equal(summary.toolCalls, 2);
+    assert.equal(requests[2].body.tool_choice, "required");
+    assert.equal(requests[3].body.tool_choice, "auto");
+    assert.doesNotMatch(events.find((event) => event.type === "assistant.delta").text, /covers every file/i);
+    assert.equal(activeSession.messages.at(-1).content, "I inspected the complete project inventory.");
+    assert.equal(events.filter((event) => event.type === "tool.finished").every((event) => event.status === "success"), true);
+  });
+});
+
+test("runTurn repairs a malformed initial read for required workspace inventory", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-inspection-repair-"));
+  fs.writeFileSync(path.join(root, "README.md"), "Project overview\n");
+  const requests = [];
+
+  await withHttpServer(async (request, response) => {
+    requests.push({ url: request.url, body: await readRequestJson(request) });
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      ...(requests.length === 1 ? { "X-Umbratic-Action-Required": "inspect" } : {}),
+    });
+    if (requests.length === 1) {
+      response.end(sseData({ choices: [{ delta: { reasoning_content: "Planning the complete folder inventory.", tool_calls: [{
+        index: 0,
+        id: "call-malformed-read",
+        function: { name: "read", arguments: 'filePath: "."' },
+      }] } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    if (requests.length === 2) {
+      response.end(sseData({ choices: [{ delta: { content: "Let me read the remaining files to give you accurate descriptions:" } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    response.write(sseData({ choices: [{ delta: { content: "Here is the complete folder inventory" } }] }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    response.end(sseData({ choices: [{ delta: { content: " and a short description of every file." } }] }) + "data: [DONE]\n\n");
+  }, async (baseURL) => {
+    const { runTurn } = loadTypeScriptModule(loopPath, { cache: new Map() });
+    const events = [];
+    const activeSession = session(root, baseURL, {
+      enabledTools: ["read"],
+      chatEndpointPath: "/api/engineering/chat",
+    });
+
+    const summary = await runTurn(
+      activeSession,
+      [{ type: "text", text: "Tell me about this folder and each file in it" }],
+      (event) => events.push(event),
+      async () => "allow",
+    );
+
+    assert.equal(requests.length, 3);
+    assert.equal(summary.toolCalls, 1);
+    assert.equal(summary.failedToolCalls, 0);
+    assert.equal(events.find((event) => event.type === "tool.finished").status, "success");
+    assert.equal(events.filter((event) => event.type === "assistant.delta").length, 2);
+    assert.equal(events.some((event) => event.type === "assistant.reasoning.delta" && /Planning the complete folder inventory/.test(event.text)), true);
+    assert.equal(events.filter((event) => event.type === "assistant.answer.started").length, 1);
+    assert.ok(events.findIndex((event) => event.type === "assistant.answer.started") < events.findIndex((event) => event.type === "assistant.delta"));
+    assert.equal(activeSession.messages.at(-1).content, "Here is the complete folder inventory and a short description of every file.");
   });
 });
 
