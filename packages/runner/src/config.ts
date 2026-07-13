@@ -1,7 +1,7 @@
 import { assertAllowedProvider, type RunnerModelBoundary, type UmbraticProviderConfig } from "./provider/local.js";
 
 export type PermissionMode = "normal" | "bypass";
-export const runnerToolNames = ["read", "write", "edit", "search", "command"] as const;
+export const runnerToolNames = ["read", "write", "edit", "search", "workspace_graph", "command"] as const;
 export type RunnerToolName = (typeof runnerToolNames)[number];
 
 export type RunnerConfig = {
@@ -12,6 +12,7 @@ export type RunnerConfig = {
   skills: RunnerSkillConfig[];
   permissionMode: PermissionMode;
   enabledTools: RunnerToolName[];
+  workspaceGraph?: { artifactPath: string };
   diagnostics: RunnerDiagnosticsConfig;
   provider: UmbraticProviderConfig;
 };
@@ -140,6 +141,11 @@ export function loadRunnerConfig(): RunnerConfig {
     skills: skillsValue(config.skills),
     permissionMode: config.permissionMode === "bypass" ? "bypass" : "normal",
     enabledTools: enabledToolsValue(config.enabledTools),
+    workspaceGraph: (() => {
+      if (!config.workspaceGraph || typeof config.workspaceGraph !== "object" || Array.isArray(config.workspaceGraph)) return undefined;
+      const artifactPath = optionalString((config.workspaceGraph as Record<string, unknown>).artifactPath);
+      return artifactPath ? { artifactPath } : undefined;
+    })(),
     diagnostics: diagnosticsValue(config.diagnostics),
     provider: assertAllowedProvider({
       id: "company-endpoint",

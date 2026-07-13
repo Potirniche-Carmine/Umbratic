@@ -23,7 +23,7 @@ export function enabledToolSpecs(enabledTools: readonly RunnerToolName[]) {
 
 export function enabledModelToolSpecs(
   enabledTools: readonly RunnerToolName[],
-  options: { includeContextRetrieval?: boolean; includeSkillReader?: boolean } = {},
+  options: { includeContextRetrieval?: boolean; includeSkillReader?: boolean; includeWorkspaceGraph?: boolean } = {},
 ) {
   return buildToolPlan({ enabledTools, ...options }).modelSpecs;
 }
@@ -51,6 +51,7 @@ export async function runTool(
     enabledTools: ctx.enabledTools,
     includeContextRetrieval: canonical === "retrieve_context" && !!ctx.contextStore,
     includeSkillReader: canonical === "read_skill",
+    includeWorkspaceGraph: canonical === "workspace_graph" && !!ctx.workspaceGraph,
   });
   const call: ToolCall = {
     id: toolCall.id,

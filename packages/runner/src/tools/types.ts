@@ -3,6 +3,7 @@ import type { SessionContextStore } from "../context/sessionContextStore.js";
 import type { UmbraticRunnerEvent } from "../events.js";
 import type { CommandClass } from "../policy.js";
 import type { ToolErrorCode, ToolResultStatus } from "./common.js";
+import type { WorkspaceGraphService } from "../workspaceGraph/service.js";
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -39,6 +40,7 @@ export type ToolRuntimeContext = {
   enabledTools: readonly RunnerToolName[];
   skills?: readonly RunnerSkillConfig[];
   contextStore?: SessionContextStore;
+  workspaceGraph?: WorkspaceGraphService;
   signal: AbortSignal;
   askPermission(input: { permissionKind: string; summary: string; autoAllow: boolean }): Promise<"allow" | "deny">;
   emitToolOutput(toolCallId: string, stream: "stdout" | "stderr", text: string): void;

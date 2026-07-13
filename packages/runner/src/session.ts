@@ -4,6 +4,8 @@ import { loadRunnerConfig, type RunnerConfig } from "./config.js";
 import { SessionContextStore } from "./context/sessionContextStore.js";
 import type { UmbraticRunnerEvent } from "./events.js";
 import { PermissionBroker } from "./permission.js";
+import { WorkspaceGraphService } from "./workspaceGraph/service.js";
+import { WorkspaceGraphStore } from "./workspaceGraph/store.js";
 
 export type InputPart = { type: "text"; text: string } | { type: "image"; data_url: string };
 export type ChatContentPart =
@@ -28,6 +30,7 @@ export type Session = {
   messages: ChatMessage[];
   abortController: AbortController;
   contextStore: SessionContextStore;
+  workspaceGraph?: WorkspaceGraphService;
 };
 
 export class SessionStore {
@@ -46,6 +49,7 @@ export class SessionStore {
       messages: [],
       abortController: new AbortController(),
       contextStore: new SessionContextStore(),
+      ...(this.config.workspaceGraph ? { workspaceGraph: new WorkspaceGraphService(this.config.cwd, new WorkspaceGraphStore(this.config.workspaceGraph.artifactPath)) } : {}),
     };
     this.sessions.set(id, session);
     return session;

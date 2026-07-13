@@ -1,0 +1,6 @@
+[
+  { "id": "architecture", "question": "Which symbol persists users?", "expectedNodeIds": ["symbol:src/store.ts:function:save:1"] },
+  { "id": "path", "question": "How does createUser reach save?", "expectedEdgeIds": ["edge:createUser-calls-save"] },
+  { "id": "impact", "question": "What is affected by src/store.ts?", "expectedNodeIds": ["symbol:src/service.ts:function:createUser:2"] },
+  { "id": "no-answer", "question": "Where is billing implemented?", "expectedNodeIds": [] }
+]

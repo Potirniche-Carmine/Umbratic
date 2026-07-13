@@ -11,11 +11,13 @@ export type ToolPlanOptions = {
   includeContextRetrieval?: boolean;
   includeSkillReader?: boolean;
   providerParallelToolCalls?: boolean;
+  includeWorkspaceGraph?: boolean;
 };
 
 function included(definition: ToolDefinition<any>, options: ToolPlanOptions): boolean {
   const name = canonicalToolNameString(definition.name);
   if (definition.exposure === "deferred") return false;
+  if (name === "workspace_graph") return !!options.includeWorkspaceGraph && options.enabledTools.includes("workspace_graph");
   if (definition.exposure === "direct") return options.enabledTools.includes(name as RunnerToolName);
   if (name === "read_skill") return !!options.includeSkillReader;
   if (name === "retrieve_context") return !!options.includeContextRetrieval;

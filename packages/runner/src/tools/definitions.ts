@@ -11,6 +11,7 @@ import { resolveWorkspacePath, toolError, type ToolResult } from "./common.js";
 import { executionResult } from "./results.js";
 import { parseToolArguments, validateObjectArguments } from "./schema.js";
 import type { ToolDefinition, ToolInvocation } from "./types.js";
+import { validateWorkspaceGraphArgs } from "../workspaceGraph/tool.js";
 
 type Args = Record<string, unknown>;
 
@@ -112,6 +113,29 @@ export const toolDefinitions: readonly ToolDefinition<Args>[] = [
     validateArguments: (raw) => validate("search", raw, ["query", "limit"], ["query"], { numbers: ["limit"] }),
     createIntent: ({ arguments: input }) => ({ risk: "read", summary: `search ${quote(input.query as string)}` }),
     execute: async (invocation) => textResult(await searchTool(invocation.context, invocation.arguments)),
+  },
+  {
+    name: { name: "workspace_graph" }, label: "Workspace graph", exposure: "direct", executionMode: "parallel", risk: "read",
+    description: "Query bounded, source-backed workspace graph evidence for architecture and change impact. Actions: summary, query, explain, path, affected. Graph evidence may be stale or incomplete; verify exact code with read before editing.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["summary", "query", "explain", "path", "affected"] },
+        query: { type: "string" }, symbol: { type: "string" }, from: { type: "string" }, to: { type: "string" },
+        files: { type: "array", items: { type: "string" } }, symbols: { type: "array", items: { type: "string" } },
+        depth: { type: "number" }, limit: { type: "number" }, maxDepth: { type: "number" },
+        direction: { type: "string", enum: ["incoming", "outgoing", "both"] },
+      },
+      required: ["action"],
+    },
+    prepareArguments: parseToolArguments,
+    validateArguments: validateWorkspaceGraphArgs,
+    createIntent: ({ arguments: input }) => ({ risk: "read", summary: `workspace_graph ${input.action}` }),
+    execute: async (invocation) => {
+      if (!invocation.context.workspaceGraph) throw toolError("validation_error", "tool_disabled", "Workspace graph is not configured for this session.");
+      const result = invocation.context.workspaceGraph.query(invocation.arguments as never);
+      return textResult({ title: `workspace_graph ${invocation.arguments.action}`, output: JSON.stringify(result), status: "success", exitCode: 0 }, result);
+    },
   },
   {
     name: { name: "command" }, label: "Command", exposure: "direct", executionMode: "exclusive", risk: "command",

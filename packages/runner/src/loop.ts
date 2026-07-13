@@ -367,6 +367,7 @@ async function streamModel(
     enabledTools: session.config.enabledTools,
     includeContextRetrieval: session.contextStore.hasEntries(),
     includeSkillReader: session.config.skills.length > 0,
+    includeWorkspaceGraph: !!session.workspaceGraph,
     providerParallelToolCalls: capabilities.parallelToolCalls,
   });
   const includeTools = options.includeTools !== false;
@@ -490,6 +491,7 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         enabledTools: session.config.enabledTools,
         skills: session.config.skills,
         contextStore: session.contextStore,
+        workspaceGraph: session.workspaceGraph,
         signal: session.abortController.signal,
         askPermission: replyPermission,
         emitToolOutput(toolCallId, stream, text) {
@@ -508,6 +510,7 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         enabledTools: session.config.enabledTools,
         includeContextRetrieval: session.contextStore.hasEntries(),
         includeSkillReader: session.config.skills.length > 0,
+        includeWorkspaceGraph: !!session.workspaceGraph,
       });
       const runtimeCalls: RuntimeToolCall[] = toolCalls.map((call, index) => ({
         id: call.id,

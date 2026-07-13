@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { isBlockedPath, isGeneratedRuntimePath } from "../policy.js";
 import type { RunnerSkillConfig, RunnerToolName } from "../config.js";
 import type { SessionContextStore } from "../context/sessionContextStore.js";
+import type { WorkspaceGraphService } from "../workspaceGraph/service.js";
 
 export type ToolResultStatus =
   | "success"
@@ -47,6 +48,7 @@ export type ToolContext = {
   enabledTools: readonly RunnerToolName[];
   skills?: readonly RunnerSkillConfig[];
   contextStore?: SessionContextStore;
+  workspaceGraph?: WorkspaceGraphService;
   signal?: AbortSignal;
   askPermission(input: { permissionKind: string; summary: string; autoAllow: boolean }): Promise<"allow" | "deny">;
   emitToolOutput(toolCallId: string, stream: "stdout" | "stderr", text: string): void;

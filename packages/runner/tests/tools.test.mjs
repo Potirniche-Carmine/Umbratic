@@ -668,7 +668,7 @@ test("normalizeModelToolSpec removes schema shapes local model adapters handle p
 });
 
 test("toolSpecs keep small stable schemas for local model tool calling", () => {
-  assert.deepEqual(plain(toolSpecs.map((spec) => spec.function.name)), ["read", "write", "edit", "search", "command"]);
+  assert.deepEqual(plain(toolSpecs.map((spec) => spec.function.name)), ["read", "write", "edit", "search", "workspace_graph", "command"]);
   const readSpec = toolSpecs.find((spec) => spec.function.name === "read");
   const searchSpec = toolSpecs.find((spec) => spec.function.name === "search");
   assert.match(readSpec.function.description, /workspace file/i);
