@@ -54,11 +54,12 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	protocol       ProviderProtocol
-	chatEndpoint   string
-	modelsEndpoint string
-	apiKey         string
-	client         *http.Client
+	protocol         ProviderProtocol
+	chatEndpoint     string
+	modelsEndpoint   string
+	generateEndpoint string
+	apiKey           string
+	client           *http.Client
 }
 
 type ProviderError struct {
@@ -104,20 +105,47 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	generateEndpoint := ""
+	if protocol == ProtocolOllama {
+		generateEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "api/generate")
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
 	return &Client{
-		protocol:       protocol,
-		chatEndpoint:   chatEndpoint,
-		modelsEndpoint: modelsEndpoint,
-		apiKey:         cfg.APIKey,
+		protocol:         protocol,
+		chatEndpoint:     chatEndpoint,
+		modelsEndpoint:   modelsEndpoint,
+		generateEndpoint: generateEndpoint,
+		apiKey:           cfg.APIKey,
 		client: &http.Client{
 			Timeout: timeout,
 		},
 	}, nil
+}
+
+func (c *Client) ActivateModel(ctx context.Context, modelID string) error {
+	if c.protocol != ProtocolOllama {
+		return nil
+	}
+	resp, err := c.postJSON(ctx, c.generateEndpoint, map[string]any{
+		"model":  modelID,
+		"stream": false,
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ProviderError{StatusCode: resp.StatusCode}
+	}
+	return nil
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
@@ -489,7 +517,25 @@ func toolArgumentsString(value any) string {
 
 func ollamaMessages(messages []Message) []map[string]any {
 	rows := make([]map[string]any, 0, len(messages))
+	systemParts := make([]string, 0, 2)
 	for _, message := range messages {
+		if message.Role != "system" {
+			continue
+		}
+		if content := ollamaContent(message.Content); content != "" {
+			systemParts = append(systemParts, content)
+		}
+	}
+	if len(systemParts) > 0 {
+		rows = append(rows, map[string]any{
+			"role":    "system",
+			"content": strings.Join(systemParts, "\n\n"),
+		})
+	}
+	for _, message := range messages {
+		if message.Role == "system" {
+			continue
+		}
 		row := map[string]any{
 			"role":    message.Role,
 			"content": ollamaContent(message.Content),

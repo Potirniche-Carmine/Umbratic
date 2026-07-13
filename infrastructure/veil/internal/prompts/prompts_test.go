@@ -29,7 +29,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic", "general-purpose", "software and non-software", "workspace preview", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction"} {
+	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "workspace preview", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}

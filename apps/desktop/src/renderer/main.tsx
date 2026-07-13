@@ -2622,6 +2622,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
       flushReasoning();
+      flushActivity();
       const separator = assistantNeedsSeparator
         && assistantBuffer.trim()
         && !/\s$/.test(assistantBuffer)

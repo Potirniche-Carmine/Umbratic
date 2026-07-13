@@ -698,14 +698,20 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
     (endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode());
   const managedBaseUrl = forceLocal ? undefined : managed?.baseUrl;
   const managedSoftware = forceLocal ? undefined : managed?.software;
-  const storedBaseUrl = !forceLocal && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim() ? endpoint.baseUrl.trim() : undefined;
+  const storedLocalEndpoint = endpoint.mode === "local";
+  const storedEndpointAllowed = !forceLocal || storedLocalEndpoint;
+  const storedBaseUrl = storedEndpointAllowed && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
+    ? endpoint.baseUrl.trim()
+    : undefined;
   const software =
     forceLocal
-      ? defaultEndpointSoftware("local")
+      ? storedLocalEndpoint && isModelEndpointSoftware(endpoint.software)
+        ? endpoint.software
+        : defaultEndpointSoftware("local")
       : managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
   const modelId =
     mode === "local"
-      ? !forceLocal && typeof endpoint.modelId === "string" && endpoint.modelId.trim()
+      ? storedLocalEndpoint && typeof endpoint.modelId === "string" && endpoint.modelId.trim()
         ? endpoint.modelId.trim()
         : defaultLocalModelId
       : defaultEndpointModelId;

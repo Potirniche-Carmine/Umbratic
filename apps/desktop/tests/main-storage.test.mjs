@@ -420,6 +420,22 @@ test("local launcher settings override a previously stored server endpoint for t
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
   });
+
+  storage.writeModelEndpointSettings({
+    mode: "local",
+    software: "vllm",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    modelId: "user-selected-model",
+  });
+
+  assert.deepEqual(plain(storage.readModelEndpointSettings()), {
+    mode: "local",
+    software: "vllm",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    modelId: "user-selected-model",
+    secret: "",
+    headers: [{ name: "", value: "" }, { name: "", value: "" }],
+  });
 });
 
 test("tool, skill, harness, and notes settings sanitize invalid input", () => {

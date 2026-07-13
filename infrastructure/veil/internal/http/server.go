@@ -22,6 +22,7 @@ type ModelClient interface {
 	Chat(context.Context, model.ChatRequest) (model.ChatResponse, error)
 	DoChat(context.Context, model.ChatRequest) (*http.Response, error)
 	ListModels(context.Context) ([]model.ModelInfo, error)
+	ActivateModel(context.Context, string) error
 }
 
 type Server struct {
@@ -63,6 +64,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.URL.Path {
+	case "/api/model/connect":
+		s.handleModelConnect(w, r)
 	case "/api/engineering/chat":
 		s.handleChat(prompts.EngineeringChat)(w, r)
 	case "/api/marketing/chat":
@@ -74,6 +77,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 	}
+}
+
+func (s *Server) handleModelConnect(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+	defer cancel()
+
+	available, err := s.configuredModelAvailable(ctx)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, "model connection failed")
+		return
+	}
+	if !available {
+		writeJSONError(w, http.StatusServiceUnavailable, "configured model unavailable")
+		return
+	}
+	if err := s.model.ActivateModel(ctx, s.cfg.DefaultModel); err != nil {
+		writeJSONError(w, http.StatusBadGateway, "model connection failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

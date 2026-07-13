@@ -100,6 +100,29 @@ function probeLocalVeil(baseUrl: string, authToken: string, onReady: () => void)
   return () => clearInterval(interval);
 }
 
+function activateLocalVeil(baseUrl: string, authToken: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = http.request(`${baseUrl}/api/model/connect`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}`, "Content-Length": "0" },
+      timeout: 75000,
+    }, (response) => {
+      response.resume();
+      response.once("end", () => {
+        const statusCode = response.statusCode ?? 0;
+        if (statusCode >= 200 && statusCode < 300) {
+          resolve();
+          return;
+        }
+        reject(new Error(`Local Veil could not load the selected model (status ${statusCode}).`));
+      });
+    });
+    request.once("timeout", () => request.destroy(new Error("Timed out loading the selected local model.")));
+    request.once("error", reject);
+    request.end();
+  });
+}
+
 export function localVeilEnvironment(
   settings: ModelEndpointSettings,
   address: string,
@@ -199,6 +222,11 @@ async function startLocalVeil(settings: ModelEndpointSettings, key: string): Pro
     child.once("error", onError);
     child.once("exit", onExit);
   }).catch((error) => {
+    stopChild(child);
+    throw error;
+  });
+
+  await activateLocalVeil(baseUrl, authToken).catch((error) => {
     stopChild(child);
     throw error;
   });

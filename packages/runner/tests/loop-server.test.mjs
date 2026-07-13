@@ -279,7 +279,7 @@ test("runTurn sends Veil skill metadata and exposes read_skill without client sy
     assert.equal(requests[0].body.tools.some((tool) => tool.function.name === "read_skill"), true);
     assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["user"]);
     assert.equal(activeSession.messages.at(-1).content, "Hello");
-    assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.delta", "assistant.reasoning.delta"]);
+    assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.answer.started", "assistant.delta", "assistant.reasoning.delta"]);
     assert.deepEqual(plain(summary), {
       status: "completed",
       turns: 1,

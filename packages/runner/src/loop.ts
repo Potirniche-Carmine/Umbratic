@@ -484,7 +484,6 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
       const readyForFinalAnswer = !!actionRequirement && actionEvidenceSatisfied();
       if (readyForFinalAnswer && !finalAnswerPrompted) {
         finalAnswerPrompted = true;
-        events.emit({ type: "assistant.answer.started", taskId: session.taskId, at: nowIso() });
         session.messages.push({
           role: "user",
           content: "The required workspace evidence is now available. Provide the complete final answer to the original request. Do not announce additional work unless you make the structured tool call in this turn.",
@@ -494,7 +493,7 @@ export async function runTurn(session: Session, parts: InputPart[], emit: (event
         requireToolCall: !!actionRequirement && actionRetries > 0 && !actionEvidenceSatisfied(),
         suppressOutput: !!actionRequirement && !readyForFinalAnswer,
         actionRequirementKnown: !!actionRequirement,
-        guardToolAnnouncements: readyForFinalAnswer,
+        guardToolAnnouncements: !actionRequirement || readyForFinalAnswer,
       });
       actionRequirement ||= acc.actionRequirement;
       recordModelTurn(summary, acc);

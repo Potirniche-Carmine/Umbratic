@@ -113,6 +113,58 @@ func TestOllamaClientChat(t *testing.T) {
 	}
 }
 
+func TestOllamaMessagesConsolidateSystemMessagesAtBeginning(t *testing.T) {
+	messages := ollamaMessages([]Message{
+		{Role: "system", Content: "Global policy."},
+		{Role: "user", Content: "Skill catalog."},
+		{Role: "system", Content: "Route and template policy."},
+		{Role: "user", Content: "Hello."},
+	})
+
+	if len(messages) != 3 {
+		t.Fatalf("got %d messages: %#v", len(messages), messages)
+	}
+	if messages[0]["role"] != "system" || messages[0]["content"] != "Global policy.\n\nRoute and template policy." {
+		t.Fatalf("system messages were not consolidated first: %#v", messages)
+	}
+	if messages[1]["role"] != "user" || messages[1]["content"] != "Skill catalog." {
+		t.Fatalf("non-system message order changed: %#v", messages)
+	}
+	for _, message := range messages[1:] {
+		if message["role"] == "system" {
+			t.Fatalf("found a non-leading system message: %#v", messages)
+		}
+	}
+}
+
+func TestOllamaClientActivatesConfiguredModel(t *testing.T) {
+	var got struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/generate" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"done": true})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientConfig{Protocol: ProtocolOllama, BaseURL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ActivateModel(context.Background(), "selected-model"); err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "selected-model" || got.Stream {
+		t.Fatalf("unexpected activation request: %#v", got)
+	}
+}
+
 func TestListModelsNormalizesVLLMAndOllamaPayloads(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {

@@ -27,10 +27,18 @@ export function createProviderStreamEmitter(
   options: { suppressContent: boolean; guardToolAnnouncements: boolean },
 ): { emit(event: UmbraticRunnerEvent): void; flush(): void } {
   let state: "pending" | "streaming" | "blocked" = options.guardToolAnnouncements ? "pending" : "streaming";
+  let answerStarted = false;
   let prefix = "";
   let buffered: Array<Extract<AssistantStreamEvent, { type: "assistant.delta" }>> = [];
 
+  const startAnswer = (event: Extract<AssistantStreamEvent, { type: "assistant.delta" }>) => {
+    if (answerStarted) return;
+    answerStarted = true;
+    emit?.({ type: "assistant.answer.started", taskId: event.taskId, at: event.at });
+  };
+
   const flushBuffered = () => {
+    if (buffered[0]) startAnswer(buffered[0]);
     for (const event of buffered) emit?.(event);
     buffered = [];
   };
@@ -47,6 +55,7 @@ export function createProviderStreamEmitter(
       }
       if (options.suppressContent || state === "blocked") return;
       if (state === "streaming") {
+        startAnswer(event);
         emit?.(event);
         return;
       }

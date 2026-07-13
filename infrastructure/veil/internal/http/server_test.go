@@ -28,6 +28,13 @@ type fakeModelClient struct {
 	streamStatusCode  int
 	streamContentType string
 	streamBody        string
+	activateErr       error
+	activatedModel    string
+}
+
+func (f *fakeModelClient) ActivateModel(ctx context.Context, modelID string) error {
+	f.activatedModel = modelID
+	return f.activateErr
 }
 
 func (f *fakeModelClient) Chat(ctx context.Context, req model.ChatRequest) (model.ChatResponse, error) {
@@ -94,6 +101,22 @@ func TestNonAPIRouteIsNotExposed(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("got status %d", rr.Code)
+	}
+}
+
+func TestModelConnectActivatesConfiguredModel(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+	req := httptest.NewRequest(http.MethodPost, "/api/model/connect", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if modelClient.activatedModel != "default-model" {
+		t.Fatalf("activated model %q", modelClient.activatedModel)
 	}
 }
 
