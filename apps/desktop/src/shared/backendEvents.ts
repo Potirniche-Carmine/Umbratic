@@ -45,6 +45,7 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number }
+  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; reserveTokens: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
   | { type: "permission.requested"; taskId: string; request: BackendPermissionRequest }
@@ -89,6 +90,7 @@ const eventTypes = new Set([
   "command.started",
   "command.output",
   "command.finished",
+  "context.usage",
   "context.compressed",
   "context.retrieved",
   "permission.requested",
@@ -141,6 +143,9 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
       return hasString(value, "id") && (value.stream === "stdout" || value.stream === "stderr") && hasString(value, "text");
     case "command.finished":
       return hasString(value, "id") && (value.exitCode === null || hasNumber(value, "exitCode"));
+    case "context.usage":
+      return hasNumber(value, "contextLength") && hasNumber(value, "contentTokens")
+        && hasNumber(value, "reserveTokens") && hasNumber(value, "estimatedTokens");
     case "context.compressed":
       return hasString(value, "toolCallId") && hasString(value, "toolKind") && hasString(value, "kind")
         && hasString(value, "strategy") && hasNumber(value, "originalBytes") && hasNumber(value, "outputBytes");

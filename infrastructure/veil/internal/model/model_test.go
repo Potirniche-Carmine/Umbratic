@@ -71,6 +71,9 @@ func TestOllamaClientChat(t *testing.T) {
 		Model    string    `json:"model"`
 		Messages []Message `json:"messages"`
 		Stream   bool      `json:"stream"`
+		Options  struct {
+			NumCtx int `json:"num_ctx"`
+		} `json:"options"`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,9 +93,10 @@ func TestOllamaClientChat(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(ClientConfig{
-		Protocol: ProtocolOllama,
-		BaseURL:  server.URL,
-		Timeout:  time.Second,
+		Protocol:      ProtocolOllama,
+		BaseURL:       server.URL,
+		ContextLength: 64000,
+		Timeout:       time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +111,9 @@ func TestOllamaClientChat(t *testing.T) {
 	}
 	if got.Model != "llama3" || got.Stream {
 		t.Fatalf("unexpected runtime request: %#v", got)
+	}
+	if got.Options.NumCtx != 64000 {
+		t.Fatalf("unexpected Ollama context length: %#v", got.Options)
 	}
 	if resp.Message.Content != "ollama done" {
 		t.Fatalf("unexpected response: %#v", resp)
@@ -282,7 +289,8 @@ func TestVLLMDoChatForwardsToolsAndToolChoice(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if got["model"] != "model-a" || got["stream"] != true || got["tools"] == nil || got["tool_choice"] != "auto" {
+	streamOptions, _ := got["stream_options"].(map[string]any)
+	if got["model"] != "model-a" || got["stream"] != true || got["tools"] == nil || got["tool_choice"] != "auto" || streamOptions["include_usage"] != true {
 		t.Fatalf("unexpected request body: %#v", got)
 	}
 }
@@ -369,7 +377,7 @@ func TestListModelsNormalizesOllamaPayloadsAndDedupes(t *testing.T) {
 func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 	src := strings.NewReader(strings.Join([]string{
 		`{"message":{"role":"assistant","content":"hi","tool_calls":[{"function":{"name":"read","arguments":{"filePath":"README.md"}}}]},"done":false}`,
-		`{"message":{"role":"assistant","content":""},"done":true}`,
+		`{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1234,"eval_count":56}`,
 		"",
 	}, "\n"))
 	var dst bytes.Buffer
@@ -382,6 +390,9 @@ func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 	}
 	if !strings.Contains(body, `"name":"read"`) || !strings.Contains(body, `"{\"filePath\":\"README.md\"}"`) {
 		t.Fatalf("missing converted tool call: %q", body)
+	}
+	if !strings.Contains(body, `"prompt_tokens":1234`) || !strings.Contains(body, `"completion_tokens":56`) || !strings.Contains(body, `"total_tokens":1290`) {
+		t.Fatalf("missing converted usage: %q", body)
 	}
 	if !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("missing done marker: %q", body)

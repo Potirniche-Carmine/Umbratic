@@ -12,7 +12,7 @@ import { localProviderCatalog } from "./config";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { enabledPromptSkills } from "./skills";
-import { readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
+import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type { HarnessProfileId, LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
@@ -47,6 +47,9 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
   return {
     taskId: task.id,
     cwd: task.worktreePath,
+    contextLength: readContextLengthSetting(),
+    maxResponseTokens: 4_096,
+    protectedPromptReserveTokens: 4_096,
     workspaceMode: task.workspaceMode,
     modelBoundary: "managed",
     skills: enabledPromptSkills().map((skill) => ({

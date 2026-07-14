@@ -61,6 +61,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getCapabilityProbes", [{ force: true }], "umbratic:get-capability-probes"],
     ["getHarnessProfile", [], "umbratic:get-harness-profile", undefined],
     ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],
+    ["getContextLength", [], "umbratic:get-context-length", undefined],
+    ["saveContextLength", [64000], "umbratic:save-context-length"],
     ["getModelEndpointSettings", [], "umbratic:get-model-endpoint-settings", undefined],
     ["saveModelEndpointSettings", [{ mode: "local", software: "ollama", baseUrl: "http://127.0.0.1:8080", modelId: "veil-managed", secret: "", headers: [] }], "umbratic:save-model-endpoint-settings"],
     ["exportTelemetry", [], "umbratic:export-telemetry", undefined],

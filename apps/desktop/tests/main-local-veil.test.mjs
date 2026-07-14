@@ -18,6 +18,7 @@ test("managed local Veil receives runtime settings, loopback binding, transient 
     },
     "127.0.0.1:43123",
     "transient-internal-token",
+    64000,
   );
 
   assert.equal(env.VEIL_ADDR, "127.0.0.1:43123");
@@ -28,6 +29,7 @@ test("managed local Veil receives runtime settings, loopback binding, transient 
   assert.equal(env.VEIL_PROVIDER_API_KEY, "");
   assert.equal(env.VEIL_PROVIDER_CHAT_PATH, "");
   assert.equal(env.VEIL_PROVIDER_MODELS_PATH, "");
+  assert.equal(env.VEIL_CONTEXT_LENGTH, "64000");
   assert.equal(env.VEIL_TELEMETRY_ENABLED, "false");
   assert.equal(env.VEIL_TELEMETRY_STORE_PATH, "");
   assert.notEqual(env.VEIL_AUTH_TOKEN, "user-facing-token-is-ignored");

@@ -22,6 +22,7 @@ func main() {
 		ChatEndpointPath:   cfg.ProviderChatEndpointPath,
 		ModelsEndpointPath: cfg.ProviderModelsEndpointPath,
 		APIKey:             cfg.ProviderAPIKey,
+		ContextLength:      cfg.ContextLength,
 		Timeout:            cfg.ModelTimeout,
 	})
 	if err != nil {

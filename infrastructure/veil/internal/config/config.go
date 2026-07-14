@@ -21,6 +21,7 @@ type Config struct {
 	ProviderModelsEndpointPath string
 	ProviderAPIKey             string
 	DefaultModel               string
+	ContextLength              int
 	TemplateRegistryPath       string
 	TelemetryEnabled           bool
 	TelemetryStorePath         string
@@ -47,6 +48,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	contextLength, err := envInt("VEIL_CONTEXT_LENGTH", 0)
+	if err != nil {
+		return Config{}, err
+	}
 	telemetryEnabled, err := envBool("VEIL_TELEMETRY_ENABLED", true)
 	if err != nil {
 		return Config{}, err
@@ -69,6 +74,7 @@ func Load() (Config, error) {
 		ProviderModelsEndpointPath: envFirst("VEIL_PROVIDER_MODELS_PATH", "VEIL_PROVIDER_MODELS_ENDPOINT_PATH"),
 		ProviderAPIKey:             os.Getenv("VEIL_PROVIDER_API_KEY"),
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
+		ContextLength:              contextLength,
 		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
 		TelemetryEnabled:           telemetryEnabled,
 		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
@@ -95,6 +101,9 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxBodyBytes <= 0 {
 		return Config{}, errors.New("VEIL_MAX_BODY_BYTES must be positive")
+	}
+	if cfg.ContextLength < 0 {
+		return Config{}, errors.New("VEIL_CONTEXT_LENGTH must be positive when set")
 	}
 	if cfg.TelemetryRetentionDays <= 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_RETENTION_DAYS must be positive")

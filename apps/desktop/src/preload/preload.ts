@@ -59,6 +59,8 @@ const umbraticApi = {
   getCapabilityProbes: (input?: { force?: boolean }) => ipcRenderer.invoke("umbratic:get-capability-probes", input ?? {}),
   getHarnessProfile: () => ipcRenderer.invoke("umbratic:get-harness-profile"),
   saveHarnessProfile: (input: HarnessProfileId) => ipcRenderer.invoke("umbratic:save-harness-profile", input),
+  getContextLength: () => ipcRenderer.invoke("umbratic:get-context-length"),
+  saveContextLength: (input: number) => ipcRenderer.invoke("umbratic:save-context-length", input),
   getModelEndpointSettings: () => ipcRenderer.invoke("umbratic:get-model-endpoint-settings"),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";

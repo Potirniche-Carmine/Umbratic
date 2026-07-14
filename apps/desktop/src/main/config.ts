@@ -35,6 +35,7 @@ export function isModelEndpointSoftware(value: unknown): value is ModelEndpointS
 }
 
 export function defaultEndpointSoftware(mode: ModelEndpointMode, baseUrl = defaultEndpointBaseUrl): ModelEndpointSoftware {
+  if (mode === "local") return "ollama";
   const normalized = baseUrl.toLowerCase();
   if (env.UMBRATIC_MANAGED_MODEL_SOFTWARE && isModelEndpointSoftware(env.UMBRATIC_MANAGED_MODEL_SOFTWARE)) {
     return env.UMBRATIC_MANAGED_MODEL_SOFTWARE;
@@ -44,7 +45,7 @@ export function defaultEndpointSoftware(mode: ModelEndpointMode, baseUrl = defau
   }
   if (env.OLLAMA_BASE_URL || normalized.includes("11434") || normalized.includes("ollama")) return "ollama";
   if (env.UMBRATIC_VLLM_BASE_URL || env.VLLM_BASE_URL || normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
-  return mode === "local" ? "ollama" : "vllm";
+  return "vllm";
 }
 
 export function defaultModelEndpointMode(): ModelEndpointMode {
@@ -94,9 +95,9 @@ export function defaultEndpointBaseUrlForSoftware(mode: ModelEndpointMode, softw
   if (mode === "local") {
     const configuredLocalRuntime =
       env.UMBRATIC_LOCAL_RUNTIME_BASE_URL ||
-      (software === "ollama" ? env.OLLAMA_BASE_URL : env.UMBRATIC_VLLM_BASE_URL || env.VLLM_BASE_URL);
+      env.OLLAMA_BASE_URL;
     if (configuredLocalRuntime?.trim()) return configuredLocalRuntime.trim();
-    return software === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:8000/v1";
+    return "http://127.0.0.1:11434";
   }
   if (configuredEndpointBaseUrl) return configuredEndpointBaseUrl;
   return "https://your-veil-server.example";

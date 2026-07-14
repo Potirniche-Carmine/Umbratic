@@ -107,6 +107,15 @@ export type UmbraticRunnerEvent =
       at: string;
     }
   | {
+      type: "context.usage";
+      taskId: string;
+      contextLength: number;
+      contentTokens: number;
+      reserveTokens: number;
+      estimatedTokens: number;
+      at: string;
+    }
+  | {
       type: "context.compressed";
       taskId: string;
       toolCallId: string;

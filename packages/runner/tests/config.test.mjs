@@ -25,6 +25,9 @@ test("loadRunnerConfig normalizes enabled tools, skills, headers, and provider U
     {
       taskId: " task-1 ",
       cwd: " C:/workspace ",
+      contextLength: 128000,
+      maxResponseTokens: 8192,
+      protectedPromptReserveTokens: 2048,
       workspaceMode: "worktree",
       skills: [
         { id: "python", name: " Python ", description: " Python work ", source: "system", instructionPath: " C:/skills/python/SKILL.md " },
@@ -59,6 +62,9 @@ test("loadRunnerConfig normalizes enabled tools, skills, headers, and provider U
 
   assert.equal(loaded.taskId, "task-1");
   assert.equal(loaded.cwd, "C:/workspace");
+  assert.equal(loaded.contextLength, 128000);
+  assert.equal(loaded.maxResponseTokens, 8192);
+  assert.equal(loaded.protectedPromptReserveTokens, 2048);
   assert.equal(loaded.workspaceMode, "worktree");
   assert.equal(loaded.modelBoundary, "development");
   assert.deepEqual(plain(loaded.skills), [{
@@ -97,6 +103,9 @@ test("loadRunnerConfig defaults invalid modes and all tools when no explicit lis
   );
 
   assert.equal(loaded.workspaceMode, "local");
+  assert.equal(loaded.contextLength, 64000);
+  assert.equal(loaded.maxResponseTokens, 4096);
+  assert.equal(loaded.protectedPromptReserveTokens, 4096);
   assert.equal(loaded.permissionMode, "normal");
   assert.deepEqual(plain(loaded.enabledTools), ["read", "write", "edit", "search", "workspace_graph", "command"]);
   assert.deepEqual(plain(loaded.skills), []);

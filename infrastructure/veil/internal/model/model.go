@@ -50,6 +50,7 @@ type ClientConfig struct {
 	ChatEndpointPath   string
 	ModelsEndpointPath string
 	APIKey             string
+	ContextLength      int
 	Timeout            time.Duration
 }
 
@@ -59,6 +60,7 @@ type Client struct {
 	modelsEndpoint   string
 	generateEndpoint string
 	apiKey           string
+	contextLength    int
 	client           *http.Client
 }
 
@@ -123,6 +125,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		modelsEndpoint:   modelsEndpoint,
 		generateEndpoint: generateEndpoint,
 		apiKey:           cfg.APIKey,
+		contextLength:    cfg.ContextLength,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -133,10 +136,14 @@ func (c *Client) ActivateModel(ctx context.Context, modelID string) error {
 	if c.protocol != ProtocolOllama {
 		return nil
 	}
-	resp, err := c.postJSON(ctx, c.generateEndpoint, map[string]any{
+	body := map[string]any{
 		"model":  modelID,
 		"stream": false,
-	})
+	}
+	if c.contextLength > 0 {
+		body["options"] = map[string]any{"num_ctx": c.contextLength}
+	}
+	resp, err := c.postJSON(ctx, c.generateEndpoint, body)
 	if err != nil {
 		return err
 	}
@@ -230,6 +237,9 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 		"messages": req.Messages,
 		"stream":   req.Stream,
 	}
+	if req.Stream {
+		body["stream_options"] = map[string]any{"include_usage": true}
+	}
 	if req.Tools != nil {
 		body["tools"] = req.Tools
 	}
@@ -247,6 +257,9 @@ func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Respo
 	}
 	if req.Tools != nil {
 		body["tools"] = req.Tools
+	}
+	if c.contextLength > 0 {
+		body["options"] = map[string]any{"num_ctx": c.contextLength}
 	}
 	return c.postJSON(ctx, c.chatEndpoint, body)
 }
@@ -407,11 +420,33 @@ func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent 
 
 	done, _ := row["done"].(bool)
 	if done {
+		promptTokens, promptOK := runtimeTokenCount(row["prompt_eval_count"])
+		completionTokens, completionOK := runtimeTokenCount(row["eval_count"])
+		if promptOK || completionOK {
+			if err := writeSSEData(dst, map[string]any{
+				"choices": []any{},
+				"usage": map[string]any{
+					"prompt_tokens":     promptTokens,
+					"completion_tokens": completionTokens,
+					"total_tokens":      promptTokens + completionTokens,
+				},
+			}); err != nil {
+				return false, roleAlreadySent, err
+			}
+		}
 		if err := writeSSEDone(dst); err != nil {
 			return false, roleAlreadySent, err
 		}
 	}
 	return done, roleAlreadySent, nil
+}
+
+func runtimeTokenCount(value any) (int, bool) {
+	count, ok := value.(float64)
+	if !ok || count < 0 || count != float64(int(count)) {
+		return 0, false
+	}
+	return int(count), true
 }
 
 func writeSSEData(dst io.Writer, value any) error {

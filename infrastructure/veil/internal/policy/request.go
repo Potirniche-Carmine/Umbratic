@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -299,9 +300,11 @@ func contentPartHasValue(part map[string]any) bool {
 }
 
 func encodedSize(value any) int {
-	encoded, err := json.Marshal(value)
-	if err != nil {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
 		return MaxMessageBytes + 1
 	}
-	return len(encoded)
+	return encoded.Len() - 1
 }

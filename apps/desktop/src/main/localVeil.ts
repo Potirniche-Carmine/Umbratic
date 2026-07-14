@@ -8,6 +8,7 @@ import * as path from "node:path";
 
 import { isLocalhostUrl } from "./policy";
 import type { ModelEndpointSettings } from "./types";
+import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 
 export type LocalVeilConnection = {
   baseUrl: string;
@@ -25,11 +26,12 @@ let running: RunningLocalVeil | null = null;
 let launchingChild: ChildProcess | null = null;
 let starting: { key: string; promise: Promise<LocalVeilConnection> } | null = null;
 
-function localVeilKey(settings: ModelEndpointSettings): string {
+function localVeilKey(settings: ModelEndpointSettings, contextLength: number): string {
   return JSON.stringify({
-    software: settings.software,
+    software: "ollama",
     runtimeBaseUrl: settings.baseUrl.trim().replace(/\/+$/, ""),
     modelId: settings.modelId.trim(),
+    contextLength,
   });
 }
 
@@ -127,6 +129,7 @@ export function localVeilEnvironment(
   settings: ModelEndpointSettings,
   address: string,
   authToken: string,
+  contextLength = DEFAULT_CONTEXT_LENGTH,
 ): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -143,7 +146,8 @@ export function localVeilEnvironment(
     VEIL_PROVIDER_ENDPOINT_PATH: "",
     VEIL_PROVIDER_MODELS_PATH: "",
     VEIL_PROVIDER_MODELS_ENDPOINT_PATH: "",
-    VEIL_PROVIDER_PROTOCOL: settings.software,
+    VEIL_PROVIDER_PROTOCOL: "ollama",
+    VEIL_CONTEXT_LENGTH: String(normalizeContextLength(contextLength)),
     VEIL_TEMPLATE_REGISTRY_PATH: "",
     VEIL_TELEMETRY_ENABLED: "false",
     VEIL_TELEMETRY_RETENTION_DAYS: "30",
@@ -165,7 +169,7 @@ export function currentLocalVeilConnection(): LocalVeilConnection | null {
   return { baseUrl, authToken, runtimeBaseUrl, modelId };
 }
 
-async function startLocalVeil(settings: ModelEndpointSettings, key: string): Promise<LocalVeilConnection> {
+async function startLocalVeil(settings: ModelEndpointSettings, contextLength: number, key: string): Promise<LocalVeilConnection> {
   const runtimeBaseUrl = settings.baseUrl.trim().replace(/\/+$/, "");
   const modelId = settings.modelId.trim();
   if (!runtimeBaseUrl) throw new Error("Enter the local model runtime URL.");
@@ -184,7 +188,7 @@ async function startLocalVeil(settings: ModelEndpointSettings, key: string): Pro
   const launch = localVeilCommand();
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: localVeilEnvironment(settings, `127.0.0.1:${port}`, authToken),
+    env: localVeilEnvironment(settings, `127.0.0.1:${port}`, authToken, contextLength),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -240,15 +244,20 @@ async function startLocalVeil(settings: ModelEndpointSettings, key: string): Pro
   return { baseUrl, authToken, runtimeBaseUrl, modelId };
 }
 
-export async function ensureLocalVeil(settings: ModelEndpointSettings): Promise<LocalVeilConnection> {
+export async function ensureLocalVeil(
+  settings: ModelEndpointSettings,
+  configuredContextLength = DEFAULT_CONTEXT_LENGTH,
+): Promise<LocalVeilConnection> {
   if (settings.mode !== "local") throw new Error("Local Veil can only run in Local mode.");
-  const key = localVeilKey(settings);
+  if (settings.software !== "ollama") throw new Error("Local mode supports Ollama. Use Server mode for vLLM.");
+  const contextLength = normalizeContextLength(configuredContextLength);
+  const key = localVeilKey(settings, contextLength);
   const current = currentLocalVeilConnection();
   if (current && running?.key === key) return current;
   if (starting?.key === key) return starting.promise;
   if (starting) await starting.promise.catch(() => undefined);
   stopLocalVeil();
-  const promise = startLocalVeil(settings, key);
+  const promise = startLocalVeil(settings, contextLength, key);
   starting = { key, promise };
   try {
     return await promise;

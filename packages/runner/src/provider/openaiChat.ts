@@ -18,6 +18,18 @@ function choice(value: unknown): { delta: Record<string, unknown>; finishReason?
   return { delta: isRecord(first.delta) ? first.delta : {}, ...(typeof first.finish_reason === "string" ? { finishReason: first.finish_reason } : {}) };
 }
 
+function tokenUsage(value: unknown): { promptTokens?: number; completionTokens?: number } {
+  const obj = isRecord(value) ? value : {};
+  const usage = isRecord(obj.usage) ? obj.usage : {};
+  const promptTokens = typeof usage.prompt_tokens === "number" && Number.isInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0
+    ? usage.prompt_tokens
+    : undefined;
+  const completionTokens = typeof usage.completion_tokens === "number" && Number.isInteger(usage.completion_tokens) && usage.completion_tokens >= 0
+    ? usage.completion_tokens
+    : undefined;
+  return { ...(promptTokens !== undefined ? { promptTokens } : {}), ...(completionTokens !== undefined ? { completionTokens } : {}) };
+}
+
 export async function readOpenAIStream(taskId: string, body: AsyncIterable<Buffer | string>, emit?: (event: UmbraticRunnerEvent) => void): Promise<ProviderStreamResult> {
   const acc: ProviderStreamResult = { content: "", reasoning: "", toolCalls: new Map(), emittedContent: false, emittedReasoning: false, actionRequirement: "" };
   let buffer = "";
@@ -30,7 +42,11 @@ export async function readOpenAIStream(taskId: string, body: AsyncIterable<Buffe
       const line = buffer.slice(0, newline).trimEnd();
       buffer = buffer.slice(newline + 1);
       if (line.trim() === "data: [DONE]") completed = true;
-      const row = choice(parseSseLine(line));
+      const payload = parseSseLine(line);
+      const row = choice(payload);
+      const usage = tokenUsage(payload);
+      if (usage.promptTokens !== undefined) acc.promptTokens = usage.promptTokens;
+      if (usage.completionTokens !== undefined) acc.completionTokens = usage.completionTokens;
       if (row.finishReason === "length") truncated = true;
       const text = textContent(row.delta.content);
       const reasoning = reasoningContent(row.delta);

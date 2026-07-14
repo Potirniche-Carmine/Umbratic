@@ -365,6 +365,11 @@ declare global {
         settings: UmbraticHarnessProfileId;
         status: UmbraticBackendStatus;
       }>;
+      getContextLength(): Promise<number>;
+      saveContextLength(input: number): Promise<{
+        contextLength: number;
+        status: UmbraticBackendStatus;
+      }>;
       getModelEndpointSettings(): Promise<UmbraticModelEndpointSettings>;
       saveModelEndpointSettings(input: UmbraticModelEndpointSettings): Promise<{
         settings: UmbraticModelEndpointSettings;

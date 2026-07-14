@@ -11,6 +11,7 @@ const fixtures = [
   ["worktree.requested", { branch: "b", path: "p", baseCommit: "c" }], ["worktree.created", { branch: "b", path: "p" }],
   ["command.started", { id: "1", command: "npm test", cwd: "." }], ["command.output", { id: "1", stream: "stdout", text: "ok" }],
   ["command.finished", { id: "1", exitCode: 0 }],
+  ["context.usage", { contextLength: 64000, contentTokens: 12000, reserveTokens: 8192, estimatedTokens: 20192 }],
   ["context.compressed", { toolCallId: "1", toolKind: "read", kind: "file", strategy: "text_head_tail", originalBytes: 2, outputBytes: 1 }],
   ["context.retrieved", { toolCallId: "1", hash: "abc", offset: 0, bytesShown: 1, totalBytes: 1 }],
   ["permission.requested", { request: { id: "p", kind: "edit", summary: "write", command: "write", cwd: "." } }],

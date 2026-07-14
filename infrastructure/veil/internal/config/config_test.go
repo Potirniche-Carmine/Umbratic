@@ -18,6 +18,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_MODEL", "default-model")
+	t.Setenv("VEIL_CONTEXT_LENGTH", "")
 	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
 	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
 	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
@@ -44,6 +45,7 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "/api/tags")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "12s")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "20")
+	t.Setenv("VEIL_CONTEXT_LENGTH", "64000")
 
 	cfg, err := Load()
 	if err != nil {
@@ -60,6 +62,9 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	}
 	if cfg.DefaultModel != "default-model" {
 		t.Fatalf("unexpected default model %q", cfg.DefaultModel)
+	}
+	if cfg.ContextLength != 64000 {
+		t.Fatalf("unexpected context length %d", cfg.ContextLength)
 	}
 	if cfg.TemplateRegistryPath != "" {
 		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
@@ -149,6 +154,16 @@ func TestLoadRejectsInvalidMaxBodyBytes(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected invalid max body error")
+	}
+}
+
+func TestLoadRejectsInvalidContextLength(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_CONTEXT_LENGTH", "-1")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected invalid context length error")
 	}
 }
 

@@ -25,6 +25,13 @@ test("length-truncated tool arguments are made non-executable", async () => {
   assert.throws(() => JSON.parse(result.toolCalls.get(0).arguments));
 });
 
+test("OpenAI stream assembler captures provider token usage", async () => {
+  const row = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1234, completion_tokens: 56, total_tokens: 1290 } })}\n\ndata: [DONE]\n\n`;
+  const result = await readOpenAIStream("task-stream", chunks(row));
+  assert.equal(result.promptTokens, 1234);
+  assert.equal(result.completionTokens, 56);
+});
+
 test("missing and duplicate provider call IDs receive stable turn-local IDs", () => {
   const calls = new Map([
     [0, { id: "same", name: "read", arguments: "{}" }],

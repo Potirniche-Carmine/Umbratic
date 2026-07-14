@@ -19,7 +19,8 @@ test("desktop defaults to editable local settings unless an endpoint is explicit
     assert.equal(config.defaultModelEndpointMode(), "local");
     assert.equal(config.endpointEditingAllowed(), true);
     assert.equal(config.defaultEndpointBaseUrlForSoftware("local", "ollama"), "http://127.0.0.1:11434");
-    assert.equal(config.defaultEndpointBaseUrlForSoftware("local", "vllm"), "http://127.0.0.1:8000/v1");
+    assert.equal(config.defaultEndpointBaseUrlForSoftware("local", "vllm"), "http://127.0.0.1:11434");
+    assert.equal(config.defaultEndpointSoftware("local", "http://127.0.0.1:8000/v1"), "ollama");
 
     process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT = "false";
     assert.equal(config.endpointEditingAllowed(), false);

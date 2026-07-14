@@ -8,7 +8,13 @@ export async function streamOllamaChat(input: ProviderStreamInput & { url: strin
   const { session } = input;
   const response = await modelHttpRequest(input.url, {
     method: "POST", headers: input.headers,
-    body: JSON.stringify({ model: session.config.provider.modelId, messages: input.messages, stream: true, ...(input.includeTools && input.tools.length ? { tools: input.tools } : {}) }),
+    body: JSON.stringify({
+      model: session.config.provider.modelId,
+      messages: input.messages,
+      stream: true,
+      options: { num_ctx: session.config.contextLength },
+      ...(input.includeTools && input.tools.length ? { tools: input.tools } : {}),
+    }),
     mtls: session.config.provider.mtls, signal: session.abortController.signal,
   });
   if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -25,6 +31,12 @@ export async function streamOllamaChat(input: ProviderStreamInput & { url: strin
     if (!line.trim()) return;
     const parsed = JSON.parse(line.trim()) as unknown;
     const row = isRecord(parsed) ? parsed : {};
+    if (typeof row.prompt_eval_count === "number" && Number.isInteger(row.prompt_eval_count) && row.prompt_eval_count >= 0) {
+      acc.promptTokens = row.prompt_eval_count;
+    }
+    if (typeof row.eval_count === "number" && Number.isInteger(row.eval_count) && row.eval_count >= 0) {
+      acc.completionTokens = row.eval_count;
+    }
     const message = isRecord(row.message) ? row.message : {};
     const text = textContent(message.content);
     const reasoning = reasoningContent(message);

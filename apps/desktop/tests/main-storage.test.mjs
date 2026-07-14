@@ -430,8 +430,8 @@ test("local launcher settings override a previously stored server endpoint for t
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    software: "vllm",
-    baseUrl: "http://127.0.0.1:8000/v1",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
     modelId: "user-selected-model",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
@@ -443,6 +443,9 @@ test("tool, skill, harness, and notes settings sanitize invalid input", () => {
   const storage = loadStorage(userData);
 
   assert.equal(storage.writeHarnessProfileSetting("marketing"), "marketing");
+  assert.equal(storage.readContextLengthSetting(), 64000);
+  assert.equal(storage.writeContextLengthSetting(128000), 128000);
+  assert.equal(storage.writeContextLengthSetting(999999), 256000);
   writeSettingsPayload(userData, { harnessProfile: "invalid" });
   assert.equal(storage.readHarnessProfileSetting(), "engineering");
 

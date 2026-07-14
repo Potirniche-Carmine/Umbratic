@@ -260,6 +260,7 @@ test("runTurn sends Veil skill metadata and exposes read_skill without client sy
     response.writeHead(200, { "Content-Type": "text/event-stream" });
     response.end(
       sseData({ choices: [{ delta: { content: "Hello", reasoning_content: "Thinking" } }] }) +
+        sseData({ choices: [], usage: { prompt_tokens: 10000, completion_tokens: 5, total_tokens: 10005 } }) +
         "data: [DONE]\n\n",
     );
   }, async (baseURL) => {
@@ -279,7 +280,19 @@ test("runTurn sends Veil skill metadata and exposes read_skill without client sy
     assert.equal(requests[0].body.tools.some((tool) => tool.function.name === "read_skill"), true);
     assert.deepEqual(plain(requests[0].body.messages.map((message) => message.role)), ["user"]);
     assert.equal(activeSession.messages.at(-1).content, "Hello");
-    assert.deepEqual(plain(events.map((event) => event.type)), ["assistant.answer.started", "assistant.delta", "assistant.reasoning.delta"]);
+    assert.deepEqual(plain(events.map((event) => event.type)), [
+      "context.usage",
+      "assistant.answer.started",
+      "assistant.delta",
+      "assistant.reasoning.delta",
+      "context.usage",
+    ]);
+    const usageEvents = events.filter((event) => event.type === "context.usage");
+    assert.equal(usageEvents.length, 2);
+    assert.equal(usageEvents[0].contextLength, 64000);
+    assert.equal(usageEvents[0].estimatedTokens, usageEvents[0].contentTokens + usageEvents[0].reserveTokens);
+    assert.equal(usageEvents[1].contentTokens, 10005);
+    assert.equal(usageEvents[1].reserveTokens, 4096);
     assert.deepEqual(plain(summary), {
       status: "completed",
       turns: 1,
@@ -927,6 +940,19 @@ test("compactToolHistoryMessages compacts prose tool context used by Veil and Ol
   assert.match(summary.content, /result-2/);
   assert.equal(compacted.filter((message) => String(message.content).startsWith("Workspace tool results:")).length, 4);
   assert.equal(compacted.at(-1).content.includes("result-6"), true);
+});
+
+test("formatToolContextMessage stays below Veil's encoded message budget", () => {
+  const { formatToolContextMessage } = loadTypeScriptModule(loopPath, { cache: new Map() });
+  const message = formatToolContextMessage([{
+    call: { id: "call-read", name: "read", arguments: "{}" },
+    title: "site.html",
+    output: `<main data-copy="${"<section>& content </section>".repeat(6000)}"></main>`,
+    status: "success",
+  }]);
+
+  assert.equal(Buffer.byteLength(JSON.stringify(message), "utf8") <= 56 * 1024, true);
+  assert.match(message, /truncated: workspace tool context exceeded/);
 });
 
 test("runTurn keeps prose tool-result fallback for Ollama chat routes", async () => {

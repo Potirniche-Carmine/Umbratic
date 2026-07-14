@@ -48,6 +48,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   const { adapter, storage } = loadRunnerAdapter(userData);
 
   storage.writeHarnessProfileSetting("sales");
+  storage.writeContextLengthSetting(128000);
   storage.writeModelEndpointSettings({
     mode: "server",
     software: "vllm",
@@ -88,6 +89,9 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
   assert.equal(config.modelBoundary, "managed");
   assert.equal(config.permissionMode, "normal");
+  assert.equal(config.contextLength, 128000);
+  assert.equal(config.maxResponseTokens, 4096);
+  assert.equal(config.protectedPromptReserveTokens, 4096);
   assert.deepEqual(plain(config.enabledTools), ["read"]);
   assert.equal(config.diagnostics.enabled, true);
   assert.equal(config.diagnostics.includeToolOutput, "stderr");

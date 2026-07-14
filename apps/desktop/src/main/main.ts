@@ -65,12 +65,14 @@ import {
   readChat,
   readChats,
   hasStoredModelEndpointSettings,
+  readContextLengthSetting,
   readHarnessProfileSetting,
   readModelEndpointSettings,
   readNotes,
   readProjects,
   readTasks,
   writeHarnessProfileSetting,
+  writeContextLengthSetting,
   writeModelEndpointSettings,
   writeChat,
   writeChats,
@@ -1522,6 +1524,7 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
       return `Required tool failed: ${event.requirement} (${event.reason}${event.detail ? `: ${compactHistoryText(event.detail, 300)}` : ""})`;
     case "task.error":
       return `Task error: ${compactHistoryText(event.message, 900)}`;
+    case "context.usage":
     case "context.compressed":
     case "context.retrieved":
       return null;
@@ -2232,7 +2235,8 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
     throw new Error("Wait for the active run to finish before changing the model connection.");
   }
   const current = readModelEndpointSettings();
-  const candidate = { ...current, ...input };
+  const requested = { ...current, ...input };
+  const candidate = requested.mode === "local" ? { ...requested, software: "ollama" as const } : requested;
   const baseUrl = typeof candidate.baseUrl === "string" ? candidate.baseUrl.trim() : "";
   let parsedUrl: URL;
   try {
@@ -2249,7 +2253,7 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
   if (candidate.mode === "local" && !candidate.modelId?.trim()) {
     throw new Error("Enter the local model name before connecting.");
   }
-  const settings = writeModelEndpointSettings(input);
+  const settings = writeModelEndpointSettings(candidate);
   const status = await getBackendStatus();
   return { settings, status };
 }
@@ -2260,11 +2264,21 @@ async function saveHarnessProfileSetting(input: unknown) {
   return { settings, status };
 }
 
+async function saveContextLengthSetting(input: unknown) {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before changing the context length.");
+  }
+  const contextLength = writeContextLengthSetting(input);
+  stopLocalVeil();
+  const status = await getBackendStatus();
+  return { contextLength, status };
+}
+
 async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
   const settings = readModelEndpointSettings();
   try {
     if (settings.mode === "local") {
-      await ensureLocalVeil(settings);
+      await ensureLocalVeil(settings, readContextLengthSetting());
     } else {
       stopLocalVeil();
     }
@@ -3382,6 +3396,23 @@ async function runRunnerTask(
         return;
       }
 
+      if (type === "context.usage") {
+        const contextLength = typeof event.contextLength === "number" && Number.isFinite(event.contextLength) ? event.contextLength : 0;
+        const contentTokens = typeof event.contentTokens === "number" && Number.isFinite(event.contentTokens) ? event.contentTokens : 0;
+        const reserveTokens = typeof event.reserveTokens === "number" && Number.isFinite(event.reserveTokens) ? event.reserveTokens : 0;
+        const estimatedTokens = typeof event.estimatedTokens === "number" && Number.isFinite(event.estimatedTokens) ? event.estimatedTokens : 0;
+        emit({
+          type: "context.usage",
+          taskId: task.id,
+          contextLength,
+          contentTokens,
+          reserveTokens,
+          estimatedTokens,
+          at: eventAt(event),
+        });
+        return;
+      }
+
       if (type === "context.retrieved") {
         const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
         const hash = typeof event.hash === "string" ? event.hash : "";
@@ -4463,6 +4494,8 @@ app.whenReady().then(async () => {
   );
   handleIpc("umbratic:get-harness-profile", () => readHarnessProfileSetting());
   handleIpc("umbratic:save-harness-profile", (input) => saveHarnessProfileSetting(input));
+  handleIpc("umbratic:get-context-length", () => readContextLengthSetting());
+  handleIpc("umbratic:save-context-length", (input) => saveContextLengthSetting(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
   handleIpc("umbratic:list-skills", () => listSkillsService());
   handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettingsService(input));

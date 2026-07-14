@@ -7,6 +7,9 @@ export type RunnerToolName = (typeof runnerToolNames)[number];
 export type RunnerConfig = {
   taskId?: string;
   cwd: string;
+  contextLength: number;
+  maxResponseTokens: number;
+  protectedPromptReserveTokens: number;
   workspaceMode?: "local" | "worktree";
   modelBoundary: RunnerModelBoundary;
   skills: RunnerSkillConfig[];
@@ -16,6 +19,9 @@ export type RunnerConfig = {
   diagnostics: RunnerDiagnosticsConfig;
   provider: UmbraticProviderConfig;
 };
+
+const defaultContextLength = 64_000;
+const defaultReservedTokens = 4_096;
 
 export type RunnerSkillConfig = {
   id: string;
@@ -46,6 +52,10 @@ function stringValue(value: unknown, name: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 function headersValue(value: unknown): Record<string, string> | undefined {
@@ -136,6 +146,9 @@ export function loadRunnerConfig(): RunnerConfig {
   return {
     taskId: typeof config.taskId === "string" && config.taskId.trim() ? config.taskId.trim() : undefined,
     cwd: stringValue(config.cwd, "cwd"),
+    contextLength: positiveInteger(config.contextLength, defaultContextLength),
+    maxResponseTokens: positiveInteger(config.maxResponseTokens, defaultReservedTokens),
+    protectedPromptReserveTokens: positiveInteger(config.protectedPromptReserveTokens, defaultReservedTokens),
     workspaceMode: config.workspaceMode === "worktree" ? "worktree" : "local",
     modelBoundary,
     skills: skillsValue(config.skills),

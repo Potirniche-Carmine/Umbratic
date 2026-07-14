@@ -11,6 +11,13 @@ import { configuredProviderEndpointUrl } from "./provider/local.js";
 import { streamProviderChat } from "./provider/chat.js";
 import { providerCapabilities } from "./provider/historyEncoder.js";
 import { parseToolArguments } from "./tools/schema.js";
+import {
+  DEFAULT_CONTEXT_LENGTH,
+  DEFAULT_MAX_RESPONSE_TOKENS,
+  estimateContextUsage,
+  estimateTextTokens,
+  type ContextUsageSnapshot,
+} from "./contextBudget.js";
 
 type ToolCall = {
   id: string;
@@ -25,6 +32,8 @@ type StreamAccumulator = {
   emittedContent: boolean;
   emittedReasoning: boolean;
   actionRequirement: "" | "change" | "execute" | "inspect" | "change-and-execute";
+  promptTokens?: number;
+  completionTokens?: number;
   toolPlan?: ToolPlan;
 };
 
@@ -128,7 +137,30 @@ function clipUtf8(value: string, byteLimit: number): string {
   return buffer.subarray(0, byteLimit).toString("utf8").replace(/\uFFFD$/u, "");
 }
 
-function formatToolContextMessage(results: ToolContextResult[]): string {
+function jsonEncodedStringBytes(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function clipJsonEncodedString(value: string, byteLimit: number, marker: string): string {
+  if (jsonEncodedStringBytes(value) <= byteLimit) return value;
+  const valueBytes = Buffer.byteLength(value, "utf8");
+  let low = 0;
+  let high = valueBytes;
+  let clipped = marker;
+  while (low <= high) {
+    const midpoint = Math.floor((low + high) / 2);
+    const candidate = `${clipUtf8(value, midpoint)}${marker}`;
+    if (jsonEncodedStringBytes(candidate) <= byteLimit) {
+      clipped = candidate;
+      low = midpoint + 1;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  return clipped;
+}
+
+export function formatToolContextMessage(results: ToolContextResult[]): string {
   const lines = [
     "Workspace tool results:",
   ];
@@ -137,15 +169,21 @@ function formatToolContextMessage(results: ToolContextResult[]): string {
     lines.push("", `### ${result.call.name}: ${result.title || result.call.id} (${status})`, "```", result.output, "```");
   }
   const message = lines.join("\n");
-  if (Buffer.byteLength(message, "utf8") <= maxToolContextBytes) return message;
-  return `${clipUtf8(message, maxToolContextBytes)}\n...[truncated: workspace tool context exceeded ${maxToolContextBytes} bytes]`;
+  return clipJsonEncodedString(
+    message,
+    maxToolContextBytes,
+    `\n...[truncated: workspace tool context exceeded ${maxToolContextBytes} encoded bytes]`,
+  );
 }
 
 function formatToolResultContent(result: ToolContextResult): string {
   const status = result.status === "success" ? "ok" : "failed";
   const message = [`${result.call.name}: ${result.title || result.call.id} (${status})`, result.output].join("\n\n");
-  if (Buffer.byteLength(message, "utf8") <= maxToolResultBytes) return message;
-  return `${clipUtf8(message, maxToolResultBytes)}\n...[truncated: workspace tool result exceeded ${maxToolResultBytes} bytes]`;
+  return clipJsonEncodedString(
+    message,
+    maxToolResultBytes,
+    `\n...[truncated: workspace tool result exceeded ${maxToolResultBytes} encoded bytes]`,
+  );
 }
 
 function emptyRunTurnSummary(): RunTurnSummary {
@@ -358,6 +396,23 @@ function messagesForModel(session: Session): ChatMessage[] {
   return compactToolHistoryMessages(session.messages);
 }
 
+function contextUsageForModel(
+  session: Session,
+  messages: ChatMessage[],
+  tools: ToolPlan["modelSpecs"],
+  includeVeilSkills: boolean,
+) {
+  const skillMetadata = includeVeilSkills && session.config.skills.length
+    ? [session.config.skills.map(({ id, name, description, source }) => ({ id, name, description, source }))]
+    : [];
+  return estimateContextUsage(messages, tools, {
+    contextLength: session.config.contextLength,
+    maxResponseTokens: session.config.maxResponseTokens,
+    protectedPromptReserveTokens: session.config.protectedPromptReserveTokens,
+    additionalPayloads: skillMetadata,
+  });
+}
+
 function messageContentFromParts(parts: InputPart[]): string | ChatContentPart[] {
   if (parts.every((part) => part.type === "text")) {
     return parts.map((part) => (part.type === "text" ? part.text : "")).join("\n\n");
@@ -394,9 +449,17 @@ async function streamModel(
     providerParallelToolCalls: capabilities.parallelToolCalls,
   });
   const includeTools = options.includeTools !== false;
+  const messages = messagesForModel(session);
+  const usage = contextUsageForModel(
+    session,
+    messages,
+    includeTools ? toolPlan.modelSpecs : [],
+    capabilities.schemaProfile === "veil-compatible",
+  );
+  emit?.({ type: "context.usage", taskId: session.taskId, ...usage, at: nowIso() });
   const acc = await streamProviderChat({
     session,
-    messages: messagesForModel(session),
+    messages,
     tools: toolPlan.modelSpecs,
     includeTools,
     requireToolCall: !!options.requireToolCall,
@@ -430,6 +493,41 @@ function appendAssistantCompletion(
   if (content && !acc.emittedContent) {
     events.emit({ type: "assistant.delta", taskId: session.taskId, text: content, at: nowIso() });
   }
+  let usage: ContextUsageSnapshot;
+  if (acc.promptTokens !== undefined) {
+    const contextLength = Number.isInteger(session.config.contextLength) && session.config.contextLength > 0
+      ? session.config.contextLength
+      : DEFAULT_CONTEXT_LENGTH;
+    const maxResponseTokens = Number.isInteger(session.config.maxResponseTokens) && session.config.maxResponseTokens > 0
+      ? session.config.maxResponseTokens
+      : DEFAULT_MAX_RESPONSE_TOKENS;
+    const responseReserve = Math.min(maxResponseTokens, Math.floor(contextLength * 0.25));
+    const completionTokens = acc.completionTokens ?? estimateTextTokens(content);
+    const fallbackTokens = !acc.content && fallback ? estimateTextTokens(fallback) : 0;
+    const contentTokens = acc.promptTokens + completionTokens + fallbackTokens;
+    usage = {
+      contextLength,
+      contentTokens,
+      reserveTokens: responseReserve,
+      estimatedTokens: contentTokens + responseReserve,
+    };
+  } else {
+    const capabilities = providerCapabilities(configuredProviderEndpointUrl(session.config.provider.baseURL, session.config.provider.chatEndpointPath));
+    const toolPlan = buildToolPlan({
+      enabledTools: session.config.enabledTools,
+      includeContextRetrieval: session.contextStore.hasEntries(),
+      includeSkillReader: session.config.skills.length > 0,
+      includeWorkspaceGraph: !!session.workspaceGraph,
+      providerParallelToolCalls: capabilities.parallelToolCalls,
+    });
+    usage = contextUsageForModel(
+      session,
+      messagesForModel(session),
+      toolPlan.modelSpecs,
+      capabilities.schemaProfile === "veil-compatible",
+    );
+  }
+  events.emit({ type: "context.usage", taskId: session.taskId, ...usage, at: nowIso() });
 }
 
 async function finishWithoutTools(

@@ -1,6 +1,16 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { BackendUiEventInput } from "../shared/backendEvents";
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
+import {
+  CONTEXT_LENGTH_OPTIONS,
+  DEFAULT_CONTEXT_LENGTH,
+  estimateContextUsage,
+  formatTokenCount,
+  normalizeContextLength,
+  shouldShowContextMeter,
+  type ContextEstimateMessage,
+  type ContextUsageEstimate,
+} from "../shared/contextWindow";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
@@ -471,6 +481,11 @@ type DesktopApi = {
     settings: HarnessProfileId;
     status: BackendStatus;
   }>;
+  getContextLength(): Promise<number>;
+  saveContextLength(input: number): Promise<{
+    contextLength: number;
+    status: BackendStatus;
+  }>;
   getModelEndpointSettings(): Promise<ModelEndpointSettings>;
   saveModelEndpointSettings(input: ModelEndpointSettings): Promise<{
     settings: ModelEndpointSettings;
@@ -535,6 +550,7 @@ const previewNotesKey = "umbratic-preview-notes";
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
+const previewContextLengthKey = "umbratic-preview-context-length";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
 export const streamingMarkdownRenderBatchIntervalMs = 33;
@@ -690,6 +706,14 @@ function writePreviewHarnessProfile(profileId: HarnessProfileId) {
   window.localStorage.setItem(previewHarnessProfileKey, profileId);
 }
 
+function readPreviewContextLength(): number {
+  return normalizeContextLength(window.localStorage.getItem(previewContextLengthKey) ?? DEFAULT_CONTEXT_LENGTH);
+}
+
+function writePreviewContextLength(contextLength: number) {
+  window.localStorage.setItem(previewContextLengthKey, String(normalizeContextLength(contextLength)));
+}
+
 function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
   const rows = Array.isArray(value) ? value : [];
   const headers = rows.slice(0, 2).map((row) => {
@@ -705,7 +729,7 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
 }
 
 function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
-  if (mode === "local") return software === "ollama" ? "http://127.0.0.1:11434" : "http://127.0.0.1:8000/v1";
+  if (mode === "local") return "http://127.0.0.1:11434";
   return "https://your-veil-server.example";
 }
 
@@ -713,12 +737,11 @@ function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultModelEndpointSettings };
   const settings = value as Partial<ModelEndpointSettings>;
   const mode = settings.mode === "local" || settings.mode === "server" ? settings.mode : defaultModelEndpointSettings.mode;
-  const software =
-    settings.software === "ollama" || settings.software === "vllm"
+  const software = mode === "local"
+    ? "ollama"
+    : settings.software === "ollama" || settings.software === "vllm"
       ? settings.software
-      : mode === "local"
-        ? "ollama"
-        : "vllm";
+      : "vllm";
   const baseUrl =
     typeof settings.baseUrl === "string" ? settings.baseUrl : defaultEndpointBaseUrlForMode(mode, software);
   return {
@@ -1438,6 +1461,12 @@ const fallbackApi: DesktopApi = {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
     writePreviewHarnessProfile(settings);
     return { settings, status: await fallbackApi.getBackendStatus() };
+  },
+  getContextLength: async () => readPreviewContextLength(),
+  saveContextLength: async (input) => {
+    const contextLength = normalizeContextLength(input);
+    writePreviewContextLength(contextLength);
+    return { contextLength, status: await fallbackApi.getBackendStatus() };
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
   saveModelEndpointSettings: async (input) => {
@@ -2176,6 +2205,42 @@ function AttachmentPreviewList({
           </React.Fragment>
         );
       })}
+    </div>
+  );
+}
+
+function ContextMeter({ estimate }: { estimate: ContextUsageEstimate }) {
+  const displayedPercentage = Math.min(100, Math.max(0, estimate.percentage));
+  const roundedPercentage = Math.round(estimate.percentage);
+  const valueText = `Context window: ${formatTokenCount(estimate.estimatedTokens)} / ${formatTokenCount(estimate.contextLength)}, ${roundedPercentage}%`;
+  return (
+    <div
+      className={`contextMeter is-${estimate.level}`}
+      role="meter"
+      aria-label="Model context window usage"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.min(100, roundedPercentage)}
+      aria-valuetext={valueText}
+      aria-describedby="context-meter-detail"
+      tabIndex={0}
+    >
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <circle className="contextMeterTrack" cx="12" cy="12" r="9" pathLength="100" />
+        <circle
+          className="contextMeterValue"
+          cx="12"
+          cy="12"
+          r="9"
+          pathLength="100"
+          strokeDasharray={`${displayedPercentage} 100`}
+        />
+      </svg>
+      <div className="contextMeterTooltip" id="context-meter-detail" role="tooltip">
+        <span>
+          Context window: <b>{formatTokenCount(estimate.estimatedTokens)} / {formatTokenCount(estimate.contextLength)}</b> · {roundedPercentage}%
+        </span>
+      </div>
     </div>
   );
 }
@@ -3221,6 +3286,8 @@ function App() {
   const [endpointRefreshing, setEndpointRefreshing] = useState(false);
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
+  const [contextLength, setContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
+  const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
   const [appearanceSettings, setAppearanceSettings] = useState<AppearanceSettings>(() => {
@@ -3327,6 +3394,11 @@ function App() {
   const endpointValidation = endpointValidationMessage(endpointDraftSettings);
   const endpointEditingEnabled = backend?.endpointConfig.endpointEditingAllowed ?? true;
   const endpointFormDisabled = endpointSaving || !endpointEditingEnabled;
+  const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
+  const harnessDraftContextIndex = Math.max(
+    0,
+    CONTEXT_LENGTH_OPTIONS.findIndex((option) => option === harnessDraftContextLength),
+  );
   const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
@@ -3387,6 +3459,47 @@ function App() {
     () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
     [task?.prompt, task?.state, visibleEvents],
   );
+  const runnerContextUsage = useMemo(() => {
+    for (let index = visibleEvents.length - 1; index >= 0; index -= 1) {
+      const event = visibleEvents[index];
+      if (event.type === "context.usage") return event;
+    }
+    return null;
+  }, [visibleEvents]);
+  const contextEstimateMessages = useMemo<ContextEstimateMessage[]>(() => {
+    const messages = runnerContextUsage ? [] : composerItems.map((item): ContextEstimateMessage => {
+      if (item.type === "user") return { text: item.rawText, attachments: item.attachedFiles };
+      if (item.type === "assistant") return { text: item.text };
+      return {
+        text: item.segments
+          .map((segment) =>
+            segment.type === "reasoning"
+              ? segment.text
+              : [segment.run.command, segment.run.stdout, segment.run.stderr].filter(Boolean).join("\n"),
+          )
+          .filter(Boolean)
+          .join("\n"),
+      };
+    });
+    if (prompt.trim() || attachedFiles.length) messages.push({ text: prompt, attachments: attachedFiles });
+    return messages;
+  }, [attachedFiles, composerItems, prompt, runnerContextUsage]);
+  const contextEstimate = useMemo(
+    () => estimateContextUsage(
+      contextEstimateMessages,
+      contextLength,
+      runnerContextUsage
+        ? { contentTokens: runnerContextUsage.contentTokens, reserveTokens: runnerContextUsage.reserveTokens }
+        : undefined,
+    ),
+    [contextEstimateMessages, contextLength, runnerContextUsage],
+  );
+  const showContextMeter = shouldShowContextMeter({
+    hasRunnerUsage: !!runnerContextUsage,
+    timelineItemCount: composerItems.length,
+    prompt,
+    attachmentCount: attachedFiles.length,
+  });
   const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
     type ChatProjectGroupBuilder = ChatProjectGroup & { worktreeMap: Map<string, WorktreeChatGroup> };
@@ -4291,6 +4404,9 @@ function App() {
   function closeSettingsDialog() {
     setEndpointDraftSettings(endpointSettings);
     endpointModeDraftsRef.current = { [endpointSettings.mode]: endpointSettings };
+    setHarnessDraftProfile(harnessProfile);
+    setHarnessDraftContextLength(contextLength);
+    setHarnessMessage(null);
     setAccountMessage(null);
     setSettingsOpen(false);
   }
@@ -4348,10 +4464,16 @@ function App() {
 
   async function loadHarnessProfile() {
     try {
-      const profileId = await api.getHarnessProfile();
+      const [profileId, configuredContextLength] = await Promise.all([
+        api.getHarnessProfile(),
+        api.getContextLength(),
+      ]);
       const normalized = isHarnessProfileId(profileId) ? profileId : defaultHarnessProfileId;
+      const normalizedContextLength = normalizeContextLength(configuredContextLength);
       setHarnessProfile(normalized);
       setHarnessDraftProfile(normalized);
+      setContextLength(normalizedContextLength);
+      setHarnessDraftContextLength(normalizedContextLength);
       setHarnessMessage(null);
     } catch (cause) {
       setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
@@ -4364,22 +4486,36 @@ function App() {
   }
 
   async function saveHarnessProfile() {
-    if (harnessDraftProfile === harnessProfile || harnessSaving) return;
-    const previous = harnessProfile;
-    setHarnessProfile(harnessDraftProfile);
+    if (!harnessDirty || harnessSaving) return;
+    const profileChanged = harnessDraftProfile !== harnessProfile;
+    const contextLengthChanged = harnessDraftContextLength !== contextLength;
     setHarnessMessage(null);
     setHarnessSaving(true);
     try {
-      const result = await api.saveHarnessProfile(harnessDraftProfile);
-      const normalized = isHarnessProfileId(result.settings) ? result.settings : defaultHarnessProfileId;
-      setHarnessProfile(normalized);
-      setHarnessDraftProfile(normalized);
-      setBackend(result.status);
-      setPermissionModeState(result.status.permissionMode);
-      setHarnessMessage("Harness profile saved. New runs will use it.");
+      let nextProfile = harnessProfile;
+      let nextContextLength = contextLength;
+      let status: BackendStatus | null = null;
+      if (profileChanged) {
+        const result = await api.saveHarnessProfile(harnessDraftProfile);
+        nextProfile = isHarnessProfileId(result.settings) ? result.settings : defaultHarnessProfileId;
+        status = result.status;
+      }
+      if (contextLengthChanged) {
+        const result = await api.saveContextLength(harnessDraftContextLength);
+        nextContextLength = normalizeContextLength(result.contextLength);
+        status = result.status;
+      }
+      setHarnessProfile(nextProfile);
+      setHarnessDraftProfile(nextProfile);
+      setContextLength(nextContextLength);
+      setHarnessDraftContextLength(nextContextLength);
+      if (status) {
+        setBackend(status);
+        setPermissionModeState(status.permissionMode);
+      }
+      setHarnessMessage("Harness settings saved. New runs will use them.");
     } catch (cause) {
-      setHarnessProfile(previous);
-      setHarnessDraftProfile(previous);
+      await loadHarnessProfile();
       setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
       setHarnessSaving(false);
@@ -6508,6 +6644,7 @@ function App() {
                 <Paperclip size={14} />
                 {attachedFiles.length ? <span className="attachmentCount">{attachedFiles.length}</span> : null}
               </button>
+              {showContextMeter ? <ContextMeter estimate={contextEstimate} /> : null}
             </div>
           </div>
           {closedChatNotice ? (
@@ -6771,7 +6908,7 @@ function App() {
                               <span className="connectionModeIcon"><Monitor size={16} /></span>
                               <strong>Local</strong>
                               {endpointDraftSettings.mode === "local" ? <Check size={14} /> : null}
-                              <em>Ollama or vLLM on this computer</em>
+                              <em>Ollama on this computer</em>
                             </button>
                             <button
                               className={endpointDraftSettings.mode === "server" ? "isActive" : ""}
@@ -6792,34 +6929,13 @@ function App() {
                           <h4>{endpointDraftSettings.mode === "local" ? "Local model" : "Server connection"}</h4>
                           {endpointDraftSettings.mode === "local" ? (
                             <>
-                              <div className="settingsField">
-                                <span>Runtime</span>
-                                <div className="segmented endpointSegmented" aria-label="Local model runtime">
-                                  <button
-                                    className={endpointDraftSettings.software === "ollama" ? "active" : ""}
-                                    type="button"
-                                    disabled={endpointFormDisabled}
-                                    onClick={() => updateEndpointDraft({ software: "ollama" })}
-                                  >
-                                    Ollama
-                                  </button>
-                                  <button
-                                    className={endpointDraftSettings.software === "vllm" ? "active" : ""}
-                                    type="button"
-                                    disabled={endpointFormDisabled}
-                                    onClick={() => updateEndpointDraft({ software: "vllm" })}
-                                  >
-                                    vLLM
-                                  </button>
-                                </div>
-                              </div>
                               <label className="settingsField">
-                                <span>Runtime URL</span>
+                                <span>Ollama URL</span>
                                 <input
                                   value={endpointDraftSettings.baseUrl}
                                   disabled={endpointFormDisabled}
                                   onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                                  placeholder={defaultEndpointBaseUrlForMode("local", endpointDraftSettings.software)}
+                                  placeholder="http://127.0.0.1:11434"
                                   spellCheck={false}
                                 />
                               </label>
@@ -6829,7 +6945,7 @@ function App() {
                                   value={endpointDraftSettings.modelId}
                                   disabled={endpointFormDisabled}
                                   onChange={(event) => updateEndpointDraft({ modelId: event.currentTarget.value })}
-                                  placeholder={endpointDraftSettings.software === "ollama" ? "llama3.2" : "your-model-name"}
+                                  placeholder="llama3.2"
                                   spellCheck={false}
                                 />
                               </label>
@@ -6935,18 +7051,66 @@ function App() {
                           </button>
                         ))}
                       </div>
-                      <div className="settingsActions">
-                        <button
-                          className="settingsInlineButton"
-                          type="button"
-                          onClick={() => void saveHarnessProfile()}
-                          disabled={harnessSaving || harnessDraftProfile === harnessProfile}
-                        >
-                          {harnessSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                          <span>Save profile</span>
-                        </button>
-                        {harnessDraftProfile !== harnessProfile ? <p className="settingsMessage">Unsaved profile change.</p> : null}
+                    </div>
+
+                    <div className={`settingsGroup contextLengthGroup ${endpointDraftSettings.mode === "server" ? "isDisabled" : ""}`}>
+                      <div className="contextLengthHead">
+                        <div>
+                          <h4>Model context</h4>
+                          <p>Choose the context window used by Ollama in Local mode.</p>
+                        </div>
                       </div>
+                      <div className="contextLengthSliderShell">
+                        <input
+                          className="contextLengthSlider"
+                          type="range"
+                          min={0}
+                          max={CONTEXT_LENGTH_OPTIONS.length - 1}
+                          step={1}
+                          value={harnessDraftContextIndex}
+                          disabled={endpointDraftSettings.mode === "server"}
+                          aria-label="Model context length"
+                          aria-valuetext={`${formatTokenCount(harnessDraftContextLength)} tokens${harnessDraftContextLength === DEFAULT_CONTEXT_LENGTH ? ", default" : ""}`}
+                          style={{
+                            "--context-slider-progress": `${(harnessDraftContextIndex / (CONTEXT_LENGTH_OPTIONS.length - 1)) * 100}%`,
+                          } as React.CSSProperties}
+                          onChange={(event) => {
+                            const option = CONTEXT_LENGTH_OPTIONS[Number(event.currentTarget.value)] ?? DEFAULT_CONTEXT_LENGTH;
+                            setHarnessDraftContextLength(option);
+                            setHarnessMessage(null);
+                          }}
+                        />
+                        <div className="contextLengthSliderLabels" aria-hidden="true">
+                          {CONTEXT_LENGTH_OPTIONS.map((option, index) => (
+                            <span
+                              key={option}
+                              className={harnessDraftContextLength === option ? "isActive" : ""}
+                              style={{ left: `${(index / (CONTEXT_LENGTH_OPTIONS.length - 1)) * 100}%` }}
+                            >
+                              <strong>{formatTokenCount(option)}</strong>
+                              {option === DEFAULT_CONTEXT_LENGTH ? <small>Default</small> : null}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="contextLengthHint">
+                        {endpointDraftSettings.mode === "server"
+                          ? "Context length is managed by your Veil server. Switch to Local to configure Ollama."
+                          : "64K is the default. Larger windows use more memory and may run more slowly."}
+                      </p>
+                    </div>
+
+                    <div className="settingsActions harnessSettingsActions">
+                      <button
+                        className="settingsInlineButton"
+                        type="button"
+                        onClick={() => void saveHarnessProfile()}
+                        disabled={harnessSaving || !harnessDirty}
+                      >
+                        {harnessSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                        <span>{harnessSaving ? "Saving" : "Save harness"}</span>
+                      </button>
+                      {harnessDirty ? <p className="settingsMessage">Unsaved harness changes.</p> : null}
                       {harnessMessage ? <p className="settingsMessage">{harnessMessage}</p> : null}
                     </div>
                   </div>

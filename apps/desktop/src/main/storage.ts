@@ -22,6 +22,7 @@ import {
 import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { normalizeReviewFile } from "../shared/reviewDiff";
+import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -594,6 +595,7 @@ type RawSettings = {
   tools?: Partial<Record<RunnerToolId, boolean>>;
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
+  contextLength?: unknown;
 };
 
 type SettingsRow = {
@@ -700,11 +702,14 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
   const managedSoftware = forceLocal ? undefined : managed?.software;
   const storedLocalEndpoint = endpoint.mode === "local";
   const storedEndpointAllowed = !forceLocal || storedLocalEndpoint;
-  const storedBaseUrl = storedEndpointAllowed && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
+  const storedLocalVllm = endpoint.mode === "local" && endpoint.software === "vllm";
+  const storedBaseUrl = storedEndpointAllowed && !storedLocalVllm && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
     ? endpoint.baseUrl.trim()
     : undefined;
   const software =
-    forceLocal
+    mode === "local"
+      ? "ollama"
+      : forceLocal
       ? storedLocalEndpoint && isModelEndpointSoftware(endpoint.software)
         ? endpoint.software
         : defaultEndpointSoftware("local")
@@ -743,19 +748,24 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
   const hasManagedEndpoint = !!(managed?.baseUrl || managed?.mode || managed?.software);
   const canEditEndpoint = endpointEditingAllowed() && !hasManagedEndpoint;
   const nextMode = canEditEndpoint && isModelEndpointMode(input.mode) ? input.mode : current.mode;
-  const nextSoftware = isModelEndpointSoftware(input.software)
-    ? canEditEndpoint
-      ? input.software
-      : current.software
-    : current.mode === nextMode
-      ? current.software
-      : defaultEndpointSoftware(nextMode);
+  const nextSoftware = nextMode === "local"
+    ? "ollama"
+    : isModelEndpointSoftware(input.software)
+      ? canEditEndpoint
+        ? input.software
+        : current.software
+      : current.mode === nextMode
+        ? current.software
+        : defaultEndpointSoftware(nextMode);
+  const rejectedLocalVllm = nextMode === "local" && input.software === "vllm";
   const next: ModelEndpointSettings = {
     mode: nextMode,
     software: nextSoftware,
     baseUrl:
       !canEditEndpoint
         ? current.baseUrl
+        : rejectedLocalVllm
+          ? defaultEndpointBaseUrlForSoftware("local", "ollama")
         : typeof input.baseUrl === "string" && input.baseUrl.trim()
           ? input.baseUrl.trim()
           : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
@@ -857,6 +867,20 @@ export function writeHarnessProfileSetting(profileId: HarnessProfileId): Harness
     harnessProfile: next,
   });
   return next;
+}
+
+export function readContextLengthSetting(): number {
+  return normalizeContextLength(readRawSettings().contextLength ?? DEFAULT_CONTEXT_LENGTH);
+}
+
+export function writeContextLengthSetting(value: unknown): number {
+  const contextLength = normalizeContextLength(value);
+  const settings = readRawSettings();
+  writeRawSettings({
+    ...settings,
+    contextLength,
+  });
+  return contextLength;
 }
 
 export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings; harnessProfile: HarnessProfileId } {

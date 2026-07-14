@@ -18,6 +18,8 @@ export type ProviderStreamResult = {
   emittedContent: boolean;
   emittedReasoning: boolean;
   actionRequirement: "" | "change" | "execute" | "inspect" | "change-and-execute";
+  promptTokens?: number;
+  completionTokens?: number;
   truncatedToolArguments?: boolean;
 };
 

@@ -166,6 +166,17 @@ func TestDecodeChatInputRejectsOversizedMessageContent(t *testing.T) {
 	}
 }
 
+func TestDecodeChatInputMeasuresHTMLWithoutEscapingInflation(t *testing.T) {
+	content := strings.Repeat("<>&", 4000)
+	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"` + content + `"}]}`))
+	if err != nil {
+		t.Fatalf("expected HTML-heavy content below the byte limit to be accepted: %v", err)
+	}
+	if len(input.Messages) != 1 || input.Messages[0].Content != content {
+		t.Fatalf("unexpected decoded content")
+	}
+}
+
 func TestDecodeChatInputMapsMaxBytesReaderError(t *testing.T) {
 	_, err := DecodeChatInput(failingReader{err: errors.New("http: request body too large")})
 	if !errors.Is(err, ErrRequestTooLarge) {
