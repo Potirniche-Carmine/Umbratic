@@ -37,7 +37,55 @@ The health route checks that the model configured inside Veil is available from 
 
 ## Configure
 
-Create `.env` in the project directory:
+Veil reads configuration from the process environment and then from an env file.
+The env file defaults to `.env` in Veil's working directory; set
+`VEIL_ENV_FILE=/path/to/file.env` before starting Veil to use a different file.
+Values already present in the process environment take precedence over values in
+the env file. Restart Veil after changing its configuration.
+
+### Required settings
+
+Every deployment must set these three values:
+
+```sh
+VEIL_AUTH_TOKEN=replace-with-a-long-random-token
+VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
+VEIL_MODEL=llama3
+```
+
+`VEIL_AUTH_TOKEN` authenticates Umbratic clients. `VEIL_PROVIDER_BASE_URL` is the
+private Ollama or vLLM address that Veil can reach. `VEIL_MODEL` must exactly match
+a model returned by the provider's models endpoint.
+
+### Complete environment reference
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `VEIL_AUTH_TOKEN` | Yes | None | Bearer token required by every Veil API route. Use a long, random secret. |
+| `VEIL_PROVIDER_BASE_URL` | Yes | None | Base URL of the private model runtime. Keep this runtime inaccessible to public clients. |
+| `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. |
+| `VEIL_ENV_FILE` | No | `.env` | Env file to load. This variable must be set in the process environment because it selects the file to read. |
+| `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
+| `VEIL_PROVIDER_PROTOCOL` | No | `vllm` | Provider wire protocol. Supported values are `vllm` and `ollama`. Setting it explicitly is recommended. |
+| `VEIL_PROVIDER_CHAT_PATH` | No | Protocol default | Chat endpoint path or full URL. Defaults to `/v1/chat/completions` for vLLM and `/api/chat` for Ollama. |
+| `VEIL_PROVIDER_MODELS_PATH` | No | Protocol default | Models endpoint path or full URL. Defaults to `/v1/models` for vLLM and `/api/tags` for Ollama. |
+| `VEIL_PROVIDER_API_KEY` | No | Empty | Bearer token sent from Veil to the model runtime. This is separate from `VEIL_AUTH_TOKEN`. |
+| `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for Ollama. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. This setting has no effect for vLLM. |
+| `VEIL_TEMPLATE_REGISTRY_PATH` | No | Empty | Path to the server-owned template registry JSON file. No template metadata is injected when unset. |
+| `VEIL_TELEMETRY_ENABLED` | No | `true` | Enables the authenticated `/api/telemetry` ingestion route. Accepted boolean values are `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. |
+| `VEIL_TELEMETRY_STORE_PATH` | No | Empty | Directory in which accepted telemetry bundles are persisted. Bundles are validated but not persisted when unset. |
+| `VEIL_TELEMETRY_RETENTION_DAYS` | No | `30` | Positive number of days to retain stored telemetry bundles. |
+| `VEIL_MODEL_TIMEOUT` | No | `60s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
+| `VEIL_REQUEST_TIMEOUT` | No | `75s` | Overall timeout applied by Veil to health, connection, and chat operations. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
+| `VEIL_MAX_BODY_BYTES` | No | `1048576` | Positive maximum request-body size in bytes for chat and telemetry requests. |
+
+`VEIL_PROVIDER_ENDPOINT_PATH` and `VEIL_PROVIDER_MODELS_ENDPOINT_PATH` are legacy
+aliases for `VEIL_PROVIDER_CHAT_PATH` and `VEIL_PROVIDER_MODELS_PATH`. The newer
+names take precedence when both are set.
+
+### Ollama
+
+Start Ollama, make sure the configured model is installed, and use an env file like:
 
 ```sh
 VEIL_ADDR=127.0.0.1:8080
@@ -45,29 +93,59 @@ VEIL_AUTH_TOKEN=replace-with-a-long-random-token
 
 VEIL_PROVIDER_PROTOCOL=ollama
 VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
-VEIL_MODEL=llama3
+VEIL_MODEL=llama3.2
+VEIL_CONTEXT_LENGTH=64000
 ```
 
-For vLLM:
+For example, install the model before starting Veil:
 
 ```sh
+ollama pull llama3.2
+```
+
+When `VEIL_CONTEXT_LENGTH` is positive, Veil sends it to Ollama as `num_ctx` when
+activating the model and on every chat request. Changing it requires a Veil restart;
+Ollama may reload the model with a differently sized KV cache on the next connection
+or request. Larger values require more memory and cannot exceed the model/runtime's
+supported context. Leave it unset or set it to `0` to use Ollama's default.
+
+Veil uses Ollama's `/api/chat`, `/api/tags`, and `/api/generate` endpoints. The
+Ollama port should remain private; expose Veil, not Ollama.
+
+### vLLM
+
+Set the context length when starting vLLM, not in Veil. For a 64,000-token context:
+
+```sh
+vllm serve your-model --host 127.0.0.1 --port 8000 --max-model-len 64000
+```
+
+Then configure Veil to use vLLM's OpenAI-compatible API:
+
+```sh
+VEIL_ADDR=127.0.0.1:8080
+VEIL_AUTH_TOKEN=replace-with-a-long-random-token
+
 VEIL_PROVIDER_PROTOCOL=vllm
 VEIL_PROVIDER_BASE_URL=http://127.0.0.1:8000/v1
 VEIL_MODEL=your-model
 ```
 
-Optional:
+`--max-model-len` limits the combined prompt and output length. If it is omitted,
+vLLM derives the value from the model configuration. Current vLLM releases also
+accept values such as `64K` and `auto`; consult the
+[vLLM serve reference](https://docs.vllm.ai/en/latest/cli/serve/) for the version
+installed on the server. Restart vLLM after changing this option.
 
-```sh
-VEIL_PROVIDER_CHAT_PATH=/v1/chat/completions
-VEIL_PROVIDER_MODELS_PATH=/v1/models
-VEIL_TEMPLATE_REGISTRY_PATH=/srv/umbratic/templates.json
-VEIL_TELEMETRY_ENABLED=true
-VEIL_TELEMETRY_STORE_PATH=/srv/umbratic/telemetry
-VEIL_TELEMETRY_RETENTION_DAYS=30
-```
+`VEIL_CONTEXT_LENGTH` is intentionally not forwarded to vLLM, because vLLM sizes
+and enforces the context window when the runtime starts. The model must support the
+requested length, and the server must have enough KV-cache memory. If vLLM is
+started with `--api-key`, set the same value in `VEIL_PROVIDER_API_KEY` so Veil can
+authenticate to it.
 
-Use `VEIL_ENV_FILE=/path/to/file.env` only when the env file is not `.env`.
+The vLLM port should remain private; expose Veil, not vLLM.
+
+### Optional templates and telemetry
 
 When `VEIL_TEMPLATE_REGISTRY_PATH` is set, Veil reads a server-owned JSON registry and injects only matching template metadata into protected prompt context. The registry can be either an array or `{ "templates": [...] }` with entries like:
 
