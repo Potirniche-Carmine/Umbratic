@@ -68,7 +68,8 @@ const umbraticApi = {
     baseUrl: string;
     modelId: string;
     secret: string;
-    headers: Array<{ name: string; value: string }>;
+    secretConfigured: boolean;
+    headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
   }) =>
     ipcRenderer.invoke("umbratic:save-model-endpoint-settings", input),
   exportTelemetry: () => ipcRenderer.invoke("umbratic:export-telemetry"),

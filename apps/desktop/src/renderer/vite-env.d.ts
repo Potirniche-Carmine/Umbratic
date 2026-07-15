@@ -54,7 +54,8 @@ type UmbraticModelEndpointSettings = {
   baseUrl: string;
   modelId: string;
   secret: string;
-  headers: Array<{ name: string; value: string }>;
+  secretConfigured: boolean;
+  headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
 };
 type UmbraticCommandClass =
   | "read"

@@ -636,6 +636,11 @@ type StoredModelEndpointSettings = Omit<ModelEndpointSettings, "headers" | "secr
   headers: Array<{ name: string; value: "" | StoredProtectedString }>;
 };
 
+export type PublicModelEndpointSettings = Omit<ModelEndpointSettings, "headers"> & {
+  secretConfigured: boolean;
+  headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
+};
+
 function readProtectedString(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (!isRecord(value) || value.encoding !== "electron-safe-storage-v1" || typeof value.encrypted !== "string") return undefined;
@@ -727,6 +732,19 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
     modelId,
     secret: mode === "local" ? "" : managed?.secret ?? readProtectedString(endpoint.secret) ?? defaultEndpointApiKey,
     headers: mode === "local" ? normalizeEndpointHeaders([]) : normalizeEndpointHeaders(endpoint.headers),
+  };
+}
+
+export function publicModelEndpointSettings(settings: ModelEndpointSettings): PublicModelEndpointSettings {
+  return {
+    ...settings,
+    secret: "",
+    secretConfigured: !!settings.secret,
+    headers: settings.headers.map((header) => ({
+      name: header.name,
+      value: "",
+      valueConfigured: !!header.value,
+    })),
   };
 }
 

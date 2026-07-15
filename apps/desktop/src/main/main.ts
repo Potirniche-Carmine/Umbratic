@@ -68,6 +68,7 @@ import {
   readContextLengthSetting,
   readHarnessProfileSetting,
   readModelEndpointSettings,
+  publicModelEndpointSettings,
   readNotes,
   readProjects,
   readTasks,
@@ -2255,7 +2256,7 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
   }
   const settings = writeModelEndpointSettings(candidate);
   const status = await getBackendStatus();
-  return { settings, status };
+  return { settings: publicModelEndpointSettings(settings), status };
 }
 
 async function saveHarnessProfileSetting(input: unknown) {
@@ -4487,7 +4488,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:get-capability-probes", (input) => getCapabilityProbes(input));
   handleIpc("umbratic:get-model-endpoint-settings", () => {
     const settings = readModelEndpointSettings();
-    return { ...settings, secret: "", headers: settings.headers.map((header) => ({ name: header.name, value: "" })) };
+    return publicModelEndpointSettings(settings);
   });
   handleIpc("umbratic:save-model-endpoint-settings", (input) =>
     saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),

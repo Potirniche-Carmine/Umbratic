@@ -125,7 +125,8 @@ type ModelEndpointSettings = {
   baseUrl: string;
   modelId: string;
   secret: string;
-  headers: Array<{ name: string; value: string }>;
+  secretConfigured: boolean;
+  headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
 };
 type CommandClass =
   | "read"
@@ -591,11 +592,13 @@ const defaultModelEndpointSettings: ModelEndpointSettings = {
   baseUrl: "http://127.0.0.1:11434",
   modelId: "",
   secret: "",
+  secretConfigured: false,
   headers: [
-    { name: "", value: "" },
-    { name: "", value: "" },
+    { name: "", value: "", valueConfigured: false },
+    { name: "", value: "", valueConfigured: false },
   ],
 };
+const savedEndpointSecretPlaceholder = "••••••••••••  Saved securely";
 const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
   {
     id: "marketing",
@@ -714,17 +717,18 @@ function writePreviewContextLength(contextLength: number) {
   window.localStorage.setItem(previewContextLengthKey, String(normalizeContextLength(contextLength)));
 }
 
-function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
+function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string; valueConfigured: boolean }> {
   const rows = Array.isArray(value) ? value : [];
   const headers = rows.slice(0, 2).map((row) => {
-    if (!row || typeof row !== "object" || Array.isArray(row)) return { name: "", value: "" };
+    if (!row || typeof row !== "object" || Array.isArray(row)) return { name: "", value: "", valueConfigured: false };
     const record = row as Record<string, unknown>;
     return {
       name: typeof record.name === "string" ? record.name : "",
       value: typeof record.value === "string" ? record.value : "",
+      valueConfigured: record.valueConfigured === true,
     };
   });
-  while (headers.length < 2) headers.push({ name: "", value: "" });
+  while (headers.length < 2) headers.push({ name: "", value: "", valueConfigured: false });
   return headers;
 }
 
@@ -750,6 +754,7 @@ function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
     baseUrl,
     modelId: typeof settings.modelId === "string" ? settings.modelId : mode === "local" ? "" : "veil-managed",
     secret: typeof settings.secret === "string" ? settings.secret : "",
+    secretConfigured: settings.secretConfigured === true,
     headers: normalizeEndpointHeaders(settings.headers),
   };
 }
@@ -762,6 +767,7 @@ function endpointDefaultsForMode(mode: ModelEndpointMode): ModelEndpointSettings
     baseUrl: defaultEndpointBaseUrlForMode(mode, software),
     modelId: mode === "local" ? "" : "veil-managed",
     secret: "",
+    secretConfigured: false,
     headers: normalizeEndpointHeaders([]),
   };
 }
@@ -791,6 +797,19 @@ function readPreviewEndpointSettings(): ModelEndpointSettings {
 
 function writePreviewEndpointSettings(settings: ModelEndpointSettings) {
   window.localStorage.setItem(previewEndpointSettingsKey, JSON.stringify(settings));
+}
+
+function publicPreviewEndpointSettings(settings: ModelEndpointSettings): ModelEndpointSettings {
+  return {
+    ...settings,
+    secret: "",
+    secretConfigured: settings.secretConfigured || !!settings.secret,
+    headers: settings.headers.map((header) => ({
+      name: header.name,
+      value: "",
+      valueConfigured: header.valueConfigured || !!header.value,
+    })),
+  };
 }
 
 function uniqueFonts(fonts: string[]): string[] {
@@ -1470,7 +1489,7 @@ const fallbackApi: DesktopApi = {
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
   saveModelEndpointSettings: async (input) => {
-    const settings = normalizeEndpointSettings(input);
+    const settings = publicPreviewEndpointSettings(normalizeEndpointSettings(input));
     writePreviewEndpointSettings(settings);
     return { settings, status: await fallbackApi.getBackendStatus() };
   },
@@ -4387,7 +4406,7 @@ function App() {
     setAccountMessage(null);
   }
 
-  function updateEndpointHeader(index: number, patch: Partial<{ name: string; value: string }>) {
+  function updateEndpointHeader(index: number, patch: Partial<{ name: string; value: string; valueConfigured: boolean }>) {
     endpointSaveSequenceRef.current += 1;
     setEndpointSaving(false);
     setEndpointRefreshing(false);
@@ -6968,7 +6987,7 @@ function App() {
                                   value={endpointDraftSettings.secret}
                                   disabled={endpointFormDisabled}
                                   onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
-                                  placeholder="Bearer token from your Veil server"
+                                  placeholder={endpointDraftSettings.secretConfigured ? savedEndpointSecretPlaceholder : "Bearer token from your Veil server"}
                                   type="password"
                                   spellCheck={false}
                                 />
@@ -6992,7 +7011,7 @@ function App() {
                                         value={header.value}
                                         disabled={endpointFormDisabled}
                                         onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
-                                        placeholder="Header value"
+                                        placeholder={header.valueConfigured ? savedEndpointSecretPlaceholder : "Header value"}
                                         type="password"
                                         spellCheck={false}
                                       />

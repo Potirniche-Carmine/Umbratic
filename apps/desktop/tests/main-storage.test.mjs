@@ -337,6 +337,18 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
     { name: "X-Org", value: "org-secret" },
     { name: "", value: "ignored" },
   ]);
+  assert.deepEqual(plain(storage.publicModelEndpointSettings(storage.readModelEndpointSettings())), {
+    mode: "server",
+    software: "vllm",
+    baseUrl: "https://veil.example.internal/",
+    modelId: "veil-managed",
+    secret: "",
+    secretConfigured: true,
+    headers: [
+      { name: "X-Org", value: "", valueConfigured: true },
+      { name: "", value: "", valueConfigured: true },
+    ],
+  });
 
   const rawSettings = readSettingsPayloadText(userData);
   assert.doesNotMatch(rawSettings, /super-secret-token/);
