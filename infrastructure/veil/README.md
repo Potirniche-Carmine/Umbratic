@@ -100,13 +100,15 @@ Do not expose Ollama or vLLM directly. Umbratic only needs the Veil tunnel URL a
 go run ./cmd/veil
 ```
 
-From the monorepo root, use the local helper to start the desktop app in Local mode:
+From the monorepo root, use the local helper to start the desktop app with the same
+connection switching behavior as the packaged app. Local is the first-run default,
+and Server remains selectable in Settings:
 
 ```sh
 npm run local
 ```
 
-The desktop app starts and owns the local Veil process, just as the packaged app does. The helper reads the runtime software, base URL, and model from `infrastructure/veil/.env`, but users do not configure a Veil URL or token in Local mode. Veil binds to loopback, uses an app-generated transient credential, and starts with telemetry ingestion disabled. Override local runtime values for one run when needed:
+When Local is selected, the desktop app starts and owns the local Veil process, just as the packaged app does. The helper may read development-only local runtime defaults from `infrastructure/veil/.env`, but the app does not force Local mode and packaged users do not need that file. Users do not configure a Veil URL or token in Local mode. Veil binds to loopback, uses an app-generated transient credential, and starts with telemetry ingestion disabled. Override local runtime values for one run when needed:
 
 ```sh
 npm run local -- --model llama3.2

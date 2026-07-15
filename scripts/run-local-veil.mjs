@@ -32,6 +32,8 @@ function usage() {
     "  --base-url <url>     Local model runtime URL. Overrides VEIL_PROVIDER_BASE_URL.",
     "  --model <name>       Runtime model name. Overrides VEIL_MODEL.",
     "  --help              Show this message.",
+    "",
+    "Starts with Local as the first-run default. You can switch between Local and Server in Settings.",
   ].join("\n");
 }
 
@@ -78,7 +80,6 @@ function desktopEnvFromVeil(veilEnv) {
     ...process.env,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
     UMBRATIC_DEFAULT_ENDPOINT_MODE: "local",
-    UMBRATIC_FORCE_LOCAL_ENDPOINT: "1",
     UMBRATIC_LOCAL_MODEL_ID: veilEnv.VEIL_MODEL || "",
     UMBRATIC_LOCAL_RUNTIME_BASE_URL: runtimeBaseUrl,
     UMBRATIC_MODEL_SOFTWARE: process.env.UMBRATIC_MODEL_SOFTWARE || software,
@@ -114,9 +115,10 @@ function spawnChild(label, command, args, options) {
 
 function main() {
   const { desktopEnv } = localEnv(process.argv.slice(2));
-  console.log(`Starting desktop-managed local Veil for ${desktopEnv.UMBRATIC_LOCAL_RUNTIME_BASE_URL}`);
-  console.log(`Local model: ${desktopEnv.UMBRATIC_LOCAL_MODEL_ID || "configure in Settings > Connection"}`);
-  console.log(fs.existsSync(veilEnvPath) ? `Veil env file: ${veilEnvPath}` : "Veil env file: none");
+  console.log("Starting Umbratic with packaged-app connection behavior");
+  console.log(`Default local runtime: ${desktopEnv.UMBRATIC_LOCAL_RUNTIME_BASE_URL}`);
+  console.log(`Default local model: ${desktopEnv.UMBRATIC_LOCAL_MODEL_ID || "configure in Settings > Connection"}`);
+  console.log(fs.existsSync(veilEnvPath) ? `Optional local defaults: ${veilEnvPath}` : "Optional local defaults: none");
 
   const children = [];
 

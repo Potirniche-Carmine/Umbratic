@@ -83,11 +83,15 @@ Build the desktop app:
 npm run desktop:build
 ```
 
-Run the desktop app with its app-managed local Veil harness:
+Run the desktop app with packaged-app connection behavior. Local is the first-run
+default, and you can switch between Local and Server in Settings:
 
 ```sh
 npm run local -- --model llama3.2
 ```
+
+In Local mode the desktop owns the Veil process and supplies its configuration at
+launch. Packaged users do not need a Veil `.env` file.
 
 Run Veil by itself for server development:
 

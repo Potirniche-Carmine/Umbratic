@@ -392,7 +392,7 @@ test("endpoint settings default to local and migrate the old local Veil URL sema
   assert.doesNotMatch(JSON.stringify(rawSettings), /must-not-be-stored|also-not-stored/);
 });
 
-test("local launcher settings override a previously stored server endpoint for the session", () => {
+test("an explicitly forced local configuration overrides a stored server endpoint for the session", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-forced-local-"));
   loadStorage(userData).readModelEndpointSettings();
   writeSettingsPayload(userData, {
