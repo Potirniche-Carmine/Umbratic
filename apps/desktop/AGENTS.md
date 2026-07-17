@@ -2,45 +2,60 @@
 
 ## Desktop App
 
-This project is the Electron, Vite, React, and TypeScript desktop app. Keep implementation choices consistent with nearby TypeScript and React patterns.
+This project is the desktop product shell. Most of it remains Electron, Vite, React, and TypeScript; `native/` is a separate Rust binary for bounded repository file search. Follow `native/AGENTS.md` for work inside that directory.
 
-Keep the desktop harness thin, simple, and direct. Its responsibilities are product UI, local workspace context, attachments, permissions, safe tool execution, review flows, event streaming, and transport to a purpose-built Veil route. Prefer straightforward request and state flows over client-side orchestration frameworks.
+Keep the shell thin and direct:
+
+- `src/renderer/` owns the React UI and presentation state.
+- `src/preload/` exposes a narrow, typed IPC surface. Do not expose general Electron, filesystem, or process primitives.
+- `src/main/` owns trusted desktop orchestration, native-process lifecycle, workspace and attachment context, permissions, review flows, event streaming, local state, telemetry redaction, and transport to the Rust runner.
+- `native/` owns only the small desktop-core command surface described by its local instructions.
+- `scripts/` owns development, build-copy, packaging, and package-verification tasks.
+
+Workspace tool execution belongs in the Rust runner. Do not restore a TypeScript runner or add a Node fallback that silently changes security behavior. Resolve the signed packaged Rust binaries through the existing development and packaged-resource paths.
 
 ## Veil Boundary
 
-Veil owns model-facing behavior. Do not add system prompts, hidden behavioral prompts, personas, skill-selection prompts, route-specific guidance, model policy, model selection, or provider/runtime decision logic to the Electron app, renderer, desktop harness, or local runner.
+Veil owns model-facing behavior. Do not add system prompts, hidden behavioral prompts, personas, skill-selection prompts, route-specific guidance, model policy, model selection, or provider/runtime decisions to Electron, the renderer, desktop core, or runner.
 
-This rule applies in both modes: Local mode must go through the app-managed local Veil process, and Server mode must go through the hosted Veil service. Do not bypass Veil to call Ollama, vLLM, or another model runtime directly.
+Both connection modes go through Veil. Local mode uses the app-managed local Veil process; Server mode uses the hosted Veil service. Never call Ollama, vLLM, or another model runtime directly.
 
-The desktop may select the explicit product route requested by the user, such as engineering, marketing, or sales. Veil owns the prompt and model behavior behind that route. Per-request model selection and protected model configuration belong in Veil.
+The desktop may select an explicit product route requested by the user. Veil owns the prompt and model behavior behind that route. Client-to-model content is limited to user content and factual local context such as workspace facts, repository instructions, attachments, conversation history, capability results, and tool results. Keep context envelopes neutral.
 
-Client-to-model content must be limited to the user's content and factual local context such as workspace facts, repository instruction files, attachments, conversation history, capability results, and tool results. Keep context envelopes neutral; do not use them to shape personality, restrict general capabilities, select skills, or prescribe response style. If new model guidance seems necessary, implement it in `infrastructure/veil/internal/prompts` or another appropriate Veil policy layer instead of the harness.
+Enabled skills are an index, not pre-injected instructions. The desktop may send validated skill id, name, description, and source metadata and expose the local `read_skill` tool. Never preselect skills with desktop heuristics or inject full skill bodies from the shell.
 
-Enabled skills are an index, not pre-injected instructions. The desktop may send validated skill id, name, description, and source metadata and make the local `read_skill` capability available. Veil must instruct the model when and how to read a relevant skill. Never preselect skills with desktop heuristics or inject full skill bodies from the harness.
+Keep provider credentials, protected prompts, route policy, model details, and raw sensitive values out of renderer-visible state, logs, and user-facing diagnostics. The runner must reject client system-prompt overrides; the desktop must not attempt them.
 
-The runner must reject client system-prompt overrides. Keep provider credentials, protected prompts, route policy, and model details out of renderer-visible state and user-facing diagnostics.
+## IPC And Native Processes
+
+Treat renderer input, workspace content, native-process output, and server responses as untrusted:
+
+- Validate IPC arguments in the main process and return stable, non-sensitive errors.
+- Keep workspace operations within the selected root and preserve path, symlink, generated-file, and secret-file protections.
+- Require the runner's loopback authentication and do not broaden its listener or expose credentials to the renderer.
+- Preserve event ordering and terminal-state semantics when adapting runner streams for the UI.
+- Clean up runner, Veil, worker, and desktop-core processes on shutdown and failed startup.
+- Keep stdout machine-readable when invoking native helpers; route diagnostics to stderr.
 
 ## Design
 
-Design and UI/UX quality are first-order product requirements, not final-pass polish. Hold every user-facing change to the quality bar expected from an Apple design engineer or an Airbnb product design team: clear hierarchy, restrained visual language, excellent typography and spacing, obvious interaction affordances, thoughtful defaults, and meticulous state design.
+Design and UI/UX quality are first-order product requirements. Use clear hierarchy, restrained visual language, excellent typography and spacing, obvious affordances, thoughtful defaults, and complete state design.
 
-Keep the experience clean, calm, fast, and intentional. Prefer simple flows, strong spacing, stable layouts, progressive disclosure, and polished interaction states. The interface should make complex model and workspace infrastructure feel simple without exposing internal implementation concepts unnecessarily.
+Keep the experience calm, fast, and intentional. Avoid configuration-heavy UI, developer-centric terminology, duplicated controls, and surfaces that expose Veil or runner internals instead of the user's task. Avoid layout shift by reserving space, overlaying transient UI, or scrolling within fixed regions.
 
-Before adding a control, setting, label, modal, or status surface, confirm that it is necessary and that the same outcome cannot be expressed more simply. Avoid configuration-heavy UI, developer-centric terminology, duplicated controls, and screens that expose Veil or runner internals instead of the user's task.
+Use semantic colors consistently and do not use emoji in product UI. For visual changes, verify light and dark mode plus relevant hover, focus, pressed, disabled, open, closed, empty, loading, success, and error states. Check keyboard navigation, accessible names, contrast, responsive sizing, truncation, overflow, and reduced motion.
 
-Avoid layout shift. Reserve space, overlay transient UI, or scroll within fixed regions instead of moving stable app areas.
-
-Keep semantic colors consistent across related states. Do not use emoji in product UI; use clear text, lucide icons, brand assets, or purpose-built visuals.
-
-For visual changes, verify light and dark mode. Include hover, focus, pressed, disabled, open, closed, empty, loading, success, and error states whenever they are relevant. Check keyboard navigation, accessible names, contrast, responsive sizing, truncation, overflow, and reduced-motion behavior.
-
-Review visual work in the running app at realistic window sizes. Do not consider a UI change complete based only on typechecks, snapshots, or static source review.
+Review visual work in the running app at realistic window sizes. Typechecks and source inspection alone are not sufficient visual verification.
 
 ## Testing
 
-Run focused checks for the changed area. Use the project’s existing scripts first:
+Add tests at the layer that owns the behavior:
 
-- `npm run test:all`
-- `npm run desktop:build`
+- TypeScript unit and contract tests belong in `tests/*.test.ts`.
+- IPC tests must prove that the preload surface is narrow and main-process validation cannot be bypassed.
+- Native-process adapter tests should assert malformed output, early exit, cancellation, event ordering, and cleanup rather than only the happy path.
+- Packaging changes must verify that both Rust binaries are present, executable, and launchable from packaged resources.
 
-Clean up any dev servers, Electron processes, preview servers, or watchers before ending the chat.
+Run focused checks first. Before finishing, run `npm run test:all` from the repository root. Also run `npm run desktop:build` for desktop changes. When packaged-resource behavior changes, run `npm --workspace @umbratic/desktop run package` followed by `npm --workspace @umbratic/desktop run verify:package`.
+
+Clean up dev servers, Electron processes, preview servers, native helpers, and watchers before ending the task.

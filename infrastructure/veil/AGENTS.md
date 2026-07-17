@@ -1,43 +1,57 @@
 # AGENTS.md
 
-## Project Overview
+## Veil Service
 
-Umbratic Veil is a Go server that sits between Umbratic clients and a private model runtime. The harness should send requests to Veil APIs, and Veil should own prompt injection, model selection, route policy, health checks, and the final runtime call.
+Veil is the Go security and model-policy boundary between Umbratic clients and an admin-configured private model runtime. Electron and the Rust runner send requests to purpose-built Veil APIs; Veil owns authentication, protected prompts, route/model policy, health checks, telemetry boundaries, and the final runtime call.
 
-## Core Rules
+Cloudflare Tunnel may expose Veil, but it must point to Veil rather than Ollama, vLLM, or another runtime directly.
 
-Security and simplicity are the two highest priorities. Keep the model inaccessible unless the request goes through Veil, and prefer the smallest clear implementation over a clever abstraction.
+## Go Structure
 
-Cloudflare Tunnel is an acceptable transport for exposing Veil to Umbratic. The tunnel should point at Veil, not at Ollama or vLLM directly.
+Use idiomatic Go and the standard library. Veil intentionally has no third-party Go module dependencies; preserve that unless a dependency has a documented, reviewed need that cannot be met clearly and safely in the standard library.
 
-If something can be done clearly in five lines, do it in five lines. Add structure only when it removes real duplication or protects a security boundary.
+Keep package boundaries simple:
 
-## Go Code
+- `cmd/veil` starts the service.
+- `internal/config` loads and validates trusted server configuration.
+- `internal/http` owns routes, authentication, middleware, limits, and response contracts.
+- `internal/model` owns outbound private-runtime calls and streaming.
+- `internal/prompts` owns protected global and route prompt assembly.
+- `internal/policy` owns request validation and access rules.
+- `internal/telemetry` owns redacted operational telemetry.
+- `internal/templates` owns built-in route/template definitions.
 
-Use idiomatic Go and the standard library first. Keep handlers small, pass `context.Context`, set timeouts for outbound model calls, and return plain JSON errors without leaking secrets or internal runtime details.
-
-Keep package boundaries boring and obvious:
-
-- `cmd/veil` starts the server.
-- `internal/http` owns routes and middleware.
-- `internal/model` owns runtime calls.
-- `internal/prompts` owns prompt assembly.
-- `internal/policy` owns validation and access rules.
+Keep handlers small, pass `context.Context`, enforce timeouts and cancellation on outbound work, and return stable JSON errors without internal details. Add abstractions only when they remove real duplication or protect a trust boundary.
 
 ## Prompt And API Rules
 
-Prompt logic belongs on the server. Do not put system prompt assembly back into the desktop harness, runner, or client UI.
+Prompt logic belongs on Veil. Do not move protected prompt assembly into the desktop, native core, or runner.
 
-All routes should use the same basic flow: authenticate the request, validate input, build the global prompt, add the route prompt, call the configured model, and return the response.
+Each public request follows the same security sequence: authenticate, enforce size and shape limits, validate the route and request, build protected global and route guidance, call the configured runtime, and return or stream the response.
 
-Do not create generic runtime passthrough endpoints. Every public API should have a clear purpose such as engineering chat, engineering write, marketing content, or sales support.
+Do not create a generic runtime passthrough. Every public endpoint must have a defined product purpose and an explicit policy. Route selection from a client is allowed only within the configured route set; client-selected models and protected system-prompt overrides are not.
 
 ## Security
 
-Never log API keys, runtime headers, raw secrets, or full prompt payloads. Redact sensitive values in errors, telemetry, and test fixtures.
+Treat HTTP input and runtime output as untrusted:
 
-Reject oversized requests, unknown routes, unsupported model choices, and any client attempt to override protected system prompts.
+- Never log API keys, authorization headers, raw secrets, full prompts, full model responses, or unredacted workspace content.
+- Reject missing/invalid authentication, oversized bodies, unknown fields where the contract is strict, unknown routes, unsupported model choices, and client attempts to override protected system guidance.
+- Keep runtime credentials and model configuration server-side.
+- Apply server, header, body, stream, idle, and outbound-call timeouts appropriate to each endpoint.
+- Preserve backpressure, cancellation, status mapping, and safe error behavior when either side disconnects.
+- Do not expose stack traces, runtime addresses, provider bodies, or sensitive configuration in health checks or errors.
 
-## Verification
+## Testing And Verification
 
-Run `gofmt` on changed Go files and `go test ./...` when Go code exists. For documentation-only changes, a focused read-through is enough.
+Use table-driven tests for authentication, size boundaries, malformed JSON, unknown fields/routes, prompt-override attempts, timeouts, cancellation, upstream failures, stream framing, and redaction. Test handlers with deterministic local HTTP servers; do not require a live model runtime or skip security coverage when one is unavailable. Assert response status, stable error shape, headers, and absence of sensitive values, not merely that a handler returned.
+
+Run:
+
+```sh
+gofmt -w <changed-go-files>
+go test ./...
+npm run test:all
+```
+
+Run `npm run test:all` from the repository root even for documentation-only repository changes, as required by the root instructions.
