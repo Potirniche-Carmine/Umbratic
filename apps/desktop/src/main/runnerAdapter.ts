@@ -47,7 +47,7 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
   return {
     taskId: task.id,
     cwd: task.worktreePath,
-    contextLength: readContextLengthSetting(),
+    contextLength: selectedModel.contextLength ?? readContextLengthSetting(),
     maxResponseTokens: 4_096,
     protectedPromptReserveTokens: 4_096,
     workspaceMode: task.workspaceMode,

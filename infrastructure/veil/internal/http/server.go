@@ -23,6 +23,7 @@ type ModelClient interface {
 	DoChat(context.Context, model.ChatRequest) (*http.Response, error)
 	ListModels(context.Context) ([]model.ModelInfo, error)
 	ActivateModel(context.Context, string) error
+	ContextLength(context.Context, string) (int, error)
 }
 
 type Server struct {
@@ -55,6 +56,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleHealth(w, r)
+		return
+	}
+	if r.URL.Path == "/api/model/context" {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleModelContext(w, r)
 		return
 	}
 
@@ -97,6 +106,25 @@ func (s *Server) handleModelConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+}
+
+func (s *Server) handleModelContext(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+	defer cancel()
+
+	contextLength, err := s.model.ContextLength(ctx, s.cfg.DefaultModel)
+	if err != nil && s.cfg.ContextLength <= 0 {
+		writeJSONError(w, http.StatusBadGateway, "model context unavailable")
+		return
+	}
+	if s.cfg.ContextLength > 0 && (contextLength <= 0 || s.cfg.ContextLength < contextLength) {
+		contextLength = s.cfg.ContextLength
+	}
+	if contextLength <= 0 {
+		writeJSONError(w, http.StatusBadGateway, "model context unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"context_length": contextLength})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

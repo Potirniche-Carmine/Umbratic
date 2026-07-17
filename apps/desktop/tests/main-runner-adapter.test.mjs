@@ -127,6 +127,7 @@ test("engineering harness mode uses its Veil route without runtime prompt profil
     modelId: "veil-managed",
     displayName: "Veil",
     baseUrl: "http://127.0.0.1:8080",
+    contextLength: 32768,
   };
   const task = {
     id: "task-2",
@@ -144,6 +145,7 @@ test("engineering harness mode uses its Veil route without runtime prompt profil
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
   assert.equal(config.modelBoundary, "managed");
+  assert.equal(config.contextLength, 32768);
   assert.equal("system" in config, false);
 });
 

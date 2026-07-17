@@ -5,14 +5,15 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.mjs";
 
 const contextWindow = loadTypeScriptModule(new URL("../src/shared/contextWindow.ts", import.meta.url));
 
-test("context length settings use the Ollama-oriented 64K default and snap to supported choices", () => {
+test("context length settings use the 64K default and snap to every supported local choice", () => {
   assert.equal(contextWindow.normalizeContextLength(undefined), 64000);
   assert.equal(contextWindow.normalizeContextLength("128000"), 128000);
-  assert.equal(contextWindow.normalizeContextLength(1000), 32000);
+  assert.equal(contextWindow.normalizeContextLength(1000), 4000);
   assert.equal(contextWindow.normalizeContextLength(71000), 64000);
   assert.equal(contextWindow.normalizeContextLength(100000), 128000);
   assert.equal(contextWindow.normalizeContextLength(999999), 256000);
-  assert.deepEqual(Array.from(contextWindow.CONTEXT_LENGTH_OPTIONS), [32000, 64000, 128000, 256000]);
+  assert.deepEqual(Array.from(contextWindow.CONTEXT_LENGTH_OPTIONS), [4000, 8000, 16000, 32000, 64000, 128000, 256000]);
+  assert.equal(contextWindow.normalizeEffectiveContextLength(131072), 131072);
 });
 
 test("runner-measured content can be used as the base for an unsent draft", () => {
@@ -23,7 +24,8 @@ test("runner-measured content can be used as the base for an unsent draft", () =
 });
 
 test("runner-provided reserves replace the fallback without being counted twice", () => {
-  const estimate = contextWindow.estimateContextUsage([], 64000, { contentTokens: 12000, reserveTokens: 4096 });
+  const estimate = contextWindow.estimateContextUsage([], 131072, { contentTokens: 12000, reserveTokens: 4096 });
+  assert.equal(estimate.contextLength, 131072);
   assert.equal(estimate.contentTokens, 12000);
   assert.equal(estimate.reserveTokens, 4096);
   assert.equal(estimate.estimatedTokens, 16096);

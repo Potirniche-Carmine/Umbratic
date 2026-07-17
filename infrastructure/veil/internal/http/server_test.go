@@ -30,11 +30,23 @@ type fakeModelClient struct {
 	streamBody        string
 	activateErr       error
 	activatedModel    string
+	contextLength     int
+	contextErr        error
 }
 
 func (f *fakeModelClient) ActivateModel(ctx context.Context, modelID string) error {
 	f.activatedModel = modelID
 	return f.activateErr
+}
+
+func (f *fakeModelClient) ContextLength(ctx context.Context, modelID string) (int, error) {
+	if f.contextErr != nil {
+		return 0, f.contextErr
+	}
+	if f.contextLength > 0 {
+		return f.contextLength, nil
+	}
+	return 131072, nil
 }
 
 func (f *fakeModelClient) Chat(ctx context.Context, req model.ChatRequest) (model.ChatResponse, error) {
@@ -117,6 +129,43 @@ func TestModelConnectActivatesConfiguredModel(t *testing.T) {
 	}
 	if modelClient.activatedModel != "default-model" {
 		t.Fatalf("activated model %q", modelClient.activatedModel)
+	}
+}
+
+func TestModelContextReturnsEffectiveConfiguredLimit(t *testing.T) {
+	cfg := testConfig()
+	cfg.ContextLength = 64000
+	modelClient := &fakeModelClient{contextLength: 131072}
+	server := NewServer(cfg, modelClient)
+	req := httptest.NewRequest(http.MethodGet, "/api/model/context", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	var payload map[string]int
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["context_length"] != 64000 {
+		t.Fatalf("got context length %d", payload["context_length"])
+	}
+}
+
+func TestModelContextFallsBackToConfiguredLimitWhenRuntimeMetadataIsUnavailable(t *testing.T) {
+	cfg := testConfig()
+	cfg.ContextLength = 32000
+	modelClient := &fakeModelClient{contextErr: errors.New("metadata unavailable")}
+	server := NewServer(cfg, modelClient)
+	req := httptest.NewRequest(http.MethodGet, "/api/model/context", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"context_length":32000`) {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
 	}
 }
 

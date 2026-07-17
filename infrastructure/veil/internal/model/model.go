@@ -34,7 +34,8 @@ type ChatResponse struct {
 }
 
 type ModelInfo struct {
-	ID string `json:"id"`
+	ID            string `json:"id"`
+	ContextLength int    `json:"context_length,omitempty"`
 }
 
 type ProviderProtocol string
@@ -59,6 +60,7 @@ type Client struct {
 	chatEndpoint     string
 	modelsEndpoint   string
 	generateEndpoint string
+	showEndpoint     string
 	apiKey           string
 	contextLength    int
 	client           *http.Client
@@ -108,8 +110,13 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 	generateEndpoint := ""
+	showEndpoint := ""
 	if protocol == ProtocolOllama {
 		generateEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "api/generate")
+		if err != nil {
+			return nil, err
+		}
+		showEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "api/show")
 		if err != nil {
 			return nil, err
 		}
@@ -124,6 +131,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		chatEndpoint:     chatEndpoint,
 		modelsEndpoint:   modelsEndpoint,
 		generateEndpoint: generateEndpoint,
+		showEndpoint:     showEndpoint,
 		apiKey:           cfg.APIKey,
 		contextLength:    cfg.ContextLength,
 		client: &http.Client{
@@ -223,12 +231,44 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, ProviderError{}
 	}
 
-	ids := modelIDsFromPayload(payload)
-	models := make([]ModelInfo, 0, len(ids))
-	for _, id := range ids {
-		models = append(models, ModelInfo{ID: id})
+	return modelInfosFromPayload(payload), nil
+}
+
+func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error) {
+	if c.protocol == ProtocolVLLM {
+		models, err := c.ListModels(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, available := range models {
+			if available.ID == modelID && available.ContextLength > 0 {
+				return available.ContextLength, nil
+			}
+		}
+		return 0, errors.New("model runtime did not report a context length")
 	}
-	return models, nil
+	if c.protocol != ProtocolOllama {
+		return 0, fmt.Errorf("unsupported model runtime protocol %q", c.protocol)
+	}
+
+	resp, err := c.postJSON(ctx, c.showEndpoint, map[string]any{"model": modelID})
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return 0, ProviderError{StatusCode: resp.StatusCode}
+	}
+	var payload any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
+		return 0, ProviderError{}
+	}
+	contextLength := ollamaContextLengthFromPayload(payload)
+	if contextLength <= 0 {
+		return 0, errors.New("model runtime did not report a context length")
+	}
+	return contextLength, nil
 }
 
 func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
@@ -608,7 +648,7 @@ func ollamaContent(content any) string {
 	}
 }
 
-func modelIDsFromPayload(payload any) []string {
+func modelInfosFromPayload(payload any) []ModelInfo {
 	record, ok := payload.(map[string]any)
 	if !ok {
 		return nil
@@ -618,9 +658,10 @@ func modelIDsFromPayload(payload any) []string {
 		rows, _ = record["models"].([]any)
 	}
 	seen := map[string]bool{}
-	ids := []string{}
+	models := []ModelInfo{}
 	for _, row := range rows {
 		var id string
+		contextLength := 0
 		if text, ok := row.(string); ok {
 			id = strings.TrimSpace(text)
 		} else if record, ok := row.(map[string]any); ok {
@@ -631,14 +672,69 @@ func modelIDsFromPayload(payload any) []string {
 					break
 				}
 			}
+			for _, key := range []string{"max_model_len", "max_context_length", "context_length"} {
+				if parsed := positiveJSONInt(record[key]); parsed > 0 {
+					contextLength = parsed
+					break
+				}
+			}
 		}
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		ids = append(ids, id)
+		models = append(models, ModelInfo{ID: id, ContextLength: contextLength})
+	}
+	return models
+}
+
+func modelIDsFromPayload(payload any) []string {
+	models := modelInfosFromPayload(payload)
+	ids := make([]string, 0, len(models))
+	for _, available := range models {
+		ids = append(ids, available.ID)
 	}
 	return ids
+}
+
+func positiveJSONInt(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 && typed == float64(int(typed)) {
+			return int(typed)
+		}
+	case int:
+		if typed > 0 {
+			return typed
+		}
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil && parsed > 0 && int64(int(parsed)) == parsed {
+			return int(parsed)
+		}
+	}
+	return 0
+}
+
+func ollamaContextLengthFromPayload(payload any) int {
+	record, ok := payload.(map[string]any)
+	if !ok {
+		return 0
+	}
+	modelInfo, ok := record["model_info"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	contextLength := 0
+	for key, value := range modelInfo {
+		if !strings.HasSuffix(strings.ToLower(key), ".context_length") && !strings.EqualFold(key, "context_length") {
+			continue
+		}
+		if parsed := positiveJSONInt(value); parsed > contextLength {
+			contextLength = parsed
+		}
+	}
+	return contextLength
 }
 
 func providerEndpointURL(baseURL, endpointPath, defaultPath string) (string, error) {

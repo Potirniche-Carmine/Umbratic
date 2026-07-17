@@ -234,6 +234,7 @@ export type LocalModelInfo = {
   modelId: string;
   displayName: string;
   baseUrl: string;
+  contextLength?: number;
 };
 
 export type LocalModelProvider = {

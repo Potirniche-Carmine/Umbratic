@@ -33,6 +33,7 @@ import {
   type CapabilityPromptNeeds,
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
+import { materializeChatAttachments, priorChatAttachments } from "./attachmentContext";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
@@ -61,6 +62,7 @@ import {
 } from "./policy";
 import { getProviderJson } from "./providerClient";
 import { ensureLocalVeil, stopLocalVeil, currentLocalVeilConnection } from "./localVeil";
+import { probeVeilContextLength, shouldProbeVeilContext } from "./veilContext";
 import {
   readChat,
   readChats,
@@ -1572,9 +1574,9 @@ function capabilityNeedsForPrompt(prompt: string, attachments: ChatAttachment[] 
   };
 }
 
-function pushPromptText(parts: RunnerPromptPart[], lines: string[]) {
+function pushPromptText(parts: RunnerPromptPart[], lines: string[], emptyHeader = "Attached file contents:") {
   const text = lines.join("\n").trim();
-  if (text && text !== "Attached file contents:") {
+  if (text && text !== emptyHeader) {
     parts.push({ type: "text", text });
   }
   lines.length = 0;
@@ -1583,11 +1585,12 @@ function pushPromptText(parts: RunnerPromptPart[], lines: string[]) {
 async function attachmentPromptParts(
   rootPath: string,
   attachments: ChatAttachment[],
-  options: { userPrompt: string; capabilityReport: CapabilityProbeReport },
+  options: { userPrompt: string; capabilityReport: CapabilityProbeReport; heading?: string },
 ): Promise<RunnerPromptPart[]> {
   if (!attachments.length) return [];
   const parts: RunnerPromptPart[] = [];
-  const lines = ["Attached file contents:"];
+  const heading = options.heading ?? "Attached file contents:";
+  const lines = [heading];
   let remaining = 30000;
   const shouldGenerateOcr = promptLooksLikeOcrTask(options.userPrompt);
   for (const file of attachments) {
@@ -1597,6 +1600,12 @@ async function attachmentPromptParts(
     lines.push(`\n### ${label}`);
     if (isChatAttachment && file.originalPath) {
       lines.push(`Original path: ${file.originalPath}`);
+    }
+    if (isChatAttachment) {
+      const workspaceCopy = path.resolve(rootPath, file.path);
+      if (pathInside(rootPath, workspaceCopy) && fs.existsSync(workspaceCopy)) {
+        lines.push(`Workspace path: ${file.path}`);
+      }
     }
     const allowed = isChatAttachment ? pathInside(chatAttachmentRoot(), absolute) : pathInside(rootPath, absolute);
     if (!allowed || !fs.existsSync(absolute)) {
@@ -1629,17 +1638,17 @@ async function attachmentPromptParts(
           ? `PDF rendered as images for the vision model: first ${rendered.rendered} of ${rendered.pageCount} pages.`
           : `PDF rendered as images for the vision model: ${rendered.pageCount} page${rendered.pageCount === 1 ? "" : "s"}.`,
       );
-      pushPromptText(parts, lines);
+      pushPromptText(parts, lines, heading);
       parts.push(...rendered.parts);
-      lines.push("Attached file contents:");
+      lines.push(heading);
       continue;
     }
     const imageDataUrl = imageDataUrlIfSafe(absolute);
     if (imageDataUrl) {
       lines.push("Image included below for the vision model.");
-      pushPromptText(parts, lines);
+      pushPromptText(parts, lines, heading);
       parts.push({ type: "image", data_url: imageDataUrl });
-      lines.push("Attached file contents:");
+      lines.push(heading);
       continue;
     }
     if (remaining <= 0) continue;
@@ -1655,7 +1664,7 @@ async function attachmentPromptParts(
     lines.push(text.length > snippet.length ? "\n...(truncated)" : "");
     lines.push("```");
   }
-  pushPromptText(parts, lines);
+  pushPromptText(parts, lines, heading);
   return parts;
 }
 
@@ -1704,6 +1713,14 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   }
   lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
+  const historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
+  parts.push(
+    ...(await attachmentPromptParts(rootPath, historicalAttachments, {
+      userPrompt,
+      capabilityReport,
+      heading: "Previously attached file contents:",
+    })),
+  );
   parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport })));
   parts.push({
     type: "text",
@@ -2190,6 +2207,19 @@ function endpointRequestHeaders(provider: ReturnType<typeof endpointProvider>): 
   }
   Object.assign(headers, provider.headers);
   return headers;
+}
+
+async function modelWithFreshContextLength(selected: LocalModelInfo): Promise<LocalModelInfo> {
+  const provider = endpointProvider();
+  const detected = await probeVeilContextLength({
+    baseUrl: provider.baseUrl,
+    headers: endpointRequestHeaders(provider),
+    mtls: provider.mtls,
+  });
+  return {
+    ...selected,
+    contextLength: detected ?? readContextLengthSetting(),
+  };
 }
 
 function telemetryUploadEndpoint(provider: ReturnType<typeof endpointProvider>): TelemetryUploadEndpoint {
@@ -3187,12 +3217,15 @@ async function runRunnerTask(
       failTask(task, providers[0]?.message ?? "Veil health check is not ready.");
       return;
     }
-    task.model = selected;
+    const selectedForRun = shouldProbeVeilContext(task.model, selected)
+      ? await modelWithFreshContextLength(selected)
+      : { ...selected, contextLength: task.model?.contextLength ?? readContextLengthSetting() };
+    task.model = selectedForRun;
     applyTaskPolicyMetadata(task);
     saveTask(task);
     const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
     const promptParts = runnerPromptParts(prompt);
-    run = await startUmbraticRunnerServer(task, selected);
+    run = await startUmbraticRunnerServer(task, selectedForRun);
     if (!taskStillRunning(task)) {
       return;
     }
@@ -3703,7 +3736,10 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       repositoryPath: hiddenWorkspace ? undefined : refreshed.rootPath,
     });
   const repositoryId = refreshed.id;
-  const attachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
+  const sanitizedAttachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
+  const attachments = hiddenWorkspace
+    ? materializeChatAttachments(refreshed.rootPath, sanitizedAttachments)
+    : sanitizedAttachments;
   const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
   const reusableWorktreeTask = requestedWorktreeTaskId ? findReusableWorktreeTask(requestedWorktreeTaskId) : undefined;
   const requestedWorkspaceMode: WorkspaceMode =

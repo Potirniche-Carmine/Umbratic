@@ -1,5 +1,5 @@
 export const DEFAULT_CONTEXT_LENGTH = 64_000;
-export const CONTEXT_LENGTH_OPTIONS = [32_000, 64_000, 128_000, 256_000] as const;
+export const CONTEXT_LENGTH_OPTIONS = [4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 256_000] as const;
 
 export const CONTEXT_MESSAGE_OVERHEAD_TOKENS = 10;
 export const CONTEXT_IMAGE_TOKENS = 1_600;
@@ -54,6 +54,11 @@ export function normalizeContextLength(value: unknown): number {
   DEFAULT_CONTEXT_LENGTH);
 }
 
+export function normalizeEffectiveContextLength(value: unknown): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_LENGTH;
+}
+
 export function estimateTextTokens(value: string | undefined | null): number {
   return value ? Math.ceil(value.length / 4) : 0;
 }
@@ -69,7 +74,7 @@ export function estimateContextUsage(
   configuredContextLength: unknown,
   base?: ContextUsageBase,
 ): ContextUsageEstimate {
-  const contextLength = normalizeContextLength(configuredContextLength);
+  const contextLength = normalizeEffectiveContextLength(configuredContextLength);
   let contentTokens = Number.isFinite(base?.contentTokens) ? Math.max(0, Math.round(base?.contentTokens ?? 0)) : 0;
   for (const message of messages) {
     const attachments = message.attachments ?? [];

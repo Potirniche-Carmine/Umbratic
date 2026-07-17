@@ -252,6 +252,7 @@ type LocalModelInfo = {
   modelId: string;
   displayName: string;
   baseUrl: string;
+  contextLength?: number;
 };
 
 type LocalModelProvider = {
@@ -3506,7 +3507,7 @@ function App() {
   const contextEstimate = useMemo(
     () => estimateContextUsage(
       contextEstimateMessages,
-      contextLength,
+      runnerContextUsage?.contextLength ?? contextLength,
       runnerContextUsage
         ? { contentTokens: runnerContextUsage.contentTokens, reserveTokens: runnerContextUsage.reserveTokens }
         : undefined,
@@ -6881,7 +6882,7 @@ function App() {
                     <div className="settingsPanelHead connectionPanelHead">
                       <div>
                         <h3>Connection</h3>
-                        <p>Run through Veil on this computer, or connect to a Veil server managed elsewhere.</p>
+                        <p>Run through local Ollama, or connect to a Veil server managing Ollama or vLLM.</p>
                       </div>
                       {endpointSettingsLoaded ? (
                         <div className="connectionCompactStatus">
@@ -7076,7 +7077,7 @@ function App() {
                       <div className="contextLengthHead">
                         <div>
                           <h4>Model context</h4>
-                          <p>Choose the context window used by Ollama in Local mode.</p>
+                          <p>Choose the context window requested from Ollama in Local mode.</p>
                         </div>
                       </div>
                       <div className="contextLengthSliderShell">
@@ -7114,8 +7115,8 @@ function App() {
                       </div>
                       <p className="contextLengthHint">
                         {endpointDraftSettings.mode === "server"
-                          ? "Context length is managed by your Veil server. Switch to Local to configure Ollama."
-                          : "64K is the default. Larger windows use more memory and may run more slowly."}
+                          ? "Context length is managed by your Veil server. Switch to Local to configure it here."
+                          : "64K is the default. Veil verifies the effective model limit when each new chat starts; larger windows use more memory."}
                       </p>
                     </div>
 

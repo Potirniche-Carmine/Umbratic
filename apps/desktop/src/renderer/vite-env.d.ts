@@ -106,7 +106,7 @@ type UmbraticBackendStatus = {
   providers: UmbraticLocalModelProvider[];
   permissionMode: UmbraticPermissionMode;
   endpointConfig: {
-    source: "server-default" | "stored" | "managed";
+    source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
   };
   privacy: {
@@ -171,6 +171,7 @@ type UmbraticLocalModelInfo = {
   modelId: string;
   displayName: string;
   baseUrl: string;
+  contextLength?: number;
 };
 
 type UmbraticLocalModelProvider = {

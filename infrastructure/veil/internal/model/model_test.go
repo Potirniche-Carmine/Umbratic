@@ -179,8 +179,8 @@ func TestListModelsNormalizesVLLMAndOllamaPayloads(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []any{
-				map[string]string{"id": "alpha"},
-				map[string]string{"id": "beta"},
+				map[string]any{"id": "alpha", "max_model_len": 98304},
+				map[string]any{"id": "beta", "max_model_len": 32768},
 			},
 		})
 	}))
@@ -196,6 +196,50 @@ func TestListModelsNormalizesVLLMAndOllamaPayloads(t *testing.T) {
 	}
 	if len(models) != 2 || models[0].ID != "alpha" || models[1].ID != "beta" {
 		t.Fatalf("unexpected models: %#v", models)
+	}
+	if models[0].ContextLength != 98304 {
+		t.Fatalf("unexpected context length: %#v", models[0])
+	}
+	contextLength, err := client.ContextLength(context.Background(), "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contextLength != 32768 {
+		t.Fatalf("got context length %d", contextLength)
+	}
+}
+
+func TestOllamaClientContextLengthUsesModelMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/show" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		var input map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if input["model"] != "gemma3" {
+			t.Fatalf("unexpected model %#v", input["model"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model_info": map[string]any{
+				"gemma3.context_length": 131072,
+				"gemma3.block_count":    34,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientConfig{Protocol: ProtocolOllama, BaseURL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextLength, err := client.ContextLength(context.Background(), "gemma3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contextLength != 131072 {
+		t.Fatalf("got context length %d", contextLength)
 	}
 }
 
