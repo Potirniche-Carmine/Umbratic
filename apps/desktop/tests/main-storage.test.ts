@@ -314,6 +314,47 @@ test("tasks drop legacy runtime profiles and normalize tool settings and event d
   assert.equal(fs.existsSync(path.join(userData, "tasks.json")), false);
 });
 
+test("single-task writes update payloads without rewriting or reordering unrelated tasks", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-task-upsert-"));
+  const storage = loadStorage(userData);
+  const task = (id, prompt) => ({
+    id,
+    repositoryId: "repo",
+    prompt,
+    originalRepoPath: userData,
+    worktreePath: userData,
+    workspaceKind: "git",
+    workspaceMode: "local",
+    state: "running",
+    originalBranch: "main",
+    baseCommit: "abc",
+    agentBranch: "",
+    permissionMode: "normal",
+    reasoningMode: "reasoning",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    changedFiles: [],
+    reviewFiles: [],
+    events: [],
+  });
+  const first = task("task-1", "first");
+  const second = task("task-2", "second");
+  storage.writeTasks([first, second]);
+
+  storage.writeTask({ ...second, state: "completed" });
+  assert.deepEqual(plain(storage.readTasks()).map((row) => [row.id, row.state]), [
+    ["task-2", "completed"],
+    ["task-1", "running"],
+  ]);
+
+  storage.writeTask({ ...first, state: "failed" }, false);
+  assert.deepEqual(plain(storage.readTasks()).map((row) => [row.id, row.state]), [
+    ["task-2", "completed"],
+    ["task-1", "failed"],
+  ]);
+  assert.equal(storage.readTask("task-1").state, "failed");
+  assert.equal(storage.readTask("missing"), null);
+});
+
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-"));
   const storage = loadStorage(userData);
@@ -355,7 +396,6 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   assert.doesNotMatch(rawSettings, /org-secret/);
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
-
 test("endpoint settings default to local and migrate the old local Veil URL semantics", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-default-"));
   const storage = loadStorage(userData);
@@ -476,5 +516,3 @@ test("tool, skill, harness, and notes settings sanitize invalid input", () => {
   assert.equal(fs.existsSync(path.join(userData, "notes.json")), false);
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
-
-

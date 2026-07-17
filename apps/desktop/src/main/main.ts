@@ -75,6 +75,7 @@ import {
   publicModelEndpointSettings,
   readNotes,
   readProjects,
+  readTask,
   readTasks,
   writeHarnessProfileSetting,
   writeContextLengthSetting,
@@ -84,6 +85,7 @@ import {
   writeJsonFile,
   writeNotes,
   writeProjects,
+  writeTask,
   writeTasks,
 } from "./storage";
 import { buildRedactedTelemetryBundle } from "./telemetry";
@@ -95,6 +97,7 @@ import {
 } from "./telemetrySync";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import { RunnerAssistantOutputBuffer, type BufferedRunnerAssistantOutput } from "./runnerAssistantOutput";
+import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
 import {
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
@@ -217,8 +220,11 @@ let permissionMode: PermissionMode = "normal";
 const pendingPermissions = new Map<string, PendingPermission>();
 const pendingTaskEvents = new Map<string, BackendUiEvent[]>();
 let pendingTaskEventFlushTimer: NodeJS.Timeout | null = null;
+const pendingRendererEvents: BackendUiEvent[] = [];
+let pendingRendererEventFlushTimer: NodeJS.Timeout | null = null;
 let telemetrySyncTimer: NodeJS.Timeout | null = null;
 const streamingTaskEventFlushDelayMs = 2000;
+const rendererEventFlushDelayMs = 20;
 
 function finishInterruptedRunningTasks() {
   const now = new Date().toISOString();
@@ -452,18 +458,14 @@ function flushPendingTaskEvents() {
   if (pendingTaskEvents.size === 0) return;
   const queued = Array.from(pendingTaskEvents.entries());
   pendingTaskEvents.clear();
-  const tasks = readTasks();
   let changed = false;
-  const nextTasks = tasks.map((task) => {
-    const events = queued.find(([taskIdValue]) => taskIdValue === task.id)?.[1] ?? [];
-    if (events.length === 0) return task;
+  for (const [taskIdValue, events] of queued) {
+    const task = readTask(taskIdValue);
+    if (!task || events.length === 0) continue;
+    writeTask(taskWithAppendedEvents(task, events), false);
     changed = true;
-    return taskWithAppendedEvents(task, events);
-  });
-  if (changed) {
-    writeTasks(nextTasks);
-    scheduleManagedTelemetrySync();
   }
+  if (changed) scheduleManagedTelemetrySync();
 }
 
 function shouldDeferTaskEventFlush(event: BackendUiEvent): boolean {
@@ -483,8 +485,7 @@ function saveTask(task: TaskRecord) {
   applyTaskPolicyMetadata(task);
   const queuedEvents = takePendingTaskEvents(task.id);
   const taskWithQueuedEvents = pruneClosedTaskInternalSnapshots(taskWithAppendedEvents(task, queuedEvents));
-  const existingTasks = readTasks();
-  const existing = existingTasks.find((row) => row.id === task.id);
+  const existing = readTask(task.id);
   const taskEvents = compactTaskEvents(Array.isArray(taskWithQueuedEvents.events) ? taskWithQueuedEvents.events : [], 500);
   const existingEvents = compactTaskEvents(Array.isArray(existing?.events) ? existing.events : [], 500);
   const events = mergeTaskEvents(existingEvents, taskEvents);
@@ -492,8 +493,7 @@ function saveTask(task: TaskRecord) {
     ...taskWithQueuedEvents,
     events,
   };
-  const tasks = [nextTask, ...existingTasks.filter((row) => row.id !== task.id)];
-  writeTasks(tasks);
+  writeTask(nextTask);
   updateChatFromTask(nextTask);
   scheduleManagedTelemetrySync();
 }
@@ -562,7 +562,7 @@ function publicTask(task: TaskRecord): TaskInfo {
 }
 
 function getTask(taskId: string): TaskRecord {
-  const task = readTasks().find((row) => row.id === taskId);
+  const task = readTask(taskId);
   if (!task) {
     throw new Error("Task was not found.");
   }
@@ -635,7 +635,7 @@ function publicTaskById(input: unknown): TaskInfo | null {
     return null;
   }
   const taskIdValue = input.taskId.trim();
-  const task = readTasks().find((row) => row.id === taskIdValue);
+  const task = readTask(taskIdValue);
   return task ? publicTask(task) : null;
 }
 
@@ -1898,10 +1898,34 @@ function recordTaskEvent(event: BackendUiEvent) {
   scheduleTaskEventFlush(shouldDeferTaskEventFlush(event) ? streamingTaskEventFlushDelayMs : 0);
 }
 
+function flushRendererEvents() {
+  if (pendingRendererEventFlushTimer) {
+    clearTimeout(pendingRendererEventFlushTimer);
+    pendingRendererEventFlushTimer = null;
+  }
+  if (pendingRendererEvents.length === 0) return;
+  const events = pendingRendererEvents.splice(0);
+  for (const event of events) {
+    mainWindow?.webContents.send("umbratic:backend-event", event);
+  }
+}
+
+function dispatchRendererEvent(event: BackendUiEvent) {
+  if (!shouldBufferBackendEvent(event)) {
+    flushRendererEvents();
+    mainWindow?.webContents.send("umbratic:backend-event", event);
+    return;
+  }
+  appendBufferedBackendEvent(pendingRendererEvents, event);
+  if (!pendingRendererEventFlushTimer) {
+    pendingRendererEventFlushTimer = setTimeout(flushRendererEvents, rendererEventFlushDelayMs);
+  }
+}
+
 function emit(event: BackendUiEvent) {
   const stampedEvent = { ...event, version: 1 as const, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
   recordTaskEvent(stampedEvent);
-  mainWindow?.webContents.send("umbratic:backend-event", stampedEvent);
+  dispatchRendererEvent(stampedEvent);
 }
 
 function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAttachment[]) {
@@ -1914,7 +1938,7 @@ function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAt
   } satisfies BackendUiEvent;
   task.events = appendTaskEvent(task.events ?? [], event, 500);
   saveTask(task);
-  mainWindow?.webContents.send("umbratic:backend-event", event);
+  dispatchRendererEvent(event);
 }
 
 function failTask(task: TaskRecord, message: string) {
@@ -3557,7 +3581,7 @@ function recentActiveStartTask(requestKey: string): TaskInfo | null {
     recentStartTaskRequests.delete(requestKey);
     return null;
   }
-  const task = readTasks().find((row) => row.id === recent.taskId);
+  const task = readTask(recent.taskId);
   if (!task) {
     recentStartTaskRequests.delete(requestKey);
     return null;
@@ -3626,7 +3650,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const attachments = hiddenWorkspace
     ? materializeChatAttachments(refreshed.rootPath, sanitizedAttachments)
     : sanitizedAttachments;
-  const existingTask = chat?.taskId ? readTasks().find((row) => row.id === chat.taskId) : undefined;
+  const existingTask = chat?.taskId ? readTask(chat.taskId) ?? undefined : undefined;
   const reusableWorktreeTask = requestedWorktreeTaskId ? findReusableWorktreeTask(requestedWorktreeTaskId) : undefined;
   const requestedWorkspaceMode: WorkspaceMode =
     !hiddenWorkspace && refreshed.kind === "git" && input.useWorktree === true ? "worktree" : "local";
@@ -4469,6 +4493,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   stopLocalVeil();
+  flushRendererEvents();
   flushPendingTaskEvents();
   for (const [id, pending] of pendingPermissions) {
     pendingPermissions.delete(id);

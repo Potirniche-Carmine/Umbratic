@@ -315,16 +315,13 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.match(commandShellText(searchRun), /Results:\napps\/desktop\/src\/renderer\/main\.tsx: content/);
 });
 
-test("stream batching drains queued assistant text without throughput capping", () => {
+test("stream batching drains queued assistant text without adding a display backlog", () => {
   const {
-    nextAnimatedStreamingLength,
     streamingMarkdownRenderBatchIntervalMs,
-    streamingTextAnimationCharsPerSecond,
     takeBatchedBackendEvents,
   } = loadRenderer();
 
-  assert.equal(streamingMarkdownRenderBatchIntervalMs, 33);
-  assert.equal(streamingTextAnimationCharsPerSecond, 500);
+  assert.equal(streamingMarkdownRenderBatchIntervalMs, 50);
   const queue = [
     { type: "assistant.delta", taskId: "task-1", text: "abcdefghijklmnopqrstuvwxyz", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:01.000Z" },
@@ -334,10 +331,6 @@ test("stream batching drains queued assistant text without throughput capping", 
   assert.deepEqual(JSON.parse(JSON.stringify(batch.map((event) => event.type))), ["assistant.delta", "assistant.done"]);
   assert.equal(batch[0].text, "abcdefghijklmnopqrstuvwxyz");
   assert.equal(queue.length, 0);
-
-  assert.equal(nextAnimatedStreamingLength("x".repeat(100), 0, 16), 8);
-  assert.equal(nextAnimatedStreamingLength("hello world", 10, 16), 11);
-  assert.equal(nextAnimatedStreamingLength("x".repeat(1000), 0, 33), 17);
 });
 
 test("prompt mention parsing supports file and skill completion triggers", () => {
@@ -363,5 +356,3 @@ test("prompt mention parsing supports file and skill completion triggers", () =>
   assert.match(highlighted, /promptMentionToken/);
   assert.match(highlighted, /\$review/);
 });
-
-

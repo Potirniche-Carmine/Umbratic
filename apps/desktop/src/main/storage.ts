@@ -74,6 +74,10 @@ type PayloadRow = {
   payload: string;
 };
 
+type PositionRow = {
+  position: number | null;
+};
+
 type RecordTableName = "projects" | "tasks" | "chats";
 
 function withStorageDatabase<T>(filePath: string, action: (db: DatabaseSync) => T): T {
@@ -357,12 +361,60 @@ function replaceTasksInDatabase(db: DatabaseSync, tasks: TaskRecord[]) {
   });
 }
 
+function upsertTaskInDatabase(db: DatabaseSync, task: TaskRecord, promote: boolean) {
+  runTransaction(db, () => {
+    const existing = db.prepare("SELECT position FROM tasks WHERE id = ?").get(task.id) as PositionRow | undefined;
+    const maximum = db.prepare("SELECT MAX(position) AS position FROM tasks").get() as PositionRow;
+    let position = existing?.position ?? ((maximum.position ?? -1) + 1);
+    if (promote && position !== 0) {
+      db.prepare("UPDATE tasks SET position = position + 1 WHERE id <> ?").run(task.id);
+      position = 0;
+    }
+    db.prepare(`
+      INSERT INTO tasks (
+        id,
+        repository_id,
+        state,
+        created_at,
+        payload,
+        position
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        repository_id = excluded.repository_id,
+        state = excluded.state,
+        created_at = excluded.created_at,
+        payload = excluded.payload,
+        position = excluded.position
+    `).run(
+      task.id,
+      typeof task.repositoryId === "string" ? task.repositoryId : "",
+      typeof task.state === "string" ? task.state : "",
+      typeof task.createdAt === "string" ? task.createdAt : "",
+      JSON.stringify(task),
+      position,
+    );
+  });
+}
+
 export function readTasks(): TaskRecord[] {
   return withAppDatabase((db) => normalizeTasks(readPayloads(db, "tasks")));
 }
 
+export function readTask(taskId: string): TaskRecord | null {
+  return withAppDatabase((db) => {
+    const row = db.prepare("SELECT payload FROM tasks WHERE id = ?").get(taskId) as PayloadRow | undefined;
+    return row ? normalizeTaskRecord(parsePayload(row.payload)) : null;
+  });
+}
+
 export function writeTasks(tasks: TaskRecord[]) {
   withAppDatabase((db) => replaceTasksInDatabase(db, normalizeTasks(tasks)));
+}
+
+export function writeTask(task: TaskRecord, promote = true) {
+  const normalized = normalizeTaskRecord(task);
+  if (!normalized) return;
+  withAppDatabase((db) => upsertTaskInDatabase(db, normalized, promote));
 }
 
 function pathKey(pathValue: string): string {

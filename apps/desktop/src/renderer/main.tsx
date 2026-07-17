@@ -555,7 +555,7 @@ const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewContextLengthKey = "umbratic-preview-context-length";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
-export const streamingMarkdownRenderBatchIntervalMs = 33;
+export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 let previewPermissionMode: PermissionMode = "normal";
@@ -3040,92 +3040,14 @@ export function LongMarkdownContent({
 }
 
 function StreamingTextContent({ content }: { content: string }) {
-  const animatedContent = useAnimatedStreamingText(content);
   return (
     <div className="streamingTextContent">
       <MarkdownContent
-        content={animatedContent || "\u200b"}
+        content={content || "\u200b"}
         trailingInline={<span className="streamingTextCaret" aria-hidden="true" />}
       />
     </div>
   );
-}
-
-export const streamingTextAnimationCharsPerSecond = 500;
-const streamingTextAnimationFrameIntervalMs = 33;
-
-export function nextAnimatedStreamingLength(content: string, visibleLength: number, elapsedMs: number): number {
-  const current = Math.min(Math.max(0, Math.floor(visibleLength)), content.length);
-  if (current >= content.length) return content.length;
-  const elapsed = Math.max(1, elapsedMs);
-  const advance = Math.max(1, Math.ceil((streamingTextAnimationCharsPerSecond * elapsed) / 1000));
-  return Math.min(content.length, current + advance);
-}
-
-function useAnimatedStreamingText(content: string): string {
-  const initialVisibleContent = prefersReducedMotion() ? content : "";
-  const [visibleContent, setVisibleContent] = useState(initialVisibleContent);
-  const contentRef = useRef(content);
-  const visibleContentRef = useRef(initialVisibleContent);
-  const visibleLengthRef = useRef(initialVisibleContent.length);
-  const animationFrameRef = useRef<number | null>(null);
-  const lastFrameAtRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    contentRef.current = content;
-    if (prefersReducedMotion()) {
-      visibleContentRef.current = content;
-      visibleLengthRef.current = content.length;
-      setVisibleContent(content);
-      return;
-    }
-    if (!content.startsWith(visibleContentRef.current)) {
-      visibleContentRef.current = content;
-      visibleLengthRef.current = content.length;
-      setVisibleContent(content);
-      return;
-    }
-    if (visibleLengthRef.current >= content.length || animationFrameRef.current !== null) return;
-
-    const animate = (now: number) => {
-      const previousFrameAt = lastFrameAtRef.current;
-      if (previousFrameAt === null) {
-        lastFrameAtRef.current = now;
-        animationFrameRef.current = window.requestAnimationFrame(animate);
-        return;
-      }
-      const elapsedMs = now - previousFrameAt;
-      if (elapsedMs < streamingTextAnimationFrameIntervalMs) {
-        animationFrameRef.current = window.requestAnimationFrame(animate);
-        return;
-      }
-      lastFrameAtRef.current = now;
-      const nextLength = nextAnimatedStreamingLength(contentRef.current, visibleLengthRef.current, elapsedMs);
-      if (nextLength !== visibleLengthRef.current) {
-        visibleLengthRef.current = nextLength;
-        const nextText = contentRef.current.slice(0, nextLength);
-        visibleContentRef.current = nextText;
-        setVisibleContent(nextText);
-      }
-      if (visibleLengthRef.current < contentRef.current.length) {
-        animationFrameRef.current = window.requestAnimationFrame(animate);
-      } else {
-        animationFrameRef.current = null;
-        lastFrameAtRef.current = null;
-      }
-    };
-
-    animationFrameRef.current = window.requestAnimationFrame(animate);
-    return () => {
-      if (animationFrameRef.current !== null) {
-        window.cancelAnimationFrame?.(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      lastFrameAtRef.current = null;
-    };
-  }, [content]);
-
-  return visibleContent;
 }
 
 function normalizeSkillPreviewHeading(value: string): string {
