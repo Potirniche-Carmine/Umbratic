@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import { createRequire } from "node:module";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,8 +15,6 @@ import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointS
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type { HarnessProfileId, LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
 import { isRecord } from "./utils";
-
-const nodeRequire = createRequire(__filename);
 
 type HarnessRouteConfig = {
   chatEndpointPath: string;
@@ -106,30 +103,31 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   };
 }
 
-function existingRunnerCliPath(candidate: string): string | null {
-  return fs.existsSync(candidate) ? candidate : null;
+function existingRunnerBinary(candidate: string): string | null {
+  try {
+    return fs.statSync(candidate).isFile() ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
-function packagedRunnerCliPath(): string | null {
+function nativeRunnerFilename(): string {
+  return process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner";
+}
+
+function packagedRunnerBinaryPath(): string | null {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  return resourcesPath ? path.join(resourcesPath, "runner", "bin", "umbratic-runner.cjs") : null;
+  return resourcesPath ? path.join(resourcesPath, "runner", nativeRunnerFilename()) : null;
 }
 
 export function runnerBinaryPath(): string | null {
   const candidates: string[] = [];
-  const packagedPath = packagedRunnerCliPath();
+  const packagedPath = packagedRunnerBinaryPath();
   if (packagedPath) candidates.push(packagedPath);
-  try {
-    candidates.push(nodeRequire.resolve("@umbratic/runner/bin/umbratic-runner.cjs"));
-  } catch {
-    /* The direct workspace fallback covers source-tree runs. */
-  }
-  candidates.push(path.resolve(__dirname, "../../../../packages/runner/bin/umbratic-runner.cjs"));
+  candidates.push(path.resolve(__dirname, "../../../../target/release", nativeRunnerFilename()));
   for (const candidate of candidates) {
-    const resolved = existingRunnerCliPath(candidate);
-    if (resolved && fs.existsSync(path.resolve(path.dirname(resolved), "../dist/cli.js"))) {
-      return resolved;
-    }
+    const resolved = existingRunnerBinary(candidate);
+    if (resolved) return resolved;
   }
   return null;
 }
@@ -195,8 +193,8 @@ export async function startUmbraticRunnerServer(
   task: TaskRecord,
   model: LocalModelInfo,
 ): Promise<RunnerProcess> {
-  const cliPath = runnerBinaryPath();
-  if (!cliPath) {
+  const binaryPath = runnerBinaryPath();
+  if (!binaryPath) {
     throw new Error("Umbratic runner is not built in the app bundle.");
   }
   const port = await freeLocalPort();
@@ -211,10 +209,7 @@ export async function startUmbraticRunnerServer(
     ...umbraticRunnerHardeningEnvironment(),
     UMBRATIC_RUNNER_CONFIG: JSON.stringify(config),
   };
-  if ((process.versions as NodeJS.ProcessVersions & { electron?: string }).electron) {
-    env.ELECTRON_RUN_AS_NODE = "1";
-  }
-  const child = spawn(process.execPath, [cliPath, "serve", "--hostname=127.0.0.1", `--port=${port}`, `--password=${password}`], {
+  const child = spawn(binaryPath, ["serve", "--hostname=127.0.0.1", `--port=${port}`, `--password=${password}`], {
     cwd: task.worktreePath,
     env,
     stdio: ["ignore", "pipe", "pipe"],

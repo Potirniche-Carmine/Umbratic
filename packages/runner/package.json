@@ -3,17 +3,10 @@
   "private": true,
   "version": "0.0.3",
   "type": "module",
-  "bin": {
-    "umbratic-runner": "bin/umbratic-runner.cjs"
-  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "cargo build --locked --release --package umbratic-runner",
     "test:all": "npm run typecheck && npm run test:unit",
-    "test:unit": "node --test tests/*.test.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "devDependencies": {
-    "@types/node": "24.13.2",
-    "typescript": "5.9.3"
+    "test:unit": "cargo test --locked --package umbratic-runner --all-targets && cargo build --locked --package umbratic-runner && node --test tests/*.test.ts",
+    "typecheck": "cargo check --locked --package umbratic-runner --all-targets"
   }
 }

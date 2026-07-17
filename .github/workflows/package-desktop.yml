@@ -2,12 +2,15 @@ name: Package Desktop Harness
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -15,28 +18,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: infrastructure/veil/go.mod
           cache: false
 
+      - name: Set up Rust
+        run: rustup toolchain install 1.96.0 --profile minimal --no-self-update && rustup default 1.96.0
+
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+
+      - name: Audit Rust dependencies
+        run: cargo install cargo-audit --locked --version 0.22.2 && cargo audit --deny warnings
 
       - name: Verify release
         run: npm run release:check
 
   package:
     name: Package ${{ matrix.name }}
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
@@ -58,19 +71,22 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: infrastructure/veil/go.mod
           cache: false
+
+      - name: Set up Rust
+        run: rustup toolchain install 1.96.0 --profile minimal --no-self-update && rustup default 1.96.0
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -78,8 +94,11 @@ jobs:
       - name: Package desktop harness
         run: npm --workspace @umbratic/desktop run package -- ${{ matrix.package_args }}
 
+      - name: Smoke test packaged native resources
+        run: npm --workspace @umbratic/desktop run verify:package
+
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_paths }}
@@ -90,9 +109,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: package
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download package artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-artifacts
           merge-multiple: true
@@ -107,7 +128,4 @@ jobs:
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --title "$tag" --notes "Umbratic AI desktop harness release $tag"
           fi
-          while IFS= read -r asset; do
-            [ -n "$asset" ] && gh release delete-asset "$tag" "$asset" -y
-          done < <(gh release view "$tag" --json assets --jq '.assets[].name')
-          gh release upload "$tag" release-artifacts/* --clobber
+          gh release upload "$tag" release-artifacts/*

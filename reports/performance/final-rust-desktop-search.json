@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "label": "rust-final",
+  "measuredAt": "2026-07-17T06:12:03.920Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.3.0"
+  },
+  "workload": {
+    "repository": "/Users/carminep/Projects/Umbratic",
+    "queries": [
+      "runner",
+      "workspace",
+      "package",
+      "policy",
+      "review"
+    ],
+    "limit": 30,
+    "latencyMs": {
+      "samples": 30,
+      "mean": 18.926,
+      "median": 16.107,
+      "p95": 16.438,
+      "min": 15.668,
+      "max": 101.512
+    },
+    "totalResults": 900,
+    "checksum": 37632
+  }
+}

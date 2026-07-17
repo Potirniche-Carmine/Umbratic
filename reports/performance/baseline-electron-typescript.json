@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "label": "electron-typescript",
+  "measuredAt": "2026-07-17T05:18:19.910Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.3.0"
+  },
+  "command": [
+    "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    "apps/desktop"
+  ],
+  "workloads": {
+    "processToRendererLoadedMs": {
+      "samples": 10,
+      "mean": 1278.374,
+      "median": 1275.842,
+      "p95": 1295.139,
+      "min": 1266.38,
+      "max": 1295.139
+    },
+    "mainModuleToRendererLoadedMs": {
+      "samples": 10,
+      "mean": 1186.946,
+      "median": 1188.621,
+      "p95": 1203.305,
+      "min": 1172.647,
+      "max": 1203.305
+    }
+  },
+  "process": {
+    "settledRssBytes": {
+      "samples": 10,
+      "mean": 1488587980.8,
+      "median": 1488437248,
+      "p95": 1490518016,
+      "min": 1486389248,
+      "max": 1490518016
+    },
+    "processCount": {
+      "samples": 10,
+      "mean": 4,
+      "median": 4,
+      "p95": 4,
+      "min": 4,
+      "max": 4
+    },
+    "roles": [
+      "browser",
+      "gpu-process",
+      "renderer",
+      "utility"
+    ]
+  },
+  "artifacts": {
+    "electronRuntimeBytes": 475391438,
+    "desktopRendererBytes": 701091,
+    "desktopMainBytes": 475282
+  },
+  "parameters": {
+    "samples": 10,
+    "settleMs": 500
+  }
+}

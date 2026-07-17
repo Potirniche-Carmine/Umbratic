@@ -13,6 +13,8 @@ files:
   - assets/**/*
   - package.json
 extraResources:
+  - from: .package/desktop-core
+    to: desktop-core
   - from: .package/runner
     to: runner
   - from: .package/veil

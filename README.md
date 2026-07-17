@@ -7,8 +7,9 @@ Umbratic is not a public connector platform. The supported harness surface is in
 ## Architecture
 
 ```text
-Electron desktop app
-  -> local runner on 127.0.0.1
+Electron/React desktop shell
+  -> native Rust desktop core for bounded repository search
+  -> native Rust runner on 127.0.0.1
     -> Veil authenticated model boundary
       -> private Ollama or vLLM runtime
   -> local workspace files and commands
@@ -49,7 +50,7 @@ Umbratic should install or validate a small versioned local runtime instead of d
 
 Recommended installer bundle:
 
-- Core: app-managed Node.js runtime, runner dependencies, Git, and a private Veil endpoint configuration.
+- Core: signed native Rust runner and desktop-core binaries, the Electron runtime, Git, and a private Veil endpoint configuration.
 - Engineering helpers: `rg`, `fd`, `uv`, CMake, Ninja, compiler toolchains, `jq`, `yq`, `tree-sitter`, and `bat` when engineering mode is enabled.
 - PDF artifacts: Poppler commands such as `pdftoppm` and `pdfinfo`, plus Python packages `reportlab`, `pdfplumber`, and `pypdf`.
 - DOCX/PPTX/XLSX artifacts: a bundled Node artifact runtime for Office files, plus LibreOffice or another local render/export path for visual QA.
@@ -59,13 +60,13 @@ The app probes these dependencies as execution capabilities, not as prompt profi
 
 ## Project Structure
 
-- `apps/desktop/` - Electron, Vite, React, and TypeScript desktop app.
-- `packages/runner/` - local TypeScript runner with the fixed workspace tool loop.
+- `apps/desktop/` - Electron/Vite/React TypeScript shell plus the native Rust desktop core in `native/`.
+- `packages/runner/` - native Rust runner with the fixed workspace tool loop.
 - `infrastructure/veil/` - Go service that owns auth, protected prompts, route policy, model configuration, and runtime calls.
 
 ## Getting Started
 
-Install dependencies:
+Install Node.js 24+, Rust 1.96+, and Go 1.26.5+, then install JavaScript dependencies:
 
 ```sh
 npm install

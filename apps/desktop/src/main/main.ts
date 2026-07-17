@@ -16,6 +16,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
@@ -34,6 +35,7 @@ import {
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
 import { materializeChatAttachments, priorChatAttachments } from "./attachmentContext";
+import { searchRootFiles } from "./fileSearch";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
@@ -147,6 +149,7 @@ import { normalizeReviewFile, parseGitPorcelainPaths } from "../shared/reviewDif
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 
 const isDev = !app.isPackaged;
+const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
 type RunnerPrompt = string | RunnerPromptPart[];
@@ -192,7 +195,8 @@ app.enableSandbox();
 app.setName("Umbratic");
 
 const appDataDirectory = app.getPath("appData");
-const cleanUserData = path.join(appDataDirectory, "Umbratic");
+const benchmarkUserData = process.env.UMBRATIC_USER_DATA_DIR?.trim();
+const cleanUserData = benchmarkUserData ? path.resolve(benchmarkUserData) : path.join(appDataDirectory, "Umbratic");
 const legacyUserData = path.join(appDataDirectory, "Umbratic AI");
 try {
   if (!fs.existsSync(cleanUserData) && fs.existsSync(legacyUserData)) {
@@ -2003,77 +2007,6 @@ async function commandAvailable(command: string): Promise<boolean> {
   }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function addSearchResult(results: Map<string, FileSearchResult>, rootPath: string, relativePath: string, match: FileSearchResult["match"]) {
-  const normalized = normalizeRelativePath(relativePath.trim());
-  if (!normalized || path.isAbsolute(normalized) || isGeneratedRuntimePath(normalized) || isBlockedPath(normalized)) {
-    return;
-  }
-  const absolute = path.join(rootPath, normalized);
-  if (!pathInside(rootPath, absolute) || !fs.existsSync(absolute)) {
-    return;
-  }
-  const existing = results.get(normalized);
-  if (existing?.match === "path") {
-    return;
-  }
-  results.set(normalized, { path: normalized, name: path.basename(normalized), match });
-}
-
-function rankedSearchResults(results: Iterable<FileSearchResult>, query: string, limit: number): FileSearchResult[] {
-  const queryLower = query.toLowerCase();
-  const score = (file: FileSearchResult) => {
-    if (!queryLower) return 0;
-    const name = file.name.toLowerCase();
-    const filePath = file.path.toLowerCase();
-    if (name.startsWith(queryLower)) return 0;
-    if (filePath.startsWith(queryLower)) return 1;
-    if (name.includes(queryLower)) return 2;
-    if (filePath.includes(queryLower)) return 3;
-    return file.match === "content" ? 4 : 5;
-  };
-  return Array.from(results)
-    .sort((left, right) => score(left) - score(right) || left.path.length - right.path.length || left.path.localeCompare(right.path))
-    .slice(0, limit);
-}
-
-function fallbackFileSearch(rootPath: string, query: string, limit: number): FileSearchResult[] {
-  const root = path.resolve(rootPath);
-  const queryLower = query.toLowerCase();
-  const results = new Map<string, FileSearchResult>();
-  const collectionLimit = Math.max(limit * 8, 80);
-  const stack = [root];
-  while (stack.length && results.size < collectionLimit) {
-    const current = stack.pop();
-    if (!current) continue;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const absolute = path.join(current, entry.name);
-      const relative = normalizeRelativePath(path.relative(root, absolute));
-      if (entry.isDirectory()) {
-        if (!ignoredSnapshotDirectories.has(entry.name) && !isGeneratedRuntimePath(relative)) {
-          stack.push(absolute);
-        }
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (!queryLower || relative.toLowerCase().includes(queryLower)) {
-        addSearchResult(results, root, relative, "path");
-      }
-      if (results.size >= collectionLimit) break;
-    }
-  }
-  return rankedSearchResults(results.values(), query, limit);
-}
-
 async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]> {
   if (!isRecord(input)) {
     throw new Error("Invalid file search input.");
@@ -2085,54 +2018,7 @@ async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]
   if (!repository) {
     throw new Error("Repository has not been selected.");
   }
-  const rootPath = repository.rootPath;
-  const results = new Map<string, FileSearchResult>();
-  const ignoreArgs = [
-    "--hidden",
-    "-g",
-    "!.git",
-    "-g",
-    "!node_modules",
-    "-g",
-    "!dist",
-    "-g",
-    "!dist-electron",
-    "-g",
-    "!.umbratic",
-    "-g",
-    "!.venv",
-    "-g",
-    "!venv",
-  ];
-
-  if (await commandAvailable("rg")) {
-    const collectionLimit = Math.max(limit * 8, 80);
-    const listed = await execFileResult("rg", ["--files", ...ignoreArgs], { cwd: rootPath, timeout: 15000 });
-    for (const file of listed.stdout.split(/\r?\n/)) {
-      if (!query || normalizeRelativePath(file).toLowerCase().includes(query.toLowerCase())) {
-        addSearchResult(results, rootPath, file, "path");
-      }
-      if (results.size >= collectionLimit) break;
-    }
-    if (query.length >= 2 && results.size < collectionLimit) {
-      const contentMatches = await execFileResult("rg", ["--ignore-case", "--files-with-matches", ...ignoreArgs, escapeRegExp(query)], {
-        cwd: rootPath,
-        timeout: 15000,
-      });
-      for (const file of contentMatches.stdout.split(/\r?\n/)) {
-        addSearchResult(results, rootPath, file, "content");
-        if (results.size >= collectionLimit) break;
-      }
-    }
-  }
-
-  if (results.size === 0) {
-    for (const result of fallbackFileSearch(rootPath, query, limit)) {
-      results.set(result.path, result);
-    }
-  }
-
-  return rankedSearchResults(results.values(), query, limit);
+  return searchRootFiles(repository.rootPath, query, limit);
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -4488,6 +4374,15 @@ async function createWindow() {
     await mainWindow.loadURL(rendererEntryUrl().toString());
   } else {
     await mainWindow.loadFile(path.resolve(__dirname, "../../dist/index.html"));
+  }
+  const benchmarkFile = process.env.UMBRATIC_BENCHMARK_FILE?.trim();
+  if (benchmarkFile) {
+    fs.mkdirSync(path.dirname(benchmarkFile), { recursive: true });
+    fs.writeFileSync(
+      benchmarkFile,
+      `${JSON.stringify({ pid: process.pid, rendererLoadedMs: performance.now() - desktopBenchmarkStartedAt })}\n`,
+      "utf8",
+    );
   }
 }
 
