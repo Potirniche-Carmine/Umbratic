@@ -42,10 +42,20 @@ async function startProvider() {
         { index: 0, id: "duplicate", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } },
         { index: 1, id: "duplicate", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"offset\":2,\"limit\":1}" } },
       ] } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("ATTACHMENT_FILE") && !encoded.includes("Read status: complete")) {
+      const offsets = Array.from(encoded.matchAll(/continue with offset (\d+)/g), (match) => Number(match[1]));
+      const offset = offsets.at(-1) ?? 0;
+      response.end(sse({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: `attachment-${offset}`,
+        function: { name: "read_attachment", arguments: JSON.stringify({ attachmentId: "complete-plan.md", offset, limit: 1024 }) },
+      }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("REPEAT_TOOL") && Array.isArray(body.tools)) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "repeat", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("MISSING_DONE")) {
       response.end(sse({ choices: [{ delta: { content: "incomplete" } }] }));
+    } else if (encoded.includes("DONE_WITHOUT_NEWLINE")) {
+      response.end(sse({ choices: [{ delta: { content: "complete without newline" } }] }) + "data:[DONE]");
     } else if (encoded.includes("SPLIT_UTF8")) {
       const payload = Buffer.from(sse({ choices: [{ delta: { content: "café" } }] }) + "data: [DONE]\n\n", "utf8");
       const marker = Buffer.from("é", "utf8");
@@ -66,7 +76,13 @@ async function startProvider() {
   };
 }
 
-function config(cwd: string, providerUrl: string, diagnosticLogPath: string, modelBoundary = "managed") {
+function config(
+  cwd: string,
+  providerUrl: string,
+  diagnosticLogPath: string,
+  modelBoundary = "managed",
+  overrides: Record<string, unknown> = {},
+) {
   return {
     taskId: "native-test-task",
     cwd,
@@ -76,14 +92,21 @@ function config(cwd: string, providerUrl: string, diagnosticLogPath: string, mod
     enabledTools: ["read", "write", "edit", "search", "command"],
     diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
     provider: { id: "company-endpoint", name: "Test Veil", baseURL: providerUrl, chatEndpointPath: "/api/engineering/chat", apiKey: "local", modelId: "test" },
+    ...overrides,
   };
 }
 
-async function startRunner(cwd: string, providerUrl: string, diagnosticLogPath: string, modelBoundary = "managed") {
+async function startRunner(
+  cwd: string,
+  providerUrl: string,
+  diagnosticLogPath: string,
+  modelBoundary = "managed",
+  overrides: Record<string, unknown> = {},
+) {
   const password = "native-test-secret";
   const child = spawn(binary, ["serve", "--hostname=127.0.0.1", "--port=0", `--password=${password}`], {
     cwd,
-    env: { ...process.env, UMBRATIC_RUNNER_CONFIG: JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, modelBoundary)) },
+    env: { ...process.env, UMBRATIC_RUNNER_CONFIG: JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, modelBoundary, overrides)) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -182,6 +205,18 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal((await prompt(run, readSession.id, "READ_FILE")).status, 204);
     const readFinished = await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "read-1");
     assert.equal(readFinished.status, "success");
+    const observedUsage = await events.waitFor((event) => event.type === "context.usage" && event.source === "provider");
+    assert.deepEqual(
+      {
+        contentTokens: observedUsage.contentTokens,
+        promptTokens: observedUsage.promptTokens,
+        completionTokens: observedUsage.completionTokens,
+        reserveTokens: observedUsage.reserveTokens,
+        estimatedTokens: observedUsage.estimatedTokens,
+        phase: observedUsage.phase,
+      },
+      { contentTokens: 16, promptTokens: 16, completionTokens: 4, reserveTokens: 8192, estimatedTokens: 8208, phase: "observed" },
+    );
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === readSession.id);
 
     const writeSession = await createSession(run);
@@ -223,6 +258,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(firstRequest.authorization, "Bearer local");
     assert.match(firstRequest.contentType ?? "", /^application\/json/);
     assert.equal(firstRequest.body.stream, true);
+    assert.equal(firstRequest.body.max_output_tokens, 8192);
     assert.equal("model" in firstRequest.body, false, "Veil routes must not receive a client-selected model");
     assert.ok(Array.isArray(firstRequest.body.messages));
     assert.ok(Array.isArray(firstRequest.body.tools));
@@ -231,8 +267,12 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       ["command", "edit", "read", "search", "write"],
     );
     assert.ok(
-      provider.requests.some(({ body }) => JSON.stringify(body.messages).includes("read: README.md (ok)")),
-      "the provider must receive the real tool result on the follow-up turn",
+      provider.requests.some(({ body }) => {
+        const messages = body.messages as Array<Record<string, unknown>>;
+        return messages.some((message) => message.role === "assistant" && Array.isArray(message.tool_calls))
+          && messages.some((message) => message.role === "tool" && message.tool_call_id === "read-1" && String(message.content).includes("read: README.md (ok)"));
+      }),
+      "Veil follow-up turns must retain structured assistant/tool history",
     );
   } finally {
     await events?.close();
@@ -246,14 +286,102 @@ test("native runner rejects oversized JSON bodies and missing sessions", async (
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-limits-"));
   const provider = await startProvider();
   const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  let events: Awaited<ReturnType<typeof eventCollector>> | undefined;
   try {
     const oversized = await run.request("/permission/missing/reply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pad: "x".repeat(513 * 1024) }) });
     assert.equal(oversized.status, 413);
     assert.equal((await run.request("/session/missing/abort", { method: "POST" })).status, 404);
+
+    events = await eventCollector(run);
+    const session = await createSession(run);
+    const image = `data:image/png;base64,${Buffer.alloc(450 * 1024, 1).toString("base64")}`;
+    const accepted = await run.request(`/session/${session.id}/prompt_async`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parts: [{ type: "text", text: "describe" }, { type: "image", data_url: image }] }),
+    });
+    assert.equal(accepted.status, 204, "the prompt endpoint must accept bounded multimodal requests larger than the control-plane limit");
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    assert.ok(provider.requests.some(({ body }) => JSON.stringify(body.messages).includes(image.slice(-128))));
   } finally {
+    await events?.close();
     await run.close();
     await provider.close();
     fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("native runner sends the adaptive response allowance selected during preflight", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-context-"));
+  const provider = await startProvider();
+  const run = await startRunner(
+    cwd,
+    provider.url,
+    path.join(cwd, "runner.jsonl"),
+    "managed",
+    {
+      contextLength: 16_000,
+      maxResponseTokens: 8_192,
+      protectedPromptReserveTokens: 2_048,
+      enabledTools: [],
+    },
+  );
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, `Summarize briefly\n${"x".repeat(45_000)}`)).status, 204);
+    const preflight = await events.waitFor((event) => event.type === "context.usage" && event.phase === "preflight");
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+
+    assert.ok([1_000, 2_000, 3_000].includes(Number(preflight.reserveTokens)));
+    assert.equal(preflight.protectedTokens, 2_048);
+    assert.equal(provider.requests.length, 1);
+    assert.equal(provider.requests[0].body.max_output_tokens, preflight.reserveTokens);
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("native runner retrieves a complete chat attachment across bounded tool calls", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-attachment-workspace-"));
+  const attachmentDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-attachments-"));
+  const attachment = `BEGIN_MARKER\n${"full attachment body 中🙂\n".repeat(300)}END_MARKER`;
+  fs.writeFileSync(path.join(attachmentDirectory, "complete-plan.md"), attachment, "utf8");
+  const provider = await startProvider();
+  const run = await startRunner(
+    cwd,
+    provider.url,
+    path.join(cwd, "runner.jsonl"),
+    "managed",
+    { attachmentDirectory, enabledTools: [] },
+  );
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "ATTACHMENT_FILE analyze every part")).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+
+    const attachmentRequests = provider.requests.filter(({ body }) =>
+      JSON.stringify(body.messages).includes("ATTACHMENT_FILE")
+    );
+    assert.ok(attachmentRequests.length > 2);
+    assert.ok(attachmentRequests.some(({ body }) =>
+      (body.tools as Array<{ function?: { name?: string } }> | undefined)
+        ?.some((tool) => tool.function?.name === "read_attachment")
+    ));
+    const finalMessages = JSON.stringify(attachmentRequests.at(-1)?.body.messages);
+    assert.match(finalMessages, /BEGIN_MARKER/);
+    assert.match(finalMessages, /END_MARKER/);
+    assert.match(finalMessages, /Read status: complete/);
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(attachmentDirectory, { recursive: true, force: true });
   }
 });
 
@@ -304,13 +432,19 @@ test("native runner refuses non-loopback listener addresses", async () => {
   }
 });
 
-test("native runner stops repeated tools and rejects streams without completion markers", async () => {
+test("native runner accepts an unterminated final SSE line, stops repeated tools, and rejects missing markers", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-guards-"));
   fs.writeFileSync(path.join(cwd, "README.md"), "first\nsecond\n", "utf8");
   const provider = await startProvider();
   const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
   const events = await eventCollector(run);
   try {
+    const trailingSession = await createSession(run);
+    assert.equal((await prompt(run, trailingSession.id, "DONE_WITHOUT_NEWLINE")).status, 204);
+    const trailing = await events.waitFor((event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "complete without newline");
+    assert.equal(trailing.text, "complete without newline");
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === trailingSession.id);
+
     const repeatedSession = await createSession(run);
     assert.equal((await prompt(run, repeatedSession.id, "REPEAT_TOOL")).status, 204);
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === repeatedSession.id);
@@ -327,7 +461,8 @@ test("native runner stops repeated tools and rejects streams without completion 
     const incompleteSession = await createSession(run);
     assert.equal((await prompt(run, incompleteSession.id, "MISSING_DONE")).status, 204);
     const error = await events.waitFor((event) => event.type === "runner.error" && event.taskId === "native-test-task" && String(event.detail).includes("completion marker"));
-    assert.equal(error.code, "loop_error");
+    assert.equal(error.category, "provider");
+    assert.equal(error.code, "model_stream_incomplete");
     assert.equal(events.events.some((event) => event.type === "session.idle" && event.sessionId === incompleteSession.id), false);
   } finally {
     await events.close();

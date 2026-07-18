@@ -14,10 +14,10 @@ type ContextModelIdentity = {
 };
 
 export function shouldProbeVeilContext(
-  previous: ContextModelIdentity | null | undefined,
-  selected: ContextModelIdentity,
+  _previous: ContextModelIdentity | null | undefined,
+  _selected: ContextModelIdentity,
 ): boolean {
-  return !previous?.contextLength || previous.baseUrl !== selected.baseUrl || previous.modelId !== selected.modelId;
+  return true;
 }
 
 function contextRoute(baseUrl: string): string {

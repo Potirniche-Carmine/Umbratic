@@ -22,6 +22,7 @@ type Config struct {
 	ProviderAPIKey             string
 	DefaultModel               string
 	ContextLength              int
+	MaxOutputTokens            int
 	TemplateRegistryPath       string
 	TelemetryEnabled           bool
 	TelemetryStorePath         string
@@ -45,7 +46,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	maxBodyBytes, err := envInt64("VEIL_MAX_BODY_BYTES", 1<<20)
+	maxBodyBytes, err := envInt64("VEIL_MAX_BODY_BYTES", 64<<20)
 	if err != nil {
 		return Config{}, err
 	}
@@ -54,6 +55,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	contextLength, err := envInt("VEIL_CONTEXT_LENGTH", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	maxOutputTokens, err := envInt("VEIL_MAX_OUTPUT_TOKENS", 8192)
 	if err != nil {
 		return Config{}, err
 	}
@@ -80,6 +85,7 @@ func Load() (Config, error) {
 		ProviderAPIKey:             os.Getenv("VEIL_PROVIDER_API_KEY"),
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:              contextLength,
+		MaxOutputTokens:            maxOutputTokens,
 		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
 		TelemetryEnabled:           telemetryEnabled,
 		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
@@ -110,6 +116,9 @@ func Load() (Config, error) {
 	}
 	if cfg.ContextLength < 0 {
 		return Config{}, errors.New("VEIL_CONTEXT_LENGTH must be positive when set")
+	}
+	if cfg.MaxOutputTokens <= 0 || cfg.MaxOutputTokens > 32*1024 {
+		return Config{}, errors.New("VEIL_MAX_OUTPUT_TOKENS must be between 1 and 32768")
 	}
 	if cfg.TelemetryRetentionDays <= 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_RETENTION_DAYS must be positive")

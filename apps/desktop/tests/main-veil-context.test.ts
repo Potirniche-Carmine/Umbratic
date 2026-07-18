@@ -36,11 +36,10 @@ test("Veil context parsing rejects invalid limits", () => {
   assert.equal(veilContext.contextLengthFromVeilPayload({}), null);
 });
 
-test("new chats and changed Veil endpoints trigger a fresh context probe", () => {
+test("every runner start refreshes the effective Veil context limit", () => {
   const selected = { baseUrl: "https://veil.example", modelId: "veil-managed" };
   assert.equal(veilContext.shouldProbeVeilContext(undefined, selected), true);
-  assert.equal(veilContext.shouldProbeVeilContext({ ...selected, contextLength: 64000 }, selected), false);
+  assert.equal(veilContext.shouldProbeVeilContext({ ...selected, contextLength: 64000 }, selected), true);
   assert.equal(veilContext.shouldProbeVeilContext({ ...selected, baseUrl: "https://old.example", contextLength: 64000 }, selected), true);
 });
-
 

@@ -36,6 +36,7 @@ use crate::{
 };
 
 const MAX_JSON_BODY_BYTES: usize = 512 * 1024;
+const MAX_PROMPT_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 fn require_loopback(hostname: &str) -> Result<(), String> {
     if hostname
@@ -150,7 +151,14 @@ async fn boundary(State(state): State<AppState>, request: Request, next: Next) -
 }
 
 async fn read_json(request: Request) -> Result<Map<String, Value>, Response> {
-    let limited = Limited::new(request.into_body(), MAX_JSON_BODY_BYTES);
+    read_json_with_limit(request, MAX_JSON_BODY_BYTES).await
+}
+
+async fn read_json_with_limit(
+    request: Request,
+    max_bytes: usize,
+) -> Result<Map<String, Value>, Response> {
+    let limited = Limited::new(request.into_body(), max_bytes);
     let bytes = limited
         .collect()
         .await
@@ -347,7 +355,7 @@ async fn prompt(
             "Session not found.",
         );
     };
-    let body = match read_json(request).await {
+    let body = match read_json_with_limit(request, MAX_PROMPT_BODY_BYTES).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -366,11 +374,26 @@ async fn prompt(
             Ok(summary) => sink.emit(json!({ "type":"session.idle", "taskId":session.task_id, "sessionId":session.id, "summary":summary, "at":now_iso() })),
             Err(error) => {
                 let detail = redact_text(&error.split_whitespace().collect::<Vec<_>>().join(" "), 1000);
-                sink.emit(json!({ "type":"runner.error", "taskId":session.task_id, "category":"loop", "code":"loop_error", "message":format!("Runner turn failed: {detail}"), "detail":detail, "at":now_iso() }));
+                let (category, code) = runner_failure_classification(&detail);
+                sink.emit(json!({ "type":"runner.error", "taskId":session.task_id, "category":category, "code":code, "message":format!("Runner turn failed: {detail}"), "detail":detail, "at":now_iso() }));
             }
         }
     });
     StatusCode::NO_CONTENT.into_response()
+}
+
+fn runner_failure_classification(detail: &str) -> (&'static str, &'static str) {
+    let normalized = detail.to_ascii_lowercase();
+    if normalized.contains("context window is full") {
+        return ("context", "context_window_full");
+    }
+    if normalized.contains("model request failed") {
+        return ("provider", "model_request_failed");
+    }
+    if normalized.contains("completion marker") || normalized.contains("model stream") {
+        return ("provider", "model_stream_incomplete");
+    }
+    ("loop", "loop_error")
 }
 
 async fn permission_reply(
@@ -500,5 +523,21 @@ mod tests {
             attachment_filename(Path::new("report\"\r\nX-Injected: yes.jsonl"))
         ));
         assert!(header.is_ok());
+    }
+
+    #[test]
+    fn runner_failures_keep_actionable_categories() {
+        assert_eq!(
+            runner_failure_classification("model request failed: the model service timed out"),
+            ("provider", "model_request_failed")
+        );
+        assert_eq!(
+            runner_failure_classification("Context window is full: request needs 17000 tokens"),
+            ("context", "context_window_full")
+        );
+        assert_eq!(
+            runner_failure_classification("model stream ended before the completion marker"),
+            ("provider", "model_stream_incomplete")
+        );
     }
 }

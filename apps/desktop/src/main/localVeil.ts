@@ -17,6 +17,15 @@ export type LocalVeilConnection = {
   modelId: string;
 };
 
+export type LocalVeilDiagnostic = {
+  level: "warn" | "error";
+  event: string;
+  message?: string;
+  data?: Record<string, unknown>;
+};
+
+type LocalVeilDiagnosticSink = (diagnostic: LocalVeilDiagnostic) => void;
+
 type RunningLocalVeil = LocalVeilConnection & {
   key: string;
   child: ChildProcess;
@@ -25,6 +34,29 @@ type RunningLocalVeil = LocalVeilConnection & {
 let running: RunningLocalVeil | null = null;
 let launchingChild: ChildProcess | null = null;
 let starting: { key: string; promise: Promise<LocalVeilConnection> } | null = null;
+const stoppingChildren = new WeakSet<ChildProcess>();
+const veilDiagnosticMarker = "VEIL_DIAGNOSTIC ";
+
+export function parseLocalVeilDiagnosticLine(line: string): LocalVeilDiagnostic | null {
+  const markerIndex = line.indexOf(veilDiagnosticMarker);
+  if (markerIndex < 0) return null;
+  try {
+    const value = JSON.parse(line.slice(markerIndex + veilDiagnosticMarker.length)) as Record<string, unknown>;
+    if (value.level !== "warn" && value.level !== "error") return null;
+    const event = typeof value.event === "string" && /^[a-z0-9._-]{1,100}$/i.test(value.event)
+      ? `veil.${value.event}`
+      : "veil.failure";
+    const { level, event: _event, message, ...data } = value;
+    return {
+      level,
+      event,
+      ...(typeof message === "string" ? { message: message.slice(0, 1000) } : {}),
+      data,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function localVeilKey(settings: ModelEndpointSettings, contextLength: number): string {
   return JSON.stringify({
@@ -74,6 +106,7 @@ function localVeilCommand(): { command: string; args: string[]; cwd?: string } {
 
 function stopChild(child: ChildProcess | null) {
   if (!child || child.exitCode !== null || child.killed) return;
+  stoppingChildren.add(child);
   if (process.platform === "win32" && child.pid) {
     const terminator = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
@@ -137,9 +170,13 @@ export function localVeilEnvironment(
     VEIL_AUTH_TOKEN: authToken,
     VEIL_ENV_FILE: path.join(os.tmpdir(), "umbratic-managed-veil-no-env"),
     VEIL_MODEL: settings.modelId.trim(),
-    VEIL_MODEL_TIMEOUT: "60s",
-    VEIL_REQUEST_TIMEOUT: "75s",
-    VEIL_MAX_BODY_BYTES: "1048576",
+    // Large local-document prompts can spend more than a minute in prompt
+    // evaluation before Ollama emits the first response byte. The runner still
+    // owns cancellation and its bounded turn timeout.
+    VEIL_MODEL_TIMEOUT: "10m",
+    VEIL_REQUEST_TIMEOUT: "12m",
+    VEIL_MAX_BODY_BYTES: "67108864",
+    VEIL_MAX_OUTPUT_TOKENS: "8192",
     VEIL_PROVIDER_API_KEY: "",
     VEIL_PROVIDER_BASE_URL: settings.baseUrl.trim().replace(/\/+$/, ""),
     VEIL_PROVIDER_CHAT_PATH: "",
@@ -169,7 +206,12 @@ export function currentLocalVeilConnection(): LocalVeilConnection | null {
   return { baseUrl, authToken, runtimeBaseUrl, modelId };
 }
 
-async function startLocalVeil(settings: ModelEndpointSettings, contextLength: number, key: string): Promise<LocalVeilConnection> {
+async function startLocalVeil(
+  settings: ModelEndpointSettings,
+  contextLength: number,
+  key: string,
+  onDiagnostic: LocalVeilDiagnosticSink,
+): Promise<LocalVeilConnection> {
   const runtimeBaseUrl = settings.baseUrl.trim().replace(/\/+$/, "");
   const modelId = settings.modelId.trim();
   if (!runtimeBaseUrl) throw new Error("Enter the local model runtime URL.");
@@ -235,11 +277,32 @@ async function startLocalVeil(settings: ModelEndpointSettings, contextLength: nu
     throw error;
   });
 
+  child.stdout?.resume();
+  let diagnosticBuffer = "";
+  child.stderr?.on("data", (chunk: Buffer | string) => {
+    diagnosticBuffer += chunk.toString();
+    const lines = diagnosticBuffer.split(/\r?\n/);
+    diagnosticBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const diagnostic = parseLocalVeilDiagnosticLine(line);
+      if (diagnostic) onDiagnostic(diagnostic);
+    }
+    if (diagnosticBuffer.length > 16000) diagnosticBuffer = diagnosticBuffer.slice(-16000);
+  });
+
   launchingChild = null;
   const connection: RunningLocalVeil = { key, child, baseUrl, authToken, runtimeBaseUrl, modelId };
   running = connection;
-  child.once("exit", () => {
+  child.once("exit", (code, signal) => {
     if (running?.child === child) running = null;
+    if (!stoppingChildren.has(child)) {
+      onDiagnostic({
+        level: "warn",
+        event: "veil.process_exited",
+        message: "Local Veil exited unexpectedly.",
+        data: { code, signal },
+      });
+    }
   });
   return { baseUrl, authToken, runtimeBaseUrl, modelId };
 }
@@ -247,6 +310,7 @@ async function startLocalVeil(settings: ModelEndpointSettings, contextLength: nu
 export async function ensureLocalVeil(
   settings: ModelEndpointSettings,
   configuredContextLength = DEFAULT_CONTEXT_LENGTH,
+  onDiagnostic: LocalVeilDiagnosticSink = () => undefined,
 ): Promise<LocalVeilConnection> {
   if (settings.mode !== "local") throw new Error("Local Veil can only run in Local mode.");
   if (settings.software !== "ollama") throw new Error("Local mode supports Ollama. Use Server mode for vLLM.");
@@ -257,7 +321,7 @@ export async function ensureLocalVeil(
   if (starting?.key === key) return starting.promise;
   if (starting) await starting.promise.catch(() => undefined);
   stopLocalVeil();
-  const promise = startLocalVeil(settings, contextLength, key);
+  const promise = startLocalVeil(settings, contextLength, key, onDiagnostic);
   starting = { key, promise };
   try {
     return await promise;

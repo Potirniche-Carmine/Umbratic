@@ -4,7 +4,7 @@ import type { BackendUiEventV1 } from "../shared/backendEvents";
 type PermissionMode = "normal" | "bypass";
 type ReasoningMode = "fast" | "reasoning";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
-type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean };
+type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string };
 type ChatAttachment = {
   path: string;
   name: string;
@@ -12,6 +12,7 @@ type ChatAttachment = {
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
+  contextTokens?: number;
 };
 type PastedAttachmentInput = {
   name?: string;

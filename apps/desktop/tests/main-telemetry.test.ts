@@ -168,6 +168,25 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
             at: "2026-01-01T00:00:04.000Z",
           },
           {
+            type: "permission.requested",
+            taskId: "task-1",
+            request: {
+              id: "permission-1",
+              kind: "bash",
+              summary: "Run tests",
+              command: "npm test",
+              cwd: "C:/secret/worktree",
+            },
+            at: "2026-01-01T00:00:04.010Z",
+          },
+          {
+            type: "permission.resolved",
+            taskId: "task-1",
+            id: "permission-1",
+            decision: "allow",
+            at: "2026-01-01T00:00:04.020Z",
+          },
+          {
             type: "context.compressed",
             taskId: "task-1",
             toolCallId: "cmd-1",
@@ -268,7 +287,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
     byStatus: { missing: 1 },
     byImportance: { optional: 1 },
   });
-  assert.equal(task.activity.eventCount, 10);
+  assert.equal(task.activity.eventCount, 12);
   assert.equal(task.activity.messages.user, 1);
   assert.equal(task.activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
   assert.equal(task.activity.messages.assistantChars, "Here is the full answer".length);
@@ -280,6 +299,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.equal(task.activity.commands.durationMs, 42);
   assert.equal(task.activity.commands.byClass.shell, 1);
   assert.equal(task.activity.commands.errors.command_exit_nonzero, 1);
+  assert.deepEqual(plain(task.activity.permissions), { requested: 1, allowed: 1, denied: 0 });
   assert.equal(task.activity.context.compressed, 1);
   assert.equal(task.activity.context.retrieved, 1);
   assert.equal(task.activity.context.originalBytes, 48000);
@@ -319,7 +339,7 @@ test("telemetry includes full rated conversations, exact failed tool payloads, c
         { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:02.000Z" },
         { type: "response.feedback", taskId: "task-1", messageId: "assistant-1", rating: "bad", comment: "Missed the edge case.", at: "2026-01-01T00:00:03.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 700, reserveTokens: 100, estimatedTokens: 800, at: "2026-01-01T00:00:04.000Z" },
-        { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 850, reserveTokens: 100, estimatedTokens: 950, at: "2026-01-01T00:00:05.000Z" },
+        { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 850, reserveTokens: 100, estimatedTokens: 950, phase: "preflight", source: "heuristic", confidence: "low", at: "2026-01-01T00:00:05.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 400, reserveTokens: 100, estimatedTokens: 500, at: "2026-01-01T00:00:06.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 660, reserveTokens: 100, estimatedTokens: 760, at: "2026-01-01T00:00:07.000Z" },
         {
@@ -358,7 +378,7 @@ test("telemetry includes full rated conversations, exact failed tool payloads, c
   });
   assert.deepEqual(plain(bundle.tasks[0].failedTools[0].input), { filePath: "src/app.ts", oldText: "before", newText: "after" });
   assert.equal(bundle.tasks[0].failedTools[0].response.toolResponse, "oldText was not found");
-  assert.deepEqual(plain(bundle.tasks[0].contextTriggers).map((trigger) => trigger.threshold), [75, 90, 75]);
+  assert.deepEqual(plain(bundle.tasks[0].contextTriggers).map((trigger) => trigger.threshold), [75, 75]);
 });
 
 test("telemetry spool files are unique and sorted for retry", async () => {
@@ -441,5 +461,3 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
 
   assert.equal((await listTelemetrySpoolFiles(spool)).length, 0);
 });
-
-

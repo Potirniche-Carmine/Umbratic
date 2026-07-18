@@ -144,6 +144,42 @@ func TestOllamaMessagesConsolidateSystemMessagesAtBeginning(t *testing.T) {
 	}
 }
 
+func TestOllamaMessagesConvertStructuredOpenAIToolHistory(t *testing.T) {
+	messages := ollamaMessages([]Message{
+		{Role: "user", Content: "Read the file."},
+		{Role: "assistant", Content: "", ToolCalls: []any{
+			map[string]any{
+				"id":   "call-1",
+				"type": "function",
+				"function": map[string]any{
+					"name":      "read",
+					"arguments": `{"filePath":"README.md"}`,
+				},
+			},
+		}},
+		{Role: "tool", Content: "file contents", ToolCallID: "call-1"},
+	})
+
+	if len(messages) != 3 {
+		t.Fatalf("got %d messages: %#v", len(messages), messages)
+	}
+	toolCalls, ok := messages[1]["tool_calls"].([]map[string]any)
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("assistant tool calls were not converted: %#v", messages[1])
+	}
+	function := toolCalls[0]["function"].(map[string]any)
+	arguments, ok := function["arguments"].(map[string]any)
+	if !ok || arguments["filePath"] != "README.md" {
+		t.Fatalf("tool arguments were not decoded for Ollama: %#v", function["arguments"])
+	}
+	if messages[2]["tool_name"] != "read" {
+		t.Fatalf("tool result was not associated with its function: %#v", messages[2])
+	}
+	if _, exists := messages[2]["tool_call_id"]; exists {
+		t.Fatalf("OpenAI-only tool_call_id leaked into Ollama history: %#v", messages[2])
+	}
+}
+
 func TestOllamaClientActivatesConfiguredModel(t *testing.T) {
 	var got struct {
 		Model  string `json:"model"`
@@ -322,11 +358,12 @@ func TestVLLMDoChatForwardsToolsAndToolChoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, err := client.DoChat(context.Background(), ChatRequest{
-		Model:      "model-a",
-		Messages:   []Message{{Role: "user", Content: "hello"}},
-		Stream:     true,
-		Tools:      []any{map[string]any{"type": "function"}},
-		ToolChoice: "auto",
+		Model:           "model-a",
+		Messages:        []Message{{Role: "user", Content: "hello"}},
+		Stream:          true,
+		Tools:           []any{map[string]any{"type": "function"}},
+		ToolChoice:      "auto",
+		MaxOutputTokens: 2048,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -334,7 +371,7 @@ func TestVLLMDoChatForwardsToolsAndToolChoice(t *testing.T) {
 	defer resp.Body.Close()
 
 	streamOptions, _ := got["stream_options"].(map[string]any)
-	if got["model"] != "model-a" || got["stream"] != true || got["tools"] == nil || got["tool_choice"] != "auto" || streamOptions["include_usage"] != true {
+	if got["model"] != "model-a" || got["stream"] != true || got["tools"] == nil || got["tool_choice"] != "auto" || streamOptions["include_usage"] != true || got["max_tokens"] != float64(2048) {
 		t.Fatalf("unexpected request body: %#v", got)
 	}
 }
@@ -363,13 +400,14 @@ func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
 			Role: "user",
 			Content: []any{
 				map[string]any{"type": "text", "text": "first"},
-				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,abc"}},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,YWJj"}},
 				map[string]any{"type": "text", "text": "second"},
 			},
 		}},
-		Stream:     false,
-		Tools:      []any{map[string]any{"type": "function"}},
-		ToolChoice: "auto",
+		Stream:          false,
+		Tools:           []any{map[string]any{"type": "function"}},
+		ToolChoice:      "auto",
+		MaxOutputTokens: 1024,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -380,6 +418,14 @@ func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
 	first := messages[0].(map[string]any)
 	if first["content"] != "first\n\nsecond" {
 		t.Fatalf("unexpected Ollama content: %#v", first["content"])
+	}
+	images, ok := first["images"].([]any)
+	if !ok || len(images) != 1 || images[0] != "YWJj" {
+		t.Fatalf("Ollama image content was not forwarded: %#v", first)
+	}
+	options, _ := got["options"].(map[string]any)
+	if options["num_predict"] != float64(1024) {
+		t.Fatalf("Ollama output allowance was not enforced: %#v", got)
 	}
 	if _, ok := got["tool_choice"]; ok {
 		t.Fatalf("Ollama request should not include tool_choice: %#v", got)

@@ -5,6 +5,7 @@ import test from "node:test";
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const localVeil = loadTypeScriptModule(new URL("../src/main/localVeil.ts", import.meta.url));
+const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test("managed local Veil receives runtime settings, loopback binding, transient auth, and no telemetry", () => {
   const env = localVeil.localVeilEnvironment(
@@ -30,6 +31,10 @@ test("managed local Veil receives runtime settings, loopback binding, transient 
   assert.equal(env.VEIL_PROVIDER_CHAT_PATH, "");
   assert.equal(env.VEIL_PROVIDER_MODELS_PATH, "");
   assert.equal(env.VEIL_CONTEXT_LENGTH, "64000");
+  assert.equal(env.VEIL_MODEL_TIMEOUT, "10m");
+  assert.equal(env.VEIL_REQUEST_TIMEOUT, "12m");
+  assert.equal(env.VEIL_MAX_OUTPUT_TOKENS, "8192");
+  assert.equal(env.VEIL_MAX_BODY_BYTES, "67108864");
   assert.equal(env.VEIL_TELEMETRY_ENABLED, "false");
   assert.equal(env.VEIL_TELEMETRY_STORE_PATH, "");
   assert.notEqual(env.VEIL_AUTH_TOKEN, "user-facing-token-is-ignored");
@@ -41,4 +46,21 @@ test("managed local Veil source keeps readiness independent of go run output and
   assert.match(source, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);
 });
 
-
+test("managed local Veil diagnostics retain safe failure metadata and ignore ordinary stderr", () => {
+  assert.deepEqual(
+    plain(localVeil.parseLocalVeilDiagnosticLine(
+      '2026/07/18 VEIL_DIAGNOSTIC {"level":"error","event":"model.request_failed","failureCode":"model_service_rejected","upstreamStatus":500,"requestBytes":12345}',
+    )),
+    {
+      level: "error",
+      event: "veil.model.request_failed",
+      data: {
+        failureCode: "model_service_rejected",
+        upstreamStatus: 500,
+        requestBytes: 12345,
+      },
+    },
+  );
+  assert.equal(localVeil.parseLocalVeilDiagnosticLine("go: downloading a build dependency"), null);
+  assert.equal(localVeil.parseLocalVeilDiagnosticLine("VEIL_DIAGNOSTIC not-json"), null);
+});

@@ -1,6 +1,6 @@
 {
   "minimumReleaseAgeDays": 14,
-  "nodeVersion": "24.18.0",
+  "nodeVersion": "26.3.0",
   "npmVersion": "11.16.0",
   "rustVersion": "1.96.0",
   "minimumGoVersion": "1.26.5",

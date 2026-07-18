@@ -221,6 +221,7 @@ type UmbraticChatAttachment = {
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
+  contextTokens?: number;
 };
 
 type UmbraticPastedAttachmentInput = {
@@ -338,7 +339,7 @@ declare global {
     umbratic?: {
       listProjects(): Promise<UmbraticRepositoryInfo[]>;
       listChats(): Promise<UmbraticChatRecord[]>;
-      createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean }): Promise<UmbraticChatRecord>;
+      createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string }): Promise<UmbraticChatRecord>;
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: UmbraticChatAttachment[] }): Promise<UmbraticChatRecord>;
       updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<UmbraticChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;

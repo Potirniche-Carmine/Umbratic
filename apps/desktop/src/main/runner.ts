@@ -88,8 +88,13 @@ export type UmbraticRunnerEvent =
       taskId: string;
       contextLength: number;
       contentTokens: number;
+      promptTokens?: number;
+      completionTokens?: number;
       reserveTokens: number;
       estimatedTokens: number;
+      phase?: "preflight" | "observed";
+      source?: "heuristic" | "provider";
+      confidence?: "low" | "high";
       at: string;
     }
   | {

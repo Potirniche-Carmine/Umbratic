@@ -51,6 +51,10 @@ test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skill
   assert.doesNotMatch(creatorSkill, /Claude|Cowork/i);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-markdown", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-spreadsheets", "SKILL.md")), true);
+  const pythonSkill = fs.readFileSync(path.join(directory, "system", "umbratic-python", "SKILL.md"), "utf8");
+  assert.match(pythonSkill, /write the file first/i);
+  assert.match(pythonSkill, /If `uv` is not found, stop issuing `uv` commands/i);
+  assert.match(pythonSkill, /Prose, code fences, and proposed commands do not create or run anything/i);
 });
 
 function storedZip(entries) {
@@ -326,5 +330,4 @@ test("importSkill imports a zip skill archive with one skill folder", async () =
     fs.rmSync(zipPath, { force: true });
   }
 });
-
 

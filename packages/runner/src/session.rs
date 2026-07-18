@@ -142,6 +142,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
         context_length: 64_000,
         max_response_tokens: 4_096,
         protected_prompt_reserve_tokens: 4_096,
+        attachment_directory: None,
         workspace_mode: "local".into(),
         model_boundary: crate::config::ModelBoundary::Managed,
         skills: Vec::new(),

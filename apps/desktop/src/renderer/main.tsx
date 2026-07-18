@@ -290,6 +290,7 @@ type ChatAttachment = {
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
+  contextTokens?: number;
 };
 
 type PastedAttachmentInput = {
@@ -456,7 +457,7 @@ type PromptMention = { kind: "file" | "skill"; query: string; start: number; end
 type DesktopApi = {
   listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
-  createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string; persist?: boolean }): Promise<ChatRecord>;
+  createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string }): Promise<ChatRecord>;
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
   updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
@@ -849,6 +850,7 @@ function normalizeAttachment(file: ChatAttachment): ChatAttachment {
   if (file.storedPath) normalized.storedPath = file.storedPath;
   if (file.originalPath) normalized.originalPath = file.originalPath;
   if (file.previewDataUrl?.startsWith("data:image/")) normalized.previewDataUrl = file.previewDataUrl;
+  if (Number.isSafeInteger(file.contextTokens) && (file.contextTokens ?? -1) >= 0) normalized.contextTokens = file.contextTokens;
   return normalized;
 }
 
@@ -1317,9 +1319,7 @@ const fallbackApi: DesktopApi = {
       draftPrompt: "",
       attachedFiles: [],
     };
-    if (input?.persist !== false) {
-      writePreviewChats([chat, ...readPreviewChats().filter((row) => row.id !== chat.id)]);
-    }
+    writePreviewChats([chat, ...readPreviewChats().filter((row) => row.id !== chat.id)]);
     return chat;
   },
   updateChatDraft: async (input) => {
@@ -2250,12 +2250,12 @@ function AttachmentPreviewList({
 function ContextMeter({ estimate }: { estimate: ContextUsageEstimate }) {
   const displayedPercentage = Math.min(100, Math.max(0, estimate.percentage));
   const roundedPercentage = Math.round(estimate.percentage);
-  const valueText = `Context window: ${formatTokenCount(estimate.estimatedTokens)} / ${formatTokenCount(estimate.contextLength)}, ${roundedPercentage}%`;
+  const valueText = `Context input: ${formatTokenCount(estimate.contentTokens)} / ${formatTokenCount(estimate.contextLength)}, ${roundedPercentage}%`;
   return (
     <div
       className={`contextMeter is-${estimate.level}`}
       role="meter"
-      aria-label="Model context window usage"
+      aria-label="Model context input usage"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.min(100, roundedPercentage)}
@@ -2276,7 +2276,7 @@ function ContextMeter({ estimate }: { estimate: ContextUsageEstimate }) {
       </svg>
       <div className="contextMeterTooltip" id="context-meter-detail" role="tooltip">
         <span>
-          Context window: <b>{formatTokenCount(estimate.estimatedTokens)} / {formatTokenCount(estimate.contextLength)}</b> · {roundedPercentage}%
+          Context input: <b>{formatTokenCount(estimate.contentTokens)} / {formatTokenCount(estimate.contextLength)}</b> · {roundedPercentage}%
         </span>
       </div>
     </div>
@@ -2658,7 +2658,10 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   };
 
   const flushActivity = (finished = true) => {
-    if (!activitySegments.length) {
+    if (
+      !activitySegments.length
+      && (!activityStartedAt || (finished && !activityEndedAt))
+    ) {
       activityStartedAt = undefined;
       activityEndedAt = undefined;
       return;
@@ -2726,11 +2729,14 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
         reviewFeedback: visiblePrompt.feedback,
         attachedFiles: (event.attachedFiles ?? []).map(normalizeAttachment),
       });
+      activityStartedAt = event.at;
+      activityEndedAt = undefined;
       continue;
     }
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
       flushReasoning();
+      markActivityTime(undefined, event.at);
       flushActivity();
       const separator = assistantNeedsSeparator
         && assistantBuffer.trim()
@@ -2751,6 +2757,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "assistant.done") {
       flushReasoning();
+      markActivityTime(undefined, event.at);
       flushActivity();
       flushAssistant();
       continue;
@@ -2846,6 +2853,12 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "task.error") {
       flushReasoning();
+      if (activitySegments.length) {
+        markActivityTime(undefined, event.at);
+      } else {
+        activityStartedAt = undefined;
+        activityEndedAt = undefined;
+      }
       flushActivity();
       assistantBuffer = `${assistantBuffer}${assistantBuffer.trim() ? "\n\n" : ""}I couldn't complete this request.\n\n${event.message}`;
       flushAssistant();
@@ -3465,10 +3478,14 @@ function App() {
       contextEstimateMessages,
       runnerContextUsage?.contextLength ?? contextLength,
       runnerContextUsage
-        ? { contentTokens: runnerContextUsage.contentTokens, reserveTokens: runnerContextUsage.reserveTokens }
+        ? {
+            contentTokens: runnerContextUsage.contentTokens,
+            reserveTokens: prompt.trim() || attachedFiles.length ? undefined : runnerContextUsage.reserveTokens,
+            protectedTokens: runnerContextUsage.protectedTokens,
+          }
         : undefined,
     ),
-    [contextEstimateMessages, contextLength, runnerContextUsage],
+    [attachedFiles.length, contextEstimateMessages, contextLength, prompt, runnerContextUsage],
   );
   const showContextMeter = shouldShowContextMeter({
     hasRunnerUsage: !!runnerContextUsage,
@@ -5616,8 +5633,8 @@ function App() {
     if (activeChatId) return activeChatId;
     const chat = await api.createChat({
       ...chatInputForCurrentProject(prompt.trim() ? titleFromPrompt(prompt) : "New chat"),
-      persist: false,
     });
+    mergeChat(chat);
     suppressDraftSaveBriefly();
     setActiveChatId(chat.id);
     return chat.id;

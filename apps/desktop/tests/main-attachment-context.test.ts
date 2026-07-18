@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
@@ -46,26 +43,35 @@ test("prior chat attachments are deduplicated and bounded by recency", () => {
   assert.deepEqual(plain(attachmentContext.priorChatAttachments(events, "Continue", 1)), [second]);
 });
 
-test("chat attachments are copied into a project-less chat workspace", (t) => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-attachment-context-"));
-  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
-  const sourceDirectory = path.join(temporaryRoot, "app-data");
-  const workspace = path.join(temporaryRoot, "workspace");
-  fs.mkdirSync(sourceDirectory, { recursive: true });
-  const storedPath = path.join(sourceDirectory, "stored-report.docx");
-  fs.writeFileSync(storedPath, "document bytes");
-
-  const [attachment] = attachmentContext.materializeChatAttachments(workspace, [
+test("legacy materialized chat paths are identified exactly without hiding neighboring files", () => {
+  const events = [
     {
-      path: "attachments/stored-report.docx",
-      name: "report.docx",
-      source: "chat",
-      storedPath,
+      type: "user.message",
+      taskId: "task-1",
+      text: "Review these",
+      attachedFiles: [
+        {
+          path: "./attachments/stored-report.docx",
+          name: "report.docx",
+          source: "chat",
+          storedPath: "/app-data/chat-attachments/chat-1/stored-report.docx",
+        },
+        {
+          path: "attachments/workspace-notes.md",
+          name: "workspace-notes.md",
+          source: "workspace",
+        },
+      ],
     },
-  ]);
+  ];
 
-  assert.equal(attachment.path, "attachments/stored-report.docx");
-  assert.equal(fs.readFileSync(path.join(workspace, attachment.path), "utf8"), "document bytes");
+  assert.deepEqual(
+    [...attachmentContext.materializedChatAttachmentReviewPaths(events, true)],
+    ["attachments/stored-report.docx"],
+  );
+  assert.deepEqual(
+    [...attachmentContext.materializedChatAttachmentReviewPaths(events, false)],
+    [],
+    "real repository reviews must not suppress matching paths",
+  );
 });
-
-

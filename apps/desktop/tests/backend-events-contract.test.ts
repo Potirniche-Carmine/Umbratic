@@ -11,7 +11,7 @@ const fixtures = [
   ["worktree.requested", { branch: "b", path: "p", baseCommit: "c" }], ["worktree.created", { branch: "b", path: "p" }],
   ["command.started", { id: "1", command: "npm test", cwd: "." }], ["command.output", { id: "1", stream: "stdout", text: "ok" }],
   ["command.finished", { id: "1", exitCode: 0 }],
-  ["context.usage", { contextLength: 64000, contentTokens: 12000, reserveTokens: 8192, estimatedTokens: 20192 }],
+  ["context.usage", { contextLength: 64000, contentTokens: 12000, promptTokens: 12000, completionTokens: 256, reserveTokens: 4096, estimatedTokens: 16096, phase: "observed", source: "provider", confidence: "high" }],
   ["context.threshold", { threshold: 75, contextLength: 64000, estimatedTokens: 48000 }],
   ["context.compressed", { toolCallId: "1", toolKind: "read", kind: "file", strategy: "text_head_tail", originalBytes: 2, outputBytes: 1 }],
   ["context.retrieved", { toolCallId: "1", hash: "abc", offset: 0, bytesShown: 1, totalBytes: 1 }],
@@ -24,7 +24,7 @@ const fixtures = [
   ["tool.failed", { id: "tool-1", toolKind: "edit", input: { filePath: "a.ts" }, response: { stdout: "", stderr: "not found", exitCode: 1 } }],
   ["skill.selected", { skillId: "s", source: "system", reason: "metadata", fullContent: false }],
   ["required_tool.failed", { requirement: "file_change", reason: "missing_tool_call", requiredTools: ["edit"] }],
-  ["task.error", { message: "failed" }],
+  ["task.error", { message: "failed", category: "provider", code: "model_request_failed", detail: "safe detail" }],
 ];
 
 test("every backend event variant normalizes to contract version 1", () => {
@@ -42,6 +42,13 @@ test("malformed, unknown, and future backend events are quarantined", () => {
   const invalid = contract.parseBackendUiEvent({ type: "assistant.delta", taskId: "t", text: 42 });
   assert.equal(invalid.code, "invalid_field");
   assert.match(contract.backendEventDiagnostic(invalid), /^\[invalid-event:invalid_field\]/);
+
+  for (const payload of [
+    { contextLength: 64000, contentTokens: -1, reserveTokens: 4096, estimatedTokens: 4095 },
+    { contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 99999 },
+    { contextLength: 0, contentTokens: 0, reserveTokens: 0, estimatedTokens: 0 },
+    { contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 16096, phase: "guess" },
+  ]) {
+    assert.equal(contract.parseBackendUiEvent({ type: "context.usage", taskId: "t", ...payload }).code, "invalid_field");
+  }
 });
-
-

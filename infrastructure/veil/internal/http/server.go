@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -124,7 +125,10 @@ func (s *Server) handleModelContext(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadGateway, "model context unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"context_length": contextLength})
+	writeJSON(w, http.StatusOK, map[string]int{
+		"context_length":    contextLength,
+		"max_output_tokens": s.cfg.MaxOutputTokens,
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -173,20 +177,24 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		defer cancel()
 
 		req := model.ChatRequest{
-			Model:      s.cfg.DefaultModel,
-			Messages:   messages,
-			Stream:     input.Stream,
-			Tools:      input.Tools,
-			ToolChoice: input.ToolChoice,
+			Model:           s.cfg.DefaultModel,
+			Messages:        messages,
+			Stream:          input.Stream,
+			Tools:           input.Tools,
+			ToolChoice:      input.ToolChoice,
+			MaxOutputTokens: effectiveMaxOutputTokens(input.MaxOutputTokens, s.cfg.MaxOutputTokens),
 		}
 		if input.Stream {
-			s.streamChat(w, ctx, req)
+			s.streamChat(w, ctx, route, req)
 			return
 		}
 
+		startedAt := time.Now()
 		resp, err := s.model.Chat(ctx, req)
 		if err != nil {
-			writeJSONError(w, http.StatusBadGateway, "model request failed")
+			failure := classifyModelFailure(err, 0)
+			recordModelFailure(route, "request", failure, req, time.Since(startedAt))
+			writeModelFailure(w, failure)
 			return
 		}
 
@@ -194,6 +202,13 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			"message": resp.Message,
 		})
 	}
+}
+
+func effectiveMaxOutputTokens(requested int, configured int) int {
+	if requested > 0 && requested < configured {
+		return requested
+	}
+	return configured
 }
 
 func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
@@ -241,17 +256,89 @@ func (s *Server) configuredModelAvailable(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, req model.ChatRequest) {
+type modelFailure struct {
+	Status         int
+	Code           string
+	Message        string
+	UpstreamStatus int
+}
+
+func classifyModelFailure(err error, upstreamStatus int) modelFailure {
+	if upstreamStatus > 0 {
+		return modelFailure{
+			Status:         http.StatusBadGateway,
+			Code:           "model_service_rejected",
+			Message:        "model service rejected the request",
+			UpstreamStatus: upstreamStatus,
+		}
+	}
+	var providerError model.ProviderError
+	if errors.As(err, &providerError) {
+		if providerError.StatusCode > 0 {
+			return classifyModelFailure(nil, providerError.StatusCode)
+		}
+		switch providerError.Kind {
+		case model.ProviderFailureTimeout:
+			return modelFailure{Status: http.StatusGatewayTimeout, Code: "model_service_timeout", Message: "model service timed out"}
+		case model.ProviderFailureInvalidResponse:
+			return modelFailure{Status: http.StatusBadGateway, Code: "model_service_invalid_response", Message: "model service returned an invalid response"}
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return modelFailure{Status: http.StatusGatewayTimeout, Code: "model_service_timeout", Message: "model service timed out"}
+	}
+	return modelFailure{Status: http.StatusBadGateway, Code: "model_service_unavailable", Message: "model service could not be reached"}
+}
+
+func recordModelFailure(route prompts.Route, phase string, failure modelFailure, req model.ChatRequest, duration time.Duration) {
+	requestBytes := 0
+	if encoded, err := json.Marshal(map[string]any{"messages": req.Messages, "tools": req.Tools}); err == nil {
+		requestBytes = len(encoded)
+	}
+	record := map[string]any{
+		"level":           "error",
+		"event":           "model.request_failed",
+		"route":           string(route),
+		"phase":           phase,
+		"failureCode":     failure.Code,
+		"messageCount":    len(req.Messages),
+		"requestBytes":    requestBytes,
+		"maxOutputTokens": req.MaxOutputTokens,
+		"stream":          req.Stream,
+		"durationMs":      duration.Milliseconds(),
+	}
+	if failure.UpstreamStatus > 0 {
+		record["upstreamStatus"] = failure.UpstreamStatus
+	}
+	if encoded, err := json.Marshal(record); err == nil {
+		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+	}
+}
+
+func writeModelFailure(w http.ResponseWriter, failure modelFailure) {
+	payload := map[string]any{"error": failure.Message, "code": failure.Code}
+	if failure.UpstreamStatus > 0 {
+		payload["upstreamStatus"] = failure.UpstreamStatus
+	}
+	writeJSON(w, failure.Status, payload)
+}
+
+func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, route prompts.Route, req model.ChatRequest) {
+	startedAt := time.Now()
 	resp, err := s.model.DoChat(ctx, req)
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "model request failed")
+		failure := classifyModelFailure(err, 0)
+		recordModelFailure(route, "request", failure, req, time.Since(startedAt))
+		writeModelFailure(w, failure)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		writeJSONError(w, http.StatusBadGateway, "model request failed")
+		failure := classifyModelFailure(nil, resp.StatusCode)
+		recordModelFailure(route, "response_status", failure, req, time.Since(startedAt))
+		writeModelFailure(w, failure)
 		return
 	}
 
@@ -259,7 +346,10 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, req mode
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	if err := model.WriteOpenAIChatSSE(s.cfg.ProviderProtocol, w, resp.Body); err != nil {
-		_, _ = io.WriteString(w, "event: error\ndata: {\"error\":\"incomplete model stream\"}\n\n")
+		failure := modelFailure{Status: http.StatusBadGateway, Code: "model_service_stream_incomplete", Message: "model service stream ended unexpectedly"}
+		recordModelFailure(route, "response_stream", failure, req, time.Since(startedAt))
+		encoded, _ := json.Marshal(map[string]string{"error": failure.Message, "code": failure.Code})
+		_, _ = io.WriteString(w, "event: error\ndata: "+string(encoded)+"\n\n")
 	}
 }
 

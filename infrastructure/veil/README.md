@@ -71,6 +71,7 @@ a model returned by the provider's models endpoint.
 | `VEIL_PROVIDER_MODELS_PATH` | No | Protocol default | Models endpoint path or full URL. Defaults to `/v1/models` for vLLM and `/api/tags` for Ollama. |
 | `VEIL_PROVIDER_API_KEY` | No | Empty | Bearer token sent from Veil to the model runtime. This is separate from `VEIL_AUTH_TOKEN`. |
 | `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for Ollama. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. This setting has no effect for vLLM. |
+| `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Veil enforces the smaller of this value and a bounded client request through vLLM `max_tokens` or Ollama `num_predict`. |
 | `VEIL_TEMPLATE_REGISTRY_PATH` | No | Empty | Path to the server-owned template registry JSON file. No template metadata is injected when unset. |
 | `VEIL_TELEMETRY_ENABLED` | No | `true` | Enables the authenticated `/api/telemetry` ingestion route. Accepted boolean values are `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. |
 | `VEIL_TELEMETRY_STORE_PATH` | No | Empty | Directory in which accepted telemetry bundles are persisted. Bundles are validated but not persisted when unset. |
@@ -78,11 +79,15 @@ a model returned by the provider's models endpoint.
 | `VEIL_TELEMETRY_MAX_BODY_BYTES` | No | `16777216` | Positive maximum request-body size for selective telemetry bundles. |
 | `VEIL_MODEL_TIMEOUT` | No | `60s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
 | `VEIL_REQUEST_TIMEOUT` | No | `75s` | Overall timeout applied by Veil to health, connection, and chat operations. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
-| `VEIL_MAX_BODY_BYTES` | No | `1048576` | Positive maximum request-body size in bytes for chat requests. |
+| `VEIL_MAX_BODY_BYTES` | No | `67108864` | Positive maximum request-body size in bytes for bounded multimodal chat requests. Text and decoded image limits are enforced separately. |
 
 `VEIL_PROVIDER_ENDPOINT_PATH` and `VEIL_PROVIDER_MODELS_ENDPOINT_PATH` are legacy
 aliases for `VEIL_PROVIDER_CHAT_PATH` and `VEIL_PROVIDER_MODELS_PATH`. The newer
 names take precedence when both are set.
+
+Chat policy accepts at most 64 client messages, 256 KiB of encoded text content
+per message, and 12 base64 image parts of at most 10 MiB decoded each. The overall
+request remains bounded by `VEIL_MAX_BODY_BYTES`.
 
 ### Ollama
 
@@ -96,6 +101,7 @@ VEIL_PROVIDER_PROTOCOL=ollama
 VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
 VEIL_MODEL=llama3.2
 VEIL_CONTEXT_LENGTH=64000
+VEIL_MAX_OUTPUT_TOKENS=8192
 ```
 
 For example, install the model before starting Veil:
@@ -109,6 +115,7 @@ activating the model and on every chat request. Changing it requires a Veil rest
 Ollama may reload the model with a differently sized KV cache on the next connection
 or request. Larger values require more memory and cannot exceed the model/runtime's
 supported context. Leave it unset or set it to `0` to use Ollama's default.
+Veil sends the effective output allowance as `num_predict` on every chat request.
 
 Veil uses Ollama's `/api/chat`, `/api/tags`, and `/api/generate` endpoints. The
 Ollama port should remain private; expose Veil, not Ollama.
@@ -143,6 +150,8 @@ and enforces the context window when the runtime starts. The model must support 
 requested length, and the server must have enough KV-cache memory. If vLLM is
 started with `--api-key`, set the same value in `VEIL_PROVIDER_API_KEY` so Veil can
 authenticate to it.
+
+Veil sends the effective output allowance as `max_tokens` on every vLLM chat request.
 
 The vLLM port should remain private; expose Veil, not vLLM.
 

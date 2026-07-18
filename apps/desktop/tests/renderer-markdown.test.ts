@@ -194,6 +194,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "assistant",
   ]);
   assert.deepEqual(timeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  assert.equal(activitySummary(timeline[1]), "Generated a response in 6 seconds");
   const delayedReasoningTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     events[2],
@@ -239,7 +240,28 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Partial answer", at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  assert.equal(activitySummary(failedToolTimeline[1]), "Generated a response in 1 second");
+  assert.equal(activitySummary(failedToolTimeline[1]), "Generated a response in 3 seconds");
+
+  const delayedFirstTokenTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.reasoning.delta", taskId: "task-1", text: "I have the document in context.", at: "2026-01-01T00:01:05.000Z", endedAt: "2026-01-01T00:01:07.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Summary", at: "2026-01-01T00:01:08.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:01:10.000Z" },
+  ], undefined, "completed")));
+  assert.equal(
+    activitySummary(delayedFirstTokenTimeline[1]),
+    "Generated a response in 1 minute 8 seconds",
+    "prompt evaluation before visible reasoning must count toward the response time",
+  );
+
+  const waitingTimeline = composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
+  ], undefined, "running");
+  assert.equal(waitingTimeline[1].type, "activity");
+  assert.equal(
+    activitySummary(waitingTimeline[1], Date.parse("2026-01-01T00:00:42.000Z")),
+    "Generating a response for 42 seconds",
+  );
 
   const preAnswerTimeline = composerTimelineFromEvents([
     events[0],

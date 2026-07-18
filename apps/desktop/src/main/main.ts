@@ -20,6 +20,12 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
+import {
+  attachmentPromptTokenBudget,
+  attachmentTextExcerpt,
+  estimateAttachmentTextTokens,
+  estimateTextTokens,
+} from "../shared/contextWindow";
 
 import {
   endpointEditingAllowed,
@@ -34,7 +40,7 @@ import {
   type CapabilityPromptNeeds,
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { materializeChatAttachments, priorChatAttachments } from "./attachmentContext";
+import { materializedChatAttachmentReviewPaths, priorChatAttachments } from "./attachmentContext";
 import { searchRootFiles } from "./fileSearch";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
@@ -158,11 +164,13 @@ import type {
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths } from "../shared/reviewDiff";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
+import { boundedRecentLines } from "./historyContext";
+import { limitPromptImages, type ContextPromptPart } from "./promptContext";
 
 const isDev = !app.isPackaged;
 const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
-type RunnerPromptPart = { type: "text"; text: string } | { type: "image"; data_url: string };
+type RunnerPromptPart = ContextPromptPart;
 type RunnerPrompt = string | RunnerPromptPart[];
 type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
@@ -174,9 +182,11 @@ const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: num
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
 const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
 const textAttachmentByteLimit = 512 * 1024;
+const chatAttachmentByteLimit = 25 * 1024 * 1024;
 const imageAttachmentByteLimit = 10 * 1024 * 1024;
 const pdfAttachmentByteLimit = 25 * 1024 * 1024;
 const pdfImagePageLimit = 12;
+const promptImageCharacterLimit = 56 * 1024 * 1024;
 const pdfImageScale = 1.4;
 const pdfRenderTimeoutMs = 30000;
 const ocrDigestPromptByteLimit = 12000;
@@ -252,14 +262,6 @@ function recordProductTelemetry(
   };
   try {
     writeProductTelemetryEvent(event);
-    recordLocalDiagnostic({
-      at: event.at,
-      level: "info",
-      source: "desktop",
-      event: type,
-      taskId: input.taskId,
-      data: { chatId: input.chatId, repositoryId: input.repositoryId, ...input.data },
-    });
     scheduleManagedTelemetrySync();
   } catch (error) {
     recordLocalDiagnostic({
@@ -586,6 +588,16 @@ function publicTask(task: TaskRecord): TaskInfo {
     patchHash,
     error,
   } = task;
+  const ignoredReviewPaths = hiddenChatAttachmentReviewPaths(task);
+  const publicReviewFiles = filterReviewFiles(reviewFiles, ignoredReviewPaths);
+  const publicEvents = compactTaskEvents(events, 500).map((event) => {
+    if (event.type !== "review.ready") return event;
+    return {
+      ...event,
+      changedFiles: filterReviewPaths(event.changedFiles, ignoredReviewPaths),
+      reviewFiles: filterReviewFiles(event.reviewFiles, ignoredReviewPaths),
+    };
+  });
   return {
     id,
     chatId,
@@ -605,17 +617,31 @@ function publicTask(task: TaskRecord): TaskInfo {
     runnerVersion,
     policyVersion,
     createdAt,
-    changedFiles,
-    reviewFiles,
+    changedFiles: filterReviewPaths(changedFiles, ignoredReviewPaths),
+    reviewFiles: publicReviewFiles,
     reviewPatchHash,
     reviewScope,
     reviewBaselineLabel,
     reviewBaselineOid,
-    events: compactTaskEvents(events, 500),
+    events: publicEvents,
     latestTest,
     patchHash,
     error,
   };
+}
+
+function hiddenChatAttachmentReviewPaths(task: TaskRecord): Set<string> {
+  return materializedChatAttachmentReviewPaths(task.events ?? [], isHiddenChatTask(task));
+}
+
+function filterReviewPaths(files: readonly string[], ignoredPaths: ReadonlySet<string>): string[] {
+  if (ignoredPaths.size === 0) return [...files];
+  return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file)));
+}
+
+function filterReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
+  if (ignoredPaths.size === 0) return [...files];
+  return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file.path)));
 }
 
 function getTask(taskId: string): TaskRecord {
@@ -811,6 +837,7 @@ function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdValue: st
     storedPath,
     originalPath,
     previewDataUrl,
+    contextTokens: attachmentContextTokens(storedPath),
   };
 }
 
@@ -824,7 +851,6 @@ function createChat(input: unknown): ChatRecord {
     isRecord(input) && typeof input.id === "string" && /^chat-[A-Za-z0-9_-]+$/.test(input.id)
       ? input.id
       : undefined;
-  const shouldPersist = !isRecord(input) || input.persist !== false;
   const title =
     isRecord(input) && typeof input.title === "string" && input.title.trim()
       ? input.title.trim().slice(0, 72)
@@ -862,9 +888,7 @@ function createChat(input: unknown): ChatRecord {
     draftPrompt: "",
     attachedFiles: [],
   };
-  if (shouldPersist) {
-    saveChat(chat);
-  }
+  saveChat(chat);
   return chat;
 }
 
@@ -883,13 +907,20 @@ function updateChatDraft(input: unknown): ChatRecord {
         .map((file) => {
           const chatAttachment = chatAttachmentFromRecord(file, id);
           if (chatAttachment) return chatAttachment;
+          const relativePath = typeof file.path === "string" ? normalizeRelativePath(file.path).slice(0, 260) : "";
+          const workspaceRoot = existing.worktreePath || existing.repositoryPath;
+          const absolute = workspaceRoot && relativePath ? path.resolve(workspaceRoot, relativePath) : "";
           return {
-            path: typeof file.path === "string" ? normalizeRelativePath(file.path).slice(0, 260) : "",
+            path: relativePath,
             name: typeof file.name === "string" ? file.name.slice(0, 120) : "",
             source: file.source === "workspace" ? "workspace" as const : undefined,
             previewDataUrl:
               typeof file.previewDataUrl === "string" && file.previewDataUrl.startsWith("data:image/")
                 ? file.previewDataUrl
+                : undefined,
+            contextTokens:
+              absolute && workspaceRoot && pathInside(workspaceRoot, absolute) && fs.existsSync(absolute)
+                ? attachmentContextTokens(absolute)
                 : undefined,
           };
         })
@@ -1059,6 +1090,23 @@ function readTextFileIfSafe(filePath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function readAttachmentTextIfSafe(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > chatAttachmentByteLimit) return null;
+    const buffer = fs.readFileSync(filePath);
+    if (buffer.includes(0)) return null;
+    return buffer.toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function attachmentContextTokens(filePath: string): number | undefined {
+  const text = readAttachmentTextIfSafe(filePath);
+  return text === null ? undefined : estimateAttachmentTextTokens(text);
 }
 
 function binarySnapshotValue(stat: fs.Stats): string {
@@ -1430,7 +1478,13 @@ function sanitizeAttachments(input: unknown, rootPath: string, chatIdValue: stri
     const name =
       typeof item.name === "string" && item.name.trim() ? item.name.trim().slice(0, 120) : path.basename(relative);
     seen.add(relative);
-    files.push({ path: relative, name, source: "workspace", previewDataUrl: imagePreviewDataUrl(absolute) });
+    files.push({
+      path: relative,
+      name,
+      source: "workspace",
+      previewDataUrl: imagePreviewDataUrl(absolute),
+      contextTokens: attachmentContextTokens(absolute),
+    });
     if (files.length >= 16) break;
   }
   return files;
@@ -1616,16 +1670,7 @@ function priorChatContext(events: BackendUiEvent[], currentUserPrompt = ""): str
     .map(historyLineForEvent)
     .filter((line): line is string => !!line);
   if (lines.length === 0) return "";
-  const selected = lines.slice(-60);
-  let remaining = 14000;
-  const compacted: string[] = [];
-  for (const line of selected) {
-    if (remaining <= 0) break;
-    const next = line.slice(0, remaining);
-    compacted.push(next);
-    remaining -= next.length + 1;
-  }
-  return compacted.join("\n");
+  return boundedRecentLines(lines);
 }
 
 function capabilityNeedsForPrompt(prompt: string, attachments: ChatAttachment[] = []): CapabilityPromptNeeds {
@@ -1648,13 +1693,17 @@ function pushPromptText(parts: RunnerPromptPart[], lines: string[], emptyHeader 
 async function attachmentPromptParts(
   rootPath: string,
   attachments: ChatAttachment[],
-  options: { userPrompt: string; capabilityReport: CapabilityProbeReport; heading?: string },
+  options: {
+    userPrompt: string;
+    capabilityReport: CapabilityProbeReport;
+    textBudget: { remainingTokens: number };
+    heading?: string;
+  },
 ): Promise<RunnerPromptPart[]> {
   if (!attachments.length) return [];
   const parts: RunnerPromptPart[] = [];
   const heading = options.heading ?? "Attached file contents:";
   const lines = [heading];
-  let remaining = 30000;
   const shouldGenerateOcr = promptLooksLikeOcrTask(options.userPrompt);
   for (const file of attachments) {
     const isChatAttachment = file.source === "chat" && typeof file.storedPath === "string";
@@ -1714,24 +1763,41 @@ async function attachmentPromptParts(
       lines.push(heading);
       continue;
     }
-    if (remaining <= 0) continue;
-    const text = readTextFileIfSafe(absolute);
+    const text = readAttachmentTextIfSafe(absolute);
     if (text === null) {
       lines.push("(binary, too large, or unreadable text file)");
       continue;
     }
-    const snippet = text.slice(0, Math.max(0, remaining));
-    remaining -= snippet.length;
+    const fullAccess = isChatAttachment
+      ? `Complete attachment: use read_attachment with attachmentId ${JSON.stringify(path.basename(absolute))} and the reported byte offsets.`
+      : `Complete workspace file: use read with filePath ${JSON.stringify(file.path)} and successive line offsets.`;
+    lines.push(fullAccess);
+    const excerpt = attachmentTextExcerpt(text, options.textBudget.remainingTokens);
+    options.textBudget.remainingTokens = Math.max(
+      0,
+      options.textBudget.remainingTokens - estimateTextTokens(excerpt.text),
+    );
+    if (!excerpt.text) {
+      lines.push("(initial excerpt omitted to preserve the active context window; the complete text remains available through the tool above)");
+      continue;
+    }
     lines.push("```");
-    lines.push(snippet);
-    lines.push(text.length > snippet.length ? "\n...(truncated)" : "");
+    lines.push(excerpt.text);
     lines.push("```");
+    if (excerpt.truncated) {
+      lines.push("Initial context contains a head-and-tail excerpt; the middle remains available through the tool above.");
+    }
   }
   pushPromptText(parts, lines, heading);
   return parts;
 }
 
-async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachments: ChatAttachment[]): Promise<RunnerPromptPart[]> {
+async function runnerPromptForTask(
+  task: TaskRecord,
+  userPrompt: string,
+  attachments: ChatAttachment[],
+  contextLength: number,
+): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
@@ -1776,20 +1842,22 @@ async function runnerPromptForTask(task: TaskRecord, userPrompt: string, attachm
   }
   lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
+  const textBudget = { remainingTokens: attachmentPromptTokenBudget(contextLength) };
   const historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
   parts.push(
     ...(await attachmentPromptParts(rootPath, historicalAttachments, {
       userPrompt,
       capabilityReport,
+      textBudget,
       heading: "Previously attached file contents:",
     })),
   );
-  parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport })));
+  parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport, textBudget })));
   parts.push({
     type: "text",
     text: ["User request:", userPrompt].join("\n"),
   });
-  return parts;
+  return limitPromptImages(parts, pdfImagePageLimit, promptImageCharacterLimit);
 }
 
 function runnerPromptParts(prompt: RunnerPrompt): RunnerPromptPart[] {
@@ -1988,6 +2056,7 @@ function persistBackendEvent(stampedEvent: BackendUiEvent) {
 }
 
 function contextThresholdEvents(event: Extract<BackendUiEvent, { type: "context.usage" }>): BackendUiEvent[] {
+  if (event.phase === "preflight" || event.source === "heuristic") return [];
   const previous = contextThresholdState.get(event.taskId) ?? { above75: false, above90: false };
   const ratio = event.contextLength > 0 ? event.estimatedTokens / event.contextLength : 0;
   const above75 = ratio >= 0.75;
@@ -2040,11 +2109,15 @@ function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAt
   dispatchRendererEvent(event);
 }
 
-function failTask(task: TaskRecord, message: string) {
+function failTask(
+  task: TaskRecord,
+  message: string,
+  details: { category?: string; code?: string; detail?: string } = {},
+) {
   task.state = "failed";
   task.error = message;
   saveTask(task);
-  emit({ type: "task.error", taskId: task.id, message });
+  emit({ type: "task.error", taskId: task.id, message, ...details });
 }
 
 function taskStillRunning(task: TaskRecord): boolean {
@@ -2141,7 +2214,11 @@ async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]
   if (!repository) {
     throw new Error("Repository has not been selected.");
   }
-  return searchRootFiles(repository.rootPath, query, limit);
+  const results = await searchRootFiles(repository.rootPath, query, limit);
+  return results.map((result) => ({
+    ...result,
+    contextTokens: attachmentContextTokens(path.resolve(repository.rootPath, result.path)),
+  }));
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -2318,7 +2395,12 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
   const settings = readModelEndpointSettings();
   try {
     if (settings.mode === "local") {
-      await ensureLocalVeil(settings, readContextLengthSetting());
+      await ensureLocalVeil(settings, readContextLengthSetting(), (diagnostic) => {
+        recordLocalDiagnostic({
+          ...diagnostic,
+          source: "veil",
+        });
+      });
     } else {
       stopLocalVeil();
     }
@@ -2683,7 +2765,7 @@ async function pickAttachmentFiles(input: unknown): Promise<{ canceled: true } |
     } catch {
       continue;
     }
-    if (!stat.isFile() || stat.size > 25 * 1024 * 1024 || seen.has(absolute.toLowerCase())) continue;
+    if (!stat.isFile() || stat.size > chatAttachmentByteLimit || seen.has(absolute.toLowerCase())) continue;
     seen.add(absolute.toLowerCase());
     const originalName = path.basename(absolute);
     const storedName = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}-${safeAttachmentFileName(originalName)}`;
@@ -2696,6 +2778,7 @@ async function pickAttachmentFiles(input: unknown): Promise<{ canceled: true } |
       storedPath,
       originalPath: absolute,
       previewDataUrl: imagePreviewDataUrl(storedPath),
+      contextTokens: attachmentContextTokens(storedPath),
     });
     if (files.length >= 16) break;
   }
@@ -2719,7 +2802,7 @@ function savePastedAttachments(input: unknown): { files: ChatAttachment[] } {
     if (!isRecord(item)) continue;
     const dataUrl = typeof item.dataUrl === "string" ? item.dataUrl : "";
     const parsed = parseAttachmentDataUrl(dataUrl);
-    if (!parsed || parsed.buffer.length === 0 || parsed.buffer.length > 25 * 1024 * 1024) continue;
+    if (!parsed || parsed.buffer.length === 0 || parsed.buffer.length > chatAttachmentByteLimit) continue;
     const typed = item as PastedAttachmentInput;
     const rawName =
       typeof typed.name === "string" && typed.name.trim()
@@ -2737,6 +2820,7 @@ function savePastedAttachments(input: unknown): { files: ChatAttachment[] } {
       storedPath,
       originalPath: "clipboard",
       previewDataUrl: imagePreviewDataUrl(storedPath),
+      contextTokens: attachmentContextTokens(storedPath),
     });
     if (files.length >= 16) break;
   }
@@ -2920,6 +3004,7 @@ async function runnerPromptForTaskWithPermission(
   task: TaskRecord,
   userPrompt: string,
   attachments: ChatAttachment[],
+  contextLength: number,
 ): Promise<RunnerPromptPart[]> {
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const needsWorkspaceSnapshot = !task.agentBranch || !!task.worktreeRootTaskId;
@@ -2927,7 +3012,7 @@ async function runnerPromptForTaskWithPermission(
     task.baselineFiles = snapshotFolder(rootPath);
     saveTask(task);
   }
-  return runnerPromptForTask(task, userPrompt, attachments);
+  return runnerPromptForTask(task, userPrompt, attachments, contextLength);
 }
 
 async function runCommandForTask(
@@ -3103,11 +3188,12 @@ async function refreshReview(
       : task.originalRepoPath;
   const worktreeIsGit = scope === "worktree"
     && (await gitResult(workspacePath, ["rev-parse", "--is-inside-work-tree"])).success;
-  const reviewFiles = task.workspaceKind === "folder" && !worktreeIsGit
+  const discoveredReviewFiles = task.workspaceKind === "folder" && !worktreeIsGit
     ? folderReviewFiles(task)
     : scope === "worktree"
       ? await gitReviewFiles(task, "HEAD", workspacePath)
       : await gitReviewFiles(task);
+  const reviewFiles = filterReviewFiles(discoveredReviewFiles, hiddenChatAttachmentReviewPaths(task));
   task.reviewFiles = reviewFiles;
   task.changedFiles = reviewFiles.map((file) => file.path);
   task.reviewScope = scope;
@@ -3289,6 +3375,7 @@ async function runRunnerTask(
 ) {
   const task = getTask(taskIdValue);
   let run: RunnerProcess | null = null;
+  let runnerFailureDetails: { category?: string; code?: string; detail?: string } = {};
   const intent = intentPrompt ?? task.prompt;
   try {
     const { providers, selected } = await resolveSelectedModel();
@@ -3305,9 +3392,19 @@ async function runRunnerTask(
     task.model = selectedForRun;
     applyTaskPolicyMetadata(task);
     saveTask(task);
-    const prompt = promptForRun ?? (await runnerPromptForTaskWithPermission(task, intent, attachments));
+    const prompt = promptForRun
+      ?? (await runnerPromptForTaskWithPermission(
+        task,
+        intent,
+        attachments,
+        selectedForRun.contextLength ?? readContextLengthSetting(),
+      ));
     const promptParts = runnerPromptParts(prompt);
-    run = await startUmbraticRunnerServer(task, selectedForRun);
+    run = await startUmbraticRunnerServer(
+      task,
+      selectedForRun,
+      task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
+    );
     if (!taskStillRunning(task)) {
       return;
     }
@@ -3555,17 +3652,28 @@ async function runRunnerTask(
       }
 
       if (type === "context.usage") {
-        const contextLength = typeof event.contextLength === "number" && Number.isFinite(event.contextLength) ? event.contextLength : 0;
-        const contentTokens = typeof event.contentTokens === "number" && Number.isFinite(event.contentTokens) ? event.contentTokens : 0;
-        const reserveTokens = typeof event.reserveTokens === "number" && Number.isFinite(event.reserveTokens) ? event.reserveTokens : 0;
-        const estimatedTokens = typeof event.estimatedTokens === "number" && Number.isFinite(event.estimatedTokens) ? event.estimatedTokens : 0;
+        const validNonNegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
+        if (!(validNonNegative(event.contextLength) && event.contextLength > 0)
+          || !validNonNegative(event.contentTokens)
+          || !validNonNegative(event.reserveTokens)) return;
+        if (event.promptTokens !== undefined && (!validNonNegative(event.promptTokens) || event.promptTokens !== event.contentTokens)) return;
+        if (event.completionTokens !== undefined && !validNonNegative(event.completionTokens)) return;
+        const contextLength = event.contextLength;
+        const contentTokens = event.contentTokens;
+        const reserveTokens = event.reserveTokens;
+        const estimatedTokens = contentTokens + reserveTokens;
         emit({
           type: "context.usage",
           taskId: task.id,
           contextLength,
           contentTokens,
+          ...(event.promptTokens !== undefined ? { promptTokens: event.promptTokens } : {}),
+          ...(event.completionTokens !== undefined ? { completionTokens: event.completionTokens } : {}),
           reserveTokens,
           estimatedTokens,
+          ...(event.phase === "preflight" || event.phase === "observed" ? { phase: event.phase } : {}),
+          ...(event.source === "heuristic" || event.source === "provider" ? { source: event.source } : {}),
+          ...(event.confidence === "low" || event.confidence === "high" ? { confidence: event.confidence } : {}),
           at: eventAt(event),
         });
         return;
@@ -3610,6 +3718,11 @@ async function runRunnerTask(
       if (type === "runner.error") {
         emitBufferedAssistantOutput(assistantOutput.fail());
         const message = typeof event.message === "string" && event.message.trim() ? event.message : "Umbratic runner failed.";
+        runnerFailureDetails = {
+          ...(typeof event.category === "string" ? { category: event.category.slice(0, 80) } : {}),
+          ...(typeof event.code === "string" ? { code: event.code.slice(0, 120) } : {}),
+          ...(typeof event.detail === "string" ? { detail: event.detail.slice(0, 1000) } : {}),
+        };
         fail(message);
         return;
       }
@@ -3686,7 +3799,7 @@ async function runRunnerTask(
     run.abortController.abort();
     await stream.done.catch(() => undefined);
   } catch (error) {
-    failTask(task, String(error instanceof Error ? error.message : error));
+    failTask(task, String(error instanceof Error ? error.message : error), runnerFailureDetails);
   } finally {
     clearPendingPermissionsForTask(task.id);
     activeRunnerProcesses.delete(task.id);
@@ -3866,9 +3979,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     });
   const repositoryId = refreshed.id;
   const sanitizedAttachments = sanitizeAttachments(input.attachedFiles, refreshed.rootPath, chat.id);
-  const attachments = hiddenWorkspace
-    ? materializeChatAttachments(refreshed.rootPath, sanitizedAttachments)
-    : sanitizedAttachments;
+  const attachments = sanitizedAttachments;
   const existingTask = chat?.taskId ? readTask(chat.taskId) ?? undefined : undefined;
   const reusableWorktreeTask = requestedWorktreeTaskId ? findReusableWorktreeTask(requestedWorktreeTaskId) : undefined;
   const requestedWorkspaceMode: WorkspaceMode =
@@ -4692,7 +4803,6 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  recordLocalDiagnostic({ level: "info", source: "desktop", event: "app.ready", data: { version: app.getVersion() } });
   try {
     installBundledSystemSkillsService();
   } catch (error) {
@@ -4791,7 +4901,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  recordLocalDiagnostic({ level: "info", source: "desktop", event: "app.before_quit" });
   stopLocalVeil();
   flushRendererEvents();
   flushPendingTaskEvents();

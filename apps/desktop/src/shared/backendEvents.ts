@@ -9,6 +9,7 @@ export type BackendChatAttachment = {
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
+  contextTokens?: number;
 };
 
 export type BackendPermissionRequest = {
@@ -45,7 +46,7 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass; toolKind?: string; input?: unknown }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number }
-  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; reserveTokens: number; estimatedTokens: number }
+  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; promptTokens?: number; completionTokens?: number; reserveTokens: number; protectedTokens?: number; estimatedTokens: number; phase?: "preflight" | "observed"; source?: "heuristic" | "provider"; confidence?: "low" | "high" }
   | { type: "context.threshold"; taskId: string; threshold: 75 | 90; contextLength: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
@@ -62,7 +63,7 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "tool.failed"; taskId: string; id: string; toolKind: string; input: unknown; response: { stdout: string; stderr: string; toolResponse?: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string } }
   | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
   | { type: "required_tool.failed"; taskId: string; requirement: "file_change"; reason: string; requiredTools: string[]; attemptedTools?: string[]; attempt?: number; detail?: string }
-  | { type: "task.error"; taskId: string; message: string }
+  | { type: "task.error"; taskId: string; message: string; category?: string; code?: string; detail?: string }
 );
 
 export type BackendUiEventInput = BackendUiEventV1 extends infer Event
@@ -124,6 +125,10 @@ function hasNumber(value: Record<string, unknown>, key: string): boolean {
   return typeof value[key] === "number" && Number.isFinite(value[key]);
 }
 
+function hasNonNegativeNumber(value: Record<string, unknown>, key: string): boolean {
+  return hasNumber(value, key) && Number(value[key]) >= 0;
+}
+
 function hasStringArray(value: Record<string, unknown>, key: string): boolean {
   return Array.isArray(value[key]) && (value[key] as unknown[]).every((item) => typeof item === "string");
 }
@@ -134,7 +139,12 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
     case "assistant.delta":
     case "assistant.reasoning.delta":
     case "task.error":
-      return hasString(value, type === "task.error" ? "message" : "text");
+      return hasString(value, type === "task.error" ? "message" : "text")
+        && (type !== "task.error" || (
+          (value.category === undefined || hasString(value, "category"))
+          && (value.code === undefined || hasString(value, "code"))
+          && (value.detail === undefined || hasString(value, "detail"))
+        ));
     case "assistant.done":
       return true;
     case "worktree.requested":
@@ -148,8 +158,17 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
     case "command.finished":
       return hasString(value, "id") && (value.exitCode === null || hasNumber(value, "exitCode"));
     case "context.usage":
-      return hasNumber(value, "contextLength") && hasNumber(value, "contentTokens")
-        && hasNumber(value, "reserveTokens") && hasNumber(value, "estimatedTokens");
+      return hasNumber(value, "contextLength") && Number(value.contextLength) > 0
+        && hasNonNegativeNumber(value, "contentTokens")
+        && hasNonNegativeNumber(value, "reserveTokens")
+        && (value.protectedTokens === undefined || (hasNonNegativeNumber(value, "protectedTokens") && Number(value.protectedTokens) <= Number(value.contentTokens)))
+        && hasNonNegativeNumber(value, "estimatedTokens")
+        && Number(value.estimatedTokens) === Number(value.contentTokens) + Number(value.reserveTokens)
+        && (value.promptTokens === undefined || (hasNonNegativeNumber(value, "promptTokens") && value.promptTokens === value.contentTokens))
+        && (value.completionTokens === undefined || hasNonNegativeNumber(value, "completionTokens"))
+        && (value.phase === undefined || value.phase === "preflight" || value.phase === "observed")
+        && (value.source === undefined || value.source === "heuristic" || value.source === "provider")
+        && (value.confidence === undefined || value.confidence === "low" || value.confidence === "high");
     case "context.threshold":
       return (value.threshold === 75 || value.threshold === 90)
         && hasNumber(value, "contextLength") && hasNumber(value, "estimatedTokens");

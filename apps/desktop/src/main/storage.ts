@@ -135,6 +135,7 @@ function withAppDatabase<T>(action: (db: DatabaseSync) => T): T {
 }
 
 function ensureStorageSchema(db: DatabaseSync) {
+  const schemaVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version?: number }).user_version) || 0;
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY NOT NULL,
@@ -207,8 +208,13 @@ function ensureStorageSchema(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS diagnostic_logs_task_id_index ON diagnostic_logs(task_id);
     CREATE INDEX IF NOT EXISTS product_telemetry_events_at_index ON product_telemetry_events(at ASC);
     CREATE INDEX IF NOT EXISTS product_telemetry_events_task_id_index ON product_telemetry_events(task_id);
-    PRAGMA user_version = 2;
   `);
+  if (schemaVersion < 3) {
+    db.exec(`
+      DELETE FROM diagnostic_logs WHERE level NOT IN ('warn', 'error');
+      PRAGMA user_version = 3;
+    `);
+  }
 }
 
 function normalizedDiagnosticText(value: string | undefined, limit: number): string | undefined {
@@ -219,6 +225,7 @@ function normalizedDiagnosticText(value: string | undefined, limit: number): str
 }
 
 export function appendLocalDiagnostic(input: LocalDiagnosticInput): void {
+  if (input.level !== "warn" && input.level !== "error") return;
   const source = normalizedDiagnosticText(input.source, 80);
   const event = normalizedDiagnosticText(input.event, 160);
   if (!source || !event) return;

@@ -1,6 +1,3 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-
 import type { BackendUiEvent, ChatAttachment } from "./types";
 
 function attachmentKey(file: ChatAttachment): string {
@@ -43,28 +40,30 @@ export function priorChatAttachments(
   return files;
 }
 
-export function materializeChatAttachments(rootPath: string, attachments: readonly ChatAttachment[]): ChatAttachment[] {
-  const root = path.resolve(rootPath);
-  const attachmentDirectory = path.join(root, "attachments");
-  let directoryCreated = false;
+function normalizedReviewPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+}
 
-  return attachments.map((file) => {
-    if (file.source !== "chat" || !file.storedPath) return file;
-    const source = path.resolve(file.storedPath);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(source);
-    } catch {
-      return file;
+/**
+ * Returns only the exact paths that older project-less chats copied into their
+ * scratch workspace. Real repository tasks always return an empty exclusion so
+ * a user file with the same path remains reviewable.
+ */
+export function materializedChatAttachmentReviewPaths(
+  events: readonly BackendUiEvent[],
+  hiddenChat: boolean,
+): Set<string> {
+  const paths = new Set<string>();
+  if (!hiddenChat) return paths;
+  for (const event of events) {
+    if (event.type !== "user.message") continue;
+    for (const file of event.attachedFiles ?? []) {
+      if (file.source !== "chat" || !file.storedPath) continue;
+      const relative = normalizedReviewPath(file.path);
+      if (relative.startsWith("attachments/") && relative.length > "attachments/".length) {
+        paths.add(relative);
+      }
     }
-    if (!stat.isFile()) return file;
-    if (!directoryCreated) {
-      fs.mkdirSync(attachmentDirectory, { recursive: true });
-      directoryCreated = true;
-    }
-    const storedName = path.basename(source);
-    const destination = path.join(attachmentDirectory, storedName);
-    if (source !== destination) fs.copyFileSync(source, destination);
-    return { ...file, path: `attachments/${storedName}` };
-  });
+  }
+  return paths;
 }

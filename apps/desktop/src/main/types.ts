@@ -243,7 +243,7 @@ export type LocalDiagnosticInfo = {
   entries: number;
 };
 
-export type LocalDiagnosticLevel = "debug" | "info" | "warn" | "error";
+export type LocalDiagnosticLevel = "warn" | "error";
 
 export type LocalDiagnosticRecord = {
   id: number;
@@ -311,6 +311,7 @@ export type ChatAttachment = {
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
+  contextTokens?: number;
 };
 
 export type PastedAttachmentInput = {

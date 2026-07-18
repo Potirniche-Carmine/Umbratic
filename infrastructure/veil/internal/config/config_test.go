@@ -19,6 +19,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_MODEL", "default-model")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "")
+	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
 	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
 	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
 	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
@@ -66,6 +67,9 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	}
 	if cfg.ContextLength != 64000 {
 		t.Fatalf("unexpected context length %d", cfg.ContextLength)
+	}
+	if cfg.MaxOutputTokens != 8192 || cfg.MaxBodyBytes != 64<<20 {
+		t.Fatalf("unexpected context enforcement defaults: %#v", cfg)
 	}
 	if cfg.TemplateRegistryPath != "" {
 		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
@@ -124,6 +128,16 @@ func TestLoadRequiresConfiguredModel(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected missing model error")
+	}
+}
+
+func TestLoadRejectsInvalidMaxOutputTokens(t *testing.T) {
+	for _, value := range []string{"0", "32769", "invalid"} {
+		setRequiredEnv(t)
+		t.Setenv("VEIL_MAX_OUTPUT_TOKENS", value)
+		if _, err := Load(); err == nil {
+			t.Fatalf("expected %q to be rejected", value)
+		}
 	}
 }
 

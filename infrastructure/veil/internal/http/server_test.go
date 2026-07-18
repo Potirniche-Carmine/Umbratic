@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -100,6 +101,19 @@ func testConfig() config.Config {
 		TelemetryRetentionDays: 30,
 		RequestTimeout:         time.Second,
 		MaxBodyBytes:           1 << 20,
+		MaxOutputTokens:        4096,
+	}
+}
+
+func TestEffectiveMaxOutputTokensNeverExceedsServerPolicy(t *testing.T) {
+	if got := effectiveMaxOutputTokens(1024, 4096); got != 1024 {
+		t.Fatalf("got %d", got)
+	}
+	if got := effectiveMaxOutputTokens(8192, 4096); got != 4096 {
+		t.Fatalf("got %d", got)
+	}
+	if got := effectiveMaxOutputTokens(0, 4096); got != 4096 {
+		t.Fatalf("got %d", got)
 	}
 }
 
@@ -149,7 +163,7 @@ func TestModelContextReturnsEffectiveConfiguredLimit(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["context_length"] != 64000 {
+	if payload["context_length"] != 64000 || payload["max_output_tokens"] != 4096 {
 		t.Fatalf("got context length %d", payload["context_length"])
 	}
 }
@@ -214,7 +228,7 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(testConfig(), modelClient)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/marketing/chat", strings.NewReader(`{"input":"draft this"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/marketing/chat", strings.NewReader(`{"input":"draft this","max_output_tokens":1024}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
 	server.ServeHTTP(rr, req)
@@ -224,6 +238,9 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 	if modelClient.req.Model != "default-model" {
 		t.Fatalf("got model %q", modelClient.req.Model)
+	}
+	if modelClient.req.MaxOutputTokens != 1024 {
+		t.Fatalf("output allowance was not forwarded: %#v", modelClient.req)
 	}
 	if len(modelClient.req.Messages) != 3 {
 		t.Fatalf("got %d messages", len(modelClient.req.Messages))
@@ -620,6 +637,9 @@ func TestChatRouteSanitizesModelChatErrors(t *testing.T) {
 	if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "default-model") {
 		t.Fatalf("model error leaked details: %s", rr.Body.String())
 	}
+	if !strings.Contains(rr.Body.String(), `"code":"model_service_unavailable"`) {
+		t.Fatalf("missing safe failure classification: %s", rr.Body.String())
+	}
 }
 
 func TestChatRouteSanitizesStreamErrorsAndNonSuccessResponses(t *testing.T) {
@@ -628,6 +648,15 @@ func TestChatRouteSanitizesStreamErrorsAndNonSuccessResponses(t *testing.T) {
 		"bad status":    {streamStatusCode: http.StatusForbidden, streamBody: "secret provider body"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			var diagnostic bytes.Buffer
+			previousOutput := log.Writer()
+			previousFlags := log.Flags()
+			log.SetOutput(&diagnostic)
+			log.SetFlags(0)
+			t.Cleanup(func() {
+				log.SetOutput(previousOutput)
+				log.SetFlags(previousFlags)
+			})
 			server := NewServer(testConfig(), modelClient)
 			req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"hello","stream":true}`))
 			req.Header.Set("Authorization", "Bearer test-token")
@@ -640,7 +669,35 @@ func TestChatRouteSanitizesStreamErrorsAndNonSuccessResponses(t *testing.T) {
 			if strings.Contains(rr.Body.String(), "secret") || strings.Contains(rr.Body.String(), "runtime") {
 				t.Fatalf("stream error leaked details: %s", rr.Body.String())
 			}
+			if name == "bad status" {
+				if !strings.Contains(rr.Body.String(), `"code":"model_service_rejected"`) ||
+					!strings.Contains(rr.Body.String(), `"upstreamStatus":403`) {
+					t.Fatalf("missing upstream classification: %s", rr.Body.String())
+				}
+			}
+			logged := diagnostic.String()
+			for _, expected := range []string{"VEIL_DIAGNOSTIC", `"event":"model.request_failed"`, `"requestBytes":`, `"maxOutputTokens":`} {
+				if !strings.Contains(logged, expected) {
+					t.Fatalf("missing safe diagnostic %q in %s", expected, logged)
+				}
+			}
+			if strings.Contains(logged, "hello") || strings.Contains(logged, "secret provider body") {
+				t.Fatalf("diagnostic leaked request or response content: %s", logged)
+			}
 		})
+	}
+}
+
+func TestChatRouteDistinguishesModelTimeouts(t *testing.T) {
+	modelClient := &fakeModelClient{streamErr: model.ProviderError{Kind: model.ProviderFailureTimeout}}
+	server := NewServer(testConfig(), modelClient)
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"hello","stream":true}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusGatewayTimeout || !strings.Contains(rr.Body.String(), `"code":"model_service_timeout"`) {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
 	}
 }
 

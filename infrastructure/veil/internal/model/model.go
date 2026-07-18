@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,11 +23,12 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model      string
-	Messages   []Message
-	Stream     bool
-	Tools      any
-	ToolChoice any
+	Model           string
+	Messages        []Message
+	Stream          bool
+	Tools           any
+	ToolChoice      any
+	MaxOutputTokens int
 }
 
 type ChatResponse struct {
@@ -68,10 +70,23 @@ type Client struct {
 
 type ProviderError struct {
 	StatusCode int
+	Kind       ProviderFailureKind
 }
+
+type ProviderFailureKind string
+
+const (
+	ProviderFailureTransport       ProviderFailureKind = "transport"
+	ProviderFailureTimeout         ProviderFailureKind = "timeout"
+	ProviderFailureStatus          ProviderFailureKind = "status"
+	ProviderFailureInvalidResponse ProviderFailureKind = "invalid_response"
+)
 
 func (e ProviderError) Error() string {
 	if e.StatusCode == 0 {
+		if e.Kind == ProviderFailureTimeout {
+			return "model runtime request timed out"
+		}
 		return "model runtime request failed"
 	}
 	return fmt.Sprintf("model runtime returned status %d", e.StatusCode)
@@ -158,7 +173,7 @@ func (c *Client) ActivateModel(ctx context.Context, modelID string) error {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ProviderError{StatusCode: resp.StatusCode}
+		return ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 	return nil
 }
@@ -172,7 +187,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return ChatResponse{}, ProviderError{StatusCode: resp.StatusCode}
+		return ChatResponse{}, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 
 	switch c.protocol {
@@ -217,18 +232,18 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, ProviderError{}
+		return nil, ProviderError{Kind: ProviderFailureTransport}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return nil, ProviderError{StatusCode: resp.StatusCode}
+		return nil, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 
 	var payload any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
-		return nil, ProviderError{}
+		return nil, ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 
 	return modelInfosFromPayload(payload), nil
@@ -258,11 +273,11 @@ func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error)
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return 0, ProviderError{StatusCode: resp.StatusCode}
+		return 0, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 	var payload any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
-		return 0, ProviderError{}
+		return 0, ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 	contextLength := ollamaContextLengthFromPayload(payload)
 	if contextLength <= 0 {
@@ -279,6 +294,9 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 	}
 	if req.Stream {
 		body["stream_options"] = map[string]any{"include_usage": true}
+	}
+	if req.MaxOutputTokens > 0 {
+		body["max_tokens"] = req.MaxOutputTokens
 	}
 	if req.Tools != nil {
 		body["tools"] = req.Tools
@@ -298,8 +316,15 @@ func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Respo
 	if req.Tools != nil {
 		body["tools"] = req.Tools
 	}
-	if c.contextLength > 0 {
-		body["options"] = map[string]any{"num_ctx": c.contextLength}
+	if c.contextLength > 0 || req.MaxOutputTokens > 0 {
+		options := map[string]any{}
+		if c.contextLength > 0 {
+			options["num_ctx"] = c.contextLength
+		}
+		if req.MaxOutputTokens > 0 {
+			options["num_predict"] = req.MaxOutputTokens
+		}
+		body["options"] = options
 	}
 	return c.postJSON(ctx, c.chatEndpoint, body)
 }
@@ -318,7 +343,14 @@ func (c *Client) postJSON(ctx context.Context, endpoint string, body any) (*http
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, ProviderError{}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, ProviderError{Kind: ProviderFailureTimeout}
+		}
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			return nil, ProviderError{Kind: ProviderFailureTimeout}
+		}
+		return nil, ProviderError{Kind: ProviderFailureTransport}
 	}
 	return resp, nil
 }
@@ -337,7 +369,7 @@ func decodeVLLMChat(r io.Reader) (ChatResponse, error) {
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r, 1<<20)).Decode(&decoded); err != nil {
-		return ChatResponse{}, ProviderError{}
+		return ChatResponse{}, ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 	if len(decoded.Choices) == 0 {
 		return ChatResponse{}, errors.New("model runtime returned no choices")
@@ -358,7 +390,7 @@ func decodeOllamaChat(r io.Reader) (ChatResponse, error) {
 		Message Message `json:"message"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r, 1<<20)).Decode(&decoded); err != nil {
-		return ChatResponse{}, ProviderError{}
+		return ChatResponse{}, ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 	if decoded.Message.Content == nil {
 		return ChatResponse{}, errors.New("model runtime returned an empty message")
@@ -408,11 +440,11 @@ func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 			break
 		}
 		if err != nil {
-			return ProviderError{}
+			return ProviderError{Kind: ProviderFailureInvalidResponse}
 		}
 	}
 	if !sentDone {
-		return ProviderError{}
+		return ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 	return nil
 }
@@ -420,7 +452,7 @@ func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent bool) (bool, bool, error) {
 	var row map[string]any
 	if err := json.Unmarshal([]byte(line), &row); err != nil {
-		return false, roleAlreadySent, ProviderError{}
+		return false, roleAlreadySent, ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 
 	message, _ := row["message"].(map[string]any)
@@ -593,6 +625,7 @@ func toolArgumentsString(value any) string {
 func ollamaMessages(messages []Message) []map[string]any {
 	rows := make([]map[string]any, 0, len(messages))
 	systemParts := make([]string, 0, 2)
+	toolNames := make(map[string]string)
 	for _, message := range messages {
 		if message.Role != "system" {
 			continue
@@ -611,40 +644,97 @@ func ollamaMessages(messages []Message) []map[string]any {
 		if message.Role == "system" {
 			continue
 		}
+		content, images := ollamaContentParts(message.Content)
 		row := map[string]any{
 			"role":    message.Role,
-			"content": ollamaContent(message.Content),
+			"content": content,
 		}
-		if message.ToolCallID != "" {
-			row["tool_call_id"] = message.ToolCallID
+		if len(images) > 0 {
+			row["images"] = images
 		}
 		if message.ToolCalls != nil {
-			row["tool_calls"] = message.ToolCalls
+			row["tool_calls"] = ollamaToolCalls(message.ToolCalls, toolNames)
+		}
+		if message.Role == "tool" && message.ToolCallID != "" {
+			if name := toolNames[message.ToolCallID]; name != "" {
+				row["tool_name"] = name
+			}
 		}
 		rows = append(rows, row)
 	}
 	return rows
 }
 
-func ollamaContent(content any) string {
-	switch value := content.(type) {
-	case string:
-		return value
-	case []any:
-		parts := make([]string, 0, len(value))
-		for _, part := range value {
-			row, ok := part.(map[string]any)
-			if !ok || row["type"] != "text" {
-				continue
-			}
-			text, ok := row["text"].(string)
-			if ok && text != "" {
-				parts = append(parts, text)
+func ollamaToolCalls(value any, toolNames map[string]string) []map[string]any {
+	rows, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	converted := make([]map[string]any, 0, len(rows))
+	for _, raw := range rows {
+		call, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		function, ok := call["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := function["name"].(string)
+		arguments := function["arguments"]
+		if encoded, ok := arguments.(string); ok {
+			var decoded any
+			if json.Unmarshal([]byte(encoded), &decoded) == nil {
+				arguments = decoded
 			}
 		}
-		return strings.Join(parts, "\n\n")
+		converted = append(converted, map[string]any{
+			"function": map[string]any{
+				"name":      name,
+				"arguments": arguments,
+			},
+		})
+		if id, _ := call["id"].(string); id != "" && name != "" {
+			toolNames[id] = name
+		}
+	}
+	return converted
+}
+
+func ollamaContent(content any) string {
+	text, _ := ollamaContentParts(content)
+	return text
+}
+
+func ollamaContentParts(content any) (string, []string) {
+	switch value := content.(type) {
+	case string:
+		return value, nil
+	case []any:
+		parts := make([]string, 0, len(value))
+		images := make([]string, 0)
+		for _, part := range value {
+			row, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch row["type"] {
+			case "text":
+				text, ok := row["text"].(string)
+				if ok && text != "" {
+					parts = append(parts, text)
+				}
+			case "image_url":
+				image, _ := row["image_url"].(map[string]any)
+				dataURL, _ := image["url"].(string)
+				if _, payload, ok := strings.Cut(dataURL, ","); ok && payload != "" {
+					images = append(images, payload)
+				}
+			}
+		}
+		return strings.Join(parts, "\n\n"), images
 	default:
-		return ""
+		return "", nil
 	}
 }
 

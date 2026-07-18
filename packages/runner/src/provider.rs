@@ -26,6 +26,13 @@ pub struct ProviderResult {
     pub truncated_tool_arguments: bool,
 }
 
+pub struct ProviderRequestOptions {
+    pub max_output_tokens: u64,
+    pub include_tools: bool,
+    pub require_tool_call: bool,
+    pub suppress_output: bool,
+}
+
 fn client_for(provider: &ProviderConfig) -> Result<Client, String> {
     let mut builder = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -242,14 +249,7 @@ fn process_openai_payload(
     suppress_output: bool,
 ) {
     if let Some(usage) = payload.get("usage") {
-        result.prompt_tokens = usage
-            .get("prompt_tokens")
-            .and_then(Value::as_u64)
-            .or(result.prompt_tokens);
-        result.completion_tokens = usage
-            .get("completion_tokens")
-            .and_then(Value::as_u64)
-            .or(result.completion_tokens);
+        update_usage(result, usage);
     }
     let choice = payload
         .get("choices")
@@ -277,6 +277,28 @@ fn process_openai_payload(
     append_openai_delta(result, delta, partial);
 }
 
+fn update_usage(result: &mut ProviderResult, usage: &Value) {
+    let total = usage.get("total_tokens").and_then(Value::as_u64);
+    let prompt = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            total
+                .zip(result.completion_tokens)
+                .map(|(total, completion)| total.saturating_sub(completion))
+        });
+    let completion = usage
+        .get("completion_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            total
+                .zip(prompt.or(result.prompt_tokens))
+                .map(|(total, prompt)| total.saturating_sub(prompt))
+        });
+    result.prompt_tokens = prompt.or(result.prompt_tokens);
+    result.completion_tokens = completion.or(result.completion_tokens);
+}
+
 fn complete_utf8_lines(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<Vec<String>, String> {
     buffer.extend_from_slice(chunk);
     let mut lines = Vec::new();
@@ -293,6 +315,81 @@ fn complete_utf8_lines(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<Vec<String>
         );
     }
     Ok(lines)
+}
+
+fn sse_data(line: &str) -> Option<&str> {
+    line.strip_prefix("data:")
+        .map(|data| data.strip_prefix(' ').unwrap_or(data))
+}
+
+fn veil_failure_message(status: Option<u16>, payload: Option<&Value>) -> String {
+    let code = payload
+        .and_then(|value| value.get("code"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let upstream_status = payload
+        .and_then(|value| value.get("upstreamStatus"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= u16::MAX as u64);
+    let description = match code {
+        "model_service_rejected" => "the model service rejected the request",
+        "model_service_timeout" => "the model service timed out",
+        "model_service_invalid_response" => "the model service returned an invalid response",
+        "model_service_stream_incomplete" => "the model service stream ended unexpectedly",
+        "model_service_unavailable" => "the model service could not be reached",
+        _ => "Veil could not complete the model request",
+    };
+    let mut details = Vec::new();
+    if let Some(upstream_status) = upstream_status {
+        details.push(format!("upstream status {upstream_status}"));
+    }
+    if let Some(status) = status {
+        details.push(format!("Veil status {status}"));
+    }
+    if details.is_empty() {
+        description.to_owned()
+    } else {
+        format!("{description} ({})", details.join(", "))
+    }
+}
+
+fn veil_stream_error(line: &str) -> Option<String> {
+    let data = sse_data(line)?;
+    let payload = serde_json::from_str::<Value>(data).ok()?;
+    payload.get("error")?;
+    Some(format!(
+        "model request failed: {}",
+        veil_failure_message(None, Some(&payload))
+    ))
+}
+
+fn process_openai_line(
+    line: &str,
+    result: &mut ProviderResult,
+    partial: &mut BTreeMap<usize, (String, String, String)>,
+    sink: &EventSink,
+    session: &Session,
+    answer_started: &mut bool,
+    suppress_output: bool,
+) -> bool {
+    let Some(data) = sse_data(line) else {
+        return false;
+    };
+    if data.trim() == "[DONE]" {
+        return true;
+    }
+    if let Ok(payload) = serde_json::from_str::<Value>(data) {
+        process_openai_payload(
+            payload,
+            result,
+            partial,
+            sink,
+            session,
+            answer_started,
+            suppress_output,
+        );
+    }
+    false
 }
 
 fn normalize_tool_call_ids(calls: &mut [ToolCall]) {
@@ -415,10 +512,14 @@ pub async fn stream_provider_chat(
     sink: &EventSink,
     messages: &[Value],
     tools: &[Value],
-    include_tools: bool,
-    require_tool_call: bool,
-    suppress_output: bool,
+    options: ProviderRequestOptions,
 ) -> Result<ProviderResult, String> {
+    let ProviderRequestOptions {
+        max_output_tokens,
+        include_tools,
+        require_tool_call,
+        suppress_output,
+    } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
     }
@@ -444,8 +545,12 @@ pub async fn stream_provider_chat(
     if ollama {
         object.insert(
             "options".into(),
-            json!({ "num_ctx": session.config.context_length }),
+            json!({ "num_ctx": session.config.context_length, "num_predict": max_output_tokens }),
         );
+    } else if veil {
+        object.insert("max_output_tokens".into(), Value::from(max_output_tokens));
+    } else {
+        object.insert("max_tokens".into(), Value::from(max_output_tokens));
     }
     if veil && !session.config.skills.is_empty() {
         object.insert("skills".into(), Value::Array(session.config.skills.iter().map(|skill| json!({ "id":skill.id, "name":skill.name, "description":skill.description, "source":skill.source })).collect()));
@@ -491,10 +596,10 @@ pub async fn stream_provider_chat(
     let status = response.status();
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
+        let payload = serde_json::from_str::<Value>(&text).ok();
         return Err(format!(
-            "model request failed: {} {}",
-            status.as_u16(),
-            text.chars().take(400).collect::<String>()
+            "model request failed: {}",
+            veil_failure_message(Some(status.as_u16()), payload.as_ref())
         ));
     }
     let action = response
@@ -535,39 +640,55 @@ pub async fn stream_provider_chat(
                         suppress_output,
                     );
                 }
-            } else if let Some(data) = line.strip_prefix("data: ") {
-                if data.trim() == "[DONE]" {
-                    completed = true;
-                    continue;
+            } else {
+                if let Some(error) = veil_stream_error(&line) {
+                    return Err(error);
                 }
-                if let Ok(payload) = serde_json::from_str::<Value>(data) {
-                    process_openai_payload(
-                        payload,
-                        &mut result,
-                        &mut partial,
-                        sink,
-                        session,
-                        &mut answer_started,
-                        suppress_output,
-                    );
+                if process_openai_line(
+                    &line,
+                    &mut result,
+                    &mut partial,
+                    sink,
+                    session,
+                    &mut answer_started,
+                    suppress_output,
+                ) {
+                    completed = true;
                 }
             }
         }
     }
     let trailing = std::str::from_utf8(&buffer)
         .map_err(|_| "model stream ended with invalid UTF-8".to_owned())?;
-    if ollama
-        && !trailing.trim().is_empty()
-        && let Ok(payload) = serde_json::from_str::<Value>(trailing.trim())
-    {
-        process_ollama_payload(
-            payload,
-            &mut result,
-            sink,
-            session,
-            &mut answer_started,
-            suppress_output,
-        );
+    if !trailing.trim().is_empty() {
+        if ollama {
+            if let Ok(payload) = serde_json::from_str::<Value>(trailing.trim()) {
+                process_ollama_payload(
+                    payload,
+                    &mut result,
+                    sink,
+                    session,
+                    &mut answer_started,
+                    suppress_output,
+                );
+            }
+        } else {
+            let trailing = trailing.trim_end_matches(['\r', '\n']);
+            if let Some(error) = veil_stream_error(trailing) {
+                return Err(error);
+            }
+            if process_openai_line(
+                trailing,
+                &mut result,
+                &mut partial,
+                sink,
+                session,
+                &mut answer_started,
+                suppress_output,
+            ) {
+                completed = true;
+            }
+        }
     }
     if !completed {
         return Err("model stream ended before the completion marker".into());
@@ -638,6 +759,54 @@ mod tests {
             [source.trim_end()]
         );
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn sse_data_accepts_optional_space_after_field_name() {
+        assert_eq!(sse_data("data: [DONE]"), Some("[DONE]"));
+        assert_eq!(sse_data("data:[DONE]"), Some("[DONE]"));
+        assert_eq!(sse_data("event: error"), None);
+    }
+
+    #[test]
+    fn veil_failures_are_specific_without_echoing_untrusted_response_bodies() {
+        let payload = json!({
+            "error": "provider leaked prompt content",
+            "code": "model_service_rejected",
+            "upstreamStatus": 500
+        });
+        let message = veil_failure_message(Some(502), Some(&payload));
+        assert_eq!(
+            message,
+            "the model service rejected the request (upstream status 500, Veil status 502)"
+        );
+        assert!(!message.contains("leaked"));
+
+        let stream =
+            "data: {\"error\":\"hidden detail\",\"code\":\"model_service_stream_incomplete\"}";
+        assert_eq!(
+            veil_stream_error(stream).as_deref(),
+            Some("model request failed: the model service stream ended unexpectedly")
+        );
+    }
+
+    #[test]
+    fn total_only_usage_completes_a_partial_provider_measurement() {
+        let mut result = ProviderResult {
+            prompt_tokens: Some(1200),
+            ..ProviderResult::default()
+        };
+        update_usage(&mut result, &json!({"total_tokens": 1300}));
+        assert_eq!(result.prompt_tokens, Some(1200));
+        assert_eq!(result.completion_tokens, Some(100));
+
+        let mut result = ProviderResult {
+            completion_tokens: Some(100),
+            ..ProviderResult::default()
+        };
+        update_usage(&mut result, &json!({"total_tokens": 1300}));
+        assert_eq!(result.prompt_tokens, Some(1200));
+        assert_eq!(result.completion_tokens, Some(100));
     }
 
     #[test]

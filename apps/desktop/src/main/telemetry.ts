@@ -276,6 +276,7 @@ function contextTriggerTelemetry(task: TaskRecord) {
   let above90 = false;
   for (const event of task.events ?? []) {
     if (event.type !== "context.usage" || event.contextLength <= 0) continue;
+    if (event.phase === "preflight" || event.source === "heuristic") continue;
     const ratio = event.estimatedTokens / event.contextLength;
     if (ratio >= 0.75 && !above75) {
       triggers.push({ threshold: 75, at: event.at, estimatedTokens: event.estimatedTokens, contextLength: event.contextLength });

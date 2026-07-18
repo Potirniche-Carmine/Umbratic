@@ -1,26 +1,53 @@
 ---
 name: Python
-description: Use for Python scripts, packages, tests, virtual environments, dependency setup, and Python-based verification.
+description: Create, edit, run, test, or debug Python scripts and projects, including interpreter discovery, virtual environments, dependencies, pyproject.toml, requirements files, pytest, and Python-based artifact generation.
 ---
 
 # Python
 
-Use this skill when the task involves Python source, packages, tests, virtual environments, `pyproject.toml`, `requirements.txt`, `pytest`, or Python-based artifact generation.
+Use structured workspace tools for every requested file change or verification. Prose, code fences, and proposed commands do not create or run anything.
 
-## Runtime Contract
+## Choose the Smallest Runtime
 
-- Keep Python work inside the current workspace. Prefer a workspace `.venv` and do not rely on shell activation.
-- Prefer `uv` when it is available. Check with `uv --version` before choosing Python setup commands.
-- When `uv` exists, use `uv python install 3.12` only if a suitable Python is missing, then `uv venv .venv --python 3.12`.
-- Prefer verification with `uv run python <script.py>`, `uv run pytest`, or the direct `.venv` interpreter. Bare `python`, `python3`, and `py` are allowed; if a bare interpreter command fails because of interpreter discovery, environment, or dependency issues, retry it through `uv` before treating Python as unavailable.
-- If dependencies are needed, install them into the workspace environment with `uv add`, `uv pip install`, or `uv run --with <package> ...`.
-- If `uv` is unavailable, use an existing workspace-managed environment or create `.venv` with an available managed interpreter. State the capability gap when it affects verification.
-- Stop after a small number of distinct failed runtime attempts. Report the commands and errors instead of looping indefinitely.
+1. Inspect nearby `pyproject.toml`, lockfiles, requirements files, test config, README instructions, and an existing `.venv` when they can affect the task.
+2. For a standalone standard-library script, write the file first and use an available interpreter directly. Do not create a virtual environment just to run one dependency-free file.
+3. For an existing project, reuse its documented command or workspace environment. Do not replace its package manager or lockfile.
+4. For new dependencies or an isolated project, check `uv --version` before using `uv`. If available, prefer a workspace `.venv` and commands such as `uv venv .venv --python 3.12`, `uv add <package>`, and `uv run pytest`.
+5. If `uv` is unavailable, check a likely interpreter (`python3 --version`, then `python --version` when needed) and reuse the exact command that succeeds. Create `.venv` only when isolation or dependencies justify it.
+
+Never rely on shell activation. Use `uv run ...`, `.venv/bin/python` (Windows: `.venv\\Scripts\\python.exe`), or the discovered interpreter explicitly.
 
 ## Workflow
 
-1. Inspect the project files that define the Python environment, such as `pyproject.toml`, `requirements.txt`, lockfiles, test config, and nearby README instructions.
-2. Reuse the project's existing commands when they are clear and safe.
-3. Make the smallest focused code or test change that answers the request.
-4. Run the narrowest relevant Python check first, then broaden only when the change warrants it.
-5. State exactly what was verified and any environment limitation that prevented a stronger check.
+1. Inspect only the environment and source files relevant to the request.
+2. Make the smallest focused change.
+3. Run the narrowest meaningful check, then broader project tests only when warranted.
+4. Read the actual exit code and output before deciding the next action.
+5. State the exact file changed and command that passed. Never claim verification from expected output.
+
+## Examples
+
+Standalone script with no dependencies:
+
+```text
+write bubble_sort.py -> command python3 bubble_sort.py
+```
+
+Existing project environment:
+
+```text
+command .venv/bin/python -m pytest tests/test_sort.py -q
+```
+
+Dependency needed and `uv --version` succeeded:
+
+```text
+command uv add requests -> command uv run python fetch_data.py
+```
+
+## Recover from Failures
+
+- Use the exact error to make one materially different correction. If `uv` is not found, stop issuing `uv` commands and try interpreter discovery; do not abandon the requested file change.
+- If an interpreter works but an import is missing, inspect the project dependency files before installing anything.
+- Do not repeatedly recreate environments, reinstall the same package, or simulate the next tool call in a code block.
+- After a small number of distinct runtime failures, preserve completed file work and report the commands and errors precisely.

@@ -28,7 +28,11 @@ export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteCon
   };
 }
 
-export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: LocalModelInfo): Record<string, unknown> {
+export function buildUmbraticRunnerConfig(
+  task: TaskRecord,
+  selectedModel: LocalModelInfo,
+  attachmentDirectory?: string,
+): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   const endpointSettings = readModelEndpointSettings();
   const localVeil = endpointSettings.mode === "local" ? currentLocalVeilConnection() : null;
@@ -38,8 +42,9 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     taskId: task.id,
     cwd: task.worktreePath,
     contextLength: selectedModel.contextLength ?? readContextLengthSetting(),
-    maxResponseTokens: 4_096,
-    protectedPromptReserveTokens: 4_096,
+    maxResponseTokens: 8_192,
+    protectedPromptReserveTokens: 2_048,
+    attachmentDirectory,
     workspaceMode: task.workspaceMode,
     modelBoundary: "managed",
     skills: enabledPromptSkills().map((skill) => ({
@@ -183,6 +188,7 @@ export async function runnerRequest<T>(
 export async function startUmbraticRunnerServer(
   task: TaskRecord,
   model: LocalModelInfo,
+  attachmentDirectory?: string,
 ): Promise<RunnerProcess> {
   const binaryPath = runnerBinaryPath();
   if (!binaryPath) {
@@ -190,7 +196,7 @@ export async function startUmbraticRunnerServer(
   }
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
-  const config = buildUmbraticRunnerConfig(task, model);
+  const config = buildUmbraticRunnerConfig(task, model, attachmentDirectory);
   const diagnostics = isRecord(config.diagnostics) && typeof config.diagnostics.logPath === "string"
     ? { diagnosticLogPath: config.diagnostics.logPath }
     : {};

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,18 +14,23 @@ import (
 )
 
 const (
-	MaxMessages     = 64
-	MaxMessageBytes = 64 * 1024
+	MaxMessages         = 64
+	MaxMessageBytes     = 256 * 1024
+	MaxImageBytes       = 10 * 1024 * 1024
+	MaxImagesPerMessage = 12
+	MaxOutputTokens     = 32 * 1024
+	MaxSkills           = 128
 )
 
 var ErrRequestTooLarge = errors.New("request body too large")
 
 type ChatInput struct {
-	Messages   []model.Message
-	Stream     bool
-	Tools      any
-	ToolChoice any
-	Skills     []prompts.SkillMetadata
+	Messages        []model.Message
+	Stream          bool
+	Tools           any
+	ToolChoice      any
+	Skills          []prompts.SkillMetadata
+	MaxOutputTokens int
 }
 
 const (
@@ -130,12 +136,13 @@ func WorkspaceActionRequirement(messages []model.Message) string {
 }
 
 type chatRequest struct {
-	Input      string                  `json:"input"`
-	Messages   []model.Message         `json:"messages"`
-	Stream     bool                    `json:"stream"`
-	Tools      any                     `json:"tools"`
-	ToolChoice any                     `json:"tool_choice"`
-	Skills     []prompts.SkillMetadata `json:"skills"`
+	Input           string                  `json:"input"`
+	Messages        []model.Message         `json:"messages"`
+	Stream          bool                    `json:"stream"`
+	Tools           any                     `json:"tools"`
+	ToolChoice      any                     `json:"tool_choice"`
+	Skills          []prompts.SkillMetadata `json:"skills"`
+	MaxOutputTokens int                     `json:"max_output_tokens"`
 }
 
 func DecodeChatInput(r io.Reader) (ChatInput, error) {
@@ -153,7 +160,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "input", "messages", "stream", "tools", "tool_choice", "skills":
+		case "input", "messages", "stream", "tools", "tool_choice", "skills", "max_output_tokens":
 		case "model", "system":
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		default:
@@ -177,6 +184,9 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	if len(req.Messages) > MaxMessages {
 		return ChatInput{}, fmt.Errorf("too many messages; maximum is %d", MaxMessages)
 	}
+	if req.MaxOutputTokens < 0 || req.MaxOutputTokens > MaxOutputTokens {
+		return ChatInput{}, fmt.Errorf("max_output_tokens must be between 1 and %d when set", MaxOutputTokens)
+	}
 	for i, message := range req.Messages {
 		if message.Role != "user" && message.Role != "assistant" && message.Role != "tool" {
 			return ChatInput{}, fmt.Errorf("message %d has unsupported role", i)
@@ -186,8 +196,8 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 				return ChatInput{}, fmt.Errorf("message %d content is required", i)
 			}
 		}
-		if encodedSize(message.Content) > MaxMessageBytes {
-			return ChatInput{}, fmt.Errorf("message %d is too large", i)
+		if err := validateMessageContent(message.Content); err != nil {
+			return ChatInput{}, fmt.Errorf("message %d %s", i, err)
 		}
 	}
 	skills, err := skillCatalog(req.Skills)
@@ -196,17 +206,21 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 
 	return ChatInput{
-		Messages:   req.Messages,
-		Stream:     req.Stream,
-		Tools:      req.Tools,
-		ToolChoice: req.ToolChoice,
-		Skills:     skills,
+		Messages:        req.Messages,
+		Stream:          req.Stream,
+		Tools:           req.Tools,
+		ToolChoice:      req.ToolChoice,
+		Skills:          skills,
+		MaxOutputTokens: req.MaxOutputTokens,
 	}, nil
 }
 
 func skillCatalog(values []prompts.SkillMetadata) ([]prompts.SkillMetadata, error) {
 	if len(values) == 0 {
 		return nil, nil
+	}
+	if len(values) > MaxSkills {
+		return nil, fmt.Errorf("too many skills; maximum is %d", MaxSkills)
 	}
 	result := make([]prompts.SkillMetadata, 0, len(values))
 	seen := make(map[string]bool, len(values))
@@ -307,4 +321,70 @@ func encodedSize(value any) int {
 		return MaxMessageBytes + 1
 	}
 	return encoded.Len() - 1
+}
+
+func validateMessageContent(content any) error {
+	parts, structured := content.([]any)
+	if !structured {
+		if encodedSize(content) > MaxMessageBytes {
+			return errors.New("is too large")
+		}
+		return nil
+	}
+
+	textOnly := make([]any, 0, len(parts))
+	imageCount := 0
+	for _, part := range parts {
+		row, ok := part.(map[string]any)
+		if !ok || row["type"] != "image_url" {
+			textOnly = append(textOnly, part)
+			continue
+		}
+		imageCount++
+		if imageCount > MaxImagesPerMessage {
+			return fmt.Errorf("contains too many images; maximum is %d", MaxImagesPerMessage)
+		}
+		image, ok := row["image_url"].(map[string]any)
+		if !ok || len(row) != 2 {
+			return errors.New("contains an invalid image")
+		}
+		for key := range image {
+			if key != "url" && key != "detail" {
+				return errors.New("contains an invalid image")
+			}
+		}
+		if detail, exists := image["detail"]; exists && detail != "auto" && detail != "low" && detail != "high" {
+			return errors.New("contains an invalid image detail")
+		}
+		dataURL, _ := image["url"].(string)
+		if err := validateImageDataURL(dataURL); err != nil {
+			return err
+		}
+		textOnly = append(textOnly, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": "[image]"},
+		})
+	}
+	if encodedSize(textOnly) > MaxMessageBytes {
+		return errors.New("text content is too large")
+	}
+	return nil
+}
+
+func validateImageDataURL(value string) error {
+	header, payload, ok := strings.Cut(value, ",")
+	if !ok || !strings.HasPrefix(strings.ToLower(header), "data:image/") || !strings.HasSuffix(strings.ToLower(header), ";base64") {
+		return errors.New("contains an invalid image data URL")
+	}
+	if base64.StdEncoding.DecodedLen(len(payload)) > MaxImageBytes {
+		return fmt.Errorf("contains an image larger than %d bytes", MaxImageBytes)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return errors.New("contains invalid base64 image data")
+	}
+	if len(decoded) > MaxImageBytes {
+		return fmt.Errorf("contains an image larger than %d bytes", MaxImageBytes)
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, Mutex, OnceLock},
@@ -30,6 +31,7 @@ use crate::{
 
 const MAX_READ_OUTPUT_BYTES: usize = 60 * 1024;
 const MAX_TEXT_FILE_BYTES: u64 = 512 * 1024;
+const MAX_ATTACHMENT_CHUNK_BYTES: usize = 12 * 1024;
 static RECENT_READS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
 type PatchTransaction = (HashMap<PathBuf, Option<String>>, Vec<String>);
 
@@ -144,6 +146,7 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
         ],
         "command" => &["command", "timeoutMs"],
         "read_skill" => &["skillId", "resource", "offset", "limit"],
+        "read_attachment" => &["attachmentId", "offset", "limit"],
         "retrieve_context" => &["hash", "offset", "limit"],
         _ => return Ok(()),
     };
@@ -161,6 +164,7 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
         "search" => vec![string_arg(input, &["query"])],
         "command" => vec![string_arg(input, &["command"])],
         "read_skill" => vec![string_arg(input, &["skillId"])],
+        "read_attachment" => vec![string_arg(input, &["attachmentId"])],
         "retrieve_context" => vec![string_arg(input, &["hash"])],
         "workspace_graph" => vec![string_arg(input, &["action"])],
         "edit"
@@ -177,6 +181,13 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
     };
     if required.iter().any(|value| value.is_empty()) {
         return Err(format!("{name} is missing a required string argument"));
+    }
+    if name == "read_attachment"
+        && ["offset", "limit"].iter().any(|key| {
+            input.contains_key(*key) && input.get(*key).and_then(Value::as_u64).is_none()
+        })
+    {
+        return Err("read_attachment offset and limit must be non-negative integers".into());
     }
     if name == "write" && !input.get("content").is_some_and(Value::is_string) {
         return Err("write argument content must be a string".into());
@@ -331,6 +342,86 @@ async fn read_tool(session: &Session, input: &Map<String, Value>) -> Result<Tool
         .collect::<Vec<_>>()
         .join("\n");
     Ok(ToolResult::success(relative, clip_read_output(output)))
+}
+
+fn read_attachment_tool(
+    session: &Session,
+    input: &Map<String, Value>,
+) -> Result<ToolResult, String> {
+    let attachment_id = string_arg(input, &["attachmentId"]);
+    if attachment_id.is_empty()
+        || attachment_id == "."
+        || attachment_id == ".."
+        || attachment_id.contains('/')
+        || attachment_id.contains('\\')
+    {
+        return Err("read_attachment requires a valid attachmentId".into());
+    }
+    let configured = session
+        .config
+        .attachment_directory
+        .as_ref()
+        .ok_or_else(|| "No chat attachment directory is configured for this session.".to_owned())?;
+    let root = configured
+        .canonicalize()
+        .map_err(|_| "Chat attachment directory is unavailable.".to_owned())?;
+    let target = root.join(&attachment_id);
+    let canonical = target
+        .canonicalize()
+        .map_err(|_| format!("Attachment {attachment_id} is unavailable."))?;
+    if !canonical.starts_with(&root) || canonical.parent() != Some(root.as_path()) {
+        return Err("Refusing attachment path outside the current chat.".into());
+    }
+    let metadata = fs::metadata(&canonical).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("Attachment is not a file.".into());
+    }
+    let total = metadata.len() as usize;
+    let requested_offset = input
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(total as u64) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(MAX_ATTACHMENT_CHUNK_BYTES as u64)
+        .clamp(1, MAX_ATTACHMENT_CHUNK_BYTES as u64) as usize;
+    let mut file = fs::File::open(&canonical).map_err(|error| error.to_string())?;
+    file.seek(SeekFrom::Start(requested_offset as u64))
+        .map_err(|error| error.to_string())?;
+    let mut bytes = vec![0u8; limit.saturating_add(4)];
+    let read = file.read(&mut bytes).map_err(|error| error.to_string())?;
+    bytes.truncate(read);
+    let mut leading = 0usize;
+    while leading < bytes.len() && bytes[leading] & 0b1100_0000 == 0b1000_0000 {
+        leading += 1;
+    }
+    let actual_offset = requested_offset + leading;
+    let mut end = leading + limit.min(bytes.len().saturating_sub(leading));
+    if let Err(error) = std::str::from_utf8(&bytes[leading..end]) {
+        if error.error_len().is_some() {
+            return Err("Refusing to read a non-UTF-8 attachment.".into());
+        }
+        end = leading + error.valid_up_to();
+    }
+    if bytes[leading..end].contains(&0) {
+        return Err("Refusing to read a binary attachment.".into());
+    }
+    let content = std::str::from_utf8(&bytes[leading..end])
+        .map_err(|_| "Refusing to read a non-UTF-8 attachment.".to_owned())?;
+    let next_offset = actual_offset + content.len();
+    let status = if next_offset < total {
+        format!("partial; continue with offset {next_offset}")
+    } else {
+        "complete".to_owned()
+    };
+    Ok(ToolResult::success(
+        format!("attachment {attachment_id}"),
+        format!(
+            "Attachment: {attachment_id}\nBytes shown: {actual_offset}-{next_offset} of {total}\nRead status: {status}\n\n{content}"
+        ),
+    ))
 }
 
 async fn write_tool(
@@ -1279,6 +1370,19 @@ pub async fn enabled_tool_specs(session: &Session, include_tools: bool) -> Vec<V
     if !session.config.skills.is_empty() {
         specs.push(tool_definition("read_skill", "Read complete instructions for one enabled skill before applying it.", json!({ "skillId":{"type":"string"}, "resource":{"type":"string"}, "offset":{"type":"number"}, "limit":{"type":"number"} }), &["skillId"]));
     }
+    if session
+        .config
+        .attachment_directory
+        .as_ref()
+        .is_some_and(|directory| directory.is_dir())
+    {
+        specs.push(tool_definition(
+            "read_attachment",
+            "Read a bounded byte range from a complete text attachment in the current chat. For whole-document work, continue from each reported offset until Read status is complete.",
+            json!({ "attachmentId":{"type":"string"}, "offset":{"type":"number"}, "limit":{"type":"number"} }),
+            &["attachmentId"],
+        ));
+    }
     if session.context_store.lock().await.has_entries() {
         specs.push(tool_definition("retrieve_context", "Retrieve a bounded window of exact compacted local tool output.", json!({ "hash":{"type":"string"}, "offset":{"type":"number"}, "limit":{"type":"number"} }), &["hash"]));
     }
@@ -1302,6 +1406,7 @@ pub async fn execute_tool(
     let summary = match parsed_args.as_ref() {
         Ok(args) => match name.as_str() {
             "read" => format!("read {}", string_arg(args, &["filePath", "path"])),
+            "read_attachment" => format!("read attachment {}", string_arg(args, &["attachmentId"])),
             "write" => format!("write {}", string_arg(args, &["filePath", "path"])),
             "edit" => format!("edit {}", string_arg(args, &["filePath", "path"])),
             "search" => format!("search {}", string_arg(args, &["query"])),
@@ -1365,7 +1470,10 @@ pub async fn execute_tool(
             "Tool call was aborted.".into(),
         );
     }
-    let internal = matches!(name.as_str(), "read_skill" | "retrieve_context");
+    let internal = matches!(
+        name.as_str(),
+        "read_skill" | "read_attachment" | "retrieve_context"
+    );
     if !internal
         && !session
             .config
@@ -1389,6 +1497,7 @@ pub async fn execute_tool(
     sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"passed", "at":now_iso() }));
     let result = match name.as_str() {
         "read" => read_tool(&session, &args).await,
+        "read_attachment" => read_attachment_tool(&session, &args),
         "write" => write_tool(&session, &sink, &args, &permissions).await,
         "edit" => edit_tool(&session, &sink, &args, &permissions).await,
         "search" => search_tool(&session, &args).await,
@@ -1667,6 +1776,61 @@ mod tests {
         .await;
         assert_eq!(result.status, "policy_blocked");
         assert!(!result.output.contains("TOP_SECRET_CONTENT"));
+    }
+
+    #[tokio::test]
+    async fn attachment_reader_retrieves_every_utf8_byte_and_rejects_escape_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let attachments = tempfile::tempdir().unwrap();
+        let content = format!("BEGIN\n{}\nEND", "中🙂 attachment content ".repeat(120));
+        std::fs::write(attachments.path().join("plan.md"), &content).unwrap();
+        let mut config = (*crate::session::test_config(workspace.path())).clone();
+        config.attachment_directory = Some(attachments.path().to_path_buf());
+        let session = Session {
+            id: "session".into(),
+            task_id: "task".into(),
+            config: Arc::new(config),
+            messages: tokio::sync::Mutex::new(Vec::new()),
+            context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
+            workspace_graph: None,
+            aborted: std::sync::atomic::AtomicBool::new(false),
+        };
+
+        let specs = enabled_tool_specs(&session, true).await;
+        assert!(
+            specs
+                .iter()
+                .any(|spec| spec["function"]["name"] == "read_attachment")
+        );
+
+        let mut offset = 0usize;
+        let mut reconstructed = String::new();
+        loop {
+            let args = json!({"attachmentId":"plan.md","offset":offset,"limit":31})
+                .as_object()
+                .unwrap()
+                .clone();
+            let result = read_attachment_tool(&session, &args).unwrap();
+            let (_, chunk) = result.output.split_once("\n\n").unwrap();
+            reconstructed.push_str(chunk);
+            let Some(next) = result
+                .output
+                .lines()
+                .find_map(|line| line.strip_prefix("Read status: partial; continue with offset "))
+            else {
+                assert!(result.output.contains("Read status: complete"));
+                break;
+            };
+            let next = next.parse::<usize>().unwrap();
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(reconstructed, content);
+
+        for invalid in ["../plan.md", "nested/plan.md", ".."] {
+            let args = json!({"attachmentId":invalid}).as_object().unwrap().clone();
+            assert!(read_attachment_tool(&session, &args).is_err());
+        }
     }
 
     async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {

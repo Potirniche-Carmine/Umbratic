@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -98,6 +100,17 @@ func TestDecodeChatInputRejectsInvalidSkills(t *testing.T) {
 	}
 }
 
+func TestDecodeChatInputBoundsSkillCatalogSize(t *testing.T) {
+	skills := make([]string, MaxSkills+1)
+	for index := range skills {
+		skills[index] = fmt.Sprintf(`{"id":"skill-%d","name":"Skill","source":"local"}`, index)
+	}
+	_, err := DecodeChatInput(strings.NewReader(`{"input":"hello","skills":[` + strings.Join(skills, ",") + `]}`))
+	if err == nil {
+		t.Fatal("expected oversized skill catalog to be rejected")
+	}
+}
+
 func TestDecodeChatInputRejectsInvalidJSON(t *testing.T) {
 	_, err := DecodeChatInput(strings.NewReader(`{"input":`))
 	if err == nil {
@@ -136,7 +149,7 @@ func TestDecodeChatInputValidatesMessageContentAndCount(t *testing.T) {
 		t.Fatal("expected blank structured user content rejection")
 	}
 
-	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`))
+	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,YWJj"}}]}]}`))
 	if err != nil {
 		t.Fatalf("expected image content part to be accepted: %v", err)
 	}
@@ -156,6 +169,36 @@ func TestDecodeChatInputValidatesMessageContentAndCount(t *testing.T) {
 	_, err = DecodeChatInput(strings.NewReader(tooMany.String()))
 	if err == nil {
 		t.Fatal("expected too many messages error")
+	}
+}
+
+func TestDecodeChatInputValidatesOutputAllowance(t *testing.T) {
+	input, err := DecodeChatInput(strings.NewReader(`{"input":"hello","max_output_tokens":2048}`))
+	if err != nil || input.MaxOutputTokens != 2048 {
+		t.Fatalf("unexpected result: %#v %v", input, err)
+	}
+	for _, value := range []string{"-1", "32769", "1.5"} {
+		_, err := DecodeChatInput(strings.NewReader(`{"input":"hello","max_output_tokens":` + value + `}`))
+		if err == nil {
+			t.Fatalf("expected %s to be rejected", value)
+		}
+	}
+}
+
+func TestDecodeChatInputMeasuresImageBytesSeparatelyFromText(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("i", 128*1024)))
+	body := `{"messages":[{"role":"user","content":[{"type":"text","text":"describe this"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + payload + `"}}]}]}`
+	if _, err := DecodeChatInput(strings.NewReader(body)); err != nil {
+		t.Fatalf("expected bounded image to be accepted independently of text: %v", err)
+	}
+
+	tooMany := make([]string, MaxImagesPerMessage+1)
+	for index := range tooMany {
+		tooMany[index] = `{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}`
+	}
+	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[` + strings.Join(tooMany, ",") + `]}]}`))
+	if err == nil {
+		t.Fatal("expected excessive image count to be rejected")
 	}
 }
 

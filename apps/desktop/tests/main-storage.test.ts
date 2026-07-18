@@ -361,6 +361,14 @@ test("local diagnostics report logical size, exportable records, and clear indep
 
   storage.appendLocalDiagnostic({
     at: "2026-01-01T00:00:00.000Z",
+    level: "info",
+    source: "desktop",
+    event: "permission.requested",
+    taskId: "task-1",
+    data: { kind: "edit" },
+  });
+  storage.appendLocalDiagnostic({
+    at: "2026-01-01T00:00:00.000Z",
     level: "error",
     source: "desktop",
     event: "tool.failed",
@@ -395,6 +403,28 @@ test("local diagnostics report logical size, exportable records, and clear indep
   assert.deepEqual(plain(storage.clearLocalDiagnostics()), { bytes: 0, entries: 0 });
   assert.deepEqual(plain(storage.readLocalDiagnostics()), []);
   assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
+});
+
+test("local diagnostics migration removes previously stored debug and info records", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-diagnostics-migration-"));
+  const storage = loadStorage(userData);
+
+  storage.appendLocalDiagnostic({
+    level: "warn",
+    source: "desktop",
+    event: "command.finished",
+    message: "Command failed.",
+  });
+  withDb(appDbPath(userData), (db) => {
+    db.prepare(`
+      INSERT INTO diagnostic_logs (at, level, source, event, task_id, message, data)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("2026-01-01T00:00:00.000Z", "info", "desktop", "permission.requested", null, null, "{}");
+    db.exec("PRAGMA user_version = 2;");
+  });
+
+  assert.deepEqual(plain(storage.readLocalDiagnostics()).map((entry) => entry.level), ["warn"]);
+  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 3);
 });
 
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {

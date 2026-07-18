@@ -84,14 +84,15 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     worktreePath: "C:/repo/.umbratic/worktree",
   };
 
-  const config = adapter.buildUmbraticRunnerConfig(task, model);
+  const config = adapter.buildUmbraticRunnerConfig(task, model, "C:/app-data/chat-attachments/chat-1");
   assert.equal(config.taskId, "task-1");
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
   assert.equal(config.modelBoundary, "managed");
   assert.equal(config.permissionMode, "normal");
   assert.equal(config.contextLength, 128000);
-  assert.equal(config.maxResponseTokens, 4096);
-  assert.equal(config.protectedPromptReserveTokens, 4096);
+  assert.equal(config.maxResponseTokens, 8192);
+  assert.equal(config.protectedPromptReserveTokens, 2048);
+  assert.equal(config.attachmentDirectory, "C:/app-data/chat-attachments/chat-1");
   assert.deepEqual(plain(config.enabledTools), ["read"]);
   assert.deepEqual(plain(config.diagnostics), { enabled: false });
   assert.deepEqual(plain(config.capabilities), [
@@ -209,5 +210,3 @@ test("runnerBinaryPath prefers the packaged runner resource", () => {
     }
   }
 });
-
-

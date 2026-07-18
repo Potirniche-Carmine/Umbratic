@@ -13,7 +13,8 @@ pub const RUNNER_TOOL_NAMES: [&str; 6] = [
     "command",
 ];
 const DEFAULT_CONTEXT_LENGTH: u64 = 64_000;
-const DEFAULT_RESERVED_TOKENS: u64 = 4_096;
+const DEFAULT_RESERVED_TOKENS: u64 = 8_192;
+const DEFAULT_PROTECTED_PROMPT_RESERVE_TOKENS: u64 = 2_048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +83,7 @@ pub struct RunnerConfig {
     pub context_length: u64,
     pub max_response_tokens: u64,
     pub protected_prompt_reserve_tokens: u64,
+    pub attachment_directory: Option<PathBuf>,
     pub workspace_mode: String,
     pub model_boundary: ModelBoundary,
     pub skills: Vec<RunnerSkillConfig>,
@@ -211,6 +213,7 @@ fn parse_skills(value: Option<&Value>) -> Vec<RunnerSkillConfig> {
         let Some(name) = optional_string(skill.get("name")) else {
             continue;
         };
+        let name = name.chars().take(160).collect::<String>();
         let Some(instruction_path) = optional_string(skill.get("instructionPath")) else {
             continue;
         };
@@ -223,13 +226,17 @@ fn parse_skills(value: Option<&Value>) -> Vec<RunnerSkillConfig> {
             RunnerSkillConfig {
                 id,
                 name,
-                description: optional_string(skill.get("description")).unwrap_or_default(),
+                description: optional_string(skill.get("description"))
+                    .unwrap_or_default()
+                    .chars()
+                    .take(1_000)
+                    .collect(),
                 source: source.to_owned(),
                 instruction_path: PathBuf::from(instruction_path),
             },
         );
     }
-    skills.into_values().collect()
+    skills.into_values().take(128).collect()
 }
 
 fn parse_diagnostics(value: Option<&Value>) -> DiagnosticsConfig {
@@ -376,8 +383,9 @@ pub fn load_runner_config() -> Result<RunnerConfig, String> {
         ),
         protected_prompt_reserve_tokens: positive_integer(
             config.get("protectedPromptReserveTokens"),
-            DEFAULT_RESERVED_TOKENS,
+            DEFAULT_PROTECTED_PROMPT_RESERVE_TOKENS,
         ),
+        attachment_directory: optional_string(config.get("attachmentDirectory")).map(PathBuf::from),
         workspace_mode:
             if config.get("workspaceMode").and_then(Value::as_str) == Some("worktree") {
                 "worktree"
@@ -491,6 +499,22 @@ mod tests {
         assert_eq!(skills[0].id, "valid");
         assert_eq!(skills[0].name, "Replacement");
         assert_eq!(skills[0].source, "system");
+
+        let many = (0..140)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("skill-{index}"),
+                    "name": "n".repeat(200),
+                    "description": "d".repeat(1_200),
+                    "source": "local",
+                    "instructionPath": format!("/{index}/SKILL.md")
+                })
+            })
+            .collect::<Vec<_>>();
+        let bounded = parse_skills(Some(&serde_json::Value::Array(many)));
+        assert_eq!(bounded.len(), 128);
+        assert_eq!(bounded[0].name.chars().count(), 160);
+        assert_eq!(bounded[0].description.chars().count(), 1_000);
     }
 
     #[test]

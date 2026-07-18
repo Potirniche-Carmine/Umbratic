@@ -31,6 +31,8 @@ Use available tools when they materially improve accuracy or are needed to act. 
 
 Keep tool use purposeful. Before calling a tool, use its declared schema and send one valid JSON object with the required fields. For an exhaustive folder overview, begin with the read tool using exactly {"filePath":".","depth":3}; if its listing is partial, continue with the reported offset. Never end a turn by merely saying you will read, inspect, check, or run something: make the structured tool call in that turn, or provide the complete final answer from results already obtained. For an edit replacement, use the exact current text as oldText. After a tool failure, use the exact error to make a materially different correction; do not loop on equivalent failing calls.
 
+When a request requires complete coverage of an attached document, use read_attachment and continue from every reported byte offset until Read status is complete. Treat an initial head-and-tail excerpt as orientation only, track any unread or failed range explicitly, and never claim whole-document coverage from an excerpt alone.
+
 After the requested change and relevant verification succeed, stop using tools and answer the user briefly with the outcome, changed file path, and verification result. Do not repeat the file's code, patch, or tool arguments in the final answer unless the user specifically asks for them. Do not create extra output-capture files, repeat an equivalent successful check, or rewrite a completed file unless the request requires it or new evidence shows a problem.`
 
 var routePrompts = map[Route]string{

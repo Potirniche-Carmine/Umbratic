@@ -3,11 +3,15 @@ import { redactText, shortHashValue } from "./policy";
 import { appendLocalDiagnostic, type LocalDiagnosticInput } from "./storage";
 
 const sensitiveKey = /(?:authorization|cookie|credential|api[_-]?key|secret|token|password)/i;
+const safeTokenCountKey = /^(?:context|content|prompt|completion|reserve|protected|estimated|maxOutput|total)Tokens$/i;
 const absolutePath = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/;
 
 export function sanitizeDiagnosticValue(value: unknown, key = "", depth = 0): unknown {
   if (depth > 8) return "[depth-limited]";
-  if (sensitiveKey.test(key)) return "[redacted]";
+  if (
+    sensitiveKey.test(key)
+    && !(safeTokenCountKey.test(key) && typeof value === "number" && Number.isFinite(value) && value >= 0)
+  ) return "[redacted]";
   if (typeof value === "string") {
     if ((key === "cwd" || /(?:path|directory)$/i.test(key)) && absolutePath.test(value)) {
       return { pathHash: shortHashValue(value) };
@@ -26,7 +30,7 @@ export function sanitizeDiagnosticValue(value: unknown, key = "", depth = 0): un
   return String(value);
 }
 
-function eventLevel(event: BackendUiEvent): LocalDiagnosticInput["level"] {
+function eventLevel(event: BackendUiEvent): LocalDiagnosticInput["level"] | null {
   if (event.type === "task.error" || event.type === "tool.failed") return "error";
   if (
     (event.type === "command.finished" && (event.exitCode !== 0 || (event.status && event.status !== "success"))) ||
@@ -35,7 +39,7 @@ function eventLevel(event: BackendUiEvent): LocalDiagnosticInput["level"] {
   ) {
     return "warn";
   }
-  return "info";
+  return null;
 }
 
 function eventMessage(event: BackendUiEvent): string | undefined {
@@ -47,13 +51,12 @@ function eventMessage(event: BackendUiEvent): string | undefined {
 }
 
 export function localDiagnosticForBackendEvent(event: BackendUiEvent): LocalDiagnosticInput | null {
-  if (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta" || event.type === "user.message") {
-    return null;
-  }
+  const level = eventLevel(event);
+  if (!level) return null;
   const { type, taskId, at, version: _version, ...data } = event;
   return {
     at,
-    level: eventLevel(event),
+    level,
     source: "desktop",
     event: type,
     taskId,
