@@ -210,6 +210,7 @@ type BackendDiagnostics = {
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
   runnerDiagnosticsDirectory: string;
+  localLogs: LocalDiagnosticInfo;
   telemetry: TelemetryPolicyInfo;
   runtimes: {
     python: {
@@ -236,6 +237,8 @@ type BackendDiagnostics = {
   };
   capabilities: CapabilityProbeReport;
 };
+
+type LocalDiagnosticInfo = { bytes: number; entries: number };
 
 type TelemetryPolicyInfo = {
   mode: "developer_toggle" | "managed_required" | "managed_disabled";
@@ -494,6 +497,17 @@ type DesktopApi = {
     status: BackendStatus;
   }>;
   exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+  exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+  clearLocalDiagnostics(): Promise<LocalDiagnosticInfo>;
+  recordProductEvent(input: {
+    type: "review.opened" | "ide.selected";
+    taskId?: string;
+    repositoryId?: string;
+    scope?: "task" | "worktree";
+    target?: "task" | "project";
+    ideId?: string;
+    surface?: "composer" | "review";
+  }): Promise<void>;
   listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
   saveSkillSettings(input: Record<string, boolean>): Promise<{ skills: SkillInfo[]; directory: string }>;
   openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
@@ -541,7 +555,7 @@ type DesktopApi = {
   rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
   keepWorktree(input: { taskId: string }): Promise<void>;
   cancelTask(input: { taskId: string }): Promise<void>;
-  setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
+  setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
   onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
 };
@@ -1449,6 +1463,7 @@ const fallbackApi: DesktopApi = {
       localhostOnlyModels: false,
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: "~/.umbratic/runner-diagnostics",
+      localLogs: { bytes: 0, entries: 0 },
       telemetry: {
         mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",
         localEnabled: false,
@@ -1495,6 +1510,9 @@ const fallbackApi: DesktopApi = {
     return { settings, status: await fallbackApi.getBackendStatus() };
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
+  exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),
+  clearLocalDiagnostics: async () => ({ bytes: 0, entries: 0 }),
+  recordProductEvent: async () => undefined,
   listSkills: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
   saveSkillSettings: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -2546,6 +2564,12 @@ function formatDuration(value: number | null): string {
   return seconds ? `${minuteLabel} ${seconds} second${seconds === 1 ? "" : "s"}` : minuteLabel;
 }
 
+function formatFileSize(bytes: number): string {
+  const value = Math.max(0, Number.isFinite(bytes) ? bytes : 0);
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 2 : 1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 function activityDurationMs(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): number | null {
   const start = eventTimeMs(item.startedAt);
   if (start === undefined) return null;
@@ -3197,6 +3221,7 @@ function App() {
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(composerTestMode ? composerTestEvents : []);
+  const [feedbackDrafts, setFeedbackDrafts] = useState<Map<string, string>>(() => new Map());
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
@@ -3251,6 +3276,7 @@ function App() {
   const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
   const [skillsMessage, setSkillsMessage] = useState<string | null>(null);
+  const [localLogsBusy, setLocalLogsBusy] = useState(false);
   const [newSkillFormOpen, setNewSkillFormOpen] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -3342,6 +3368,7 @@ function App() {
     CONTEXT_LENGTH_OPTIONS.findIndex((option) => option === harnessDraftContextLength),
   );
   const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
+  const localLogInfo = backend?.diagnostics.localLogs ?? { bytes: 0, entries: 0 };
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const isGenerating = task?.state === "running";
@@ -3396,6 +3423,13 @@ function App() {
       }
     }
     return ratings;
+  }, [visibleEvents]);
+  const responseFeedbackComments = useMemo(() => {
+    const comments = new Map<string, string>();
+    for (const event of visibleEvents) {
+      if (event.type === "response.feedback" && event.comment) comments.set(event.messageId, event.comment);
+    }
+    return comments;
   }, [visibleEvents]);
   const composerItems = useMemo(
     () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
@@ -3582,12 +3616,14 @@ function App() {
 
   function setVisibleTask(nextTask: TaskInfo | null) {
     visibleTaskIdRef.current = nextTask?.id ?? null;
+    setFeedbackDrafts(new Map());
     if (nextTask) setWorkspaceReview(null);
     setTask(nextTask);
   }
 
   function prepareVisibleTaskLoad(taskId: string | null) {
     visibleTaskIdRef.current = taskId;
+    setFeedbackDrafts(new Map());
     setWorkspaceReview(null);
     setTask(null);
   }
@@ -5072,31 +5108,62 @@ function App() {
     await copyPlainText(value);
   }
 
-  async function rateResponse(messageId: string, rating: "good" | "bad") {
+  async function rateResponse(messageId: string, rating: "good" | "bad", comment?: string) {
     if (!latestTaskId) return;
     setError(null);
     const taskId = latestTaskId;
-    const previousRating = responseFeedback.get(messageId);
+    const previousFeedback = [...visibleEvents].reverse().find(
+      (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
+        event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId,
+    );
+    const nextComment = (comment ?? previousFeedback?.comment ?? "").trim().slice(0, 1000);
     const feedbackEvent: BackendUiEvent = {
       type: "response.feedback",
       taskId,
       messageId,
       rating,
+      ...(nextComment ? { comment: nextComment } : {}),
       at: new Date().toISOString(),
     };
     setEvents((current) => appendBackendEvent(current, feedbackEvent, 500));
     try {
-      await api.setResponseFeedback({ taskId, messageId, rating });
+      await api.setResponseFeedback({ taskId, messageId, rating, ...(nextComment ? { comment: nextComment } : {}) });
     } catch (cause) {
       setEvents((current) => {
         const withoutFailedRating = current.filter(
           (event) => !(event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId),
         );
-        return previousRating
-          ? appendBackendEvent(withoutFailedRating, { ...feedbackEvent, rating: previousRating, at: new Date().toISOString() }, 500)
+        return previousFeedback
+          ? appendBackendEvent(withoutFailedRating, { ...previousFeedback, at: new Date().toISOString() }, 500)
           : withoutFailedRating;
       });
       setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function exportLocalLogs() {
+    setLocalLogsBusy(true);
+    try {
+      await api.exportLocalDiagnostics();
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setLocalLogsBusy(false);
+    }
+  }
+
+  async function clearLocalLogs() {
+    setLocalLogsBusy(true);
+    try {
+      const info = await api.clearLocalDiagnostics();
+      setBackend((current) => current ? {
+        ...current,
+        diagnostics: { ...current.diagnostics, localLogs: info },
+      } : current);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setLocalLogsBusy(false);
     }
   }
 
@@ -5166,6 +5233,13 @@ function App() {
                 type="button"
                 role="menuitem"
                 onClick={() => {
+                  void api.recordProductEvent({
+                    type: "ide.selected",
+                    taskId: task?.id,
+                    repositoryId: repository?.id,
+                    ideId: ide.id,
+                    surface: owner,
+                  }).catch(() => undefined);
                   setSelectedIdeId(ide.id);
                   setIdeMenuOpen(null);
                 }}
@@ -5234,6 +5308,15 @@ function App() {
   }
 
   function openReviewPanel(filePath?: string) {
+    if (!reviewOpen || reviewClosing) {
+      void api.recordProductEvent({
+        type: "review.opened",
+        taskId: task?.id,
+        repositoryId: repository?.id,
+        scope: task?.reviewScope ?? tasklessReviewScope,
+        target: task ? "task" : "project",
+      }).catch(() => undefined);
+    }
     cancelReviewClose();
     if (!reviewHasSessionWidth) setReviewWidth(reviewMaxWidth());
     setReviewOpen(true);
@@ -6212,6 +6295,7 @@ function App() {
                     ) : item.type === "assistant" ? (
                       (() => {
                         const rating = responseFeedback.get(item.id);
+                        const feedbackNote = feedbackDrafts.get(item.id) ?? responseFeedbackComments.get(item.id) ?? "";
                         return (
                           <article className="timelineMessage assistantMessage" key={item.id}>
                             {item.streaming ? (
@@ -6251,6 +6335,30 @@ function App() {
                                 <ThumbsDown size={14} />
                               </button>
                             </div>
+                            {rating ? (
+                              <form
+                                className="responseFeedbackNote"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  void rateResponse(item.id, rating, feedbackNote);
+                                }}
+                              >
+                                <input
+                                  type="text"
+                                  value={feedbackNote}
+                                  maxLength={1000}
+                                  placeholder="Add a note (optional)"
+                                  aria-label="Response feedback note"
+                                  onChange={(event) => {
+                                    const value = event.target.value;
+                                    setFeedbackDrafts((current) => new Map(current).set(item.id, value));
+                                  }}
+                                />
+                                <button type="submit" disabled={!feedbackNote.trim()}>
+                                  Send
+                                </button>
+                              </form>
+                            ) : null}
                           </article>
                         );
                       })()
@@ -7346,51 +7454,96 @@ function App() {
                       <h3>Telemetry</h3>
                       <p>
                         {telemetrySyncEnabled
-                          ? "Umbratic sends redacted run summaries to your configured Veil server. Detailed logs stay local."
-                          : "Local mode does not upload telemetry. Task history and detailed logs stay on this computer."}
+                          ? "Your organization owns and controls telemetry stored on its configured Veil server."
+                          : "Your organization owns and controls these logs. In local mode, they remain on this device."}
                       </p>
                     </div>
 
+                    <div className="telemetryPrivacyNotice">
+                      <ShieldCheck size={18} aria-hidden="true" />
+                      <div>
+                        <strong>Umbratic does not collect this data</strong>
+                        <p>
+                          Logs and telemetry can be shared with Umbratic only with explicit approval from you or your organization, and only to improve the platform.
+                        </p>
+                      </div>
+                    </div>
+
                     <div className="settingsGroup">
-                      <h4>{telemetrySyncEnabled ? "Sent to your server" : "Local mode"}</h4>
+                      <h4>Local logs</h4>
+                      <div className="localLogsControl">
+                        <strong>{formatFileSize(localLogInfo.bytes)}</strong>
+                        <div>
+                          <button className="settingsInlineButton" type="button" onClick={() => void exportLocalLogs()} disabled={localLogsBusy}>
+                            Export
+                          </button>
+                          <button className="settingsInlineButton" type="button" onClick={() => void clearLocalLogs()} disabled={localLogsBusy || localLogInfo.entries === 0}>
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="settingsGroup">
+                      <h4>{telemetrySyncEnabled ? "What your server receives" : "Local mode"}</h4>
                       <div className="settingsList telemetryDisclosureList">
                         {telemetrySyncEnabled ? (
                           <>
                             <div className="settingsListRow">
-                              <span>Run record</span>
+                              <span>Activity</span>
                               <p>
-                                Task, chat, and repository IDs, timestamps, status, outcome, model, runner version, workspace
-                                mode, and reasoning mode.
+                                Review opens, editor choices, accept, undo, worktree actions, and context thresholds.
                               </p>
                             </div>
                             <div className="settingsListRow">
-                              <span>Usage shape</span>
+                              <span>Rated chats</span>
                               <p>
-                                Counts for messages, commands, tests, changed files, reviews, permissions, feedback, and
-                                runtime capability health.
+                                Only chats where you rate a response, plus the optional note. Unrated prompt text is not sent.
+                              </p>
+                            </div>
+                            <div className="settingsListRow">
+                              <span>Tool failures</span>
+                              <p>
+                                The attempted tool input and returned failure response, so your organization can diagnose problems.
                               </p>
                             </div>
                           </>
                         ) : (
                           <div className="settingsListRow">
                             <span>Uploads</span>
-                            <p>Disabled. The desktop-managed Veil process also starts with telemetry ingestion turned off.</p>
+                            <p>Stored on this device under your organization&apos;s control. Nothing is sent to Umbratic without explicit permission.</p>
                           </div>
                         )}
                       </div>
                     </div>
 
                     <div className="settingsGroup">
-                      <h4>Not sent</h4>
+                      <h4>{telemetrySyncEnabled ? "What stays private" : "What stays local"}</h4>
                       <div className="settingsList telemetryDisclosureList">
                         <div className="settingsListRow">
-                          <span>Content</span>
+                          <span>Repository</span>
                           <p>
-                            Prompts, assistant responses, command text, command output, file paths, diffs, patches,
-                            branch names, detailed logs, and raw secrets.
+                            Source files, repository names and paths, ignored files, diffs, and attachments are never bulk-uploaded.
+                          </p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Sensitive data</span>
+                          <p>
+                            Umbratic does not scan environment variables, credentials, keys, secret files, or ignored files for telemetry.
+                          </p>
+                        </div>
+                        <div className="settingsListRow">
+                          <span>Local diagnostics</span>
+                          <p>
+                            SQLite logs, successful tool output, and assistant reasoning stay on this computer.
                           </p>
                         </div>
                       </div>
+                      {telemetrySyncEnabled ? (
+                        <p className="telemetryScopeNote">
+                          Content included in a rated chat or present in a failed tool request or response is part of that specific telemetry item.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}

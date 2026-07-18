@@ -5,6 +5,7 @@ asar: true
 asarUnpack:
   - "**/*.node"
 npmRebuild: false
+electronDist: ../../node_modules/electron/dist
 directories:
   output: release
 files:

@@ -70,13 +70,17 @@ import {
   readChats,
   hasStoredModelEndpointSettings,
   readContextLengthSetting,
+  readLocalDiagnosticInfo,
+  readLocalDiagnostics,
   readHarnessProfileSetting,
   readModelEndpointSettings,
   publicModelEndpointSettings,
   readNotes,
   readProjects,
+  readProductTelemetryEvents,
   readTask,
   readTasks,
+  clearLocalDiagnostics,
   writeHarnessProfileSetting,
   writeContextLengthSetting,
   writeModelEndpointSettings,
@@ -85,9 +89,11 @@ import {
   writeJsonFile,
   writeNotes,
   writeProjects,
+  writeProductTelemetryEvent,
   writeTask,
   writeTasks,
 } from "./storage";
+import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
 import { buildRedactedTelemetryBundle } from "./telemetry";
 import {
   syncTelemetryBundle,
@@ -127,6 +133,8 @@ import type {
   IdeOpenResult,
   LocalModelInfo,
   LocalModelProvider,
+  LocalDiagnosticInfo,
+  ProductTelemetryEventType,
   RunnerProcess,
   RunnerToolId,
   PendingPermission,
@@ -219,12 +227,51 @@ let mainWindow: BrowserWindow | null = null;
 let permissionMode: PermissionMode = "normal";
 const pendingPermissions = new Map<string, PendingPermission>();
 const pendingTaskEvents = new Map<string, BackendUiEvent[]>();
+const contextThresholdState = new Map<string, { above75: boolean; above90: boolean }>();
 let pendingTaskEventFlushTimer: NodeJS.Timeout | null = null;
 const pendingRendererEvents: BackendUiEvent[] = [];
 let pendingRendererEventFlushTimer: NodeJS.Timeout | null = null;
 let telemetrySyncTimer: NodeJS.Timeout | null = null;
 const streamingTaskEventFlushDelayMs = 2000;
 const rendererEventFlushDelayMs = 20;
+
+function recordProductTelemetry(
+  type: ProductTelemetryEventType,
+  input: {
+    taskId?: string;
+    chatId?: string;
+    repositoryId?: string;
+    data?: Record<string, string | number | boolean>;
+  } = {},
+): void {
+  const event = {
+    id: crypto.randomUUID(),
+    type,
+    at: new Date().toISOString(),
+    ...input,
+  };
+  try {
+    writeProductTelemetryEvent(event);
+    recordLocalDiagnostic({
+      at: event.at,
+      level: "info",
+      source: "desktop",
+      event: type,
+      taskId: input.taskId,
+      data: { chatId: input.chatId, repositoryId: input.repositoryId, ...input.data },
+    });
+    scheduleManagedTelemetrySync();
+  } catch (error) {
+    recordLocalDiagnostic({
+      level: "error",
+      source: "desktop",
+      event: "product_telemetry.persist_failed",
+      taskId: input.taskId,
+      message: error instanceof Error ? error.message : String(error),
+      data: { type, error },
+    });
+  }
+}
 
 function finishInterruptedRunningTasks() {
   const now = new Date().toISOString();
@@ -304,16 +351,26 @@ function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
   return events.filter((event) => !isReviewReadyAssistantEvent(event));
 }
 
+function boundedTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
+  if (events.length <= limit) return events;
+  const recent = events.slice(-limit);
+  const retained = events.slice(0, -limit).filter(
+    (event) => event.type === "user.message" || event.type === "assistant.delta" || event.type === "assistant.done"
+      || event.type === "response.feedback" || event.type === "tool.failed" || event.type === "context.threshold",
+  );
+  return [...retained, ...recent];
+}
+
 function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {
   const existing = visibleTaskEvents(events);
   if (event.type === "response.feedback") {
-    return [
+    return boundedTaskEvents([
       ...existing.filter(
         (storedEvent) =>
           !(storedEvent.type === "response.feedback" && storedEvent.taskId === event.taskId && storedEvent.messageId === event.messageId),
       ),
       event,
-    ].slice(-limit);
+    ], limit);
   }
   if (
     event.type === "user.message" &&
@@ -344,14 +401,14 @@ function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit:
     last.type === event.type &&
     last.taskId === event.taskId
   ) {
-    return [
+    return boundedTaskEvents([
       ...existing.slice(0, -1),
       {
         ...last,
         text: `${last.text}${event.text}`,
         endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
       },
-    ].slice(-limit);
+    ], limit);
   }
   if (
     last &&
@@ -361,16 +418,16 @@ function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit:
     last.id === event.id &&
     last.stream === event.stream
   ) {
-    return [
+    return boundedTaskEvents([
       ...existing.slice(0, -1),
       {
         ...last,
         text: `${last.text}${event.text}`,
         endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
       },
-    ].slice(-limit);
+    ], limit);
   }
-  return [...existing, event].slice(-limit);
+  return boundedTaskEvents([...existing, event], limit);
 }
 
 function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
@@ -1532,12 +1589,14 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
     case "task.error":
       return `Task error: ${compactHistoryText(event.message, 900)}`;
     case "context.usage":
+    case "context.threshold":
     case "context.compressed":
     case "context.retrieved":
       return null;
     case "assistant.done":
     case "assistant.reasoning.delta":
     case "response.feedback":
+    case "tool.failed":
     case "worktree.requested":
     case "worktree.created":
       return null;
@@ -1922,10 +1981,50 @@ function dispatchRendererEvent(event: BackendUiEvent) {
   }
 }
 
-function emit(event: BackendUiEvent) {
-  const stampedEvent = { ...event, version: 1 as const, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
+function persistBackendEvent(stampedEvent: BackendUiEvent) {
+  recordBackendEventDiagnostic(stampedEvent);
   recordTaskEvent(stampedEvent);
   dispatchRendererEvent(stampedEvent);
+}
+
+function contextThresholdEvents(event: Extract<BackendUiEvent, { type: "context.usage" }>): BackendUiEvent[] {
+  const previous = contextThresholdState.get(event.taskId) ?? { above75: false, above90: false };
+  const ratio = event.contextLength > 0 ? event.estimatedTokens / event.contextLength : 0;
+  const above75 = ratio >= 0.75;
+  const above90 = ratio >= 0.9;
+  contextThresholdState.set(event.taskId, { above75, above90 });
+  const events: BackendUiEvent[] = [];
+  if (above75 && !previous.above75) {
+    events.push({
+      type: "context.threshold",
+      taskId: event.taskId,
+      threshold: 75,
+      contextLength: event.contextLength,
+      estimatedTokens: event.estimatedTokens,
+      at: event.at,
+    });
+  }
+  if (above90 && !previous.above90) {
+    events.push({
+      type: "context.threshold",
+      taskId: event.taskId,
+      threshold: 90,
+      contextLength: event.contextLength,
+      estimatedTokens: event.estimatedTokens,
+      at: event.at,
+    });
+  }
+  return events;
+}
+
+function emit(event: BackendUiEvent) {
+  const stampedEvent = { ...event, version: 1 as const, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
+  persistBackendEvent(stampedEvent);
+  if (stampedEvent.type === "context.usage") {
+    for (const thresholdEvent of contextThresholdEvents(stampedEvent)) {
+      persistBackendEvent({ ...thresholdEvent, version: 1 as const } as BackendUiEvent);
+    }
+  }
 }
 
 function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAttachment[]) {
@@ -2308,6 +2407,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
       localhostOnlyModels: models.every((model) => isLocalhostUrl(model.baseUrl)),
       commandClassifier: "enabled",
       runnerDiagnosticsDirectory: runnerDiagnosticsDirectory(app.getPath("userData")),
+      localLogs: readLocalDiagnosticInfo(),
       telemetry: telemetryPolicyForMode(endpointSettings.mode),
       runtimes: runtimeDiagnostics(),
       capabilities: capabilityReport,
@@ -2398,10 +2498,70 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
   if (result.canceled || !result.filePath) {
     return { ok: false, message: "Export canceled." };
   }
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects());
+  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents());
   fs.mkdirSync(path.dirname(result.filePath), { recursive: true });
   fs.writeFileSync(result.filePath, `${JSON.stringify(bundle)}\n`, "utf8");
   return { ok: true, path: result.filePath };
+}
+
+async function exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const result = mainWindow
+    ? await dialog.showSaveDialog(mainWindow, {
+        title: "Export Umbratic Logs",
+        defaultPath: `umbratic-logs-${timestamp}.jsonl`,
+        filters: [{ name: "JSON Lines", extensions: ["jsonl"] }],
+      })
+    : await dialog.showSaveDialog({
+        title: "Export Umbratic Logs",
+        defaultPath: `umbratic-logs-${timestamp}.jsonl`,
+        filters: [{ name: "JSON Lines", extensions: ["jsonl"] }],
+      });
+  if (result.canceled || !result.filePath) return { ok: false, message: "Export canceled." };
+  const contents = readLocalDiagnostics().map((entry) => JSON.stringify(entry)).join("\n");
+  fs.mkdirSync(path.dirname(result.filePath), { recursive: true });
+  fs.writeFileSync(result.filePath, contents ? `${contents}\n` : "", "utf8");
+  return { ok: true, path: result.filePath };
+}
+
+function clearLocalDiagnosticLogs(): LocalDiagnosticInfo {
+  const info = clearLocalDiagnostics();
+  const legacyDirectory = path.resolve(runnerDiagnosticsDirectory(app.getPath("userData")));
+  if (pathInside(app.getPath("userData"), legacyDirectory) && fs.existsSync(legacyDirectory)) {
+    fs.rmSync(legacyDirectory, { recursive: true, force: true });
+  }
+  return info;
+}
+
+function recordRendererProductEvent(input: unknown): void {
+  if (!isRecord(input) || (input.type !== "review.opened" && input.type !== "ide.selected")) {
+    throw new Error("Invalid product event input.");
+  }
+  const taskId = typeof input.taskId === "string" && /^task-[A-Za-z0-9_-]+$/.test(input.taskId) ? input.taskId : undefined;
+  const task = taskId ? readTask(taskId) : null;
+  const repositoryId = typeof input.repositoryId === "string" && input.repositoryId.length <= 128
+    ? input.repositoryId
+    : task?.repositoryId;
+  if (input.type === "review.opened") {
+    const scope = input.scope === "worktree" ? "worktree" : "task";
+    const target = input.target === "project" ? "project" : "task";
+    recordProductTelemetry("review.opened", {
+      taskId,
+      chatId: task?.chatId,
+      repositoryId,
+      data: { scope, target },
+    });
+    return;
+  }
+  const ideId = requiredString(input.ideId, "ideId");
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(ideId)) throw new Error("Invalid IDE selection.");
+  const surface = input.surface === "review" ? "review" : "composer";
+  recordProductTelemetry("ide.selected", {
+    taskId,
+    chatId: task?.chatId,
+    repositoryId,
+    data: { ideId, surface },
+  });
 }
 
 async function retryTelemetrySpoolQueue(): Promise<void> {
@@ -2418,7 +2578,7 @@ async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
     throw new Error("Telemetry sync is disabled by policy.");
   }
   const provider = endpointProvider();
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects());
+  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents());
   return syncTelemetryBundle({
     directory: telemetrySpoolDirectory(app.getPath("userData")),
     bundle,
@@ -2430,7 +2590,14 @@ function scheduleManagedTelemetrySync() {
   if (!telemetryPolicyForMode(readModelEndpointSettings().mode).syncEnabled || telemetrySyncTimer) return;
   telemetrySyncTimer = setTimeout(() => {
     telemetrySyncTimer = null;
-    void syncTelemetryNow().catch(() => undefined);
+    void syncTelemetryNow().catch((cause) => {
+      recordLocalDiagnostic({
+        level: "warn",
+        source: "telemetry",
+        event: "sync.failed",
+        message: String(cause instanceof Error ? cause.message : cause),
+      });
+    });
   }, 5000);
   telemetrySyncTimer.unref?.();
 }
@@ -3071,6 +3238,11 @@ async function handleRunnerPermission(
         path: task.worktreePath,
         baseCommit: task.baseCommit,
       });
+      recordProductTelemetry("worktree.requested", {
+        taskId: task.id,
+        chatId: task.chatId,
+        repositoryId: task.repositoryId,
+      });
     }
     return "worktree_requested";
   }
@@ -3143,7 +3315,16 @@ async function runRunnerTask(
     task.diagnosticLogPath = run.diagnosticLogPath;
     saveTask(task);
 
-    const toolRuns = new Map<string, { commandId: string; command: string; kind: PermissionRequest["kind"]; toolKind?: RunnerToolId; finished: boolean }>();
+    const toolRuns = new Map<string, {
+      commandId: string;
+      command: string;
+      kind: PermissionRequest["kind"];
+      toolKind?: string;
+      input: unknown;
+      stdout: string[];
+      stderr: string[];
+      finished: boolean;
+    }>();
     const assistantOutput = new RunnerAssistantOutputBuffer();
     let delegatedToWorktree = false;
     let completed = false;
@@ -3210,14 +3391,25 @@ async function runRunnerTask(
       command: string,
       kind: PermissionRequest["kind"],
       commandClass: CommandClass,
-      toolKind?: RunnerToolId,
+      toolKind?: string,
+      input?: unknown,
     ) => {
       const existing = toolRuns.get(toolCallId);
       if (existing) {
         if (toolKind && !existing.toolKind) existing.toolKind = toolKind;
+        if (input !== undefined) existing.input = input;
         return existing;
       }
-      const current = { commandId: `ar-${toolCallId}`, command, kind, toolKind, finished: false };
+      const current = {
+        commandId: `ar-${toolCallId}`,
+        command,
+        kind,
+        toolKind,
+        input: input ?? {},
+        stdout: [] as string[],
+        stderr: [] as string[],
+        finished: false,
+      };
       toolRuns.set(toolCallId, current);
       emit({
         type: "command.started",
@@ -3227,6 +3419,8 @@ async function runRunnerTask(
         cwd: task.worktreePath,
         kind,
         commandClass,
+        toolKind,
+        input,
       });
       return current;
     };
@@ -3268,7 +3462,7 @@ async function runRunnerTask(
               : "edit";
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
-        ensureToolRun(toolCallId, command, kind, commandClass, runnerToolKind);
+        ensureToolRun(toolCallId, command, kind, commandClass, runnerToolKind ?? toolKind, event.arguments);
         return;
       }
 
@@ -3279,6 +3473,7 @@ async function runRunnerTask(
         const text = typeof event.text === "string" ? event.text : "";
         const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
         if (text) {
+          current[stream].push(text);
           emit({
             type: "command.output",
             taskId: task.id,
@@ -3314,6 +3509,25 @@ async function runRunnerTask(
             ...(durationMs !== undefined ? { durationMs } : {}),
             at: eventAt(event),
           });
+          if (exitCode !== 0 || (status && status !== "success")) {
+            emit({
+              type: "tool.failed",
+              taskId: task.id,
+              id: current.commandId,
+              toolKind: current.toolKind ?? "tool",
+              input: current.input,
+              response: {
+                stdout: current.stdout.join(""),
+                stderr: current.stderr.join(""),
+                ...(typeof event.response === "string" ? { toolResponse: event.response } : {}),
+                exitCode,
+                ...(status ? { status } : {}),
+                ...(errorCode ? { errorCode } : {}),
+                ...(errorMessage ? { errorMessage } : {}),
+              },
+              at: eventAt(event),
+            });
+          }
         }
         return;
       }
@@ -3501,6 +3715,11 @@ async function createWorktreeAndRunRunner(
     pendingRunnerPrompts.delete(task.id);
     saveTask(task);
     emit({ type: "worktree.created", taskId: task.id, branch: task.agentBranch, path: task.worktreePath });
+    recordProductTelemetry("worktree.created", {
+      taskId: task.id,
+      chatId: task.chatId,
+      repositoryId: task.repositoryId,
+    });
     void runRunnerTask(task.id, promptForRun, intentPrompt, attachments);
   } catch (error) {
     failTask(task, String(error instanceof Error ? error.message : error));
@@ -3796,6 +4015,11 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   saveTask(task);
   appendUserMessage(task, prompt, attachments);
   if (shouldCreateWorktree) {
+    recordProductTelemetry("worktree.requested", {
+      taskId: task.id,
+      chatId: task.chatId,
+      repositoryId: task.repositoryId,
+    });
     await createWorktreeAndRunRunner(task, undefined, attachments, prompt);
   } else {
     void runRunnerTask(task.id, undefined, prompt, attachments);
@@ -3813,6 +4037,11 @@ async function approveWorktreeCreation(input: unknown): Promise<void> {
     throw new Error("Task is not waiting for worktree approval.");
   }
   if (!approved) {
+    recordProductTelemetry("worktree.denied", {
+      taskId: task.id,
+      chatId: task.chatId,
+      repositoryId: task.repositoryId,
+    });
     task.state = "rejected";
     task.pendingPrompt = undefined;
     pendingRunnerPrompts.delete(task.id);
@@ -3821,6 +4050,11 @@ async function approveWorktreeCreation(input: unknown): Promise<void> {
     emit({ type: "task.error", taskId: task.id, message: "Worktree creation was declined." });
     return;
   }
+  recordProductTelemetry("worktree.approved", {
+    taskId: task.id,
+    chatId: task.chatId,
+    repositoryId: task.repositoryId,
+  });
   const promptForRun = pendingRunnerPrompts.get(task.id) ?? task.pendingPrompt ?? task.prompt;
   task.pendingPrompt = undefined;
   pendingRunnerPrompts.delete(task.id);
@@ -3861,6 +4095,11 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
     throw new Error("Invalid approval input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
+  recordProductTelemetry("task.accepted", {
+    taskId: task.id,
+    chatId: task.chatId,
+    repositoryId: task.repositoryId,
+  });
   emit({ type: "merge.approval", taskId: task.id, decision: "approved" });
   task.state = "approving";
   saveTask(task);
@@ -3949,6 +4188,11 @@ async function rejectTask(input: unknown): Promise<void> {
     throw new Error("Invalid reject input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
+  recordProductTelemetry("task.undone", {
+    taskId: task.id,
+    chatId: task.chatId,
+    repositoryId: task.repositoryId,
+  });
   const run = activeRunnerProcesses.get(task.id);
   if (run) {
     activeRunnerProcesses.delete(task.id);
@@ -4009,6 +4253,11 @@ async function keepWorktree(input: unknown): Promise<void> {
     throw new Error("Invalid keep-worktree input.");
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
+  recordProductTelemetry("worktree.kept", {
+    taskId: task.id,
+    chatId: task.chatId,
+    repositoryId: task.repositoryId,
+  });
   emit({
     type: "task.error",
     taskId: task.id,
@@ -4046,6 +4295,7 @@ async function setResponseFeedback(input: unknown): Promise<void> {
   const task = getTask(requiredString(input.taskId, "taskId"));
   const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
   const rating = input.rating === "bad" ? "bad" : "good";
+  const comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 1000) : "";
   if (!/^assistant-\d+$/.test(messageId)) {
     throw new Error("Invalid response message id.");
   }
@@ -4053,7 +4303,7 @@ async function setResponseFeedback(input: unknown): Promise<void> {
     (event) => !(event.type === "response.feedback" && event.messageId === messageId),
   );
   saveTask(task);
-  emit({ type: "response.feedback", taskId: task.id, messageId, rating });
+  emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(comment ? { comment } : {}) });
 }
 
 async function launchCommand(command: string, args: string[]): Promise<IdeOpenResult> {
@@ -4182,6 +4432,16 @@ async function openTaskInIde(input: unknown): Promise<IdeOpenResult> {
       result: result.ok ? "success" : "failed",
       message: result.ok ? undefined : result.message,
     });
+    recordProductTelemetry("ide.opened", {
+      taskId: task.id,
+      chatId: task.chatId,
+      repositoryId: task.repositoryId,
+      data: {
+        ideId,
+        target: relativeFilePath ? "file" : "workspace",
+        result: result.ok ? "success" : "failed",
+      },
+    });
     return result;
   };
   return withTelemetry(await openPathInIde(ideId, targetPath, relativeFilePath ? "file" : "folder", task.worktreePath));
@@ -4199,7 +4459,12 @@ async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
   if (!fs.existsSync(repositoryPath)) {
     return { ok: false, message: "Selected folder no longer exists." };
   }
-  return openPathInIde(ideId, repositoryPath, "folder");
+  const result = await openPathInIde(ideId, repositoryPath, "folder");
+  recordProductTelemetry("ide.opened", {
+    repositoryId: typeof input.repositoryId === "string" ? input.repositoryId : undefined,
+    data: { ideId, target: "workspace", result: result.ok ? "success" : "failed" },
+  });
+  return result;
 }
 
 async function openPathInIde(
@@ -4291,8 +4556,24 @@ function assertTrustedSender(event: IpcMainInvokeEvent) {
 
 function handleIpc<T>(channel: string, handler: (input: unknown, event: IpcMainInvokeEvent) => Promise<T> | T) {
   ipcMain.handle(channel, async (event, input: unknown) => {
-    assertTrustedSender(event);
-    return handler(input, event);
+    try {
+      assertTrustedSender(event);
+      return await handler(input, event);
+    } catch (cause) {
+      const message = String(cause instanceof Error ? cause.message : cause);
+      recordLocalDiagnostic({
+        level: "error",
+        source: "ipc",
+        event: channel,
+        taskId: isRecord(input) && typeof input.taskId === "string" ? input.taskId : undefined,
+        message,
+        data: {
+          input: sanitizeDiagnosticValue(input),
+          stack: cause instanceof Error ? cause.stack : undefined,
+        },
+      });
+      throw cause;
+    }
   });
 }
 
@@ -4411,9 +4692,17 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  recordLocalDiagnostic({ level: "info", source: "desktop", event: "app.ready", data: { version: app.getVersion() } });
   try {
     installBundledSystemSkillsService();
   } catch (error) {
+    recordLocalDiagnostic({
+      level: "error",
+      source: "desktop",
+      event: "skills.install.failed",
+      message: String(error instanceof Error ? error.message : error),
+      data: { stack: error instanceof Error ? error.stack : undefined },
+    });
     console.error("Unable to install bundled skills.", error);
   }
   finishInterruptedRunningTasks();
@@ -4453,6 +4742,9 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:get-context-length", () => readContextLengthSetting());
   handleIpc("umbratic:save-context-length", (input) => saveContextLengthSetting(input));
   handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
+  handleIpc("umbratic:export-local-diagnostics", () => exportLocalDiagnostics());
+  handleIpc("umbratic:clear-local-diagnostics", () => clearLocalDiagnosticLogs());
+  handleIpc("umbratic:record-product-event", (input) => recordRendererProductEvent(input));
   handleIpc("umbratic:list-skills", () => listSkillsService());
   handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettingsService(input));
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
@@ -4482,7 +4774,14 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   await createWindow();
   void getBackendStatus();
-  void retryTelemetrySpoolQueue().catch(() => undefined);
+  void retryTelemetrySpoolQueue().catch((cause) => {
+    recordLocalDiagnostic({
+      level: "warn",
+      source: "telemetry",
+      event: "spool.retry.failed",
+      message: String(cause instanceof Error ? cause.message : cause),
+    });
+  });
 });
 
 app.on("window-all-closed", () => {
@@ -4492,6 +4791,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  recordLocalDiagnostic({ level: "info", source: "desktop", event: "app.before_quit" });
   stopLocalVeil();
   flushRendererEvents();
   flushPendingTaskEvents();

@@ -93,9 +93,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.maxResponseTokens, 4096);
   assert.equal(config.protectedPromptReserveTokens, 4096);
   assert.deepEqual(plain(config.enabledTools), ["read"]);
-  assert.equal(config.diagnostics.enabled, true);
-  assert.equal(config.diagnostics.includeToolOutput, "stderr");
-  assert.equal(config.diagnostics.logPath, path.join(userData, "runner-diagnostics", "task-1.jsonl"));
+  assert.deepEqual(plain(config.diagnostics), { enabled: false });
   assert.deepEqual(plain(config.capabilities), [
     {
       id: "uv",

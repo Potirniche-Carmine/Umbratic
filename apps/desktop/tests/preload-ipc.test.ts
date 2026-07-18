@@ -66,6 +66,9 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getModelEndpointSettings", [], "umbratic:get-model-endpoint-settings", undefined],
     ["saveModelEndpointSettings", [{ mode: "local", software: "ollama", baseUrl: "http://127.0.0.1:8080", modelId: "veil-managed", secret: "", headers: [] }], "umbratic:save-model-endpoint-settings"],
     ["exportTelemetry", [], "umbratic:export-telemetry", undefined],
+    ["exportLocalDiagnostics", [], "umbratic:export-local-diagnostics", undefined],
+    ["clearLocalDiagnostics", [], "umbratic:clear-local-diagnostics", undefined],
+    ["recordProductEvent", [{ type: "review.opened", taskId: "task-1" }], "umbratic:record-product-event"],
     ["listSkills", [], "umbratic:list-skills", undefined],
     ["saveSkillSettings", [{ skill: false }], "umbratic:save-skill-settings"],
     ["openSkillsFolder", [], "umbratic:open-skills-folder", undefined],
@@ -87,7 +90,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["rejectTask", [{ taskId: "task-1", cleanup: true }], "umbratic:reject-task"],
     ["keepWorktree", [{ taskId: "task-1" }], "umbratic:keep-worktree"],
     ["cancelTask", [{ taskId: "task-1" }], "umbratic:cancel-task"],
-    ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good" }], "umbratic:set-response-feedback"],
+    ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good", comment: "Useful." }], "umbratic:set-response-feedback"],
     ["setWindowChromeTheme", ["dark"], "umbratic:set-window-chrome-theme"],
   ];
 

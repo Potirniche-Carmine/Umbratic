@@ -42,10 +42,11 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
-  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass }
+  | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass; toolKind?: string; input?: unknown }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number }
   | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; reserveTokens: number; estimatedTokens: number }
+  | { type: "context.threshold"; taskId: string; threshold: 75 | 90; contextLength: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
   | { type: "permission.requested"; taskId: string; request: BackendPermissionRequest }
@@ -57,7 +58,8 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
-  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad" }
+  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }
+  | { type: "tool.failed"; taskId: string; id: string; toolKind: string; input: unknown; response: { stdout: string; stderr: string; toolResponse?: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string } }
   | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
   | { type: "required_tool.failed"; taskId: string; requirement: "file_change"; reason: string; requiredTools: string[]; attemptedTools?: string[]; attempt?: number; detail?: string }
   | { type: "task.error"; taskId: string; message: string }
@@ -91,6 +93,7 @@ const eventTypes = new Set([
   "command.output",
   "command.finished",
   "context.usage",
+  "context.threshold",
   "context.compressed",
   "context.retrieved",
   "permission.requested",
@@ -103,6 +106,7 @@ const eventTypes = new Set([
   "merge.completed",
   "ide.opened",
   "response.feedback",
+  "tool.failed",
   "skill.selected",
   "required_tool.failed",
   "task.error",
@@ -146,6 +150,9 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
     case "context.usage":
       return hasNumber(value, "contextLength") && hasNumber(value, "contentTokens")
         && hasNumber(value, "reserveTokens") && hasNumber(value, "estimatedTokens");
+    case "context.threshold":
+      return (value.threshold === 75 || value.threshold === 90)
+        && hasNumber(value, "contextLength") && hasNumber(value, "estimatedTokens");
     case "context.compressed":
       return hasString(value, "toolCallId") && hasString(value, "toolKind") && hasString(value, "kind")
         && hasString(value, "strategy") && hasNumber(value, "originalBytes") && hasNumber(value, "outputBytes");
@@ -173,7 +180,12 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
       return hasString(value, "ideId") && ["workspace", "file"].includes(String(value.target))
         && ["success", "failed"].includes(String(value.result));
     case "response.feedback":
-      return hasString(value, "messageId") && (value.rating === "good" || value.rating === "bad");
+      return hasString(value, "messageId") && (value.rating === "good" || value.rating === "bad")
+        && (value.comment === undefined || hasString(value, "comment"));
+    case "tool.failed":
+      return hasString(value, "id") && hasString(value, "toolKind") && isRecord(value.response)
+        && hasString(value.response, "stdout") && hasString(value.response, "stderr")
+        && (value.response.exitCode === null || hasNumber(value.response, "exitCode"));
     case "skill.selected":
       return hasString(value, "skillId") && hasString(value, "source") && hasString(value, "reason") && typeof value.fullContent === "boolean";
     case "required_tool.failed":

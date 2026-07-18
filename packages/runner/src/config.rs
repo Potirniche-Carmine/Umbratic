@@ -54,8 +54,6 @@ pub struct MtlsConfig {
     pub ca_path: Option<PathBuf>,
     pub cert_path: Option<PathBuf>,
     pub key_path: Option<PathBuf>,
-    pub pfx_path: Option<PathBuf>,
-    pub passphrase: Option<String>,
     pub server_name: Option<String>,
     pub pinned_server_certificate_sha256: Option<String>,
 }
@@ -268,6 +266,27 @@ fn parse_diagnostics(value: Option<&Value>) -> DiagnosticsConfig {
     }
 }
 
+fn parse_mtls(value: &Value) -> Result<MtlsConfig, String> {
+    let value = value
+        .as_object()
+        .ok_or_else(|| "invalid provider.mtls: expected object".to_owned())?;
+    if value.contains_key("pfxPath") || value.contains_key("passphrase") {
+        return Err(
+            "invalid provider.mtls: PKCS#12/PFX is not supported; use certPath/keyPath PEM files"
+                .to_owned(),
+        );
+    }
+    Ok(MtlsConfig {
+        ca_path: optional_string(value.get("caPath")).map(PathBuf::from),
+        cert_path: optional_string(value.get("certPath")).map(PathBuf::from),
+        key_path: optional_string(value.get("keyPath")).map(PathBuf::from),
+        server_name: optional_string(value.get("serverName")),
+        pinned_server_certificate_sha256: optional_string(
+            value.get("pinnedServerCertificateSha256"),
+        ),
+    })
+}
+
 pub fn load_runner_config() -> Result<RunnerConfig, String> {
     let raw = env::var("UMBRATIC_RUNNER_CONFIG")
         .map_err(|_| "UMBRATIC_RUNNER_CONFIG is required".to_owned())?;
@@ -314,22 +333,7 @@ pub fn load_runner_config() -> Result<RunnerConfig, String> {
     let mtls = provider_object
         .get("mtls")
         .filter(|value| !value.is_null())
-        .map(|value| {
-            let value = value
-                .as_object()
-                .ok_or_else(|| "invalid provider.mtls: expected object".to_owned())?;
-            Ok::<_, String>(MtlsConfig {
-                ca_path: optional_string(value.get("caPath")).map(PathBuf::from),
-                cert_path: optional_string(value.get("certPath")).map(PathBuf::from),
-                key_path: optional_string(value.get("keyPath")).map(PathBuf::from),
-                pfx_path: optional_string(value.get("pfxPath")).map(PathBuf::from),
-                passphrase: optional_string(value.get("passphrase")),
-                server_name: optional_string(value.get("serverName")),
-                pinned_server_certificate_sha256: optional_string(
-                    value.get("pinnedServerCertificateSha256"),
-                ),
-            })
-        })
+        .map(parse_mtls)
         .transpose()?;
     let provider = ProviderConfig {
         id: optional_string(provider_object.get("id"))
@@ -500,5 +504,17 @@ mod tests {
         let invalid =
             parse_diagnostics(Some(&serde_json::json!({"includeToolOutput":"everything"})));
         assert_eq!(invalid.include_tool_output, "stderr");
+    }
+
+    #[test]
+    fn mtls_rejects_legacy_pkcs12_fields() {
+        for field in ["pfxPath", "passphrase"] {
+            let value = Value::Object(
+                [(field.to_owned(), Value::String("legacy-value".to_owned()))]
+                    .into_iter()
+                    .collect(),
+            );
+            assert!(parse_mtls(&value).unwrap_err().contains("PKCS#12/PFX"));
+        }
     }
 }

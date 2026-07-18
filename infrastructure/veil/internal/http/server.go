@@ -201,7 +201,11 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "telemetry disabled by admin policy")
 		return
 	}
-	bundle, raw, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes))
+	maxBodyBytes := s.cfg.TelemetryMaxBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = s.cfg.MaxBodyBytes
+	}
+	bundle, raw, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		if errors.Is(err, telemetry.ErrInvalidBundle) {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -216,10 +220,11 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":            true,
-		"acceptedTasks": len(bundle.Tasks),
-		"retentionDays": s.cfg.TelemetryRetentionDays,
-		"stored":        storedPath != "",
+		"ok":             true,
+		"acceptedTasks":  len(bundle.Tasks),
+		"acceptedEvents": len(bundle.ProductEvents),
+		"retentionDays":  s.cfg.TelemetryRetentionDays,
+		"stored":         storedPath != "",
 	})
 }
 

@@ -366,51 +366,49 @@ func TestChatRouteHidesTemplateRegistryLoadErrors(t *testing.T) {
 	}
 }
 
-func redactedTelemetryBody() string {
+func selectiveTelemetryBody() string {
 	return `{
-		"schemaVersion": 1,
+		"schemaVersion": 4,
 		"exportedAt": "2026-01-01T00:00:00.000Z",
-		"policy": {
-			"mode": "managed_required",
-			"localEnabled": false,
-			"syncEnabled": true,
-			"retentionDays": 30,
-			"exportFormat": "redacted-json",
-			"storage": "company-managed-telemetry"
-		},
+		"productEvents": [{
+			"id": "event-1",
+			"type": "review.opened",
+			"at": "2026-01-01T00:00:00.000Z",
+			"taskId": "task-1",
+			"data": {"scope": "task"}
+		}],
 		"tasks": [{
 			"id": "task-1",
 			"chatId": "chat-1",
-			"repoId": "repo-1",
-			"repoRootHash": "hash-1",
-			"workspaceKind": "git",
-			"baseBranch": "main",
-			"baseCommit": "abcdef1234567890",
 			"status": "completed",
-			"capabilityProbes": [{
-				"id": "pdftoppm",
-				"status": "missing",
-				"category": "optional-artifacts",
-				"importance": "optional",
-				"workflows": ["PDF artifact"]
+			"feedback": [{
+				"messageId": "assistant-1",
+				"rating": "bad",
+				"comment": "Missed the requested edge case.",
+				"conversation": [
+					{"role": "user", "content": "Fix the parser edge case.", "taskId": "task-1"},
+					{"role": "assistant", "content": "I updated the parser.", "taskId": "task-1", "messageId": "assistant-1"}
+				]
 			}],
-			"events": [{
-				"type": "user.message",
-				"at": "2026-01-01T00:00:00.000Z",
-				"data": {"promptRedacted": true, "length": 42}
-			}]
+			"failedTools": [{
+				"id": "tool-1",
+				"toolKind": "edit",
+				"input": {"filePath": "parser.ts", "oldText": "a", "newText": "b"},
+				"response": {"stdout": "", "stderr": "oldText was not found", "exitCode": 1}
+			}],
+			"contextTriggers": [{"threshold": 75, "estimatedTokens": 750, "contextLength": 1000}]
 		}]
 	}`
 }
 
-func TestTelemetryRouteAcceptsRedactedBundleAndPersistsIt(t *testing.T) {
+func TestTelemetryRouteAcceptsSelectiveBundleAndPersistsIt(t *testing.T) {
 	cfg := testConfig()
 	cfg.TelemetryStorePath = t.TempDir()
 	cfg.TelemetryRetentionDays = 14
 	modelClient := &fakeModelClient{}
 	server := NewServer(cfg, modelClient)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(redactedTelemetryBody()))
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(selectiveTelemetryBody()))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
 	server.ServeHTTP(rr, req)
@@ -422,7 +420,7 @@ func TestTelemetryRouteAcceptsRedactedBundleAndPersistsIt(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response["acceptedTasks"] != float64(1) || response["stored"] != true || response["retentionDays"] != float64(14) {
+	if response["acceptedTasks"] != float64(1) || response["acceptedEvents"] != float64(1) || response["stored"] != true || response["retentionDays"] != float64(14) {
 		t.Fatalf("unexpected telemetry response: %#v", response)
 	}
 	entries, err := os.ReadDir(cfg.TelemetryStorePath)
@@ -436,8 +434,8 @@ func TestTelemetryRouteAcceptsRedactedBundleAndPersistsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(stored), "promptRedacted") {
-		t.Fatalf("stored telemetry did not contain redacted event facts: %s", stored)
+	if !strings.Contains(string(stored), "Fix the parser edge case.") || !strings.Contains(string(stored), "oldText was not found") {
+		t.Fatalf("stored telemetry did not contain selective feedback and failure content: %s", stored)
 	}
 	if strings.Contains(string(stored), "raw secret prompt") {
 		t.Fatalf("stored telemetry contained raw prompt text: %s", stored)
@@ -450,7 +448,7 @@ func TestTelemetryRouteAcceptsRedactedBundleAndPersistsIt(t *testing.T) {
 func TestTelemetryRouteRejectsRawPromptFields(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(testConfig(), modelClient)
-	body := strings.Replace(redactedTelemetryBody(), `"id": "task-1",`, `"id": "task-1", "prompt": "raw secret prompt",`, 1)
+	body := strings.Replace(selectiveTelemetryBody(), `"id": "task-1",`, `"id": "task-1", "prompt": "raw secret prompt",`, 1)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -475,7 +473,7 @@ func TestTelemetryRouteObeysAdminDisablePolicy(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(cfg, modelClient)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(redactedTelemetryBody()))
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry", strings.NewReader(selectiveTelemetryBody()))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
 	server.ServeHTTP(rr, req)

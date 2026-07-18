@@ -22,8 +22,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{StreamExt, stream};
 use http_body_util::{BodyExt, Limited};
 use serde_json::{Map, Value, json};
-use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::{
+    net::TcpListener,
+    sync::{broadcast::error::RecvError, oneshot},
+    task::JoinHandle,
+};
 
 use crate::{
     events::now_iso,
@@ -230,13 +233,22 @@ async fn events(State(state): State<AppState>) -> impl IntoResponse {
     let connected = stream::once(async {
         Ok::<Event, std::convert::Infallible>(Event::default().comment("connected"))
     });
-    let updates =
-        BroadcastStream::new(state.store.sink.subscribe()).filter_map(|event| async move {
-            match event {
-                Ok(event) => Some(Ok(Event::default().data(event.to_string()))),
-                Err(_) => None,
+    let updates = stream::unfold(state.store.sink.subscribe(), |mut receiver| async move {
+        loop {
+            match receiver.recv().await {
+                Ok(event) => {
+                    return Some((
+                        Ok::<Event, std::convert::Infallible>(
+                            Event::default().data(event.to_string()),
+                        ),
+                        receiver,
+                    ));
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
             }
-        });
+        }
+    });
     Sse::new(connected.chain(updates)).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))

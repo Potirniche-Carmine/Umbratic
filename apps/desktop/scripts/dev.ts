@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { createServer } from "vite";
 
+import { resolveInstalledElectron } from "./electron-runtime.ts";
+
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(__dirname, "..");
@@ -102,7 +104,7 @@ function localServerUrl(server) {
 async function buildDesktopProcessFiles() {
   const tsc = require.resolve("typescript/bin/tsc");
   await new Promise((resolve, reject) => {
-    const child = spawn("cargo", ["build", "--release", "--workspace"], {
+    const child = spawn("cargo", ["build", "--locked", "--release", "--workspace"], {
       cwd: monorepoRoot,
       stdio: "inherit",
       windowsHide: true,
@@ -129,7 +131,7 @@ async function main() {
   viteServer.printUrls();
 
   const devServerUrl = localServerUrl(viteServer);
-  const electron = spawn(require("electron"), ["."], {
+  const electron = spawn(resolveInstalledElectron(), ["."], {
     cwd: desktopRoot,
     stdio: "inherit",
     // On Windows, hiding the spawned process can also hide Electron's app window.

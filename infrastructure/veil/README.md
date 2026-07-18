@@ -75,9 +75,10 @@ a model returned by the provider's models endpoint.
 | `VEIL_TELEMETRY_ENABLED` | No | `true` | Enables the authenticated `/api/telemetry` ingestion route. Accepted boolean values are `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. |
 | `VEIL_TELEMETRY_STORE_PATH` | No | Empty | Directory in which accepted telemetry bundles are persisted. Bundles are validated but not persisted when unset. |
 | `VEIL_TELEMETRY_RETENTION_DAYS` | No | `30` | Positive number of days to retain stored telemetry bundles. |
+| `VEIL_TELEMETRY_MAX_BODY_BYTES` | No | `16777216` | Positive maximum request-body size for selective telemetry bundles. |
 | `VEIL_MODEL_TIMEOUT` | No | `60s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
 | `VEIL_REQUEST_TIMEOUT` | No | `75s` | Overall timeout applied by Veil to health, connection, and chat operations. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
-| `VEIL_MAX_BODY_BYTES` | No | `1048576` | Positive maximum request-body size in bytes for chat and telemetry requests. |
+| `VEIL_MAX_BODY_BYTES` | No | `1048576` | Positive maximum request-body size in bytes for chat requests. |
 
 `VEIL_PROVIDER_ENDPOINT_PATH` and `VEIL_PROVIDER_MODELS_ENDPOINT_PATH` are legacy
 aliases for `VEIL_PROVIDER_CHAT_PATH` and `VEIL_PROVIDER_MODELS_PATH`. The newer
@@ -164,7 +165,7 @@ When `VEIL_TEMPLATE_REGISTRY_PATH` is set, Veil reads a server-owned JSON regist
 }
 ```
 
-`POST /api/telemetry` accepts the desktop app's redacted telemetry bundles using the same bearer token as chat. It rejects raw prompt/task fields, applies the configured request body limit, and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
+`POST /api/telemetry` accepts the desktop app's selective telemetry bundles using the same bearer token as chat. The contract includes compact product events, rated conversations, failed-tool input/response, and context thresholds; it rejects raw top-level task fields and unscoped task-event dumps. It applies `VEIL_TELEMETRY_MAX_BODY_BYTES` and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
 
 ## Network
 

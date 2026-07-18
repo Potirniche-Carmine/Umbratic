@@ -109,6 +109,8 @@ impl RunnerDiagnostics {
         for key in ["type", "taskId", "at"] {
             data.remove(key);
         }
+        data.remove("arguments");
+        data.remove("response");
         for key in ["message", "detail", "summary", "errorMessage", "text"] {
             if let Some(Value::String(value)) = data.get_mut(key) {
                 *value = redact_text(value, if key == "text" { 1600 } else { 1000 });
@@ -207,10 +209,26 @@ mod tests {
             "cwd":"/private/workspace",
             "at":now_iso()
         }));
-        let content = fs::read_to_string(path).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
         assert!(!content.contains("super-secret-token"));
         assert!(!content.contains("/private/workspace"));
         assert!(content.contains("cwdHash"));
+
+        diagnostics.record(&json!({
+            "type":"tool.requested",
+            "taskId":"task",
+            "arguments":{"token":"raw-tool-token"},
+            "at":now_iso()
+        }));
+        diagnostics.record(&json!({
+            "type":"tool.finished",
+            "taskId":"task",
+            "response":"raw-tool-response",
+            "at":now_iso()
+        }));
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("raw-tool-token"));
+        assert!(!content.contains("raw-tool-response"));
     }
 
     #[test]

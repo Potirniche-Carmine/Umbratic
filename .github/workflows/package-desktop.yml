@@ -15,7 +15,7 @@ permissions:
 jobs:
   verify:
     name: Verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Set up Go
@@ -33,7 +33,7 @@ jobs:
           cache: false
 
       - name: Set up Rust
-        run: rustup toolchain install 1.96.0 --profile minimal --no-self-update && rustup default 1.96.0
+        run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt --no-self-update && rustup default 1.96.0
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -42,10 +42,28 @@ jobs:
         run: cargo fetch --locked
 
       - name: Audit Rust dependencies
-        run: cargo install cargo-audit --locked --version 0.22.2 && cargo audit --deny warnings
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Install Go vulnerability scanner
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
+      - name: Audit dependency vulnerabilities and provenance
+        run: npm run supply-chain:audit
+
+      - name: Generate locked dependency SBOM
+        run: npm run supply-chain:sbom
 
       - name: Verify release
+        env:
+          CARGO_NET_OFFLINE: "true"
         run: npm run release:check
+
+      - name: Upload dependency SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: umbratic-supply-chain-metadata
+          path: artifacts/supply-chain/umbratic-sbom.cdx.json
+          if-no-files-found: error
 
   package:
     name: Package ${{ matrix.name }}
@@ -57,13 +75,13 @@ jobs:
       matrix:
         include:
           - name: macOS
-            os: macos-latest
+            os: macos-15
             package_args: "--mac dmg"
             artifact_name: umbratic-ai-macos
             artifact_paths: |
               apps/desktop/release/*.dmg
           - name: Windows
-            os: windows-latest
+            os: windows-2025
             package_args: "--win nsis --x64"
             artifact_name: umbratic-ai-windows
             artifact_paths: |
@@ -76,7 +94,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Set up Go
@@ -86,12 +104,20 @@ jobs:
           cache: false
 
       - name: Set up Rust
-        run: rustup toolchain install 1.96.0 --profile minimal --no-self-update && rustup default 1.96.0
+        run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt --no-self-update && rustup default 1.96.0
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+
+      - name: Provision checksum-verified Electron runtime
+        run: npm run dependencies:provision
+
       - name: Package desktop harness
+        env:
+          CARGO_NET_OFFLINE: "true"
         run: npm --workspace @umbratic/desktop run package -- ${{ matrix.package_args }}
 
       - name: Smoke test packaged native resources
@@ -108,7 +134,7 @@ jobs:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/')
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -117,6 +143,14 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
+
+      - name: Generate release checksums
+        run: |
+          set -euo pipefail
+          find release-artifacts -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#release-artifacts/##' > release-artifacts/SHA256SUMS
 
       - name: Attach artifacts to release
         env:

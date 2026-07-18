@@ -95,6 +95,7 @@ export type BackendDiagnostics = {
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
   runnerDiagnosticsDirectory: string;
+  localLogs: LocalDiagnosticInfo;
   telemetry: TelemetryPolicyInfo;
   runtimes: RuntimeDiagnostics;
   capabilities: CapabilityProbeReport;
@@ -235,6 +236,46 @@ export type LocalModelInfo = {
   displayName: string;
   baseUrl: string;
   contextLength?: number;
+};
+
+export type LocalDiagnosticInfo = {
+  bytes: number;
+  entries: number;
+};
+
+export type LocalDiagnosticLevel = "debug" | "info" | "warn" | "error";
+
+export type LocalDiagnosticRecord = {
+  id: number;
+  at: string;
+  level: LocalDiagnosticLevel;
+  source: string;
+  event: string;
+  taskId?: string;
+  message?: string;
+  data: unknown;
+};
+
+export type ProductTelemetryEventType =
+  | "review.opened"
+  | "ide.selected"
+  | "ide.opened"
+  | "task.accepted"
+  | "task.undone"
+  | "worktree.requested"
+  | "worktree.approved"
+  | "worktree.denied"
+  | "worktree.created"
+  | "worktree.kept";
+
+export type ProductTelemetryEvent = {
+  id: string;
+  type: ProductTelemetryEventType;
+  at: string;
+  taskId?: string;
+  chatId?: string;
+  repositoryId?: string;
+  data?: Record<string, string | number | boolean>;
 };
 
 export type LocalModelProvider = {

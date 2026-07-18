@@ -1139,6 +1139,8 @@ async fn terminate_command_tree(child: &mut tokio::process::Child, pid: Option<u
         }
         return;
     }
+    #[cfg(not(unix))]
+    let _ = pid;
     let _ = child.kill().await;
 }
 
@@ -1317,7 +1319,7 @@ pub async fn execute_tool(
         Ok(_) => "read",
         Err(_) => "unknown",
     };
-    sink.emit(json!({ "type":"tool.requested", "taskId":session.task_id, "toolCallId":call.id, "toolKind":name, "commandClass":command_class, "summary":summary, "cwd":session.config.cwd, "at":started_at }));
+    sink.emit(json!({ "type":"tool.requested", "taskId":session.task_id, "toolCallId":call.id, "toolKind":name, "arguments":call.arguments.clone(), "commandClass":command_class, "summary":summary, "cwd":session.config.cwd, "at":started_at }));
     let args = match parsed_args {
         Ok(value) => value,
         Err(error) => {
@@ -1427,7 +1429,17 @@ pub async fn execute_tool(
                 sink.emit(json!({"type":"context.compressed","taskId":session.task_id,"toolCallId":call.id,"toolKind":name,"kind":compressed.kind,"strategy":compressed.strategy,"hash":compressed.marker_hash,"originalBytes":compressed.original_bytes,"outputBytes":compressed.output_bytes,"at":now_iso()}));
                 result.output = compressed.output;
             }
-            sink.emit(json!({ "type":"tool.finished", "taskId":session.task_id, "toolCallId":call.id, "exitCode":result.exit_code, "status":result.status, "errorCode":result.error_code, "errorMessage":result.error_message, "startedAt":started_at, "finishedAt":now_iso(), "durationMs":started.elapsed().as_secs_f64()*1000.0, "at":now_iso() }));
+            let failure_response = if result.status == "success" {
+                Value::Null
+            } else {
+                Value::String(
+                    result
+                        .error_message
+                        .clone()
+                        .unwrap_or_else(|| result.output.clone()),
+                )
+            };
+            sink.emit(json!({ "type":"tool.finished", "taskId":session.task_id, "toolCallId":call.id, "exitCode":result.exit_code, "status":result.status, "errorCode":result.error_code, "errorMessage":result.error_message, "response":failure_response, "startedAt":started_at, "finishedAt":now_iso(), "durationMs":started.elapsed().as_secs_f64()*1000.0, "at":now_iso() }));
             result
         }
         Err(error) => {
@@ -1467,7 +1479,7 @@ fn finish_failure(
     code: &str,
     message: String,
 ) -> ToolResult {
-    sink.emit(json!({ "type":"tool.finished", "taskId":session.task_id, "toolCallId":call.id, "exitCode":1, "status":status, "errorCode":code, "errorMessage":redact_text(&message,500), "startedAt":started_at, "finishedAt":now_iso(), "durationMs":started.elapsed().as_secs_f64()*1000.0, "at":now_iso() }));
+    sink.emit(json!({ "type":"tool.finished", "taskId":session.task_id, "toolCallId":call.id, "exitCode":1, "status":status, "errorCode":code, "errorMessage":redact_text(&message,500), "response":message.clone(), "startedAt":started_at, "finishedAt":now_iso(), "durationMs":started.elapsed().as_secs_f64()*1000.0, "at":now_iso() }));
     let mut result = ToolResult::failure(status, code, message);
     result.title = name.to_owned();
     result
@@ -1587,7 +1599,12 @@ mod tests {
             assert_eq!(result.error_code.as_deref(), Some(expected));
             let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
             assert_eq!(observed.first().unwrap()["type"], "tool.requested");
+            assert_eq!(
+                observed.first().unwrap()["arguments"]["filePath"],
+                "README.md"
+            );
             assert_eq!(observed.last().unwrap()["type"], "tool.finished");
+            assert!(observed.last().unwrap()["response"].as_str().is_some());
             assert_eq!(
                 observed
                     .iter()

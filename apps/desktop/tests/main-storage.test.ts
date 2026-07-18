@@ -355,6 +355,48 @@ test("single-task writes update payloads without rewriting or reordering unrelat
   assert.equal(storage.readTask("missing"), null);
 });
 
+test("local diagnostics report logical size, exportable records, and clear independently of product telemetry", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-diagnostics-"));
+  const storage = loadStorage(userData);
+
+  storage.appendLocalDiagnostic({
+    at: "2026-01-01T00:00:00.000Z",
+    level: "error",
+    source: "desktop",
+    event: "tool.failed",
+    taskId: "task-1",
+    message: "Edit failed.",
+    data: { errorCode: "invalid_arguments" },
+  });
+  storage.writeProductTelemetryEvent({
+    id: "event-1",
+    type: "review.opened",
+    at: "2026-01-01T00:00:01.000Z",
+    taskId: "task-1",
+    repositoryId: "repo-1",
+    data: { scope: "task" },
+  });
+
+  const info = storage.readLocalDiagnosticInfo();
+  assert.equal(info.entries, 1);
+  assert.ok(info.bytes > 0);
+  assert.deepEqual(plain(storage.readLocalDiagnostics()), [{
+    id: 1,
+    at: "2026-01-01T00:00:00.000Z",
+    level: "error",
+    source: "desktop",
+    event: "tool.failed",
+    taskId: "task-1",
+    message: "Edit failed.",
+    data: { errorCode: "invalid_arguments" },
+  }]);
+  assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
+
+  assert.deepEqual(plain(storage.clearLocalDiagnostics()), { bytes: 0, entries: 0 });
+  assert.deepEqual(plain(storage.readLocalDiagnostics()), []);
+  assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
+});
+
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-"));
   const storage = loadStorage(userData);

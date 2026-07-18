@@ -129,6 +129,7 @@ type UmbraticBackendDiagnostics = {
   localhostOnlyModels: boolean;
   commandClassifier: "enabled";
   runnerDiagnosticsDirectory: string;
+  localLogs: { bytes: number; entries: number };
   telemetry: UmbraticTelemetryPolicyInfo;
   runtimes: {
     python: {
@@ -378,6 +379,17 @@ declare global {
         status: UmbraticBackendStatus;
       }>;
       exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+      exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
+      clearLocalDiagnostics(): Promise<{ bytes: number; entries: number }>;
+      recordProductEvent(input: {
+        type: "review.opened" | "ide.selected";
+        taskId?: string;
+        repositoryId?: string;
+        scope?: "task" | "worktree";
+        target?: "task" | "project";
+        ideId?: string;
+        surface?: "composer" | "review";
+      }): Promise<void>;
       listSkills(): Promise<{
         skills: UmbraticSkillInfo[];
         directory: string;
@@ -451,7 +463,7 @@ declare global {
       rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
       keepWorktree(input: { taskId: string }): Promise<void>;
       cancelTask(input: { taskId: string }): Promise<void>;
-      setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad" }): Promise<void>;
+      setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }): Promise<void>;
       setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
       onBackendEvent(callback: (event: UmbraticBackendUiEvent) => void): () => void;
     };

@@ -6,8 +6,6 @@ export type EndpointMtlsConfig = {
   caPath?: string;
   certPath?: string;
   keyPath?: string;
-  pfxPath?: string;
-  passphrase?: string;
   serverName?: string;
   pinnedServerCertificateSha256?: string;
 };
@@ -113,8 +111,6 @@ export const defaultEndpointMtlsConfig: EndpointMtlsConfig | undefined = (() => 
     caPath: optionalEnv("UMBRATIC_MODEL_MTLS_CA_PATH"),
     certPath: optionalEnv("UMBRATIC_MODEL_MTLS_CERT_PATH"),
     keyPath: optionalEnv("UMBRATIC_MODEL_MTLS_KEY_PATH"),
-    pfxPath: optionalEnv("UMBRATIC_MODEL_MTLS_PFX_PATH"),
-    passphrase: optionalEnv("UMBRATIC_MODEL_MTLS_PASSPHRASE"),
     serverName: optionalEnv("UMBRATIC_MODEL_TLS_SERVER_NAME"),
     pinnedServerCertificateSha256: optionalEnv("UMBRATIC_MODEL_TLS_PIN_SHA256"),
   };

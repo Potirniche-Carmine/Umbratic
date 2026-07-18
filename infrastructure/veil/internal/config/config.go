@@ -26,6 +26,7 @@ type Config struct {
 	TelemetryEnabled           bool
 	TelemetryStorePath         string
 	TelemetryRetentionDays     int
+	TelemetryMaxBodyBytes      int64
 	ModelTimeout               time.Duration
 	RequestTimeout             time.Duration
 	MaxBodyBytes               int64
@@ -45,6 +46,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	maxBodyBytes, err := envInt64("VEIL_MAX_BODY_BYTES", 1<<20)
+	if err != nil {
+		return Config{}, err
+	}
+	telemetryMaxBodyBytes, err := envInt64("VEIL_TELEMETRY_MAX_BODY_BYTES", 16<<20)
 	if err != nil {
 		return Config{}, err
 	}
@@ -79,6 +84,7 @@ func Load() (Config, error) {
 		TelemetryEnabled:           telemetryEnabled,
 		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
 		TelemetryRetentionDays:     telemetryRetentionDays,
+		TelemetryMaxBodyBytes:      telemetryMaxBodyBytes,
 		ModelTimeout:               modelTimeout,
 		RequestTimeout:             requestTimeout,
 		MaxBodyBytes:               maxBodyBytes,
@@ -107,6 +113,9 @@ func Load() (Config, error) {
 	}
 	if cfg.TelemetryRetentionDays <= 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_RETENTION_DAYS must be positive")
+	}
+	if cfg.TelemetryMaxBodyBytes <= 0 {
+		return Config{}, errors.New("VEIL_TELEMETRY_MAX_BODY_BYTES must be positive")
 	}
 
 	return cfg, nil

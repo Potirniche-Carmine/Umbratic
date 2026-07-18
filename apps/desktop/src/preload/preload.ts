@@ -73,6 +73,17 @@ const umbraticApi = {
   }) =>
     ipcRenderer.invoke("umbratic:save-model-endpoint-settings", input),
   exportTelemetry: () => ipcRenderer.invoke("umbratic:export-telemetry"),
+  exportLocalDiagnostics: () => ipcRenderer.invoke("umbratic:export-local-diagnostics"),
+  clearLocalDiagnostics: () => ipcRenderer.invoke("umbratic:clear-local-diagnostics"),
+  recordProductEvent: (input: {
+    type: "review.opened" | "ide.selected";
+    taskId?: string;
+    repositoryId?: string;
+    scope?: "task" | "worktree";
+    target?: "task" | "project";
+    ideId?: string;
+    surface?: "composer" | "review";
+  }) => ipcRenderer.invoke("umbratic:record-product-event", input),
   listSkills: () => ipcRenderer.invoke("umbratic:list-skills"),
   saveSkillSettings: (input: Record<string, boolean>) => ipcRenderer.invoke("umbratic:save-skill-settings", input),
   openSkillsFolder: () => ipcRenderer.invoke("umbratic:open-skills-folder"),
@@ -107,7 +118,7 @@ const umbraticApi = {
   rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("umbratic:reject-task", input),
   keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:cancel-task", input),
-  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" }) =>
+  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {

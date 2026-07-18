@@ -17,17 +17,8 @@ import (
 type Bundle struct {
 	SchemaVersion int              `json:"schemaVersion"`
 	ExportedAt    string           `json:"exportedAt"`
-	Policy        Policy           `json:"policy"`
+	ProductEvents []map[string]any `json:"productEvents"`
 	Tasks         []map[string]any `json:"tasks"`
-}
-
-type Policy struct {
-	Mode          string `json:"mode"`
-	LocalEnabled  bool   `json:"localEnabled"`
-	SyncEnabled   bool   `json:"syncEnabled"`
-	RetentionDays int    `json:"retentionDays"`
-	ExportFormat  string `json:"exportFormat"`
-	Storage       string `json:"storage"`
 }
 
 var ErrInvalidBundle = errors.New("invalid telemetry bundle")
@@ -58,14 +49,11 @@ func DecodeBundle(reader io.Reader) (Bundle, []byte, error) {
 }
 
 func validateBundle(bundle Bundle) error {
-	if bundle.SchemaVersion != 1 {
+	if bundle.SchemaVersion != 4 {
 		return fmt.Errorf("%w: unsupported schema version", ErrInvalidBundle)
 	}
 	if _, err := time.Parse(time.RFC3339Nano, bundle.ExportedAt); err != nil {
 		return fmt.Errorf("%w: exportedAt must be RFC3339", ErrInvalidBundle)
-	}
-	if err := validatePolicy(bundle.Policy); err != nil {
-		return err
 	}
 	if len(bundle.Tasks) > 1000 {
 		return fmt.Errorf("%w: too many tasks", ErrInvalidBundle)
@@ -75,21 +63,13 @@ func validateBundle(bundle Bundle) error {
 			return err
 		}
 	}
-	return nil
-}
-
-func validatePolicy(policy Policy) error {
-	if policy.Mode != "developer_toggle" && policy.Mode != "managed_required" && policy.Mode != "managed_disabled" {
-		return fmt.Errorf("%w: invalid policy mode", ErrInvalidBundle)
+	if len(bundle.ProductEvents) > 100000 {
+		return fmt.Errorf("%w: too many product events", ErrInvalidBundle)
 	}
-	if policy.ExportFormat != "redacted-json" {
-		return fmt.Errorf("%w: invalid export format", ErrInvalidBundle)
-	}
-	if policy.Storage != "company-managed-telemetry" && policy.Storage != "task-event-snapshots" {
-		return fmt.Errorf("%w: invalid storage", ErrInvalidBundle)
-	}
-	if policy.RetentionDays <= 0 || policy.RetentionDays > 3650 {
-		return fmt.Errorf("%w: invalid retention", ErrInvalidBundle)
+	for _, event := range bundle.ProductEvents {
+		if err := validateProductEvent(event); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -104,25 +84,63 @@ func validateTask(task map[string]any) error {
 			return fmt.Errorf("%w: raw task field %q is not allowed", ErrInvalidBundle, blocked)
 		}
 	}
-	if events, ok := task["events"].([]any); ok {
-		for _, event := range events {
-			eventMap, ok := event.(map[string]any)
-			if !ok {
-				return fmt.Errorf("%w: event must be an object", ErrInvalidBundle)
-			}
-			if eventType, ok := eventMap["type"].(string); !ok || eventType == "" {
-				return fmt.Errorf("%w: event type is required", ErrInvalidBundle)
-			}
-			if data, ok := eventMap["data"].(map[string]any); ok {
-				if err := validateEventData(data); err != nil {
-					return err
-				}
+	if _, exists := task["events"]; exists {
+		return fmt.Errorf("%w: raw task events are not allowed", ErrInvalidBundle)
+	}
+	if err := validateFeedback(task["feedback"]); err != nil {
+		return err
+	}
+	if err := validateFailedTools(task["failedTools"]); err != nil {
+		return err
+	}
+	if err := validateContextTriggers(task["contextTriggers"]); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateFeedback(value any) error {
+	feedback, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("%w: feedback must be an array", ErrInvalidBundle)
+	}
+	if len(feedback) > 100 {
+		return fmt.Errorf("%w: too many feedback records", ErrInvalidBundle)
+	}
+	for _, item := range feedback {
+		record, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: feedback record must be an object", ErrInvalidBundle)
+		}
+		if err := requiredString(record, "messageId", 128); err != nil {
+			return err
+		}
+		rating, _ := record["rating"].(string)
+		if rating != "good" && rating != "bad" {
+			return fmt.Errorf("%w: invalid feedback rating", ErrInvalidBundle)
+		}
+		if comment, exists := record["comment"]; exists {
+			if text, ok := comment.(string); !ok || len(text) > 4000 {
+				return fmt.Errorf("%w: invalid feedback comment", ErrInvalidBundle)
 			}
 		}
-	}
-	if probes, ok := task["capabilityProbes"].([]any); ok {
-		for _, probe := range probes {
-			if err := validateCapabilityProbe(probe); err != nil {
+		conversation, ok := record["conversation"].([]any)
+		if !ok || len(conversation) > 2000 {
+			return fmt.Errorf("%w: invalid feedback conversation", ErrInvalidBundle)
+		}
+		for _, message := range conversation {
+			entry, ok := message.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%w: conversation message must be an object", ErrInvalidBundle)
+			}
+			role, _ := entry["role"].(string)
+			if role != "user" && role != "assistant" {
+				return fmt.Errorf("%w: invalid conversation role", ErrInvalidBundle)
+			}
+			if err := requiredString(entry, "content", 4<<20); err != nil {
+				return err
+			}
+			if err := requiredString(entry, "taskId", 128); err != nil {
 				return err
 			}
 		}
@@ -130,30 +148,84 @@ func validateTask(task map[string]any) error {
 	return nil
 }
 
-func validateEventData(data map[string]any) error {
-	for _, blocked := range []string{"prompt", "rawPrompt", "text", "rawText", "fullDiff", "commandOutput", "sourceContents"} {
-		if _, exists := data[blocked]; exists {
-			return fmt.Errorf("%w: raw event field %q is not allowed", ErrInvalidBundle, blocked)
+func validateFailedTools(value any) error {
+	tools, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("%w: failedTools must be an array", ErrInvalidBundle)
+	}
+	if len(tools) > 2000 {
+		return fmt.Errorf("%w: too many failed tools", ErrInvalidBundle)
+	}
+	for _, item := range tools {
+		record, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: failed tool must be an object", ErrInvalidBundle)
+		}
+		if err := requiredString(record, "id", 160); err != nil {
+			return err
+		}
+		if err := requiredString(record, "toolKind", 80); err != nil {
+			return err
+		}
+		if _, exists := record["input"]; !exists {
+			return fmt.Errorf("%w: failed tool input is required", ErrInvalidBundle)
+		}
+		response, ok := record["response"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: failed tool response is required", ErrInvalidBundle)
+		}
+		for _, key := range []string{"stdout", "stderr"} {
+			if _, ok := response[key].(string); !ok {
+				return fmt.Errorf("%w: failed tool %s is required", ErrInvalidBundle, key)
+			}
 		}
 	}
 	return nil
 }
 
-func validateCapabilityProbe(value any) error {
-	probe, ok := value.(map[string]any)
-	if !ok {
-		return fmt.Errorf("%w: capability probe must be an object", ErrInvalidBundle)
+func validateContextTriggers(value any) error {
+	triggers, ok := value.([]any)
+	if !ok || len(triggers) > 10000 {
+		return fmt.Errorf("%w: invalid context triggers", ErrInvalidBundle)
 	}
-	if id, ok := probe["id"].(string); !ok || strings.TrimSpace(id) == "" {
-		return fmt.Errorf("%w: capability probe id is required", ErrInvalidBundle)
+	for _, item := range triggers {
+		trigger, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: context trigger must be an object", ErrInvalidBundle)
+		}
+		threshold := fmt.Sprint(trigger["threshold"])
+		if threshold != "75" && threshold != "90" {
+			return fmt.Errorf("%w: invalid context threshold", ErrInvalidBundle)
+		}
 	}
-	status, ok := probe["status"].(string)
-	if !ok || (status != "available" && status != "missing" && status != "error" && status != "unknown") {
-		return fmt.Errorf("%w: invalid capability probe status", ErrInvalidBundle)
+	return nil
+}
+
+func validateProductEvent(event map[string]any) error {
+	if err := requiredString(event, "id", 128); err != nil {
+		return err
 	}
-	category, ok := probe["category"].(string)
-	if !ok || (category != "required" && category != "recommended" && category != "optional-engineering" && category != "optional-artifacts") {
-		return fmt.Errorf("%w: invalid capability probe category", ErrInvalidBundle)
+	eventType, _ := event["type"].(string)
+	allowed := map[string]bool{
+		"review.opened": true, "ide.selected": true, "ide.opened": true,
+		"task.accepted": true, "task.undone": true, "worktree.requested": true,
+		"worktree.approved": true, "worktree.denied": true, "worktree.created": true,
+		"worktree.kept": true,
+	}
+	if !allowed[eventType] {
+		return fmt.Errorf("%w: invalid product event type", ErrInvalidBundle)
+	}
+	at, _ := event["at"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
+		return fmt.Errorf("%w: product event timestamp is invalid", ErrInvalidBundle)
+	}
+	return nil
+}
+
+func requiredString(value map[string]any, key string, limit int) error {
+	text, ok := value[key].(string)
+	if !ok || strings.TrimSpace(text) == "" || len(text) > limit {
+		return fmt.Errorf("%w: %s is required", ErrInvalidBundle, key)
 	}
 	return nil
 }

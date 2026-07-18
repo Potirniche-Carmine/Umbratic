@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +6,9 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
+import { resolveInstalledElectron } from "../apps/desktop/scripts/electron-runtime.ts";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(import.meta.url);
 const samples = positiveInteger(process.env.UMBRATIC_BENCH_SAMPLES, 10);
 const settleMs = positiveInteger(process.env.UMBRATIC_BENCH_SETTLE_MS, 500);
 const label = process.env.UMBRATIC_BENCH_LABEL || "electron-typescript";
@@ -17,7 +17,7 @@ const outputPath = process.env.UMBRATIC_BENCH_OUTPUT
   : null;
 const desktopCommand = process.env.UMBRATIC_BENCH_DESKTOP
   ? path.resolve(process.env.UMBRATIC_BENCH_DESKTOP)
-  : require("electron");
+  : resolveInstalledElectron();
 const desktopArgs = process.env.UMBRATIC_BENCH_DESKTOP_ARGS
   ? JSON.parse(process.env.UMBRATIC_BENCH_DESKTOP_ARGS)
   : [path.join(root, "apps/desktop")];

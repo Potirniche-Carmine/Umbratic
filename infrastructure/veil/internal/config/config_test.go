@@ -23,6 +23,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
 	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
 	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "")
+	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
@@ -69,7 +70,7 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	if cfg.TemplateRegistryPath != "" {
 		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
 	}
-	if !cfg.TelemetryEnabled || cfg.TelemetryRetentionDays != 30 || cfg.TelemetryStorePath != "" {
+	if !cfg.TelemetryEnabled || cfg.TelemetryRetentionDays != 30 || cfg.TelemetryStorePath != "" || cfg.TelemetryMaxBodyBytes != 16<<20 {
 		t.Fatalf("unexpected telemetry defaults: %#v", cfg)
 	}
 	if cfg.ModelTimeout != 12*time.Second || cfg.RequestTimeout != 20*time.Second {
@@ -96,6 +97,7 @@ func TestLoadUsesConfiguredTelemetryPolicy(t *testing.T) {
 	t.Setenv("VEIL_TELEMETRY_ENABLED", "false")
 	t.Setenv("VEIL_TELEMETRY_STORE_PATH", storePath)
 	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "14")
+	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "8388608")
 
 	cfg, err := Load()
 	if err != nil {
@@ -109,6 +111,9 @@ func TestLoadUsesConfiguredTelemetryPolicy(t *testing.T) {
 	}
 	if cfg.TelemetryRetentionDays != 14 {
 		t.Fatalf("unexpected retention days %d", cfg.TelemetryRetentionDays)
+	}
+	if cfg.TelemetryMaxBodyBytes != 8388608 {
+		t.Fatalf("unexpected telemetry body limit %d", cfg.TelemetryMaxBodyBytes)
 	}
 }
 
@@ -182,6 +187,13 @@ func TestLoadRejectsInvalidTelemetryPolicy(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid telemetry retention error")
 	}
+
+	setRequiredEnv(t)
+	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "0")
+	_, err = Load()
+	if err == nil {
+		t.Fatal("expected invalid telemetry body limit error")
+	}
 }
 
 func TestLoadRequiresProviderBaseURL(t *testing.T) {
@@ -220,6 +232,7 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
+	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
 	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")

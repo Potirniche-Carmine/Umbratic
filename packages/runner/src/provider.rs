@@ -56,37 +56,21 @@ fn client_for(provider: &ProviderConfig) -> Result<Client, String> {
             .map_err(|error| format!("Invalid mTLS CA: {error}"))?;
             builder = builder.add_root_certificate(certificate);
         }
-        if let Some(pfx) = &mtls.pfx_path {
-            if mtls.cert_path.is_some() || mtls.key_path.is_some() {
-                return Err(
-                    "Configure either provider.mtls.pfxPath or certPath/keyPath, not both.".into(),
+        match (&mtls.cert_path, &mtls.key_path) {
+            (Some(cert), Some(key)) => {
+                let mut identity = fs::read(cert)
+                    .map_err(|error| format!("Unable to read mTLS certificate: {error}"))?;
+                identity.extend_from_slice(b"\n");
+                identity.extend_from_slice(
+                    &fs::read(key).map_err(|error| format!("Unable to read mTLS key: {error}"))?,
+                );
+                builder = builder.use_rustls_tls().identity(
+                    Identity::from_pem(&identity)
+                        .map_err(|error| format!("Invalid mTLS identity: {error}"))?,
                 );
             }
-            builder = builder.use_native_tls().identity(
-                Identity::from_pkcs12_der(
-                    &fs::read(pfx).map_err(|error| format!("Unable to read mTLS PFX: {error}"))?,
-                    mtls.passphrase.as_deref().unwrap_or(""),
-                )
-                .map_err(|error| format!("Invalid mTLS PFX identity: {error}"))?,
-            );
-        } else {
-            match (&mtls.cert_path, &mtls.key_path) {
-                (Some(cert), Some(key)) => {
-                    let mut identity = fs::read(cert)
-                        .map_err(|error| format!("Unable to read mTLS certificate: {error}"))?;
-                    identity.extend_from_slice(b"\n");
-                    identity.extend_from_slice(
-                        &fs::read(key)
-                            .map_err(|error| format!("Unable to read mTLS key: {error}"))?,
-                    );
-                    builder = builder.use_rustls_tls().identity(
-                        Identity::from_pem(&identity)
-                            .map_err(|error| format!("Invalid mTLS identity: {error}"))?,
-                    );
-                }
-                (None, None) => {}
-                _ => return Err("mTLS certPath and keyPath must be configured together.".into()),
-            }
+            (None, None) => {}
+            _ => return Err("mTLS certPath and keyPath must be configured together.".into()),
         }
     }
     builder.build().map_err(|error| error.to_string())
@@ -711,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn mtls_identity_formats_are_mutually_exclusive_and_pem_requires_a_pair() {
+    fn mtls_pem_identity_requires_a_certificate_and_key_pair() {
         let cert_only = provider_with_mtls(MtlsConfig {
             cert_path: Some("client.pem".into()),
             ..MtlsConfig::default()
@@ -720,18 +704,6 @@ mod tests {
             client_for(&cert_only)
                 .unwrap_err()
                 .contains("certPath and keyPath")
-        );
-
-        let mixed = provider_with_mtls(MtlsConfig {
-            pfx_path: Some("client.pfx".into()),
-            cert_path: Some("client.pem".into()),
-            key_path: Some("client-key.pem".into()),
-            ..MtlsConfig::default()
-        });
-        assert!(
-            client_for(&mixed)
-                .unwrap_err()
-                .contains("either provider.mtls.pfxPath")
         );
     }
 }

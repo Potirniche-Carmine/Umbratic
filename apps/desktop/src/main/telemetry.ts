@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { BackendUiEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
+import type { BackendUiEvent, ProductTelemetryEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
 import { classifyCommandText, redactText } from "./policy";
 
 function diffStats(diff: string): { additions: number; deletions: number } {
@@ -182,12 +182,126 @@ function telemetryEventSummary(events: BackendUiEvent[]) {
   return summary;
 }
 
-export function buildRedactedTelemetryBundle(tasks: TaskRecord[], _projects: RepositoryInfo[]) {
+type TelemetryConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+  taskId: string;
+  at?: string;
+  messageId?: string;
+};
+
+function taskConversation(task: TaskRecord): TelemetryConversationMessage[] {
+  const messages: TelemetryConversationMessage[] = [];
+  let assistant = "";
+  let assistantAt: string | undefined;
+  let assistantIndex = 0;
+  const flushAssistant = () => {
+    const content = assistant.trim();
+    if (content && content !== "Ready for review.") {
+      assistantIndex += 1;
+      messages.push({
+        role: "assistant",
+        content,
+        taskId: task.id,
+        at: assistantAt,
+        messageId: `assistant-${assistantIndex}`,
+      });
+    }
+    assistant = "";
+    assistantAt = undefined;
+  };
+
+  for (const event of task.events ?? []) {
+    if (event.type === "user.message") {
+      flushAssistant();
+      messages.push({ role: "user", content: event.text, taskId: task.id, at: event.at });
+      continue;
+    }
+    if (event.type === "assistant.delta") {
+      assistantAt ??= event.at;
+      assistant += event.text;
+      continue;
+    }
+    if (event.type === "assistant.done") flushAssistant();
+  }
+  flushAssistant();
+  return messages;
+}
+
+function conversationByChat(tasks: TaskRecord[]): Map<string, TelemetryConversationMessage[]> {
+  const conversations = new Map<string, TelemetryConversationMessage[]>();
+  for (const task of [...tasks].sort((left, right) => left.createdAt.localeCompare(right.createdAt))) {
+    const key = task.chatId || task.id;
+    conversations.set(key, [...(conversations.get(key) ?? []), ...taskConversation(task)]);
+  }
+  return conversations;
+}
+
+function feedbackTelemetry(task: TaskRecord, conversation: TelemetryConversationMessage[]) {
+  return (task.events ?? [])
+    .filter((event): event is Extract<BackendUiEvent, { type: "response.feedback" }> => event.type === "response.feedback")
+    .map((event) => ({
+      messageId: event.messageId,
+      rating: event.rating,
+      ...(event.comment ? { comment: event.comment } : {}),
+      at: event.at,
+      conversation,
+    }));
+}
+
+function failedToolTelemetry(task: TaskRecord) {
+  return (task.events ?? [])
+    .filter((event): event is Extract<BackendUiEvent, { type: "tool.failed" }> => event.type === "tool.failed")
+    .map((event) => ({
+      id: event.id,
+      toolKind: event.toolKind,
+      input: event.input,
+      response: event.response,
+      at: event.at,
+    }));
+}
+
+function contextTriggerTelemetry(task: TaskRecord) {
+  const explicit = (task.events ?? [])
+    .filter((event): event is Extract<BackendUiEvent, { type: "context.threshold" }> => event.type === "context.threshold")
+    .map((event) => ({
+      threshold: event.threshold,
+      at: event.at,
+      estimatedTokens: event.estimatedTokens,
+      contextLength: event.contextLength,
+    }));
+  if (explicit.length) return explicit;
+  const triggers: Array<{ threshold: 75 | 90; at?: string; estimatedTokens: number; contextLength: number }> = [];
+  let above75 = false;
+  let above90 = false;
+  for (const event of task.events ?? []) {
+    if (event.type !== "context.usage" || event.contextLength <= 0) continue;
+    const ratio = event.estimatedTokens / event.contextLength;
+    if (ratio >= 0.75 && !above75) {
+      triggers.push({ threshold: 75, at: event.at, estimatedTokens: event.estimatedTokens, contextLength: event.contextLength });
+    }
+    if (ratio >= 0.9 && !above90) {
+      triggers.push({ threshold: 90, at: event.at, estimatedTokens: event.estimatedTokens, contextLength: event.contextLength });
+    }
+    above75 = ratio >= 0.75;
+    above90 = ratio >= 0.9;
+  }
+  return triggers;
+}
+
+export function buildRedactedTelemetryBundle(
+  tasks: TaskRecord[],
+  _projects: RepositoryInfo[],
+  productEvents: ProductTelemetryEvent[] = [],
+) {
+  const conversations = conversationByChat(tasks);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     exportedAt: new Date().toISOString(),
+    productEvents,
     tasks: tasks.map((task) => {
       const events = task.events ?? [];
+      const conversation = conversations.get(task.chatId || task.id) ?? [];
       return {
         id: task.id,
         chatId: task.chatId,
@@ -225,6 +339,9 @@ export function buildRedactedTelemetryBundle(tasks: TaskRecord[], _projects: Rep
         },
         runtimeHealth: capabilitySummary(task),
         activity: telemetryEventSummary(events),
+        feedback: feedbackTelemetry(task, conversation),
+        failedTools: failedToolTelemetry(task),
+        contextTriggers: contextTriggerTelemetry(task),
       };
     }),
   };

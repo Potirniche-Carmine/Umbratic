@@ -31,8 +31,12 @@ import type {
   ChatRecord,
   HarnessProfileId,
   LocalProviderId,
+  LocalDiagnosticInfo,
+  LocalDiagnosticLevel,
+  LocalDiagnosticRecord,
   ModelEndpointMode,
   ModelEndpointSettings,
+  ProductTelemetryEvent,
   RepositoryInfo,
   RunnerToolId,
   TaskRecord,
@@ -45,6 +49,10 @@ function dataFile(name: string): string {
 
 function appDatabasePath(): string {
   return dataFile("umbratic.sqlite");
+}
+
+export function localDatabasePath(): string {
+  return appDatabasePath();
 }
 
 function chatsDatabasePath(): string {
@@ -76,6 +84,36 @@ type PayloadRow = {
 
 type PositionRow = {
   position: number | null;
+};
+
+type DiagnosticRow = {
+  id: number;
+  at: string;
+  level: string;
+  source: string;
+  event: string;
+  task_id: string | null;
+  message: string | null;
+  data: string;
+};
+
+type DiagnosticStatsRow = {
+  bytes: number;
+  entries: number;
+};
+
+type ProductTelemetryRow = {
+  payload: string;
+};
+
+export type LocalDiagnosticInput = {
+  at?: string;
+  level: LocalDiagnosticLevel;
+  source: string;
+  event: string;
+  taskId?: string;
+  message?: string;
+  data?: unknown;
 };
 
 type RecordTableName = "projects" | "tasks" | "chats";
@@ -141,12 +179,136 @@ function ensureStorageSchema(db: DatabaseSync) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS diagnostic_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      level TEXT NOT NULL,
+      source TEXT NOT NULL,
+      event TEXT NOT NULL,
+      task_id TEXT,
+      message TEXT,
+      data TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS product_telemetry_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      type TEXT NOT NULL,
+      at TEXT NOT NULL,
+      task_id TEXT,
+      repository_id TEXT,
+      payload TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS chats_updated_at_index ON chats(updated_at DESC);
     CREATE INDEX IF NOT EXISTS chats_repository_path_index ON chats(repository_path);
     CREATE INDEX IF NOT EXISTS tasks_created_at_index ON tasks(created_at DESC);
     CREATE INDEX IF NOT EXISTS tasks_repository_id_index ON tasks(repository_id);
-    PRAGMA user_version = 1;
+    CREATE INDEX IF NOT EXISTS diagnostic_logs_at_index ON diagnostic_logs(at DESC);
+    CREATE INDEX IF NOT EXISTS diagnostic_logs_task_id_index ON diagnostic_logs(task_id);
+    CREATE INDEX IF NOT EXISTS product_telemetry_events_at_index ON product_telemetry_events(at ASC);
+    CREATE INDEX IF NOT EXISTS product_telemetry_events_task_id_index ON product_telemetry_events(task_id);
+    PRAGMA user_version = 2;
   `);
+}
+
+function normalizedDiagnosticText(value: string | undefined, limit: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  return normalized.slice(0, limit);
+}
+
+export function appendLocalDiagnostic(input: LocalDiagnosticInput): void {
+  const source = normalizedDiagnosticText(input.source, 80);
+  const event = normalizedDiagnosticText(input.event, 160);
+  if (!source || !event) return;
+  const at = typeof input.at === "string" && Number.isFinite(Date.parse(input.at)) ? input.at : new Date().toISOString();
+  const data = JSON.stringify(input.data ?? {});
+  withAppDatabase((db) => {
+    db.prepare(`
+      INSERT INTO diagnostic_logs (at, level, source, event, task_id, message, data)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      at,
+      input.level,
+      source,
+      event,
+      normalizedDiagnosticText(input.taskId, 128) ?? null,
+      normalizedDiagnosticText(input.message, 4000) ?? null,
+      data,
+    );
+  });
+}
+
+export function readLocalDiagnosticInfo(): LocalDiagnosticInfo {
+  return withAppDatabase((db) => {
+    const row = db.prepare(`
+      SELECT
+        COUNT(*) AS entries,
+        COALESCE(SUM(
+          LENGTH(CAST(at AS BLOB)) +
+          LENGTH(CAST(level AS BLOB)) +
+          LENGTH(CAST(source AS BLOB)) +
+          LENGTH(CAST(event AS BLOB)) +
+          COALESCE(LENGTH(CAST(task_id AS BLOB)), 0) +
+          COALESCE(LENGTH(CAST(message AS BLOB)), 0) +
+          LENGTH(CAST(data AS BLOB))
+        ), 0) AS bytes
+      FROM diagnostic_logs
+    `).get() as DiagnosticStatsRow;
+    return { bytes: Number(row.bytes) || 0, entries: Number(row.entries) || 0 };
+  });
+}
+
+export function readLocalDiagnostics(): LocalDiagnosticRecord[] {
+  return withAppDatabase((db) => {
+    const rows = db.prepare(`
+      SELECT id, at, level, source, event, task_id, message, data
+      FROM diagnostic_logs
+      ORDER BY id ASC
+    `).all() as DiagnosticRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      at: row.at,
+      level: row.level as LocalDiagnosticLevel,
+      source: row.source,
+      event: row.event,
+      ...(row.task_id ? { taskId: row.task_id } : {}),
+      ...(row.message ? { message: row.message } : {}),
+      data: parsePayload(row.data) ?? {},
+    }));
+  });
+}
+
+export function clearLocalDiagnostics(): LocalDiagnosticInfo {
+  return withAppDatabase((db) => {
+    db.exec("DELETE FROM diagnostic_logs; VACUUM;");
+    return { bytes: 0, entries: 0 };
+  });
+}
+
+export function writeProductTelemetryEvent(event: ProductTelemetryEvent): void {
+  withAppDatabase((db) => {
+    db.prepare(`
+      INSERT OR REPLACE INTO product_telemetry_events (id, type, at, task_id, repository_id, payload)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      event.id,
+      event.type,
+      event.at,
+      event.taskId ?? null,
+      event.repositoryId ?? null,
+      JSON.stringify(event),
+    );
+  });
+}
+
+export function readProductTelemetryEvents(): ProductTelemetryEvent[] {
+  return withAppDatabase((db) => (
+    db.prepare("SELECT payload FROM product_telemetry_events ORDER BY at ASC, id ASC").all() as ProductTelemetryRow[]
+  ).map((row) => parsePayload(row.payload)).filter((event): event is ProductTelemetryEvent => (
+    isRecord(event) && typeof event.id === "string" && typeof event.type === "string" && typeof event.at === "string"
+  )));
 }
 
 function runTransaction(db: DatabaseSync, action: () => void) {

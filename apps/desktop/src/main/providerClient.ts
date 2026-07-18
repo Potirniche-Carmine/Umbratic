@@ -34,8 +34,6 @@ function tlsOptions(url: URL, mtls?: EndpointMtlsConfig): https.RequestOptions {
     ca: readOptionalFile(mtls.caPath),
     cert: readOptionalFile(mtls.certPath),
     key: readOptionalFile(mtls.keyPath),
-    pfx: readOptionalFile(mtls.pfxPath),
-    passphrase: mtls.passphrase,
     servername: mtls.serverName || url.hostname,
     minVersion: "TLSv1.2",
   };

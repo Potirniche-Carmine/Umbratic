@@ -245,8 +245,9 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.doesNotMatch(serialized, /echo token/);
   assert.doesNotMatch(serialized, /C:\/secret/);
   assert.doesNotMatch(serialized, /executablePath/);
-  assert.equal(bundle.schemaVersion, 3);
+  assert.equal(bundle.schemaVersion, 4);
   assert.equal("policy" in bundle, false);
+  assert.deepEqual(plain(bundle.productEvents), []);
 
   const task = bundle.tasks[0];
   assert.equal(task.outcome, "success");
@@ -288,6 +289,76 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.equal(task.activity.context.byKind.log, 1);
   assert.equal(task.activity.context.byStrategy.log_errors_tail, 1);
   assert.equal(task.activity.requiredToolFailures.attempted_tool_failed, 1);
+});
+
+test("telemetry includes full rated conversations, exact failed tool payloads, context crossings, and product events", () => {
+  const task = (id, createdAt, events) => ({
+    id,
+    chatId: "chat-shared",
+    repositoryId: "repo-1",
+    originalRepoPath: "/private/repo",
+    workspaceKind: "git",
+    workspaceMode: "local",
+    originalBranch: "main",
+    baseCommit: "abcdef1234567890",
+    worktreePath: "/private/repo",
+    permissionMode: "normal",
+    reasoningMode: "reasoning",
+    state: "completed",
+    createdAt,
+    changedFiles: [],
+    reviewFiles: [],
+    prompt: "stored prompt",
+    events,
+  });
+  const bundle = buildRedactedTelemetryBundle(
+    [
+      task("task-1", "2026-01-01T00:00:00.000Z", [
+        { type: "user.message", taskId: "task-1", text: "First user message", at: "2026-01-01T00:00:00.000Z" },
+        { type: "assistant.delta", taskId: "task-1", text: "First response", at: "2026-01-01T00:00:01.000Z" },
+        { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:02.000Z" },
+        { type: "response.feedback", taskId: "task-1", messageId: "assistant-1", rating: "bad", comment: "Missed the edge case.", at: "2026-01-01T00:00:03.000Z" },
+        { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 700, reserveTokens: 100, estimatedTokens: 800, at: "2026-01-01T00:00:04.000Z" },
+        { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 850, reserveTokens: 100, estimatedTokens: 950, at: "2026-01-01T00:00:05.000Z" },
+        { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 400, reserveTokens: 100, estimatedTokens: 500, at: "2026-01-01T00:00:06.000Z" },
+        { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 660, reserveTokens: 100, estimatedTokens: 760, at: "2026-01-01T00:00:07.000Z" },
+        {
+          type: "tool.failed",
+          taskId: "task-1",
+          id: "ar-call-1",
+          toolKind: "edit",
+          input: { filePath: "src/app.ts", oldText: "before", newText: "after" },
+          response: { stdout: "", stderr: "", toolResponse: "oldText was not found", exitCode: 1, status: "validation_error", errorCode: "invalid_arguments" },
+          at: "2026-01-01T00:00:08.000Z",
+        },
+      ]),
+      task("task-2", "2026-01-01T00:10:00.000Z", [
+        { type: "user.message", taskId: "task-2", text: "Second user message", at: "2026-01-01T00:10:00.000Z" },
+        { type: "assistant.delta", taskId: "task-2", text: "Second response", at: "2026-01-01T00:10:01.000Z" },
+        { type: "assistant.done", taskId: "task-2", at: "2026-01-01T00:10:02.000Z" },
+      ]),
+    ],
+    [],
+    [{ id: "event-1", type: "review.opened", at: "2026-01-01T00:00:00.000Z", taskId: "task-1", repositoryId: "repo-1", data: { scope: "task" } }],
+  );
+
+  assert.equal(bundle.schemaVersion, 4);
+  assert.deepEqual(plain(bundle.productEvents).map((event) => event.type), ["review.opened"]);
+  assert.deepEqual(plain(bundle.tasks[0].feedback[0]), {
+    messageId: "assistant-1",
+    rating: "bad",
+    comment: "Missed the edge case.",
+    at: "2026-01-01T00:00:03.000Z",
+    conversation: [
+      { role: "user", content: "First user message", taskId: "task-1", at: "2026-01-01T00:00:00.000Z" },
+      { role: "assistant", content: "First response", taskId: "task-1", at: "2026-01-01T00:00:01.000Z", messageId: "assistant-1" },
+      { role: "user", content: "Second user message", taskId: "task-2", at: "2026-01-01T00:10:00.000Z" },
+      { role: "assistant", content: "Second response", taskId: "task-2", at: "2026-01-01T00:10:01.000Z", messageId: "assistant-1" },
+    ],
+  });
+  assert.deepEqual(plain(bundle.tasks[0].failedTools[0].input), { filePath: "src/app.ts", oldText: "before", newText: "after" });
+  assert.equal(bundle.tasks[0].failedTools[0].response.toolResponse, "oldText was not found");
+  assert.deepEqual(plain(bundle.tasks[0].contextTriggers).map((trigger) => trigger.threshold), [75, 90, 75]);
 });
 
 test("telemetry spool files are unique and sorted for retry", async () => {
@@ -355,7 +426,7 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
   assert.doesNotMatch(received[0].body, /\/secret\/repo/);
   assert.doesNotMatch(received[0].body, /promptRedacted/);
   const uploadedBundle = JSON.parse(received[0].body);
-  assert.equal(uploadedBundle.schemaVersion, 3);
+  assert.equal(uploadedBundle.schemaVersion, 4);
   assert.equal(uploadedBundle.tasks[0].outcome, "success");
   assert.equal(uploadedBundle.tasks[0].activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
   assert.equal("events" in uploadedBundle.tasks[0], false);

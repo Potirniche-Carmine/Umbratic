@@ -5,8 +5,6 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { app } from "electron";
-
 import { localProviderCatalog } from "./config";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
@@ -22,11 +20,6 @@ type HarnessRouteConfig = {
 
 export function runnerDiagnosticsDirectory(userDataPath: string): string {
   return path.join(userDataPath, "runner-diagnostics");
-}
-
-export function runnerDiagnosticLogPath(userDataPath: string, taskId: string): string {
-  const safeTaskId = taskId.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^-+|-+$/g, "") || "task";
-  return path.join(runnerDiagnosticsDirectory(userDataPath), `${safeTaskId}.jsonl`);
 }
 
 export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteConfig {
@@ -60,9 +53,7 @@ export function buildUmbraticRunnerConfig(task: TaskRecord, selectedModel: Local
     permissionMode: "normal",
     enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
     diagnostics: {
-      enabled: true,
-      logPath: runnerDiagnosticLogPath(app.getPath("userData"), task.id),
-      includeToolOutput: "stderr",
+      enabled: false,
     },
     provider: {
       id: selectedModel.providerId,
