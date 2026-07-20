@@ -82,6 +82,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChat(prompts.MarketingChat)(w, r)
 	case "/api/sales/chat":
 		s.handleChat(prompts.SalesChat)(w, r)
+	case "/api/internal/context/compact":
+		s.handleContextCompact(w, r)
 	case "/api/telemetry":
 		s.handleTelemetry(w, r)
 	default:
@@ -184,6 +186,15 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			ToolChoice:      input.ToolChoice,
 			MaxOutputTokens: effectiveMaxOutputTokens(input.MaxOutputTokens, s.cfg.MaxOutputTokens),
 		}
+		if estimated, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+				"error":           "assembled request exceeds the configured context window",
+				"code":            "context_overflow_preflight",
+				"estimatedTokens": estimated,
+				"contextLength":   s.cfg.ContextLength,
+			})
+			return
+		}
 		if input.Stream {
 			s.streamChat(w, ctx, route, req)
 			return
@@ -202,6 +213,85 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			"message": resp.Message,
 		})
 	}
+}
+
+func estimatedValueTokens(value any) int {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return 1 << 30
+	}
+	return (len(encoded) + 2) / 3
+}
+
+func finalRequestFits(req model.ChatRequest, contextLength int) (int, bool) {
+	if contextLength <= 0 {
+		return 0, true
+	}
+	estimated := len(req.Messages)*10 + estimatedValueTokens(req.Messages) + estimatedValueTokens(req.Tools) + req.MaxOutputTokens
+	return estimated, estimated <= contextLength
+}
+
+func validCompactionSummary(summary string) bool {
+	headings := []string{
+		"Goal and current request",
+		"Constraints and decisions",
+		"Work completed",
+		"Files and verification",
+		"Errors or blockers",
+		"Next work",
+	}
+	cursor := 0
+	for _, heading := range headings {
+		position := strings.Index(summary[cursor:], heading)
+		if position < 0 {
+			return false
+		}
+		cursor += position + len(heading)
+	}
+	return true
+}
+
+func (s *Server) handleContextCompact(w http.ResponseWriter, r *http.Request) {
+	const limit = 8 << 20
+	input, err := policy.DecodeCompactionInput(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		if errors.Is(err, policy.ErrRequestTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "compaction request too large", "code": "compaction_input_overflow"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "invalid_compaction_request"})
+		return
+	}
+	source, err := json.Marshal(input.Messages)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid compaction messages", "code": "invalid_compaction_request"})
+		return
+	}
+	req := model.ChatRequest{
+		Model:           s.cfg.DefaultModel,
+		Messages:        prompts.BuildCompaction(input.PreviousSummary, string(source)),
+		Stream:          false,
+		MaxOutputTokens: input.MaxSummaryTokens,
+	}
+	if _, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "compaction input exceeds context", "code": "compaction_input_overflow"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+	defer cancel()
+	response, err := s.model.Chat(ctx, req)
+	if err != nil {
+		failure := classifyModelFailure(err, 0)
+		writeModelFailure(w, failure)
+		return
+	}
+	summary, ok := response.Message.Content.(string)
+	summary = strings.TrimSpace(summary)
+	if !ok || len(summary) < 200 || len(summary) > 24_000 || len(summary) >= len(source)+len(input.PreviousSummary) || !validCompactionSummary(summary) {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "model returned an invalid compaction summary", "code": "invalid_compaction_summary"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"version": 1, "summary": summary, "sourceDigest": input.SourceDigest})
 }
 
 func effectiveMaxOutputTokens(requested int, configured int) int {
@@ -265,6 +355,9 @@ type modelFailure struct {
 
 func classifyModelFailure(err error, upstreamStatus int) modelFailure {
 	if upstreamStatus > 0 {
+		if upstreamStatus == http.StatusRequestEntityTooLarge {
+			return modelFailure{Status: http.StatusRequestEntityTooLarge, Code: "context_overflow_upstream", Message: "model service rejected the assembled context", UpstreamStatus: upstreamStatus}
+		}
 		return modelFailure{
 			Status:         http.StatusBadGateway,
 			Code:           "model_service_rejected",

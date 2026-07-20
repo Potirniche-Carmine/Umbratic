@@ -45,7 +45,6 @@ import {
   RefreshCw,
   Send,
   Settings,
-  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Square,
@@ -68,6 +67,7 @@ import {
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { ReviewPanel } from "./review/ReviewPanel";
+import { CheckpointPanel, type CheckpointItem } from "./review/CheckpointPanel";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
@@ -102,7 +102,7 @@ type CapabilityProbeReport = {
     optionalMissing: number;
   };
 };
-type PermissionMode = "normal" | "bypass";
+type PermissionMode = "normal" | "auto_safe";
 type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
@@ -334,6 +334,23 @@ type TaskInfo = {
   error?: string;
 };
 
+type TaskCheckpoint = {
+  id: string;
+  source: "manual" | "pre_restore" | "pre_cleanup";
+  label?: string;
+  createdAt: string;
+  state: "preparing" | "ready" | "failed";
+  pinned: boolean;
+  logicalBytes?: number;
+};
+
+type TaskCheckpointList = {
+  supported: boolean;
+  reason?: string;
+  changedFileCount: number;
+  checkpoints: TaskCheckpoint[];
+};
+
 type ChatRecord = {
   id: string;
   title: string;
@@ -397,6 +414,9 @@ type PermissionRequest = {
   command: string;
   commandClass?: CommandClass;
   cwd: string;
+  consequence?: string;
+  riskyFragment?: string;
+  suggestion?: string;
 };
 
 type BackendUiEvent = BackendUiEventInput;
@@ -466,6 +486,12 @@ type DesktopApi = {
   getNotes(): Promise<UserNotes>;
   updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
+  listTaskCheckpoints(input: { taskId: string }): Promise<TaskCheckpointList>;
+  createTaskCheckpoint(input: { taskId: string; label?: string }): Promise<TaskCheckpoint>;
+  setTaskCheckpointPinned(input: { taskId: string; checkpointId: string; pinned: boolean }): Promise<TaskCheckpoint>;
+  deleteTaskCheckpoint(input: { taskId: string; checkpointId: string }): Promise<void>;
+  forkTaskCheckpoint(input: { taskId: string; checkpointId: string }): Promise<TaskInfo>;
+  restoreTaskCheckpoint(input: { taskId: string; checkpointId: string; confirmed: boolean }): Promise<TaskInfo>;
   refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<TaskInfo | null>;
   refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }>;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
@@ -578,7 +604,7 @@ const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultAppearanceSettings: AppearanceSettings = {
   theme: "system",
   uiFont: "System UI",
-  monoFont: isMacLike ? "SF Mono" : "Cascadia Code",
+  monoFont: "System UI",
 };
 const defaultUiFontChoices = [
   "System UI",
@@ -591,6 +617,7 @@ const defaultUiFontChoices = [
   "Verdana",
 ];
 const defaultMonoFontChoices = [
+  "System UI",
   "Cascadia Code",
   "SF Mono",
   "Consolas",
@@ -1304,6 +1331,27 @@ function previewSkillContent(skill: SkillInfo): string {
   return `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n# ${skill.name}\n\n${guidance.map((line) => `- ${line}`).join("\n")}\n`;
 }
 
+let previewTaskCheckpoints: TaskCheckpoint[] = [
+  {
+    id: "preview-checkpoint-2",
+    source: "manual",
+    label: "After verification",
+    createdAt: new Date(Date.now() - 90_000).toISOString(),
+    state: "ready",
+    pinned: true,
+    logicalBytes: 18_432,
+  },
+  {
+    id: "preview-checkpoint-1",
+    source: "pre_restore",
+    label: "Recovery before restore",
+    createdAt: new Date(Date.now() - 600_000).toISOString(),
+    state: "ready",
+    pinned: true,
+    logicalBytes: 12_288,
+  },
+];
+
 const fallbackApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -1369,6 +1417,33 @@ const fallbackApi: DesktopApi = {
   getNotes: async () => readPreviewNotes(),
   updateNotes: async (input) => writePreviewNotes(input.content),
   getTask: async () => null,
+  listTaskCheckpoints: async () => composerTestMode ? ({
+    supported: true,
+    changedFileCount: composerTestReviewFiles.length,
+    checkpoints: previewTaskCheckpoints,
+  }) : ({
+    supported: false,
+    reason: "Open the Electron app to manage task checkpoints.",
+    changedFileCount: 0,
+    checkpoints: [],
+  }),
+  createTaskCheckpoint: async () => {
+    const checkpoint: TaskCheckpoint = {
+      id: `preview-checkpoint-${Date.now()}`, source: "manual", label: "Manual checkpoint",
+      createdAt: new Date().toISOString(), state: "ready", pinned: false, logicalBytes: 20_480,
+    };
+    previewTaskCheckpoints = [checkpoint, ...previewTaskCheckpoints];
+    return checkpoint;
+  },
+  setTaskCheckpointPinned: async (input) => {
+    previewTaskCheckpoints = previewTaskCheckpoints.map((checkpoint) =>
+      checkpoint.id === input.checkpointId ? { ...checkpoint, pinned: input.pinned } : checkpoint,
+    );
+    return previewTaskCheckpoints.find((checkpoint) => checkpoint.id === input.checkpointId)!;
+  },
+  deleteTaskCheckpoint: async (input) => { previewTaskCheckpoints = previewTaskCheckpoints.filter((checkpoint) => checkpoint.id !== input.checkpointId); },
+  forkTaskCheckpoint: async () => ({ ...composerTestTask, id: `composer-fork-${Date.now()}`, state: "completed" }),
+  restoreTaskCheckpoint: async () => ({ ...composerTestTask, state: "completed", changedFiles: [], reviewFiles: [] }),
   refreshTaskReview: async (input) => {
     const scope = input.scope === "worktree" ? "worktree" : "task";
     const reviewFiles = scope === "worktree" ? composerTestWholeDiffFiles : composerTestReviewFiles;
@@ -2129,6 +2204,9 @@ const sidebarDefaultWidth = 230;
 const sidebarMinWidth = 168;
 const sidebarMaxWidth = 230;
 const reviewMinWidth = 360;
+const reviewDefaultWidth = 440;
+const reviewOpenWidthRatio = 0.65;
+const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
 
 function parseHunkHeader(line: string): { oldStart: number; newStart: number } | null {
@@ -3218,6 +3296,9 @@ function App() {
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
+  const [checkpointList, setCheckpointList] = useState<TaskCheckpointList | null>(null);
+  const [checkpointBusy, setCheckpointBusy] = useState(false);
+  const [checkpointError, setCheckpointError] = useState<string | undefined>();
   const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
@@ -3284,7 +3365,6 @@ function App() {
   const [fontScanMessage, setFontScanMessage] = useState<string | null>(null);
   const [fontScanPending, setFontScanPending] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [skillsDirectory, setSkillsDirectory] = useState<string>("~/.umbratic/skills");
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
@@ -3302,7 +3382,7 @@ function App() {
   const [availableIdes, setAvailableIdes] = useState<IdeChoice[]>(defaultIdeChoices);
   const [selectedIdeId, setSelectedIdeId] = useState(defaultIdeChoices[0].id);
   const [sidebarWidth, setSidebarWidth] = useState(sidebarDefaultWidth);
-  const [reviewWidth, setReviewWidth] = useState(520);
+  const [reviewWidth, setReviewWidth] = useState(reviewDefaultWidth);
   const [reviewHasSessionWidth, setReviewHasSessionWidth] = useState(false);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -3652,6 +3732,21 @@ function App() {
   }, [repository?.rootPath]);
 
   useEffect(() => {
+    const taskId = task?.id;
+    if (!taskId) {
+      setCheckpointList(null);
+      setCheckpointError(undefined);
+      return;
+    }
+    let cancelled = false;
+    void api.listTaskCheckpoints({ taskId }).then(
+      (result) => { if (!cancelled) setCheckpointList(result); },
+      (cause) => { if (!cancelled) setCheckpointError(cause instanceof Error ? cause.message : String(cause)); },
+    );
+    return () => { cancelled = true; };
+  }, [task?.id, task?.state, task?.changedFiles.length]);
+
+  useEffect(() => {
     writeAppearanceSettings(appearanceSettings);
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.style.colorScheme = effectiveTheme;
@@ -3963,7 +4058,7 @@ function App() {
     const resizeReview = () => {
       setReviewWidth((current) => reviewHasSessionWidth
         ? clamp(current, reviewMinWidthForViewport(), reviewMaxWidth())
-        : reviewMaxWidth());
+        : Math.min(reviewOpenWidth(), reviewMaxWidth()));
     };
     window.addEventListener("resize", resizeReview);
     return () => window.removeEventListener("resize", resizeReview);
@@ -4522,7 +4617,6 @@ function App() {
     try {
       const result = await api.listSkills();
       setSkills(result.skills);
-      setSkillsDirectory(result.directory);
       setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
       setSelectedSkillId((current) => (current && result.skills.some((skill) => skill.id === current) ? current : null));
       skillsLoadedRef.current = true;
@@ -4550,7 +4644,6 @@ function App() {
       const result = await api.saveSkillSettings(next);
       if (requestId !== skillsSaveSequenceRef.current) return;
       setSkills(result.skills);
-      setSkillsDirectory(result.directory);
       setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
       setSkillDocument((current) =>
         current && current.id === skillId ? { ...current, enabled: result.skills.find((skill) => skill.id === skillId)?.enabled ?? current.enabled } : current,
@@ -4568,8 +4661,6 @@ function App() {
       const result = await api.openSkillsFolder();
       if (!result.ok) {
         setSkillsMessage(result.message);
-      } else {
-        setSkillsDirectory(result.directory);
       }
     } catch (cause) {
       setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
@@ -4601,7 +4692,6 @@ function App() {
         setSkillDocument(null);
         return;
       }
-      setSkillsDirectory(result.directory);
       setSkillDocument(result.skill);
     } catch (cause) {
       setSkillsMessage(String(cause instanceof Error ? cause.message : cause));
@@ -4637,7 +4727,6 @@ function App() {
         return;
       }
       setSkills(result.skills);
-      setSkillsDirectory(result.directory);
       setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
       setSkillDocument(result.skill);
       setSkillsMessage(`Reset ${result.skill.name}.`);
@@ -4680,7 +4769,6 @@ function App() {
         return;
       }
       setSkills(result.skills);
-      setSkillsDirectory(result.directory);
       setSkillsEnabled(Object.fromEntries(result.skills.map((skill) => [skill.id, skill.enabled])));
       skillsLoadedRef.current = true;
       setSkillsLoaded(true);
@@ -4864,7 +4952,7 @@ function App() {
 
   async function updatePermissionMode(mode: PermissionMode) {
     setPermissionMenuOpen(false);
-    if (mode === "bypass" && permissionMode !== "bypass") {
+    if (mode === "auto_safe" && permissionMode !== "auto_safe") {
       setShowElevatedPermissionsDialog(true);
       return;
     }
@@ -4882,9 +4970,9 @@ function App() {
   async function confirmElevatedPermissionsMode() {
     setShowElevatedPermissionsDialog(false);
     setError(null);
-    setPermissionModeState("bypass");
+    setPermissionModeState("auto_safe");
     try {
-      const status = await api.setPermissionMode("bypass");
+      const status = await api.setPermissionMode("auto_safe");
       setBackend(status);
       setPermissionModeState(status.permissionMode);
     } catch (cause) {
@@ -5275,8 +5363,81 @@ function App() {
     return clamp(Math.round(window.innerWidth * sidebarMaxRatio), sidebarMinWidth, sidebarMaxWidth);
   }
 
+  async function reloadCheckpoints(taskId: string) {
+    setCheckpointList(await api.listTaskCheckpoints({ taskId }));
+  }
+
+  async function runCheckpointOperation(operation: () => Promise<void>) {
+    if (checkpointBusy) return;
+    setCheckpointBusy(true);
+    setCheckpointError(undefined);
+    try {
+      await operation();
+    } catch (cause) {
+      setCheckpointError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCheckpointBusy(false);
+    }
+  }
+
+  function createCurrentCheckpoint() {
+    if (!task) return;
+    void runCheckpointOperation(async () => {
+      await api.createTaskCheckpoint({ taskId: task.id });
+      await reloadCheckpoints(task.id);
+    });
+  }
+
+  function pinCurrentCheckpoint(checkpoint: CheckpointItem) {
+    if (!task) return;
+    void runCheckpointOperation(async () => {
+      await api.setTaskCheckpointPinned({ taskId: task.id, checkpointId: checkpoint.id, pinned: !checkpoint.pinned });
+      await reloadCheckpoints(task.id);
+    });
+  }
+
+  function deleteCurrentCheckpoint(checkpoint: CheckpointItem) {
+    if (!task || !window.confirm(`Delete checkpoint “${checkpoint.label || "Manual checkpoint"}”? This removes its recovery point.`)) return;
+    void runCheckpointOperation(async () => {
+      await api.deleteTaskCheckpoint({ taskId: task.id, checkpointId: checkpoint.id });
+      await reloadCheckpoints(task.id);
+    });
+  }
+
+  function forkCurrentCheckpoint(checkpoint: CheckpointItem) {
+    if (!task) return;
+    void runCheckpointOperation(async () => {
+      const forked = await api.forkTaskCheckpoint({ taskId: task.id, checkpointId: checkpoint.id });
+      setVisibleTask(forked);
+      setEvents(visibleEventsForTask(forked));
+      setChats(await api.listChats());
+      await reloadCheckpoints(forked.id);
+    });
+  }
+
+  function restoreCurrentCheckpoint(checkpoint: CheckpointItem) {
+    if (!task) return;
+    const changedFileCount = checkpointList?.changedFileCount ?? task.changedFiles.length;
+    const identity = checkpoint.label || new Date(checkpoint.createdAt).toLocaleString();
+    const confirmed = window.confirm(
+      `Restore “${identity}”?\n\nThe current ${changedFileCount} changed file${changedFileCount === 1 ? "" : "s"} will first be preserved in a pinned recovery checkpoint. Restore creates a replacement worktree; the current worktree remains available for recovery.`,
+    );
+    if (!confirmed) return;
+    void runCheckpointOperation(async () => {
+      const restored = await api.restoreTaskCheckpoint({ taskId: task.id, checkpointId: checkpoint.id, confirmed: true });
+      setVisibleTask(restored);
+      setEvents(visibleEventsForTask(restored));
+      setChats(await api.listChats());
+      await reloadCheckpoints(restored.id);
+    });
+  }
+
   function reviewMaxWidth() {
-    return Math.max(0, window.innerWidth - 32);
+    return Math.max(0, Math.floor(window.innerWidth * reviewMaxWidthRatio));
+  }
+
+  function reviewOpenWidth() {
+    return Math.max(reviewDefaultWidth, Math.floor(window.innerWidth * reviewOpenWidthRatio));
   }
 
   function reviewMinWidthForViewport() {
@@ -5335,7 +5496,7 @@ function App() {
       }).catch(() => undefined);
     }
     cancelReviewClose();
-    if (!reviewHasSessionWidth) setReviewWidth(reviewMaxWidth());
+    if (!reviewHasSessionWidth) setReviewWidth(Math.min(reviewOpenWidth(), reviewMaxWidth()));
     setReviewOpen(true);
     animateReviewTo(0, reviewVelocityRef.current);
     if (filePath) {
@@ -6521,8 +6682,10 @@ function App() {
         ) : pendingPermission ? (
           <section ref={modalRef} tabIndex={-1} className="floatingApproval" role="alertdialog" aria-modal="true" aria-label="Command permission request" onKeyDown={(event) => { if (event.key === "Escape") void resolvePermission("deny"); }}>
             <div>
-              <strong>{pendingPermission.kind} permission</strong>
+              <strong>{pendingPermission.consequence ?? `${pendingPermission.kind} permission`}</strong>
               <span>{pendingPermission.command}</span>
+              {pendingPermission.riskyFragment ? <span>Risky fragment: {pendingPermission.riskyFragment}</span> : null}
+              {pendingPermission.suggestion ? <span>{pendingPermission.suggestion}</span> : null}
             </div>
             <button className="secondaryAction" type="button" onClick={() => resolvePermission("deny")}>
               <X size={15} />
@@ -6530,7 +6693,7 @@ function App() {
             </button>
             <button className="primaryAction" type="button" onClick={() => resolvePermission("allow")}>
               <ShieldCheck size={15} />
-              Allow
+              Run once
             </button>
           </section>
         ) : null}
@@ -6646,7 +6809,7 @@ function App() {
               </div>
             ) : null}
 
-            <div className={`permissionControl ${permissionMode === "bypass" ? "isElevated" : ""}`}>
+            <div className={`permissionControl ${permissionMode === "auto_safe" ? "isElevated" : ""}`}>
               <button
                 className="permissionTrigger"
                 type="button"
@@ -6662,14 +6825,14 @@ function App() {
                 }}
                 aria-expanded={permissionMenuOpen}
                 aria-haspopup="menu"
-                title={permissionMode === "bypass" ? "Elevated permissions" : "Normal permissions"}
+                title={permissionMode === "auto_safe" ? "Auto-run low-risk actions" : "Ask before running actions"}
               >
-                {permissionMode === "bypass" ? (
-                  <ShieldAlert className="elevatedPermissionsIcon" size={14} />
+                {permissionMode === "auto_safe" ? (
+                  <ShieldCheck className="elevatedPermissionsIcon" size={14} />
                 ) : (
                   <Hand size={14} />
                 )}
-                <span className="permissionLabel">{permissionMode === "bypass" ? "Elevated" : "Normal"}</span>
+                <span className="permissionLabel">{permissionMode === "auto_safe" ? "Auto-run low risk" : "Ask first"}</span>
                 <ChevronDown size={12} />
               </button>
               {permissionMenuOpen ? (
@@ -6683,18 +6846,18 @@ function App() {
                     }}
                   >
                     <Hand size={14} />
-                    <span>Normal</span>
+                    <span>Ask first</span>
                   </button>
                   <button
-                    className={permissionMode === "bypass" ? "active" : ""}
+                    className={permissionMode === "auto_safe" ? "active" : ""}
                     type="button"
                     onClick={() => {
                       setPermissionMenuOpen(false);
-                      void updatePermissionMode("bypass");
+                      void updatePermissionMode("auto_safe");
                     }}
                   >
-                    <ShieldAlert className="elevatedPermissionsIcon" size={14} />
-                    <span>Elevated</span>
+                    <ShieldCheck className="elevatedPermissionsIcon" size={14} />
+                    <span>Auto-run low risk</span>
                   </button>
                 </div>
               ) : null}
@@ -6835,6 +6998,21 @@ function App() {
           canApprove={canApprove}
           selectedIdeLabel={selectedIde.label}
           approvalVisible={task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged"}
+          checkpointPanel={task && checkpointList ? (
+            <CheckpointPanel
+              supported={checkpointList.supported}
+              reason={checkpointList.reason}
+              changedFileCount={checkpointList.changedFileCount}
+              checkpoints={checkpointList.checkpoints}
+              busy={checkpointBusy}
+              error={checkpointError}
+              onCreate={createCurrentCheckpoint}
+              onFork={forkCurrentCheckpoint}
+              onRestore={restoreCurrentCheckpoint}
+              onPin={pinCurrentCheckpoint}
+              onDelete={deleteCurrentCheckpoint}
+            />
+          ) : undefined}
           onClose={closeReviewPanel}
           onUndo={undoTask}
           onApprove={approveMerge}
@@ -6975,7 +7153,6 @@ function App() {
                               <span className="connectionModeIcon"><Monitor size={16} /></span>
                               <strong>Local</strong>
                               {endpointDraftSettings.mode === "local" ? <Check size={14} /> : null}
-                              <em>Ollama on this computer</em>
                             </button>
                             <button
                               className={endpointDraftSettings.mode === "server" ? "isActive" : ""}
@@ -6987,7 +7164,6 @@ function App() {
                               <span className="connectionModeIcon"><Cloud size={16} /></span>
                               <strong>Server</strong>
                               {endpointDraftSettings.mode === "server" ? <Check size={14} /> : null}
-                              <em>Connect to an existing Veil deployment</em>
                             </button>
                           </div>
                         </div>
@@ -7210,9 +7386,6 @@ function App() {
                           </button>
                         ))}
                       </div>
-                      <p className="settingsMessage">
-                        Current: {effectiveTheme}. System preference: {systemPrefersDark ? "dark" : "light"}.
-                      </p>
                     </div>
 
                     <div className="settingsGroup">
@@ -7316,9 +7489,6 @@ function App() {
                           </button>
                         </div>
                       </div>
-                      <p className="skillSectionHint">
-                        Personal and system skills are editable. Personal skills load from <code className="settingsCode">{skillsDirectory}</code>.
-                      </p>
                       <div className="segmented skillFilter" aria-label="Skill source filter">
                         <button
                           type="button"
@@ -7632,20 +7802,24 @@ function App() {
 
       {showElevatedPermissionsDialog ? (
         <div className="modalScrim" role="presentation">
-          <section ref={modalRef} tabIndex={-1} className="riskDialog" role="dialog" aria-modal="true" aria-labelledby="elevated-permissions-title" onKeyDown={(event) => { if (event.key === "Escape") setShowElevatedPermissionsDialog(false); }}>
+          <section ref={modalRef} tabIndex={-1} className="riskDialog safePermissionDialog" role="dialog" aria-modal="true" aria-labelledby="elevated-permissions-title" onKeyDown={(event) => { if (event.key === "Escape") setShowElevatedPermissionsDialog(false); }}>
+            <div className="safePermissionIcon" aria-hidden="true">
+              <ShieldCheck size={18} />
+            </div>
             <div>
-              <h3 id="elevated-permissions-title">Enable elevated mode?</h3>
+              <h3 id="elevated-permissions-title">Auto-run low-risk actions?</h3>
               <p>
-                Routine workspace commands can run without asking each time. The workspace sandbox still applies: file
-                tools stay in the task workspace, and network or external-path commands stay blocked.
+                Verified non-destructive commands and routine workspace edits can continue without pausing.
+                Umbratic will still ask before higher-risk or unrecognized actions.
               </p>
             </div>
             <div className="dialogActions">
               <button className="secondaryAction" type="button" onClick={() => setShowElevatedPermissionsDialog(false)}>
                 Cancel
               </button>
-              <button className="dangerAction" type="button" onClick={confirmElevatedPermissionsMode}>
-                Enable elevated
+              <button className="primaryAction" type="button" onClick={confirmElevatedPermissionsMode}>
+                <ShieldCheck size={14} />
+                Turn on auto-run
               </button>
             </div>
           </section>

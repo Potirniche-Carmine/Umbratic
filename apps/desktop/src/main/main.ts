@@ -85,6 +85,7 @@ import {
   readProjects,
   readProductTelemetryEvents,
   readTask,
+  readTaskCheckpoints,
   readTasks,
   clearLocalDiagnostics,
   writeHarnessProfileSetting,
@@ -133,6 +134,7 @@ import type {
   CommandResult,
   ContextCompressionStrategy,
   ContextContentKind,
+  ContextStateV1,
   FileSearchResult,
   HarnessProfileId,
   IdeInfo,
@@ -153,6 +155,7 @@ import type {
   ServiceStatus,
   TelemetrySyncResult,
   TaskInfo,
+  TaskCheckpoint,
   TaskRecord,
   TaskState,
   ToolErrorCode,
@@ -163,6 +166,15 @@ import type {
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths } from "../shared/reviewDiff";
+import {
+  createTaskCheckpoint,
+  ensurePreCleanupCheckpoint,
+  forkTaskFromCheckpoint,
+  removeTaskCheckpoint,
+  restoreTaskCheckpoint,
+  setTaskCheckpointPinned,
+} from "./checkpoints/service";
+import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, type ContextPromptPart } from "./promptContext";
@@ -720,6 +732,223 @@ function publicTaskById(input: unknown): TaskInfo | null {
   const taskIdValue = input.taskId.trim();
   const task = readTask(taskIdValue);
   return task ? publicTask(task) : null;
+}
+
+type TaskCheckpointView = Pick<
+  TaskCheckpoint,
+  "id" | "source" | "label" | "createdAt" | "state" | "pinned" | "logicalBytes"
+>;
+
+function checkpointView(checkpoint: TaskCheckpoint): TaskCheckpointView {
+  const { id, source, label, createdAt, state, pinned, logicalBytes } = checkpoint;
+  return { id, source, ...(label ? { label } : {}), createdAt, state, pinned, ...(logicalBytes !== undefined ? { logicalBytes } : {}) };
+}
+
+function checkpointEligibility(task: TaskRecord, requireIdle = true, requireActiveWorktree = true): { supported: boolean; reason?: string } {
+  if (task.workspaceKind !== "git" || task.workspaceMode !== "worktree" || !task.agentBranch) {
+    return { supported: false, reason: "Checkpoints are available for Umbratic-owned Git task worktrees." };
+  }
+  if (requireIdle && (activeRunnerProcesses.has(task.id) || task.state === "running" || task.state === "approving")) {
+    return { supported: false, reason: "Wait for the current task operation to finish before changing checkpoints." };
+  }
+  const managedRoot = worktreeRootForRepo(task.originalRepoPath);
+  if (!task.worktreePath || !pathInside(managedRoot, task.worktreePath)) {
+    return { supported: false, reason: "The active task worktree is missing or is outside Umbratic's managed worktree root." };
+  }
+  if (requireActiveWorktree && !fs.existsSync(task.worktreePath)) {
+    return { supported: false, reason: "The active task worktree is missing. A ready checkpoint can still be restored." };
+  }
+  return { supported: true };
+}
+
+function checkpointTask(input: unknown): TaskRecord {
+  if (!isRecord(input)) throw new Error("Invalid checkpoint input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const eligibility = checkpointEligibility(task);
+  if (!eligibility.supported) throw new Error(eligibility.reason);
+  return task;
+}
+
+function lifecycleDurationBucket(startedAt: number): string {
+  const duration = performance.now() - startedAt;
+  if (duration < 100) return "lt_100ms";
+  if (duration < 500) return "100_499ms";
+  if (duration < 2000) return "500_1999ms";
+  return "gte_2s";
+}
+
+function checkpointByteBucket(bytes?: number): string {
+  if (!bytes || bytes < 1024) return "lt_1kib";
+  if (bytes < 1024 * 1024) return "1kib_1mib";
+  if (bytes < 100 * 1024 * 1024) return "1mib_100mib";
+  return "gte_100mib";
+}
+
+function listTaskCheckpoints(input: unknown): {
+  supported: boolean;
+  reason?: string;
+  changedFileCount: number;
+  checkpoints: TaskCheckpointView[];
+} {
+  if (!isRecord(input)) throw new Error("Invalid checkpoint input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  return {
+    ...checkpointEligibility(task),
+    changedFileCount: task.changedFiles.length,
+    checkpoints: readTaskCheckpoints(task.id).map(checkpointView),
+  };
+}
+
+async function createCheckpoint(input: unknown): Promise<TaskCheckpointView> {
+  const task = checkpointTask(input);
+  const startedAt = performance.now();
+  recordProductTelemetry("checkpoint.started", { taskId: task.id, repositoryId: task.repositoryId });
+  try {
+    const label = isRecord(input) && typeof input.label === "string" ? input.label : undefined;
+    const checkpoint = await createTaskCheckpoint(task, "manual", label);
+    saveTask(task);
+    recordProductTelemetry("checkpoint.completed", {
+      taskId: task.id,
+      repositoryId: task.repositoryId,
+      data: {
+        durationBucket: lifecycleDurationBucket(startedAt),
+        changedFileCount: task.changedFiles.length,
+        byteBucket: checkpointByteBucket(checkpoint.logicalBytes),
+      },
+    });
+    return checkpointView(checkpoint);
+  } catch (error) {
+    recordProductTelemetry("checkpoint.failed", {
+      taskId: task.id,
+      repositoryId: task.repositoryId,
+      data: { durationBucket: lifecycleDurationBucket(startedAt) },
+    });
+    throw error;
+  }
+}
+
+async function setCheckpointPinned(input: unknown): Promise<TaskCheckpointView> {
+  const task = checkpointTask(input);
+  if (!isRecord(input) || typeof input.pinned !== "boolean") throw new Error("Invalid checkpoint pin input.");
+  return checkpointView(setTaskCheckpointPinned(task.id, requiredString(input.checkpointId, "checkpointId"), input.pinned));
+}
+
+async function deleteCheckpoint(input: unknown): Promise<void> {
+  const task = checkpointTask(input);
+  if (!isRecord(input)) throw new Error("Invalid checkpoint delete input.");
+  await removeTaskCheckpoint(task, requiredString(input.checkpointId, "checkpointId"));
+  saveTask(task);
+}
+
+async function forkCheckpoint(input: unknown): Promise<TaskInfo> {
+  const sourceTask = checkpointTask(input);
+  if (!isRecord(input)) throw new Error("Invalid checkpoint fork input.");
+  const checkpointId = requiredString(input.checkpointId, "checkpointId");
+  const startedAt = performance.now();
+  const id = taskId();
+  const targetTask: TaskRecord = {
+    ...sourceTask,
+    id,
+    worktreeRootTaskId: id,
+    prompt: `Forked from checkpoint ${checkpointId}`,
+    state: "completed",
+    agentBranch: `umbratic/${id}-fork`,
+    worktreePath: path.join(worktreeRootForRepo(sourceTask.originalRepoPath), id),
+    createdAt: new Date().toISOString(),
+    changedFiles: [],
+    reviewFiles: [],
+    events: [],
+    runnerSessionId: undefined,
+    diagnosticLogPath: undefined,
+    pendingPrompt: undefined,
+    metadataPath: undefined,
+    approvedAt: undefined,
+    mergedAt: undefined,
+    rejectedAt: undefined,
+    activeWorkspaceId: undefined,
+    latestCheckpointId: undefined,
+    parentTaskId: sourceTask.id,
+    sourceCheckpointId: checkpointId,
+    reviewPatchHash: undefined,
+    reviewBaselineLabel: "Fork checkpoint",
+    reviewBaselineOid: undefined,
+    patchHash: undefined,
+    error: undefined,
+  };
+  try {
+    const forked = await forkTaskFromCheckpoint({
+      sourceTask,
+      targetTask,
+      checkpointId,
+      managedRoot: worktreeRootForRepo(sourceTask.originalRepoPath),
+    });
+    saveTask(forked);
+    recordProductTelemetry("fork.completed", {
+      taskId: forked.id,
+      chatId: forked.chatId,
+      repositoryId: forked.repositoryId,
+      data: { durationBucket: lifecycleDurationBucket(startedAt) },
+    });
+    return publicTask(forked);
+  } catch (error) {
+    recordProductTelemetry("fork.failed", {
+      taskId: sourceTask.id,
+      repositoryId: sourceTask.repositoryId,
+      data: { durationBucket: lifecycleDurationBucket(startedAt) },
+    });
+    throw error;
+  }
+}
+
+async function stopTaskForRestore(task: TaskRecord): Promise<void> {
+  pendingRunnerPrompts.delete(task.id);
+  clearPendingPermissionsForTask(task.id);
+  const run = activeRunnerProcesses.get(task.id);
+  if (!run) return;
+  activeRunnerProcesses.delete(task.id);
+  if (run.sessionId) {
+    await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(() => undefined);
+  }
+  stopRunnerProcess(run);
+  if (run.child.exitCode === null) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 2000);
+      run.child.once("exit", () => { clearTimeout(timer); resolve(); });
+    });
+  }
+}
+
+async function restoreCheckpoint(input: unknown): Promise<TaskInfo> {
+  if (!isRecord(input) || input.confirmed !== true) throw new Error("Restore confirmation is required.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const eligibility = checkpointEligibility(task, false, false);
+  if (!eligibility.supported) throw new Error(eligibility.reason);
+  const checkpointId = requiredString(input.checkpointId, "checkpointId");
+  const startedAt = performance.now();
+  recordProductTelemetry("restore.started", { taskId: task.id, repositoryId: task.repositoryId });
+  await stopTaskForRestore(task);
+  try {
+    const restored = await restoreTaskCheckpoint({
+      task,
+      checkpointId,
+      managedRoot: worktreeRootForRepo(task.originalRepoPath),
+      skipRecoveryCheckpoint: !fs.existsSync(task.worktreePath),
+    });
+    saveTask(restored);
+    recordProductTelemetry("restore.completed", {
+      taskId: restored.id,
+      repositoryId: restored.repositoryId,
+      data: { durationBucket: lifecycleDurationBucket(startedAt) },
+    });
+    return publicTask(restored);
+  } catch (error) {
+    recordProductTelemetry("restore.failed", {
+      taskId: task.id,
+      repositoryId: task.repositoryId,
+      data: { durationBucket: lifecycleDurationBucket(startedAt) },
+    });
+    throw error;
+  }
 }
 
 function stableRepositoryId(rootPath: string): string {
@@ -1832,7 +2061,8 @@ async function runnerPromptForTask(
     }
   }
   pushAgentInstructionContext(lines, rootPath);
-  const history = priorChatContext(task.events ?? [], userPrompt);
+  const hasDurableContext = Boolean(task.chatId && readChat(task.chatId)?.contextState);
+  const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
   if (history) {
     lines.push(
       "",
@@ -2117,6 +2347,14 @@ function failTask(
   task.state = "failed";
   task.error = message;
   saveTask(task);
+  recordLocalDiagnostic({
+    level: "error",
+    source: "task",
+    event: "task.error",
+    taskId: task.id,
+    message,
+    data: { category: details.category, code: details.code },
+  });
   emit({ type: "task.error", taskId: task.id, message, ...details });
 }
 
@@ -2580,7 +2818,7 @@ async function exportTelemetryBundle(): Promise<{ ok: true; path: string } | { o
   if (result.canceled || !result.filePath) {
     return { ok: false, message: "Export canceled." };
   }
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents());
+  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents(), readLocalDiagnostics());
   fs.mkdirSync(path.dirname(result.filePath), { recursive: true });
   fs.writeFileSync(result.filePath, `${JSON.stringify(bundle)}\n`, "utf8");
   return { ok: true, path: result.filePath };
@@ -2660,7 +2898,7 @@ async function syncTelemetryNow(): Promise<TelemetrySyncResult> {
     throw new Error("Telemetry sync is disabled by policy.");
   }
   const provider = endpointProvider();
-  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents());
+  const bundle = buildRedactedTelemetryBundle(readTasks(), readProjects(), readProductTelemetryEvents(), readLocalDiagnostics());
   return syncTelemetryBundle({
     directory: telemetrySpoolDirectory(app.getPath("userData")),
     bundle,
@@ -2964,7 +3202,7 @@ async function askPermission(
   const { elevatedPermissionsRequiresApproval = false, ...visibleRequest } = request;
   const fullRequest: PermissionRequest = { id, ...visibleRequest };
   emit({ type: "permission.requested", taskId: task.id, request: fullRequest });
-  if (task.permissionMode === "bypass" && !elevatedPermissionsRequiresApproval) {
+  if (task.permissionMode === "auto_safe" && !elevatedPermissionsRequiresApproval) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     return;
   }
@@ -3280,6 +3518,7 @@ async function handleRunnerPermission(
   permission: Record<string, unknown>,
   promptForRun: RunnerPrompt,
   intentPrompt: string,
+  safety?: Record<string, unknown>,
 ): Promise<"pending" | "resolved" | "worktree_requested"> {
   const id = typeof permission.id === "string" ? permission.id : "";
   if (!id || pendingPermissions.has(id)) return "pending";
@@ -3292,11 +3531,14 @@ async function handleRunnerPermission(
     (typeof permission.title === "string" && permission.title.trim()) ||
     (typeof permission.summary === "string" && permission.summary.trim()) ||
     type;
+  const safetyCommandClass = typeof safety?.commandClass === "string" ? safety.commandClass as CommandClass : undefined;
   const classification = type.includes("edit")
     ? ({ commandClass: "edit" as const, risky: false })
     : type === "read" || type === "search"
       ? ({ commandClass: "read" as const, risky: false })
-    : classifyCommandText(title, task.worktreePath);
+    : safetyCommandClass
+      ? ({ commandClass: safetyCommandClass, risky: safety?.action !== "allow" })
+      : classifyCommandText(title, task.worktreePath);
 
   if (type === "read" || type === "search") {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
@@ -3311,10 +3553,10 @@ async function handleRunnerPermission(
     task.diagnosticLogPath = undefined;
     task.pendingPrompt = runnerPromptText(promptForRun);
     pendingRunnerPrompts.set(task.id, runnerPromptParts(promptForRun));
-    task.state = permissionMode === "bypass" ? "running" : "awaiting_worktree_approval";
+    task.state = permissionMode === "auto_safe" ? "running" : "awaiting_worktree_approval";
     saveTask(task);
     await replyRunnerPermission(run, id, false).catch(() => undefined);
-    if (permissionMode === "bypass") {
+    if (permissionMode === "auto_safe") {
       void createWorktreeAndRunRunner(task, promptForRun);
     } else {
       emit({
@@ -3340,6 +3582,11 @@ async function handleRunnerPermission(
     command: title,
     commandClass: classification.commandClass,
     cwd: task.worktreePath,
+    ...(typeof safety?.explanation === "string" ? { consequence: safety.explanation.slice(0, 500) } : {}),
+    ...(isRecord(safety?.matchedSpan) && typeof safety.matchedSpan.preview === "string"
+      ? { riskyFragment: safety.matchedSpan.preview.slice(0, 240) }
+      : {}),
+    ...(typeof safety?.suggestion === "string" ? { suggestion: safety.suggestion.slice(0, 500) } : {}),
   };
   emit({ type: "permission.requested", taskId: task.id, request });
 
@@ -3350,8 +3597,8 @@ async function handleRunnerPermission(
   }
 
   if (
-    task.permissionMode === "bypass" &&
-    (type === "read" || type === "search" || type === "edit" || type === "bash") &&
+    task.permissionMode === "auto_safe" &&
+    (type === "read" || type === "search" || type === "edit" || (type === "bash" && safety?.action === "allow")) &&
     !requiresElevatedPermissionsApproval(classification)
   ) {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
@@ -3422,6 +3669,7 @@ async function runRunnerTask(
       stderr: string[];
       finished: boolean;
     }>();
+    let latestCommandSafety: Record<string, unknown> | undefined;
     const assistantOutput = new RunnerAssistantOutputBuffer();
     let delegatedToWorktree = false;
     let completed = false;
@@ -3560,6 +3808,11 @@ async function runRunnerTask(
         const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
         const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
         ensureToolRun(toolCallId, command, kind, commandClass, runnerToolKind ?? toolKind, event.arguments);
+        return;
+      }
+
+      if (type === "command.safety.decision") {
+        latestCommandSafety = event;
         return;
       }
 
@@ -3704,7 +3957,9 @@ async function runRunnerTask(
           type: typeof event.permissionKind === "string" ? event.permissionKind : "tool",
           title: typeof event.summary === "string" ? event.summary : "",
         };
-        void handleRunnerPermission(task, run as RunnerProcess, permission, prompt, intent)
+        const safety = latestCommandSafety;
+        latestCommandSafety = undefined;
+        void handleRunnerPermission(task, run as RunnerProcess, permission, prompt, intent, safety)
           .then((result) => {
             if (result === "worktree_requested") {
               delegatedToWorktree = true;
@@ -3745,9 +4000,10 @@ async function runRunnerTask(
     // Runner sessions live only inside the runner process started above.
     // Because Umbratic starts a fresh process for each task run, a persisted
     // runnerSessionId from an earlier process is stale and cannot be reused.
+    const contextState = task.chatId ? readChat(task.chatId)?.contextState : undefined;
     const session = await runnerRequest<{ id: string }>(run, "/session", {
       method: "POST",
-      body: { title: chatTitleFromFirstMessage(intent) },
+      body: { contextState: contextState ?? null },
     });
     run.sessionId = session.id;
     task.runnerSessionId = session.id;
@@ -3768,6 +4024,17 @@ async function runRunnerTask(
       ]);
 
     await waitForCompletion();
+
+    if (task.chatId) {
+      const snapshot = await runnerRequest<ContextStateV1>(
+        run,
+        `/session/${encodeURIComponent(session.id)}/context`,
+      );
+      const chat = readChat(task.chatId);
+      if (chat) {
+        writeChat({ ...chat, contextState: snapshot });
+      }
+    }
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
       return;
@@ -4315,6 +4582,7 @@ async function rejectTask(input: unknown): Promise<void> {
   emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
   if (taskUsesIsolatedWorktree(task) && cleanup && taskStatesThatCanOpen.has(task.state)) {
     if (fs.existsSync(task.worktreePath)) {
+      await ensurePreCleanupCheckpoint(task);
       const reset = await gitResult(task.worktreePath, ["reset", "--hard", task.baseCommit]);
       if (!reset.success) {
         throw new Error((reset.stderr || reset.stdout || "Failed to reset worktree changes.").trim());
@@ -4610,7 +4878,8 @@ async function openPathInIde(
 }
 
 function setPermissionMode(input: unknown): Promise<BackendStatus> {
-  permissionMode = input === "bypass" ? "bypass" : "normal";
+  permissionMode = input === "auto_safe" || input === "bypass" ? "auto_safe" : "normal";
+  recordProductTelemetry("permission.mode_changed", { data: { mode: permissionMode } });
   return getBackendStatus();
 }
 
@@ -4817,6 +5086,16 @@ app.whenReady().then(async () => {
   }
   finishInterruptedRunningTasks();
   compactClosedTaskStorage();
+  const checkpointRecovery = await reconcileCheckpointLifecycle((task) => worktreeRootForRepo(task.originalRepoPath));
+  if (checkpointRecovery.inspectedTasks > 0) {
+    recordLocalDiagnostic({
+      level: checkpointRecovery.missingActiveWorkspaces > 0 ? "error" : "warn",
+      source: "desktop",
+      event: "checkpoint.reconciled",
+      message: "Recovered interrupted checkpoint lifecycle records.",
+      data: checkpointRecovery,
+    });
+  }
   handleIpc("umbratic:list-projects", () => readProjects());
   handleIpc("umbratic:list-chats", () => readChats());
   handleIpc("umbratic:create-chat", (input) => createChat(input));
@@ -4828,6 +5107,12 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:get-notes", () => getNotes());
   handleIpc("umbratic:update-notes", (input) => updateNotes(input));
   handleIpc("umbratic:get-task", (input) => publicTaskById(input));
+  handleIpc("umbratic:list-task-checkpoints", (input) => listTaskCheckpoints(input));
+  handleIpc("umbratic:create-task-checkpoint", (input) => createCheckpoint(input));
+  handleIpc("umbratic:set-task-checkpoint-pinned", (input) => setCheckpointPinned(input));
+  handleIpc("umbratic:delete-task-checkpoint", (input) => deleteCheckpoint(input));
+  handleIpc("umbratic:fork-task-checkpoint", (input) => forkCheckpoint(input));
+  handleIpc("umbratic:restore-task-checkpoint", (input) => restoreCheckpoint(input));
   handleIpc("umbratic:refresh-task-review", (input) => refreshTaskReview(input));
   handleIpc("umbratic:refresh-workspace-review", (input) => refreshWorkspaceReview(input));
   handleIpc("umbratic:search-files", (input) => searchRepositoryFiles(input));

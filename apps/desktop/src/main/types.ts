@@ -3,7 +3,7 @@ import type { ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import type { BackendUiEventInput } from "../shared/backendEvents";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
-export type PermissionMode = "normal" | "bypass";
+export type PermissionMode = "normal" | "auto_safe";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
@@ -260,13 +260,22 @@ export type ProductTelemetryEventType =
   | "review.opened"
   | "ide.selected"
   | "ide.opened"
+  | "permission.mode_changed"
   | "task.accepted"
   | "task.undone"
   | "worktree.requested"
   | "worktree.approved"
   | "worktree.denied"
   | "worktree.created"
-  | "worktree.kept";
+  | "worktree.kept"
+  | "checkpoint.started"
+  | "checkpoint.completed"
+  | "checkpoint.failed"
+  | "fork.completed"
+  | "fork.failed"
+  | "restore.started"
+  | "restore.completed"
+  | "restore.failed";
 
 export type ProductTelemetryEvent = {
   id: string;
@@ -312,6 +321,27 @@ export type ChatAttachment = {
   originalPath?: string;
   previewDataUrl?: string;
   contextTokens?: number;
+};
+
+export type ContextMessageV1 = {
+  role: "user" | "assistant" | "tool";
+  content: unknown;
+  tool_call_id?: string;
+  tool_calls?: unknown[];
+};
+
+export type ContextStateV1 = {
+  version: 1;
+  sourceTaskId: string;
+  updatedAt: string;
+  summary?: string;
+  tail: ContextMessageV1[];
+  sourceDigest: string;
+  usage: {
+    estimatedPromptTokens: number;
+    observedPromptTokens?: number;
+    compactionCount: number;
+  };
 };
 
 export type PastedAttachmentInput = {
@@ -371,6 +401,7 @@ export type ChatRecord = {
   worktreeBaseCommit?: string;
   draftPrompt?: string;
   attachedFiles?: ChatAttachment[];
+  contextState?: ContextStateV1;
 };
 
 export type TaskRecord = TaskInfo & {
@@ -392,6 +423,36 @@ export type TaskRecord = TaskInfo & {
   approvedAt?: string;
   mergedAt?: string;
   rejectedAt?: string;
+  activeWorkspaceId?: string;
+  latestCheckpointId?: string;
+  parentTaskId?: string;
+  sourceCheckpointId?: string;
+};
+
+export type TaskCheckpoint = {
+  id: string;
+  taskId: string;
+  workspaceId: string;
+  parentCheckpointId?: string;
+  source: "manual" | "pre_restore" | "pre_cleanup";
+  label?: string;
+  commitOid: string;
+  treeOid: string;
+  createdAt: string;
+  state: "preparing" | "ready" | "failed";
+  pinned: boolean;
+  logicalBytes?: number;
+};
+
+export type TaskWorkspace = {
+  id: string;
+  taskId: string;
+  number: number;
+  branch: string;
+  path: string;
+  sourceCheckpointId?: string;
+  createdAt: string;
+  state: "preparing" | "active" | "recovery" | "retired" | "failed";
 };
 
 export type PermissionRequest = {
@@ -401,6 +462,9 @@ export type PermissionRequest = {
   command: string;
   commandClass?: CommandClass;
   cwd: string;
+  consequence?: string;
+  riskyFragment?: string;
+  suggestion?: string;
 };
 
 export type BackendUiEvent = BackendUiEventInput;

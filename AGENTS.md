@@ -46,6 +46,10 @@ Keep outside dependencies as small as practical:
 
 Preserve unrelated user changes and keep edits focused. Do not perform broad cleanup as part of an unrelated task.
 
+## UI Copy Rules
+
+Avoid redundant microcopy: non-essential explanatory text that merely restates a control, exposes implementation details, repeats visible state, or adds decorative status prose. Prefer the shortest useful label and keep helper text only when it changes a user decision or explains an action that is not otherwise clear.
+
 Run focused checks while developing. Before finishing any repository change, run this from the repository root:
 
 ```sh

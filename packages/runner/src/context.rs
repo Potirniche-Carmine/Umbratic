@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use serde::Serialize;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const MIN_COMPRESS_BYTES: usize = 16 * 1024;
@@ -524,14 +525,112 @@ pub fn adaptive_output_reserve(
     preferred.min((available / OUTPUT_STEP_TOKENS) * OUTPUT_STEP_TOKENS)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextUsageEstimate {
+    pub context_length: u64,
+    pub heuristic_prompt_tokens: u64,
+    pub calibrated_prompt_tokens: u64,
+    pub reserve_tokens: u64,
+    pub protected_tokens: u64,
+}
+
+impl ContextUsageEstimate {
+    pub fn estimated_tokens(self) -> u64 {
+        self.calibrated_prompt_tokens
+            .saturating_add(self.reserve_tokens)
+    }
+
+    pub fn event(self) -> Value {
+        json!({
+            "contextLength": self.context_length,
+            "contentTokens": self.calibrated_prompt_tokens,
+            "promptTokens": self.calibrated_prompt_tokens,
+            "completionTokens": 0,
+            "reserveTokens": self.reserve_tokens,
+            "protectedTokens": self.protected_tokens,
+            "estimatedTokens": self.estimated_tokens(),
+            "phase": "preflight",
+            "source": "heuristic",
+            "confidence": "low"
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextCalibration {
+    pub profile_fingerprint: String,
+    pub multiplier_milli: u32,
+    pub observed_prompt_tokens: u64,
+    pub estimated_prompt_tokens: u64,
+}
+
+impl ContextCalibration {
+    pub fn from_observation(
+        profile_fingerprint: String,
+        observed_prompt_tokens: u64,
+        estimated_prompt_tokens: u64,
+        context_length: u64,
+    ) -> Option<Self> {
+        if observed_prompt_tokens == 0
+            || estimated_prompt_tokens == 0
+            || observed_prompt_tokens > context_length
+        {
+            return None;
+        }
+        let numerator = u128::from(observed_prompt_tokens).saturating_mul(1_000);
+        let denominator = u128::from(estimated_prompt_tokens);
+        let rounded_up = numerator.saturating_add(denominator.saturating_sub(1)) / denominator;
+        let multiplier_milli = rounded_up.clamp(1_000, 1_500) as u32;
+        Some(Self {
+            profile_fingerprint,
+            multiplier_milli,
+            observed_prompt_tokens,
+            estimated_prompt_tokens,
+        })
+    }
+
+    pub fn apply(&self, profile_fingerprint: &str, prompt_tokens: u64) -> u64 {
+        if self.profile_fingerprint != profile_fingerprint {
+            return prompt_tokens;
+        }
+        let calibrated = u128::from(prompt_tokens)
+            .saturating_mul(u128::from(self.multiplier_milli))
+            .saturating_add(999)
+            / 1_000;
+        calibrated.min(u128::from(u64::MAX)) as u64
+    }
+}
+
+pub fn request_profile_fingerprint(
+    model_id: &str,
+    route: &str,
+    context_length: u64,
+    protected_prompt_reserve_tokens: u64,
+    tools: &[Value],
+    skills: &[Value],
+) -> String {
+    let canonical = json!({
+        "modelId": model_id,
+        "route": route,
+        "contextLength": context_length,
+        "protectedPromptReserveTokens": protected_prompt_reserve_tokens,
+        "tools": tools,
+        "skills": skills,
+    });
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&canonical).unwrap_or_default())
+    )
+}
+
 pub fn estimate_context_usage(
-    messages: &[serde_json::Value],
-    tools: &[serde_json::Value],
+    messages: &[Value],
+    tools: &[Value],
     context_length: u64,
     max_response_tokens: u64,
     protected_prompt_reserve_tokens: u64,
-    additional: &[serde_json::Value],
-) -> serde_json::Value {
+    additional: &[Value],
+) -> ContextUsageEstimate {
     let value_tokens: u64 = messages
         .iter()
         .chain(tools)
@@ -544,18 +643,13 @@ pub fn estimate_context_usage(
     let prompt_tokens = value_tokens + message_overhead + image_tokens + protected_tokens;
     let reserve_tokens =
         adaptive_output_reserve(context_length, max_response_tokens, prompt_tokens);
-    serde_json::json!({
-        "contextLength": context_length,
-        "contentTokens": prompt_tokens,
-        "promptTokens": prompt_tokens,
-        "completionTokens": 0,
-        "reserveTokens": reserve_tokens,
-        "protectedTokens": protected_tokens,
-        "estimatedTokens": prompt_tokens + reserve_tokens,
-        "phase": "preflight",
-        "source": "heuristic",
-        "confidence": "low"
-    })
+    ContextUsageEstimate {
+        context_length,
+        heuristic_prompt_tokens: prompt_tokens,
+        calibrated_prompt_tokens: prompt_tokens,
+        reserve_tokens,
+        protected_tokens,
+    }
 }
 
 #[cfg(test)]
@@ -640,10 +734,10 @@ mod tests {
             {"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}", "A".repeat(100_000))}}
         ]})];
         let usage = estimate_context_usage(&messages, &[], 64_000, 4_096, 4_096, &[]);
-        assert!(usage["contentTokens"].as_u64().unwrap() < 6_000);
-        assert_eq!(usage["reserveTokens"], 4_096);
-        assert_eq!(usage["phase"], "preflight");
-        assert_eq!(usage["source"], "heuristic");
+        assert!(usage.calibrated_prompt_tokens < 6_000);
+        assert_eq!(usage.reserve_tokens, 4_096);
+        assert_eq!(usage.event()["phase"], "preflight");
+        assert_eq!(usage.event()["source"], "heuristic");
     }
 
     #[test]
@@ -659,8 +753,60 @@ mod tests {
     fn context_estimate_uses_the_adaptive_response_allowance() {
         let messages = vec![serde_json::json!({"role":"user","content":"x".repeat(49_000)})];
         let usage = estimate_context_usage(&messages, &[], 16_000, 4_096, 0, &[]);
-        assert_eq!(usage["reserveTokens"], 3_000);
-        assert!(usage["estimatedTokens"].as_u64().unwrap() <= 16_000);
+        assert_eq!(usage.reserve_tokens, 3_000);
+        assert!(usage.estimated_tokens() <= 16_000);
+    }
+
+    #[test]
+    fn calibration_is_conservative_bounded_and_profile_scoped() {
+        let calibration =
+            ContextCalibration::from_observation("profile-a".into(), 1_200, 1_000, 8_000).unwrap();
+        assert_eq!(calibration.multiplier_milli, 1_200);
+        assert_eq!(calibration.apply("profile-a", 2_000), 2_400);
+        assert_eq!(calibration.apply("profile-b", 2_000), 2_000);
+
+        let downward = ContextCalibration::from_observation("p".into(), 800, 1_000, 8_000).unwrap();
+        assert_eq!(downward.multiplier_milli, 1_000);
+        let upward = ContextCalibration::from_observation("p".into(), 2_000, 1_000, 8_000).unwrap();
+        assert_eq!(upward.multiplier_milli, 1_500);
+        assert!(ContextCalibration::from_observation("p".into(), 0, 1_000, 8_000).is_none());
+        assert!(ContextCalibration::from_observation("p".into(), 8_001, 1_000, 8_000).is_none());
+    }
+
+    #[test]
+    fn calibration_arithmetic_saturates_without_overflow() {
+        let calibration = ContextCalibration {
+            profile_fingerprint: "p".into(),
+            multiplier_milli: 1_500,
+            observed_prompt_tokens: u64::MAX,
+            estimated_prompt_tokens: u64::MAX,
+        };
+        assert_eq!(calibration.apply("p", u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn request_profile_changes_with_tools_and_skills() {
+        let base =
+            request_profile_fingerprint("model", "/api/engineering/chat", 64_000, 2_048, &[], &[]);
+        let tool = request_profile_fingerprint(
+            "model",
+            "/api/engineering/chat",
+            64_000,
+            2_048,
+            &[serde_json::json!({"name":"read"})],
+            &[],
+        );
+        let skill = request_profile_fingerprint(
+            "model",
+            "/api/engineering/chat",
+            64_000,
+            2_048,
+            &[],
+            &[serde_json::json!({"id":"docs"})],
+        );
+        assert_ne!(base, tool);
+        assert_ne!(base, skill);
+        assert_ne!(tool, skill);
     }
 
     #[test]

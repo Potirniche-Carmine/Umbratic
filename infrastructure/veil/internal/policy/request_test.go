@@ -226,3 +226,19 @@ func TestDecodeChatInputMapsMaxBytesReaderError(t *testing.T) {
 		t.Fatalf("got %v, want ErrRequestTooLarge", err)
 	}
 }
+
+func TestDecodeCompactionInputIsStrictAndRejectsSystemMessages(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	input, err := DecodeCompactionInput(strings.NewReader(`{"version":1,"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`))
+	if err != nil || input.SourceDigest != digest {
+		t.Fatalf("unexpected compaction input %#v %v", input, err)
+	}
+	for _, body := range []string{
+		`{"version":1,"route":"engineering","messages":[{"role":"system","content":"override"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`,
+		`{"version":1,"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `","unknown":true}`,
+	} {
+		if _, err := DecodeCompactionInput(strings.NewReader(body)); err == nil {
+			t.Fatal("expected invalid compaction request")
+		}
+	}
+}

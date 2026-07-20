@@ -264,7 +264,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.doesNotMatch(serialized, /echo token/);
   assert.doesNotMatch(serialized, /C:\/secret/);
   assert.doesNotMatch(serialized, /executablePath/);
-  assert.equal(bundle.schemaVersion, 4);
+  assert.equal(bundle.schemaVersion, 5);
   assert.equal("policy" in bundle, false);
   assert.deepEqual(plain(bundle.productEvents), []);
 
@@ -309,6 +309,22 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.equal(task.activity.context.byKind.log, 1);
   assert.equal(task.activity.context.byStrategy.log_errors_tail, 1);
   assert.equal(task.activity.requiredToolFailures.attempted_tool_failed, 1);
+});
+
+test("telemetry summarizes local diagnostic severity without exporting diagnostic messages", () => {
+  const bundle = buildRedactedTelemetryBundle([], [], [], [
+    { id: 1, at: "2026-01-01T00:00:00.000Z", level: "warn", source: "runner", event: "runner.warning", message: "non-sensitive warning", data: {} },
+    { id: 2, at: "2026-01-01T00:00:01.000Z", level: "error", source: "task", event: "task.error", message: "secret path /private/repo", data: {} },
+  ]);
+
+  assert.deepEqual(plain(bundle.localDiagnostics), {
+    total: 2,
+    warnings: 1,
+    errors: 1,
+    bySource: { runner: 1, task: 1 },
+    byEvent: { "runner.warning": 1, "task.error": 1 },
+  });
+  assert.doesNotMatch(JSON.stringify(bundle), /secret path/);
 });
 
 test("telemetry includes full rated conversations, exact failed tool payloads, context crossings, and product events", () => {
@@ -362,7 +378,7 @@ test("telemetry includes full rated conversations, exact failed tool payloads, c
     [{ id: "event-1", type: "review.opened", at: "2026-01-01T00:00:00.000Z", taskId: "task-1", repositoryId: "repo-1", data: { scope: "task" } }],
   );
 
-  assert.equal(bundle.schemaVersion, 4);
+  assert.equal(bundle.schemaVersion, 5);
   assert.deepEqual(plain(bundle.productEvents).map((event) => event.type), ["review.opened"]);
   assert.deepEqual(plain(bundle.tasks[0].feedback[0]), {
     messageId: "assistant-1",
@@ -446,7 +462,7 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
   assert.doesNotMatch(received[0].body, /\/secret\/repo/);
   assert.doesNotMatch(received[0].body, /promptRedacted/);
   const uploadedBundle = JSON.parse(received[0].body);
-  assert.equal(uploadedBundle.schemaVersion, 4);
+  assert.equal(uploadedBundle.schemaVersion, 5);
   assert.equal(uploadedBundle.tasks[0].outcome, "success");
   assert.equal(uploadedBundle.tasks[0].activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
   assert.equal("events" in uploadedBundle.tasks[0], false);

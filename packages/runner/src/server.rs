@@ -29,6 +29,8 @@ use tokio::{
 };
 
 use crate::{
+    context::estimate_context_usage,
+    context_state::{ContextStateV1, snapshot_context_state},
     events::now_iso,
     loop_runtime::run_turn,
     policy::redact_text,
@@ -338,9 +340,97 @@ async fn diagnostics_export(State(state): State<AppState>) -> Response {
     response
 }
 
-async fn create_session(State(state): State<AppState>) -> Response {
-    let session = state.store.create().await;
-    json_response(StatusCode::OK, json!({ "id": session.id }))
+async fn create_session(State(state): State<AppState>, request: Request) -> Response {
+    let body = match read_json(request).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    if body.keys().any(|key| key != "contextState") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_session_seed",
+            "Session creation contains an unknown field.",
+        );
+    }
+    let context_state = match body.get("contextState") {
+        None | Some(Value::Null) => None,
+        Some(value) => match serde_json::from_value::<ContextStateV1>(value.clone()) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_context_state",
+                    "Context state is malformed.",
+                );
+            }
+        },
+    };
+    match state.store.create(context_state).await {
+        Ok(session) => json_response(StatusCode::OK, json!({ "id": session.id })),
+        Err(_) => error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_context_state",
+            "Context state failed validation.",
+        ),
+    }
+}
+
+async fn session_context(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let Ok(session) = state.store.get(&id).await else {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "session_not_found",
+            "Session not found.",
+        );
+    };
+    let messages = session.messages.lock().await.clone();
+    let summary = session.durable_summary.lock().await.clone();
+    let calibration = session.context_calibration.lock().await.clone();
+    let skills = session
+        .config
+        .skills
+        .iter()
+        .map(|skill| {
+            json!({
+                "id": skill.id,
+                "name": skill.name,
+                "description": skill.description,
+                "source": skill.source,
+            })
+        })
+        .collect::<Vec<_>>();
+    let additional = if skills.is_empty() {
+        vec![]
+    } else {
+        vec![Value::Array(skills)]
+    };
+    let estimate = estimate_context_usage(
+        &messages,
+        &[],
+        session.config.context_length,
+        session.config.max_response_tokens,
+        session.config.protected_prompt_reserve_tokens,
+        &additional,
+    );
+    let snapshot = snapshot_context_state(crate::context_state::ContextStateSnapshotInput {
+        task_id: &session.task_id,
+        updated_at: now_iso(),
+        summary,
+        messages: &messages,
+        context_length: session.config.context_length,
+        estimated_prompt_tokens: estimate.heuristic_prompt_tokens,
+        calibration: calibration.as_ref(),
+        compaction_count: session
+            .compaction_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+    });
+    json_response(
+        StatusCode::OK,
+        serde_json::to_value(snapshot).unwrap_or(Value::Null),
+    )
 }
 
 async fn prompt(
@@ -451,6 +541,7 @@ pub async fn listen(hostname: &str, port: u16, password: String) -> Result<Runne
         .route("/diagnostics", get(diagnostics))
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/session", post(create_session))
+        .route("/session/{id}/context", get(session_context))
         .route("/session/{id}/prompt_async", post(prompt))
         .route("/session/{id}/abort", post(abort))
         .route("/permission/{id}/reply", post(permission_reply))

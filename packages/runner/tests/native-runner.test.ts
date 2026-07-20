@@ -21,14 +21,34 @@ async function requestBody(request: http.IncomingMessage) {
 }
 
 async function startProvider() {
-  const requests: Array<{ body: Record<string, unknown>; authorization?: string; contentType?: string }> = [];
+  const requests: Array<{ path?: string; body: Record<string, unknown>; authorization?: string; contentType?: string }> = [];
   const server = http.createServer(async (request, response) => {
     const body = await requestBody(request) as Record<string, unknown>;
     requests.push({
+      path: request.url,
       body,
       authorization: request.headers.authorization,
       contentType: request.headers["content-type"],
     });
+    if (request.url === "/api/internal/context/compact") {
+      const source = JSON.stringify(body.messages ?? []);
+      const recalledFacts = Array.from(source.matchAll(/(?:PRIOR_FAILURE|CHANGED_FILE|LAST_VERIFICATION)_\d+/g), (match) => match[0]);
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        version: 1,
+        summary: [
+          "## Goal and current request", recalledFacts.join(" "),
+          "## Constraints and decisions", "Keep context bounded and factual.",
+          "## Work completed", "Prior work is compacted.",
+          "## Files and verification", recalledFacts.join(" "),
+          "## Errors or blockers", "Preserve recorded failures.",
+          "## Next work", "Continue from the latest request.",
+          "bounded factual summary ".repeat(20),
+        ].join("\n"),
+        sourceDigest: body.sourceDigest,
+      }));
+      return;
+    }
     const encoded = JSON.stringify(body.messages ?? []);
     response.writeHead(200, { "Content-Type": "text/event-stream", "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE") ? "change" : "" });
     if (encoded.includes("READ_FILE") && !encoded.includes("read: README.md (ok)")) {
@@ -36,7 +56,7 @@ async function startProvider() {
     } else if (encoded.includes("WRITE_FILE") && !encoded.includes("write: note.txt (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "write-1", function: { name: "write", arguments: "{\"filePath\":\"note.txt\",\"content\":\"native write\\n\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("BLOCK_NETWORK") && !encoded.includes("policy_blocked")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "command-1", function: { name: "command", arguments: "{\"command\":\"curl https://example.com\"}" } }] } }] }) + "data: [DONE]\n\n");
+      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "command-1", function: { name: "command", arguments: "{\"command\":\"curl https://example.com; printf spawned > blocked-command-spawned.txt\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("DUPLICATE_IDS") && !encoded.includes("read: README.md (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [
         { index: 0, id: "duplicate", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } },
@@ -106,9 +126,10 @@ async function startRunner(
   const password = "native-test-secret";
   const child = spawn(binary, ["serve", "--hostname=127.0.0.1", "--port=0", `--password=${password}`], {
     cwd,
-    env: { ...process.env, UMBRATIC_RUNNER_CONFIG: JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, modelBoundary, overrides)) },
-    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env },
+    stdio: ["pipe", "pipe", "pipe"],
   });
+  child.stdin.end(JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, modelBoundary, overrides)));
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`runner startup timed out: ${output}`)), 5_000);
@@ -179,12 +200,111 @@ async function eventCollector(run: Awaited<ReturnType<typeof startRunner>>) {
   };
 }
 
-async function createSession(run: Awaited<ReturnType<typeof startRunner>>) {
-  const response = await run.request("/session", { method: "POST" });
-  assert.equal(response.status, 200);
+async function createSession(run: Awaited<ReturnType<typeof startRunner>>, contextState?: unknown) {
+  const response = await run.request("/session", {
+    method: "POST",
+    ...(contextState === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contextState }) }),
+  });
+  if (response.status !== 200) {
+    throw new Error(`session create failed ${response.status}: ${await response.text()}`);
+  }
   assert.match(response.headers.get("cache-control") ?? "", /no-store/);
   return response.json() as Promise<{ id: string }>;
 }
+
+test("native runner semantically compacts a durable prefix and persists the validated handoff", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-compaction-"));
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+    contextLength: 10_000,
+    maxResponseTokens: 4_096,
+    protectedPromptReserveTokens: 2_048,
+  });
+  const events = await eventCollector(run);
+  try {
+    const bootstrap = await createSession(run);
+    assert.equal((await prompt(run, bootstrap.id, `old context ${"x".repeat(12_000)}`)).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === bootstrap.id);
+    const bootstrapSnapshot = await run.request(`/session/${bootstrap.id}/context`);
+    assert.equal(bootstrapSnapshot.status, 200);
+    const contextState = await bootstrapSnapshot.json();
+    const session = await createSession(run, contextState);
+    assert.equal((await prompt(run, session.id, `latest request ${"z".repeat(15_000)}`)).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    assert.ok(provider.requests.some((request) => request.path === "/api/internal/context/compact"));
+    const snapshotResponse = await run.request(`/session/${session.id}/context`);
+    assert.equal(snapshotResponse.status, 200);
+    const snapshot = await snapshotResponse.json() as { summary?: string; usage: { compactionCount: number }; tail: Array<{ role: string }> };
+    assert.match(snapshot.summary ?? "", /bounded factual summary/);
+    assert.equal(snapshot.usage.compactionCount, 1);
+    assert.equal(snapshot.tail[0]?.role, "user");
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("32K and 64K compaction evaluation preserves latest-request recall without overflow", async () => {
+  for (const contextLength of [32_000, 64_000]) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `umbratic-context-${contextLength}-`));
+    const provider = await startProvider();
+    const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+      contextLength,
+      maxResponseTokens: 8_192,
+      protectedPromptReserveTokens: 2_048,
+    });
+    const events = await eventCollector(run);
+    try {
+      const session = await createSession(run);
+      const priorMarker = `PRIOR_FAILURE_${contextLength}`;
+      const changedFileMarker = `CHANGED_FILE_${contextLength}`;
+      const verificationMarker = `LAST_VERIFICATION_${contextLength}`;
+      let latestMarker = "";
+      let idleCount = 0;
+      for (let turn = 0; turn < 40 && !provider.requests.some((request) => request.path === "/api/internal/context/compact"); turn += 1) {
+        latestMarker = `LATEST_REQUEST_RECALL_${contextLength}_${turn}`;
+        const durableFacts = turn === 0 ? `${priorMarker} ${changedFileMarker} ${verificationMarker} ` : "";
+        assert.equal((await prompt(run, session.id, `${durableFacts}${latestMarker} ${"q".repeat(7_000)}`)).status, 204);
+        idleCount += 1;
+        const deadline = Date.now() + 5_000;
+        while (events.events.filter((event) => event.type === "session.idle" && event.sessionId === session.id).length < idleCount) {
+          if (Date.now() >= deadline) throw new Error(`timed out waiting for turn ${turn} at ${contextLength}`);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      }
+
+      const compactRequests = provider.requests.filter((request) => request.path === "/api/internal/context/compact");
+      assert.equal(compactRequests.length, 1, `${contextLength} should compact exactly once`);
+      const finalChat = provider.requests.filter((request) => request.path === "/api/engineering/chat").at(-1);
+      assert.ok(finalChat);
+      const finalMessages = JSON.stringify(finalChat.body.messages ?? []);
+      assert.match(finalMessages, new RegExp(latestMarker));
+      assert.match(finalMessages, /bounded factual summary/);
+      assert.match(finalMessages, new RegExp(priorMarker));
+      assert.match(finalMessages, new RegExp(changedFileMarker));
+      assert.match(finalMessages, new RegExp(verificationMarker));
+      assert.doesNotMatch(finalMessages, /context_window_full|context_overflow/);
+      const snapshotResponse = await run.request(`/session/${session.id}/context`);
+      const snapshotText = await snapshotResponse.text();
+      assert.ok(Buffer.byteLength(snapshotText, "utf8") <= 128 * 1024);
+      const snapshot = JSON.parse(snapshotText) as {
+        sourceDigest: string;
+        usage: { compactionCount: number; estimatedPromptTokens: number };
+      };
+      assert.match(snapshot.sourceDigest, /^[a-f0-9]{64}$/);
+      assert.equal(snapshot.usage.compactionCount, 1);
+      assert.ok(snapshot.usage.estimatedPromptTokens < contextLength);
+      console.log(JSON.stringify({ contextLength, turns: idleCount, compactions: 1, snapshotBytes: Buffer.byteLength(snapshotText, "utf8"), overflowCount: 0 }));
+    } finally {
+      await events.close();
+      await run.close();
+      await provider.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+});
 
 async function prompt(run: Awaited<ReturnType<typeof startRunner>>, id: string, text: string) {
   return run.request(`/session/${id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text }) });
@@ -231,6 +351,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal((await prompt(run, blockedSession.id, "BLOCK_NETWORK")).status, 204);
     const blocked = await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "command-1");
     assert.equal(blocked.status, "policy_blocked");
+    assert.equal(fs.existsSync(path.join(cwd, "blocked-command-spawned.txt")), false, "policy-denied commands must never spawn");
 
     const duplicateSession = await createSession(run);
     assert.equal((await prompt(run, duplicateSession.id, "DUPLICATE_IDS")).status, 204);
@@ -415,9 +536,10 @@ test("native runner refuses non-loopback listener addresses", async () => {
   try {
     const child = spawn(binary, ["serve", "--hostname=0.0.0.0", "--port=0", "--password=secret"], {
       cwd,
-      env: { ...process.env, UMBRATIC_RUNNER_CONFIG: JSON.stringify(config(cwd, provider.url, path.join(cwd, "runner.jsonl"))) },
-      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    child.stdin.end(JSON.stringify(config(cwd, provider.url, path.join(cwd, "runner.jsonl"))));
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     const code = await new Promise<number | null>((resolve, reject) => {

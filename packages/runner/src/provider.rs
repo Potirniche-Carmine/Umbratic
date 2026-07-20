@@ -33,6 +33,79 @@ pub struct ProviderRequestOptions {
     pub suppress_output: bool,
 }
 
+pub async fn compact_context(
+    session: &Session,
+    previous_summary: Option<&str>,
+    messages: &[Value],
+    source_digest: &str,
+    max_summary_tokens: u64,
+) -> Result<String, String> {
+    let (mut endpoint, host_header) = request_endpoint(&session.config.provider)?;
+    endpoint.set_path("/api/internal/context/compact");
+    endpoint.set_query(None);
+    let route = session
+        .config
+        .provider
+        .chat_endpoint_path
+        .as_deref()
+        .and_then(|path| path.split('/').nth(2))
+        .unwrap_or("engineering");
+    let body = json!({
+        "version": 1,
+        "route": route,
+        "previousSummary": previous_summary.unwrap_or(""),
+        "messages": messages,
+        "maxSummaryTokens": max_summary_tokens.min(4_096),
+        "sourceDigest": source_digest,
+    });
+    let client = client_for(&session.config.provider)?;
+    let mut request = client
+        .post(endpoint)
+        .header("Content-Type", "application/json");
+    if let Some(host) = host_header {
+        request = request.header("Host", host);
+    }
+    if !session.config.provider.api_key.trim().is_empty() {
+        request = request.bearer_auth(&session.config.provider.api_key);
+    }
+    for (name, value) in &session.config.provider.headers {
+        request = request.header(name, value);
+    }
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("context compaction failed: {error}"))?;
+    verify_certificate_pin(&session.config.provider, &response)?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("context compaction failed: {error}"))?;
+    if bytes.len() > 64 * 1024 {
+        return Err("context compaction returned an oversized response".into());
+    }
+    let payload: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "context compaction returned invalid JSON".to_owned())?;
+    if !status.is_success() {
+        let code = payload
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("context_compaction_failed");
+        return Err(code.to_owned());
+    }
+    if payload.get("version").and_then(Value::as_u64) != Some(1)
+        || payload.get("sourceDigest").and_then(Value::as_str) != Some(source_digest)
+    {
+        return Err("context compaction response did not match its source".into());
+    }
+    payload
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "context compaction response did not contain a summary".to_owned())
+}
+
 fn client_for(provider: &ProviderConfig) -> Result<Client, String> {
     let mut builder = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -337,6 +410,8 @@ fn veil_failure_message(status: Option<u16>, payload: Option<&Value>) -> String 
         "model_service_invalid_response" => "the model service returned an invalid response",
         "model_service_stream_incomplete" => "the model service stream ended unexpectedly",
         "model_service_unavailable" => "the model service could not be reached",
+        "context_overflow_preflight" => "context_overflow_preflight",
+        "context_overflow_upstream" => "context_overflow_upstream",
         _ => "Veil could not complete the model request",
     };
     let mut details = Vec::new();

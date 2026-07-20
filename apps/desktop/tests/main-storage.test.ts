@@ -296,7 +296,7 @@ test("tasks drop legacy runtime profiles and normalize tool settings and event d
     originalBranch: "main",
     baseCommit: "abc",
     agentBranch: "",
-    permissionMode: "normal",
+    permissionMode: "bypass",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: [],
     enabledTools: ["read", "bogus", "command", "read"],
@@ -308,6 +308,7 @@ test("tasks drop legacy runtime profiles and normalize tool settings and event d
   assert.equal("runtimeProfile" in task, false);
   assert.equal(task.workspaceMode, "local");
   assert.equal(task.reasoningMode, "reasoning");
+  assert.equal(task.permissionMode, "auto_safe");
   assert.deepEqual(plain(task.enabledTools), ["read", "command"]);
   assert.deepEqual(plain(task.reviewFiles), []);
   assert.deepEqual(plain(task.events), []);
@@ -353,6 +354,67 @@ test("single-task writes update payloads without rewriting or reordering unrelat
   ]);
   assert.equal(storage.readTask("task-1").state, "failed");
   assert.equal(storage.readTask("missing"), null);
+});
+
+test("checkpoint metadata persists and workspace activation switches the task atomically", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-workspace-switch-"));
+  const storage = loadStorage(userData);
+  const task = {
+    id: "task-checkpoint",
+    repositoryId: "repo",
+    prompt: "checkpoint task",
+    originalRepoPath: userData,
+    worktreePath: path.join(userData, "worktree-1"),
+    workspaceKind: "git",
+    workspaceMode: "worktree",
+    state: "completed",
+    originalBranch: "main",
+    baseCommit: "base",
+    agentBranch: "umbratic/task-checkpoint",
+    permissionMode: "normal",
+    reasoningMode: "reasoning",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    changedFiles: ["tracked.txt"],
+    reviewFiles: [],
+    events: [],
+    activeWorkspaceId: "workspace-1",
+  };
+  storage.writeTask(task, false);
+  storage.writeTaskWorkspace({
+    id: "workspace-1", taskId: task.id, number: 1, branch: task.agentBranch,
+    path: task.worktreePath, createdAt: task.createdAt, state: "active",
+  });
+  const checkpoint = {
+    id: "checkpoint-1", taskId: task.id, workspaceId: "workspace-1", source: "manual",
+    commitOid: "commit-1", treeOid: "tree-1", createdAt: "2026-01-01T00:01:00.000Z",
+    state: "ready", pinned: true, logicalBytes: 42,
+  };
+  storage.completeTaskCheckpoint({ ...task, latestCheckpointId: checkpoint.id }, checkpoint);
+  assert.equal(storage.readTask(task.id).latestCheckpointId, checkpoint.id);
+
+  const replacement = {
+    id: "workspace-2", taskId: task.id, number: 2, branch: "umbratic/task-checkpoint-restore-2",
+    path: path.join(userData, "worktree-2"), sourceCheckpointId: "checkpoint-1",
+    createdAt: "2026-01-01T00:02:00.000Z", state: "active",
+  };
+  storage.activateTaskWorkspace(
+    { ...task, activeWorkspaceId: replacement.id, worktreePath: replacement.path, agentBranch: replacement.branch },
+    replacement,
+    { ...storage.readTaskWorkspaces(task.id)[0], state: "recovery" },
+  );
+  assert.equal(storage.readTask(task.id).activeWorkspaceId, "workspace-2");
+  assert.deepEqual(plain(storage.readTaskWorkspaces(task.id)).map((workspace) => [workspace.id, workspace.state]), [
+    ["workspace-2", "active"],
+    ["workspace-1", "recovery"],
+  ]);
+  assert.equal(storage.readTaskCheckpoints(task.id)[0].logicalBytes, 42);
+
+  assert.throws(() => storage.activateTaskWorkspace(
+    { ...storage.readTask(task.id), activeWorkspaceId: "workspace-3" },
+    { ...replacement, id: "workspace-3", number: 3, path: path.join(userData, "worktree-3"), sourceCheckpointId: "missing" },
+  ));
+  assert.equal(storage.readTask(task.id).activeWorkspaceId, "workspace-2");
+  assert.equal(storage.readTaskWorkspaces(task.id).some((workspace) => workspace.id === "workspace-3"), false);
 });
 
 test("local diagnostics report logical size, exportable records, and clear independently of product telemetry", () => {
@@ -424,7 +486,7 @@ test("local diagnostics migration removes previously stored debug and info recor
   });
 
   assert.deepEqual(plain(storage.readLocalDiagnostics()).map((entry) => entry.level), ["warn"]);
-  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 3);
+  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 4);
 });
 
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {

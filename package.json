@@ -17,6 +17,7 @@
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
     "desktop:build": "npm --workspace @umbratic/desktop run build",
     "runner:build": "npm --workspace @umbratic/runner run build",
+    "benchmark:runner": "node scripts/benchmark-runner.ts",
     "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",
     "local": "node scripts/run-local-veil.ts",
     "veil:test": "cd infrastructure/veil && go test ./...",
@@ -25,6 +26,7 @@
     "supply-chain:audit": "node scripts/audit-supply-chain.ts",
     "supply-chain:sbom": "node scripts/generate-sbom.ts",
     "test:all": "npm run supply-chain:check && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test",
+    "verify:implementation-plans": "npm run test:all && cargo test --locked --release --package umbratic-runner --test performance -- --nocapture && npm run benchmark:runner && npm --workspace @umbratic/desktop run benchmark:checkpoints && npm run build",
     "release:check": "npm run test:all && npm run build"
   }
 }

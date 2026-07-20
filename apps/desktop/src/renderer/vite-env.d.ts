@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-type UmbraticPermissionMode = "normal" | "bypass";
+type UmbraticPermissionMode = "normal" | "auto_safe";
 type UmbraticReasoningMode = "fast" | "reasoning";
 type UmbraticServiceStatus = "ready" | "degraded" | "unavailable";
 type UmbraticCapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
@@ -299,6 +299,16 @@ type UmbraticTaskInfo = {
   error?: string;
 };
 
+type UmbraticTaskCheckpoint = {
+  id: string;
+  source: "manual" | "pre_restore" | "pre_cleanup";
+  label?: string;
+  createdAt: string;
+  state: "preparing" | "ready" | "failed";
+  pinned: boolean;
+  logicalBytes?: number;
+};
+
 type UmbraticPermissionDecision = {
   taskId: string;
   id: string;
@@ -348,6 +358,17 @@ declare global {
       getNotes(): Promise<UmbraticUserNotes>;
       updateNotes(input: { content: string }): Promise<UmbraticUserNotes>;
       getTask(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
+      listTaskCheckpoints(input: { taskId: string }): Promise<{
+        supported: boolean;
+        reason?: string;
+        changedFileCount: number;
+        checkpoints: UmbraticTaskCheckpoint[];
+      }>;
+      createTaskCheckpoint(input: { taskId: string; label?: string }): Promise<UmbraticTaskCheckpoint>;
+      setTaskCheckpointPinned(input: { taskId: string; checkpointId: string; pinned: boolean }): Promise<UmbraticTaskCheckpoint>;
+      deleteTaskCheckpoint(input: { taskId: string; checkpointId: string }): Promise<void>;
+      forkTaskCheckpoint(input: { taskId: string; checkpointId: string }): Promise<UmbraticTaskInfo>;
+      restoreTaskCheckpoint(input: { taskId: string; checkpointId: string; confirmed: boolean }): Promise<UmbraticTaskInfo>;
       refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<UmbraticTaskInfo | null>;
       refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: UmbraticReviewFile[]; baselineOid: string }>;
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<UmbraticFileSearchResult[]>;

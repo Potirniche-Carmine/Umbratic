@@ -24,6 +24,7 @@ type fakeModelClient struct {
 	req               model.ChatRequest
 	models            []model.ModelInfo
 	chatErr           error
+	chatContent       string
 	listErr           error
 	streamErr         error
 	streamStatusCode  int
@@ -55,7 +56,11 @@ func (f *fakeModelClient) Chat(ctx context.Context, req model.ChatRequest) (mode
 	if f.chatErr != nil {
 		return model.ChatResponse{}, f.chatErr
 	}
-	return model.ChatResponse{Message: model.Message{Role: "assistant", Content: "ok"}}, nil
+	content := f.chatContent
+	if content == "" {
+		content = "ok"
+	}
+	return model.ChatResponse{Message: model.Message{Role: "assistant", Content: content}}, nil
 }
 
 func (f *fakeModelClient) DoChat(ctx context.Context, req model.ChatRequest) (*http.Response, error) {
@@ -102,6 +107,55 @@ func testConfig() config.Config {
 		RequestTimeout:         time.Second,
 		MaxBodyBytes:           1 << 20,
 		MaxOutputTokens:        4096,
+	}
+}
+
+func TestFinalAssembledRequestGuardRejectsBeforeModelCall(t *testing.T) {
+	cfg := testConfig()
+	cfg.ContextLength = 1000
+	client := &fakeModelClient{}
+	server := NewServer(cfg, client)
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"`+strings.Repeat("x", 4000)+`"}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rr.Body.String(), "context_overflow_preflight") {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+	if len(client.req.Messages) != 0 {
+		t.Fatal("model was called despite final guard")
+	}
+}
+
+func TestContextCompactionRouteUsesProtectedPromptAndEchoesDigest(t *testing.T) {
+	cfg := testConfig()
+	cfg.ContextLength = 64_000
+	client := &fakeModelClient{chatContent: "# Goal and current request\nSummary facts.\n# Constraints and decisions\nConstraints.\n# Work completed\nCompleted work.\n# Files and verification\nVerification facts.\n# Errors or blockers\nNo blockers.\n# Next work\nContinue verification. " + strings.Repeat("bounded facts ", 8)}
+	server := NewServer(cfg, client)
+	body := fmt.Sprintf(`{"version":1,"route":"engineering","messages":[{"role":"user","content":%q}],"maxSummaryTokens":512,"sourceDigest":"%s"}`, strings.Repeat("source facts ", 200), strings.Repeat("a", 64))
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/context/compact", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), strings.Repeat("a", 64)) {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+	if len(client.req.Messages) != 2 || client.req.Messages[0].Role != "system" || client.req.Tools != nil {
+		t.Fatalf("unexpected compaction request %#v", client.req)
+	}
+}
+
+func TestContextCompactionRejectsSummaryWithoutRequiredHandoffStructure(t *testing.T) {
+	cfg := testConfig()
+	client := &fakeModelClient{chatContent: strings.Repeat("generic summary without structure ", 20)}
+	server := NewServer(cfg, client)
+	body := fmt.Sprintf(`{"version":1,"route":"engineering","messages":[{"role":"user","content":"%s"}],"maxSummaryTokens":512,"sourceDigest":"%s"}`, strings.Repeat("source facts ", 200), strings.Repeat("b", 64))
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/context/compact", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadGateway || !strings.Contains(rr.Body.String(), "invalid_compaction_summary") {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
 	}
 }
 

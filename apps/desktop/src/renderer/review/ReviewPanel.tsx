@@ -41,6 +41,7 @@ export function ReviewPanel({
   canApprove,
   selectedIdeLabel,
   approvalVisible,
+  checkpointPanel,
   onClose,
   onUndo,
   onApprove,
@@ -61,6 +62,7 @@ export function ReviewPanel({
   canApprove: boolean;
   selectedIdeLabel: string;
   approvalVisible: boolean;
+  checkpointPanel?: React.ReactNode;
   onClose(): void;
   onUndo(): void;
   onApprove(): void;
@@ -211,6 +213,7 @@ export function ReviewPanel({
           <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>
         </div>
       </header>
+      {checkpointPanel}
       {files.length && selectedFile ? (
         <div className="reviewWorkspace">
           <aside className="reviewFileNavigator" aria-label="Changed files">

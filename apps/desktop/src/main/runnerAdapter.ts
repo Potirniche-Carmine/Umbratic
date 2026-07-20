@@ -87,8 +87,7 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
     path.join(runtimeRoot, "uv", "Scripts"),
     process.env[pathKey] ?? "",
   ].filter(Boolean);
-  return {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = {
     [pathKey]: pathEntries.join(path.delimiter),
     UV_INSTALL_DIR: path.join(runtimeRoot, "uv"),
     UV_UNMANAGED_INSTALL: path.join(runtimeRoot, "uv"),
@@ -97,6 +96,17 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
     UV_PYTHON_BIN_DIR: path.join(runtimeRoot, "python-bin"),
     UV_CACHE_DIR: path.join(runtimeRoot, "uv-cache"),
   };
+  const allowedExact = new Set([
+    "HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_PROXY",
+    "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "NODE_ENV",
+  ].map((name) => name.toLowerCase()));
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!value || name.toLowerCase() === pathKey.toLowerCase()) continue;
+    if (allowedExact.has(name.toLowerCase()) || name.toUpperCase().startsWith("LC_")) {
+      env[name] = value;
+    }
+  }
+  return env;
 }
 
 function existingRunnerBinary(candidate: string): string | null {
@@ -204,14 +214,14 @@ export async function startUmbraticRunnerServer(
   const env: NodeJS.ProcessEnv = {
     ...runtimeEnv(task.worktreePath),
     ...umbraticRunnerHardeningEnvironment(),
-    UMBRATIC_RUNNER_CONFIG: JSON.stringify(config),
   };
   const child = spawn(binaryPath, ["serve", "--hostname=127.0.0.1", `--port=${port}`, `--password=${password}`], {
     cwd: task.worktreePath,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
+  child.stdin?.end(JSON.stringify(config));
 
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {

@@ -10,6 +10,7 @@
     "build:main": "tsc -p tsconfig.main.json && npm run copy:system-skills",
     "build:runner": "npm --workspace @umbratic/runner run build",
     "build:native": "cargo build --locked --release --workspace",
+    "benchmark:checkpoints": "node scripts/benchmark-checkpoints.ts",
     "copy:system-skills": "node scripts/copy-system-skills.ts",
     "prepare:package": "node scripts/prepare-package.ts",
     "package": "npm run build && npm run prepare:package && electron-builder --config electron-builder.yml --publish never",

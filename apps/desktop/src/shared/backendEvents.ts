@@ -19,6 +19,9 @@ export type BackendPermissionRequest = {
   command: string;
   commandClass?: BackendCommandClass;
   cwd: string;
+  consequence?: string;
+  riskyFragment?: string;
+  suggestion?: string;
 };
 
 export type BackendCommandClass =
@@ -180,7 +183,10 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
         && hasNumber(value, "bytesShown") && hasNumber(value, "totalBytes");
     case "permission.requested":
       return isRecord(value.request) && hasString(value.request, "id") && hasString(value.request, "kind")
-        && hasString(value.request, "summary") && hasString(value.request, "command") && hasString(value.request, "cwd");
+        && hasString(value.request, "summary") && hasString(value.request, "command") && hasString(value.request, "cwd")
+        && (value.request.consequence === undefined || hasString(value.request, "consequence"))
+        && (value.request.riskyFragment === undefined || hasString(value.request, "riskyFragment"))
+        && (value.request.suggestion === undefined || hasString(value.request, "suggestion"));
     case "permission.resolved":
       return hasString(value, "id") && (value.decision === "allow" || value.decision === "deny");
     case "review.ready":

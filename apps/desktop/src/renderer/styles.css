@@ -2,7 +2,7 @@
   color-scheme: dark;
   font-family: var(--app-font, system-ui, sans-serif);
   --app-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --mono-font: "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
+  --mono-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --bg: #0b0d10;
   --chrome: #14171b;
   --sidebar: #111418;
@@ -487,9 +487,9 @@ pre {
   container: review / inline-size;
   display: flex;
   justify-self: end;
-  width: min(var(--review-width, 520px), calc(100vw - 32px));
+  width: min(var(--review-width, 65vw), 95vw, calc(100vw - 32px));
   min-width: 0;
-  max-width: calc(100vw - 32px);
+  max-width: min(95vw, calc(100vw - 32px));
   min-height: 0;
   overflow: hidden;
   resize: none;
@@ -3051,21 +3051,21 @@ pre {
 }
 
 .permissionControl.isElevated .permissionTrigger {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 36%, transparent);
-  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  border-color: color-mix(in srgb, var(--line-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--control-bg) 86%, var(--surface-3));
 }
 
 .permissionControl.isElevated .permissionTrigger:hover {
-  background: color-mix(in srgb, var(--red) 18%, transparent);
+  background: var(--control-hover);
 }
 
 .permissionControl.isElevated .permissionTrigger svg:first-child {
-  color: var(--red);
+  color: var(--muted);
 }
 
 .elevatedPermissionsIcon {
-  color: var(--red);
+  color: var(--muted);
 }
 
 .permissionMenu {
@@ -5006,16 +5006,16 @@ button.attachmentPreview:focus-visible {
 .connectionModeGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 14px;
 }
 
 .connectionModeGrid > button {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 14px;
-  grid-template-rows: 28px auto;
+  grid-template-rows: 28px;
   align-items: center;
-  gap: 7px;
-  min-height: 76px;
+  column-gap: 8px;
+  min-height: 52px;
   padding: 11px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   border-radius: 8px;
@@ -5048,19 +5048,6 @@ button.attachmentPreview:focus-visible {
   color: inherit;
   font-size: 12.5px;
   line-height: 1.2;
-}
-
-.connectionModeGrid em {
-  grid-column: 1 / -1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--faint);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 400;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .connectionModeIcon {
@@ -5341,15 +5328,6 @@ button.attachmentPreview:focus-visible {
   font-size: 12.5px;
 }
 
-.settingsCode {
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--inline-code-bg);
-  font-family: var(--mono-font);
-  font-size: 11.5px;
-  color: var(--text);
-}
-
 .settingsEmpty {
   display: flex;
   align-items: center;
@@ -5408,13 +5386,6 @@ button.attachmentPreview:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-
-.skillSectionHint {
-  margin: 0;
-  color: var(--faint);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .skillFilter {
@@ -5969,6 +5940,22 @@ button.attachmentPreview:focus-visible {
   box-shadow: 0 16px 44px color-mix(in srgb, var(--shadow-color) 70%, transparent);
 }
 
+.safePermissionDialog {
+  grid-template-columns: 30px minmax(0, 1fr);
+  width: min(430px, calc(100vw - 48px));
+  border-color: color-mix(in srgb, var(--green) 28%, var(--line-strong));
+}
+
+.safePermissionIcon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 13%, var(--control-bg));
+}
+
 .deleteDialog {
   grid-template-columns: 22px minmax(0, 1fr);
   width: min(440px, calc(100vw - 48px));
@@ -6150,6 +6137,122 @@ button.attachmentPreview:focus-visible {
   color: var(--faint);
   font-size: 10.5px;
   font-weight: 500;
+}
+
+.checkpointPanel {
+  flex: 0 0 auto;
+  max-height: min(230px, 34vh);
+  overflow: auto;
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+}
+
+.checkpointHeader,
+.checkpointHeader > span,
+.checkpointIdentity {
+  display: flex;
+}
+
+.checkpointHeader {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.checkpointHeader > span,
+.checkpointIdentity {
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.checkpointHeader strong,
+.checkpointIdentity strong {
+  font-size: 11.5px;
+  font-weight: 680;
+}
+
+.checkpointHeader small,
+.checkpointIdentity small,
+.checkpointNotice,
+.checkpointError {
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.checkpointHeader button,
+.checkpointActions button {
+  display: inline-flex;
+  min-height: 27px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 10.5px;
+}
+
+.checkpointHeader button:hover:not(:disabled),
+.checkpointActions button:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.checkpointNotice,
+.checkpointError {
+  margin: 8px 0 0;
+}
+
+.checkpointError {
+  color: var(--red);
+}
+
+.checkpointList {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkpointList li {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.checkpointIdentity strong,
+.checkpointIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checkpointActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.checkpointActions button:disabled,
+.checkpointHeader button:disabled {
+  opacity: 0.45;
+}
+
+@media (max-width: 760px) {
+  .checkpointList li { grid-template-columns: minmax(0, 1fr); }
+  .checkpointActions { justify-content: flex-start; }
 }
 
 .reviewWorkspace {
@@ -7156,8 +7259,8 @@ select:focus-visible {
 
 @media (max-width: 1120px) {
   .reviewSidebar {
-    width: min(var(--review-width, 520px), calc(100vw - 24px));
-    max-width: calc(100vw - 24px);
+    width: min(var(--review-width, 65vw), 95vw, calc(100vw - 24px));
+    max-width: min(95vw, calc(100vw - 24px));
   }
 
   .promptDock {
@@ -7172,8 +7275,8 @@ select:focus-visible {
   }
 
   .reviewSidebar {
-    width: min(var(--review-width, 520px), calc(100vw - 30px));
-    max-width: calc(100vw - 30px);
+    width: min(var(--review-width, 65vw), 95vw, calc(100vw - 30px));
+    max-width: min(95vw, calc(100vw - 30px));
   }
 
   .promptDock {

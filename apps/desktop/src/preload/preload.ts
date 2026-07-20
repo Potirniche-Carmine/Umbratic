@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import type { BackendUiEventV1 } from "../shared/backendEvents";
 
-type PermissionMode = "normal" | "bypass";
+type PermissionMode = "normal" | "auto_safe";
 type ReasoningMode = "fast" | "reasoning";
 type HarnessProfileId = "marketing" | "sales" | "engineering";
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string };
@@ -19,7 +19,6 @@ type PastedAttachmentInput = {
   mimeType?: string;
   dataUrl: string;
 };
-
 function normalizedBackendEvent(value: unknown): BackendUiEventV1 | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const event = value as Record<string, unknown>;
@@ -42,6 +41,16 @@ const umbraticApi = {
   getNotes: () => ipcRenderer.invoke("umbratic:get-notes"),
   updateNotes: (input: { content: string }) => ipcRenderer.invoke("umbratic:update-notes", input),
   getTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:get-task", input),
+  listTaskCheckpoints: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:list-task-checkpoints", input),
+  createTaskCheckpoint: (input: { taskId: string; label?: string }) => ipcRenderer.invoke("umbratic:create-task-checkpoint", input),
+  setTaskCheckpointPinned: (input: { taskId: string; checkpointId: string; pinned: boolean }) =>
+    ipcRenderer.invoke("umbratic:set-task-checkpoint-pinned", input),
+  deleteTaskCheckpoint: (input: { taskId: string; checkpointId: string }) =>
+    ipcRenderer.invoke("umbratic:delete-task-checkpoint", input),
+  forkTaskCheckpoint: (input: { taskId: string; checkpointId: string }) =>
+    ipcRenderer.invoke("umbratic:fork-task-checkpoint", input),
+  restoreTaskCheckpoint: (input: { taskId: string; checkpointId: string; confirmed: boolean }) =>
+    ipcRenderer.invoke("umbratic:restore-task-checkpoint", input),
   refreshTaskReview: (input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }) => ipcRenderer.invoke("umbratic:refresh-task-review", input),
   refreshWorkspaceReview: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:refresh-workspace-review", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("umbratic:search-files", input),

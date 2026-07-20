@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, env, path::PathBuf};
+use std::{collections::BTreeMap, env, io::Read, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -15,12 +15,14 @@ pub const RUNNER_TOOL_NAMES: [&str; 6] = [
 const DEFAULT_CONTEXT_LENGTH: u64 = 64_000;
 const DEFAULT_RESERVED_TOKENS: u64 = 8_192;
 const DEFAULT_PROTECTED_PROMPT_RESERVE_TOKENS: u64 = 2_048;
+const MAX_RUNNER_CONFIG_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionMode {
     Normal,
-    Bypass,
+    #[serde(rename = "auto_safe", alias = "bypass")]
+    AutoSafe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,10 +296,8 @@ fn parse_mtls(value: &Value) -> Result<MtlsConfig, String> {
     })
 }
 
-pub fn load_runner_config() -> Result<RunnerConfig, String> {
-    let raw = env::var("UMBRATIC_RUNNER_CONFIG")
-        .map_err(|_| "UMBRATIC_RUNNER_CONFIG is required".to_owned())?;
-    let value: Value = serde_json::from_str(&raw)
+fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
+    let value: Value = serde_json::from_str(raw)
         .map_err(|error| format!("invalid runner config JSON: {error}"))?;
     let config = object(&value)?;
     let provider_value = config
@@ -395,8 +395,11 @@ pub fn load_runner_config() -> Result<RunnerConfig, String> {
             .to_owned(),
         model_boundary,
         skills: parse_skills(config.get("skills")),
-        permission_mode: if config.get("permissionMode").and_then(Value::as_str) == Some("bypass") {
-            PermissionMode::Bypass
+        permission_mode: if matches!(
+            config.get("permissionMode").and_then(Value::as_str),
+            Some("auto_safe" | "bypass")
+        ) {
+            PermissionMode::AutoSafe
         } else {
             PermissionMode::Normal
         },
@@ -411,6 +414,30 @@ pub fn load_runner_config() -> Result<RunnerConfig, String> {
         diagnostics: parse_diagnostics(config.get("diagnostics")),
         provider,
     })
+}
+
+pub fn load_runner_config() -> Result<RunnerConfig, String> {
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take((MAX_RUNNER_CONFIG_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read runner config from stdin: {error}"))?;
+    if bytes.len() > MAX_RUNNER_CONFIG_BYTES {
+        return Err("runner config exceeds the 2 MiB limit".into());
+    }
+    if !bytes.is_empty() {
+        let raw = String::from_utf8(bytes)
+            .map_err(|_| "runner config stdin must be valid UTF-8".to_owned())?;
+        return parse_runner_config(&raw);
+    }
+    if cfg!(debug_assertions)
+        && env::var("UMBRATIC_RUNNER_ALLOW_ENV_CONFIG").ok().as_deref() == Some("1")
+    {
+        let raw = env::var("UMBRATIC_RUNNER_CONFIG")
+            .map_err(|_| "runner config is required on stdin".to_owned())?;
+        return parse_runner_config(&raw);
+    }
+    Err("runner config is required on stdin".into())
 }
 
 #[cfg(test)]
@@ -528,6 +555,22 @@ mod tests {
         let invalid =
             parse_diagnostics(Some(&serde_json::json!({"includeToolOutput":"everything"})));
         assert_eq!(invalid.include_tool_output, "stderr");
+    }
+
+    #[test]
+    fn permission_mode_uses_auto_safe_and_accepts_the_legacy_value() {
+        assert_eq!(
+            serde_json::from_str::<PermissionMode>("\"auto_safe\"").unwrap(),
+            PermissionMode::AutoSafe
+        );
+        assert_eq!(
+            serde_json::from_str::<PermissionMode>("\"bypass\"").unwrap(),
+            PermissionMode::AutoSafe
+        );
+        assert_eq!(
+            serde_json::to_string(&PermissionMode::AutoSafe).unwrap(),
+            "\"auto_safe\""
+        );
     }
 
     #[test]

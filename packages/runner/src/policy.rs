@@ -1,4 +1,8 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Component, Path, PathBuf},
+    sync::{Mutex, OnceLock},
+};
 
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -165,8 +169,16 @@ pub fn resolve_workspace_path(cwd: &Path, file_path: &str) -> Result<(PathBuf, S
     Ok((absolute, relative))
 }
 
-fn regex(pattern: &str, value: &str) -> bool {
-    Regex::new(pattern).is_ok_and(|regex| regex.is_match(value))
+fn regex(pattern: &'static str, value: &str) -> bool {
+    static REGEXES: OnceLock<Mutex<HashMap<&'static str, Regex>>> = OnceLock::new();
+    let mut regexes = REGEXES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let regex = regexes
+        .entry(pattern)
+        .or_insert_with(|| Regex::new(pattern).expect("static policy regex must compile"));
+    regex.is_match(value)
 }
 
 pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassification {
@@ -189,12 +201,15 @@ pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassi
         };
     }
     if let Some(root) = cwd {
-        let absolute = Regex::new(if cfg!(windows) {
-            r#"(?i)(?:[A-Z]:\\|\\\\)[^\s\"'`<>|;&]*"#
-        } else {
-            r#"/(?:[^\s\"'`<>|;&]+)"#
-        })
-        .unwrap();
+        static ABSOLUTE_PATH: OnceLock<Regex> = OnceLock::new();
+        let absolute = ABSOLUTE_PATH.get_or_init(|| {
+            Regex::new(if cfg!(windows) {
+                r#"(?i)(?:[A-Z]:\\|\\\\)[^\s\"'`<>|;&]*"#
+            } else {
+                r#"/(?:[^\s\"'`<>|;&]+)"#
+            })
+            .expect("static absolute-path regex must compile")
+        });
         if absolute
             .find_iter(trimmed)
             .any(|found| !path_inside(root, Path::new(found.as_str())))

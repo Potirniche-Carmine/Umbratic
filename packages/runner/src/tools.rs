@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -23,9 +23,10 @@ use crate::{
     context::compress_tool_result,
     events::now_iso,
     policy::{
-        classify_command_text, is_blocked_path, is_generated_runtime_path, redact_stream_text,
-        redact_text, resolve_workspace_path,
+        is_blocked_path, is_generated_runtime_path, redact_stream_text, redact_text,
+        resolve_workspace_path,
     },
+    safety::{CommandPermit, SafetyAction, SafetyDecisionV1, evaluate_command},
     session::{EventSink, Session},
 };
 
@@ -442,7 +443,7 @@ async fn write_tool(
             &session.task_id,
             "edit",
             &format!("write {relative}"),
-            session.config.permission_mode == PermissionMode::Bypass,
+            session.config.permission_mode == PermissionMode::AutoSafe,
         )
         .await;
     if decision != "allow" {
@@ -654,7 +655,7 @@ async fn edit_tool(
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                session.config.permission_mode == PermissionMode::Bypass,
+                session.config.permission_mode == PermissionMode::AutoSafe,
             )
             .await;
         if decision != "allow" {
@@ -700,7 +701,7 @@ async fn edit_tool(
             &session.task_id,
             "edit",
             &format!("edit {relative}"),
-            session.config.permission_mode == PermissionMode::Bypass,
+            session.config.permission_mode == PermissionMode::AutoSafe,
         )
         .await;
     if decision != "allow" {
@@ -1043,25 +1044,36 @@ async fn command_tool(
     input: &Map<String, Value>,
     permissions: &crate::permission::PermissionBroker,
     call_id: &str,
+    safety: &SafetyDecisionV1,
 ) -> Result<ToolResult, String> {
     let command = string_arg(input, &["command"]).trim().to_owned();
     if command.is_empty() {
         return Err("command requires command".into());
     }
-    let classification = classify_command_text(&command, Some(&session.config.cwd));
-    if matches!(
-        classification.command_class,
-        "network" | "external-directory"
-    ) {
-        return Err(format!(
-            "Command blocked by policy: {}",
-            classification
-                .reason
-                .unwrap_or(classification.command_class)
-        ));
+    sink.emit(json!({
+        "type": "command.safety.decision",
+        "taskId": session.task_id,
+        "toolCallId": call_id,
+        "schemaVersion": safety.schema_version,
+        "policyVersion": safety.policy_version,
+        "action": safety.action,
+        "severity": safety.severity,
+        "certainty": safety.certainty,
+        "commandClass": safety.command_class,
+        "ruleId": safety.rule_id,
+        "explanation": safety.explanation,
+        "matchedSpan": safety.matched_span,
+        "suggestion": safety.suggestion,
+        "commandFingerprint": safety.command_fingerprint,
+        "cwdFingerprint": safety.cwd_fingerprint,
+        "evaluationMicros": safety.evaluation_micros,
+        "at": now_iso(),
+    }));
+    if safety.action == SafetyAction::Deny {
+        return Err(format!("Command blocked by policy: {}", safety.explanation));
     }
-    let auto_allow =
-        session.config.permission_mode == PermissionMode::Bypass && !classification.risky;
+    let auto_allow = session.config.permission_mode == PermissionMode::AutoSafe
+        && safety.action == SafetyAction::Allow;
     let decision = permissions
         .request(
             sink,
@@ -1074,6 +1086,7 @@ async fn command_tool(
     if decision != "allow" {
         return Err("Command denied.".into());
     }
+    let permit = CommandPermit::new(safety);
     let requested = input
         .get("timeoutMs")
         .and_then(Value::as_u64)
@@ -1094,8 +1107,11 @@ async fn command_tool(
         value.args(["-c", &command]);
         value
     };
+    permit.consume(&command, &session.config.cwd)?;
     process
         .current_dir(&session.config.cwd)
+        .env_clear()
+        .envs(safe_command_environment())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -1219,6 +1235,68 @@ async fn command_tool(
         exit_code: exit,
         details: None,
     })
+}
+
+fn protected_environment_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper == "UMBRATIC_RUNNER_CONFIG"
+        || upper == "SSH_AUTH_SOCK"
+        || [
+            "API_KEY",
+            "APIKEY",
+            "AUTHORIZATION",
+            "BEARER",
+            "PASSWORD",
+            "PASSWD",
+            "COOKIE",
+            "CREDENTIAL",
+            "SECRET",
+            "TOKEN",
+        ]
+        .iter()
+        .any(|marker| upper.contains(marker))
+}
+
+fn allowed_command_environment_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "PATH"
+            | "HOME"
+            | "USERPROFILE"
+            | "TMPDIR"
+            | "TMP"
+            | "TEMP"
+            | "LANG"
+            | "TERM"
+            | "NO_PROXY"
+            | "SYSTEMROOT"
+            | "WINDIR"
+            | "COMSPEC"
+            | "PATHEXT"
+            | "UV_INSTALL_DIR"
+            | "UV_UNMANAGED_INSTALL"
+            | "UV_NO_MODIFY_PATH"
+            | "UV_PYTHON_INSTALL_DIR"
+            | "UV_PYTHON_BIN_DIR"
+            | "UV_CACHE_DIR"
+    ) || upper.starts_with("LC_")
+}
+
+fn filtered_command_environment<I>(values: I) -> BTreeMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    values
+        .into_iter()
+        .filter(|(name, _)| {
+            allowed_command_environment_name(name) && !protected_environment_name(name)
+        })
+        .collect()
+}
+
+fn safe_command_environment() -> BTreeMap<String, String> {
+    filtered_command_environment(std::env::vars())
 }
 
 async fn terminate_command_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
@@ -1403,6 +1481,11 @@ pub async fn execute_tool(
     let started = Instant::now();
     let name = canonical_tool_name(&call.name);
     let parsed_args = parse_arguments(&call.arguments);
+    let command_decision = parsed_args
+        .as_ref()
+        .ok()
+        .filter(|_| name == "command")
+        .map(|args| evaluate_command(&string_arg(args, &["command"]), &session.config.cwd));
     let summary = match parsed_args.as_ref() {
         Ok(args) => match name.as_str() {
             "read" => format!("read {}", string_arg(args, &["filePath", "path"])),
@@ -1416,10 +1499,10 @@ pub async fn execute_tool(
         Err(_) => name.clone(),
     };
     let command_class = match parsed_args.as_ref() {
-        Ok(args) if name == "command" => {
-            classify_command_text(&string_arg(args, &["command"]), Some(&session.config.cwd))
-                .command_class
-        }
+        Ok(_) if name == "command" => command_decision
+            .as_ref()
+            .map(|decision| decision.command_class)
+            .unwrap_or("unknown"),
         Ok(_) if matches!(name.as_str(), "write" | "edit") => "edit",
         Ok(_) => "read",
         Err(_) => "unknown",
@@ -1511,7 +1594,19 @@ pub async fn execute_tool(
                 )
             })
             .ok_or_else(|| "Workspace graph is not configured for this session.".into()),
-        "command" => command_tool(&session, &sink, &args, &permissions, &call.id).await,
+        "command" => {
+            command_tool(
+                &session,
+                &sink,
+                &args,
+                &permissions,
+                &call.id,
+                command_decision
+                    .as_ref()
+                    .expect("validated command has a decision"),
+            )
+            .await
+        }
         "read_skill" => read_skill_tool(&session, &args),
         "retrieve_context" => {
             let hash = string_arg(&args, &["hash"]);
@@ -1599,6 +1694,24 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn workspace_command_environment_is_explicit_and_filters_credentials_case_insensitively() {
+        let filtered = filtered_command_environment([
+            ("PATH".into(), "/bin".into()),
+            ("HOME".into(), "/home/test".into()),
+            ("LC_ALL".into(), "C.UTF-8".into()),
+            ("provider_api_key".into(), "secret".into()),
+            ("Authorization".into(), "Bearer secret".into()),
+            ("SSH_AUTH_SOCK".into(), "/tmp/agent".into()),
+            ("UMBRATIC_RUNNER_CONFIG".into(), "secret config".into()),
+            ("UNRELATED".into(), "not forwarded".into()),
+        ]);
+        assert_eq!(filtered.get("PATH").map(String::as_str), Some("/bin"));
+        assert_eq!(filtered.get("HOME").map(String::as_str), Some("/home/test"));
+        assert_eq!(filtered.get("LC_ALL").map(String::as_str), Some("C.UTF-8"));
+        assert_eq!(filtered.len(), 3);
+    }
     #[test]
     fn markdown_fenced_arguments_parse() {
         let value = Value::String("```json\n{\"filePath\":\"README.md\"}\n```".into());
@@ -1682,6 +1795,10 @@ mod tests {
             task_id: "task".into(),
             config: Arc::new(config),
             messages: tokio::sync::Mutex::new(Vec::new()),
+            durable_summary: tokio::sync::Mutex::new(None),
+            failed_compaction_digest: tokio::sync::Mutex::new(None),
+            compaction_count: std::sync::atomic::AtomicU32::new(0),
+            context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
             workspace_graph: None,
             aborted: std::sync::atomic::AtomicBool::new(false),
@@ -1791,6 +1908,10 @@ mod tests {
             task_id: "task".into(),
             config: Arc::new(config),
             messages: tokio::sync::Mutex::new(Vec::new()),
+            durable_summary: tokio::sync::Mutex::new(None),
+            failed_compaction_digest: tokio::sync::Mutex::new(None),
+            compaction_count: std::sync::atomic::AtomicU32::new(0),
+            context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
             workspace_graph: None,
             aborted: std::sync::atomic::AtomicBool::new(false),
@@ -1835,18 +1956,28 @@ mod tests {
 
     async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {
         let directory = tempfile::tempdir().unwrap();
-        execute_tool(
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+        let permissions = Arc::new(crate::permission::PermissionBroker::default());
+        let task = tokio::spawn(execute_tool(
             crate::session::test_session(directory.path()),
-            crate::session::test_sink(directory.path()),
-            Arc::new(crate::permission::PermissionBroker::default()),
+            sink.clone(),
+            permissions.clone(),
             ToolCall {
                 id: "command".into(),
                 name: "command".into(),
                 arguments: json!({"command":command,"timeoutMs":timeout_ms}),
                 index: 0,
             },
-        )
-        .await
+        ));
+        loop {
+            let event = events.recv().await.unwrap();
+            if event["type"] == "permission.requested" {
+                permissions.reply(&sink, event["permissionId"].as_str().unwrap(), "allow");
+                break;
+            }
+        }
+        task.await.unwrap()
     }
 
     #[tokio::test]
@@ -1892,6 +2023,10 @@ mod tests {
             task_id: "task".into(),
             config: Arc::new(config),
             messages: tokio::sync::Mutex::new(Vec::new()),
+            durable_summary: tokio::sync::Mutex::new(None),
+            failed_compaction_digest: tokio::sync::Mutex::new(None),
+            compaction_count: std::sync::atomic::AtomicU32::new(0),
+            context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
             workspace_graph: None,
             aborted: std::sync::atomic::AtomicBool::new(false),

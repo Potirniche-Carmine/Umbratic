@@ -79,7 +79,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getSkillDocument", [{ id: "skill" }], "umbratic:get-skill-document"],
     ["saveSkillDocument", [{ id: "skill", content: "# Skill" }], "umbratic:save-skill-document"],
     ["resetSystemSkill", [{ id: "umbratic-markdown" }], "umbratic:reset-system-skill"],
-    ["setPermissionMode", ["bypass"], "umbratic:set-permission-mode"],
+    ["setPermissionMode", ["auto_safe"], "umbratic:set-permission-mode"],
     ["listAvailableIdes", [], "umbratic:list-available-ides", undefined],
     ["startTask", [{ prompt: "go", worktreeTaskId: "task-root" }], "umbratic:start-task"],
     ["approveWorktreeCreation", [{ taskId: "task-1", approved: true }], "umbratic:approve-worktree-creation"],
@@ -116,5 +116,4 @@ test("compiled sandboxed preload has no relative runtime dependencies", () => {
   const source = fs.readFileSync(new URL("../dist-electron/preload/preload.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /require\(["']\.\.?\//);
 });
-
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { BackendUiEvent, ProductTelemetryEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
+import type { BackendUiEvent, LocalDiagnosticRecord, ProductTelemetryEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
 import { classifyCommandText, redactText } from "./policy";
 
 function diffStats(diff: string): { additions: number; deletions: number } {
@@ -35,6 +35,23 @@ function reviewSummary(files: ReviewFile[]) {
 function increment(map: Record<string, number>, key: string | undefined) {
   if (!key) return;
   map[key] = (map[key] ?? 0) + 1;
+}
+
+function localDiagnosticSummary(records: LocalDiagnosticRecord[]) {
+  const summary = {
+    total: records.length,
+    warnings: 0,
+    errors: 0,
+    bySource: {} as Record<string, number>,
+    byEvent: {} as Record<string, number>,
+  };
+  for (const record of records) {
+    if (record.level === "error") summary.errors += 1;
+    else summary.warnings += 1;
+    increment(summary.bySource, record.source);
+    increment(summary.byEvent, record.event);
+  }
+  return summary;
 }
 
 function taskOutcome(task: TaskRecord): "success" | "failure" | "in_progress" {
@@ -294,12 +311,14 @@ export function buildRedactedTelemetryBundle(
   tasks: TaskRecord[],
   _projects: RepositoryInfo[],
   productEvents: ProductTelemetryEvent[] = [],
+  localDiagnostics: LocalDiagnosticRecord[] = [],
 ) {
   const conversations = conversationByChat(tasks);
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     exportedAt: new Date().toISOString(),
     productEvents,
+    localDiagnostics: localDiagnosticSummary(localDiagnostics),
     tasks: tasks.map((task) => {
       const events = task.events ?? [];
       const conversation = conversations.get(task.chatId || task.id) ?? [];

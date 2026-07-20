@@ -56,7 +56,7 @@ function runnerConfig(cwd, providerBaseUrl) {
     workspaceMode: "local",
     modelBoundary: "managed",
     skills: [],
-    permissionMode: "bypass",
+    permissionMode: "auto_safe",
     enabledTools: ["read"],
     diagnostics: false,
     provider: {
@@ -134,10 +134,10 @@ async function startRunner(cwd, providerBaseUrl) {
     env: {
       ...process.env,
       NODE_ENV: "production",
-      UMBRATIC_RUNNER_CONFIG: JSON.stringify(runnerConfig(cwd, providerBaseUrl)),
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
+  child.stdin.end(JSON.stringify(runnerConfig(cwd, providerBaseUrl)));
   let output = "";
   const url = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Runner startup timed out: ${output}`)), 10_000);
@@ -359,4 +359,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.stack : String(error));
   process.exit(1);
 });
-

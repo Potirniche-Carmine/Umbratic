@@ -40,6 +40,8 @@ import type {
   RepositoryInfo,
   RunnerToolId,
   TaskRecord,
+  TaskCheckpoint,
+  TaskWorkspace,
   UserNotes,
 } from "./types";
 
@@ -200,6 +202,38 @@ function ensureStorageSchema(db: DatabaseSync) {
       payload TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS task_checkpoints (
+      id TEXT PRIMARY KEY NOT NULL,
+      task_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      parent_checkpoint_id TEXT,
+      source TEXT NOT NULL,
+      label TEXT,
+      commit_oid TEXT NOT NULL,
+      tree_oid TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      state TEXT NOT NULL,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      logical_bytes INTEGER,
+      FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY(parent_checkpoint_id) REFERENCES task_checkpoints(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_workspaces (
+      id TEXT PRIMARY KEY NOT NULL,
+      task_id TEXT NOT NULL,
+      number INTEGER NOT NULL,
+      branch TEXT NOT NULL,
+      path TEXT NOT NULL,
+      source_checkpoint_id TEXT,
+      created_at TEXT NOT NULL,
+      state TEXT NOT NULL,
+      FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_checkpoint_id) REFERENCES task_checkpoints(id) ON DELETE SET NULL,
+      UNIQUE(task_id, number),
+      UNIQUE(path)
+    );
+
     CREATE INDEX IF NOT EXISTS chats_updated_at_index ON chats(updated_at DESC);
     CREATE INDEX IF NOT EXISTS chats_repository_path_index ON chats(repository_path);
     CREATE INDEX IF NOT EXISTS tasks_created_at_index ON tasks(created_at DESC);
@@ -208,11 +242,13 @@ function ensureStorageSchema(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS diagnostic_logs_task_id_index ON diagnostic_logs(task_id);
     CREATE INDEX IF NOT EXISTS product_telemetry_events_at_index ON product_telemetry_events(at ASC);
     CREATE INDEX IF NOT EXISTS product_telemetry_events_task_id_index ON product_telemetry_events(task_id);
+    CREATE INDEX IF NOT EXISTS task_checkpoints_task_state_created_index ON task_checkpoints(task_id, state, created_at DESC);
+    CREATE INDEX IF NOT EXISTS task_workspaces_task_state_created_index ON task_workspaces(task_id, state, created_at DESC);
   `);
-  if (schemaVersion < 3) {
+  if (schemaVersion < 4) {
     db.exec(`
       DELETE FROM diagnostic_logs WHERE level NOT IN ('warn', 'error');
-      PRAGMA user_version = 3;
+      PRAGMA user_version = 4;
     `);
   }
 }
@@ -480,6 +516,7 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
     ...(storedTask as TaskRecord),
     workspaceKind: task.workspaceKind === "folder" ? "folder" : "git",
     workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
+    permissionMode: task.permissionMode === "auto_safe" || task.permissionMode === "bypass" ? "auto_safe" : "normal",
     reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
     runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
     runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
@@ -530,16 +567,15 @@ function replaceTasksInDatabase(db: DatabaseSync, tasks: TaskRecord[]) {
   });
 }
 
-function upsertTaskInDatabase(db: DatabaseSync, task: TaskRecord, promote: boolean) {
-  runTransaction(db, () => {
-    const existing = db.prepare("SELECT position FROM tasks WHERE id = ?").get(task.id) as PositionRow | undefined;
-    const maximum = db.prepare("SELECT MAX(position) AS position FROM tasks").get() as PositionRow;
-    let position = existing?.position ?? ((maximum.position ?? -1) + 1);
-    if (promote && position !== 0) {
-      db.prepare("UPDATE tasks SET position = position + 1 WHERE id <> ?").run(task.id);
-      position = 0;
-    }
-    db.prepare(`
+function upsertTaskRowInDatabase(db: DatabaseSync, task: TaskRecord, promote: boolean) {
+  const existing = db.prepare("SELECT position FROM tasks WHERE id = ?").get(task.id) as PositionRow | undefined;
+  const maximum = db.prepare("SELECT MAX(position) AS position FROM tasks").get() as PositionRow;
+  let position = existing?.position ?? ((maximum.position ?? -1) + 1);
+  if (promote && position !== 0) {
+    db.prepare("UPDATE tasks SET position = position + 1 WHERE id <> ?").run(task.id);
+    position = 0;
+  }
+  db.prepare(`
       INSERT INTO tasks (
         id,
         repository_id,
@@ -554,15 +590,18 @@ function upsertTaskInDatabase(db: DatabaseSync, task: TaskRecord, promote: boole
         created_at = excluded.created_at,
         payload = excluded.payload,
         position = excluded.position
-    `).run(
-      task.id,
-      typeof task.repositoryId === "string" ? task.repositoryId : "",
-      typeof task.state === "string" ? task.state : "",
-      typeof task.createdAt === "string" ? task.createdAt : "",
-      JSON.stringify(task),
-      position,
-    );
-  });
+  `).run(
+    task.id,
+    typeof task.repositoryId === "string" ? task.repositoryId : "",
+    typeof task.state === "string" ? task.state : "",
+    typeof task.createdAt === "string" ? task.createdAt : "",
+    JSON.stringify(task),
+    position,
+  );
+}
+
+function upsertTaskInDatabase(db: DatabaseSync, task: TaskRecord, promote: boolean) {
+  runTransaction(db, () => upsertTaskRowInDatabase(db, task, promote));
 }
 
 export function readTasks(): TaskRecord[] {
@@ -586,9 +625,156 @@ export function writeTask(task: TaskRecord, promote = true) {
   withAppDatabase((db) => upsertTaskInDatabase(db, normalized, promote));
 }
 
+type CheckpointRow = {
+  id: string; task_id: string; workspace_id: string; parent_checkpoint_id: string | null;
+  source: string; label: string | null; commit_oid: string; tree_oid: string; created_at: string;
+  state: string; pinned: number; logical_bytes: number | null;
+};
+
+type WorkspaceRow = {
+  id: string; task_id: string; number: number; branch: string; path: string;
+  source_checkpoint_id: string | null; created_at: string; state: string;
+};
+
+export function writeTaskCheckpoint(checkpoint: TaskCheckpoint): void {
+  withAppDatabase((db) => insertTaskCheckpoint(db, checkpoint));
+}
+
+function insertTaskCheckpoint(db: DatabaseSync, checkpoint: TaskCheckpoint): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO task_checkpoints
+      (id, task_id, workspace_id, parent_checkpoint_id, source, label, commit_oid, tree_oid, created_at, state, pinned, logical_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    checkpoint.id, checkpoint.taskId, checkpoint.workspaceId, checkpoint.parentCheckpointId ?? null,
+    checkpoint.source, checkpoint.label ?? null, checkpoint.commitOid, checkpoint.treeOid,
+    checkpoint.createdAt, checkpoint.state, checkpoint.pinned ? 1 : 0, checkpoint.logicalBytes ?? null,
+  );
+}
+
+export function completeTaskCheckpoint(task: TaskRecord, checkpoint: TaskCheckpoint): void {
+  if (checkpoint.state !== "ready" || task.id !== checkpoint.taskId || task.latestCheckpointId !== checkpoint.id) {
+    throw new Error("Checkpoint completion requires matching ready checkpoint and task pointer state.");
+  }
+  const normalized = normalizeTaskRecord(task);
+  if (!normalized) throw new Error("Checkpoint completion contains an invalid task.");
+  withAppDatabase((db) => runTransaction(db, () => {
+    insertTaskCheckpoint(db, checkpoint);
+    upsertTaskRowInDatabase(db, normalized, false);
+  }));
+}
+
+export function readTaskCheckpoints(taskId: string): TaskCheckpoint[] {
+  return withAppDatabase((db) => (db.prepare(`
+    SELECT * FROM task_checkpoints WHERE task_id = ? ORDER BY created_at DESC, id DESC
+  `).all(taskId) as CheckpointRow[]).map((row) => ({
+    id: row.id, taskId: row.task_id, workspaceId: row.workspace_id,
+    ...(row.parent_checkpoint_id ? { parentCheckpointId: row.parent_checkpoint_id } : {}),
+    source: row.source as TaskCheckpoint["source"], ...(row.label ? { label: row.label } : {}),
+    commitOid: row.commit_oid, treeOid: row.tree_oid, createdAt: row.created_at,
+    state: row.state as TaskCheckpoint["state"], pinned: row.pinned === 1,
+    ...(row.logical_bytes !== null ? { logicalBytes: row.logical_bytes } : {}),
+  })));
+}
+
+export function deleteTaskCheckpoint(checkpointId: string): void {
+  withAppDatabase((db) => db.prepare("DELETE FROM task_checkpoints WHERE id = ?").run(checkpointId));
+}
+
+export function writeTaskWorkspace(workspace: TaskWorkspace): void {
+  withAppDatabase((db) => db.prepare(`
+    INSERT OR REPLACE INTO task_workspaces
+      (id, task_id, number, branch, path, source_checkpoint_id, created_at, state)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    workspace.id, workspace.taskId, workspace.number, workspace.branch, workspace.path,
+    workspace.sourceCheckpointId ?? null, workspace.createdAt, workspace.state,
+  ));
+}
+
+export function readTaskWorkspaces(taskId: string): TaskWorkspace[] {
+  return withAppDatabase((db) => (db.prepare(`
+    SELECT * FROM task_workspaces WHERE task_id = ? ORDER BY number DESC
+  `).all(taskId) as WorkspaceRow[]).map((row) => ({
+    id: row.id, taskId: row.task_id, number: row.number, branch: row.branch, path: row.path,
+    ...(row.source_checkpoint_id ? { sourceCheckpointId: row.source_checkpoint_id } : {}),
+    createdAt: row.created_at, state: row.state as TaskWorkspace["state"],
+  })));
+}
+
+export function activateTaskWorkspace(
+  task: TaskRecord,
+  active: TaskWorkspace,
+  previous?: TaskWorkspace,
+): void {
+  const normalized = normalizeTaskRecord(task);
+  if (!normalized) throw new Error("Task workspace switch contains an invalid task.");
+  withAppDatabase((db) => runTransaction(db, () => {
+    if (previous) {
+      db.prepare(`
+        INSERT OR REPLACE INTO task_workspaces
+          (id, task_id, number, branch, path, source_checkpoint_id, created_at, state)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(previous.id, previous.taskId, previous.number, previous.branch, previous.path,
+        previous.sourceCheckpointId ?? null, previous.createdAt, previous.state);
+    }
+    db.prepare(`
+      INSERT OR REPLACE INTO task_workspaces
+        (id, task_id, number, branch, path, source_checkpoint_id, created_at, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(active.id, active.taskId, active.number, active.branch, active.path,
+      active.sourceCheckpointId ?? null, active.createdAt, active.state);
+    upsertTaskRowInDatabase(db, normalized, false);
+  }));
+}
+
 function pathKey(pathValue: string): string {
   const resolved = path.resolve(pathValue);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function normalizeContextState(value: unknown): ChatRecord["contextState"] | undefined {
+  if (!isRecord(value) || value.version !== 1 || typeof value.sourceTaskId !== "string"
+    || !value.sourceTaskId || value.sourceTaskId.length > 200 || typeof value.updatedAt !== "string"
+    || !value.updatedAt || value.updatedAt.length > 80 || typeof value.sourceDigest !== "string"
+    || !/^[a-f0-9]{64}$/.test(value.sourceDigest) || !Array.isArray(value.tail) || value.tail.length > 32
+    || !isRecord(value.usage) || typeof value.usage.estimatedPromptTokens !== "number"
+    || !Number.isSafeInteger(value.usage.estimatedPromptTokens)
+    || value.usage.estimatedPromptTokens < 0 || typeof value.usage.compactionCount !== "number"
+    || !Number.isSafeInteger(value.usage.compactionCount) || value.usage.compactionCount < 0
+    || (value.usage.observedPromptTokens !== undefined
+      && (typeof value.usage.observedPromptTokens !== "number"
+        || !Number.isSafeInteger(value.usage.observedPromptTokens) || value.usage.observedPromptTokens < 0))
+    || (value.summary !== undefined && (typeof value.summary !== "string" || value.summary.length > 24_000))) {
+    return undefined;
+  }
+  const tail = value.tail.map((message) => {
+    if (!isRecord(message) || !["user", "assistant", "tool"].includes(String(message.role))) return null;
+    if (message.tool_call_id !== undefined && typeof message.tool_call_id !== "string") return null;
+    if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) return null;
+    return {
+      role: message.role as "user" | "assistant" | "tool",
+      content: message.content,
+      ...(typeof message.tool_call_id === "string" ? { tool_call_id: message.tool_call_id } : {}),
+      ...(Array.isArray(message.tool_calls) ? { tool_calls: message.tool_calls } : {}),
+    };
+  });
+  if (tail.some((message) => !message) || Buffer.byteLength(JSON.stringify(value), "utf8") > 128 * 1024) return undefined;
+  return {
+    version: 1,
+    sourceTaskId: value.sourceTaskId,
+    updatedAt: value.updatedAt,
+    ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
+    tail: tail as NonNullable<ChatRecord["contextState"]>["tail"],
+    sourceDigest: value.sourceDigest,
+    usage: {
+      estimatedPromptTokens: value.usage.estimatedPromptTokens as number,
+      ...(typeof value.usage.observedPromptTokens === "number"
+        ? { observedPromptTokens: value.usage.observedPromptTokens }
+        : {}),
+      compactionCount: value.usage.compactionCount as number,
+    },
+  };
 }
 
 function normalizeChatRecord(chat: unknown): ChatRecord | null {
@@ -633,6 +819,7 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
     attachedFiles: Array.isArray(chat.attachedFiles)
       ? chat.attachedFiles.filter((file) => file && typeof file.path === "string" && typeof file.name === "string")
       : [],
+    contextState: normalizeContextState(chat.contextState),
   } as ChatRecord;
 }
 

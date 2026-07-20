@@ -78,7 +78,7 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
   };
 
   assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig(config, model));
-  assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, permissionMode: "bypass" }, model), /permissions/);
+  assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, permissionMode: "auto_safe" }, model), /permissions/);
   assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, enabledTools: ["read", "bad"] }, model), /enabled tools/);
   assert.throws(
     () => policy.assertUmbraticRunnerConfig({ ...config, provider: { ...config.provider, chatEndpointPath: "/api/chat" } }, model),
@@ -104,5 +104,4 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     command: false,
   });
 });
-
 

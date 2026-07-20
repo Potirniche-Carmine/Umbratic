@@ -24,6 +24,81 @@ const (
 
 var ErrRequestTooLarge = errors.New("request body too large")
 
+type CompactionInput struct {
+	Version          int
+	Route            string
+	PreviousSummary  string
+	Messages         []model.Message
+	MaxSummaryTokens int
+	SourceDigest     string
+}
+
+type compactionRequest struct {
+	Version          int             `json:"version"`
+	Route            string          `json:"route"`
+	PreviousSummary  string          `json:"previousSummary"`
+	Messages         []model.Message `json:"messages"`
+	MaxSummaryTokens int             `json:"maxSummaryTokens"`
+	SourceDigest     string          `json:"sourceDigest"`
+}
+
+func DecodeCompactionInput(r io.Reader) (CompactionInput, error) {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			return CompactionInput{}, ErrRequestTooLarge
+		}
+		return CompactionInput{}, errors.New("invalid request body")
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(body, &raw) != nil {
+		return CompactionInput{}, errors.New("invalid JSON request")
+	}
+	for field := range raw {
+		switch field {
+		case "version", "route", "previousSummary", "messages", "maxSummaryTokens", "sourceDigest":
+		default:
+			return CompactionInput{}, fmt.Errorf("field %q is not supported", field)
+		}
+	}
+	var req compactionRequest
+	if json.Unmarshal(body, &req) != nil {
+		return CompactionInput{}, errors.New("invalid JSON request")
+	}
+	if req.Version != 1 {
+		return CompactionInput{}, errors.New("unsupported compaction version")
+	}
+	if req.Route != "engineering" && req.Route != "marketing" && req.Route != "sales" {
+		return CompactionInput{}, errors.New("unsupported compaction route")
+	}
+	if len(req.PreviousSummary) > 24_000 {
+		return CompactionInput{}, errors.New("previous summary is too large")
+	}
+	if len(req.Messages) == 0 || len(req.Messages) > MaxMessages {
+		return CompactionInput{}, errors.New("compaction messages are missing or too numerous")
+	}
+	if req.MaxSummaryTokens < 200 || req.MaxSummaryTokens > 4096 {
+		return CompactionInput{}, errors.New("maxSummaryTokens must be between 200 and 4096")
+	}
+	if len(req.SourceDigest) != 64 {
+		return CompactionInput{}, errors.New("sourceDigest is invalid")
+	}
+	for _, c := range req.SourceDigest {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return CompactionInput{}, errors.New("sourceDigest is invalid")
+		}
+	}
+	for i, message := range req.Messages {
+		if message.Role != "user" && message.Role != "assistant" && message.Role != "tool" {
+			return CompactionInput{}, fmt.Errorf("message %d has unsupported role", i)
+		}
+		if err := validateMessageContent(message.Content); err != nil {
+			return CompactionInput{}, fmt.Errorf("message %d %s", i, err)
+		}
+	}
+	return CompactionInput{Version: 1, Route: req.Route, PreviousSummary: req.PreviousSummary, Messages: req.Messages, MaxSummaryTokens: req.MaxSummaryTokens, SourceDigest: req.SourceDigest}, nil
+}
+
 type ChatInput struct {
 	Messages        []model.Message
 	Stream          bool

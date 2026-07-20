@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 use crate::{
     config::{RunnerConfig, load_runner_config},
-    context::SessionContextStore,
+    context::{ContextCalibration, SessionContextStore},
+    context_state::ContextStateV1,
     diagnostics::RunnerDiagnostics,
     events::RunnerEvent,
     permission::PermissionBroker,
@@ -49,6 +50,10 @@ pub struct Session {
     pub task_id: String,
     pub config: Arc<RunnerConfig>,
     pub messages: Mutex<Vec<Value>>,
+    pub durable_summary: Mutex<Option<String>>,
+    pub failed_compaction_digest: Mutex<Option<String>>,
+    pub compaction_count: AtomicU32,
+    pub context_calibration: Mutex<Option<ContextCalibration>>,
     pub context_store: Mutex<SessionContextStore>,
     pub workspace_graph: Option<WorkspaceGraphService>,
     pub aborted: AtomicBool,
@@ -93,23 +98,36 @@ impl SessionStore {
         }))
     }
 
-    pub async fn create(&self) -> Arc<Session> {
+    pub async fn create(
+        &self,
+        context_state: Option<ContextStateV1>,
+    ) -> Result<Arc<Session>, String> {
+        let context_state = context_state.map(ContextStateV1::validate).transpose()?;
         let id = format!("session-{}", Uuid::new_v4());
         let task_id = self.config.task_id.clone().unwrap_or_else(|| id.clone());
         let workspace_graph = self.config.workspace_graph.as_ref().map(|graph| {
             WorkspaceGraphService::new(self.config.cwd.clone(), graph.artifact_path.clone())
         });
+        let messages = context_state
+            .as_ref()
+            .map(ContextStateV1::seeded_messages)
+            .unwrap_or_default();
+        let durable_summary = context_state.and_then(|state| state.summary);
         let session = Arc::new(Session {
             id: id.clone(),
             task_id,
             config: self.config.clone(),
-            messages: Mutex::new(Vec::new()),
+            messages: Mutex::new(messages),
+            durable_summary: Mutex::new(durable_summary),
+            failed_compaction_digest: Mutex::new(None),
+            compaction_count: AtomicU32::new(0),
+            context_calibration: Mutex::new(None),
             context_store: Mutex::new(SessionContextStore::default()),
             workspace_graph,
             aborted: AtomicBool::new(false),
         });
         self.sessions.write().await.insert(id, session.clone());
-        session
+        Ok(session)
     }
 
     pub async fn get(&self, id: &str) -> Result<Arc<Session>, String> {
@@ -146,7 +164,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
         workspace_mode: "local".into(),
         model_boundary: crate::config::ModelBoundary::Managed,
         skills: Vec::new(),
-        permission_mode: crate::config::PermissionMode::Bypass,
+        permission_mode: crate::config::PermissionMode::AutoSafe,
         enabled_tools: crate::config::RUNNER_TOOL_NAMES
             .iter()
             .map(|name| (*name).to_owned())
@@ -193,6 +211,10 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         task_id: "test-task".into(),
         config: test_config(cwd),
         messages: Mutex::new(Vec::new()),
+        durable_summary: Mutex::new(None),
+        failed_compaction_digest: Mutex::new(None),
+        compaction_count: AtomicU32::new(0),
+        context_calibration: Mutex::new(None),
         context_store: Mutex::new(SessionContextStore::default()),
         workspace_graph: None,
         aborted: AtomicBool::new(false),
