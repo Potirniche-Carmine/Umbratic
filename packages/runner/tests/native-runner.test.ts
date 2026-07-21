@@ -52,7 +52,7 @@ async function startProvider() {
     const encoded = JSON.stringify(body.messages ?? []);
     response.writeHead(200, { "Content-Type": "text/event-stream", "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE") ? "change" : "" });
     if (encoded.includes("READ_FILE") && !encoded.includes("read: README.md (ok)")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "read-1", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":2}" } }] } }] }) + "data: [DONE]\n\n");
+      response.end(sse({ choices: [{ delta: { content: "Internal plan must stay hidden.", tool_calls: [{ index: 0, id: "read-1", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":2}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("WRITE_FILE") && !encoded.includes("write: note.txt (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "write-1", function: { name: "write", arguments: "{\"filePath\":\"note.txt\",\"content\":\"native write\\n\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("BLOCK_NETWORK") && !encoded.includes("policy_blocked")) {
@@ -338,6 +338,11 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       { contentTokens: 16, promptTokens: 16, completionTokens: 4, reserveTokens: 8192, estimatedTokens: 8208, phase: "observed" },
     );
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === readSession.id);
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "Internal plan must stay hidden."),
+      false,
+      "provisional prose from a tool-call response must not escape as a final answer",
+    );
 
     const writeSession = await createSession(run);
     assert.equal((await prompt(run, writeSession.id, "WRITE_FILE")).status, 204);

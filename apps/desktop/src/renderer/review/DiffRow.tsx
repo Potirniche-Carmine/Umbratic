@@ -15,7 +15,7 @@ function DiffCode({ cell }: { cell: DiffCell }) {
     <code>
       {cell.spans?.length
         ? cell.spans.map((span, index) => (
-            <mark className={span.changed && showIntraLineChanges ? "intraLineChange" : "intraLineSame"} key={index}>{span.text}</mark>
+            <mark className={span.changed && showIntraLineChanges && span.text.trim() ? "intraLineChange" : "intraLineSame"} key={index}>{span.text}</mark>
           ))
         : cell.content || " "}
     </code>

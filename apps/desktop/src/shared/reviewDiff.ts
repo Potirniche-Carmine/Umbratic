@@ -68,7 +68,20 @@ export type SideBySideRow = {
   hunkId: string;
 };
 
-const maxPatchCharacters = 4_000_000;
+export function hiddenLinesBeforeHunk(previous: DiffHunk | undefined, current: DiffHunk): number {
+  const oldHidden = previous
+    ? current.oldStart - (previous.oldStart + previous.oldCount)
+    : current.oldStart - 1;
+  const newHidden = previous
+    ? current.newStart - (previous.newStart + previous.newCount)
+    : current.newStart - 1;
+  return Math.max(0, oldHidden, newHidden);
+}
+
+export const reviewContextLines = 5;
+const maxPatchCharacters = 500_000;
+const maxPatchLines = 5_000;
+const oversizedPatchMetadataCharacters = 64_000;
 const maxSemanticBlockLines = 200;
 const maxAlignmentCells = 40_000;
 const maxIntraLineCharacters = 2_000;
@@ -114,8 +127,22 @@ function parseHunkHeader(line: string) {
 
 export function parseReviewPatch(patchInput: string, fallbackPath = "unknown"): ReviewFile {
   const originalPatch = typeof patchInput === "string" ? patchInput : "";
-  const tooLarge = originalPatch.length > maxPatchCharacters;
-  const patch = tooLarge ? originalPatch.slice(0, maxPatchCharacters) : originalPatch;
+  let patchLineCount = originalPatch ? 1 : 0;
+  let measuredAdditions = 0;
+  let measuredDeletions = 0;
+  let lineStart = 0;
+  for (let index = 0; index <= originalPatch.length; index += 1) {
+    if (index < originalPatch.length && originalPatch.charCodeAt(index) !== 10) continue;
+    const first = originalPatch[lineStart];
+    const second = originalPatch[lineStart + 1];
+    const third = originalPatch[lineStart + 2];
+    if (first === "+" && !(second === "+" && third === "+")) measuredAdditions += 1;
+    if (first === "-" && !(second === "-" && third === "-")) measuredDeletions += 1;
+    if (index < originalPatch.length) patchLineCount += 1;
+    lineStart = index + 1;
+  }
+  const tooLarge = originalPatch.length > maxPatchCharacters || patchLineCount > maxPatchLines;
+  const patch = tooLarge ? originalPatch.slice(0, oversizedPatchMetadataCharacters) : originalPatch;
   const lines = patch.replace(/\r\n?/g, "\n").split("\n");
   let path = fallbackPath;
   let oldPath: string | undefined;
@@ -194,6 +221,12 @@ export function parseReviewPatch(patchInput: string, fallbackPath = "unknown"): 
     }
   }
 
+  if (tooLarge) {
+    additions = measuredAdditions;
+    deletions = measuredDeletions;
+    hunks.length = 0;
+  }
+
   for (const hunk of hunks) {
     const suffix = hunk.header.replace(/^@@[^@]+@@/, "");
     hunk.id = `h-${stableReviewHash(`${path}\n${suffix}\n${hunk.lines.map((line) => `${line.origin[0]}${line.content}`).join("\n")}`)}`;
@@ -216,6 +249,28 @@ export function parseReviewPatch(patchInput: string, fallbackPath = "unknown"): 
 
 export function normalizeReviewFile(value: Partial<ReviewFile> & { path: string; diff?: string; patch?: string }): ReviewFile {
   const patch = typeof value.patch === "string" ? value.patch : typeof value.diff === "string" ? value.diff : "";
+  if (
+    Array.isArray(value.hunks)
+    && typeof value.status === "string"
+    && typeof value.additions === "number"
+    && typeof value.deletions === "number"
+    && typeof value.binary === "boolean"
+    && typeof value.contentHash === "string"
+  ) {
+    return {
+      path: value.path,
+      oldPath: value.oldPath,
+      status: value.status,
+      additions: value.additions,
+      deletions: value.deletions,
+      binary: value.binary,
+      patch,
+      diff: patch,
+      contentHash: value.contentHash,
+      hunks: value.hunks,
+      tooLarge: value.tooLarge,
+    };
+  }
   const parsed = parseReviewPatch(patch, value.path);
   const metadataStatus = parsed.status === "renamed" || parsed.status === "copied" || parsed.status === "binary";
   return {

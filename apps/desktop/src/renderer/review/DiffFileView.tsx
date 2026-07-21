@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import type { DiffCell, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
-import { alignHunk } from "../../shared/reviewDiff";
+import { alignHunk, hiddenLinesBeforeHunk } from "../../shared/reviewDiff";
 import { DiffRow, type ReviewLineSelection } from "./DiffRow";
 
 export function DiffFileView({
@@ -34,30 +34,40 @@ export function DiffFileView({
       <div className="reviewDiffColumnHeaders" aria-hidden="true">
         <span>Before</span><span>After</span>
       </div>
-      {hunks.map(({ hunk, rows }) => (
-        <section className="reviewHunk" id={`review-hunk-${hunk.id}`} key={hunk.id}>
-          {viewMode === "split" ? rows.map((row) => (
-            <React.Fragment key={row.id}>
-              <DiffRow row={row} selection={selection} commenting={commenting} onSelect={onSelect} />
-              {selection?.rowId === row.id ? editor : null}
-            </React.Fragment>
-          )) : rows.flatMap((row) => {
-            const cells = row.kind === "context" ? [row.right] : [row.left, row.right].filter((cell) => cell.origin !== "empty");
-            return cells.map((cell) => {
-              const unifiedRow: SideBySideRow = cell.side === "old"
-                ? { ...row, left: cell, right: { side: "new", line: null, content: "", origin: "empty" } }
-                : { ...row, left: { side: "old", line: null, content: "", origin: "empty" }, right: cell };
-              const key = `${row.id}-${cell.side}`;
-              return (
-                <React.Fragment key={key}>
-                  <DiffRow row={unifiedRow} selection={selection} commenting={commenting} onSelect={onSelect} />
-                  {selection?.rowId === row.id && selection.side === cell.side ? editor : null}
+      {hunks.map(({ hunk, rows }, hunkIndex) => {
+        const hiddenLines = hiddenLinesBeforeHunk(hunks[hunkIndex - 1]?.hunk, hunk);
+        return (
+          <React.Fragment key={hunk.id}>
+            {hiddenLines ? (
+              <div className="reviewDiffGap" role="separator" aria-label={`${hiddenLines} unchanged lines hidden`}>
+                <span>{hiddenLines} unchanged line{hiddenLines === 1 ? "" : "s"} hidden</span>
+              </div>
+            ) : null}
+            <section className="reviewHunk" id={`review-hunk-${hunk.id}`}>
+              {viewMode === "split" ? rows.map((row) => (
+                <React.Fragment key={row.id}>
+                  <DiffRow row={row} selection={selection} commenting={commenting} onSelect={onSelect} />
+                  {selection?.rowId === row.id ? editor : null}
                 </React.Fragment>
-              );
-            });
-          })}
-        </section>
-      ))}
+              )) : rows.flatMap((row) => {
+                const cells = row.kind === "context" ? [row.right] : [row.left, row.right].filter((cell) => cell.origin !== "empty");
+                return cells.map((cell) => {
+                  const unifiedRow: SideBySideRow = cell.side === "old"
+                    ? { ...row, left: cell, right: { side: "new", line: null, content: "", origin: "empty" } }
+                    : { ...row, left: { side: "old", line: null, content: "", origin: "empty" }, right: cell };
+                  const key = `${row.id}-${cell.side}`;
+                  return (
+                    <React.Fragment key={key}>
+                      <DiffRow row={unifiedRow} selection={selection} commenting={commenting} onSelect={onSelect} />
+                      {selection?.rowId === row.id && selection.side === cell.side ? editor : null}
+                    </React.Fragment>
+                  );
+                });
+              })}
+            </section>
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }

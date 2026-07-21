@@ -251,6 +251,13 @@ function ensureStorageSchema(db: DatabaseSync) {
       PRAGMA user_version = 4;
     `);
   }
+  if (schemaVersion < 5) {
+    const checkpointColumns = db.prepare("PRAGMA table_info(task_checkpoints)").all() as Array<{ name: string }>;
+    if (!checkpointColumns.some((column) => column.name === "index_tree_oid")) {
+      db.exec("ALTER TABLE task_checkpoints ADD COLUMN index_tree_oid TEXT;");
+    }
+    db.exec("PRAGMA user_version = 5;");
+  }
 }
 
 function normalizedDiagnosticText(value: string | undefined, limit: number): string | undefined {
@@ -541,6 +548,13 @@ function normalizeTasks(tasks: unknown[]): TaskRecord[] {
     .filter((task): task is TaskRecord => !!task);
 }
 
+function serializeTask(task: TaskRecord): string {
+  return JSON.stringify({
+    ...task,
+    reviewFiles: task.reviewFiles.map(({ patch: _patch, hunks: _hunks, ...file }) => file),
+  });
+}
+
 function replaceTasksInDatabase(db: DatabaseSync, tasks: TaskRecord[]) {
   runTransaction(db, () => {
     db.prepare("DELETE FROM tasks").run();
@@ -560,7 +574,7 @@ function replaceTasksInDatabase(db: DatabaseSync, tasks: TaskRecord[]) {
         typeof task.repositoryId === "string" ? task.repositoryId : "",
         typeof task.state === "string" ? task.state : "",
         typeof task.createdAt === "string" ? task.createdAt : "",
-        JSON.stringify(task),
+        serializeTask(task),
         index,
       );
     });
@@ -595,7 +609,7 @@ function upsertTaskRowInDatabase(db: DatabaseSync, task: TaskRecord, promote: bo
     typeof task.repositoryId === "string" ? task.repositoryId : "",
     typeof task.state === "string" ? task.state : "",
     typeof task.createdAt === "string" ? task.createdAt : "",
-    JSON.stringify(task),
+    serializeTask(task),
     position,
   );
 }
@@ -627,7 +641,7 @@ export function writeTask(task: TaskRecord, promote = true) {
 
 type CheckpointRow = {
   id: string; task_id: string; workspace_id: string; parent_checkpoint_id: string | null;
-  source: string; label: string | null; commit_oid: string; tree_oid: string; created_at: string;
+  source: string; label: string | null; commit_oid: string; tree_oid: string; index_tree_oid: string | null; created_at: string;
   state: string; pinned: number; logical_bytes: number | null;
 };
 
@@ -643,12 +657,12 @@ export function writeTaskCheckpoint(checkpoint: TaskCheckpoint): void {
 function insertTaskCheckpoint(db: DatabaseSync, checkpoint: TaskCheckpoint): void {
   db.prepare(`
     INSERT OR REPLACE INTO task_checkpoints
-      (id, task_id, workspace_id, parent_checkpoint_id, source, label, commit_oid, tree_oid, created_at, state, pinned, logical_bytes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, task_id, workspace_id, parent_checkpoint_id, source, label, commit_oid, tree_oid, index_tree_oid, created_at, state, pinned, logical_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     checkpoint.id, checkpoint.taskId, checkpoint.workspaceId, checkpoint.parentCheckpointId ?? null,
     checkpoint.source, checkpoint.label ?? null, checkpoint.commitOid, checkpoint.treeOid,
-    checkpoint.createdAt, checkpoint.state, checkpoint.pinned ? 1 : 0, checkpoint.logicalBytes ?? null,
+    checkpoint.indexTreeOid ?? null, checkpoint.createdAt, checkpoint.state, checkpoint.pinned ? 1 : 0, checkpoint.logicalBytes ?? null,
   );
 }
 
@@ -671,7 +685,9 @@ export function readTaskCheckpoints(taskId: string): TaskCheckpoint[] {
     id: row.id, taskId: row.task_id, workspaceId: row.workspace_id,
     ...(row.parent_checkpoint_id ? { parentCheckpointId: row.parent_checkpoint_id } : {}),
     source: row.source as TaskCheckpoint["source"], ...(row.label ? { label: row.label } : {}),
-    commitOid: row.commit_oid, treeOid: row.tree_oid, createdAt: row.created_at,
+    commitOid: row.commit_oid, treeOid: row.tree_oid,
+    ...(row.index_tree_oid ? { indexTreeOid: row.index_tree_oid } : {}),
+    createdAt: row.created_at,
     state: row.state as TaskCheckpoint["state"], pinned: row.pinned === 1,
     ...(row.logical_bytes !== null ? { logicalBytes: row.logical_bytes } : {}),
   })));

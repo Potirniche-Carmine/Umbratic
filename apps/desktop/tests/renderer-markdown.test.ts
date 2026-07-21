@@ -153,6 +153,7 @@ test("skill previews render markdown content and source filters split system fro
 test("diff parsing, command aggregation, pending permissions, and timelines reflect real event streams", () => {
   const {
     activitySummary,
+    activityToolGroups,
     assistantTextFromEvents,
     commandDetailLabel,
     commandLabel,
@@ -194,7 +195,13 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "assistant",
   ]);
   assert.deepEqual(timeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
-  assert.equal(activitySummary(timeline[1]), "Generated a response in 6 seconds");
+  assert.equal(activitySummary(timeline[1]), "Worked for 6 seconds");
+  const groupedTools = activityToolGroups([
+    ...timeline[1].segments,
+    { ...timeline[1].segments[1], id: "cmd-2", run: { ...timeline[1].segments[1].run, id: "cmd-2" } },
+  ]);
+  assert.equal(groupedTools.length, 1);
+  assert.equal(groupedTools[0].runs.length, 2);
   const delayedReasoningTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     events[2],
@@ -240,7 +247,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Partial answer", at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  assert.equal(activitySummary(failedToolTimeline[1]), "Generated a response in 3 seconds");
+  assert.equal(activitySummary(failedToolTimeline[1]), "Worked for 3 seconds");
 
   const delayedFirstTokenTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
@@ -250,7 +257,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   ], undefined, "completed")));
   assert.equal(
     activitySummary(delayedFirstTokenTimeline[1]),
-    "Generated a response in 1 minute 8 seconds",
+    "Worked for 1 minute 8 seconds",
     "prompt evaluation before visible reasoning must count toward the response time",
   );
 
@@ -260,7 +267,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(waitingTimeline[1].type, "activity");
   assert.equal(
     activitySummary(waitingTimeline[1], Date.parse("2026-01-01T00:00:42.000Z")),
-    "Generating a response for 42 seconds",
+    "Working · 42 seconds",
   );
 
   const preAnswerTimeline = composerTimelineFromEvents([
@@ -333,8 +340,15 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   };
   assert.equal(commandLabel(searchRun.command), "Search workspace");
   assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
-  assert.match(commandShellText(searchRun), /Search workspace: search "composer"/);
-  assert.match(commandShellText(searchRun), /Results:\napps\/desktop\/src\/renderer\/main\.tsx: content/);
+  assert.equal(commandShellText(searchRun), "apps/desktop/src/renderer/main.tsx: content");
+
+  const readRun = { ...searchRun, command: "read apps/desktop/src/renderer/main.tsx" };
+  const readGroups = activityToolGroups([
+    { type: "command", id: "read-1", run: { ...readRun, id: "read-1" } },
+    { type: "command", id: "read-2", run: { ...readRun, id: "read-2" } },
+  ]);
+  assert.equal(readGroups[0].label, "Read main.tsx");
+  assert.equal(readGroups[0].runs.length, 2);
 });
 
 test("stream batching drains queued assistant text without adding a display backlog", () => {

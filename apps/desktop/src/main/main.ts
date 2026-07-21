@@ -166,13 +166,14 @@ import type {
   WorkspaceMode,
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths } from "../shared/reviewDiff";
+import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines } from "../shared/reviewDiff";
 import {
   createTaskCheckpoint,
-  ensurePreCleanupCheckpoint,
+  createTurnCheckpoint,
   forkTaskFromCheckpoint,
   removeTaskCheckpoint,
   restoreTaskCheckpoint,
+  restoreTurnCheckpoint,
   setTaskCheckpointPinned,
 } from "./checkpoints/service";
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
@@ -204,6 +205,7 @@ const pdfImageScale = 1.4;
 const pdfRenderTimeoutMs = 30000;
 const ocrDigestPromptByteLimit = 12000;
 const binarySnapshotPrefix = "__UMBRATIC_BINARY_FILE__:";
+const missingSnapshotValue = "__UMBRATIC_MISSING_FILE__";
 const windowChromeDark = "#15161a";
 const windowChromeLight = "#ffffff";
 const windowChromeSymbolDark = "#d7dce2";
@@ -363,7 +365,7 @@ function isReviewReadyAssistantEvent(event: BackendUiEvent): boolean {
 }
 
 function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
-  return events.filter((event) => !isReviewReadyAssistantEvent(event));
+  return events.filter((event) => !isReviewReadyAssistantEvent(event) && event.type !== "review.ready");
 }
 
 function boundedTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
@@ -420,7 +422,9 @@ function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit:
       ...existing.slice(0, -1),
       {
         ...last,
-        text: `${last.text}${event.text}`,
+        text: event.type === "assistant.reasoning.delta"
+          ? `${last.text}${event.text}`.slice(-24_000)
+          : `${last.text}${event.text}`,
         endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
       },
     ], limit);
@@ -437,12 +441,17 @@ function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit:
       ...existing.slice(0, -1),
       {
         ...last,
-        text: `${last.text}${event.text}`,
+        text: `${last.text}${event.text}`.slice(-12_000),
         endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
       },
     ], limit);
   }
-  return boundedTaskEvents([...existing, event], limit);
+  const boundedEvent = event.type === "assistant.reasoning.delta"
+    ? { ...event, text: event.text.slice(-24_000) }
+    : event.type === "command.output"
+      ? { ...event, text: event.text.slice(-12_000) }
+      : event;
+  return boundedTaskEvents([...existing, boundedEvent], limit);
 }
 
 function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
@@ -602,13 +611,13 @@ function publicTask(task: TaskRecord): TaskInfo {
     error,
   } = task;
   const ignoredReviewPaths = hiddenChatAttachmentReviewPaths(task);
-  const publicReviewFiles = filterReviewFiles(reviewFiles, ignoredReviewPaths);
+  const publicReviewFiles = rendererReviewFiles(reviewFiles, ignoredReviewPaths);
   const publicEvents = compactTaskEvents(events, 500).map((event) => {
     if (event.type !== "review.ready") return event;
     return {
       ...event,
       changedFiles: filterReviewPaths(event.changedFiles, ignoredReviewPaths),
-      reviewFiles: filterReviewFiles(event.reviewFiles, ignoredReviewPaths),
+      reviewFiles: rendererReviewFiles(event.reviewFiles, ignoredReviewPaths),
     };
   });
   return {
@@ -655,6 +664,12 @@ function filterReviewPaths(files: readonly string[], ignoredPaths: ReadonlySet<s
 function filterReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
   if (ignoredPaths.size === 0) return [...files];
   return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file.path)));
+}
+
+function rendererReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
+  return filterReviewFiles(files, ignoredPaths).map((file) => file.tooLarge
+    ? { ...file, patch: "", diff: "", hunks: [] }
+    : file);
 }
 
 function getTask(taskId: string): TaskRecord {
@@ -1345,6 +1360,29 @@ function binarySnapshotValue(stat: fs.Stats): string {
 
 function isBinarySnapshotValue(value: string | null | undefined): boolean {
   return typeof value === "string" && value.startsWith(binarySnapshotPrefix);
+}
+
+function snapshotFileValue(filePath: string): string {
+  const text = readTextFileIfSafe(filePath);
+  if (text !== null) return text;
+  try {
+    const stat = fs.statSync(filePath);
+    return stat.isFile() ? binarySnapshotValue(stat) : missingSnapshotValue;
+  } catch {
+    return missingSnapshotValue;
+  }
+}
+
+function snapshotSelectedFiles(rootPath: string, files: string[]): Record<string, string> {
+  const root = path.resolve(rootPath);
+  const snapshot: Record<string, string> = {};
+  for (const file of files) {
+    const relative = normalizeRelativePath(file);
+    const absolute = path.resolve(root, relative);
+    if (!relative || !pathInside(root, absolute) || isGeneratedRuntimePath(relative)) continue;
+    snapshot[relative] = snapshotFileValue(absolute);
+  }
+  return snapshot;
 }
 
 function isPdfFile(filePath: string): boolean {
@@ -2115,7 +2153,9 @@ function diffHeader(filePath: string, status: ReviewFile["status"]): string[] {
   return [`diff --git a/${escaped} b/${escaped}`, `--- a/${escaped}`, `+++ b/${escaped}`];
 }
 
-function lcsLineDiff(before: string[], after: string[]): string[] {
+type SnapshotDiffOperation = { prefix: " " | "+" | "-"; text: string };
+
+function lcsLineDiff(before: string[], after: string[]): SnapshotDiffOperation[] {
   const rows = before.length;
   const cols = after.length;
   const table: number[][] = Array.from({ length: rows + 1 }, () => Array<number>(cols + 1).fill(0));
@@ -2127,23 +2167,145 @@ function lcsLineDiff(before: string[], after: string[]): string[] {
           : Math.max(table[row + 1][col], table[row][col + 1]);
     }
   }
-  const diff: string[] = [];
+  const diff: SnapshotDiffOperation[] = [];
   let row = 0;
   let col = 0;
   while (row < rows || col < cols) {
     if (row < rows && col < cols && before[row] === after[col]) {
-      diff.push(` ${before[row]}`);
+      diff.push({ prefix: " ", text: before[row] });
       row += 1;
       col += 1;
     } else if (col < cols && (row === rows || table[row][col + 1] >= table[row + 1][col])) {
-      diff.push(`+${after[col]}`);
+      diff.push({ prefix: "+", text: after[col] });
       col += 1;
     } else if (row < rows) {
-      diff.push(`-${before[row]}`);
+      diff.push({ prefix: "-", text: before[row] });
       row += 1;
     }
   }
   return diff;
+}
+
+function patienceLineDiff(before: string[], after: string[]): SnapshotDiffOperation[] {
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < before.length - prefix
+    && suffix < after.length - prefix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  ) suffix += 1;
+
+  const leading = before.slice(0, prefix).map((text) => ({ prefix: " " as const, text }));
+  const trailing = before.slice(before.length - suffix).map((text) => ({ prefix: " " as const, text }));
+  const left = before.slice(prefix, before.length - suffix);
+  const right = after.slice(prefix, after.length - suffix);
+  if (!left.length) return [...leading, ...right.map((text) => ({ prefix: "+" as const, text })), ...trailing];
+  if (!right.length) return [...leading, ...left.map((text) => ({ prefix: "-" as const, text })), ...trailing];
+  if (left.length * right.length <= 40_000) return [...leading, ...lcsLineDiff(left, right), ...trailing];
+
+  const leftCounts = new Map<string, number>();
+  const rightCounts = new Map<string, number>();
+  const rightIndexes = new Map<string, number>();
+  left.forEach((line) => leftCounts.set(line, (leftCounts.get(line) ?? 0) + 1));
+  right.forEach((line, index) => {
+    rightCounts.set(line, (rightCounts.get(line) ?? 0) + 1);
+    rightIndexes.set(line, index);
+  });
+  const candidates = left
+    .map((line, leftIndex) => ({ leftIndex, rightIndex: rightIndexes.get(line) ?? -1 }))
+    .filter(({ leftIndex, rightIndex }) => (
+      rightIndex >= 0
+      && leftCounts.get(left[leftIndex]) === 1
+      && rightCounts.get(left[leftIndex]) === 1
+    ));
+  if (!candidates.length) {
+    return [
+      ...leading,
+      ...left.map((text) => ({ prefix: "-" as const, text })),
+      ...right.map((text) => ({ prefix: "+" as const, text })),
+      ...trailing,
+    ];
+  }
+
+  const tails: number[] = [];
+  const prior = new Array<number>(candidates.length).fill(-1);
+  for (let index = 0; index < candidates.length; index += 1) {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (candidates[tails[middle]].rightIndex < candidates[index].rightIndex) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0) prior[index] = tails[low - 1];
+    tails[low] = index;
+  }
+  const anchors: typeof candidates = [];
+  for (let index = tails.at(-1) ?? -1; index >= 0; index = prior[index]) anchors.push(candidates[index]);
+  anchors.reverse();
+
+  const middle: SnapshotDiffOperation[] = [];
+  let leftStart = 0;
+  let rightStart = 0;
+  for (const anchor of anchors) {
+    middle.push(...patienceLineDiff(left.slice(leftStart, anchor.leftIndex), right.slice(rightStart, anchor.rightIndex)));
+    middle.push({ prefix: " ", text: left[anchor.leftIndex] });
+    leftStart = anchor.leftIndex + 1;
+    rightStart = anchor.rightIndex + 1;
+  }
+  middle.push(...patienceLineDiff(left.slice(leftStart), right.slice(rightStart)));
+  return [...leading, ...middle, ...trailing];
+}
+
+function unifiedDiffHunks(before: string[], after: string[], contextLines = reviewContextLines): string[] {
+  const operations = patienceLineDiff(before, after);
+  const annotated = operations.map((operation, index) => ({
+    ...operation,
+    index,
+    oldLine: 0,
+    newLine: 0,
+  }));
+  let oldLine = 1;
+  let newLine = 1;
+  for (const operation of annotated) {
+    operation.oldLine = oldLine;
+    operation.newLine = newLine;
+    if (operation.prefix !== "+") oldLine += 1;
+    if (operation.prefix !== "-") newLine += 1;
+  }
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const operation of annotated) {
+    if (operation.prefix === " ") continue;
+    let start = operation.index;
+    let remaining = contextLines;
+    while (start > 0 && remaining > 0) {
+      start -= 1;
+      if (annotated[start].prefix === " ") remaining -= 1;
+    }
+    let end = operation.index;
+    remaining = contextLines;
+    while (end + 1 < annotated.length && remaining > 0) {
+      end += 1;
+      if (annotated[end].prefix === " ") remaining -= 1;
+    }
+    const previous = ranges.at(-1);
+    if (previous && start <= previous.end + 1) previous.end = Math.max(previous.end, end);
+    else ranges.push({ start, end });
+  }
+
+  return ranges.flatMap(({ start, end }) => {
+    const body = annotated.slice(start, end + 1);
+    const oldCount = body.filter((operation) => operation.prefix !== "+").length;
+    const newCount = body.filter((operation) => operation.prefix !== "-").length;
+    const oldStart = oldCount ? body[0].oldLine : Math.max(0, body[0].oldLine - 1);
+    const newStart = newCount ? body[0].newLine : Math.max(0, body[0].newLine - 1);
+    return [
+      `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`,
+      ...body.map((operation) => `${operation.prefix}${operation.text}`),
+    ];
+  });
 }
 
 function buildTextDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
@@ -2153,17 +2315,10 @@ function buildTextDiff(filePath: string, before: string | null, after: string | 
   const status: ReviewFile["status"] = before === null ? "added" : after === null ? "deleted" : "modified";
   const beforeLines = before === null ? [] : textLines(before);
   const afterLines = after === null ? [] : textLines(after);
-  const body =
-    status === "added"
-      ? afterLines.map((line) => `+${line}`)
-      : status === "deleted"
-        ? beforeLines.map((line) => `-${line}`)
-        : lcsLineDiff(beforeLines, afterLines);
-  const hunk = `@@ -1,${beforeLines.length} +1,${afterLines.length} @@`;
   return normalizeReviewFile({
     path: filePath,
     status,
-    diff: [...diffHeader(filePath, status), hunk, ...body].join("\n"),
+    diff: [...diffHeader(filePath, status), ...unifiedDiffHunks(beforeLines, afterLines)].join("\n"),
   });
 }
 
@@ -2250,7 +2405,7 @@ function taskMetadataPath(task: TaskRecord): string {
 }
 
 function recordTaskEvent(event: BackendUiEvent) {
-  if (isReviewReadyAssistantEvent(event)) return;
+  if (isReviewReadyAssistantEvent(event) || event.type === "review.ready") return;
   const events = pendingTaskEvents.get(event.taskId) ?? [];
   pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
   scheduleTaskEventFlush(shouldDeferTaskEventFlush(event) ? streamingTaskEventFlushDelayMs : 0);
@@ -3246,13 +3401,29 @@ async function runnerPromptForTaskWithPermission(
   attachments: ChatAttachment[],
   contextLength: number,
 ): Promise<RunnerPromptPart[]> {
-  const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
-  const needsWorkspaceSnapshot = !task.agentBranch || !!task.worktreeRootTaskId;
-  if (needsWorkspaceSnapshot && !task.baselineFiles) {
-    task.baselineFiles = snapshotFolder(rootPath);
-    saveTask(task);
-  }
   return runnerPromptForTask(task, userPrompt, attachments, contextLength);
+}
+
+async function prepareTaskTurnCheckpoint(task: TaskRecord): Promise<void> {
+  const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  task.baselineFiles = task.workspaceKind === "git"
+    ? snapshotSelectedFiles(rootPath, await getChangedFiles(rootPath, task.baseCommit))
+    : snapshotFolder(rootPath);
+  task.turnCheckpointId = undefined;
+  if (taskUsesIsolatedWorktree(task)) {
+    try {
+      await createTurnCheckpoint(task);
+    } catch (error) {
+      recordLocalDiagnostic({
+        level: "warn",
+        source: "desktop",
+        event: "turn_checkpoint.unavailable",
+        message: "Automatic turn checkpoint was unavailable. Text-file undo remains available.",
+        data: { taskId: task.id, detail: String(error instanceof Error ? error.message : error).slice(0, 500) },
+      });
+    }
+  }
+  saveTask(task);
 }
 
 async function runCommandForTask(
@@ -3367,38 +3538,57 @@ async function gitWorkspaceReviewFiles(repositoryPath: string, baseline: string)
     .sort((a, b) => a.localeCompare(b));
   const files: ReviewFile[] = [];
   for (const file of changed) {
-    const absolute = path.join(repositoryPath, file);
-    const status = await gitFileStatus(repositoryPath, baseline, file);
-    const diff = await gitOutput(repositoryPath, ["diff", "--no-ext-diff", "--binary", "--find-renames", "--find-copies", "--unified=20", baseline, "--", file]).catch(
-      () => "",
-    );
-    if (diff.trim()) {
-      files.push(normalizeReviewFile({ path: file, status, diff }));
-      continue;
+    const review = await gitWorkspaceReviewFile(repositoryPath, baseline, file);
+    if (review) files.push(review);
+  }
+  return files;
+}
+
+async function gitWorkspaceReviewFile(repositoryPath: string, baseline: string, file: string): Promise<ReviewFile | null> {
+  const absolute = path.join(repositoryPath, file);
+  const status = await gitFileStatus(repositoryPath, baseline, file);
+  const diff = await gitOutput(repositoryPath, ["diff", "--no-ext-diff", "--binary", "--find-renames", "--find-copies", `--unified=${reviewContextLines}`, baseline, "--", file]).catch(
+    () => "",
+  );
+  if (diff.trim()) return normalizeReviewFile({ path: file, status, diff });
+  const text = readTextFileIfSafe(absolute);
+  if (text !== null) return buildTextDiff(file, null, text);
+  return buildBinaryDiff(
+    file,
+    status === "added" ? null : "before",
+    status === "deleted" ? null : "after",
+  );
+}
+
+async function gitLocalReviewFiles(task: TaskRecord): Promise<ReviewFile[]> {
+  const baselineFiles = task.baselineFiles ?? {};
+  const baselinePaths = new Set(Object.keys(baselineFiles));
+  const currentPaths = await getChangedFiles(task.worktreePath, task.baseCommit);
+  const paths = Array.from(new Set([...baselinePaths, ...currentPaths]))
+    .filter((file) => !isGeneratedRuntimePath(file))
+    .sort((left, right) => left.localeCompare(right));
+  const files: ReviewFile[] = [];
+  for (const file of paths) {
+    let review: ReviewFile | null;
+    if (baselinePaths.has(file)) {
+      const beforeValue = baselineFiles[file];
+      const afterValue = snapshotFileValue(path.join(task.worktreePath, file));
+      review = buildSnapshotDiff(
+        file,
+        beforeValue === missingSnapshotValue ? null : beforeValue,
+        afterValue === missingSnapshotValue ? null : afterValue,
+      );
+    } else {
+      review = await gitWorkspaceReviewFile(task.worktreePath, task.baseCommit, file);
     }
-    const text = readTextFileIfSafe(absolute);
-    if (text !== null) {
-      const review = buildTextDiff(file, null, text);
-      if (review) {
-        files.push(review);
-      }
-      continue;
-    }
-    const review = buildBinaryDiff(
-      file,
-      status === "added" ? null : "before",
-      status === "deleted" ? null : "after",
-    );
-    if (review) {
-      files.push(review);
-    }
+    if (review) files.push(review);
   }
   return files;
 }
 
 async function gitReviewFiles(task: TaskRecord, baseline = task.baseCommit, repositoryPath = task.worktreePath): Promise<ReviewFile[]> {
   if (task.baselineFiles && baseline !== "HEAD") {
-    return folderReviewFiles(task);
+    return task.workspaceKind === "git" ? gitLocalReviewFiles(task) : folderReviewFiles(task);
   }
   return gitWorkspaceReviewFiles(repositoryPath, baseline);
 }
@@ -3641,6 +3831,7 @@ async function runRunnerTask(
     task.model = selectedForRun;
     applyTaskPolicyMetadata(task);
     saveTask(task);
+    await prepareTaskTurnCheckpoint(task);
     const prompt = promptForRun
       ?? (await runnerPromptForTaskWithPermission(
         task,
@@ -3825,7 +4016,7 @@ async function runRunnerTask(
         const text = typeof event.text === "string" ? event.text : "";
         const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
         if (text) {
-          current[stream].push(text);
+          current[stream] = [`${current[stream].join("")}${text}`.slice(-12_000)];
           emit({
             type: "command.output",
             taskId: task.id,
@@ -4064,7 +4255,13 @@ async function runRunnerTask(
     task.reviewPatchHash = reviewPatchHash(reviewFiles);
     saveTask(task);
     emit({ type: "assistant.done", taskId: task.id });
-    emit({ type: "review.ready", taskId: task.id, changedFiles: task.changedFiles, reviewFiles, latestTest: task.latestTest });
+    emit({
+      type: "review.ready",
+      taskId: task.id,
+      changedFiles: task.changedFiles,
+      reviewFiles: rendererReviewFiles(reviewFiles, hiddenChatAttachmentReviewPaths(task)),
+      latestTest: task.latestTest,
+    });
     run.abortController.abort();
     await stream.done.catch(() => undefined);
   } catch (error) {
@@ -4583,16 +4780,12 @@ async function rejectTask(input: unknown): Promise<void> {
   const cleanup = input.cleanup === true;
   emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
   if (taskUsesIsolatedWorktree(task) && cleanup && taskStatesThatCanOpen.has(task.state)) {
-    if (fs.existsSync(task.worktreePath)) {
-      await ensurePreCleanupCheckpoint(task);
-      const reset = await gitResult(task.worktreePath, ["reset", "--hard", task.baseCommit]);
-      if (!reset.success) {
-        throw new Error((reset.stderr || reset.stdout || "Failed to reset worktree changes.").trim());
-      }
-      const clean = await gitResult(task.worktreePath, ["clean", "-fd"]);
-      if (!clean.success) {
-        throw new Error((clean.stderr || clean.stdout || "Failed to remove untracked worktree files.").trim());
-      }
+    const restoredCheckpoint = fs.existsSync(task.worktreePath) && task.turnCheckpointId
+      ? await restoreTurnCheckpoint(task)
+      : false;
+    if (!restoredCheckpoint) {
+      const reviewFiles = await refreshReview(task);
+      restoreFolderTaskChanges(task, reviewFiles);
     }
     task.changedFiles = [];
     task.reviewFiles = [];
@@ -4610,6 +4803,10 @@ async function rejectTask(input: unknown): Promise<void> {
 
 function restoreFolderTaskChanges(task: TaskRecord, reviewFiles: ReviewFile[]) {
   const baseline = task.baselineFiles ?? {};
+  const unsafeBinary = reviewFiles.find((file) => isBinarySnapshotValue(baseline[file.path]));
+  if (unsafeBinary) {
+    throw new Error(`Undo cannot safely restore the earlier binary content of ${unsafeBinary.path}.`);
+  }
   for (const file of reviewFiles) {
     if (isGeneratedRuntimePath(file.path)) {
       continue;
@@ -4619,6 +4816,10 @@ function restoreFolderTaskChanges(task: TaskRecord, reviewFiles: ReviewFile[]) {
       throw new Error(`Refusing to restore a path outside the task folder: ${file.path}`);
     }
     if (Object.prototype.hasOwnProperty.call(baseline, file.path)) {
+      if (baseline[file.path] === missingSnapshotValue) {
+        if (fs.existsSync(absolute)) fs.rmSync(absolute, { force: true });
+        continue;
+      }
       fs.mkdirSync(path.dirname(absolute), { recursive: true });
       fs.writeFileSync(absolute, baseline[file.path]);
       continue;

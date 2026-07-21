@@ -12,7 +12,7 @@ import {
   writeTaskWorkspace,
 } from "../storage";
 import type { TaskCheckpoint, TaskRecord, TaskWorkspace } from "../types";
-import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree } from "./gitAdapter";
+import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpoint } from "./gitAdapter";
 import * as path from "node:path";
 
 const taskLocks = new Map<string, Promise<void>>();
@@ -71,7 +71,7 @@ export async function createTaskCheckpoint(
       treeOid: "",
       createdAt: new Date().toISOString(),
       state: "preparing",
-      pinned: source !== "manual",
+      pinned: source === "pre_restore" || source === "pre_cleanup",
     };
     writeTaskCheckpoint(checkpoint);
     try {
@@ -81,7 +81,7 @@ export async function createTaskCheckpoint(
         checkpointId: id,
         seedCommit: prior?.commitOid || task.baseCommit,
       });
-      if (prior?.treeOid === result.treeOid) {
+      if (source !== "pre_turn" && prior?.treeOid === result.treeOid) {
         await deleteGitCheckpointRef(task.originalRepoPath, result.ref);
         deleteTaskCheckpoint(id);
         return prior;
@@ -90,6 +90,7 @@ export async function createTaskCheckpoint(
         ...checkpoint,
         commitOid: result.commitOid,
         treeOid: result.treeOid,
+        indexTreeOid: result.indexTreeOid,
         logicalBytes: result.logicalBytes,
         state: "ready",
       };
@@ -109,6 +110,36 @@ export async function createTaskCheckpoint(
       throw error;
     }
   });
+}
+
+export async function createTurnCheckpoint(task: TaskRecord): Promise<TaskCheckpoint> {
+  const checkpoint = await createTaskCheckpoint(task, "pre_turn", "Before turn");
+  task.turnCheckpointId = checkpoint.id;
+  writeTask(task, false);
+  return checkpoint;
+}
+
+export async function restoreTurnCheckpoint(task: TaskRecord): Promise<boolean> {
+  if (!task.turnCheckpointId) return false;
+  const checkpoint = readyCheckpoint(task.id, task.turnCheckpointId);
+  const indexTreeOid = checkpoint.indexTreeOid;
+  if (checkpoint.source !== "pre_turn" || !indexTreeOid) {
+    throw new Error("The automatic turn checkpoint is not restorable.");
+  }
+  await createTaskCheckpoint(task, "pre_restore", "Recovery before undo");
+  await serialized(task.id, async () => {
+    await restoreGitCheckpoint({
+      workspacePath: task.worktreePath,
+      checkpointCommit: checkpoint.commitOid,
+      treeOid: checkpoint.treeOid,
+      indexTreeOid,
+    });
+    task.latestCheckpointId = checkpoint.id;
+    task.turnCheckpointId = undefined;
+    task.baselineFiles = undefined;
+    writeTask(task, false);
+  });
+  return true;
 }
 
 export function setTaskCheckpointPinned(taskId: string, checkpointId: string, pinned: boolean): TaskCheckpoint {

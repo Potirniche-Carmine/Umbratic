@@ -863,7 +863,10 @@ pub async fn run_turn(
                 require_tool_call: !action_requirement.is_empty()
                     && action_retries > 0
                     && !ready_for_answer,
-                suppress_output: !action_requirement.is_empty() && !ready_for_answer,
+                // A provider can send prose before it sends tool-call deltas. Keep
+                // that provisional prose private until this tool-aware response is
+                // complete and the loop knows that it is the final answer.
+                suppress_output: true,
             },
         )
         .await;
@@ -887,7 +890,7 @@ pub async fn run_turn(
                         require_tool_call: !action_requirement.is_empty()
                             && action_retries > 0
                             && !ready_for_answer,
-                        suppress_output: !action_requirement.is_empty() && !ready_for_answer,
+                        suppress_output: true,
                     },
                 )
                 .await;
@@ -933,6 +936,10 @@ pub async fn run_turn(
                     .await
                     .push(json!({"role":"assistant","content":fallback}));
                 return Ok(summary);
+            }
+            if !result.content.trim().is_empty() {
+                sink.emit(json!({"type":"assistant.answer.started","taskId":session.task_id,"at":now_iso()}));
+                sink.emit(json!({"type":"assistant.delta","taskId":session.task_id,"text":result.content.clone(),"at":now_iso()}));
             }
             session
                 .messages

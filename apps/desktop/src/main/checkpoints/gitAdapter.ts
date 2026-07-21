@@ -11,6 +11,7 @@ const MAX_CHECKPOINT_LOGICAL_BYTES = 1024 * 1024 * 1024;
 export type CheckpointGitResult = {
   commitOid: string;
   treeOid: string;
+  indexTreeOid: string;
   ref: string;
   changedFiles: number;
   logicalBytes: number;
@@ -80,12 +81,26 @@ async function checkpointPaths(workspacePath: string, seedCommit: string): Promi
   return [...new Set(`${tracked}${untracked}`.split("\0").filter(Boolean))];
 }
 
+async function pathsUseContentFilters(workspacePath: string, paths: string[]): Promise<boolean> {
+  if (!paths.length) return false;
+  const attributes = await gitWithInput(
+    workspacePath,
+    ["check-attr", "-z", "--stdin", "filter"],
+    `${paths.join("\0")}\0`,
+  );
+  const fields = attributes.split("\0");
+  for (let index = 2; index < fields.length; index += 3) {
+    const value = fields[index];
+    if (value && value !== "unspecified" && value !== "unset") return true;
+  }
+  return false;
+}
+
 async function assertEligible(workspacePath: string, seed: string): Promise<{ root: string; indexPath: string; seedCommit: string }> {
-  const [repositoryOutput, filterConfig, submodules] = await Promise.all([
+  const [repositoryOutput, submodules] = await Promise.all([
     git(workspacePath, [
       "rev-parse", "--show-toplevel", "--is-bare-repository", "--git-common-dir", "--git-path", "index", `${seed}^{commit}`,
     ]),
-    git(workspacePath, ["config", "--get-regexp", "^filter\\..*\\.(process|clean)$"]).catch(() => ""),
     fs.existsSync(path.join(workspacePath, ".gitmodules"))
       ? git(workspacePath, ["submodule", "status", "--recursive"]).catch(() => "")
       : Promise.resolve(""),
@@ -98,7 +113,6 @@ async function assertEligible(workspacePath: string, seed: string): Promise<{ ro
   if (bare !== "false") throw new Error("Bare repositories cannot be checkpointed.");
   const commonDir = path.resolve(root, commonDirectory);
   if (!fs.existsSync(commonDir)) throw new Error("Git common directory is unavailable.");
-  if (filterConfig) throw new Error("Checkpointing is unavailable while Git clean/process filters are active.");
   if (submodules.split(/\r?\n/).some((line) => /^[+\-U]/.test(line))) {
     throw new Error("Checkpointing is unavailable with missing or dirty submodules.");
   }
@@ -120,8 +134,12 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
   const { root, indexPath, seedCommit } = eligibility;
   const paths = preloadedPaths ?? await checkpointPaths(root, seedCommit);
   const beforeIndex = fileBytes(indexPath);
+  const indexTreeOid = await git(root, ["write-tree"]);
   if (paths.length > MAX_CHECKPOINT_FILES) throw new Error("Checkpoint exceeds the 25,000-file limit.");
   if (paths.some(blockedCheckpointPath)) throw new Error("Checkpoint contains a blocked credential or runtime path.");
+  if (await pathsUseContentFilters(root, paths)) {
+    throw new Error("Checkpointing is unavailable for files that use Git content filters.");
+  }
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-checkpoint-"));
   const temporaryIndex = path.join(temporary, "index");
   const checkpointEnv: NodeJS.ProcessEnv = {
@@ -167,15 +185,51 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
     const commitOid = await git(root, ["commit-tree", treeOid, "-p", seedCommit, "-m", `Umbratic checkpoint ${checkpointId}`], checkpointEnv);
     await git(root, ["update-ref", ref, commitOid, "0".repeat(commitOid.length)], checkpointEnv);
     // `commit-tree <treeOid>` validates and embeds this exact tree; `update-ref` atomically
-    // publishes only the private checkpoint ref. The real index remains independently checked.
-    if (!sameBytes(beforeIndex, fileBytes(indexPath))) {
+    // publishes only the private checkpoint ref. Git can refresh harmless index stat data, so
+    // compare the staged tree if the index bytes change.
+    if (!sameBytes(beforeIndex, fileBytes(indexPath)) && await git(root, ["write-tree"]) !== indexTreeOid) {
       throw new Error("Checkpoint changed visible Git state.");
     }
-    return { commitOid, treeOid, ref, changedFiles: paths.length, logicalBytes };
+    return { commitOid, treeOid, indexTreeOid, ref, changedFiles: paths.length, logicalBytes };
   } catch (error) {
     await readTree.catch(() => undefined);
     await git(root, ["update-ref", "-d", ref]).catch(() => undefined);
     throw error;
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+export async function restoreGitCheckpoint(input: {
+  workspacePath: string;
+  checkpointCommit: string;
+  treeOid: string;
+  indexTreeOid: string;
+}): Promise<void> {
+  const workspacePath = path.resolve(input.workspacePath);
+  if (![input.checkpointCommit, input.treeOid, input.indexTreeOid].every((oid) => /^[a-f0-9]{40,64}$/i.test(oid))) {
+    throw new Error("Checkpoint object identity is invalid.");
+  }
+  const { root } = await assertEligible(workspacePath, input.checkpointCommit);
+  const commitTree = await git(root, ["rev-parse", `${input.checkpointCommit}^{tree}`]);
+  if (commitTree !== input.treeOid) throw new Error("Checkpoint tree does not match its commit.");
+  await git(root, ["cat-file", "-e", `${input.indexTreeOid}^{tree}`]);
+
+  await git(root, ["clean", "-fd"]);
+  await git(root, ["read-tree", "--reset", "-u", input.treeOid]);
+  await git(root, ["read-tree", input.indexTreeOid]);
+  if (await git(root, ["write-tree"]) !== input.indexTreeOid) {
+    throw new Error("Checkpoint index restoration failed validation.");
+  }
+
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-checkpoint-verify-"));
+  const verificationEnv: NodeJS.ProcessEnv = { GIT_INDEX_FILE: path.join(temporary, "index"), GIT_OPTIONAL_LOCKS: "0" };
+  try {
+    await git(root, ["read-tree", input.treeOid], verificationEnv);
+    await git(root, ["update-index", "-q", "--refresh"], verificationEnv);
+    await git(root, ["diff-files", "--quiet", "--"], verificationEnv);
+  } catch {
+    throw new Error("Checkpoint worktree restoration failed validation.");
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

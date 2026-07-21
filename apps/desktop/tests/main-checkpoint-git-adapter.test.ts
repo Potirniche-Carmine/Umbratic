@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 
-import { createGitCheckpoint, materializeCheckpointWorktree } from "../src/main/checkpoints/gitAdapter.ts";
+import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpoint } from "../src/main/checkpoints/gitAdapter.ts";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -16,6 +16,7 @@ function fixtureRepository(): string {
   git(root, ["init"]);
   git(root, ["config", "user.name", "Checkpoint Test"]);
   git(root, ["config", "user.email", "checkpoint@example.test"]);
+  git(root, ["config", "core.autocrlf", "false"]);
   fs.writeFileSync(path.join(root, "tracked.txt"), "base\n");
   fs.writeFileSync(path.join(root, "deleted.txt"), "remove me\n");
   git(root, ["add", "."]);
@@ -103,6 +104,42 @@ test("checkpoint uses its seed tree when a file is reverted to the visible base 
       workspacePath: root, taskId: "task-revert", checkpointId: "second", seedCommit: first.commitOid,
     });
     assert.equal(git(root, ["show", `${second.commitOid}:tracked.txt`]), "base");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("turn restore returns the worktree and staged state to the checkpoint", async () => {
+  const root = fixtureRepository();
+  try {
+    fs.writeFileSync(path.join(root, "tracked.txt"), "staged state\n");
+    git(root, ["add", "tracked.txt"]);
+    fs.writeFileSync(path.join(root, "tracked.txt"), "turn start\n");
+    fs.writeFileSync(path.join(root, "turn-start.txt"), "present before turn\n");
+    const statusBefore = git(root, ["status", "--porcelain=v1"]);
+    const checkpoint = await createGitCheckpoint({
+      workspacePath: root,
+      taskId: "task-undo",
+      checkpointId: "before-turn",
+      seedCommit: "HEAD",
+    });
+
+    fs.writeFileSync(path.join(root, "tracked.txt"), "changed by turn\n");
+    fs.rmSync(path.join(root, "turn-start.txt"));
+    fs.writeFileSync(path.join(root, "turn-only.txt"), "remove on undo\n");
+    git(root, ["add", "-A"]);
+
+    await restoreGitCheckpoint({
+      workspacePath: root,
+      checkpointCommit: checkpoint.commitOid,
+      treeOid: checkpoint.treeOid,
+      indexTreeOid: checkpoint.indexTreeOid,
+    });
+
+    assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "turn start\n");
+    assert.equal(fs.readFileSync(path.join(root, "turn-start.txt"), "utf8"), "present before turn\n");
+    assert.equal(fs.existsSync(path.join(root, "turn-only.txt")), false);
+    assert.equal(git(root, ["status", "--porcelain=v1"]), statusBefore);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

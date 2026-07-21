@@ -425,6 +425,7 @@ export type TaskRecord = TaskInfo & {
   rejectedAt?: string;
   activeWorkspaceId?: string;
   latestCheckpointId?: string;
+  turnCheckpointId?: string;
   parentTaskId?: string;
   sourceCheckpointId?: string;
 };
@@ -434,10 +435,11 @@ export type TaskCheckpoint = {
   taskId: string;
   workspaceId: string;
   parentCheckpointId?: string;
-  source: "manual" | "pre_restore" | "pre_cleanup";
+  source: "manual" | "pre_turn" | "pre_restore" | "pre_cleanup";
   label?: string;
   commitOid: string;
   treeOid: string;
+  indexTreeOid?: string;
   createdAt: string;
   state: "preparing" | "ready" | "failed";
   pinned: boolean;

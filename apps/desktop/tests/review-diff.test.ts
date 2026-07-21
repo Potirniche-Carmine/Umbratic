@@ -145,4 +145,28 @@ test("malformed input and legacy review records normalize without throwing", () 
   assert.equal(typeof malformed.contentHash, "string");
 });
 
+test("oversized review patches keep counters without creating renderable rows", () => {
+  const body = Array.from({ length: 5_100 }, (_, index) => `+line ${index}`);
+  const file = review.parseReviewPatch([
+    "diff --git a/large.txt b/large.txt",
+    "--- /dev/null",
+    "+++ b/large.txt",
+    "@@ -0,0 +1,5100 @@",
+    ...body,
+  ].join("\n"));
+
+  assert.equal(file.tooLarge, true);
+  assert.equal(file.additions, 5_100);
+  assert.equal(file.hunks.length, 0);
+  assert.equal(review.alignReviewFile(file).length, 0);
+});
+
+test("hunk gaps report the omitted unchanged lines", () => {
+  const first = { oldStart: 6, oldCount: 5, newStart: 6, newCount: 5 };
+  const second = { oldStart: 22, oldCount: 5, newStart: 24, newCount: 5 };
+
+  assert.equal(review.hiddenLinesBeforeHunk(undefined, first), 5);
+  assert.equal(review.hiddenLinesBeforeHunk(first, second), 13);
+});
+
 

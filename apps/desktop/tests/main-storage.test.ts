@@ -386,7 +386,7 @@ test("checkpoint metadata persists and workspace activation switches the task at
   });
   const checkpoint = {
     id: "checkpoint-1", taskId: task.id, workspaceId: "workspace-1", source: "manual",
-    commitOid: "commit-1", treeOid: "tree-1", createdAt: "2026-01-01T00:01:00.000Z",
+    commitOid: "commit-1", treeOid: "tree-1", indexTreeOid: "index-tree-1", createdAt: "2026-01-01T00:01:00.000Z",
     state: "ready", pinned: true, logicalBytes: 42,
   };
   storage.completeTaskCheckpoint({ ...task, latestCheckpointId: checkpoint.id }, checkpoint);
@@ -408,6 +408,7 @@ test("checkpoint metadata persists and workspace activation switches the task at
     ["workspace-1", "recovery"],
   ]);
   assert.equal(storage.readTaskCheckpoints(task.id)[0].logicalBytes, 42);
+  assert.equal(storage.readTaskCheckpoints(task.id)[0].indexTreeOid, "index-tree-1");
 
   assert.throws(() => storage.activateTaskWorkspace(
     { ...storage.readTask(task.id), activeWorkspaceId: "workspace-3" },
@@ -486,7 +487,7 @@ test("local diagnostics migration removes previously stored debug and info recor
   });
 
   assert.deepEqual(plain(storage.readLocalDiagnostics()).map((entry) => entry.level), ["warn"]);
-  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 4);
+  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 5);
 });
 
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {

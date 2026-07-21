@@ -68,7 +68,6 @@ import {
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { ReviewPanel } from "./review/ReviewPanel";
-import { CheckpointPanel, type CheckpointItem } from "./review/CheckpointPanel";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 
 type ServiceStatus = "ready" | "degraded" | "unavailable";
@@ -335,23 +334,6 @@ type TaskInfo = {
   error?: string;
 };
 
-type TaskCheckpoint = {
-  id: string;
-  source: "manual" | "pre_restore" | "pre_cleanup";
-  label?: string;
-  createdAt: string;
-  state: "preparing" | "ready" | "failed";
-  pinned: boolean;
-  logicalBytes?: number;
-};
-
-type TaskCheckpointList = {
-  supported: boolean;
-  reason?: string;
-  changedFileCount: number;
-  checkpoints: TaskCheckpoint[];
-};
-
 type ChatRecord = {
   id: string;
   title: string;
@@ -487,12 +469,6 @@ type DesktopApi = {
   getNotes(): Promise<UserNotes>;
   updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
-  listTaskCheckpoints(input: { taskId: string }): Promise<TaskCheckpointList>;
-  createTaskCheckpoint(input: { taskId: string; label?: string }): Promise<TaskCheckpoint>;
-  setTaskCheckpointPinned(input: { taskId: string; checkpointId: string; pinned: boolean }): Promise<TaskCheckpoint>;
-  deleteTaskCheckpoint(input: { taskId: string; checkpointId: string }): Promise<void>;
-  forkTaskCheckpoint(input: { taskId: string; checkpointId: string }): Promise<TaskInfo>;
-  restoreTaskCheckpoint(input: { taskId: string; checkpointId: string; confirmed: boolean }): Promise<TaskInfo>;
   refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<TaskInfo | null>;
   refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }>;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
@@ -952,9 +928,9 @@ const composerTestEvents: BackendUiEvent[] = [
     type: "command.started",
     taskId: "composer-test",
     id: "composer-fixture-search",
-    command: 'rg -n "promptDock|timelineActivity" apps/desktop/src/renderer/styles.css',
+    command: "read apps/desktop/src/renderer/styles.css",
     cwd: "/Users/carminep/Projects/Umbratic",
-    kind: "bash",
+    kind: "read",
     commandClass: "read",
   },
   {
@@ -962,7 +938,7 @@ const composerTestEvents: BackendUiEvent[] = [
     taskId: "composer-test",
     id: "composer-fixture-search",
     stream: "stdout",
-    text: "apps/desktop/src/renderer/styles.css:1405:.timelineActivity {\napps/desktop/src/renderer/styles.css:2073:.promptDock {\n",
+    text: ".timelineActivity {\n  display: grid;\n}\n",
   },
   {
     type: "command.finished",
@@ -1358,27 +1334,6 @@ function previewSkillContent(skill: SkillInfo): string {
   return `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n# ${skill.name}\n\n${guidance.map((line) => `- ${line}`).join("\n")}\n`;
 }
 
-let previewTaskCheckpoints: TaskCheckpoint[] = [
-  {
-    id: "preview-checkpoint-2",
-    source: "manual",
-    label: "After verification",
-    createdAt: new Date(Date.now() - 90_000).toISOString(),
-    state: "ready",
-    pinned: true,
-    logicalBytes: 18_432,
-  },
-  {
-    id: "preview-checkpoint-1",
-    source: "pre_restore",
-    label: "Recovery before restore",
-    createdAt: new Date(Date.now() - 600_000).toISOString(),
-    state: "ready",
-    pinned: true,
-    logicalBytes: 12_288,
-  },
-];
-
 const fallbackApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -1444,33 +1399,6 @@ const fallbackApi: DesktopApi = {
   getNotes: async () => readPreviewNotes(),
   updateNotes: async (input) => writePreviewNotes(input.content),
   getTask: async () => null,
-  listTaskCheckpoints: async () => composerTestMode ? ({
-    supported: true,
-    changedFileCount: composerTestReviewFiles.length,
-    checkpoints: previewTaskCheckpoints,
-  }) : ({
-    supported: false,
-    reason: "Open the Electron app to manage task checkpoints.",
-    changedFileCount: 0,
-    checkpoints: [],
-  }),
-  createTaskCheckpoint: async () => {
-    const checkpoint: TaskCheckpoint = {
-      id: `preview-checkpoint-${Date.now()}`, source: "manual", label: "Manual checkpoint",
-      createdAt: new Date().toISOString(), state: "ready", pinned: false, logicalBytes: 20_480,
-    };
-    previewTaskCheckpoints = [checkpoint, ...previewTaskCheckpoints];
-    return checkpoint;
-  },
-  setTaskCheckpointPinned: async (input) => {
-    previewTaskCheckpoints = previewTaskCheckpoints.map((checkpoint) =>
-      checkpoint.id === input.checkpointId ? { ...checkpoint, pinned: input.pinned } : checkpoint,
-    );
-    return previewTaskCheckpoints.find((checkpoint) => checkpoint.id === input.checkpointId)!;
-  },
-  deleteTaskCheckpoint: async (input) => { previewTaskCheckpoints = previewTaskCheckpoints.filter((checkpoint) => checkpoint.id !== input.checkpointId); },
-  forkTaskCheckpoint: async () => ({ ...composerTestTask, id: `composer-fork-${Date.now()}`, state: "completed" }),
-  restoreTaskCheckpoint: async () => ({ ...composerTestTask, state: "completed", changedFiles: [], reviewFiles: [] }),
   refreshTaskReview: async (input) => {
     const scope = input.scope === "worktree" ? "worktree" : "task";
     const reviewFiles = scope === "worktree" ? composerTestWholeDiffFiles : composerTestReviewFiles;
@@ -2507,14 +2435,14 @@ export function commandSummary(run: CommandRun): string {
 
 export function commandShellText(run: CommandRun): string {
   const isTool = !!run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command);
-  const label = isTool ? workspaceActivityLabel(run.command) : "Shell";
-  const parts = [isTool ? `${label}: ${run.command}` : `$ ${run.command}`];
+  const parts = isTool ? [] : [`$ ${run.command}`];
   const outputPreview = previewTail([run.stdout, run.stderr].filter(Boolean).join("\n"), commandOutputPreviewCharacterLimit);
   const output = stripAnsi(outputPreview.text).trimEnd();
   if (outputPreview.truncated) {
     parts.push(`[Showing the last ${commandOutputPreviewCharacterLimit.toLocaleString()} characters of command output.]`);
   }
-  if (output) parts.push(isTool ? `Results:\n${output}` : output);
+  if (output) parts.push(output);
+  if (isTool && !parts.length) parts.push(commandSummary(run));
   return parts.join("\n\n");
 }
 
@@ -2689,9 +2617,44 @@ function activityDurationMs(item: Extract<ComposerTimelineItem, { type: "activit
 export function activitySummary(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): string {
   const duration = formatDuration(activityDurationMs(item, now));
   if (!item.finished) {
-    return duration ? `Generating a response for ${duration}` : "Generating a response";
+    return ["Working", duration].filter(Boolean).join(" · ");
   }
-  return duration ? `Generated a response in ${duration}` : "Response activity";
+  return duration ? `Worked for ${duration}` : "Work complete";
+}
+
+function activityToolLabel(command: string): { key: string; label: string } {
+  const trimmed = command.trim();
+  const fileTool = trimmed.match(/^(read|write|edit)\s+([^\s]+)/i);
+  if (fileTool) {
+    const target = fileTool[2].replaceAll("\\", "/");
+    const name = target.split("/").filter(Boolean).at(-1) ?? target;
+    const action = `${fileTool[1][0].toUpperCase()}${fileTool[1].slice(1).toLowerCase()}`;
+    return { key: `${action.toLowerCase()}:${target.toLowerCase()}`, label: `${action} ${name}` };
+  }
+  const label = commandLabel(command);
+  return { key: label.toLowerCase(), label };
+}
+
+export function activityToolGroups(segments: ComposerActivitySegment[]): Array<{
+  id: string;
+  label: string;
+  runs: CommandRun[];
+  status: CommandRun["status"];
+}> {
+  const groups = new Map<string, { id: string; label: string; runs: CommandRun[]; status: CommandRun["status"] }>();
+  for (const segment of segments) {
+    if (segment.type !== "command") continue;
+    const { key, label } = activityToolLabel(segment.run.command);
+    const group = groups.get(key) ?? { id: `tool-group-${groups.size + 1}`, label, runs: [], status: "passed" as const };
+    group.runs.push(segment.run);
+    group.status = group.runs.some((run) => run.status === "running")
+      ? "running"
+      : group.runs.some((run) => run.status === "failed")
+        ? "failed"
+        : "passed";
+    groups.set(key, group);
+  }
+  return Array.from(groups.values());
 }
 
 function stripAssistantSpeakerPrefix(text: string): string {
@@ -3327,9 +3290,6 @@ function App() {
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
-  const [checkpointList, setCheckpointList] = useState<TaskCheckpointList | null>(null);
-  const [checkpointBusy, setCheckpointBusy] = useState(false);
-  const [checkpointError, setCheckpointError] = useState<string | undefined>();
   const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
@@ -3763,21 +3723,6 @@ function App() {
   }, [repository?.rootPath]);
 
   useEffect(() => {
-    const taskId = task?.id;
-    if (!taskId) {
-      setCheckpointList(null);
-      setCheckpointError(undefined);
-      return;
-    }
-    let cancelled = false;
-    void api.listTaskCheckpoints({ taskId }).then(
-      (result) => { if (!cancelled) setCheckpointList(result); },
-      (cause) => { if (!cancelled) setCheckpointError(cause instanceof Error ? cause.message : String(cause)); },
-    );
-    return () => { cancelled = true; };
-  }, [task?.id, task?.state, task?.changedFiles.length]);
-
-  useEffect(() => {
     writeAppearanceSettings(appearanceSettings);
     document.documentElement.dataset.theme = effectiveTheme;
     document.documentElement.style.colorScheme = effectiveTheme;
@@ -3813,10 +3758,8 @@ function App() {
     const activeActivityToolIds = new Set<string>();
     for (const item of composerItems) {
       if (item.type !== "activity") continue;
-      for (const segment of item.segments) {
-        if (segment.type === "command") {
-          activeActivityToolIds.add(`${item.id}:${segment.id}`);
-        }
+      for (const group of activityToolGroups(item.segments)) {
+        activeActivityToolIds.add(`${item.id}:${group.id}`);
       }
     }
     setExpandedActivityIds((current) => {
@@ -5394,75 +5337,6 @@ function App() {
     return clamp(Math.round(window.innerWidth * sidebarMaxRatio), sidebarMinWidth, sidebarMaxWidth);
   }
 
-  async function reloadCheckpoints(taskId: string) {
-    setCheckpointList(await api.listTaskCheckpoints({ taskId }));
-  }
-
-  async function runCheckpointOperation(operation: () => Promise<void>) {
-    if (checkpointBusy) return;
-    setCheckpointBusy(true);
-    setCheckpointError(undefined);
-    try {
-      await operation();
-    } catch (cause) {
-      setCheckpointError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setCheckpointBusy(false);
-    }
-  }
-
-  function createCurrentCheckpoint() {
-    if (!task) return;
-    void runCheckpointOperation(async () => {
-      await api.createTaskCheckpoint({ taskId: task.id });
-      await reloadCheckpoints(task.id);
-    });
-  }
-
-  function pinCurrentCheckpoint(checkpoint: CheckpointItem) {
-    if (!task) return;
-    void runCheckpointOperation(async () => {
-      await api.setTaskCheckpointPinned({ taskId: task.id, checkpointId: checkpoint.id, pinned: !checkpoint.pinned });
-      await reloadCheckpoints(task.id);
-    });
-  }
-
-  function deleteCurrentCheckpoint(checkpoint: CheckpointItem) {
-    if (!task || !window.confirm(`Delete checkpoint “${checkpoint.label || "Manual checkpoint"}”? This removes its recovery point.`)) return;
-    void runCheckpointOperation(async () => {
-      await api.deleteTaskCheckpoint({ taskId: task.id, checkpointId: checkpoint.id });
-      await reloadCheckpoints(task.id);
-    });
-  }
-
-  function forkCurrentCheckpoint(checkpoint: CheckpointItem) {
-    if (!task) return;
-    void runCheckpointOperation(async () => {
-      const forked = await api.forkTaskCheckpoint({ taskId: task.id, checkpointId: checkpoint.id });
-      setVisibleTask(forked);
-      setEvents(visibleEventsForTask(forked));
-      setChats(await api.listChats());
-      await reloadCheckpoints(forked.id);
-    });
-  }
-
-  function restoreCurrentCheckpoint(checkpoint: CheckpointItem) {
-    if (!task) return;
-    const changedFileCount = checkpointList?.changedFileCount ?? task.changedFiles.length;
-    const identity = checkpoint.label || new Date(checkpoint.createdAt).toLocaleString();
-    const confirmed = window.confirm(
-      `Restore “${identity}”?\n\nThe current ${changedFileCount} changed file${changedFileCount === 1 ? "" : "s"} will first be preserved in a pinned recovery checkpoint. Restore creates a replacement worktree; the current worktree remains available for recovery.`,
-    );
-    if (!confirmed) return;
-    void runCheckpointOperation(async () => {
-      const restored = await api.restoreTaskCheckpoint({ taskId: task.id, checkpointId: checkpoint.id, confirmed: true });
-      setVisibleTask(restored);
-      setEvents(visibleEventsForTask(restored));
-      setChats(await api.listChats());
-      await reloadCheckpoints(restored.id);
-    });
-  }
-
   function reviewMaxWidth() {
     return Math.max(0, Math.floor(window.innerWidth * reviewMaxWidthRatio));
   }
@@ -6640,48 +6514,57 @@ function App() {
                                 onTouchMove={(event) => handleActivityTouchMove(item.id, event)}
                                 onWheel={(event) => handleActivityWheel(item.id, event)}
                               >
-                                {item.segments.map((segment) =>
-                                  segment.type === "reasoning" ? (
+                                {item.segments
+                                  .filter((segment): segment is Extract<ComposerActivitySegment, { type: "reasoning" }> => segment.type === "reasoning")
+                                  .map((segment) => (
                                     <section className="activityLogEntry reasoningLog" key={segment.id}>
                                       <div className="activityLogHeader">
                                         <span>Thinking</span>
                                       </div>
                                       <pre>{segment.text.trim()}</pre>
                                     </section>
-                                  ) : (() => {
-                                    const toolDisclosureId = `${item.id}:${segment.id}`;
-                                    const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
-                                    return (
-                                      <section
-                                        className={`activityLogEntry commandLog ${segment.run.status} ${
-                                          toolExpanded ? "isExpanded" : ""
-                                        }`}
-                                        key={segment.id}
+                                  ))}
+                                {activityToolGroups(item.segments).map((group) => {
+                                  const toolDisclosureId = `${item.id}:${group.id}`;
+                                  const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
+                                  return (
+                                    <section
+                                      className={`activityLogEntry commandLog ${group.status} ${
+                                        toolExpanded ? "isExpanded" : ""
+                                      }`}
+                                      key={group.id}
+                                    >
+                                      <button
+                                        className="activityToolToggle"
+                                        type="button"
+                                        onClick={() => {
+                                          setExpandedActivityToolIds((current) => {
+                                            const next = new Set(current);
+                                            if (toolExpanded) {
+                                              next.delete(toolDisclosureId);
+                                            } else {
+                                              next.add(toolDisclosureId);
+                                            }
+                                            return next;
+                                          });
+                                        }}
+                                        aria-expanded={toolExpanded}
                                       >
-                                        <button
-                                          className="activityToolToggle"
-                                          type="button"
-                                          onClick={() => {
-                                            setExpandedActivityToolIds((current) => {
-                                              const next = new Set(current);
-                                              if (toolExpanded) {
-                                                next.delete(toolDisclosureId);
-                                              } else {
-                                                next.add(toolDisclosureId);
-                                              }
-                                              return next;
-                                            });
-                                          }}
-                                          aria-expanded={toolExpanded}
-                                        >
-                                          <span title={segment.run.command}>{commandLabel(segment.run.command)}</span>
-                                          {toolExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                        </button>
-                                        {toolExpanded ? <pre>{commandShellText(segment.run)}</pre> : null}
-                                      </section>
-                                    );
-                                  })(),
-                                )}
+                                        <span title={group.runs.map((run) => run.command).join("\n")}>{group.label}</span>
+                                        {toolExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                      </button>
+                                      {toolExpanded ? (
+                                        <div className="activityToolGroupDetails">
+                                          {group.runs.map((run) => (
+                                            <div key={run.id}>
+                                              <pre>{commandShellText(run)}</pre>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </section>
+                                  );
+                                })}
                               </div>
                             </div>
                           </article>
@@ -7044,21 +6927,6 @@ function App() {
           canApprove={canApprove}
           selectedIdeLabel={selectedIde.label}
           approvalVisible={task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged"}
-          checkpointPanel={task && checkpointList ? (
-            <CheckpointPanel
-              supported={checkpointList.supported}
-              reason={checkpointList.reason}
-              changedFileCount={checkpointList.changedFileCount}
-              checkpoints={checkpointList.checkpoints}
-              busy={checkpointBusy}
-              error={checkpointError}
-              onCreate={createCurrentCheckpoint}
-              onFork={forkCurrentCheckpoint}
-              onRestore={restoreCurrentCheckpoint}
-              onPin={pinCurrentCheckpoint}
-              onDelete={deleteCurrentCheckpoint}
-            />
-          ) : undefined}
           onClose={closeReviewPanel}
           onUndo={undoTask}
           onApprove={approveMerge}
@@ -7493,7 +7361,7 @@ function App() {
                     <div className="settingsPanelHead">
                       <h3>Skills</h3>
                       <p>
-                        Skills give Umbratic focused guidance for different kinds of work. Enabled skills are available for new runs.
+                        Focused guidance for specific work.
                       </p>
                     </div>
 
