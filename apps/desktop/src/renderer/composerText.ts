@@ -8,6 +8,11 @@ export type PromptHighlightSegment = {
   mention: boolean;
 };
 
+export type NumberedListContinuation = {
+  value: string;
+  caret: number;
+};
+
 export type MarkdownBlock =
   | { type: "code"; language: string; content: string }
   | { type: "heading"; level: number; text: string }
@@ -25,6 +30,29 @@ export function attachmentLabel(file: ComposerAttachmentReference): string {
 
 export function attachmentMention(file: ComposerAttachmentReference): string {
   return `@${attachmentLabel(file)}`;
+}
+
+export function continueNumberedList(
+  value: string,
+  selectionStart: number,
+  selectionEnd = selectionStart,
+): NumberedListContinuation | null {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  const lineBeforeCaret = value.slice(lineStart, start);
+  const match = lineBeforeCaret.match(/^(\s*)(\d+)([.)])(?:[ \t]+|$)/);
+  if (!match) return null;
+
+  const currentNumber = Number(match[2]);
+  if (!Number.isSafeInteger(currentNumber) || currentNumber >= Number.MAX_SAFE_INTEGER) return null;
+
+  const nextNumber = String(currentNumber + 1).padStart(match[2].length, "0");
+  const insertion = `\n${match[1]}${nextNumber}${match[3]} `;
+  return {
+    value: `${value.slice(0, start)}${insertion}${value.slice(end)}`,
+    caret: start + insertion.length,
+  };
 }
 
 export function promptHighlightSegments(value: string, files: ComposerAttachmentReference[]): PromptHighlightSegment[] {

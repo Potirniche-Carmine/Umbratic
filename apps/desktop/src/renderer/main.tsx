@@ -62,6 +62,7 @@ import {
 import {
   attachmentLabel,
   attachmentMention,
+  continueNumberedList,
   markdownPreview,
   parseMarkdown,
 } from "./composerText";
@@ -659,6 +660,27 @@ const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: 
     description: "Codebase inspection, implementation, debugging, tests, verification, and precise repository changes.",
   },
 ];
+const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
+  engineering: new Set(["umbratic-skill-creator", "umbratic-git-worktree", "umbratic-markdown", "umbratic-python"]),
+  marketing: new Set([
+    "umbratic-markdown",
+    "umbratic-python",
+    "umbratic-pdf",
+    "umbratic-data-analysis",
+    "umbratic-presentations",
+    "umbratic-documents",
+    "umbratic-spreadsheets",
+  ]),
+  sales: new Set([
+    "umbratic-markdown",
+    "umbratic-python",
+    "umbratic-pdf",
+    "umbratic-data-analysis",
+    "umbratic-presentations",
+    "umbratic-documents",
+    "umbratic-spreadsheets",
+  ]),
+};
 type LocalFontDescriptor = {
   family?: string;
   fullName?: string;
@@ -1237,17 +1259,17 @@ const previewDefaultSkills: SkillInfo[] = [
     readOnly: false,
   },
   {
-    id: "umbratic-cmake",
-    name: "C/CMake",
-    description: "Use for C, C++, CMake, compiler diagnostics, native build setup, sanitizers, and C/C++ test verification.",
+    id: "umbratic-data-analysis",
+    name: "Data Analysis",
+    description: "Use for source-grounded analysis with pandas, data cleaning, validation, summaries, charts, and reproducible outputs.",
     enabled: true,
     source: "system",
     readOnly: false,
   },
   {
     id: "umbratic-pdf",
-    name: "PDF",
-    description: "Use for PDF reading, summarization, page-aware review, and PDF-backed business artifacts.",
+    name: "PDF & OCR",
+    description: "Use for PDF reading, page-aware review, polished PDF artifacts, and OCR of images or scanned documents.",
     enabled: true,
     source: "system",
     readOnly: false,
@@ -1277,6 +1299,10 @@ const previewDefaultSkills: SkillInfo[] = [
     readOnly: false,
   },
 ];
+let previewSkills = previewDefaultSkills.map((skill) => ({
+  ...skill,
+  enabled: harnessSystemSkillIds[readPreviewHarnessProfile()].has(skill.id),
+}));
 
 const previewDefaultSkillGuidance: Record<string, string[]> = {
   "umbratic-skill-creator": [
@@ -1299,13 +1325,14 @@ const previewDefaultSkillGuidance: Record<string, string[]> = {
     "Prefer `uv` when available. Bare Python commands are allowed; if one fails because of the interpreter, environment, or dependencies, retry it through `uv run`.",
     "State runtime or dependency gaps when they affect verification.",
   ],
-  "umbratic-cmake": [
-    "Inspect the repository's own C/CMake build path before choosing commands.",
-    "Use presets when available; otherwise keep manual builds under `.umbratic/build`.",
-    "Treat compilers, build backends, and sanitizers as optional host capabilities and state verification gaps.",
+  "umbratic-data-analysis": [
+    "Inspect columns, types, missing values, duplicates, ranges, and category cardinality before drawing conclusions.",
+    "Use reproducible pandas scripts for cleaning, joins, aggregations, statistics, and chart-ready tables.",
+    "Keep source data unchanged, label assumptions, and save derived outputs separately with validation checks.",
   ],
   "umbratic-pdf": [
     "Use local PDFs as page-aware source material; use extraction for text checks and rendered pages for layout fidelity.",
+    "Use local OCR digests for images and scanned PDFs, preserving page locations, confidence warnings, and uncertain text.",
     "Generate PDFs with the configured Python artifact runtime and keep final files under `.umbratic/artifacts/pdf/` unless directed otherwise.",
     "Render with Poppler and inspect pages before claiming visual QA; state extraction, generation, or render gaps plainly.",
   ],
@@ -1570,6 +1597,7 @@ const fallbackApi: DesktopApi = {
   saveHarnessProfile: async (input) => {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
     writePreviewHarnessProfile(settings);
+    previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: harnessSystemSkillIds[settings].has(skill.id) }));
     return { settings, status: await fallbackApi.getBackendStatus() };
   },
   getContextLength: async () => readPreviewContextLength(),
@@ -1588,15 +1616,18 @@ const fallbackApi: DesktopApi = {
   exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),
   clearLocalDiagnostics: async () => ({ bytes: 0, entries: 0 }),
   recordProductEvent: async () => undefined,
-  listSkills: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
-  saveSkillSettings: async () => ({ skills: previewDefaultSkills, directory: "~/.umbratic/skills" }),
+  listSkills: async () => ({ skills: previewSkills, directory: "~/.umbratic/skills" }),
+  saveSkillSettings: async (input) => {
+    previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: input[skill.id] ?? skill.enabled }));
+    return { skills: previewSkills, directory: "~/.umbratic/skills" };
+  },
   openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
   openRunnerDiagnosticsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
   openSkillInEditor: async () => ({ ok: false, message: "Electron preload is not available." }),
   importSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   getSkillDocument: async (input) => {
-    const skill = previewDefaultSkills.find((row) => row.id === input.id);
+    const skill = previewSkills.find((row) => row.id === input.id);
     return skill
       ? { ok: true, skill: { ...skill, path: `~/.umbratic/skills/${skill.id}.md`, content: previewSkillContent(skill) }, directory: "~/.umbratic/skills" }
       : { ok: false, message: "Electron preload is not available." };
@@ -4599,11 +4630,11 @@ function App() {
       setHarnessDraftProfile(nextProfile);
       setContextLength(nextContextLength);
       setHarnessDraftContextLength(nextContextLength);
+      if (profileChanged) await loadSkills();
       if (status) {
         setBackend(status);
         setPermissionModeState(status.permissionMode);
       }
-      setHarnessMessage("Harness settings saved. New runs will use them.");
     } catch (cause) {
       await loadHarnessProfile();
       setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
@@ -5879,18 +5910,33 @@ function App() {
         });
         return;
       }
-      if (attachmentMenuOpen && (event.key === "Enter" || event.key === "Tab") && fileMatches.length) {
+      if (attachmentMenuOpen && ((!event.shiftKey && event.key === "Enter") || event.key === "Tab") && fileMatches.length) {
         event.preventDefault();
         addAttachment(fileMatches[Math.min(selectedFileIndex, fileMatches.length - 1)]);
         return;
       }
-      if (skillMenuOpen && (event.key === "Enter" || event.key === "Tab") && skillMatches.length) {
+      if (skillMenuOpen && ((!event.shiftKey && event.key === "Enter") || event.key === "Tab") && skillMatches.length) {
         event.preventDefault();
         insertSkillMention(skillMatches[Math.min(selectedSkillIndex, skillMatches.length - 1)]);
         return;
       }
     }
-    if (event.key !== "Enter" || event.shiftKey) {
+    if (event.key !== "Enter") {
+      return;
+    }
+    if (event.shiftKey) {
+      const target = event.currentTarget;
+      const continuation = continueNumberedList(target.value, target.selectionStart, target.selectionEnd);
+      if (!continuation) return;
+      event.preventDefault();
+      setPrompt(continuation.value);
+      setMention(null);
+      setFileMatches([]);
+      setSelectedFileIndex(0);
+      setSelectedSkillIndex(0);
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.setSelectionRange(continuation.caret, continuation.caret);
+      });
       return;
     }
     event.preventDefault();
@@ -7354,7 +7400,7 @@ function App() {
                         <span>{harnessSaving ? "Saving" : "Save harness"}</span>
                       </button>
                       {harnessDirty ? <p className="settingsMessage">Unsaved harness changes.</p> : null}
-                      {harnessMessage ? <p className="settingsMessage">{harnessMessage}</p> : null}
+                      {harnessMessage ? <p className="settingsMessage settingsMessageError">{harnessMessage}</p> : null}
                     </div>
                   </div>
                 ) : null}

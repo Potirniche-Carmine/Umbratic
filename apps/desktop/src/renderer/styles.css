@@ -3590,7 +3590,7 @@ button.attachmentPreview:focus-visible {
   color: var(--reference-token-text);
   background: transparent;
   box-shadow: none;
-  font-weight: 640;
+  font-weight: inherit;
 }
 
 .composer textarea {

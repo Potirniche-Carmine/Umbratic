@@ -1,15 +1,16 @@
 ---
-name: PDF
-description: Use for local PDF reading, extraction, generation, rendering, page-aware review, and polished PDF deliverables.
+name: PDF & OCR
+description: Use for local PDF reading, extraction, generation, rendering, page-aware review, and OCR of images or scanned documents.
 ---
 
-# PDF
+# PDF & OCR
 
 ## When To Use
 
 - Read, summarize, compare, or review local PDF files where page order, layout, tables, images, or visual fidelity matter.
 - Create PDF reports, one-pagers, white papers, handouts, and other fixed-layout business artifacts.
 - Convert structured source material into a polished PDF deliverable that can be rendered and inspected locally.
+- Extract text from screenshots, scans, photographed documents, image attachments, and scanned PDFs when embedded text is missing or unreliable.
 
 ## Local Workflow
 
@@ -19,11 +20,20 @@ description: Use for local PDF reading, extraction, generation, rendering, page-
 4. Render final PDFs with Poppler (`pdftoppm` plus `pdfinfo`) before claiming visual QA.
 5. Inspect rendered page PNGs for clipping, overlap, illegible type, bad table geometry, missing images, broken glyphs, page-number issues, and awkward section breaks.
 
+## OCR Workflow
+
+1. Prefer clean embedded PDF text when it is available and layout fidelity is not important.
+2. For image or scanned-PDF text, use the local OCR artifact digest when one is provided in the prompt.
+3. Treat OCR Markdown as the readable digest and OCR JSON as the auditable source for coordinates, page numbers, confidence, warnings, and timing.
+4. Preserve uncertainty. Mention low-confidence lines when a value matters, and never silently drop uncertain text.
+5. If warnings mention columns or table-like layouts, review the relevant page and line evidence before making strong claims.
+
 ## Paths And Files
 
 - Keep generated PDF deliverables under `.umbratic/artifacts/pdf/` unless the user requests a specific path.
 - Use `.umbratic/templates/pdf/` only for user-supplied or server-selected templates; do not invent a protected template.
 - Put temporary extraction, render, and QA files under a task-specific scratch directory and keep final filenames stable and descriptive.
+- Keep OCR outputs under `.umbratic/artifacts/ocr/`; use `*.ocr.json` for the structured contract and `*.ocr.md` for the digest.
 
 ## Quality Bar
 
@@ -37,3 +47,5 @@ description: Use for local PDF reading, extraction, generation, rendering, page-
 - If extraction packages are missing, use available render/page inspection paths or state the extraction gap.
 - If `reportlab` is missing, provide clean structured source content and state the PDF generation gap.
 - If Poppler render tools are missing or rendering fails, do not claim PDF visual QA. State exactly what was checked instead.
+- If the OCR engine is missing or fails on a page, preserve the warning and do not claim that page was read.
+- Do not claim table reconstruction, formula recognition, chart parsing, or document-layout analysis unless a separate verified capability was used.

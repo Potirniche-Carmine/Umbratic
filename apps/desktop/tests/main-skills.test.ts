@@ -51,6 +51,10 @@ test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skill
   assert.doesNotMatch(creatorSkill, /Claude|Cowork/i);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-markdown", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-spreadsheets", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-data-analysis", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-cmake")), false);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-ocr")), false);
+  assert.match(fs.readFileSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md"), "utf8"), /OCR Workflow/);
   const pythonSkill = fs.readFileSync(path.join(directory, "system", "umbratic-python", "SKILL.md"), "utf8");
   assert.match(pythonSkill, /write the file first/i);
   assert.match(pythonSkill, /If `uv` is not found, stop issuing `uv` commands/i);
@@ -136,10 +140,11 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   const systemSkills = listing.skills.filter((skill) => skill.source === "system");
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-skill-creator" && skill.name === "Skill Creator" && skill.enabled), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-markdown" && skill.name === "Markdown" && !skill.readOnly && skill.enabled), true);
-  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-ocr" && skill.name === "OCR"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-ocr"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-git-worktree" && skill.name === "Git Worktree"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-python" && skill.name === "Python"), true);
-  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-cmake" && skill.name === "C/CMake"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-cmake"), false);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-data-analysis" && skill.name === "Data Analysis"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-engineering"), false);
@@ -173,6 +178,33 @@ test("listSkills removes obsolete skill storage and does not list reserved roots
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md")), true);
 });
 
+test("listSkills upgrades an unchanged legacy PDF default without overwriting edits", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-default-migration-settings-"));
+  const skills = loadSkills(userData);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-default-migration-"));
+  const pdfDirectory = path.join(directory, "system", "umbratic-pdf");
+  fs.mkdirSync(pdfDirectory, { recursive: true });
+  const legacyPdf = fs.readFileSync(
+    path.join(import.meta.dirname, "../src/main/system-skills/.legacy/umbratic-pdf-v1.md"),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pdfDirectory, "SKILL.md"), legacyPdf.replace(/\n/g, "\r\n"), "utf8");
+
+  const migrated = await skills.listSkills(directory, {});
+  const pdf = migrated.skills.find((skill) => skill.id === "umbratic-pdf");
+  assert.equal(pdf.name, "PDF & OCR");
+  assert.equal(pdf.modified, false);
+  assert.equal(pdf.checksumStatus, "known_good");
+  assert.match(fs.readFileSync(path.join(pdfDirectory, "SKILL.md"), "utf8"), /OCR Workflow/);
+
+  const customized = `${legacyPdf}\nUser-specific PDF instruction.\n`;
+  fs.writeFileSync(path.join(pdfDirectory, "SKILL.md"), customized, "utf8");
+  const preserved = await skills.listSkills(directory, {});
+  const customizedPdf = preserved.skills.find((skill) => skill.id === "umbratic-pdf");
+  assert.equal(customizedPdf.modified, true);
+  assert.match(fs.readFileSync(path.join(pdfDirectory, "SKILL.md"), "utf8"), /User-specific PDF instruction/);
+});
+
 test("enabledPromptSkills returns every enabled skill as metadata with a readable instruction path", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-enabled-skill-catalog-"));
   const skills = loadSkills(userData);
@@ -191,6 +223,31 @@ test("enabledPromptSkills returns every enabled skill as metadata with a readabl
   assert.equal(catalog.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(catalog.every((skill) => !("fullContent" in skill) && !("content" in skill) && !("reason" in skill)), true);
   assert.equal(catalog.every((skill) => fs.existsSync(skill.instructionPath)), true);
+});
+
+test("harness profiles select only their relevant system skills", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-harness-skill-settings-"));
+  const skills = loadSkills(userData);
+
+  const engineering = skills.harnessSystemSkillSettings("engineering");
+  assert.equal(engineering["umbratic-git-worktree"], true);
+  assert.equal(engineering["umbratic-python"], true);
+  assert.equal(engineering["umbratic-data-analysis"], false);
+  assert.equal(engineering["umbratic-presentations"], false);
+  assert.equal(engineering["umbratic-documents"], false);
+  assert.equal(engineering["umbratic-spreadsheets"], false);
+  assert.equal("umbratic-cmake" in engineering, false);
+  assert.equal("umbratic-ocr" in engineering, false);
+
+  for (const profile of ["marketing", "sales"]) {
+    const business = skills.harnessSystemSkillSettings(profile);
+    assert.equal(business["umbratic-git-worktree"], false);
+    assert.equal(business["umbratic-data-analysis"], true);
+    assert.equal(business["umbratic-pdf"], true);
+    assert.equal(business["umbratic-presentations"], true);
+    assert.equal(business["umbratic-documents"], true);
+    assert.equal(business["umbratic-spreadsheets"], true);
+  }
 });
 
 test("skill document editing validates ids, size, and real files", async () => {

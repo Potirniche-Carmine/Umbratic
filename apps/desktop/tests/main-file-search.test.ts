@@ -6,8 +6,10 @@ import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
-test("native desktop file search preserves path/content ranking and ignores generated trees", async () => {
+test("native desktop file search falls back from development resources and preserves ranking", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-search-"));
+  const originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+  Object.defineProperty(process, "resourcesPath", { configurable: true, value: root });
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.mkdirSync(path.join(root, "node_modules", "hidden"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "runner.ts"), "export const runner = 'native';\n", "utf8");
@@ -21,6 +23,11 @@ test("native desktop file search preserves path/content ranking and ignores gene
       ["src/other.ts", "content"],
     ]);
   } finally {
+    if (originalResourcesPath) {
+      Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+    } else {
+      delete process.resourcesPath;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

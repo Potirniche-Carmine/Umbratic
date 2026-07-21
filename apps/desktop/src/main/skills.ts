@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 
 import { readSkillSettings, writeSkillSettings } from "./storage";
+import type { HarnessProfileId } from "./types";
 import { pathInside } from "./utils";
 
 export type SkillSource = "system" | "local";
@@ -54,16 +55,61 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
   { id: "umbratic-skill-creator" },
   { id: "umbratic-git-worktree" },
   { id: "umbratic-markdown" },
-  { id: "umbratic-ocr" },
   { id: "umbratic-python" },
-  { id: "umbratic-cmake" },
   { id: "umbratic-pdf" },
+  { id: "umbratic-data-analysis" },
   { id: "umbratic-presentations" },
   { id: "umbratic-documents" },
   { id: "umbratic-spreadsheets" },
 ];
 
-const retiredSystemSkillIds = ["umbratic-engineering", "umbratic-sales", "umbratic-marketing"];
+const retiredSystemSkillIds = [
+  "umbratic-engineering",
+  "umbratic-sales",
+  "umbratic-marketing",
+  "umbratic-cmake",
+  "umbratic-ocr",
+];
+
+const legacyBundledSystemSkillFiles: Partial<Record<string, string[]>> = {
+  "umbratic-pdf": ["umbratic-pdf-v1.md"],
+};
+
+const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
+  engineering: new Set([
+    "umbratic-skill-creator",
+    "umbratic-git-worktree",
+    "umbratic-markdown",
+    "umbratic-python",
+  ]),
+  marketing: new Set([
+    "umbratic-markdown",
+    "umbratic-python",
+    "umbratic-pdf",
+    "umbratic-data-analysis",
+    "umbratic-presentations",
+    "umbratic-documents",
+    "umbratic-spreadsheets",
+  ]),
+  sales: new Set([
+    "umbratic-markdown",
+    "umbratic-python",
+    "umbratic-pdf",
+    "umbratic-data-analysis",
+    "umbratic-presentations",
+    "umbratic-documents",
+    "umbratic-spreadsheets",
+  ]),
+};
+
+export function harnessSystemSkillSettings(profileId: HarnessProfileId): Record<string, boolean> {
+  const enabled = harnessSystemSkillIds[profileId];
+  return Object.fromEntries(systemSkillDefinitions.map((skill) => [skill.id, enabled.has(skill.id)]));
+}
+
+export function applyHarnessSystemSkillSettings(profileId: HarnessProfileId): Record<string, boolean> {
+  return writeSkillSettings(harnessSystemSkillSettings(profileId));
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -230,6 +276,18 @@ function bundledSystemSkillContent(id: string): string {
   return content;
 }
 
+function migrateLegacyBundledSystemSkill(skill: SystemSkillDefinition, skillFile: string) {
+  const current = readTextFileIfSafe(skillFile);
+  if (current === null) return;
+  const normalizedCurrent = current.replace(/\r\n/g, "\n");
+  const legacyFiles = legacyBundledSystemSkillFiles[skill.id] ?? [];
+  const matchesLegacyDefault = legacyFiles.some((fileName) => {
+    const legacy = readTextFileIfSafe(path.join(bundledSystemSkillsDirectory(), ".legacy", fileName));
+    return legacy !== null && legacy.replace(/\r\n/g, "\n") === normalizedCurrent;
+  });
+  if (matchesLegacyDefault) fs.writeFileSync(skillFile, bundledSystemSkillContent(skill.id), "utf8");
+}
+
 function systemSkillById(id: string): SystemSkillDefinition | undefined {
   return systemSkillDefinitions.find((skill) => skill.id === id);
 }
@@ -259,6 +317,7 @@ function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {
       const previousContent = readTextFileIfSafe(previousRootFile);
       fs.writeFileSync(skillFile, previousContent ?? bundledSystemSkillContent(skill.id), "utf8");
     }
+    migrateLegacyBundledSystemSkill(skill, skillFile);
     fs.rmSync(previousRootFile, { force: true });
   }
   cleanupObsoleteSkillPaths(root);

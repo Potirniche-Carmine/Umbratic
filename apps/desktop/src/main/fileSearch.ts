@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { FileSearchResult } from "./types";
@@ -7,9 +8,15 @@ import { isRecord } from "./utils";
 function desktopCoreBinaryPath(): string {
   const filename = process.platform === "win32" ? "umbratic-desktop-core.exe" : "umbratic-desktop-core";
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  return resourcesPath
-    ? path.join(resourcesPath, "desktop-core", filename)
-    : path.resolve(__dirname, "../../../../target/release", filename);
+  if (resourcesPath) {
+    const packagedBinary = path.join(resourcesPath, "desktop-core", filename);
+    try {
+      if (fs.statSync(packagedBinary).isFile()) return packagedBinary;
+    } catch {
+      // Electron also defines resourcesPath in development, where this packaged binary is absent.
+    }
+  }
+  return path.resolve(__dirname, "../../../../target/release", filename);
 }
 
 function isFileSearchResult(value: unknown): value is FileSearchResult {

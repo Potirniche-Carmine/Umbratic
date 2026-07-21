@@ -112,6 +112,7 @@ import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings"
 import { RunnerAssistantOutputBuffer, type BufferedRunnerAssistantOutput } from "./runnerAssistantOutput";
 import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
 import {
+  applyHarnessSystemSkillSettings,
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
   importSkill as importSkillService,
@@ -2615,6 +2616,7 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
 
 async function saveHarnessProfileSetting(input: unknown) {
   const settings = writeHarnessProfileSetting(input as HarnessProfileId);
+  applyHarnessSystemSkillSettings(settings);
   const status = await getBackendStatus();
   return { settings, status };
 }

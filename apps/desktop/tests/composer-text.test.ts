@@ -36,6 +36,7 @@ function loadTypeScriptModule(filePath) {
 }
 
 const {
+  continueNumberedList,
   markdownPreview,
   parseMarkdown,
   promptHighlightSegments,
@@ -112,6 +113,29 @@ test("prompt highlighting recognizes file mentions without matching email addres
     ["@main.tsx", "@metrics.csv"],
   );
   assert.equal(segments.some((segment) => segment.mention && segment.text.includes("email")), false);
+});
+
+test("numbered list continuation increments the current item and places the caret after the marker", () => {
+  assert.deepEqual(
+    plain(continueNumberedList("1. First item", 13)),
+    { value: "1. First item\n2. ", caret: 17 },
+  );
+  assert.deepEqual(
+    plain(continueNumberedList("  09) Item", 10)),
+    { value: "  09) Item\n  10) ", caret: 17 },
+  );
+  assert.deepEqual(
+    plain(continueNumberedList("1.", 2)),
+    { value: "1.\n2. ", caret: 6 },
+  );
+});
+
+test("numbered list continuation replaces a selection and ignores non-list lines", () => {
+  assert.deepEqual(
+    plain(continueNumberedList("1. Keep selected", 7, 16)),
+    { value: "1. Keep\n2. ", caret: 11 },
+  );
+  assert.equal(continueNumberedList("Write a normal line", 19), null);
 });
 
 test("markdown preview truncates on a complete paragraph boundary", () => {

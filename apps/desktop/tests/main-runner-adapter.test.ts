@@ -28,9 +28,11 @@ function loadRunnerAdapter(userData) {
   delete process.env.UMBRATIC_MANAGED_MODEL_SOFTWARE;
   const cache = new Map();
   const electron = electronMock(userData);
+  const mocks = { electron, "node:os": { ...os, homedir: () => path.join(userData, "home") } };
   return {
-    adapter: loadTypeScriptModule(runnerAdapterPath, { cache, mocks: { electron } }),
-    storage: loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), { cache, mocks: { electron } }),
+    adapter: loadTypeScriptModule(runnerAdapterPath, { cache, mocks }),
+    skills: loadTypeScriptModule(new URL("../src/main/skills.ts", import.meta.url), { cache, mocks }),
+    storage: loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), { cache, mocks }),
   };
 }
 
@@ -45,9 +47,10 @@ test("harnessRouteConfig maps every profile to its purpose-built Veil API", () =
 
 test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled tools, and skill metadata", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-"));
-  const { adapter, storage } = loadRunnerAdapter(userData);
+  const { adapter, skills, storage } = loadRunnerAdapter(userData);
 
   storage.writeHarnessProfileSetting("sales");
+  storage.writeSkillSettings(skills.harnessSystemSkillSettings("sales"));
   storage.writeContextLengthSetting(128000);
   storage.writeModelEndpointSettings({
     mode: "server",
@@ -117,8 +120,9 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
 
 test("engineering harness mode uses its Veil route without runtime prompt profiles", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-engineering-"));
-  const { adapter, storage } = loadRunnerAdapter(userData);
+  const { adapter, skills, storage } = loadRunnerAdapter(userData);
   storage.writeHarnessProfileSetting("engineering");
+  storage.writeSkillSettings(skills.harnessSystemSkillSettings("engineering"));
 
   const model = {
     providerId: "company-endpoint",
@@ -141,17 +145,20 @@ test("engineering harness mode uses its Veil route without runtime prompt profil
   const config = adapter.buildUmbraticRunnerConfig(task, model);
   assert.equal(config.runtimeProfiles, undefined);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-python"), true);
-  assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-git-worktree"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), false);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-data-analysis"), false);
   assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
   assert.equal(config.modelBoundary, "managed");
   assert.equal(config.contextLength, 32768);
   assert.equal("system" in config, false);
 });
 
-test("business harness modes use their Veil route with the same enabled skill catalog", () => {
+test("business harness modes use their Veil route with business system skills", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-markdown-"));
-  const { adapter, storage } = loadRunnerAdapter(userData);
+  const { adapter, skills, storage } = loadRunnerAdapter(userData);
   storage.writeHarnessProfileSetting("marketing");
+  storage.writeSkillSettings(skills.harnessSystemSkillSettings("marketing"));
 
   const model = {
     providerId: "company-endpoint",
@@ -172,7 +179,11 @@ test("business harness modes use their Veil route with the same enabled skill ca
 
   const config = adapter.buildUmbraticRunnerConfig(task, model);
   assert.equal(config.runtimeProfiles, undefined);
-  assert.equal(config.skills.some((skill) => skill.id === "umbratic-cmake"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-git-worktree"), false);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-cmake"), false);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-data-analysis"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-pdf"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
   assert.equal(config.modelBoundary, "managed");
   assert.equal("system" in config, false);
