@@ -36,6 +36,7 @@ import type {
   LocalDiagnosticRecord,
   ModelEndpointMode,
   ModelEndpointSettings,
+  PermissionMode,
   ProductTelemetryEvent,
   RepositoryInfo,
   RunnerToolId,
@@ -1020,6 +1021,7 @@ type RawSettings = {
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
   contextLength?: unknown;
+  permissionMode?: unknown;
 };
 
 type SettingsRow = {
@@ -1323,6 +1325,20 @@ export function writeContextLengthSetting(value: unknown): number {
     contextLength,
   });
   return contextLength;
+}
+
+export function readPermissionModeSetting(): PermissionMode {
+  return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
+}
+
+export function writePermissionModeSetting(value: unknown): PermissionMode {
+  const permissionMode: PermissionMode = value === "auto_safe" || value === "bypass" ? "auto_safe" : "normal";
+  const settings = readRawSettings();
+  writeRawSettings({
+    ...settings,
+    permissionMode,
+  });
+  return permissionMode;
 }
 
 export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings; harnessProfile: HarnessProfileId } {

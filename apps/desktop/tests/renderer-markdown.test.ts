@@ -342,6 +342,12 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
   assert.equal(commandShellText(searchRun), "apps/desktop/src/renderer/main.tsx: content");
 
+  const verboseRun = {
+    ...searchRun,
+    stdout: Array.from({ length: 7 }, (_, index) => `line ${index + 1}`).join("\n"),
+  };
+  assert.equal(commandShellText(verboseRun), "[3 earlier output lines omitted.]\nline 4\nline 5\nline 6\nline 7");
+
   const readRun = { ...searchRun, command: "read apps/desktop/src/renderer/main.tsx" };
   const readGroups = activityToolGroups([
     { type: "command", id: "read-1", run: { ...readRun, id: "read-1" } },

@@ -576,6 +576,7 @@ const markdownPreviewCharacterLimit = 60000;
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
+const commandOutputPreviewLineLimit = 5;
 let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultAppearanceSettings: AppearanceSettings = {
@@ -938,7 +939,15 @@ const composerTestEvents: BackendUiEvent[] = [
     taskId: "composer-test",
     id: "composer-fixture-search",
     stream: "stdout",
-    text: ".timelineActivity {\n  display: grid;\n}\n",
+    text: [
+      "Read composer styles",
+      "1: .timelineActivity {",
+      "2:   display: grid;",
+      "3:   gap: 0.5rem;",
+      "4:   min-width: 0;",
+      "5:   color: var(--text);",
+      "6: }",
+    ].join("\n"),
   },
   {
     type: "command.finished",
@@ -2438,10 +2447,19 @@ export function commandShellText(run: CommandRun): string {
   const parts = isTool ? [] : [`$ ${run.command}`];
   const outputPreview = previewTail([run.stdout, run.stderr].filter(Boolean).join("\n"), commandOutputPreviewCharacterLimit);
   const output = stripAnsi(outputPreview.text).trimEnd();
-  if (outputPreview.truncated) {
-    parts.push(`[Showing the last ${commandOutputPreviewCharacterLimit.toLocaleString()} characters of command output.]`);
+  if (output) {
+    const outputLines = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const lineTruncated = outputLines.length > commandOutputPreviewLineLimit;
+    if (outputPreview.truncated || lineTruncated) {
+      const visibleLines = outputLines.slice(-(commandOutputPreviewLineLimit - 1));
+      const marker = outputPreview.truncated
+        ? "[Earlier output omitted.]"
+        : `[${outputLines.length - visibleLines.length} earlier output line${outputLines.length - visibleLines.length === 1 ? "" : "s"} omitted.]`;
+      parts.push([marker, ...visibleLines].join("\n"));
+    } else {
+      parts.push(output);
+    }
   }
-  if (output) parts.push(output);
   if (isTool && !parts.length) parts.push(commandSummary(run));
   return parts.join("\n\n");
 }

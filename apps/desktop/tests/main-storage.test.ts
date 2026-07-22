@@ -625,7 +625,7 @@ test("an explicitly forced local configuration overrides a stored server endpoin
   });
 });
 
-test("tool, skill, harness, and notes settings sanitize invalid input", () => {
+test("tool, skill, harness, permission, and notes settings sanitize invalid input", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-settings-"));
   const storage = loadStorage(userData);
 
@@ -633,8 +633,14 @@ test("tool, skill, harness, and notes settings sanitize invalid input", () => {
   assert.equal(storage.readContextLengthSetting(), 64000);
   assert.equal(storage.writeContextLengthSetting(128000), 128000);
   assert.equal(storage.writeContextLengthSetting(999999), 256000);
+  assert.equal(storage.readPermissionModeSetting(), "normal");
+  assert.equal(storage.writePermissionModeSetting("auto_safe"), "auto_safe");
+  assert.equal(loadStorage(userData).readPermissionModeSetting(), "auto_safe");
   writeSettingsPayload(userData, { harnessProfile: "invalid" });
   assert.equal(storage.readHarnessProfileSetting(), "engineering");
+  assert.equal(storage.readPermissionModeSetting(), "normal");
+  assert.equal(storage.writePermissionModeSetting("bypass"), "auto_safe");
+  assert.equal(storage.writePermissionModeSetting("invalid"), "normal");
 
   writeSettingsPayload(userData, {
     tools: { read: false, write: "no", legacyTool: true, nope: false },

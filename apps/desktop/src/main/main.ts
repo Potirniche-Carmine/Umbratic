@@ -82,6 +82,7 @@ import {
   readModelEndpointSettings,
   publicModelEndpointSettings,
   readNotes,
+  readPermissionModeSetting,
   readProjects,
   readProductTelemetryEvents,
   readTask,
@@ -95,6 +96,7 @@ import {
   writeChats,
   writeJsonFile,
   writeNotes,
+  writePermissionModeSetting,
   writeProjects,
   writeProductTelemetryEvent,
   writeTask,
@@ -180,6 +182,7 @@ import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, type ContextPromptPart } from "./promptContext";
+import { findAgentInstructionFiles } from "./repositoryInstructions";
 
 const isDev = !app.isPackaged;
 const desktopBenchmarkStartedAt = performance.now();
@@ -249,7 +252,7 @@ try {
 }
 
 let mainWindow: BrowserWindow | null = null;
-let permissionMode: PermissionMode = "normal";
+let permissionMode: PermissionMode = readPermissionModeSetting();
 const pendingPermissions = new Map<string, PendingPermission>();
 const pendingTaskEvents = new Map<string, BackendUiEvent[]>();
 const contextThresholdState = new Map<string, { above75: boolean; above90: boolean }>();
@@ -1806,62 +1809,17 @@ function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string
 
 const keyWorkspaceFileCandidates = ["README.md", "package.json", "apps/desktop/package.json", "src/package.json", "pyproject.toml"];
 
-function findAgentInstructionFiles(rootPath: string): Array<{ path: string; text: string }> {
-  const root = path.resolve(rootPath);
-  const files: Array<{ path: string; text: string }> = [];
-  const seen = new Set<string>();
-  let remaining = 24000;
-  const addFile = (absolute: string) => {
-    const resolved = path.resolve(absolute);
-    if (!pathInside(root, resolved) || seen.has(resolved) || !fs.existsSync(resolved)) return;
-    const text = readTextFileIfSafe(resolved);
-    if (text === null) return;
-    const relative = normalizeRelativePath(path.relative(root, resolved)) || "AGENTS.md";
-    const snippet = text.slice(0, Math.max(0, remaining));
-    if (!snippet) return;
-    files.push({ path: relative, text: snippet });
-    seen.add(resolved);
-    remaining -= snippet.length;
-  };
-
-  addFile(path.join(root, "AGENTS.md"));
-  const walk = (directory: string, depth: number) => {
-    if (remaining <= 0 || files.length >= 12 || depth > 3) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (remaining <= 0 || files.length >= 12) return;
-      const absolute = path.join(directory, entry.name);
-      const relative = normalizeRelativePath(path.relative(root, absolute));
-      if (entry.isFile() && entry.name === "AGENTS.md") {
-        addFile(absolute);
-        continue;
-      }
-      if (
-        entry.isDirectory() &&
-        depth < 3 &&
-        !ignoredSnapshotDirectories.has(entry.name) &&
-        !isGeneratedRuntimePath(relative) &&
-        !isBlockedPath(relative)
-      ) {
-        walk(absolute, depth + 1);
-      }
-    }
-  };
-  walk(root, 0);
-  return files;
-}
-
 function pushAgentInstructionContext(lines: string[], rootPath: string) {
-  const files = findAgentInstructionFiles(rootPath);
+  const files = findAgentInstructionFiles(rootPath, {
+    readTextFile: readTextFileIfSafe,
+    shouldSkipDirectory: ({ name, path: relative }) =>
+      ignoredSnapshotDirectories.has(name) || isGeneratedRuntimePath(relative) || isBlockedPath(relative),
+  });
   if (!files.length) return;
   lines.push(
     "",
-    "Repository instruction files discovered in the workspace:",
+    "Repository instruction files, ordered from the workspace root to more specific directories:",
+    "Apply the root file to the full workspace. Apply each nested file to work inside its containing directory.",
   );
   for (const file of files) {
     lines.push(`\n### ${file.path}`, "```", file.text, "```");
@@ -2079,9 +2037,6 @@ async function runnerPromptForTask(
         "- no project folder is selected for this chat",
         "- Umbratic created a private scratch workspace for attachments and any files produced during the conversation",
         `- scratch workspace: ${rootPath}`,
-        "",
-        "Scratch workspace file preview (bounded, not exhaustive):",
-        tree.length ? tree.join("\n") : "- (empty)",
       ]
     : [
         "Umbratic workspace context:",
@@ -2089,17 +2044,19 @@ async function runnerPromptForTask(
         `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
         `- workspace kind: ${task.workspaceKind}`,
         `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
-        "",
-        "Visible workspace file preview (bounded, not exhaustive):",
-        tree.length ? tree.join("\n") : "- (no readable files found)",
       ];
+  pushAgentInstructionContext(lines, rootPath);
+  lines.push(
+    "",
+    hiddenChat ? "Scratch workspace file preview (bounded, not exhaustive):" : "Visible workspace file preview (bounded, not exhaustive):",
+    tree.length ? tree.join("\n") : hiddenChat ? "- (empty)" : "- (no readable files found)",
+  );
   if (keyFiles.length) {
     lines.push("", "Key workspace files:");
     for (const file of keyFiles) {
       lines.push(`\n### ${file.path}`, "```", file.text, "```");
     }
   }
-  pushAgentInstructionContext(lines, rootPath);
   const hasDurableContext = Boolean(task.chatId && readChat(task.chatId)?.contextState);
   const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
   if (history) {
@@ -5081,7 +5038,7 @@ async function openPathInIde(
 }
 
 function setPermissionMode(input: unknown): Promise<BackendStatus> {
-  permissionMode = input === "auto_safe" || input === "bypass" ? "auto_safe" : "normal";
+  permissionMode = writePermissionModeSetting(input);
   recordProductTelemetry("permission.mode_changed", { data: { mode: permissionMode } });
   return getBackendStatus();
 }
