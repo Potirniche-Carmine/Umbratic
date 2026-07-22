@@ -53,7 +53,7 @@ function DiffCellView({
   );
 }
 
-export function DiffRow({
+function DiffRowComponent({
   row,
   selection,
   commenting,
@@ -72,3 +72,19 @@ export function DiffRow({
     </div>
   );
 }
+
+function cellIsSelected(selection: ReviewLineSelection | null, row: SideBySideRow, cell: DiffCell): boolean {
+  return !!selection
+    && selection.hunkId === row.hunkId
+    && selection.side === cell.side
+    && cell.line !== null
+    && selection.lines.includes(cell.line);
+}
+
+export const DiffRow = React.memo(DiffRowComponent, (previous, next) => (
+  previous.row === next.row
+  && previous.commenting === next.commenting
+  && previous.onSelect === next.onSelect
+  && cellIsSelected(previous.selection, previous.row, previous.row.left) === cellIsSelected(next.selection, next.row, next.row.left)
+  && cellIsSelected(previous.selection, previous.row, previous.row.right) === cellIsSelected(next.selection, next.row, next.row.right)
+));

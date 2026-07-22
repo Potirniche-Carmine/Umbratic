@@ -6388,6 +6388,12 @@ button.attachmentPreview:focus-visible {
   min-width: max-content;
 }
 
+.reviewDiffChunk {
+  min-width: max-content;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1760px;
+}
+
 .reviewDiffGap {
   display: flex;
   min-width: 760px;
@@ -6500,6 +6506,7 @@ button.attachmentPreview:focus-visible {
 }
 
 .reviewDiffCanvas.isWrapped .reviewHunk,
+.reviewDiffCanvas.isWrapped .reviewDiffChunk,
 .reviewDiffCanvas.isWrapped .reviewDiffRow {
   min-width: 0;
 }

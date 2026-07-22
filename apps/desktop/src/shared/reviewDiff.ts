@@ -82,8 +82,9 @@ export const reviewContextLines = 5;
 const maxPatchCharacters = 500_000;
 const maxPatchLines = 5_000;
 const oversizedPatchMetadataCharacters = 64_000;
-const maxSemanticBlockLines = 200;
-const maxAlignmentCells = 40_000;
+const maxSemanticBlockLines = 120;
+const maxLineAlignmentCells = 10_000;
+const maxIntraLineAlignmentCells = 10_000;
 const maxIntraLineCharacters = 2_000;
 
 export function stableReviewHash(value: string): string {
@@ -317,8 +318,8 @@ function lineSimilarity(left: string, right: string): number {
 function shouldShowIntraLineDiff(left: string, right: string): boolean {
   const longerLength = Math.max(left.trim().length, right.trim().length);
   const shorterLength = Math.min(left.trim().length, right.trim().length);
-  if (!longerLength || shorterLength / longerLength < 0.5) return false;
-  return lineSimilarity(left, right) >= 0.5;
+  if (!longerLength || shorterLength / longerLength < 0.72) return false;
+  return lineSimilarity(left, right) >= 0.68;
 }
 
 function tokenize(value: string): string[] {
@@ -329,7 +330,7 @@ export function intraLineDiff(left: string, right: string): { left: IntraLineSpa
   if (left.length > maxIntraLineCharacters || right.length > maxIntraLineCharacters) return undefined;
   const a = tokenize(left);
   const b = tokenize(right);
-  if (a.length * b.length > maxAlignmentCells) return undefined;
+  if (a.length * b.length > maxIntraLineAlignmentCells) return undefined;
   const table = Array.from({ length: a.length + 1 }, () => new Uint16Array(b.length + 1));
   for (let row = a.length - 1; row >= 0; row -= 1) {
     for (let col = b.length - 1; col >= 0; col -= 1) {
@@ -371,7 +372,7 @@ function alignReplacementBlock(deletions: DiffLine[], additions: DiffLine[]): Pa
   // replacement even when the text has no similarity (for example, replacing
   // a blank line). Keep both sides on the same visual row.
   if (deletions.length === 1 && additions.length === 1) return [{ left: deletions[0], right: additions[0] }];
-  if (deletions.length > maxSemanticBlockLines || additions.length > maxSemanticBlockLines || deletions.length * additions.length > maxAlignmentCells) {
+  if (deletions.length > maxSemanticBlockLines || additions.length > maxSemanticBlockLines || deletions.length * additions.length > maxLineAlignmentCells) {
     return Array.from({ length: Math.max(deletions.length, additions.length) }, (_, index) => ({ left: deletions[index], right: additions[index] }));
   }
   const rows = deletions.length;
@@ -415,8 +416,8 @@ function emptyCell(side: DiffSide): DiffCell {
 export function alignHunk(hunk: DiffHunk): SideBySideRow[] {
   const rows: SideBySideRow[] = [];
   let index = 0;
-  const appendPair = (pair: Pair) => {
-    const spans = pair.left && pair.right && shouldShowIntraLineDiff(pair.left.content, pair.right.content)
+  const appendPair = (pair: Pair, allowIntraLineDiff: boolean) => {
+    const spans = allowIntraLineDiff && pair.left && pair.right && shouldShowIntraLineDiff(pair.left.content, pair.right.content)
       ? intraLineDiff(pair.left.content, pair.right.content)
       : undefined;
     const kind = pair.left && pair.right ? "modification" : pair.left ? "deletion" : "addition";
@@ -448,7 +449,10 @@ export function alignHunk(hunk: DiffHunk): SideBySideRow[] {
     while (hunk.lines[index] && hunk.lines[index].origin !== "context") changedLines.push(hunk.lines[index++]);
     const deletions = changedLines.filter((candidate) => candidate.origin === "deletion");
     const additions = changedLines.filter((candidate) => candidate.origin === "addition");
-    for (const pair of alignReplacementBlock(deletions, additions)) appendPair(pair);
+    const longerBlock = Math.max(deletions.length, additions.length);
+    const shorterBlock = Math.min(deletions.length, additions.length);
+    const allowIntraLineDiff = longerBlock <= 80 && shorterBlock / Math.max(1, longerBlock) >= 0.5;
+    for (const pair of alignReplacementBlock(deletions, additions)) appendPair(pair, allowIntraLineDiff);
   }
   return rows;
 }

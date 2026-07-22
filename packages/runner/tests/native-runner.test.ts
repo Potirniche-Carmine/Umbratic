@@ -390,7 +390,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.ok(Array.isArray(firstRequest.body.tools));
     assert.deepEqual(
       (firstRequest.body.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name).filter(Boolean).sort(),
-      ["command", "edit", "read", "search", "write"],
+      ["apply_patch", "command", "edit", "read", "search", "write"],
     );
     assert.ok(
       provider.requests.some(({ body }) => {

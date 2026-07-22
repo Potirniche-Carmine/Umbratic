@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText, X } from "lucide-react";
 import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
 import { reviewPatchHash } from "../../shared/reviewDiff";
@@ -140,7 +140,7 @@ export function ReviewPanel({
     setScopeOpen(false);
     onScopeChange(nextScope);
   };
-  const selectLine = (event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow) => {
+  const selectLine = useCallback((event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow) => {
     if (!commenting || cell.line === null || !cell.hunkId) return;
     const lineNumber = cell.line;
     setSelection((current) => {
@@ -152,7 +152,7 @@ export function ReviewPanel({
       }
       return { hunkId: cell.hunkId!, side: cell.side, lines: [lineNumber], rowId: row.id };
     });
-  };
+  }, [commenting]);
   const saveComment = () => {
     if (!selection || !selectedFile || !commentBody.trim()) return;
     const selectedLines = [...selection.lines].sort((left, right) => left - right);

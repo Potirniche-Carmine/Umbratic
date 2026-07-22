@@ -109,6 +109,22 @@ fn string_arg(input: &Map<String, Value>, names: &[&str]) -> String {
         .to_owned()
 }
 
+fn string_list_arg(input: &Map<String, Value>, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .find_map(|name| input.get(*name))
+        .map(|value| match value {
+            Value::String(value) => vec![value.clone()],
+            Value::Array(values) => values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        })
+        .unwrap_or_default()
+}
+
 fn number_arg(input: &Map<String, Value>, name: &str, fallback: u64, max: u64) -> u64 {
     input
         .get(name)
@@ -119,19 +135,46 @@ fn number_arg(input: &Map<String, Value>, name: &str, fallback: u64, max: u64) -
 
 fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), String> {
     let allowed: &[&str] = match name {
-        "read" => &["filePath", "path", "offset", "limit", "depth"],
-        "write" => &["filePath", "path", "content"],
+        "read" => &[
+            "filePath",
+            "file_path",
+            "path",
+            "directory",
+            "offset",
+            "limit",
+            "depth",
+        ],
+        "write" => &["filePath", "file_path", "path", "content", "text"],
         "edit" => &[
             "mode",
             "filePath",
+            "file_path",
             "path",
             "oldText",
             "old_string",
+            "old",
+            "find",
             "newText",
             "new_string",
+            "new",
+            "replace",
             "patch",
         ],
-        "search" => &["query", "limit"],
+        "search" => &[
+            "query",
+            "pattern",
+            "term",
+            "text",
+            "path",
+            "directory",
+            "filePath",
+            "glob",
+            "filePattern",
+            "exclude",
+            "caseSensitive",
+            "limit",
+            "maxResults",
+        ],
         "workspace_graph" => &[
             "action",
             "query",
@@ -145,7 +188,7 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
             "maxDepth",
             "direction",
         ],
-        "command" => &["command", "timeoutMs"],
+        "command" => &["command", "cmd", "script", "timeoutMs"],
         "read_skill" => &["skillId", "resource", "offset", "limit"],
         "read_attachment" => &["attachmentId", "offset", "limit"],
         "retrieve_context" => &["hash", "offset", "limit"],
@@ -154,34 +197,73 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
     if let Some(key) = input.keys().find(|key| !allowed.contains(&key.as_str())) {
         return Err(format!("{name} received unknown argument {key}"));
     }
-    for key in ["offset", "limit", "depth", "maxDepth", "timeoutMs"] {
+    for key in [
+        "offset",
+        "limit",
+        "maxResults",
+        "depth",
+        "maxDepth",
+        "timeoutMs",
+    ] {
         if input.contains_key(key) && !input.get(key).is_some_and(Value::is_number) {
             return Err(format!("{name} argument {key} must be a number"));
         }
     }
     let required = match name {
-        "read" => vec![string_arg(input, &["filePath", "path"])],
-        "write" => vec![string_arg(input, &["filePath", "path"])],
-        "search" => vec![string_arg(input, &["query"])],
-        "command" => vec![string_arg(input, &["command"])],
+        "read" => vec![string_arg(
+            input,
+            &["filePath", "file_path", "path", "directory"],
+        )],
+        "write" => vec![string_arg(input, &["filePath", "file_path", "path"])],
+        "search" => vec![
+            string_arg(input, &["query", "pattern", "term", "text"]),
+            string_arg(input, &["path", "directory", "filePath"]),
+            string_list_arg(input, &["glob", "filePattern"]).join(""),
+        ],
+        "command" => vec![string_arg(input, &["command", "cmd", "script"])],
         "read_skill" => vec![string_arg(input, &["skillId"])],
         "read_attachment" => vec![string_arg(input, &["attachmentId"])],
         "retrieve_context" => vec![string_arg(input, &["hash"])],
         "workspace_graph" => vec![string_arg(input, &["action"])],
         "edit"
             if input.get("mode").and_then(Value::as_str) == Some("patch")
-                || (input.contains_key("patch") && !input.contains_key("filePath")) =>
+                || (input.contains_key("patch")
+                    && !["filePath", "file_path", "path"]
+                        .iter()
+                        .any(|name| input.contains_key(*name))) =>
         {
             vec![string_arg(input, &["patch"])]
         }
         "edit" => vec![
-            string_arg(input, &["filePath", "path"]),
-            string_arg(input, &["oldText", "old_string"]),
+            string_arg(input, &["filePath", "file_path", "path"]),
+            string_arg(input, &["oldText", "old_string", "old", "find"]),
         ],
         _ => vec![],
     };
-    if required.iter().any(|value| value.is_empty()) {
+    let missing_required = if name == "search" {
+        required.iter().all(|value| value.is_empty())
+    } else {
+        required.iter().any(|value| value.is_empty())
+    };
+    if missing_required {
         return Err(format!("{name} is missing a required string argument"));
+    }
+    for key in ["glob", "filePattern", "exclude"] {
+        if let Some(value) = input.get(key)
+            && !value.is_string()
+            && !value
+                .as_array()
+                .is_some_and(|values| values.iter().all(Value::is_string))
+        {
+            return Err(format!(
+                "{name} argument {key} must be a string or an array of strings"
+            ));
+        }
+    }
+    if input.contains_key("caseSensitive")
+        && !input.get("caseSensitive").is_some_and(Value::is_boolean)
+    {
+        return Err("search argument caseSensitive must be a boolean".into());
     }
     if name == "read_attachment"
         && ["offset", "limit"].iter().any(|key| {
@@ -190,7 +272,12 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
     {
         return Err("read_attachment offset and limit must be non-negative integers".into());
     }
-    if name == "write" && !input.get("content").is_some_and(Value::is_string) {
+    if name == "write"
+        && !input
+            .get("content")
+            .or_else(|| input.get("text"))
+            .is_some_and(Value::is_string)
+    {
         return Err("write argument content must be a string".into());
     }
     if name == "edit" {
@@ -205,6 +292,8 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
             && !(input
                 .get("newText")
                 .or_else(|| input.get("new_string"))
+                .or_else(|| input.get("new"))
+                .or_else(|| input.get("replace"))
                 .is_some_and(Value::is_string))
         {
             return Err("edit newText must be a string".into());
@@ -279,7 +368,7 @@ fn list_directory(cwd: &Path, directory: &Path, depth: usize) -> Vec<String> {
 }
 
 async fn read_tool(session: &Session, input: &Map<String, Value>) -> Result<ToolResult, String> {
-    let mut file_path = string_arg(input, &["filePath", "path"]);
+    let mut file_path = string_arg(input, &["filePath", "file_path", "path", "directory"]);
     if file_path.is_empty() {
         return Err("read requires string argument filePath".into());
     }
@@ -431,9 +520,10 @@ async fn write_tool(
     input: &Map<String, Value>,
     permissions: &crate::permission::PermissionBroker,
 ) -> Result<ToolResult, String> {
-    let path = string_arg(input, &["filePath", "path"]);
+    let path = string_arg(input, &["filePath", "file_path", "path"]);
     let content = input
         .get("content")
+        .or_else(|| input.get("text"))
         .and_then(Value::as_str)
         .ok_or_else(|| "write requires string argument content".to_owned())?;
     let (absolute, relative) = resolve_workspace_path(&session.config.cwd, &path)?;
@@ -464,6 +554,36 @@ enum PatchOperation {
     Add(String, Vec<String>),
     Delete(String),
     Update(String, Option<String>, Vec<Vec<(char, String)>>),
+}
+
+fn normalized_line_endings(value: &str) -> String {
+    value.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn preferred_line_ending(value: &str) -> &'static str {
+    if value.contains("\r\n") {
+        "\r\n"
+    } else if value.contains('\r') {
+        "\r"
+    } else {
+        "\n"
+    }
+}
+
+fn with_line_endings(value: &str, line_ending: &str) -> String {
+    normalized_line_endings(value).replace('\n', line_ending)
+}
+
+fn replace_text_block(current: &str, old: &str, new: &str) -> Option<String> {
+    let line_ending = preferred_line_ending(current);
+    let replacement = with_line_endings(new, line_ending);
+    if current.contains(old) {
+        return Some(current.replacen(old, &replacement, 1));
+    }
+    let old = with_line_endings(old, line_ending);
+    current
+        .contains(&old)
+        .then(|| current.replacen(&old, &replacement, 1))
 }
 
 fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
@@ -601,10 +721,11 @@ fn apply_patch(session: &Session, patch: &str) -> Result<PatchTransaction, Strin
                     if old == new {
                         continue;
                     }
-                    if old.is_empty() || !content.contains(&old) {
+                    if old.is_empty() {
                         return Err(format!("Patch hunk was not found in {relative}"));
                     }
-                    content = content.replacen(&old, &new, 1);
+                    content = replace_text_block(&content, &old, &new)
+                        .ok_or_else(|| format!("Patch hunk was not found in {relative}"))?;
                 }
                 if let Some(destination) = move_to {
                     let (moved, moved_relative) =
@@ -631,8 +752,11 @@ async fn edit_tool(
     input: &Map<String, Value>,
     permissions: &crate::permission::PermissionBroker,
 ) -> Result<ToolResult, String> {
+    let has_file_path = ["filePath", "file_path", "path"]
+        .iter()
+        .any(|name| input.contains_key(*name));
     let patch_mode = input.get("mode").and_then(Value::as_str) == Some("patch")
-        || (input.contains_key("patch") && !input.contains_key("filePath"));
+        || (input.contains_key("patch") && !has_file_path);
     if patch_mode {
         let patch = input
             .get("patch")
@@ -681,20 +805,22 @@ async fn edit_tool(
             ),
         ));
     }
-    let path = string_arg(input, &["filePath", "path"]);
-    let old = string_arg(input, &["oldText", "old_string"]);
-    let new = string_arg(input, &["newText", "new_string"]);
+    let path = string_arg(input, &["filePath", "file_path", "path"]);
+    let old = string_arg(input, &["oldText", "old_string", "old", "find"]);
+    let new = string_arg(input, &["newText", "new_string", "new", "replace"]);
     if old.is_empty() {
         return Err("edit replace mode requires oldText".into());
     }
-    if old == new {
+    if normalized_line_endings(&old) == normalized_line_endings(&new) {
         return Err("edit replacement must change the file".into());
     }
     let (absolute, relative) = resolve_workspace_path(&session.config.cwd, &path)?;
     let current = ensure_text_file(&absolute)?;
-    if !current.contains(&old) {
-        return Err(format!("Text to replace was not found in {relative}"));
-    }
+    let updated = replace_text_block(&current, &old, &new).ok_or_else(|| {
+        format!(
+            "Text to replace was not found in {relative}. Read the current range and retry, or use edit patch mode."
+        )
+    })?;
     let decision = permissions
         .request(
             sink,
@@ -707,7 +833,7 @@ async fn edit_tool(
     if decision != "allow" {
         return Err(format!("Edit denied: {relative}"));
     }
-    fs::write(absolute, current.replacen(&old, &new, 1)).map_err(|error| error.to_string())?;
+    fs::write(absolute, updated).map_err(|error| error.to_string())?;
     Ok(ToolResult::success(relative, "Edited file successfully."))
 }
 
@@ -727,7 +853,26 @@ fn parse_search_query(raw: &str) -> SearchQuery {
         smart_case: raw.chars().any(char::is_uppercase),
         ..Default::default()
     };
-    for token in raw.split_whitespace() {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quote = None;
+    for value in raw.chars() {
+        if quote.is_some_and(|active| active == value) {
+            quote = None;
+        } else if quote.is_none() && token.is_empty() && matches!(value, '\'' | '"') {
+            quote = Some(value);
+        } else if quote.is_none() && value.is_whitespace() {
+            if !token.is_empty() {
+                tokens.push(std::mem::take(&mut token));
+            }
+        } else {
+            token.push(value);
+        }
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    for token in tokens {
         let excluded = token.starts_with('!') && token.len() > 1;
         let value = token
             .trim_start_matches('!')
@@ -794,14 +939,16 @@ fn search_constraints(relative: &str, filename: &str, query: &SearchQuery) -> bo
             value.to_lowercase()
         }
     };
-    query
-        .include_dirs
-        .iter()
-        .all(|value| candidate.starts_with(&normalize(value)))
-        && query
-            .include_globs
+    (query.include_dirs.is_empty()
+        || query
+            .include_dirs
             .iter()
-            .all(|value| glob_matches(value, relative, filename, query.smart_case))
+            .any(|value| candidate.starts_with(&normalize(value))))
+        && (query.include_globs.is_empty()
+            || query
+                .include_globs
+                .iter()
+                .any(|value| glob_matches(value, relative, filename, query.smart_case)))
         && !query.exclude_dirs.iter().any(|value| {
             let value = normalize(value);
             candidate.starts_with(&value) || candidate.contains(&format!("/{value}"))
@@ -892,12 +1039,55 @@ fn term_score(relative: &str, filename: &str, term: &str, case_sensitive: bool) 
 }
 
 async fn search_tool(session: &Session, input: &Map<String, Value>) -> Result<ToolResult, String> {
-    let query = string_arg(input, &["query"]);
-    if query.trim().is_empty() {
-        return Err("search requires query".into());
+    let query = string_arg(input, &["query", "pattern", "term", "text"]);
+    let limit = input
+        .get("limit")
+        .or_else(|| input.get("maxResults"))
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .clamp(1, 100) as usize;
+    let mut parsed = parse_search_query(&query);
+    if let Some(case_sensitive) = input.get("caseSensitive").and_then(Value::as_bool) {
+        parsed.smart_case = case_sensitive;
     }
-    let limit = number_arg(input, "limit", 50, 100) as usize;
-    let parsed = parse_search_query(&query);
+    for scope in string_list_arg(input, &["path", "directory", "filePath"])
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let (absolute, relative) = resolve_workspace_path(&session.config.cwd, scope.trim())?;
+        let relative = relative.replace('\\', "/");
+        if absolute.is_file() {
+            parsed.include_globs.push(relative);
+        } else if !relative.is_empty() {
+            parsed
+                .include_dirs
+                .push(format!("{}/", relative.trim_end_matches('/')));
+        }
+    }
+    parsed.include_globs.extend(
+        string_list_arg(input, &["glob", "filePattern"])
+            .into_iter()
+            .map(|value| value.trim().trim_start_matches("./").replace('\\', "/"))
+            .filter(|value| !value.is_empty()),
+    );
+    for value in string_list_arg(input, &["exclude"])
+        .into_iter()
+        .map(|value| value.trim().trim_start_matches('!').replace('\\', "/"))
+        .filter(|value| !value.is_empty())
+    {
+        if value.ends_with('/') {
+            parsed.exclude_dirs.push(value);
+        } else {
+            parsed.exclude_globs.push(value);
+        }
+    }
+    if parsed.terms.is_empty()
+        && parsed.include_dirs.is_empty()
+        && parsed.include_globs.is_empty()
+        && parsed.location.is_none()
+    {
+        return Err("search requires query, path, or glob".into());
+    }
     let path_terms = if parsed.terms.is_empty() {
         parsed.location.iter().cloned().collect::<Vec<_>>()
     } else {
@@ -909,7 +1099,7 @@ async fn search_tool(session: &Session, input: &Map<String, Value>) -> Result<To
         .unwrap()
         .clone();
     let mut path_hits: Vec<(String, f64)> = Vec::new();
-    let mut content_hits: Vec<(String, usize, u8, f64)> = Vec::new();
+    let mut content_hits: Vec<(String, usize, u8, f64, String)> = Vec::new();
     let definition_pattern = Regex::new(
         r"^(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|fn|def|impl|trait)\b",
     )
@@ -999,7 +1189,8 @@ async fn search_tool(session: &Session, input: &Map<String, Value>) -> Result<To
                     } else {
                         1
                     };
-                    content_hits.push((relative.clone(), index + 1, rank, boost));
+                    let snippet = line.chars().take(240).collect::<String>();
+                    content_hits.push((relative.clone(), index + 1, rank, boost, snippet));
                 }
             }
         }
@@ -1025,11 +1216,18 @@ async fn search_tool(session: &Session, input: &Map<String, Value>) -> Result<To
     results.extend(
         content_hits
             .into_iter()
-            .map(|(path, line, _, _)| format!("{path}:{line}: content")),
+            .map(|(path, line, _, _, snippet)| format!("{path}:{line}: {snippet}")),
     );
     results.truncate(limit);
     Ok(ToolResult::success(
-        format!("search {query}"),
+        format!(
+            "search {}",
+            if query.trim().is_empty() {
+                string_arg(input, &["path", "directory", "filePath"])
+            } else {
+                query
+            }
+        ),
         if results.is_empty() {
             "No matches.".into()
         } else {
@@ -1046,7 +1244,9 @@ async fn command_tool(
     call_id: &str,
     safety: &SafetyDecisionV1,
 ) -> Result<ToolResult, String> {
-    let command = string_arg(input, &["command"]).trim().to_owned();
+    let command = string_arg(input, &["command", "cmd", "script"])
+        .trim()
+        .to_owned();
     if command.is_empty() {
         return Err("command requires command".into());
     }
@@ -1424,23 +1624,34 @@ pub async fn enabled_tool_specs(session: &Session, include_tools: bool) -> Vec<V
         ));
     }
     if enabled.iter().any(|name| name == "edit") {
-        specs.push(tool_definition("edit", "Replace exact text in one workspace file after permission.", json!({ "filePath":{"type":"string"}, "oldText":{"type":"string"}, "newText":{"type":"string"} }), &["filePath","oldText","newText"]));
+        specs.push(tool_definition("edit", "Replace one text block in a workspace file after permission. Use filePath, oldText, and newText. LF and CRLF line endings match automatically.", json!({ "filePath":{"type":"string"}, "oldText":{"type":"string"}, "newText":{"type":"string"} }), &["filePath", "oldText", "newText"]));
+        specs.push(tool_definition(
+            "apply_patch",
+            "Apply a Begin Patch document to one or more workspace files after permission.",
+            json!({ "patch":{"type":"string"} }),
+            &["patch"],
+        ));
     }
     if enabled.iter().any(|name| name == "search") {
         specs.push(tool_definition(
             "search",
-            "Search workspace file paths and small text-file contents.",
-            json!({ "query":{"type":"string"}, "limit":{"type":"number"} }),
-            &["query"],
+            "Fuzzy-search workspace file paths and small text-file contents. Use query for text or fuzzy path terms. Use path and glob to narrow or list files. Results include line snippets that can be copied into read or edit.",
+            json!({ "query":{"type":"string"}, "path":{"type":"string"}, "glob":{"type":"string"}, "exclude":{"type":"string"}, "caseSensitive":{"type":"boolean"}, "limit":{"type":"number"} }),
+            &[],
         ));
     }
     if enabled.iter().any(|name| name == "workspace_graph") && session.workspace_graph.is_some() {
         specs.push(tool_definition("workspace_graph", "Query bounded source-backed workspace graph evidence.", json!({ "action":{"type":"string","enum":["summary","query","explain","path","affected"]}, "query":{"type":"string"}, "symbol":{"type":"string"}, "from":{"type":"string"}, "to":{"type":"string"}, "files":{"type":"array","items":{"type":"string"}}, "symbols":{"type":"array","items":{"type":"string"}}, "depth":{"type":"number"}, "limit":{"type":"number"}, "maxDepth":{"type":"number"}, "direction":{"type":"string","enum":["incoming","outgoing","both"]} }), &["action"]));
     }
     if enabled.iter().any(|name| name == "command") {
+        let description = if cfg!(windows) {
+            "Run a local workspace command in Windows PowerShell after policy and permission checks. Prefer read and search for file inspection."
+        } else {
+            "Run a local workspace command in /bin/sh after policy and permission checks. Prefer read and search for file inspection."
+        };
         specs.push(tool_definition(
             "command",
-            "Run a local workspace shell command after policy and permission checks.",
+            description,
             json!({ "command":{"type":"string"}, "timeoutMs":{"type":"number"} }),
             &["command"],
         ));
@@ -1468,7 +1679,15 @@ pub async fn enabled_tool_specs(session: &Session, include_tools: bool) -> Vec<V
 }
 
 pub fn canonical_tool_name(name: &str) -> String {
-    name.trim().to_ascii_lowercase()
+    let normalized = name.trim().to_ascii_lowercase().replace(['-', '.'], "_");
+    match normalized.as_str() {
+        "read_file" | "list_files" | "list_directory" | "ls" => "read".into(),
+        "write_file" | "create_file" => "write".into(),
+        "edit_file" | "replace_text" | "apply_patch" => "edit".into(),
+        "search_files" | "find_files" | "grep" | "rg" => "search".into(),
+        "run_command" | "shell" | "bash" | "powershell" => "command".into(),
+        _ => normalized,
+    }
 }
 
 pub async fn execute_tool(
@@ -1485,15 +1704,32 @@ pub async fn execute_tool(
         .as_ref()
         .ok()
         .filter(|_| name == "command")
-        .map(|args| evaluate_command(&string_arg(args, &["command"]), &session.config.cwd));
+        .map(|args| {
+            evaluate_command(
+                &string_arg(args, &["command", "cmd", "script"]),
+                &session.config.cwd,
+            )
+        });
     let summary = match parsed_args.as_ref() {
         Ok(args) => match name.as_str() {
-            "read" => format!("read {}", string_arg(args, &["filePath", "path"])),
+            "read" => format!(
+                "read {}",
+                string_arg(args, &["filePath", "file_path", "path", "directory"])
+            ),
             "read_attachment" => format!("read attachment {}", string_arg(args, &["attachmentId"])),
-            "write" => format!("write {}", string_arg(args, &["filePath", "path"])),
-            "edit" => format!("edit {}", string_arg(args, &["filePath", "path"])),
-            "search" => format!("search {}", string_arg(args, &["query"])),
-            "command" => redact_text(&string_arg(args, &["command"]), 320),
+            "write" => format!(
+                "write {}",
+                string_arg(args, &["filePath", "file_path", "path"])
+            ),
+            "edit" => format!(
+                "edit {}",
+                string_arg(args, &["filePath", "file_path", "path"])
+            ),
+            "search" => format!(
+                "search {}",
+                string_arg(args, &["query", "pattern", "term", "text"])
+            ),
+            "command" => redact_text(&string_arg(args, &["command", "cmd", "script"]), 320),
             other => other.to_owned(),
         },
         Err(_) => name.clone(),
@@ -1729,16 +1965,131 @@ mod tests {
     }
     #[test]
     fn search_query_supports_constraints_globs_smart_case_and_locations() {
-        let parsed =
-            parse_search_query("src/ src/**/*.tsx !test/ !*.min.js Button service.ts:42:7");
+        let parsed = parse_search_query(
+            "src/ src/**/*.tsx !test/ !*.min.js \"Button label\" service.ts:42:7",
+        );
         assert_eq!(parsed.include_dirs, ["src/"]);
         assert_eq!(parsed.include_globs, ["src/**/*.tsx"]);
         assert_eq!(parsed.exclude_dirs, ["test/"]);
         assert_eq!(parsed.exclude_globs, ["*.min.js"]);
-        assert_eq!(parsed.terms, ["Button"]);
+        assert_eq!(parsed.terms, ["Button label"]);
         assert_eq!(parsed.location.as_deref(), Some("service.ts"));
         assert!(parsed.smart_case);
         assert!(term_score("src/components/Button.ts", "Button.ts", "Buton.ts", false) > 0.0);
+    }
+
+    #[test]
+    fn replace_text_accepts_read_output_line_endings_and_preserves_the_file_style() {
+        let current = "before\r\n  <span>Auto-run low risk</span>\r\nafter\r\n";
+        let old = "  <span>Auto-run low risk</span>\nafter";
+        let new = "  <span className=\"safe\">Auto-run low risk</span>\nafter";
+        let updated = replace_text_block(current, old, new).unwrap();
+        assert_eq!(
+            updated,
+            "before\r\n  <span className=\"safe\">Auto-run low risk</span>\r\nafter\r\n"
+        );
+    }
+
+    #[test]
+    fn common_model_tool_names_map_to_the_bounded_tools() {
+        assert_eq!(canonical_tool_name("search_files"), "search");
+        assert_eq!(canonical_tool_name("apply-patch"), "edit");
+        assert_eq!(canonical_tool_name("ls"), "read");
+        assert_eq!(canonical_tool_name("PowerShell"), "command");
+    }
+
+    #[tokio::test]
+    async fn tool_specs_offer_clear_replace_patch_and_scoped_search_shapes() {
+        let directory = tempfile::tempdir().unwrap();
+        let specs = enabled_tool_specs(&crate::session::test_session(directory.path()), true).await;
+        let named = |name: &str| {
+            specs
+                .iter()
+                .find(|spec| spec["function"]["name"] == name)
+                .unwrap()
+        };
+        assert_eq!(
+            named("edit")["function"]["parameters"]["required"],
+            json!(["filePath", "oldText", "newText"])
+        );
+        assert_eq!(
+            named("apply_patch")["function"]["parameters"]["required"],
+            json!(["patch"])
+        );
+        assert!(named("search")["function"]["parameters"]["properties"]["path"].is_object());
+    }
+
+    #[tokio::test]
+    async fn edit_aliases_replace_lf_text_in_a_crlf_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("main.tsx");
+        std::fs::write(
+            &target,
+            "before\r\n  <span>Auto-run low risk</span>\r\nafter\r\n",
+        )
+        .unwrap();
+        let result = execute_tool(
+            crate::session::test_session(directory.path()),
+            crate::session::test_sink(directory.path()),
+            Arc::new(crate::permission::PermissionBroker::default()),
+            ToolCall {
+                id: "edit-alias".into(),
+                name: "edit_file".into(),
+                arguments: json!({
+                    "path":"main.tsx",
+                    "find":"  <span>Auto-run low risk</span>\nafter",
+                    "replace":"  <span className=\"safe\">Auto-run low risk</span>\nafter"
+                }),
+                index: 0,
+            },
+        )
+        .await;
+        assert_eq!(result.status, "success", "{:?}", result.error_message);
+        assert_eq!(
+            std::fs::read_to_string(target).unwrap(),
+            "before\r\n  <span className=\"safe\">Auto-run low risk</span>\r\nafter\r\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn structured_search_aliases_scope_results_and_return_editable_snippets() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("src/renderer")).unwrap();
+        std::fs::create_dir_all(directory.path().join("other")).unwrap();
+        std::fs::write(
+            directory.path().join("src/renderer/main.tsx"),
+            "<span>Auto-run low risk</span>\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("other/main.tsx"),
+            "<span>Auto-run low risk</span>\n",
+        )
+        .unwrap();
+        let result = execute_tool(
+            crate::session::test_session(directory.path()),
+            crate::session::test_sink(directory.path()),
+            Arc::new(crate::permission::PermissionBroker::default()),
+            ToolCall {
+                id: "search-alias".into(),
+                name: "rg".into(),
+                arguments: json!({
+                    "pattern":"Auto-run low risk",
+                    "directory":"src/renderer",
+                    "filePattern":["*.tsx", "*.jsx"],
+                    "maxResults":10
+                }),
+                index: 0,
+            },
+        )
+        .await;
+        assert_eq!(result.status, "success", "{:?}", result.error_message);
+        assert!(
+            result
+                .output
+                .contains("src/renderer/main.tsx:1: <span>Auto-run low risk</span>")
+        );
+        assert!(!result.output.contains("other/main.tsx"));
     }
 
     #[tokio::test]

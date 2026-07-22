@@ -122,6 +122,59 @@ test("alignment avoids misleading intra-line fragments for asymmetric rewrites",
   assert.equal(rows[0].right.spans, undefined);
 });
 
+test("intra-line highlighting stays focused on a close word edit", () => {
+  const file = review.parseReviewPatch([
+    "diff --git a/settings.ts b/settings.ts",
+    "--- a/settings.ts",
+    "+++ b/settings.ts",
+    "@@ -1,1 +1,1 @@",
+    '-const field = "filePath";',
+    '+const field = "file_path";',
+  ].join("\n"));
+  const row = review.alignReviewFile(file)[0];
+
+  assert.equal(row.kind, "modification");
+  assert.deepEqual(plain(row.left.spans.map((span) => span.changed)), [false, true, false]);
+  assert.deepEqual(plain(row.right.spans.map((span) => span.changed)), [false, true, false]);
+});
+
+test("structural rewrites do not show unstable word fragments", () => {
+  const file = review.parseReviewPatch([
+    "diff --git a/tools.rs b/tools.rs",
+    "--- a/tools.rs",
+    "+++ b/tools.rs",
+    "@@ -1,2 +1,5 @@",
+    '-"read" => vec![string_arg(input, &["filePath", "path"])],',
+    '-"write" => vec![string_arg(input, &["filePath", "path"])],',
+    '+"read" => vec![string_arg(',
+    "+    input,",
+    '+    &["filePath", "file_path", "path", "directory"],',
+    "+)],",
+    '+"write" => vec![string_arg(input, &["filePath", "file_path", "path"])],',
+  ].join("\n"));
+  const rows = review.alignReviewFile(file);
+
+  assert.equal(rows.length, 5);
+  assert.equal(rows.some((row) => row.left.spans || row.right.spans), false);
+});
+
+test("large replacement blocks use the bounded alignment path", () => {
+  const deletions = Array.from({ length: 160 }, (_, index) => `-old call ${index}`);
+  const additions = Array.from({ length: 500 }, (_, index) => `+new call ${index}`);
+  const file = review.parseReviewPatch([
+    "diff --git a/large.ts b/large.ts",
+    "--- a/large.ts",
+    "+++ b/large.ts",
+    "@@ -1,160 +1,500 @@",
+    ...deletions,
+    ...additions,
+  ].join("\n"));
+  const rows = review.alignReviewFile(file);
+
+  assert.equal(rows.length, 500);
+  assert.equal(rows.some((row) => row.left.spans || row.right.spans), false);
+});
+
 test("added, renamed, and binary metadata normalize safely", () => {
   const renamed = review.parseReviewPatch([
     "diff --git a/old name.txt b/new name.txt",
