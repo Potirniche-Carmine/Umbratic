@@ -59,6 +59,7 @@ import {
   umbraticRunnerVersion,
   allowedLocalProviderIds,
   baseUrlHost,
+  canAutoResolvePermission,
   classifyCommandText,
   isBlockedPath,
   isGeneratedRuntimePath,
@@ -3724,6 +3725,12 @@ async function handleRunnerPermission(
     return "worktree_requested";
   }
 
+  if (canAutoResolvePermission(task.permissionMode, type, classification, typeof safety?.action === "string" ? safety.action : undefined)) {
+    emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
+    await replyRunnerPermission(run, id, true);
+    return "resolved";
+  }
+
   const request: PermissionRequest = {
     id,
     kind: type.includes("edit") ? "edit" : type === "read" || type === "search" ? "read" : "bash",
@@ -3742,16 +3749,6 @@ async function handleRunnerPermission(
   if (type === "webfetch" || type === "websearch") {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "deny" });
     await replyRunnerPermission(run, id, false);
-    return "resolved";
-  }
-
-  if (
-    task.permissionMode === "auto_safe" &&
-    (type === "read" || type === "search" || type === "edit" || (type === "bash" && safety?.action === "allow")) &&
-    !requiresElevatedPermissionsApproval(classification)
-  ) {
-    emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
-    await replyRunnerPermission(run, id, true);
     return "resolved";
   }
 

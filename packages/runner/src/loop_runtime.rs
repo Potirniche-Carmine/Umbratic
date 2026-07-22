@@ -17,8 +17,8 @@ use crate::{
 };
 
 const MAX_TOOL_TURNS: usize = 64;
-const MAX_FAILED_TURNS: usize = 3;
-const MAX_REPEATED_TURNS: usize = 3;
+const MAX_FAILED_TURNS: usize = 5;
+const MAX_REPEATED_TURNS: usize = 5;
 const MAX_RETAINED_TOOL_EXCHANGES: usize = 12;
 const MAX_PROVIDER_MESSAGES: usize = 60;
 const MAX_TOOL_HISTORY_SUMMARY_CHARS: usize = 8_000;

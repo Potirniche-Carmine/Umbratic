@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::policy::classify_command_text;
 
-pub const COMMAND_POLICY_VERSION: &str = "command-safety-v1";
+pub const COMMAND_POLICY_VERSION: &str = "command-safety-v2";
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_SEGMENTS: usize = 32;
 
@@ -106,6 +106,36 @@ fn split_segments(command: &str) -> Result<Vec<&str>, &'static str> {
         return Err("too_many_segments");
     }
     Ok(segments)
+}
+
+fn is_auto_safe_python_runtime(command: &str) -> bool {
+    let trimmed = command.trim();
+    let trimmed = trimmed
+        .strip_prefix("run ")
+        .or_else(|| trimmed.strip_prefix("RUN "))
+        .unwrap_or(trimmed)
+        .trim_start();
+    let program = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(['\'', '"'])
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let name = program.rsplit('/').next().unwrap_or(&program);
+    matches!(
+        name,
+        "python"
+            | "python.exe"
+            | "python3"
+            | "python3.exe"
+            | "py"
+            | "py.exe"
+            | "pytest"
+            | "pytest.exe"
+            | "uv"
+            | "uv.exe"
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -249,6 +279,14 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecisionV1 {
                     "The command can remove or discard workspace state.",
                     Some("Create a checkpoint or preview the affected paths first."),
                 ),
+                "python-runtime" if !dynamic && is_auto_safe_python_runtime(segment) => (
+                    SafetyAction::Allow,
+                    SafetySeverity::Info,
+                    SafetyCertainty::Heuristic,
+                    "workspace_python_runtime",
+                    "The command uses the approved local Python or uv runtime.",
+                    None,
+                ),
                 "package-manager" | "cmake-build" | "compiler" | "python-runtime" => (
                     SafetyAction::Confirm,
                     SafetySeverity::Medium,
@@ -350,6 +388,26 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("npm test", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("python bubble_sort.py", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("py bubble_sort.py", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("uv python install 3.12", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("uv run python bubble_sort.py", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("pip install example", cwd).action,
             SafetyAction::Confirm
         );
         assert_eq!(evaluate_command("rm -rf /", cwd).action, SafetyAction::Deny);

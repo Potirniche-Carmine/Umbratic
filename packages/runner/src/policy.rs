@@ -52,6 +52,7 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
         "dist-electron/",
         "target/",
         "coverage/",
+        "%systemdrive%/programdata/microsoft/windows/caches/",
     ];
     let names = [
         "__pycache__",
@@ -101,14 +102,20 @@ pub fn path_inside(root: &Path, candidate: &Path) -> bool {
     })
 }
 
-fn canonical_existing_ancestor(path: &Path) -> Option<PathBuf> {
+fn canonicalize_with_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut existing = path.to_path_buf();
+    let mut missing = Vec::new();
     while !existing.exists() {
+        missing.push(existing.file_name()?.to_owned());
         if !existing.pop() {
             return None;
         }
     }
-    existing.canonicalize().ok()
+    let mut canonical = existing.canonicalize().ok()?;
+    for component in missing.into_iter().rev() {
+        canonical.push(component);
+    }
+    Some(canonical)
 }
 
 pub fn resolve_workspace_path(cwd: &Path, file_path: &str) -> Result<(PathBuf, String), String> {
@@ -143,30 +150,22 @@ pub fn resolve_workspace_path(cwd: &Path, file_path: &str) -> Result<(PathBuf, S
             }
         }
     }
-    let normalized = if absolute.exists() {
-        absolute.canonicalize().map_err(|error| error.to_string())?
-    } else {
-        let parent = canonical_existing_ancestor(&absolute)
-            .ok_or_else(|| "Unable to resolve workspace path".to_owned())?;
-        if !path_inside(&root, &parent) {
-            return Err(format!(
-                "Refusing symlink or junction outside workspace: {file_path}"
-            ));
-        }
-        absolute.clone()
-    };
+    let normalized = canonicalize_with_existing_ancestor(&absolute)
+        .ok_or_else(|| "Unable to resolve workspace path".to_owned())?;
     if !path_inside(&root, &normalized) {
-        return Err(format!("Refusing path outside workspace: {file_path}"));
+        return Err(format!(
+            "Refusing symlink, junction, or path outside workspace: {file_path}"
+        ));
     }
-    let relative = absolute
+    let relative = normalized
         .strip_prefix(&root)
-        .unwrap_or(&absolute)
+        .unwrap_or(&normalized)
         .to_string_lossy()
         .replace('\\', "/");
     if is_blocked_path(&relative) {
         return Err(format!("Refusing blocked path: {relative}"));
     }
-    Ok((absolute, relative))
+    Ok((normalized, relative))
 }
 
 fn regex(pattern: &'static str, value: &str) -> bool {
@@ -360,6 +359,9 @@ mod tests {
     fn generated_and_blocked_paths_are_closed() {
         assert!(is_generated_runtime_path("node_modules/a.js"));
         assert!(is_generated_runtime_path("src/__pycache__/x.pyc"));
+        assert!(is_generated_runtime_path(
+            "%SystemDrive%/ProgramData/Microsoft/Windows/Caches/cversions.2.db"
+        ));
         assert!(is_blocked_path(".env.local"));
         assert!(is_blocked_path("certs/client.key"));
         assert!(!is_blocked_path("src/main.rs"));
@@ -421,5 +423,23 @@ mod tests {
         assert!(target.starts_with(directory.path().canonicalize().unwrap()));
         assert!(resolve_workspace_path(directory.path(), "../outside.txt").is_err());
         assert!(resolve_workspace_path(directory.path(), ".env").is_err());
+    }
+
+    #[test]
+    fn workspace_resolution_accepts_an_absolute_new_file_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let requested = directory.path().join("bubble_sort.py");
+        let (target, relative) =
+            resolve_workspace_path(directory.path(), requested.to_str().unwrap()).unwrap();
+
+        assert_eq!(relative, "bubble_sort.py");
+        assert_eq!(
+            target,
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("bubble_sort.py")
+        );
     }
 }

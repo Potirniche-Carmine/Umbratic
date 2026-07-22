@@ -12,6 +12,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 test("desktop policy identifies generated runtime artifacts without creating prompt profiles", () => {
   assert.equal(policy.isGeneratedRuntimePath(".DS_Store"), true);
   assert.equal(policy.isGeneratedRuntimePath("notes/Desktop.ini"), true);
+  assert.equal(policy.isGeneratedRuntimePath("%SystemDrive%/ProgramData/Microsoft/Windows/Caches/cversions.2.db"), true);
   assert.equal("runtimeProfileForPrompt" in policy, false);
 });
 
@@ -53,6 +54,10 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     assert.equal(got.risky, risky, command);
   }
   assert.equal(policy.runtimeDiagnostics().python.barePythonVerification, "allowed_uv_preferred");
+  assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("python script.py", cwd), "allow"), true);
+  assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("uv run python script.py", cwd), "allow"), true);
+  assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("python script.py", cwd), "confirm"), false);
+  assert.equal(policy.canAutoResolvePermission("normal", "bash", policy.classifyCommandText("python script.py", cwd), "allow"), false);
 });
 
 test("hardening config asserts provider, model, permission, and tool boundaries", () => {

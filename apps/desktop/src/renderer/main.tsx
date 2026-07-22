@@ -2575,6 +2575,7 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
+      if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
       run.endedAt = event.at ?? run.endedAt;
       run.durationMs = event.durationMs;
     }
@@ -2934,6 +2935,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
+      if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
       run.endedAt = event.at ?? run.endedAt;
       run.durationMs = event.durationMs;
       if (ensureCommandSegment(run)) {

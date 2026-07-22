@@ -70,6 +70,17 @@ async function startProvider() {
         id: `attachment-${offset}`,
         function: { name: "read_attachment", arguments: JSON.stringify({ attachmentId: "complete-plan.md", offset, limit: 1024 }) },
       }] } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("RECOVER_AFTER_FAILURES") && Array.isArray(body.tools)) {
+      const failedAttempts = new Set(
+        Array.from(encoded.matchAll(/missing-(\d+)\.txt/g), (match) => match[1]),
+      ).size;
+      if (failedAttempts < 4) {
+        response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: `recover-${failedAttempts}`, function: { name: "read", arguments: JSON.stringify({ filePath: `missing-${failedAttempts}.txt` }) } }] } }] }) + "data: [DONE]\n\n");
+      } else if (!encoded.includes("read: README.md (ok)")) {
+        response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "recover-success", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
+      } else {
+        response.end(sse({ choices: [{ delta: { content: "Recovered after distinct failures." } }] }) + "data: [DONE]\n\n");
+      }
     } else if (encoded.includes("REPEAT_TOOL") && Array.isArray(body.tools)) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "repeat", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("MISSING_DONE")) {
@@ -577,12 +588,28 @@ test("native runner accepts an unterminated final SSE line, stops repeated tools
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === repeatedSession.id);
     assert.equal(
       events.events.filter((event) => event.type === "tool.finished" && event.toolCallId === "repeat").length,
-      3,
+      5,
     );
     assert.equal(
       provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL")).length,
+      6,
+      "five repeated tool turns must be followed by exactly one tool-free final request",
+    );
+
+    const recoveringSession = await createSession(run);
+    assert.equal((await prompt(run, recoveringSession.id, "RECOVER_AFTER_FAILURES")).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === recoveringSession.id);
+    assert.equal(
+      events.events.filter((event) => event.type === "tool.finished" && /^recover-\d+$/.test(String(event.toolCallId)) && event.status !== "success").length,
       4,
-      "three repeated tool turns must be followed by exactly one tool-free final request",
+    );
+    assert.equal(
+      events.events.some((event) => event.type === "tool.finished" && event.toolCallId === "recover-success" && event.status === "success"),
+      true,
+    );
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "Recovered after distinct failures."),
+      true,
     );
 
     const incompleteSession = await createSession(run);

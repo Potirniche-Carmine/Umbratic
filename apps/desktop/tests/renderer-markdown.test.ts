@@ -187,6 +187,12 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   const [run] = commandRunsFromEvents(events);
   assert.equal(run.status, "passed");
   assert.equal(commandSummary(run), "ok");
+  const [failedWrite] = commandRunsFromEvents([
+    { type: "command.started", taskId: "task-1", id: "write-1", command: "write bubble_sort.py", cwd: "C:/repo", kind: "edit", commandClass: "edit" },
+    { type: "command.finished", taskId: "task-1", id: "write-1", exitCode: 1, status: "policy_blocked", errorCode: "policy_blocked", errorMessage: "Refusing path outside workspace: bubble_sort.py" },
+  ]);
+  assert.equal(commandSummary(failedWrite), "exit 1: Refusing path outside workspace: bubble_sort.py");
+  assert.equal(commandShellText(failedWrite), "Refusing path outside workspace: bubble_sort.py");
   assert.equal(pendingPermissionFromEvents(events).id, "perm-1");
   const timeline = JSON.parse(JSON.stringify(composerTimelineFromEvents(events)));
   assert.deepEqual(timeline.map((item) => item.type), [

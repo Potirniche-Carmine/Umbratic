@@ -1471,6 +1471,7 @@ fn allowed_command_environment_name(name: &str) -> bool {
             | "TERM"
             | "NO_PROXY"
             | "SYSTEMROOT"
+            | "SYSTEMDRIVE"
             | "WINDIR"
             | "COMSPEC"
             | "PATHEXT"
@@ -1937,6 +1938,7 @@ mod tests {
             ("PATH".into(), "/bin".into()),
             ("HOME".into(), "/home/test".into()),
             ("LC_ALL".into(), "C.UTF-8".into()),
+            ("SystemDrive".into(), "C:".into()),
             ("provider_api_key".into(), "secret".into()),
             ("Authorization".into(), "Bearer secret".into()),
             ("SSH_AUTH_SOCK".into(), "/tmp/agent".into()),
@@ -1946,7 +1948,8 @@ mod tests {
         assert_eq!(filtered.get("PATH").map(String::as_str), Some("/bin"));
         assert_eq!(filtered.get("HOME").map(String::as_str), Some("/home/test"));
         assert_eq!(filtered.get("LC_ALL").map(String::as_str), Some("C.UTF-8"));
-        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered.get("SystemDrive").map(String::as_str), Some("C:"));
+        assert_eq!(filtered.len(), 4);
     }
     #[test]
     fn markdown_fenced_arguments_parse() {

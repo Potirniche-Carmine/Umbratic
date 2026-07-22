@@ -7,6 +7,7 @@ import type {
   LocalModelInfo,
   LocalProviderId,
   ModelEndpointMode,
+  PermissionMode,
   RuntimeDiagnostics,
   TelemetryPolicyInfo,
 } from "./types";
@@ -58,6 +59,7 @@ const generatedRuntimePrefixes = [
   "dist-electron/",
   "target/",
   "coverage/",
+  "%systemdrive%/programdata/microsoft/windows/caches/",
 ];
 
 const generatedRuntimeNames = new Set(["__pycache__", "cmakefiles", ".ds_store", "thumbs.db", "desktop.ini"]);
@@ -236,6 +238,19 @@ export type CommandClassification = {
   risky: boolean;
   reason?: string;
 };
+
+export function canAutoResolvePermission(
+  mode: PermissionMode,
+  permissionKind: string,
+  classification: CommandClassification,
+  safetyAction?: string,
+): boolean {
+  if (mode !== "auto_safe" || classification.risky) return false;
+  return permissionKind === "read"
+    || permissionKind === "search"
+    || permissionKind === "edit"
+    || (permissionKind === "bash" && safetyAction === "allow");
+}
 
 export function classifyCommandText(command: string, cwd?: string): CommandClassification {
   const trimmed = command.trim();

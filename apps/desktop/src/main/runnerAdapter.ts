@@ -98,7 +98,7 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   };
   const allowedExact = new Set([
     "HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_PROXY",
-    "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "NODE_ENV",
+    "SystemRoot", "SystemDrive", "WINDIR", "COMSPEC", "PATHEXT", "NODE_ENV",
   ].map((name) => name.toLowerCase()));
   for (const [name, value] of Object.entries(process.env)) {
     if (!value || name.toLowerCase() === pathKey.toLowerCase()) continue;
