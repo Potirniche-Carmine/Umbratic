@@ -81,12 +81,21 @@ async function startProvider() {
       } else {
         response.end(sse({ choices: [{ delta: { content: "Recovered after distinct failures." } }] }) + "data: [DONE]\n\n");
       }
+    } else if (encoded.includes("RECOVER_AFTER_FAILURES")) {
+      response.end(sse({ choices: [{ delta: { content: "Recovered after distinct failures." } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("REPEAT_TOOL") && Array.isArray(body.tools)) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "repeat", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("MISSING_DONE")) {
       response.end(sse({ choices: [{ delta: { content: "incomplete" } }] }));
     } else if (encoded.includes("DONE_WITHOUT_NEWLINE")) {
       response.end(sse({ choices: [{ delta: { content: "complete without newline" } }] }) + "data:[DONE]");
+    } else if (encoded.includes("STREAM_RESPONSE") && Array.isArray(body.tools)) {
+      response.end(sse({ choices: [{ delta: { content: "Buffered planning answer." } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("STREAM_RESPONSE")) {
+      response.write(sse({ choices: [{ delta: { content: "First streamed " } }] }));
+      setTimeout(() => {
+        response.end(sse({ choices: [{ delta: { content: "second streamed." } }] }) + "data: [DONE]\n\n");
+      }, 40);
     } else if (encoded.includes("SPLIT_UTF8")) {
       const payload = Buffer.from(sse({ choices: [{ delta: { content: "café" } }] }) + "data: [DONE]\n\n", "utf8");
       const marker = Buffer.from("é", "utf8");
@@ -381,6 +390,27 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(utf8.text, "café");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === utf8Session.id);
 
+    const streamingSession = await createSession(run);
+    assert.equal((await prompt(run, streamingSession.id, "STREAM_RESPONSE")).status, 204);
+    const firstStreamed = await events.waitFor(
+      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "First streamed ",
+    );
+    assert.equal(firstStreamed.text, "First streamed ");
+    assert.equal(
+      events.events.some((event) => event.type === "session.idle" && event.sessionId === streamingSession.id),
+      false,
+      "the first final-answer delta must arrive before the session becomes idle",
+    );
+    await events.waitFor(
+      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "second streamed.",
+    );
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === streamingSession.id);
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "Buffered planning answer."),
+      false,
+      "the private tool-aware pass must not escape as assistant output",
+    );
+
     const system = await run.request(`/session/${blockedSession.id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: "x", system: "override" }) });
     assert.equal(system.status, 400);
     assert.deepEqual(await system.json(), { error: "System prompts are managed by Veil.", code: "protected_system_prompt" });
@@ -472,8 +502,10 @@ test("native runner sends the adaptive response allowance selected during prefli
 
     assert.ok([1_000, 2_000, 3_000].includes(Number(preflight.reserveTokens)));
     assert.equal(preflight.protectedTokens, 2_048);
-    assert.equal(provider.requests.length, 1);
+    assert.equal(provider.requests.length, 2);
     assert.equal(provider.requests[0].body.max_output_tokens, preflight.reserveTokens);
+    assert.equal(provider.requests[1].body.max_output_tokens, preflight.reserveTokens);
+    assert.equal("tools" in provider.requests[1].body, false);
   } finally {
     await events.close();
     await run.close();

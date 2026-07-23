@@ -345,12 +345,6 @@ fn context_event(session: &Session, usage: ContextUsageEstimate) -> Value {
     json!({ "type": "context.usage", "taskId": session.task_id, "contextLength": usage["contextLength"], "contentTokens": usage["contentTokens"], "promptTokens": usage["promptTokens"], "completionTokens": usage["completionTokens"], "reserveTokens": usage["reserveTokens"], "protectedTokens": usage["protectedTokens"], "estimatedTokens": usage["estimatedTokens"], "phase": usage["phase"], "source": usage["source"], "confidence": usage["confidence"], "at": now_iso() })
 }
 
-async fn current_context_event(session: &Session, messages: &[Value], tools: &[Value]) -> Value {
-    let calibration = session.context_calibration.lock().await.clone();
-    let (usage, _) = request_estimate(session, messages, tools, calibration.as_ref());
-    context_event(session, usage)
-}
-
 fn observed_context_usage(
     context_length: u64,
     reserve_tokens: u64,
@@ -838,16 +832,21 @@ pub async fn run_turn(
     let mut changed = false;
     let mut executed = false;
     let mut inspected = false;
-    let mut final_prompted = false;
     for _ in 0..MAX_TOOL_TURNS {
         if session.is_aborted() {
             return Err("Runner turn aborted".into());
         }
         let ready_for_answer = !action_requirement.is_empty()
             && evidence_satisfied(&action_requirement, changed, executed, inspected);
-        if ready_for_answer && !final_prompted {
-            final_prompted = true;
-            session.messages.lock().await.push(json!({"role":"user","content":"The required workspace evidence is now available. Provide the complete final answer to the original request. Do not announce additional work unless you make the structured tool call in this turn."}));
+        if ready_for_answer {
+            final_without_tools(
+                &session,
+                &sink,
+                &mut summary,
+                "The requested workspace action completed, but the model did not provide a final answer.",
+            )
+            .await;
+            return Ok(summary);
         }
         let tools = enabled_tool_specs(&session, true).await;
         let mut prepared = prepared_messages(&session, &tools).await?;
@@ -863,9 +862,8 @@ pub async fn run_turn(
                 require_tool_call: !action_requirement.is_empty()
                     && action_retries > 0
                     && !ready_for_answer,
-                // A provider can send prose before it sends tool-call deltas. Keep
-                // that provisional prose private until this tool-aware response is
-                // complete and the loop knows that it is the final answer.
+                // Tool-aware passes are private planning passes. The separate
+                // tool-free pass below owns the public streamed answer.
                 suppress_output: true,
             },
         )
@@ -937,17 +935,15 @@ pub async fn run_turn(
                     .push(json!({"role":"assistant","content":fallback}));
                 return Ok(summary);
             }
-            if !result.content.trim().is_empty() {
-                sink.emit(json!({"type":"assistant.answer.started","taskId":session.task_id,"at":now_iso()}));
-                sink.emit(json!({"type":"assistant.delta","taskId":session.task_id,"text":result.content.clone(),"at":now_iso()}));
-            }
-            session
-                .messages
-                .lock()
-                .await
-                .push(json!({"role":"assistant","content":result.content}));
-            let replayed = session.messages.lock().await.clone();
-            sink.emit(current_context_event(&session, &replayed, &tools).await);
+            // A tool-aware response cannot be public while it is streaming:
+            // providers can emit prose before a later tool call. Generate the
+            // public answer in a tool-free pass so every emitted delta is final.
+            let fallback = if result.content.trim().is_empty() {
+                "The model did not provide a final answer."
+            } else {
+                result.content.as_str()
+            };
+            final_without_tools(&session, &sink, &mut summary, fallback).await;
             return Ok(summary);
         }
         let signature = calls
