@@ -1,0 +1,21 @@
+{{define "setup.html"}}<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}}</title><link rel="icon" href="/favicon.ico?v=6"><link rel="stylesheet" href="/assets/style.css?v=6"></head>
+<body>
+<main class="auth-page">
+  <section class="card auth-card">
+    <div class="auth-brand">{{template "brand-mark"}}<span>Veil Console</span></div>
+    <header><h1>Create owner</h1></header>
+    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/setup">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label>Setup code<input name="setup_code" autocomplete="one-time-code" required autofocus></label>
+      <label>Username<input name="username" autocomplete="username" maxlength="64" required></label>
+      <label>Password<input type="password" name="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
+      <p class="field-help">Password must have at least 15 characters.</p>
+      <button class="button primary full-button" type="submit">Create owner</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>{{end}}

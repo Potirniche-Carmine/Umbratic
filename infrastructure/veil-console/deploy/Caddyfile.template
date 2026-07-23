@@ -1,0 +1,9 @@
+@@ORIGIN@@ {
+	reverse_proxy 127.0.0.1:@@CONSOLE_PORT@@ {
+		header_up Host 127.0.0.1:@@CONSOLE_PORT@@
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

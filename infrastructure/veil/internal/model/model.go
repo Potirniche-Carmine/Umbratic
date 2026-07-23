@@ -52,7 +52,6 @@ type ClientConfig struct {
 	BaseURL            string
 	ChatEndpointPath   string
 	ModelsEndpointPath string
-	APIKey             string
 	ContextLength      int
 	Timeout            time.Duration
 }
@@ -63,7 +62,6 @@ type Client struct {
 	modelsEndpoint   string
 	generateEndpoint string
 	showEndpoint     string
-	apiKey           string
 	contextLength    int
 	client           *http.Client
 }
@@ -147,7 +145,6 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		modelsEndpoint:   modelsEndpoint,
 		generateEndpoint: generateEndpoint,
 		showEndpoint:     showEndpoint,
-		apiKey:           cfg.APIKey,
 		contextLength:    cfg.ContextLength,
 		client: &http.Client{
 			Timeout: timeout,
@@ -357,9 +354,6 @@ func (c *Client) postJSON(ctx context.Context, endpoint string, body any) (*http
 
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(c.apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
 }
 
 func decodeVLLMChat(r io.Reader) (ChatResponse, error) {

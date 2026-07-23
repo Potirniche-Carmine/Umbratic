@@ -45,10 +45,16 @@ run("npm registry signature and provenance audit", npmSignatureCommand, npmSigna
 
 run("RustSec audit", "cargo", ["audit", "--deny", "warnings"]);
 run(
-  "Go vulnerability audit",
+  "Veil Go vulnerability audit",
   "govulncheck",
   ["./..."],
   path.join(root, "infrastructure/veil"),
+);
+run(
+  "Veil Console Go vulnerability audit",
+  "govulncheck",
+  ["./..."],
+  path.join(root, "infrastructure/veil-console"),
 );
 
 console.log("\nAll supply-chain vulnerability and provenance audits passed.");

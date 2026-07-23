@@ -97,9 +97,11 @@ const rustToolchain = fs.readFileSync(path.join(root, "rust-toolchain.toml"), "u
 if (!new RegExp(`^channel\\s*=\\s*"${supplyChainPolicy.rustVersion.replaceAll(".", "\\.")}"\\s*$`, "m").test(rustToolchain)) {
   fail(`rust-toolchain.toml must pin Rust ${supplyChainPolicy.rustVersion}.`);
 }
-const goMod = fs.readFileSync(path.join(root, "infrastructure/veil/go.mod"), "utf8");
-if (!new RegExp(`^go\\s+${supplyChainPolicy.minimumGoVersion.replaceAll(".", "\\.")}\\s*$`, "m").test(goMod)) {
-  fail(`infrastructure/veil/go.mod must require Go ${supplyChainPolicy.minimumGoVersion}.`);
+for (const goModPath of ["infrastructure/veil/go.mod", "infrastructure/veil-console/go.mod"]) {
+  const goMod = fs.readFileSync(path.join(root, goModPath), "utf8");
+  if (!new RegExp(`^go\\s+${supplyChainPolicy.minimumGoVersion.replaceAll(".", "\\.")}\\s*$`, "m").test(goMod)) {
+    fail(`${goModPath} must require Go ${supplyChainPolicy.minimumGoVersion}.`);
+  }
 }
 
 if (Object.hasOwn(rootManifest, "allowScripts")) {

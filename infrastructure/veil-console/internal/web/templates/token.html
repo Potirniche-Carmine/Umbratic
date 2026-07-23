@@ -1,0 +1,14 @@
+{{define "token.html"}}<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}}</title><link rel="icon" href="/favicon.ico?v=6"><link rel="stylesheet" href="/assets/style.css?v=6"><script defer src="/assets/console.js?v=6"></script></head>
+<body>
+<main class="auth-page">
+  <section class="card auth-card token-card">
+    <div class="auth-brand">{{template "brand-mark"}}<span>Veil Console</span></div>
+    <header><h1>Client token</h1><p>Copy this token now. It is shown once.</p></header>
+    <pre data-token>{{.Token}}</pre>
+    <div class="actions"><button class="button secondary" type="button" data-copy-token>Copy token</button><a class="button primary" href="/">Done</a></div>
+  </section>
+</main>
+</body>
+</html>{{end}}

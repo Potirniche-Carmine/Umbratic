@@ -19,7 +19,6 @@ type Config struct {
 	ProviderBaseURL            string
 	ProviderChatEndpointPath   string
 	ProviderModelsEndpointPath string
-	ProviderAPIKey             string
 	DefaultModel               string
 	ContextLength              int
 	MaxOutputTokens            int
@@ -34,8 +33,11 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	if err := loadDotEnv(envString("VEIL_ENV_FILE", ".env")); err != nil {
-		return Config{}, err
+	envFile := envString("VEIL_ENV_FILE", ".env")
+	if envFile != "-" {
+		if err := loadDotEnv(envFile); err != nil {
+			return Config{}, err
+		}
 	}
 
 	modelTimeout, err := envDuration("VEIL_MODEL_TIMEOUT", 60*time.Second)
@@ -82,7 +84,6 @@ func Load() (Config, error) {
 		ProviderBaseURL:            strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
 		ProviderChatEndpointPath:   envFirst("VEIL_PROVIDER_CHAT_PATH", "VEIL_PROVIDER_ENDPOINT_PATH"),
 		ProviderModelsEndpointPath: envFirst("VEIL_PROVIDER_MODELS_PATH", "VEIL_PROVIDER_MODELS_ENDPOINT_PATH"),
-		ProviderAPIKey:             os.Getenv("VEIL_PROVIDER_API_KEY"),
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:              contextLength,
 		MaxOutputTokens:            maxOutputTokens,

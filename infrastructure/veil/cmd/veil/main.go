@@ -21,7 +21,6 @@ func main() {
 		BaseURL:            cfg.ProviderBaseURL,
 		ChatEndpointPath:   cfg.ProviderChatEndpointPath,
 		ModelsEndpointPath: cfg.ProviderModelsEndpointPath,
-		APIKey:             cfg.ProviderAPIKey,
 		ContextLength:      cfg.ContextLength,
 		Timeout:            cfg.ModelTimeout,
 	})

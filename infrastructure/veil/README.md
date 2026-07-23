@@ -40,6 +40,8 @@ The health route checks that the model configured inside Veil is available from 
 Veil reads configuration from the process environment and then from an env file.
 The env file defaults to `.env` in Veil's working directory; set
 `VEIL_ENV_FILE=/path/to/file.env` before starting Veil to use a different file.
+Set `VEIL_ENV_FILE=-` to disable env-file loading. Veil Console always uses this
+managed mode and supplies a complete allowlisted process environment.
 Values already present in the process environment take precedence over values in
 the env file. Restart Veil after changing its configuration.
 
@@ -64,12 +66,11 @@ a model returned by the provider's models endpoint.
 | `VEIL_AUTH_TOKEN` | Yes | None | Bearer token required by every Veil API route. Use a long, random secret. |
 | `VEIL_PROVIDER_BASE_URL` | Yes | None | Base URL of the private model runtime. Keep this runtime inaccessible to public clients. |
 | `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. |
-| `VEIL_ENV_FILE` | No | `.env` | Env file to load. This variable must be set in the process environment because it selects the file to read. |
+| `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
 | `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
 | `VEIL_PROVIDER_PROTOCOL` | No | `vllm` | Provider wire protocol. Supported values are `vllm` and `ollama`. Setting it explicitly is recommended. |
 | `VEIL_PROVIDER_CHAT_PATH` | No | Protocol default | Chat endpoint path or full URL. Defaults to `/v1/chat/completions` for vLLM and `/api/chat` for Ollama. |
 | `VEIL_PROVIDER_MODELS_PATH` | No | Protocol default | Models endpoint path or full URL. Defaults to `/v1/models` for vLLM and `/api/tags` for Ollama. |
-| `VEIL_PROVIDER_API_KEY` | No | Empty | Bearer token sent from Veil to the model runtime. This is separate from `VEIL_AUTH_TOKEN`. |
 | `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for Ollama. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. This setting has no effect for vLLM. |
 | `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Veil enforces the smaller of this value and a bounded client request through vLLM `max_tokens` or Ollama `num_predict`. |
 | `VEIL_TEMPLATE_REGISTRY_PATH` | No | Empty | Path to the server-owned template registry JSON file. No template metadata is injected when unset. |
@@ -147,9 +148,9 @@ installed on the server. Restart vLLM after changing this option.
 
 `VEIL_CONTEXT_LENGTH` is intentionally not forwarded to vLLM, because vLLM sizes
 and enforces the context window when the runtime starts. The model must support the
-requested length, and the server must have enough KV-cache memory. If vLLM is
-started with `--api-key`, set the same value in `VEIL_PROVIDER_API_KEY` so Veil can
-authenticate to it.
+requested length, and the server must have enough KV-cache memory. Do not start
+vLLM with `--api-key`. Veil supports only a local model runtime without provider
+authentication.
 
 Veil sends the effective output allowance as `max_tokens` on every vLLM chat request.
 

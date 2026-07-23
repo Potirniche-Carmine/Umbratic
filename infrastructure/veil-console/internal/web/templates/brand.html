@@ -1,0 +1,15 @@
+{{define "brand-mark"}}<span class="brand-mark" aria-hidden="true"></span>{{end}}
+
+{{define "topbar"}}
+<nav class="topbar" aria-label="Main navigation">
+  <a class="brand" href="/">{{template "brand-mark"}}<span>Veil Console</span></a>
+  <div class="nav-links">
+    <a href="/" {{if eq .Title "Veil Console"}}aria-current="page"{{end}}>Overview</a>
+    <a href="/settings" {{if eq .Title "Settings"}}aria-current="page"{{end}}>Settings</a>
+  </div>
+  <form class="signout" method="post" action="/logout" data-session-logout>
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="nav-action" type="submit">Sign out</button>
+  </form>
+</nav>
+{{end}}

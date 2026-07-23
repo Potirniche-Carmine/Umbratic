@@ -1,0 +1,135 @@
+{{define "settings.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/favicon.ico?v=6">
+  <link rel="stylesheet" href="/assets/style.css?v=6">
+  <script defer src="/assets/console.js?v=6"></script>
+</head>
+<body>
+<main class="app-shell">
+  {{template "topbar" .}}
+
+  <div class="page">
+    <header class="page-header">
+      <h1>Settings</h1>
+    </header>
+
+    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+
+    <form class="settings-form" method="post" data-settings-form>
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Model</h2>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Runtime</span>
+            <select name="protocol" data-provider>
+              <option value="ollama" {{if eq .Config.Protocol "ollama"}}selected{{end}}>Ollama</option>
+              <option value="vllm" {{if eq .Config.Protocol "vllm"}}selected{{end}}>vLLM</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Runtime URL</span>
+            <input type="url" name="provider_base_url" value="{{.Config.ProviderBaseURL}}" data-provider-url required>
+          </label>
+
+          <label class="field field-full">
+            <span>Model ID</span>
+            <input name="model" value="{{.Config.Model}}" maxlength="256" placeholder="llama3.2" required>
+          </label>
+        </div>
+
+        <div class="slider-field">
+          <div class="slider-heading">
+            <label for="context-slider">Context window</label>
+          </div>
+          <input type="hidden" name="context_length" value="{{.Config.ContextLength}}" data-context-value>
+          <div class="range-control">
+            <input
+              class="range"
+              id="context-slider"
+              type="range"
+              min="0"
+              max="7"
+              step="1"
+              value="{{.ContextIndex}}"
+              data-context-slider
+            >
+            <output class="range-value" for="context-slider" data-context-label>{{.ContextLabel}}</output>
+          </div>
+          <div class="range-ends" aria-hidden="true"><span>8K</span><span>1M</span></div>
+        </div>
+      </section>
+
+      <details class="panel disclosure">
+        <summary>
+          <strong>Advanced</strong>
+          <span class="disclosure-mark" aria-hidden="true"></span>
+        </summary>
+        <div class="advanced-content">
+          <div class="field-grid advanced-grid">
+            <label class="field">
+              <span>Maximum output</span>
+              <div class="input-suffix">
+                <input type="number" name="max_output_tokens" value="{{.Config.MaxOutputTokens}}" min="1" max="32768" required>
+                <span>tokens</span>
+              </div>
+            </label>
+            <label class="field">
+              <span>Model timeout</span>
+              <input name="model_timeout" value="{{.Config.ModelTimeout}}" required>
+            </label>
+            <label class="field">
+              <span>Request timeout</span>
+              <input name="request_timeout" value="{{.Config.RequestTimeout}}" required>
+            </label>
+          </div>
+
+          <div class="slider-field">
+            <div class="slider-heading">
+              <label for="body-size-slider">Request size</label>
+            </div>
+            <input type="hidden" name="max_body_bytes" value="{{.Config.MaxBodyBytes}}" data-body-bytes>
+            <div class="range-control">
+              <input
+                class="range"
+                id="body-size-slider"
+                type="range"
+                min="0"
+                max="4"
+                step="1"
+                value="{{.BodySizeIndex}}"
+                data-body-slider
+              >
+              <output class="range-value" for="body-size-slider" data-body-label>{{.BodySizeLabel}}</output>
+            </div>
+            <div class="range-ends" aria-hidden="true"><span>16 MiB</span><span>256 MiB</span></div>
+          </div>
+        </div>
+      </details>
+
+      <section class="panel apply-panel">
+        <label class="field password-field">
+          <span>Owner password</span>
+          <input type="password" name="password" autocomplete="current-password" {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}} required>
+          {{if .PasswordError}}<small class="field-error" id="password-error" role="alert">Owner password is incorrect.</small>{{end}}
+        </label>
+        <div class="apply-actions">
+          <button class="button secondary" formaction="/settings/test" type="submit">Test connection</button>
+          <button class="button primary" formaction="/settings/apply" type="submit">Apply and restart</button>
+        </div>
+      </section>
+    </form>
+  </div>
+</main>
+</body>
+</html>{{end}}

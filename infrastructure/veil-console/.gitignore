@@ -1,0 +1,7 @@
+/veil-console
+/veil-console.exe
+*.db
+*.db-shm
+*.db-wal
+secrets.json
+console.lock

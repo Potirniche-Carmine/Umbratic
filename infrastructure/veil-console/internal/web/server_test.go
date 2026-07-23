@@ -1,0 +1,341 @@
+package web
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"umbratic-veil-console/internal/config"
+	"umbratic-veil-console/internal/state"
+	"umbratic-veil-console/internal/supervisor"
+)
+
+func testServer(t *testing.T) (*Server, func()) {
+	return testServerWithTrustedOrigin(t, "")
+}
+
+func testServerWithTrustedOrigin(t *testing.T, trustedOrigin string) (*Server, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "veil")
+	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	startup := config.Startup{
+		Listen: "127.0.0.1", Port: 8177, StateDir: filepath.Join(dir, "state"),
+		VeilBinary: binary, VeilAddress: "127.0.0.1:8080", TrustedOrigin: trustedOrigin,
+	}
+	if err := config.ValidateStartup(&startup); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.Open(startup.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := store.LoadOrCreateSecrets()
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	server, err := New(startup, store, secrets, supervisor.New(binary, startup.VeilAddress))
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	return server, func() { _ = store.Close() }
+}
+
+func TestHTTPSOriginUsesStandardProtectionAndSecureCookies(t *testing.T) {
+	server, closeServer := testServerWithTrustedOrigin(t, "https://console.example.com")
+	defer closeServer()
+
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8177/setup", nil)
+	request.Header.Set("Origin", "https://console.example.com")
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	if err := server.crossOrigin.Check(request); err != nil {
+		t.Fatalf("trusted HTTPS origin was rejected: %v", err)
+	}
+
+	response := httptest.NewRecorder()
+	server.setSessionCookies(response, "session", "csrf")
+	for _, cookie := range response.Result().Cookies() {
+		if !cookie.Secure {
+			t.Errorf("HTTPS cookie is not Secure: %s", cookie.Name)
+		}
+		if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
+			t.Errorf("session cookie attributes are unsafe: %s", cookie.Name)
+		}
+		if cookie.MaxAge != 0 || !cookie.Expires.IsZero() {
+			t.Errorf("session cookie is persistent: %s", cookie.Name)
+		}
+	}
+}
+
+func TestSecurityHeadersAndHostValidation(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/healthz", nil)
+	req.Host = "127.0.0.1:8177"
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Security-Policy") == "" || recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("missing security response: %d %#v", recorder.Code, recorder.Header())
+	}
+	req = httptest.NewRequest(http.MethodGet, "http://attacker.test/healthz", nil)
+	req.Host = "attacker.test"
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unsafe Host was accepted: %d", recorder.Code)
+	}
+
+	logoRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/assets/umbratic-icon.png", nil)
+	logoRequest.Host = "127.0.0.1:8177"
+	logoResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(logoResponse, logoRequest)
+	if logoResponse.Code != http.StatusOK || logoResponse.Header().Get("Content-Type") != "image/png" || logoResponse.Body.Len() == 0 {
+		t.Fatalf("brand asset was not served: %d %#v", logoResponse.Code, logoResponse.Header())
+	}
+
+	faviconRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/favicon.ico", nil)
+	faviconRequest.Host = "127.0.0.1:8177"
+	faviconResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(faviconResponse, faviconRequest)
+	if faviconResponse.Code != http.StatusOK || faviconResponse.Header().Get("Content-Type") != "image/x-icon" || faviconResponse.Body.Len() == 0 {
+		t.Fatalf("favicon was not served: %d %#v", faviconResponse.Code, faviconResponse.Header())
+	}
+}
+
+func TestSetupRejectsMissingCSRF(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8177/setup", strings.NewReader("username=owner"))
+	req.Host = "127.0.0.1:8177"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://127.0.0.1:8177")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF was accepted: %d", recorder.Code)
+	}
+}
+
+func TestFormOriginAcceptsOnlyConsoleLoopbackOrigins(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	for _, origin := range []string{
+		"http://127.0.0.1:8177",
+		"http://localhost:8177",
+		"http://[::1]:8177",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8177/setup", nil)
+		request.Header.Set("Origin", origin)
+		request.Header.Set("Sec-Fetch-Site", "cross-site")
+		if err := server.crossOrigin.Check(request); err != nil {
+			t.Errorf("valid loopback origin was rejected: %s: %v", origin, err)
+		}
+	}
+	for _, origin := range []string{
+		"https://127.0.0.1:8177",
+		"http://127.0.0.1:8080",
+		"http://attacker.test:8177",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8177/setup", nil)
+		request.Header.Set("Origin", origin)
+		request.Header.Set("Sec-Fetch-Site", "cross-site")
+		if err := server.crossOrigin.Check(request); err == nil {
+			t.Errorf("untrusted origin was accepted: %s", origin)
+		}
+	}
+}
+
+func TestSetupLoginAndAuthenticatedPage(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	setupCode, err := server.store.NewSetup(t.Context(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Handler()
+	getSetup := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/setup", nil)
+	getSetup.Host = "127.0.0.1:8177"
+	setupResponse := httptest.NewRecorder()
+	handler.ServeHTTP(setupResponse, getSetup)
+	publicCookie := setupResponse.Result().Cookies()[0]
+	csrf := publicCookie.Value
+
+	setupForm := url.Values{"csrf": {csrf}, "setup_code": {setupCode}, "username": {"owner"}, "password": {"a long owner password"}}
+	postSetup := formRequest(http.MethodPost, "/setup", setupForm, publicCookie)
+	setupSubmitResponse := httptest.NewRecorder()
+	handler.ServeHTTP(setupSubmitResponse, postSetup)
+	if setupSubmitResponse.Code != http.StatusSeeOther {
+		t.Fatalf("setup failed: %d %s", setupSubmitResponse.Code, setupSubmitResponse.Body.String())
+	}
+
+	loginForm := url.Values{"csrf": {csrf}, "username": {"owner"}, "password": {"a long owner password"}}
+	postLogin := formRequest(http.MethodPost, "/login", loginForm, publicCookie)
+	loginResponse := httptest.NewRecorder()
+	handler.ServeHTTP(loginResponse, postLogin)
+	if loginResponse.Code != http.StatusSeeOther {
+		t.Fatalf("login failed: %d %s", loginResponse.Code, loginResponse.Body.String())
+	}
+	cookies := loginResponse.Result().Cookies()
+	getDashboard := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/", nil)
+	getDashboard.Host = "127.0.0.1:8177"
+	for _, cookie := range cookies {
+		getDashboard.AddCookie(cookie)
+	}
+	dashboardResponse := httptest.NewRecorder()
+	handler.ServeHTTP(dashboardResponse, getDashboard)
+	if dashboardResponse.Code != http.StatusOK {
+		body, _ := io.ReadAll(dashboardResponse.Result().Body)
+		t.Fatalf("authenticated page failed: %d %s", dashboardResponse.Code, body)
+	}
+	secrets := server.currentSecrets()
+	if strings.Contains(dashboardResponse.Body.String(), secrets.VeilToken) || strings.Contains(dashboardResponse.Body.String(), secrets.CSRFKey) {
+		t.Fatal("authenticated page leaked a secret")
+	}
+
+	unknownRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/not-a-page", nil)
+	unknownRequest.Host = "127.0.0.1:8177"
+	for _, cookie := range cookies {
+		unknownRequest.AddCookie(cookie)
+	}
+	unknownResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unknownResponse, unknownRequest)
+	if unknownResponse.Code != http.StatusSeeOther || unknownResponse.Header().Get("Location") != "/" {
+		t.Fatalf("unknown page did not redirect home: %d %q", unknownResponse.Code, unknownResponse.Header().Get("Location"))
+	}
+
+	touchRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/session/touch", nil)
+	touchRequest.Host = "127.0.0.1:8177"
+	for _, cookie := range cookies {
+		touchRequest.AddCookie(cookie)
+	}
+	touchResponse := httptest.NewRecorder()
+	handler.ServeHTTP(touchResponse, touchRequest)
+	if touchResponse.Code != http.StatusNoContent {
+		t.Fatalf("session heartbeat failed: %d", touchResponse.Code)
+	}
+
+	var sessionCSRF string
+	for _, cookie := range cookies {
+		if cookie.Name == "veil_console_csrf" {
+			sessionCSRF = cookie.Value
+		}
+	}
+	settingsForm := url.Values{
+		"csrf":              {sessionCSRF},
+		"protocol":          {"vllm"},
+		"provider_base_url": {"http://127.0.0.1:8000/v1"},
+		"model":             {"local-model"},
+		"context_length":    {"65536"},
+		"max_output_tokens": {"8192"},
+		"model_timeout":     {"1m"},
+		"request_timeout":   {"1m15s"},
+		"max_body_bytes":    {"67108864"},
+		"password":          {"wrong password"},
+	}
+	for _, path := range []string{"/settings/test", "/settings/apply"} {
+		settingsRequest := formRequest(http.MethodPost, path, settingsForm, cookies...)
+		settingsResponse := httptest.NewRecorder()
+		handler.ServeHTTP(settingsResponse, settingsRequest)
+		if settingsResponse.Code != http.StatusUnauthorized {
+			t.Fatalf("%s wrong confirmation password returned %d", path, settingsResponse.Code)
+		}
+		if body := settingsResponse.Body.String(); !strings.Contains(body, "Owner password is incorrect.") || !strings.Contains(body, "<h1>Settings</h1>") {
+			t.Fatalf("%s password error did not render in the app: %s", path, body)
+		} else if strings.Contains(body, "wrong password") {
+			t.Fatalf("%s echoed the submitted password", path)
+		}
+	}
+
+	startForm := url.Values{"csrf": {sessionCSRF}, "password": {"wrong password"}}
+	startRequest := formRequest(http.MethodPost, "/veil/start", startForm, cookies...)
+	startResponse := httptest.NewRecorder()
+	handler.ServeHTTP(startResponse, startRequest)
+	if startResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("start accepted a wrong owner password: %d", startResponse.Code)
+	}
+	if body := startResponse.Body.String(); !strings.Contains(body, "Owner password is incorrect.") || !strings.Contains(body, "<h1>Veil</h1>") {
+		t.Fatalf("start password error did not render in the app: %s", body)
+	}
+}
+
+func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	response := httptest.NewRecorder()
+	server.render(response, "dashboard.html", pageData{
+		Title: "Veil Console", CSRF: "test", Configured: true, Running: true, Healthy: true, Status: "Running",
+	})
+	body := response.Body.String()
+	if strings.Contains(body, `action="/veil/start"`) {
+		t.Fatal("dashboard showed Start while Veil was running")
+	}
+	if !strings.Contains(body, `action="/veil/restart"`) {
+		t.Fatal("dashboard did not show Restart while Veil was running")
+	}
+	if !strings.Contains(body, `name="password"`) {
+		t.Fatal("Restart did not require the owner password")
+	}
+
+	response = httptest.NewRecorder()
+	server.render(response, "dashboard.html", pageData{
+		Title: "Veil Console", CSRF: "test", Configured: true, Running: false, Status: "stopped",
+	})
+	body = response.Body.String()
+	if strings.Contains(body, `action="/veil/restart"`) {
+		t.Fatal("dashboard showed Restart while Veil was stopped")
+	}
+	if !strings.Contains(body, `action="/veil/start"`) || !strings.Contains(body, `name="password"`) {
+		t.Fatal("stopped dashboard did not show password-protected Start")
+	}
+}
+
+func TestRestartCooldown(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	now := time.Unix(1000, 0)
+	server.markRestart(now)
+	if wait := server.restartWait(now); wait != restartCooldown {
+		t.Fatalf("restart cooldown = %v", wait)
+	}
+	if wait := server.restartWait(now.Add(restartCooldown)); wait != 0 {
+		t.Fatalf("restart cooldown did not expire: %v", wait)
+	}
+}
+
+func TestContextPresentationUsesCommonPresets(t *testing.T) {
+	for _, test := range []struct {
+		value int
+		index int
+		label string
+	}{
+		{value: 0, index: 3, label: "64K tokens"},
+		{value: 131_072, index: 4, label: "128K tokens"},
+		{value: 1_048_576, index: 7, label: "1M tokens"},
+	} {
+		index, label := contextPresentation(test.value)
+		if index != test.index || label != test.label {
+			t.Errorf("context %d presented as %d %q", test.value, index, label)
+		}
+	}
+}
+
+func formRequest(method, path string, values url.Values, cookies ...*http.Cookie) *http.Request {
+	request := httptest.NewRequest(method, "http://127.0.0.1:8177"+path, strings.NewReader(values.Encode()))
+	request.Host = "127.0.0.1:8177"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://127.0.0.1:8177")
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	return request
+}

@@ -1,0 +1,33 @@
+[Unit]
+Description=Umbratic Veil Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=veil-console
+Group=veil-console
+ExecStart=/usr/local/lib/veil-console/veil-console --listen 127.0.0.1 --port @@CONSOLE_PORT@@ --state-dir /var/lib/veil-console --veil-binary /usr/local/lib/veil-console/veil --veil-address 127.0.0.1:@@VEIL_PORT@@ --trusted-origin @@ORIGIN@@
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/veil-console
+RuntimeDirectory=veil-console
+RuntimeDirectoryMode=0700
+StateDirectory=veil-console
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

@@ -30,6 +30,26 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
 }
 
+func TestLoadManagedModeDoesNotReadDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("VEIL_MODEL=from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	setRequiredEnv(t)
+	t.Setenv("VEIL_ENV_FILE", "-")
+	t.Setenv("VEIL_MODEL", "from-process")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "from-process" {
+		t.Fatalf("managed mode read .env: %q", cfg.DefaultModel)
+	}
+}
+
 func TestLoadRequiresAuthToken(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_AUTH_TOKEN", "")

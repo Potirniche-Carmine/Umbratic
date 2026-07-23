@@ -22,8 +22,8 @@ func TestVLLMClientChat(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "Bearer redacted-test-key" {
-			t.Fatalf("missing auth header")
+		if r.Header.Get("Authorization") != "" {
+			t.Fatalf("local runtime request included authorization")
 		}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
@@ -44,7 +44,6 @@ func TestVLLMClientChat(t *testing.T) {
 	client, err := NewClient(ClientConfig{
 		Protocol: ProtocolVLLM,
 		BaseURL:  server.URL,
-		APIKey:   "redacted-test-key",
 		Timeout:  time.Second,
 	})
 	if err != nil {
