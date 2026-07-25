@@ -214,6 +214,11 @@ type UmbraticReviewFile = {
   tooLarge?: boolean;
 };
 
+type UmbraticDocumentReviewSnapshot = import("../shared/documentReview").DocumentReviewSnapshot;
+type UmbraticDocumentReviewReadResult =
+  | { ok: true; preview: UmbraticDocumentReviewSnapshot }
+  | { ok: false; code: "not_available" | "invalid" | "unsafe" | "too_large"; message: string };
+
 type UmbraticChatAttachment = {
   path: string;
   name: string;
@@ -371,6 +376,7 @@ declare global {
       restoreTaskCheckpoint(input: { taskId: string; checkpointId: string; confirmed: boolean }): Promise<UmbraticTaskInfo>;
       refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<UmbraticTaskInfo | null>;
       refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: UmbraticReviewFile[]; baselineOid: string }>;
+      readDocumentReview(input: { taskId: string; documentPath: string }): Promise<UmbraticDocumentReviewReadResult>;
       searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<UmbraticFileSearchResult[]>;
       pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: UmbraticRepositoryInfo }>;
       pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: UmbraticChatAttachment[] }>;

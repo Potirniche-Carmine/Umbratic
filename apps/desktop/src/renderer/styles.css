@@ -6348,6 +6348,176 @@ button.attachmentPreview:focus-visible {
   scrollbar-width: thin;
 }
 
+.documentReviewPreview {
+  min-height: 100%;
+  padding: clamp(18px, 3vw, 38px);
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 32%),
+    color-mix(in srgb, var(--surface-2) 52%, var(--surface));
+}
+
+.documentReviewPaper {
+  width: min(760px, 100%);
+  min-height: min(840px, calc(100vh - 210px));
+  margin: 0 auto;
+  padding: clamp(38px, 6vw, 72px) clamp(38px, 7vw, 78px);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 68%, transparent);
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--text) 96%, transparent);
+  background: color-mix(in srgb, var(--surface) 96%, white 4%);
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.2),
+    0 2px 7px rgba(0, 0, 0, 0.13);
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.documentReviewBlock {
+  position: relative;
+  margin: 0 0 15px;
+  border-radius: 4px;
+}
+
+.documentReviewBlock.style-title { margin-bottom: 8px; }
+.documentReviewBlock.style-subtitle { margin-bottom: 32px; }
+.documentReviewBlock.style-heading1 { margin-top: 30px; margin-bottom: 10px; }
+.documentReviewBlock.style-heading2 { margin-top: 24px; margin-bottom: 8px; }
+.documentReviewBlock.style-heading3 { margin-top: 20px; margin-bottom: 7px; }
+
+.documentReviewBlockContent h1,
+.documentReviewBlockContent h2,
+.documentReviewBlockContent h3,
+.documentReviewBlockContent h4,
+.documentReviewBlockContent p,
+.documentReviewBlockContent blockquote {
+  margin: 0;
+  color: inherit;
+}
+
+.documentReviewBlockContent h1 {
+  font-family: var(--app-font);
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 720;
+  letter-spacing: -0.018em;
+  line-height: 1.08;
+  word-spacing: 0.04em;
+}
+
+.documentReviewBlockContent h2,
+.documentReviewBlockContent h3,
+.documentReviewBlockContent h4 {
+  font-family: var(--app-font);
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  line-height: 1.22;
+}
+
+.documentReviewBlockContent h2 { font-size: 20px; }
+.documentReviewBlockContent h3 { font-size: 16px; }
+.documentReviewBlockContent h4 { font-size: 13px; letter-spacing: 0.025em; text-transform: uppercase; }
+
+.documentReviewBlockContent p,
+.documentReviewBlockContent blockquote {
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+.documentReviewSubtitle {
+  color: var(--muted) !important;
+  font-family: var(--app-font);
+  font-size: 16px !important;
+  line-height: 1.45 !important;
+}
+
+.documentReviewBlockContent blockquote {
+  padding: 2px 0 2px 15px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 44%, var(--line));
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-style: italic;
+}
+
+.documentReviewListItem {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+}
+
+.documentReviewListItem > span {
+  padding-top: 4px;
+  color: var(--muted);
+  font: 650 12px/1.7 var(--app-font);
+}
+
+.documentReviewParagraphGutter {
+  position: absolute;
+  top: 1px;
+  right: calc(100% + 12px);
+  display: grid;
+  width: 26px;
+  min-height: 25px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--faint);
+  font: 650 10px/1 var(--app-font);
+  font-variant-numeric: tabular-nums;
+}
+
+.documentReviewPreview.isCommenting .documentReviewParagraphGutter:hover,
+.documentReviewPreview.isCommenting .documentReviewParagraphGutter:focus-visible,
+.documentReviewParagraphGutter[aria-pressed="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.documentReviewParagraphGutter:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.documentReviewSentence {
+  display: inline;
+  padding: 1px 2px;
+  margin: -1px -2px;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: text;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.documentReviewPreview.isCommenting .documentReviewSentence {
+  cursor: pointer;
+}
+
+.documentReviewPreview.isCommenting .documentReviewSentence:hover,
+.documentReviewSentence:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.documentReviewSentence.isSelected {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.documentReviewPaper > .inlineReviewComment {
+  position: relative;
+  left: auto;
+  width: 100%;
+  margin: 10px 0 20px;
+  font-family: var(--app-font);
+}
+
+.reviewFeedbackModeButton:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 .reviewDiffCanvas {
   --review-diff-line-height: 18px;
   min-width: 760px;
@@ -6818,6 +6988,19 @@ button.attachmentPreview:focus-visible {
   background-color: rgba(250, 251, 253, 0.95);
 }
 
+:root[data-theme="light"] .documentReviewPreview {
+  background: #edf0f4;
+}
+
+:root[data-theme="light"] .documentReviewPaper {
+  color: #20242b;
+  background: #fff;
+  border-color: rgba(38, 45, 55, 0.16);
+  box-shadow:
+    0 22px 60px rgba(42, 48, 57, 0.14),
+    0 2px 7px rgba(42, 48, 57, 0.08);
+}
+
 :root[data-theme="light"] .reviewDiffCell.origin-addition { color: #174832; }
 :root[data-theme="light"] .reviewDiffCell.origin-deletion { color: #4a2027; }
 
@@ -6838,6 +7021,9 @@ button.attachmentPreview:focus-visible {
   .reviewWorkspace { grid-template-columns: 1fr; }
   .reviewFileNavigator { display: none; }
   .reviewFileActions .reviewSegmentedControl { display: none; }
+  .documentReviewPreview { padding: 12px; }
+  .documentReviewPaper { min-height: 100%; padding: 34px 28px 48px 42px; }
+  .documentReviewParagraphGutter { right: calc(100% + 5px); }
 }
 
 @media (prefers-reduced-transparency: reduce) {

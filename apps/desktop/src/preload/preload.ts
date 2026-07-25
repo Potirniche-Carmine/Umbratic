@@ -53,6 +53,7 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:restore-task-checkpoint", input),
   refreshTaskReview: (input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }) => ipcRenderer.invoke("umbratic:refresh-task-review", input),
   refreshWorkspaceReview: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:refresh-workspace-review", input),
+  readDocumentReview: (input: { taskId: string; documentPath: string }) => ipcRenderer.invoke("umbratic:read-document-review", input),
   searchFiles: (input: { repositoryId: string; query: string; limit?: number }) => ipcRenderer.invoke("umbratic:search-files", input),
   pickRepository: () => ipcRenderer.invoke("umbratic:pick-repository"),
   pickAttachmentFiles: (input: { chatId: string; repositoryId?: string }) => ipcRenderer.invoke("umbratic:pick-attachment-files", input),

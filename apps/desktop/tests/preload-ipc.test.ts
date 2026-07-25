@@ -49,6 +49,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getTask", [{ taskId: "task-1" }], "umbratic:get-task"],
     ["refreshTaskReview", [{ taskId: "task-1", scope: "worktree" }], "umbratic:refresh-task-review"],
     ["refreshWorkspaceReview", [{ repositoryPath: "/repo" }], "umbratic:refresh-workspace-review"],
+    ["readDocumentReview", [{ taskId: "task-1", documentPath: ".umbratic/artifacts/docx/proposal.docx" }], "umbratic:read-document-review"],
     ["searchFiles", [{ repositoryId: "repo", query: "app" }], "umbratic:search-files"],
     ["pickRepository", [], "umbratic:pick-repository", undefined],
     ["pickAttachmentFiles", [{ chatId: "chat-1" }], "umbratic:pick-attachment-files"],
@@ -116,4 +117,3 @@ test("compiled sandboxed preload has no relative runtime dependencies", () => {
   const source = fs.readFileSync(new URL("../dist-electron/preload/preload.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /require\(["']\.\.?\//);
 });
-

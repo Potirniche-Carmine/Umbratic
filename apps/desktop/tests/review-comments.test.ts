@@ -50,6 +50,33 @@ test("review line labels collapse consecutive lines into ranges", () => {
   assert.equal(comments.reviewCommentLineLabel(comment({ lineNumbers: [4, 5, 6, 9] })), "Lines 4-6, 9");
 });
 
+test("document review feedback keeps its paragraph and sentence anchor in the next prompt", () => {
+  const documentComment = comment({
+    filePath: ".umbratic/artifacts/docx/proposal.docx",
+    hunkId: "document:proposal",
+    startLine: 2,
+    endLine: 2,
+    lineNumbers: [2],
+    excerpt: "First sentence.",
+    documentSelection: {
+      blockIds: ["opening"],
+      sentenceIds: ["opening:sentence:1"],
+      label: "Paragraph 2 · Sentence 1",
+    },
+  });
+  const serialized = comments.appendReviewFeedback("Revise the proposal.", [documentComment]);
+  assert.match(serialized, /\*\*\.umbratic\/artifacts\/docx\/proposal\.docx · Paragraph 2 · Sentence 1\*\*/);
+  assert.deepEqual(JSON.parse(JSON.stringify(comments.visibleReviewPrompt(serialized))), {
+    text: "Revise the proposal.",
+    feedback: [{
+      filePath: ".umbratic/artifacts/docx/proposal.docx",
+      lineLabel: "Paragraph 2 · Sentence 1",
+      body: "Keep the gutters aligned when this wraps.",
+      excerpt: "First sentence.",
+    }],
+  });
+});
+
 test("comment reconciliation survives offset-only hunk movement and marks changed hunks stale", () => {
   const first = review.parseReviewPatch("diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -12,1 +12,1 @@\n-old\n+new");
   const moved = review.parseReviewPatch("diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -22,1 +22,1 @@\n-old\n+new");
@@ -62,5 +89,4 @@ test("comment reconciliation survives offset-only hunk movement and marks change
   const changed = review.parseReviewPatch("diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -12,1 +12,1 @@\n-old\n+different");
   assert.equal(comments.reconcileReviewComments([anchored], [changed], "changed")[0].stale, true);
 });
-
 

@@ -170,6 +170,8 @@ import type {
 } from "./types";
 import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines } from "../shared/reviewDiff";
+import { isDocumentReviewSidecarPath } from "../shared/documentReview";
+import { readTaskDocumentReview } from "./documentReview";
 import {
   createTaskCheckpoint,
   createTurnCheckpoint,
@@ -614,7 +616,7 @@ function publicTask(task: TaskRecord): TaskInfo {
     patchHash,
     error,
   } = task;
-  const ignoredReviewPaths = hiddenChatAttachmentReviewPaths(task);
+  const ignoredReviewPaths = hiddenRendererReviewPaths(task);
   const publicReviewFiles = rendererReviewFiles(reviewFiles, ignoredReviewPaths);
   const publicEvents = compactTaskEvents(events, 500).map((event) => {
     if (event.type !== "review.ready") return event;
@@ -658,6 +660,15 @@ function publicTask(task: TaskRecord): TaskInfo {
 
 function hiddenChatAttachmentReviewPaths(task: TaskRecord): Set<string> {
   return materializedChatAttachmentReviewPaths(task.events ?? [], isHiddenChatTask(task));
+}
+
+function hiddenRendererReviewPaths(task: TaskRecord): Set<string> {
+  const hidden = new Set(hiddenChatAttachmentReviewPaths(task));
+  for (const file of task.reviewFiles ?? []) {
+    const relativePath = normalizeRelativePath(file.path);
+    if (isDocumentReviewSidecarPath(relativePath)) hidden.add(relativePath);
+  }
+  return hidden;
 }
 
 function filterReviewPaths(files: readonly string[], ignoredPaths: ReadonlySet<string>): string[] {
@@ -752,6 +763,12 @@ function publicTaskById(input: unknown): TaskInfo | null {
   const taskIdValue = input.taskId.trim();
   const task = readTask(taskIdValue);
   return task ? publicTask(task) : null;
+}
+
+function readDocumentReview(input: unknown) {
+  if (!isRecord(input)) throw new Error("Invalid document review input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  return readTaskDocumentReview(task, requiredString(input.documentPath, "documentPath"));
 }
 
 type TaskCheckpointView = Pick<
@@ -4213,7 +4230,7 @@ async function runRunnerTask(
       type: "review.ready",
       taskId: task.id,
       changedFiles: task.changedFiles,
-      reviewFiles: rendererReviewFiles(reviewFiles, hiddenChatAttachmentReviewPaths(task)),
+      reviewFiles: rendererReviewFiles(reviewFiles, hiddenRendererReviewPaths(task)),
       latestTest: task.latestTest,
     });
     run.abortController.abort();
@@ -5272,6 +5289,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:restore-task-checkpoint", (input) => restoreCheckpoint(input));
   handleIpc("umbratic:refresh-task-review", (input) => refreshTaskReview(input));
   handleIpc("umbratic:refresh-workspace-review", (input) => refreshWorkspaceReview(input));
+  handleIpc("umbratic:read-document-review", (input) => readDocumentReview(input));
   handleIpc("umbratic:search-files", (input) => searchRepositoryFiles(input));
   handleIpc("umbratic:pick-repository", () => pickRepository());
   handleIpc("umbratic:pick-attachment-files", (input) => pickAttachmentFiles(input));

@@ -67,6 +67,7 @@ import {
   parseMarkdown,
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
+import type { DocumentReviewSnapshot } from "../shared/documentReview";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 
@@ -471,6 +472,10 @@ type DesktopApi = {
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
   refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<TaskInfo | null>;
   refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }>;
+  readDocumentReview(input: { taskId: string; documentPath: string }): Promise<
+    | { ok: true; preview: DocumentReviewSnapshot }
+    | { ok: false; code: "not_available" | "invalid" | "unsafe" | "too_large"; message: string }
+  >;
   searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
   pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }>;
@@ -1008,7 +1013,7 @@ const composerTestEvents: BackendUiEvent[] = [
   },
 ];
 
-const composerTestReviewFiles: ReviewFile[] = [
+const composerTestCodeReviewFiles: ReviewFile[] = [
   {
     path: "apps/desktop/src/features/review/new-panel.ts",
     status: "added",
@@ -1081,6 +1086,51 @@ const composerTestReviewFiles: ReviewFile[] = [
     ].join("\n"),
   },
 ].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; diff: string }));
+
+const composerTestDocumentPath = ".umbratic/artifacts/docx/narrative-proposal.docx";
+const composerTestDocumentPreview: DocumentReviewSnapshot = {
+  schemaVersion: 1,
+  documentPath: composerTestDocumentPath,
+  title: "Narrative Proposal",
+  blocks: [
+    { id: "title", style: "title", text: "Narrative Proposal" },
+    { id: "subtitle", style: "subtitle", text: "A calmer document review workflow" },
+    {
+      id: "overview",
+      style: "heading1",
+      text: "Executive overview",
+    },
+    {
+      id: "opening",
+      style: "paragraph",
+      text: "Umbratic keeps document review close to the conversation. Reviewers can select one sentence or an entire paragraph without opening another application.",
+    },
+    {
+      id: "workflow",
+      style: "paragraph",
+      text: "Selected feedback is attached to the next prompt with the relevant excerpt. The document remains the source of truth while the review experience stays focused.",
+    },
+    { id: "benefit-one", style: "bullet", text: "Keep feedback specific and easy to revisit." },
+    { id: "benefit-two", style: "bullet", text: "Use the same interaction pattern as code review." },
+    {
+      id: "close",
+      style: "quote",
+      text: "The result is a lightweight review loop that feels native to the composer.",
+    },
+  ],
+};
+const composerTestDocumentFile = normalizeReviewFile({
+  path: composerTestDocumentPath,
+  status: "binary",
+  diff: [
+    `diff --git a/${composerTestDocumentPath} b/${composerTestDocumentPath}`,
+    "new file mode 100644",
+    `Binary files /dev/null and b/${composerTestDocumentPath} differ`,
+  ].join("\n"),
+});
+const composerTestReviewFiles: ReviewFile[] = composerTestParams.has("documents")
+  ? [composerTestDocumentFile, ...composerTestCodeReviewFiles]
+  : composerTestCodeReviewFiles;
 
 const composerTestWholeDiffFiles: ReviewFile[] = [
   ...composerTestReviewFiles,
@@ -1421,6 +1471,9 @@ const fallbackApi: DesktopApi = {
     };
   },
   refreshWorkspaceReview: async () => ({ reviewFiles: composerTestWholeDiffFiles, baselineOid: "HEAD" }),
+  readDocumentReview: async (input) => input.documentPath === composerTestDocumentPath
+    ? { ok: true, preview: composerTestDocumentPreview }
+    : { ok: false, code: "not_available", message: "This document does not include a review preview." },
   searchFiles: async (input) =>
     [
       { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", match: "path" as const },
@@ -6955,6 +7008,9 @@ function App() {
           onResizePointerDown={beginReviewResize}
           onResizeKeyDown={handleReviewResizeKeyDown}
           onAddFeedback={addReviewFeedbackToPrompt}
+          onLoadDocumentReview={(documentPath) => task
+            ? api.readDocumentReview({ taskId: task.id, documentPath })
+            : Promise.resolve({ ok: false, code: "not_available", message: "Document previews are available for task reviews." })}
         />
       </aside>
 

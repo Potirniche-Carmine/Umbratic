@@ -1,9 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText, X } from "lucide-react";
+import {
+  isDocumentReviewArtifactPath,
+  type DocumentReviewSnapshot,
+} from "../../shared/documentReview";
 import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
 import { reviewPatchHash } from "../../shared/reviewDiff";
+import { DocumentReviewPreview } from "./DocumentReviewPreview";
 import { DiffFileView } from "./DiffFileView";
 import type { ReviewLineSelection } from "./DiffRow";
+import { documentReviewSelectionDetails } from "./documentReviewSelection";
 import { reconcileReviewComments, type ReviewCommentDraft } from "./reviewComments";
 
 const viewModeKey = "umbratic-review-view-mode";
@@ -49,6 +55,7 @@ export function ReviewPanel({
   onResizePointerDown,
   onResizeKeyDown,
   onAddFeedback,
+  onLoadDocumentReview,
 }: {
   files: ReviewFile[];
   initialSelectedPath?: string;
@@ -69,6 +76,10 @@ export function ReviewPanel({
   onResizePointerDown(event: React.PointerEvent<HTMLDivElement>): void;
   onResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void;
   onAddFeedback(comments: ReviewCommentDraft[]): void;
+  onLoadDocumentReview(documentPath: string): Promise<
+    | { ok: true; preview: DocumentReviewSnapshot }
+    | { ok: false; code: "not_available" | "invalid" | "unsafe" | "too_large"; message: string }
+  >;
 }) {
   const [selectedPath, setSelectedPath] = useState(initialSelectedPath ?? files[0]?.path ?? "");
   const [viewMode, setViewMode] = useState<"split" | "unified">(() => {
@@ -80,6 +91,10 @@ export function ReviewPanel({
   const [wrap, setWrap] = useState(() => window.localStorage.getItem(wrapKey) !== "false");
   const [commenting, setCommenting] = useState(false);
   const [selection, setSelection] = useState<ReviewLineSelection | null>(null);
+  const [documentSelection, setDocumentSelection] = useState<string[]>([]);
+  const [documentPreview, setDocumentPreview] = useState<DocumentReviewSnapshot | null>(null);
+  const [documentPreviewLoading, setDocumentPreviewLoading] = useState(false);
+  const [documentPreviewError, setDocumentPreviewError] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
   const [feedbackAdded, setFeedbackAdded] = useState(false);
   const [commentBody, setCommentBody] = useState("");
@@ -88,10 +103,16 @@ export function ReviewPanel({
   const [selectedScope, setSelectedScope] = useState(scope);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
   const feedbackAddedTimerRef = useRef<number | null>(null);
+  const loadDocumentReviewRef = useRef(onLoadDocumentReview);
   const actualPatchHash = patchHash || reviewPatchHash(files);
   const selectedIndex = Math.max(0, files.findIndex((file) => file.path === selectedPath));
   const selectedFile = files[selectedIndex] ?? files[0];
+  const selectedFileIsDocument = !!selectedFile && isDocumentReviewArtifactPath(selectedFile.path);
   const totals = useMemo(() => files.reduce((total, file) => ({ additions: total.additions + file.additions, deletions: total.deletions + file.deletions }), { additions: 0, deletions: 0 }), [files]);
+
+  useEffect(() => {
+    loadDocumentReviewRef.current = onLoadDocumentReview;
+  }, [onLoadDocumentReview]);
 
   useEffect(() => {
     if (!files.some((file) => file.path === selectedPath)) setSelectedPath(files[Math.min(selectedIndex, files.length - 1)]?.path ?? "");
@@ -107,8 +128,38 @@ export function ReviewPanel({
   }, [selectedFile?.path, selectedFile?.status]);
 
   useEffect(() => {
+    let active = true;
+    setDocumentSelection([]);
+    setDocumentPreview(null);
+    setDocumentPreviewError("");
+    setDocumentPreviewLoading(selectedFileIsDocument);
+    setEditorOpen(false);
+    setCommentBody("");
+    if (!selectedFileIsDocument || !selectedFile) {
+      setDocumentPreviewLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    void loadDocumentReviewRef.current(selectedFile.path).then((result) => {
+      if (!active) return;
+      setDocumentPreviewLoading(false);
+      if (result.ok) setDocumentPreview(result.preview);
+      else setDocumentPreviewError(result.message);
+    }).catch(() => {
+      if (!active) return;
+      setDocumentPreviewLoading(false);
+      setDocumentPreviewError("The document preview could not be loaded.");
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedFile?.path, selectedFileIsDocument]);
+
+  useEffect(() => {
     setComments([]);
     setSelection(null);
+    setDocumentSelection([]);
     setCommentBody("");
     setFeedbackAdded(false);
   }, [taskId]);
@@ -154,24 +205,41 @@ export function ReviewPanel({
     });
   }, [commenting]);
   const saveComment = () => {
-    if (!selection || !selectedFile || !commentBody.trim()) return;
-    const selectedLines = [...selection.lines].sort((left, right) => left - right);
+    if (!selectedFile || !commentBody.trim()) return;
+    const documentDetails = selectedFileIsDocument && documentPreview
+      ? documentReviewSelectionDetails(documentPreview, documentSelection)
+      : null;
+    if (selectedFileIsDocument && !documentDetails) return;
+    if (!selectedFileIsDocument && !selection) return;
+    const selectedLines = documentDetails
+      ? documentDetails.blockIds
+        .map((id) => documentPreview!.blocks.findIndex((block) => block.id === id) + 1)
+        .filter((line) => line > 0)
+      : [...selection!.lines].sort((left, right) => left - right);
     const comment: ReviewCommentDraft = {
       id: `review-${Date.now().toString(36)}-${comments.length}`,
       taskId,
       patchHash: actualPatchHash,
       filePath: selectedFile.path,
-      hunkId: selection.hunkId,
-      side: selection.side,
+      hunkId: documentDetails ? `document:${documentPreview!.documentPath}` : selection!.hunkId,
+      side: documentDetails ? "new" : selection!.side,
       startLine: selectedLines[0],
       endLine: selectedLines[selectedLines.length - 1],
       lineNumbers: selectedLines,
       body: commentBody.trim(),
-      excerpt: selectedExcerpt(selectedFile, selection),
+      excerpt: documentDetails ? documentDetails.excerpt : selectedExcerpt(selectedFile, selection!),
+      ...(documentDetails ? {
+        documentSelection: {
+          blockIds: documentDetails.blockIds,
+          sentenceIds: documentDetails.sentenceIds,
+          label: documentDetails.label,
+        },
+      } : {}),
     };
     setComments((current) => [...current, comment]);
     onAddFeedback([comment]);
     setSelection(null);
+    setDocumentSelection([]);
     setEditorOpen(false);
     setCommentBody("");
     setFeedbackAdded(true);
@@ -181,15 +249,18 @@ export function ReviewPanel({
       feedbackAddedTimerRef.current = null;
     }, 1800);
   };
-  const editor = selection && editorOpen ? (
+  const hasSelection = selectedFileIsDocument ? documentSelection.length > 0 : !!selection;
+  const editor = hasSelection && editorOpen ? (
     <div className="inlineReviewComment">
       <textarea ref={commentRef} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="Leave feedback for the next prompt…" aria-label="Review comment" />
       <div className="inlineReviewCommentActions"><button type="button" onClick={() => { setEditorOpen(false); setCommentBody(""); }}>Cancel</button><button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button></div>
     </div>
   ) : null;
+  const selectionCount = selectedFileIsDocument ? documentSelection.length : selection?.lines.length ?? 0;
+  const documentFeedbackEnabled = !selectedFileIsDocument || !!documentPreview;
 
   return (
-    <section className="panel reviewPanel" aria-label="Code review">
+    <section className="panel reviewPanel" aria-label={selectedFileIsDocument ? "Document review" : "Code review"}>
       {feedbackAdded ? <div className="reviewFeedbackAdded" role="status"><span><Check size={13} /></span><strong>Added</strong></div> : null}
       <div
         className="reviewResizeHandle"
@@ -222,15 +293,21 @@ export function ReviewPanel({
               <span className="reviewSelectedFile"><strong title={selectedFile.path}>{selectedFile.path}</strong>{selectedFile.oldPath ? <small>from {selectedFile.oldPath}</small> : null}</span>
               <div className="reviewFileActions">
                 <span className="reviewFeedbackSelectionControls">
-                  <span className="reviewSelectionConfirmSlot">{selection && !editorOpen ? <button className="reviewSelectionConfirm" type="button" onClick={() => setEditorOpen(true)} aria-label={`Write feedback for ${selection.lines.length} selected ${selection.lines.length === 1 ? "line" : "lines"}`} title="Continue with selected lines"><Check size={14} /><span>{selection.lines.length}</span></button> : null}</span>
-                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setEditorOpen(false); setCommentBody(""); }} title={commenting ? "Click lines to add or remove them from this comment" : "Select lines to leave feedback"}><MessageSquarePlus size={14} /><span>{commenting ? "Select lines" : "Leave feedback"}</span></button>
+                  <span className="reviewSelectionConfirmSlot">{selectionCount && !editorOpen ? <button className="reviewSelectionConfirm" type="button" onClick={() => setEditorOpen(true)} aria-label={`Write feedback for ${selectionCount} selected ${selectedFileIsDocument ? (selectionCount === 1 ? "sentence" : "sentences") : (selectionCount === 1 ? "line" : "lines")}`} title="Continue with selection"><Check size={14} /><span>{selectionCount}</span></button> : null}</span>
+                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" disabled={!documentFeedbackEnabled} aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setDocumentSelection([]); setEditorOpen(false); setCommentBody(""); }} title={commenting ? `Click ${selectedFileIsDocument ? "sentences or paragraph numbers" : "lines"} to add or remove them from this comment` : selectedFileIsDocument && !documentFeedbackEnabled ? "A review preview is required for document feedback" : `Select ${selectedFileIsDocument ? "sentences or paragraphs" : "lines"} to leave feedback`}><MessageSquarePlus size={14} /><span>{commenting ? (selectedFileIsDocument ? "Select text" : "Select lines") : "Leave feedback"}</span></button>
                 </span>
-                <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span>
-                <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button>
+                {!selectedFileIsDocument ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
+                {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
                 <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
               </div>
             </header>
-            <div className="reviewFileScroller"><DiffFileView file={selectedFile} viewMode={viewMode} wrap={wrap} commenting={commenting} selection={selection} onSelect={selectLine} editor={editor} /></div>
+            <div className="reviewFileScroller">
+              {selectedFileIsDocument ? (
+                documentPreviewLoading ? <div className="reviewDiffEmpty"><strong>Loading document preview…</strong></div>
+                  : documentPreview ? <DocumentReviewPreview preview={documentPreview} commenting={commenting} selection={documentSelection} editor={editor} onSelectionChange={setDocumentSelection} />
+                    : <div className="reviewDiffEmpty"><FileText size={22} /><strong>Preview unavailable</strong><span>{documentPreviewError || "Open the document externally to review it."}</span></div>
+              ) : <DiffFileView file={selectedFile} viewMode={viewMode} wrap={wrap} commenting={commenting} selection={selection} onSelect={selectLine} editor={editor} />}
+            </div>
           </main>
         </div>
       ) : <div className="reviewEmptyState"><FileText size={24} /><strong>No changes to review</strong><span>Refresh the task after files change.</span></div>}

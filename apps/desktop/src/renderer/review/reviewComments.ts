@@ -12,6 +12,11 @@ export type ReviewCommentDraft = {
   lineNumbers?: number[];
   body: string;
   excerpt: string;
+  documentSelection?: {
+    blockIds: string[];
+    sentenceIds: string[];
+    label: string;
+  };
   stale?: boolean;
 };
 
@@ -30,6 +35,9 @@ export type VisibleReviewPrompt = {
 export function reconcileReviewComments(comments: ReviewCommentDraft[], files: ReviewFile[], patchHash: string): ReviewCommentDraft[] {
   return comments.map((comment) => {
     const file = files.find((candidate) => candidate.path === comment.filePath);
+    if (comment.documentSelection) {
+      return { ...comment, patchHash: file ? patchHash : comment.patchHash, stale: !file };
+    }
     const hunk = file?.hunks.find((candidate) => candidate.id === comment.hunkId);
     const lineNumbers = hunk?.lines
       .map((line) => (comment.side === "old" ? line.oldLine : line.newLine))
@@ -51,6 +59,7 @@ export function reviewCommentLines(comment: ReviewCommentDraft): number[] {
 }
 
 export function reviewCommentLineLabel(comment: ReviewCommentDraft): string {
+  if (comment.documentSelection?.label) return comment.documentSelection.label;
   const lines = reviewCommentLines(comment);
   const groups: string[] = [];
   let start = lines[0];
@@ -99,7 +108,7 @@ export function visibleReviewPrompt(value: string): VisibleReviewPrompt {
   for (const row of rows) {
     const firstBreak = row.indexOf("\n\n");
     const heading = firstBreak >= 0 ? row.slice(0, firstBreak) : row;
-    const match = heading.match(/^\*\*(.+) · (Lines .+)\*\*$/);
+    const match = heading.match(/^\*\*(.+?) · ((?:Lines|Paragraphs?).+)\*\*$/);
     if (!match || firstBreak < 0) return { text: value, feedback: [] };
     let remainder = row.slice(firstBreak + 2);
     let excerpt = "";
