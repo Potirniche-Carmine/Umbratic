@@ -10,3 +10,5 @@ apps/desktop/release/
 packages/runner/dist/
 artifacts/
 %SystemDrive%/ProgramData/Microsoft/Windows/Caches/
+.build
+*.profraw

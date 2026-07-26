@@ -108,7 +108,20 @@ export function ReviewPanel({
   const selectedIndex = Math.max(0, files.findIndex((file) => file.path === selectedPath));
   const selectedFile = files[selectedIndex] ?? files[0];
   const selectedFileIsDocument = !!selectedFile && isDocumentReviewArtifactPath(selectedFile.path);
-  const totals = useMemo(() => files.reduce((total, file) => ({ additions: total.additions + file.additions, deletions: total.deletions + file.deletions }), { additions: 0, deletions: 0 }), [files]);
+  const navigatorFiles = useMemo(
+    () => files.filter((file) => !isDocumentReviewArtifactPath(file.path)),
+    [files],
+  );
+  const navigatorTotals = useMemo(
+    () => navigatorFiles.reduce(
+      (total, file) => ({
+        additions: total.additions + file.additions,
+        deletions: total.deletions + file.deletions,
+      }),
+      { additions: 0, deletions: 0 },
+    ),
+    [navigatorFiles],
+  );
 
   useEffect(() => {
     loadDocumentReviewRef.current = onLoadDocumentReview;
@@ -283,18 +296,20 @@ export function ReviewPanel({
         </div>
       </header>
       {files.length && selectedFile ? (
-        <div className="reviewWorkspace">
-          <aside className="reviewFileNavigator" aria-label="Changed files">
-            <div className="reviewNavigatorSummary"><span>{files.length} file{files.length === 1 ? "" : "s"}</span><span className="additions">+{totals.additions}</span><span className="deletions">-{totals.deletions}</span></div>
-            <div className="reviewNavigatorList">{files.map((file) => <button type="button" className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`} onClick={() => { setSelectedPath(file.path); setSelection(null); }} key={file.path}><span>{file.path}</span><small><span>{statusLabel(file.status)}</span><span className="additions">+{file.additions}</span><span className="deletions">-{file.deletions}</span></small></button>)}</div>
-          </aside>
+        <div className={`reviewWorkspace ${navigatorFiles.length ? "" : "withoutNavigator"}`}>
+          {navigatorFiles.length ? (
+            <aside className="reviewFileNavigator" aria-label="Changed files">
+              <div className="reviewNavigatorSummary"><span>{navigatorFiles.length} file{navigatorFiles.length === 1 ? "" : "s"}</span><span className="additions">+{navigatorTotals.additions}</span><span className="deletions">-{navigatorTotals.deletions}</span></div>
+              <div className="reviewNavigatorList">{navigatorFiles.map((file) => <button type="button" className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`} onClick={() => { setSelectedPath(file.path); setSelection(null); }} key={file.path}><span>{file.path}</span><small><span>{statusLabel(file.status)}</span><span className="additions">+{file.additions}</span><span className="deletions">-{file.deletions}</span></small></button>)}</div>
+            </aside>
+          ) : null}
           <main className="reviewFileCanvas">
             <header className="reviewFileToolbar">
               <span className="reviewSelectedFile"><strong title={selectedFile.path}>{selectedFile.path}</strong>{selectedFile.oldPath ? <small>from {selectedFile.oldPath}</small> : null}</span>
               <div className="reviewFileActions">
                 <span className="reviewFeedbackSelectionControls">
                   <span className="reviewSelectionConfirmSlot">{selectionCount && !editorOpen ? <button className="reviewSelectionConfirm" type="button" onClick={() => setEditorOpen(true)} aria-label={`Write feedback for ${selectionCount} selected ${selectedFileIsDocument ? (selectionCount === 1 ? "sentence" : "sentences") : (selectionCount === 1 ? "line" : "lines")}`} title="Continue with selection"><Check size={14} /><span>{selectionCount}</span></button> : null}</span>
-                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" disabled={!documentFeedbackEnabled} aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setDocumentSelection([]); setEditorOpen(false); setCommentBody(""); }} title={commenting ? `Click ${selectedFileIsDocument ? "sentences or paragraph numbers" : "lines"} to add or remove them from this comment` : selectedFileIsDocument && !documentFeedbackEnabled ? "A review preview is required for document feedback" : `Select ${selectedFileIsDocument ? "sentences or paragraphs" : "lines"} to leave feedback`}><MessageSquarePlus size={14} /><span>{commenting ? (selectedFileIsDocument ? "Select text" : "Select lines") : "Leave feedback"}</span></button>
+                  <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" disabled={!documentFeedbackEnabled} aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setDocumentSelection([]); setEditorOpen(false); setCommentBody(""); }} title={commenting ? `Click ${selectedFileIsDocument ? "sentences" : "lines"} to add or remove them from this comment` : selectedFileIsDocument && !documentFeedbackEnabled ? "A review preview is required for document feedback" : `Select ${selectedFileIsDocument ? "sentences" : "lines"} to leave feedback`}><MessageSquarePlus size={14} /><span>{commenting ? (selectedFileIsDocument ? "Select text" : "Select lines") : "Leave feedback"}</span></button>
                 </span>
                 {!selectedFileIsDocument ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
                 {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}

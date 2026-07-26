@@ -1961,6 +1961,93 @@ pre {
   opacity: 0.82;
 }
 
+.documentResponseLinks {
+  display: grid;
+  width: min(100%, var(--response-content-width));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.documentResponseLink {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--blue) 15%, var(--line-strong));
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--blue) 3%, var(--surface));
+  text-align: left;
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out,
+    transform 100ms ease-out;
+}
+
+.documentResponseLink:hover {
+  border-color: color-mix(in srgb, var(--blue) 30%, var(--line-strong));
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+}
+
+.documentResponseLink:active {
+  transform: scale(0.995);
+}
+
+.documentResponseLink:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.documentResponseIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 11%, transparent);
+}
+
+.documentResponseIdentity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.documentResponseIdentity strong,
+.documentResponseIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documentResponseIdentity strong {
+  font-size: 12.5px;
+  font-weight: 680;
+  line-height: 1.25;
+}
+
+.documentResponseIdentity small {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.documentResponseAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.documentResponseLink:hover .documentResponseAction {
+  color: var(--text);
+}
+
 .assistantMessage .messageActions:has(.messageAction[aria-pressed="true"]) {
   opacity: 1;
 }
@@ -6154,6 +6241,10 @@ button.attachmentPreview:focus-visible {
   overflow: hidden;
 }
 
+.reviewWorkspace.withoutNavigator {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .reviewFileNavigator {
   display: flex;
   min-width: 0;
@@ -6447,43 +6538,19 @@ button.attachmentPreview:focus-visible {
   font: 650 12px/1.7 var(--app-font);
 }
 
-.documentReviewParagraphGutter {
-  position: absolute;
-  top: 1px;
-  right: calc(100% + 12px);
-  display: grid;
-  width: 26px;
-  min-height: 25px;
-  place-items: center;
-  border-radius: 6px;
-  color: var(--faint);
-  font: 650 10px/1 var(--app-font);
-  font-variant-numeric: tabular-nums;
-}
-
-.documentReviewPreview.isCommenting .documentReviewParagraphGutter:hover,
-.documentReviewPreview.isCommenting .documentReviewParagraphGutter:focus-visible,
-.documentReviewParagraphGutter[aria-pressed="true"] {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-}
-
-.documentReviewParagraphGutter:disabled {
-  opacity: 0;
-  pointer-events: none;
-}
-
 .documentReviewSentence {
   display: inline;
-  padding: 1px 2px;
-  margin: -1px -2px;
-  border-radius: 3px;
+  padding: 0;
+  margin: 0;
+  border-radius: 2px;
   color: inherit;
   background: transparent;
   font: inherit;
   line-height: inherit;
   text-align: left;
   cursor: text;
+  outline: none;
+  box-shadow: inset 0 0 0 1px transparent;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
@@ -6494,15 +6561,19 @@ button.attachmentPreview:focus-visible {
 
 .documentReviewPreview.isCommenting .documentReviewSentence:hover,
 .documentReviewSentence:focus-visible {
-  outline: none;
-  background: color-mix(in srgb, var(--accent) 11%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--blue) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 10%, transparent);
 }
 
 .documentReviewSentence.isSelected {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--blue) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 22%, transparent);
+}
+
+.documentReviewSentence.isSelected:hover,
+.documentReviewSentence.isSelected:focus-visible {
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 28%, transparent);
 }
 
 .documentReviewPaper > .inlineReviewComment {
@@ -7001,6 +7072,29 @@ button.attachmentPreview:focus-visible {
     0 2px 7px rgba(42, 48, 57, 0.08);
 }
 
+:root[data-theme="light"] .segmented {
+  border-color: rgba(18, 24, 32, 0.12);
+  background: #f2f5f8;
+}
+
+:root[data-theme="light"] .segmented button.active {
+  background: #ffffff;
+  box-shadow:
+    inset 0 0 0 1px rgba(18, 24, 32, 0.11),
+    0 1px 2px rgba(20, 35, 55, 0.06);
+}
+
+:root[data-theme="light"] .inlineReviewComment {
+  border-color: rgba(18, 24, 32, 0.16);
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(20, 35, 55, 0.12);
+}
+
+:root[data-theme="light"] .inlineReviewComment textarea {
+  border-color: rgba(18, 24, 32, 0.13);
+  background: #f7f9fb;
+}
+
 :root[data-theme="light"] .reviewDiffCell.origin-addition { color: #174832; }
 :root[data-theme="light"] .reviewDiffCell.origin-deletion { color: #4a2027; }
 
@@ -7022,8 +7116,7 @@ button.attachmentPreview:focus-visible {
   .reviewFileNavigator { display: none; }
   .reviewFileActions .reviewSegmentedControl { display: none; }
   .documentReviewPreview { padding: 12px; }
-  .documentReviewPaper { min-height: 100%; padding: 34px 28px 48px 42px; }
-  .documentReviewParagraphGutter { right: calc(100% + 5px); }
+  .documentReviewPaper { min-height: 100%; padding: 34px 28px 48px; }
 }
 
 @media (prefers-reduced-transparency: reduce) {

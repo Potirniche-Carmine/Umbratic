@@ -67,7 +67,7 @@ import {
   parseMarkdown,
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
-import type { DocumentReviewSnapshot } from "../shared/documentReview";
+import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 
@@ -3314,6 +3314,42 @@ function ReviewSummaryCard({
   );
 }
 
+export function documentReviewDisplayName(filePath: string): string {
+  const fileName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
+  const stem = fileName.replace(/\.docx$/i, "");
+  const title = stem
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return title || fileName;
+}
+
+function DocumentReviewResponseLink({
+  file,
+  onOpenReview,
+}: {
+  file: ReviewFile;
+  onOpenReview(filePath: string): void;
+}) {
+  const fileName = file.path.replace(/\\/g, "/").split("/").pop() ?? file.path;
+  return (
+    <button
+      className="documentResponseLink"
+      type="button"
+      onClick={() => onOpenReview(file.path)}
+      aria-label={`Review ${documentReviewDisplayName(file.path)} document`}
+    >
+      <span className="documentResponseIcon"><FileText size={17} aria-hidden="true" /></span>
+      <span className="documentResponseIdentity">
+        <strong>{documentReviewDisplayName(file.path)}</strong>
+        <small>{fileName}</small>
+      </span>
+      <span className="documentResponseAction">Review <ChevronRight size={13} aria-hidden="true" /></span>
+    </button>
+  );
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -3492,13 +3528,21 @@ function App() {
     }
     return Array.from(byPath.values());
   }, [rawReviewFiles]);
+  const documentReviewFiles = useMemo(
+    () => reviewFiles.filter((file) => isDocumentReviewArtifactPath(file.path)),
+    [reviewFiles],
+  );
+  const codeReviewFiles = useMemo(
+    () => reviewFiles.filter((file) => !isDocumentReviewArtifactPath(file.path)),
+    [reviewFiles],
+  );
   const reviewDiffs = useMemo(
     () => new Map(reviewFiles.map((file) => [file.path, parseUnifiedDiff(file.diff)])),
     [reviewFiles],
   );
-  const reviewTotals = useMemo(
+  const codeReviewTotals = useMemo(
     () =>
-      reviewFiles.reduce(
+      codeReviewFiles.reduce(
         (total, file) => {
           const stats = reviewDiffs.get(file.path) ?? emptyParsedDiff;
           total.additions += stats.additions;
@@ -3507,7 +3551,7 @@ function App() {
         },
         { additions: 0, deletions: 0 },
       ),
-    [reviewDiffs, reviewFiles],
+    [codeReviewFiles, reviewDiffs],
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
@@ -3592,6 +3636,13 @@ function App() {
     () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
     [task?.prompt, task?.state, visibleEvents],
   );
+  const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
+  const reviewReadyForDisplay =
+    task?.state === "review_ready"
+    || task?.state === "approving"
+    || task?.state === "approved"
+    || task?.state === "merged"
+    || task?.state === "rejected";
   const runnerContextUsage = useMemo(() => {
     for (let index = visibleEvents.length - 1; index >= 0; index -= 1) {
       const event = visibleEvents[index];
@@ -6478,6 +6529,17 @@ function App() {
                                 reviewFiles={reviewFiles}
                               />
                             )}
+                            {item.id === lastAssistantItemId && reviewReadyForDisplay && documentReviewFiles.length ? (
+                              <div className="documentResponseLinks" aria-label="Generated documents">
+                                {documentReviewFiles.map((file) => (
+                                  <DocumentReviewResponseLink
+                                    file={file}
+                                    key={file.path}
+                                    onOpenReview={openReviewPanel}
+                                  />
+                                ))}
+                              </div>
+                            ) : null}
                             <div className="messageActions">
                               <button
                                 className="messageAction"
@@ -6645,17 +6707,12 @@ function App() {
                       })()
                     ),
                   )}
-                  {reviewFiles.length &&
-                  (task?.state === "review_ready" ||
-                    task?.state === "approving" ||
-                    task?.state === "approved" ||
-                    task?.state === "merged" ||
-                    task?.state === "rejected") ? (
+                  {codeReviewFiles.length && reviewReadyForDisplay ? (
                     <ReviewSummaryCard
                       diffs={reviewDiffs}
-                      files={reviewFiles}
+                      files={codeReviewFiles}
                       onOpenReview={(filePath) => openReviewPanel(filePath)}
-                      totals={reviewTotals}
+                      totals={codeReviewTotals}
                     />
                   ) : null}
                 </div>

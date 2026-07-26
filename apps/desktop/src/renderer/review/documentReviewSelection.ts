@@ -58,24 +58,6 @@ export function segmentDocumentReview(preview: DocumentReviewSnapshot): Document
   );
 }
 
-function numberLabel(numbers: number[]): string {
-  const sorted = [...new Set(numbers)].sort((left, right) => left - right);
-  const ranges: string[] = [];
-  let start = sorted[0];
-  let end = sorted[0];
-  for (const number of sorted.slice(1)) {
-    if (number === end + 1) {
-      end = number;
-      continue;
-    }
-    ranges.push(start === end ? String(start) : `${start}-${end}`);
-    start = number;
-    end = number;
-  }
-  if (start !== undefined) ranges.push(start === end ? String(start) : `${start}-${end}`);
-  return ranges.join(", ");
-}
-
 export function documentReviewSelectionDetails(
   preview: DocumentReviewSnapshot,
   selectedIds: readonly string[],
@@ -86,21 +68,10 @@ export function documentReviewSelectionDetails(
   if (!chosen.length) return null;
   const blockIndexes = [...new Set(chosen.map((segment) => segment.blockIndex))];
   const blockIds = blockIndexes.map((index) => preview.blocks[index].id);
-  let label: string;
-  if (blockIndexes.length === 1) {
-    const blockIndex = blockIndexes[0];
-    const inBlock = segments.filter((segment) => segment.blockIndex === blockIndex);
-    const sentenceNumbers = chosen.map((segment) => segment.sentenceIndex + 1);
-    label = chosen.length === inBlock.length
-      ? `Paragraph ${blockIndex + 1}`
-      : `Paragraph ${blockIndex + 1} · Sentence${chosen.length === 1 ? "" : "s"} ${numberLabel(sentenceNumbers)}`;
-  } else {
-    label = `Paragraphs ${numberLabel(blockIndexes.map((index) => index + 1))} · ${chosen.length} sentences`;
-  }
   return {
     blockIds,
     sentenceIds: chosen.map((segment) => segment.id),
-    label,
+    label: "Selected text",
     excerpt: chosen.map((segment) => segment.text).join(" ").slice(0, 240),
   };
 }

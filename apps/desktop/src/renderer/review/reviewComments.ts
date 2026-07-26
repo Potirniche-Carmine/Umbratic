@@ -108,7 +108,7 @@ export function visibleReviewPrompt(value: string): VisibleReviewPrompt {
   for (const row of rows) {
     const firstBreak = row.indexOf("\n\n");
     const heading = firstBreak >= 0 ? row.slice(0, firstBreak) : row;
-    const match = heading.match(/^\*\*(.+?) · ((?:Lines|Paragraphs?).+)\*\*$/);
+    const match = heading.match(/^\*\*(.+?) · ((?:Lines|Paragraphs?).+|Selected text)\*\*$/);
     if (!match || firstBreak < 0) return { text: value, feedback: [] };
     let remainder = row.slice(firstBreak + 2);
     let excerpt = "";

@@ -116,6 +116,12 @@ test("inline references render review buttons only for unambiguous review files"
   assert.match(html, />docs\/README\.md<\/button>/);
 });
 
+test("generated document paths become clean response labels", () => {
+  const { documentReviewDisplayName } = loadRenderer();
+  assert.equal(documentReviewDisplayName(".umbratic/artifacts/docx/narrative-proposal.docx"), "Narrative Proposal");
+  assert.equal(documentReviewDisplayName(".umbratic/artifacts/docx/Q3_brief.docx"), "Q3 Brief");
+});
+
 test("skill previews render markdown content and source filters split system from personal skills", () => {
   const { filterSkillsBySource, skillGovernanceLabel, skillPreviewMarkdown } = loadRenderer();
   const skillFile = [

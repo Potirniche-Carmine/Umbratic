@@ -24,10 +24,10 @@ test("document review selection segments sentences and labels focused selections
     "Third sentence.",
   ]);
   const one = selection.documentReviewSelectionDetails(preview, [sentences[1].id]);
-  assert.equal(one.label, "Paragraph 2 · Sentence 1");
+  assert.equal(one.label, "Selected text");
   assert.equal(one.excerpt, "First sentence.");
   const paragraph = selection.documentReviewSelectionDetails(preview, [sentences[1].id, sentences[2].id]);
-  assert.equal(paragraph.label, "Paragraph 2");
+  assert.equal(paragraph.label, "Selected text");
   const multiple = selection.documentReviewSelectionDetails(preview, [sentences[1].id, sentences[3].id]);
-  assert.equal(multiple.label, "Paragraphs 2-3 · 2 sentences");
+  assert.equal(multiple.label, "Selected text");
 });
