@@ -33,6 +33,24 @@ export function pathInside(parent: string, child: string): boolean {
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/** True when any path component from root to target is a symlink/junction. */
+export function hasSymlinkComponent(root: string, target: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return true;
+  let current = resolvedRoot;
+  for (const part of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 export function slugify(value: string): string {
   const slug = value
     .toLowerCase()

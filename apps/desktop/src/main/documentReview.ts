@@ -9,7 +9,7 @@ import {
   type DocumentReviewSnapshot,
 } from "../shared/documentReview";
 import type { ReviewFile } from "./types";
-import { normalizeRelativePath, pathInside } from "./utils";
+import { hasSymlinkComponent, normalizeRelativePath, pathInside } from "./utils";
 
 type DocumentReviewTask = {
   id: string;
@@ -24,20 +24,6 @@ export type DocumentReviewReadResult =
 
 function taskReviewContains(task: DocumentReviewTask, relativePath: string): boolean {
   return task.reviewFiles.some((file) => normalizeRelativePath(file.path) === relativePath);
-}
-
-function hasSymlinkComponent(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  let current = root;
-  for (const part of relative.split(path.sep).filter(Boolean)) {
-    current = path.join(current, part);
-    try {
-      if (fs.lstatSync(current).isSymbolicLink()) return true;
-    } catch {
-      return false;
-    }
-  }
-  return false;
 }
 
 export function readTaskDocumentReview(

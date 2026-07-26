@@ -168,8 +168,9 @@ import type {
   WorkspaceKind,
   WorkspaceMode,
 } from "./types";
-import { commandText, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines } from "../shared/reviewDiff";
+import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
+import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
+import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, taskEventSignature } from "../shared/taskEvents";
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
 import { readTaskDocumentReview } from "./documentReview";
 import {
@@ -374,125 +375,12 @@ function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
   return events.filter((event) => !isReviewReadyAssistantEvent(event) && event.type !== "review.ready");
 }
 
-function boundedTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
-  if (events.length <= limit) return events;
-  const recent = events.slice(-limit);
-  const retained = events.slice(0, -limit).filter(
-    (event) => event.type === "user.message" || event.type === "assistant.delta" || event.type === "assistant.done"
-      || event.type === "response.feedback" || event.type === "tool.failed" || event.type === "context.threshold",
-  );
-  return [...retained, ...recent];
-}
-
 function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {
-  const existing = visibleTaskEvents(events);
-  if (event.type === "response.feedback") {
-    return boundedTaskEvents([
-      ...existing.filter(
-        (storedEvent) =>
-          !(storedEvent.type === "response.feedback" && storedEvent.taskId === event.taskId && storedEvent.messageId === event.messageId),
-      ),
-      event,
-    ], limit);
-  }
-  if (
-    event.type === "user.message" &&
-    event.at &&
-    existing.some(
-      (storedEvent) =>
-        storedEvent.type === "user.message" &&
-        storedEvent.at === event.at &&
-        taskEventSignature(storedEvent) === taskEventSignature(event),
-    )
-  ) {
-    return existing;
-  }
-  const last = existing.at(-1);
-  if (
-    last &&
-    event.type === "user.message" &&
-    last.type === "user.message" &&
-    event.at &&
-    last.at === event.at &&
-    taskEventSignature(last) === taskEventSignature(event)
-  ) {
-    return existing;
-  }
-  if (
-    last &&
-    (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") &&
-    last.type === event.type &&
-    last.taskId === event.taskId
-  ) {
-    return boundedTaskEvents([
-      ...existing.slice(0, -1),
-      {
-        ...last,
-        text: event.type === "assistant.reasoning.delta"
-          ? `${last.text}${event.text}`.slice(-24_000)
-          : `${last.text}${event.text}`,
-        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
-      },
-    ], limit);
-  }
-  if (
-    last &&
-    event.type === "command.output" &&
-    last.type === "command.output" &&
-    last.taskId === event.taskId &&
-    last.id === event.id &&
-    last.stream === event.stream
-  ) {
-    return boundedTaskEvents([
-      ...existing.slice(0, -1),
-      {
-        ...last,
-        text: `${last.text}${event.text}`.slice(-12_000),
-        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
-      },
-    ], limit);
-  }
-  const boundedEvent = event.type === "assistant.reasoning.delta"
-    ? { ...event, text: event.text.slice(-24_000) }
-    : event.type === "command.output"
-      ? { ...event, text: event.text.slice(-12_000) }
-      : event;
-  return boundedTaskEvents([...existing, boundedEvent], limit);
+  return appendSharedTaskEvent(visibleTaskEvents(events), event, limit) as BackendUiEvent[];
 }
 
 function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
-  return events.reduce<BackendUiEvent[]>((current, event) => appendTaskEvent(current, event, limit), []);
-}
-
-function taskEventSignature(event: BackendUiEvent): string {
-  if (event.type === "user.message") {
-    return JSON.stringify({
-      type: event.type,
-      taskId: event.taskId,
-      at: event.at,
-      text: event.text,
-      attachedFiles: (event.attachedFiles ?? []).map((file) => ({
-        path: file.path,
-        name: file.name,
-        storedPath: file.storedPath,
-        originalPath: file.originalPath,
-      })),
-    });
-  }
-  if (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") {
-    return JSON.stringify({
-      type: event.type,
-      taskId: event.taskId,
-      text: event.text,
-    });
-  }
-  if (event.type === "assistant.done") {
-    return JSON.stringify({
-      type: event.type,
-      taskId: event.taskId,
-    });
-  }
-  return JSON.stringify(event);
+  return compactSharedTaskEvents(events, limit) as BackendUiEvent[];
 }
 
 function mergeTaskEvents(...groups: BackendUiEvent[][]): BackendUiEvent[] {
@@ -1314,6 +1202,7 @@ function updateChatFromTask(task: TaskRecord) {
     worktreeBaseCommit: isolatedWorktree ? task.baseCommit : undefined,
     draftPrompt: existing?.draftPrompt ?? "",
     attachedFiles: existing?.attachedFiles ?? [],
+    ...(existing?.contextState ? { contextState: existing.contextState } : {}),
   };
   writeChat(next);
 }
@@ -1333,19 +1222,10 @@ const ignoredSnapshotDirectories = new Set([
   ".vite",
 ]);
 
-function textLines(value: string): string[] {
-  const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = normalized.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
-  return lines;
-}
-
 function readTextFileIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > textAttachmentByteLimit) {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > textAttachmentByteLimit) {
       return null;
     }
     const buffer = fs.readFileSync(filePath);
@@ -1360,8 +1240,8 @@ function readTextFileIfSafe(filePath: string): string | null {
 
 function readAttachmentTextIfSafe(filePath: string): string | null {
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > chatAttachmentByteLimit) return null;
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > chatAttachmentByteLimit) return null;
     const buffer = fs.readFileSync(filePath);
     if (buffer.includes(0)) return null;
     return buffer.toString("utf8");
@@ -1384,11 +1264,17 @@ function isBinarySnapshotValue(value: string | null | undefined): boolean {
 }
 
 function snapshotFileValue(filePath: string): string {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) return missingSnapshotValue;
+  } catch {
+    return missingSnapshotValue;
+  }
   const text = readTextFileIfSafe(filePath);
   if (text !== null) return text;
   try {
-    const stat = fs.statSync(filePath);
-    return stat.isFile() ? binarySnapshotValue(stat) : missingSnapshotValue;
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink() ? binarySnapshotValue(stat) : missingSnapshotValue;
   } catch {
     return missingSnapshotValue;
   }
@@ -1400,7 +1286,14 @@ function snapshotSelectedFiles(rootPath: string, files: string[]): Record<string
   for (const file of files) {
     const relative = normalizeRelativePath(file);
     const absolute = path.resolve(root, relative);
-    if (!relative || !pathInside(root, absolute) || isGeneratedRuntimePath(relative)) continue;
+    if (
+      !relative
+      || !pathInside(root, absolute)
+      || hasSymlinkComponent(root, absolute)
+      || isGeneratedRuntimePath(relative)
+    ) {
+      continue;
+    }
     snapshot[relative] = snapshotFileValue(absolute);
   }
   return snapshot;
@@ -1714,13 +1607,16 @@ function snapshotFolder(rootPath: string): Record<string, string> {
     for (const entry of entries) {
       const absolute = path.join(current, entry.name);
       const relative = normalizeRelativePath(path.relative(root, absolute));
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
       if (entry.isDirectory()) {
         if (!ignoredSnapshotDirectories.has(entry.name) && !isGeneratedRuntimePath(relative)) {
           stack.push(absolute);
         }
         continue;
       }
-      if (!entry.isFile() || isGeneratedRuntimePath(relative)) {
+      if (!entry.isFile() || isGeneratedRuntimePath(relative) || hasSymlinkComponent(root, absolute)) {
         continue;
       }
       const text = readTextFileIfSafe(absolute);
@@ -1729,8 +1625,8 @@ function snapshotFolder(rootPath: string): Record<string, string> {
         continue;
       }
       try {
-        const stat = fs.statSync(absolute);
-        if (stat.isFile()) {
+        const stat = fs.lstatSync(absolute);
+        if (stat.isFile() && !stat.isSymbolicLink()) {
           snapshot[relative] = binarySnapshotValue(stat);
         }
       } catch {
@@ -2041,6 +1937,7 @@ async function runnerPromptForTask(
   userPrompt: string,
   attachments: ChatAttachment[],
   contextLength: number,
+  options: { useDurableContext?: boolean } = {},
 ): Promise<RunnerPromptPart[]> {
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
@@ -2075,7 +1972,8 @@ async function runnerPromptForTask(
       lines.push(`\n### ${file.path}`, "```", file.text, "```");
     }
   }
-  const hasDurableContext = Boolean(task.chatId && readChat(task.chatId)?.contextState);
+  const hasDurableContext = options.useDurableContext
+    ?? Boolean(task.chatId && readChat(task.chatId)?.contextState);
   const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
   if (history) {
     lines.push(
@@ -2099,7 +1997,7 @@ async function runnerPromptForTask(
   parts.push(...(await attachmentPromptParts(rootPath, attachments, { userPrompt, capabilityReport, textBudget })));
   parts.push({
     type: "text",
-    text: ["User request:", userPrompt].join("\n"),
+    text: userPrompt,
   });
   return limitPromptImages(parts, pdfImagePageLimit, promptImageCharacterLimit);
 }
@@ -2117,195 +2015,22 @@ function runnerPromptText(prompt: RunnerPrompt): string {
         .join("\n\n");
 }
 
-function diffHeader(filePath: string, status: ReviewFile["status"]): string[] {
-  const escaped = filePath.replace(/\\/g, "/");
-  if (status === "added") {
-    return [`diff --git a/${escaped} b/${escaped}`, "new file mode 100644", "--- /dev/null", `+++ b/${escaped}`];
-  }
-  if (status === "deleted") {
-    return [`diff --git a/${escaped} b/${escaped}`, "deleted file mode 100644", `--- a/${escaped}`, "+++ /dev/null"];
-  }
-  return [`diff --git a/${escaped} b/${escaped}`, `--- a/${escaped}`, `+++ b/${escaped}`];
-}
-
-type SnapshotDiffOperation = { prefix: " " | "+" | "-"; text: string };
-
-function lcsLineDiff(before: string[], after: string[]): SnapshotDiffOperation[] {
-  const rows = before.length;
-  const cols = after.length;
-  const table: number[][] = Array.from({ length: rows + 1 }, () => Array<number>(cols + 1).fill(0));
-  for (let row = rows - 1; row >= 0; row -= 1) {
-    for (let col = cols - 1; col >= 0; col -= 1) {
-      table[row][col] =
-        before[row] === after[col]
-          ? table[row + 1][col + 1] + 1
-          : Math.max(table[row + 1][col], table[row][col + 1]);
-    }
-  }
-  const diff: SnapshotDiffOperation[] = [];
-  let row = 0;
-  let col = 0;
-  while (row < rows || col < cols) {
-    if (row < rows && col < cols && before[row] === after[col]) {
-      diff.push({ prefix: " ", text: before[row] });
-      row += 1;
-      col += 1;
-    } else if (col < cols && (row === rows || table[row][col + 1] >= table[row + 1][col])) {
-      diff.push({ prefix: "+", text: after[col] });
-      col += 1;
-    } else if (row < rows) {
-      diff.push({ prefix: "-", text: before[row] });
-      row += 1;
-    }
-  }
-  return diff;
-}
-
-function patienceLineDiff(before: string[], after: string[]): SnapshotDiffOperation[] {
-  let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
-  let suffix = 0;
-  while (
-    suffix < before.length - prefix
-    && suffix < after.length - prefix
-    && before[before.length - suffix - 1] === after[after.length - suffix - 1]
-  ) suffix += 1;
-
-  const leading = before.slice(0, prefix).map((text) => ({ prefix: " " as const, text }));
-  const trailing = before.slice(before.length - suffix).map((text) => ({ prefix: " " as const, text }));
-  const left = before.slice(prefix, before.length - suffix);
-  const right = after.slice(prefix, after.length - suffix);
-  if (!left.length) return [...leading, ...right.map((text) => ({ prefix: "+" as const, text })), ...trailing];
-  if (!right.length) return [...leading, ...left.map((text) => ({ prefix: "-" as const, text })), ...trailing];
-  if (left.length * right.length <= 40_000) return [...leading, ...lcsLineDiff(left, right), ...trailing];
-
-  const leftCounts = new Map<string, number>();
-  const rightCounts = new Map<string, number>();
-  const rightIndexes = new Map<string, number>();
-  left.forEach((line) => leftCounts.set(line, (leftCounts.get(line) ?? 0) + 1));
-  right.forEach((line, index) => {
-    rightCounts.set(line, (rightCounts.get(line) ?? 0) + 1);
-    rightIndexes.set(line, index);
-  });
-  const candidates = left
-    .map((line, leftIndex) => ({ leftIndex, rightIndex: rightIndexes.get(line) ?? -1 }))
-    .filter(({ leftIndex, rightIndex }) => (
-      rightIndex >= 0
-      && leftCounts.get(left[leftIndex]) === 1
-      && rightCounts.get(left[leftIndex]) === 1
-    ));
-  if (!candidates.length) {
-    return [
-      ...leading,
-      ...left.map((text) => ({ prefix: "-" as const, text })),
-      ...right.map((text) => ({ prefix: "+" as const, text })),
-      ...trailing,
-    ];
-  }
-
-  const tails: number[] = [];
-  const prior = new Array<number>(candidates.length).fill(-1);
-  for (let index = 0; index < candidates.length; index += 1) {
-    let low = 0;
-    let high = tails.length;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      if (candidates[tails[middle]].rightIndex < candidates[index].rightIndex) low = middle + 1;
-      else high = middle;
-    }
-    if (low > 0) prior[index] = tails[low - 1];
-    tails[low] = index;
-  }
-  const anchors: typeof candidates = [];
-  for (let index = tails.at(-1) ?? -1; index >= 0; index = prior[index]) anchors.push(candidates[index]);
-  anchors.reverse();
-
-  const middle: SnapshotDiffOperation[] = [];
-  let leftStart = 0;
-  let rightStart = 0;
-  for (const anchor of anchors) {
-    middle.push(...patienceLineDiff(left.slice(leftStart, anchor.leftIndex), right.slice(rightStart, anchor.rightIndex)));
-    middle.push({ prefix: " ", text: left[anchor.leftIndex] });
-    leftStart = anchor.leftIndex + 1;
-    rightStart = anchor.rightIndex + 1;
-  }
-  middle.push(...patienceLineDiff(left.slice(leftStart), right.slice(rightStart)));
-  return [...leading, ...middle, ...trailing];
-}
-
-function unifiedDiffHunks(before: string[], after: string[], contextLines = reviewContextLines): string[] {
-  const operations = patienceLineDiff(before, after);
-  const annotated = operations.map((operation, index) => ({
-    ...operation,
-    index,
-    oldLine: 0,
-    newLine: 0,
-  }));
-  let oldLine = 1;
-  let newLine = 1;
-  for (const operation of annotated) {
-    operation.oldLine = oldLine;
-    operation.newLine = newLine;
-    if (operation.prefix !== "+") oldLine += 1;
-    if (operation.prefix !== "-") newLine += 1;
-  }
-
-  const ranges: Array<{ start: number; end: number }> = [];
-  for (const operation of annotated) {
-    if (operation.prefix === " ") continue;
-    let start = operation.index;
-    let remaining = contextLines;
-    while (start > 0 && remaining > 0) {
-      start -= 1;
-      if (annotated[start].prefix === " ") remaining -= 1;
-    }
-    let end = operation.index;
-    remaining = contextLines;
-    while (end + 1 < annotated.length && remaining > 0) {
-      end += 1;
-      if (annotated[end].prefix === " ") remaining -= 1;
-    }
-    const previous = ranges.at(-1);
-    if (previous && start <= previous.end + 1) previous.end = Math.max(previous.end, end);
-    else ranges.push({ start, end });
-  }
-
-  return ranges.flatMap(({ start, end }) => {
-    const body = annotated.slice(start, end + 1);
-    const oldCount = body.filter((operation) => operation.prefix !== "+").length;
-    const newCount = body.filter((operation) => operation.prefix !== "-").length;
-    const oldStart = oldCount ? body[0].oldLine : Math.max(0, body[0].oldLine - 1);
-    const newStart = newCount ? body[0].newLine : Math.max(0, body[0].newLine - 1);
-    return [
-      `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`,
-      ...body.map((operation) => `${operation.prefix}${operation.text}`),
-    ];
-  });
-}
-
-function buildTextDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
-  if (before === after) {
-    return null;
-  }
-  const status: ReviewFile["status"] = before === null ? "added" : after === null ? "deleted" : "modified";
-  const beforeLines = before === null ? [] : textLines(before);
-  const afterLines = after === null ? [] : textLines(after);
-  return normalizeReviewFile({
-    path: filePath,
-    status,
-    diff: [...diffHeader(filePath, status), ...unifiedDiffHunks(beforeLines, afterLines)].join("\n"),
-  });
-}
-
 function buildBinaryDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
   if (before === after) {
     return null;
   }
   const status: ReviewFile["status"] = before === null ? "added" : after === null ? "deleted" : "modified";
+  const escaped = filePath.replace(/\\/g, "/");
+  const header =
+    status === "added"
+      ? [`diff --git a/${escaped} b/${escaped}`, "new file mode 100644", "--- /dev/null", `+++ b/${escaped}`]
+      : status === "deleted"
+        ? [`diff --git a/${escaped} b/${escaped}`, "deleted file mode 100644", `--- a/${escaped}`, "+++ /dev/null"]
+        : [`diff --git a/${escaped} b/${escaped}`, `--- a/${escaped}`, `+++ b/${escaped}`];
   return normalizeReviewFile({
     path: filePath,
     status,
-    diff: [...diffHeader(filePath, status), `Binary file ${status}: ${filePath}`].join("\n"),
+    diff: [...header, `Binary file ${status}: ${filePath}`].join("\n"),
   });
 }
 
@@ -3370,15 +3095,6 @@ async function respondToToolPermission(input: unknown) {
   }
 }
 
-async function runnerPromptForTaskWithPermission(
-  task: TaskRecord,
-  userPrompt: string,
-  attachments: ChatAttachment[],
-  contextLength: number,
-): Promise<RunnerPromptPart[]> {
-  return runnerPromptForTask(task, userPrompt, attachments, contextLength);
-}
-
 async function prepareTaskTurnCheckpoint(task: TaskRecord): Promise<void> {
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   task.baselineFiles = task.workspaceKind === "git"
@@ -3803,14 +3519,14 @@ async function runRunnerTask(
     applyTaskPolicyMetadata(task);
     saveTask(task);
     await prepareTaskTurnCheckpoint(task);
-    const prompt = promptForRun
-      ?? (await runnerPromptForTaskWithPermission(
+    let prompt = promptForRun
+      ?? (await runnerPromptForTask(
         task,
         intent,
         attachments,
         selectedForRun.contextLength ?? readContextLengthSetting(),
       ));
-    const promptParts = runnerPromptParts(prompt);
+    let promptParts = runnerPromptParts(prompt);
     run = await startUmbraticRunnerServer(
       task,
       selectedForRun,
@@ -4164,11 +3880,47 @@ async function runRunnerTask(
     // Runner sessions live only inside the runner process started above.
     // Because Umbratic starts a fresh process for each task run, a persisted
     // runnerSessionId from an earlier process is stale and cannot be reused.
-    const contextState = task.chatId ? readChat(task.chatId)?.contextState : undefined;
-    const session = await runnerRequest<{ id: string }>(run, "/session", {
-      method: "POST",
-      body: { contextState: contextState ?? null },
-    });
+    let contextState = task.chatId ? readChat(task.chatId)?.contextState : undefined;
+    let session: { id: string };
+    try {
+      session = await runnerRequest<{ id: string }>(run, "/session", {
+        method: "POST",
+        body: { contextState: contextState ?? null },
+      });
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error);
+      if (!contextState || !message.includes("invalid_context_state")) {
+        throw error;
+      }
+      if (task.chatId) {
+        const chat = readChat(task.chatId);
+        if (chat) {
+          writeChat({ ...chat, contextState: undefined });
+        }
+      }
+      recordLocalDiagnostic({
+        level: "warn",
+        source: "desktop",
+        event: "context_state.invalid",
+        message: "Persisted chat context was invalid and was cleared; falling back to event history.",
+        data: { taskId: task.id, chatId: task.chatId },
+      });
+      contextState = undefined;
+      if (!promptForRun) {
+        prompt = await runnerPromptForTask(
+          task,
+          intent,
+          attachments,
+          selectedForRun.contextLength ?? readContextLengthSetting(),
+          { useDurableContext: false },
+        );
+        promptParts = runnerPromptParts(prompt);
+      }
+      session = await runnerRequest<{ id: string }>(run, "/session", {
+        method: "POST",
+        body: { contextState: null },
+      });
+    }
     run.sessionId = session.id;
     task.runnerSessionId = session.id;
     saveTask(task);
@@ -4755,8 +4507,19 @@ async function rejectTask(input: unknown): Promise<void> {
       ? await restoreTurnCheckpoint(task)
       : false;
     if (!restoredCheckpoint) {
-      const reviewFiles = await refreshReview(task);
-      restoreFolderTaskChanges(task, reviewFiles);
+      if (task.workspaceKind === "git" && fs.existsSync(task.worktreePath) && /^[a-f0-9]{40,64}$/i.test(task.baseCommit)) {
+        const reset = await gitResult(task.worktreePath, ["reset", "--hard", task.baseCommit]);
+        if (!reset.success) {
+          throw new Error((reset.stderr || reset.stdout || "Failed to restore the Git worktree.").trim());
+        }
+        const cleaned = await gitResult(task.worktreePath, ["clean", "-fd"]);
+        if (!cleaned.success) {
+          throw new Error((cleaned.stderr || cleaned.stdout || "Failed to clean the Git worktree.").trim());
+        }
+      } else {
+        const reviewFiles = await refreshReview(task);
+        restoreFolderTaskChanges(task, reviewFiles);
+      }
     }
     task.changedFiles = [];
     task.reviewFiles = [];
@@ -4783,8 +4546,15 @@ function restoreFolderTaskChanges(task: TaskRecord, reviewFiles: ReviewFile[]) {
       continue;
     }
     const absolute = path.resolve(task.worktreePath, file.path);
-    if (!pathInside(task.worktreePath, absolute)) {
+    if (!pathInside(task.worktreePath, absolute) || hasSymlinkComponent(task.worktreePath, absolute)) {
       throw new Error(`Refusing to restore a path outside the task folder: ${file.path}`);
+    }
+    try {
+      if (fs.existsSync(absolute) && fs.lstatSync(absolute).isSymbolicLink()) {
+        throw new Error(`Refusing to restore through a symbolic link: ${file.path}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Refusing to restore")) throw error;
     }
     if (Object.prototype.hasOwnProperty.call(baseline, file.path)) {
       if (baseline[file.path] === missingSnapshotValue) {

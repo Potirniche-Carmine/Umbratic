@@ -56,7 +56,15 @@ test("document review service rejects symlinked and oversized sidecars", () => {
   const absoluteSidecar = path.join(root, sidecarPath);
   fs.mkdirSync(path.dirname(absoluteSidecar), { recursive: true });
   fs.writeFileSync(outside, source(), "utf8");
-  fs.symlinkSync(outside, absoluteSidecar);
+  let symlinkCreated = false;
+  try {
+    fs.symlinkSync(outside, absoluteSidecar);
+    symlinkCreated = true;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "EPERM")) {
+      throw error;
+    }
+  }
   const task = {
     id: "task-1",
     worktreePath: root,
@@ -64,8 +72,10 @@ test("document review service rejects symlinked and oversized sidecars", () => {
     reviewFiles: [reviewFile(documentPath), reviewFile(sidecarPath)],
   };
   try {
-    assert.equal(service.readTaskDocumentReview(task, documentPath).code, "unsafe");
-    fs.unlinkSync(absoluteSidecar);
+    if (symlinkCreated) {
+      assert.equal(service.readTaskDocumentReview(task, documentPath).code, "unsafe");
+      fs.unlinkSync(absoluteSidecar);
+    }
     fs.writeFileSync(absoluteSidecar, "x".repeat(1024 * 1024 + 1), "utf8");
     assert.equal(service.readTaskDocumentReview(task, documentPath).code, "too_large");
   } finally {

@@ -67,12 +67,22 @@ fn clipped_head_tail(value: &str, limit: usize) -> String {
     )
 }
 
-fn strip_stale_desktop_envelope(value: &str) -> String {
-    value
-        .rfind("User request:")
-        .map(|index| value[index + "User request:".len()..].trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| value.to_owned())
+fn persistable_user_content(content: &Value) -> Value {
+    match content {
+        Value::Array(parts) => {
+            let last_text = parts.iter().rev().find_map(|part| {
+                (part.get("type").and_then(Value::as_str) == Some("text"))
+                    .then(|| part.get("text").and_then(Value::as_str))
+                    .flatten()
+            });
+            if let Some(text) = last_text {
+                return Value::String(clipped_head_tail(text, MAX_CONTENT_STRING_BYTES));
+            }
+            sanitize_value(content)
+        }
+        Value::String(text) => Value::String(clipped_head_tail(text, MAX_CONTENT_STRING_BYTES)),
+        other => sanitize_value(other),
+    }
 }
 
 fn sanitize_value(value: &Value) -> Value {
@@ -80,10 +90,7 @@ fn sanitize_value(value: &Value) -> Value {
         Value::String(value) if value.starts_with("data:image/") => {
             Value::String("[image unavailable in persisted context]".into())
         }
-        Value::String(value) => Value::String(clipped_head_tail(
-            &strip_stale_desktop_envelope(value),
-            MAX_CONTENT_STRING_BYTES,
-        )),
+        Value::String(value) => Value::String(clipped_head_tail(value, MAX_CONTENT_STRING_BYTES)),
         Value::Array(values) => Value::Array(values.iter().map(sanitize_value).collect()),
         Value::Object(values) => Value::Object(
             values
@@ -221,7 +228,12 @@ fn message_from_value(value: &Value) -> Option<ContextMessageV1> {
     if !matches!(role.as_str(), "user" | "assistant" | "tool") {
         return None;
     }
-    let content = sanitize_value(value.get("content").unwrap_or(&Value::Null));
+    let raw_content = value.get("content").unwrap_or(&Value::Null);
+    let content = if role == "user" {
+        persistable_user_content(raw_content)
+    } else {
+        sanitize_value(raw_content)
+    };
     let tool_call_id = value
         .get("tool_call_id")
         .and_then(Value::as_str)
@@ -350,9 +362,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snapshot_strips_images_and_stale_desktop_context() {
+    fn snapshot_keeps_only_the_final_user_text_part() {
         let messages = vec![json!({"role":"user","content":[
-            {"type":"text","text":"workspace boilerplate\nUser request:\nkeep this request"},
+            {"type":"text","text":"workspace boilerplate"},
+            {"type":"text","text":"keep this request"},
             {"type":"image_url","image_url":{"url":"data:image/png;base64,SECRET"}}
         ]})];
         let state = snapshot_context_state(ContextStateSnapshotInput {

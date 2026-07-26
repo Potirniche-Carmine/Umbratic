@@ -108,7 +108,7 @@ fn split_segments(command: &str) -> Result<Vec<&str>, &'static str> {
     Ok(segments)
 }
 
-fn is_auto_safe_python_runtime(command: &str) -> bool {
+fn command_program_name(command: &str) -> String {
     let trimmed = command.trim();
     let trimmed = trimmed
         .strip_prefix("run ")
@@ -122,19 +122,52 @@ fn is_auto_safe_python_runtime(command: &str) -> bool {
         .trim_matches(['\'', '"'])
         .replace('\\', "/")
         .to_ascii_lowercase();
-    let name = program.rsplit('/').next().unwrap_or(&program);
+    program
+        .rsplit('/')
+        .next()
+        .unwrap_or(&program)
+        .to_owned()
+}
+
+fn uv_tokens(command: &str) -> Vec<String> {
+    let trimmed = command.trim();
+    let trimmed = trimmed
+        .strip_prefix("run ")
+        .or_else(|| trimmed.strip_prefix("RUN "))
+        .unwrap_or(trimmed)
+        .trim_start();
+    trimmed
+        .split_whitespace()
+        .map(|token| token.trim_matches(['\'', '"']).to_ascii_lowercase())
+        .collect()
+}
+
+fn is_auto_safe_uv_invocation(command: &str) -> bool {
+    let tokens = uv_tokens(command);
+    let Some(program) = tokens.first() else {
+        return false;
+    };
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    if !matches!(name, "uv" | "uv.exe") {
+        return false;
+    }
+    // Only local execution helpers are auto-safe. Install/add/sync/tool/python
+    // mutations can reach the network and must confirm like other package managers.
+    match tokens.get(1).map(String::as_str) {
+        Some("run") => true,
+        Some("tool") if tokens.get(2).map(String::as_str) == Some("run") => true,
+        _ => false,
+    }
+}
+
+fn is_auto_safe_python_runtime(command: &str) -> bool {
+    let name = command_program_name(command);
+    if matches!(name.as_str(), "uv" | "uv.exe") {
+        return is_auto_safe_uv_invocation(command);
+    }
     matches!(
-        name,
-        "python"
-            | "python.exe"
-            | "python3"
-            | "python3.exe"
-            | "py"
-            | "py.exe"
-            | "pytest"
-            | "pytest.exe"
-            | "uv"
-            | "uv.exe"
+        name.as_str(),
+        "python" | "python.exe" | "python3" | "python3.exe" | "py" | "py.exe" | "pytest" | "pytest.exe"
     )
 }
 
@@ -195,9 +228,9 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecisionV1 {
         );
     }
     let lower = trimmed.to_ascii_lowercase();
-    let destructive_root = (lower.contains("rm -rf /")
+    let destructive_root = lower.contains("rm -rf /")
         || lower.contains("rm -fr /")
-        || lower.contains("remove-item -recurse")
+        || (lower.contains("remove-item -recurse")
             && (lower.contains(" c:\\\\") || lower.contains(" /")))
         || ((lower.contains("rm -rf") || lower.contains("rm -fr"))
             && lower.contains(&cwd.to_string_lossy().to_ascii_lowercase()));
@@ -400,10 +433,26 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("uv python install 3.12", cwd).action,
-            SafetyAction::Allow
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("uv pip install example", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("uv add example", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("uv tool install ruff", cwd).action,
+            SafetyAction::Confirm
         );
         assert_eq!(
             evaluate_command("uv run python bubble_sort.py", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("uv tool run ruff check .", cwd).action,
             SafetyAction::Allow
         );
         assert_eq!(

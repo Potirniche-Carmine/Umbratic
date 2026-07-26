@@ -166,9 +166,24 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
       if (relation.startsWith("..") || path.isAbsolute(relation)) throw new Error("Checkpoint path escapes the workspace.");
       try {
         const stat = fs.lstatSync(target);
+        if (stat.isSymbolicLink()) {
+          throw new Error("Checkpoint refuses symbolic links or junctions.");
+        }
+        // Refuse symlink path components (e.g. nested/link/file.txt).
+        let cursor = root;
+        for (const part of relation.split(path.sep).filter(Boolean)) {
+          cursor = path.join(cursor, part);
+          if (fs.lstatSync(cursor).isSymbolicLink()) {
+            throw new Error("Checkpoint refuses symbolic links or junctions.");
+          }
+        }
+        if (!stat.isFile()) {
+          throw new Error("Checkpoint path is not a regular file.");
+        }
         presentPaths.push(relative);
-        if (stat.isFile()) logicalBytes += stat.size;
-      } catch {
+        logicalBytes += stat.size;
+      } catch (error) {
+        if (error instanceof Error && /symbolic links|regular file/.test(error.message)) throw error;
         // Deletions have no current logical bytes.
         deletedPaths.push(relative);
       }

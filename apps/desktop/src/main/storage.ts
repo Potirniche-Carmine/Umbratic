@@ -777,12 +777,14 @@ export function normalizeContextState(value: unknown): ChatRecord["contextState"
     };
   });
   if (tail.some((message) => !message) || Buffer.byteLength(JSON.stringify(value), "utf8") > 128 * 1024) return undefined;
+  const normalizedTail = tail as NonNullable<ChatRecord["contextState"]>["tail"];
+  if (!contextStateTailIsComplete(normalizedTail)) return undefined;
   return {
     version: 1,
     sourceTaskId: value.sourceTaskId,
     updatedAt: value.updatedAt,
     ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
-    tail: tail as NonNullable<ChatRecord["contextState"]>["tail"],
+    tail: normalizedTail,
     sourceDigest: value.sourceDigest,
     usage: {
       estimatedPromptTokens: value.usage.estimatedPromptTokens as number,
@@ -792,6 +794,35 @@ export function normalizeContextState(value: unknown): ChatRecord["contextState"
       compactionCount: value.usage.compactionCount as number,
     },
   };
+}
+
+function contextStateTailIsComplete(tail: NonNullable<ChatRecord["contextState"]>["tail"]): boolean {
+  if (tail[0]?.role === "tool") return false;
+  const seen = new Set<string>();
+  let pending: string[] = [];
+  for (const message of tail) {
+    if (message.role === "tool") {
+      const id = message.tool_call_id;
+      if (!id) return false;
+      const index = pending.indexOf(id);
+      if (index < 0) return false;
+      pending.splice(index, 1);
+      continue;
+    }
+    if (pending.length) return false;
+    if (message.tool_call_id) return false;
+    const ids = Array.isArray(message.tool_calls)
+      ? message.tool_calls
+          .map((call) => (isRecord(call) && typeof call.id === "string" ? call.id : ""))
+          .filter(Boolean)
+      : [];
+    for (const id of ids) {
+      if (seen.has(id) || id.length > 160) return false;
+      seen.add(id);
+    }
+    pending = ids;
+  }
+  return pending.length === 0;
 }
 
 function normalizeChatRecord(chat: unknown): ChatRecord | null {

@@ -109,6 +109,33 @@ test("checkpoint uses its seed tree when a file is reverted to the visible base 
   }
 });
 
+test("checkpoint refuses symbolic links instead of following them", async () => {
+  const root = fixtureRepository();
+  try {
+    fs.writeFileSync(path.join(root, "secret.env"), "TOKEN=secret\n");
+    try {
+      fs.symlinkSync(path.join(root, "secret.env"), path.join(root, "notes.txt"));
+    } catch (error) {
+      if (process.platform === "win32") {
+        // Creating symlinks can require elevated privileges on Windows.
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(
+      createGitCheckpoint({
+        workspacePath: root,
+        taskId: "task-symlink",
+        checkpointId: "blocked-link",
+        seedCommit: "HEAD",
+      }),
+      /symbolic links/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("turn restore returns the worktree and staged state to the checkpoint", async () => {
   const root = fixtureRepository();
   try {

@@ -222,4 +222,14 @@ test("hunk gaps report the omitted unchanged lines", () => {
   assert.equal(review.hiddenLinesBeforeHunk(first, second), 13);
 });
 
+test("buildTextDiff produces a patience unified patch for local snapshots", () => {
+  const file = review.buildTextDiff("notes.txt", "alpha\nbeta\n", "alpha\ngamma\n");
+  assert.equal(file?.path, "notes.txt");
+  assert.equal(file?.status, "modified");
+  assert.match(file?.diff ?? "", /diff --git a\/notes\.txt b\/notes\.txt/);
+  assert.match(file?.diff ?? "", /-beta/);
+  assert.match(file?.diff ?? "", /\+gamma/);
+  assert.equal(file?.hunks.length, 1);
+});
+
 
