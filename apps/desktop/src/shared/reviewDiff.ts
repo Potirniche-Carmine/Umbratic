@@ -464,3 +464,192 @@ export function alignReviewFile(file: ReviewFile): SideBySideRow[] {
 export function reviewPatchHash(files: ReviewFile[]): string {
   return stableReviewHash(files.map((file) => `${file.path}\0${file.contentHash}`).sort().join("\0"));
 }
+
+export function textLines(value: string): string[] {
+  const normalized = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+function diffHeader(filePath: string, status: ReviewFileStatus): string[] {
+  const escaped = filePath.replace(/\\/g, "/");
+  if (status === "added") {
+    return [`diff --git a/${escaped} b/${escaped}`, "new file mode 100644", "--- /dev/null", `+++ b/${escaped}`];
+  }
+  if (status === "deleted") {
+    return [`diff --git a/${escaped} b/${escaped}`, "deleted file mode 100644", `--- a/${escaped}`, "+++ /dev/null"];
+  }
+  return [`diff --git a/${escaped} b/${escaped}`, `--- a/${escaped}`, `+++ b/${escaped}`];
+}
+
+type SnapshotDiffOperation = { prefix: " " | "+" | "-"; text: string };
+
+function lcsLineDiff(before: string[], after: string[]): SnapshotDiffOperation[] {
+  const rows = before.length;
+  const cols = after.length;
+  const table: number[][] = Array.from({ length: rows + 1 }, () => Array<number>(cols + 1).fill(0));
+  for (let row = rows - 1; row >= 0; row -= 1) {
+    for (let col = cols - 1; col >= 0; col -= 1) {
+      table[row][col] =
+        before[row] === after[col]
+          ? table[row + 1][col + 1] + 1
+          : Math.max(table[row + 1][col], table[row][col + 1]);
+    }
+  }
+  const diff: SnapshotDiffOperation[] = [];
+  let row = 0;
+  let col = 0;
+  while (row < rows || col < cols) {
+    if (row < rows && col < cols && before[row] === after[col]) {
+      diff.push({ prefix: " ", text: before[row] });
+      row += 1;
+      col += 1;
+    } else if (col < cols && (row === rows || table[row][col + 1] >= table[row + 1][col])) {
+      diff.push({ prefix: "+", text: after[col] });
+      col += 1;
+    } else if (row < rows) {
+      diff.push({ prefix: "-", text: before[row] });
+      row += 1;
+    }
+  }
+  return diff;
+}
+
+function patienceLineDiff(before: string[], after: string[]): SnapshotDiffOperation[] {
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < before.length - prefix
+    && suffix < after.length - prefix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  ) suffix += 1;
+
+  const leading = before.slice(0, prefix).map((text) => ({ prefix: " " as const, text }));
+  const trailing = before.slice(before.length - suffix).map((text) => ({ prefix: " " as const, text }));
+  const left = before.slice(prefix, before.length - suffix);
+  const right = after.slice(prefix, after.length - suffix);
+  if (!left.length) return [...leading, ...right.map((text) => ({ prefix: "+" as const, text })), ...trailing];
+  if (!right.length) return [...leading, ...left.map((text) => ({ prefix: "-" as const, text })), ...trailing];
+  if (left.length * right.length <= 40_000) return [...leading, ...lcsLineDiff(left, right), ...trailing];
+
+  const leftCounts = new Map<string, number>();
+  const rightCounts = new Map<string, number>();
+  const rightIndexes = new Map<string, number>();
+  left.forEach((line) => leftCounts.set(line, (leftCounts.get(line) ?? 0) + 1));
+  right.forEach((line, index) => {
+    rightCounts.set(line, (rightCounts.get(line) ?? 0) + 1);
+    rightIndexes.set(line, index);
+  });
+  const candidates = left
+    .map((line, leftIndex) => ({ leftIndex, rightIndex: rightIndexes.get(line) ?? -1 }))
+    .filter(({ leftIndex, rightIndex }) => (
+      rightIndex >= 0
+      && leftCounts.get(left[leftIndex]) === 1
+      && rightCounts.get(left[leftIndex]) === 1
+    ));
+  if (!candidates.length) {
+    return [
+      ...leading,
+      ...left.map((text) => ({ prefix: "-" as const, text })),
+      ...right.map((text) => ({ prefix: "+" as const, text })),
+      ...trailing,
+    ];
+  }
+
+  const tails: number[] = [];
+  const prior = new Array<number>(candidates.length).fill(-1);
+  for (let index = 0; index < candidates.length; index += 1) {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (candidates[tails[middle]].rightIndex < candidates[index].rightIndex) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0) prior[index] = tails[low - 1];
+    tails[low] = index;
+  }
+  const anchors: typeof candidates = [];
+  for (let index = tails.at(-1) ?? -1; index >= 0; index = prior[index]) anchors.push(candidates[index]);
+  anchors.reverse();
+
+  const middle: SnapshotDiffOperation[] = [];
+  let leftStart = 0;
+  let rightStart = 0;
+  for (const anchor of anchors) {
+    middle.push(...patienceLineDiff(left.slice(leftStart, anchor.leftIndex), right.slice(rightStart, anchor.rightIndex)));
+    middle.push({ prefix: " ", text: left[anchor.leftIndex] });
+    leftStart = anchor.leftIndex + 1;
+    rightStart = anchor.rightIndex + 1;
+  }
+  middle.push(...patienceLineDiff(left.slice(leftStart), right.slice(rightStart)));
+  return [...leading, ...middle, ...trailing];
+}
+
+export function unifiedDiffHunks(before: string[], after: string[], contextLines = reviewContextLines): string[] {
+  const operations = patienceLineDiff(before, after);
+  const annotated = operations.map((operation, index) => ({
+    ...operation,
+    index,
+    oldLine: 0,
+    newLine: 0,
+  }));
+  let oldLine = 1;
+  let newLine = 1;
+  for (const operation of annotated) {
+    operation.oldLine = oldLine;
+    operation.newLine = newLine;
+    if (operation.prefix !== "+") oldLine += 1;
+    if (operation.prefix !== "-") newLine += 1;
+  }
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const operation of annotated) {
+    if (operation.prefix === " ") continue;
+    let start = operation.index;
+    let remaining = contextLines;
+    while (start > 0 && remaining > 0) {
+      start -= 1;
+      if (annotated[start].prefix === " ") remaining -= 1;
+    }
+    let end = operation.index;
+    remaining = contextLines;
+    while (end + 1 < annotated.length && remaining > 0) {
+      end += 1;
+      if (annotated[end].prefix === " ") remaining -= 1;
+    }
+    const previous = ranges.at(-1);
+    if (previous && start <= previous.end + 1) previous.end = Math.max(previous.end, end);
+    else ranges.push({ start, end });
+  }
+
+  return ranges.flatMap(({ start, end }) => {
+    const body = annotated.slice(start, end + 1);
+    const oldCount = body.filter((operation) => operation.prefix !== "+").length;
+    const newCount = body.filter((operation) => operation.prefix !== "-").length;
+    const oldStart = oldCount ? body[0].oldLine : Math.max(0, body[0].oldLine - 1);
+    const newStart = newCount ? body[0].newLine : Math.max(0, body[0].newLine - 1);
+    return [
+      `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`,
+      ...body.map((operation) => `${operation.prefix}${operation.text}`),
+    ];
+  });
+}
+
+export function buildTextDiff(filePath: string, before: string | null, after: string | null): ReviewFile | null {
+  if (before === after) {
+    return null;
+  }
+  const status: ReviewFileStatus = before === null ? "added" : after === null ? "deleted" : "modified";
+  const beforeLines = before === null ? [] : textLines(before);
+  const afterLines = after === null ? [] : textLines(after);
+  return normalizeReviewFile({
+    path: filePath,
+    status,
+    diff: [...diffHeader(filePath, status), ...unifiedDiffHunks(beforeLines, afterLines)].join("\n"),
+  });
+}

@@ -68,6 +68,7 @@ import {
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
+import { appendTaskEvent, compactTaskEvents } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 
@@ -1726,107 +1727,12 @@ function isReviewReadyText(text: string): boolean {
   return text.trim() === "Ready for review.";
 }
 
-function eventSignature(event: BackendUiEvent): string {
-  if (event.type === "user.message") {
-    return JSON.stringify({
-      type: event.type,
-      taskId: event.taskId,
-      at: event.at,
-      text: event.text,
-      attachedFiles: (event.attachedFiles ?? []).map((file) => ({
-        path: file.path,
-        name: file.name,
-        storedPath: file.storedPath,
-        originalPath: file.originalPath,
-      })),
-    });
-  }
-  if (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") {
-    return JSON.stringify({
-      type: event.type,
-      taskId: event.taskId,
-      text: event.text,
-    });
-  }
-  if (event.type === "assistant.done") {
-    return JSON.stringify({
-      type: event.type,
-      taskId: event.taskId,
-    });
-  }
-  return JSON.stringify(event);
-}
-
 function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, limit = 500): BackendUiEvent[] {
-  if (event.type === "response.feedback") {
-    return [
-      ...events.filter(
-        (existing) =>
-          !(existing.type === "response.feedback" && existing.taskId === event.taskId && existing.messageId === event.messageId),
-      ),
-      event,
-    ].slice(-limit);
-  }
-  if (
-    event.type === "user.message" &&
-    event.at &&
-    events.some(
-      (existing) =>
-        existing.type === "user.message" &&
-        existing.at === event.at &&
-        eventSignature(existing) === eventSignature(event),
-    )
-  ) {
-    return events;
-  }
-  const last = events.at(-1);
-  if (
-    last &&
-    event.type === "user.message" &&
-    last.type === "user.message" &&
-    event.at &&
-    last.at === event.at &&
-    eventSignature(last) === eventSignature(event)
-  ) {
-    return events;
-  }
-  if (
-    last &&
-    (event.type === "assistant.delta" || event.type === "assistant.reasoning.delta") &&
-    last.type === event.type &&
-    last.taskId === event.taskId
-  ) {
-    return [
-      ...events.slice(0, -1),
-      {
-        ...last,
-        text: `${last.text}${event.text}`,
-        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
-      },
-    ].slice(-limit);
-  }
-  if (
-    last &&
-    event.type === "command.output" &&
-    last.type === "command.output" &&
-    last.taskId === event.taskId &&
-    last.id === event.id &&
-    last.stream === event.stream
-  ) {
-    return [
-      ...events.slice(0, -1),
-      {
-        ...last,
-        text: `${last.text}${event.text}`,
-        endedAt: event.endedAt ?? event.at ?? last.endedAt ?? last.at,
-      },
-    ].slice(-limit);
-  }
-  return [...events, event].slice(-limit);
+  return appendTaskEvent(events, event, limit) as BackendUiEvent[];
 }
 
 export function compactBackendEvents(events: BackendUiEvent[], limit = 500): BackendUiEvent[] {
-  return events.reduce<BackendUiEvent[]>((current, event) => appendBackendEvent(current, event, limit), []);
+  return compactTaskEvents(events, limit) as BackendUiEvent[];
 }
 
 export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): BackendUiEvent[] {
