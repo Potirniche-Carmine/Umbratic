@@ -107,6 +107,9 @@ for (const goModPath of ["infrastructure/veil/go.mod", "infrastructure/veil-cons
 if (Object.hasOwn(rootManifest, "allowScripts")) {
   fail("package.json must not declare allowScripts while npm install scripts are globally disabled.");
 }
+if (JSON.stringify(rootManifest.overrides ?? {}) !== JSON.stringify(supplyChainPolicy.reviewedNpmOverrides ?? {})) {
+  fail("package.json overrides must match the reviewed npm overrides in supply-chain-policy.json.");
+}
 
 const lock = readJson("package-lock.json");
 for (const manifestPath of manifestPaths) {
@@ -226,21 +229,32 @@ if (fs.existsSync(path.join(root, "node_modules"))) {
   } else {
     const npmCommand = npmCliPath ? process.execPath : "npm";
     const npmArgs = npmCliPath
-      ? [npmCliPath, "ls", "--all", "--json"]
-      : ["ls", "--all", "--json"];
+      ? [npmCliPath, "ls", "--all", "--json", "--omit=peer"]
+      : ["ls", "--all", "--json", "--omit=peer"];
     const npmTree = spawnSync(npmCommand, npmArgs, {
       cwd: root,
       encoding: "utf8",
     });
-    if (npmTree.error || npmTree.status !== 0) {
-      let detail = npmTree.error?.message ?? npmTree.stderr.trim();
+    if (npmTree.error) {
+      fail(`Unable to inspect the installed npm tree: ${npmTree.error.message}`);
+    } else {
       try {
         const parsed = JSON.parse(npmTree.stdout);
-        detail = parsed.problems?.join("; ") || detail;
+        const reviewedOverrides = supplyChainPolicy.reviewedNpmOverrides ?? {};
+        const omittedPeers = new Set(supplyChainPolicy.omittedNpmPeerPackages ?? []);
+        const unexpectedProblems = (parsed.problems ?? []).filter((problem) => {
+          const invalid = problem.match(/^invalid: (.+)@([^ ]+) /);
+          if (invalid && reviewedOverrides[invalid[1]] === invalid[2]) return false;
+          const missing = problem.match(/^missing: (.+?@[^,]+), required by /);
+          if (missing && omittedPeers.has(missing[1])) return false;
+          return true;
+        });
+        if (unexpectedProblems.length > 0) {
+          fail(`Installed npm tree does not match package-lock.json: ${unexpectedProblems.join("; ")}`);
+        }
       } catch {
-        // Keep npm's stderr when its output is not JSON.
+        fail(`Unable to parse the installed npm tree: ${npmTree.stderr.trim()}`);
       }
-      fail(`Installed npm tree does not match package-lock.json: ${detail}`);
     }
   }
 }

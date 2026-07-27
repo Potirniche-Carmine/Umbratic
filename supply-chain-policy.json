@@ -6,6 +6,15 @@
   "minimumGoVersion": "1.26.5",
   "cargoAuditVersion": "0.22.2",
   "govulncheckVersion": "1.6.0",
+  "reviewedNpmOverrides": {
+    "@electron/asar": "4.2.0",
+    "@electron/universal": "3.0.6",
+    "brace-expansion": "5.0.8",
+    "jake": "12.10.1"
+  },
+  "omittedNpmPeerPackages": [
+    "electron-builder-squirrel-windows@26.15.3"
+  ],
   "allowedNpmInstallScriptPackages": [
     "electron-winstaller@5.4.0",
     "fsevents@2.3.3"

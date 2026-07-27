@@ -1,0 +1,65 @@
+name: Verify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: infrastructure/veil/go.mod
+          cache: false
+
+      - name: Set up Rust
+        run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt --no-self-update && rustup default 1.96.0
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --omit=peer
+
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+
+      - name: Audit Rust dependencies
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Install Go vulnerability scanner
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
+      - name: Audit dependency vulnerabilities and provenance
+        run: npm run supply-chain:audit
+
+      - name: Generate locked dependency SBOM
+        run: npm run supply-chain:sbom
+
+      - name: Verify changes
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: npm run test:all
+
+      - name: Upload dependency SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: umbratic-supply-chain-metadata
+          path: artifacts/supply-chain/umbratic-sbom.cdx.json
+          if-no-files-found: error

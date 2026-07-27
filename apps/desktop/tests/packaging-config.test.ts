@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const configUrl = new URL("../electron-builder.yml", import.meta.url);
 const preparePackageUrl = new URL("../scripts/prepare-package.ts", import.meta.url);
 const packageWorkflowUrl = new URL("../../../.github/workflows/package-desktop.yml", import.meta.url);
+const verifyWorkflowUrl = new URL("../../../.github/workflows/verify.yml", import.meta.url);
 
 test("desktop packages use the Umbratic product name without a version in Windows installed apps", () => {
   const config = fs.readFileSync(configUrl, "utf8");
@@ -64,6 +65,34 @@ test("desktop packaging jobs install Go and Rust before building native services
   assert.ok(packageJob.search(/uses: actions\/setup-go@[0-9a-f]{40}/) < packageJob.indexOf("npm --workspace @umbratic/desktop run package"));
   assert.ok(packageJob.indexOf("rustup toolchain install 1.96.0") < packageJob.indexOf("npm --workspace @umbratic\/desktop run package"));
   assert.ok(packageJob.indexOf("npm --workspace @umbratic/desktop run package") < packageJob.indexOf("npm --workspace @umbratic/desktop run verify:package"));
+});
+
+test("desktop packaging runs only for version tags", () => {
+  const packageWorkflow = fs.readFileSync(packageWorkflowUrl, "utf8");
+  const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
+  const packageTriggers = packageWorkflow.slice(
+    packageWorkflow.indexOf("on:"),
+    packageWorkflow.indexOf("\npermissions:"),
+  );
+  const verifyTriggers = verifyWorkflow.slice(
+    verifyWorkflow.indexOf("on:"),
+    verifyWorkflow.indexOf("\npermissions:"),
+  );
+
+  assert.match(packageTriggers, /tags:\r?\n\s+- "v\*"/);
+  assert.doesNotMatch(packageTriggers, /branches:|pull_request:/);
+  assert.match(verifyTriggers, /branches:\r?\n\s+- main/);
+  assert.match(verifyTriggers, /pull_request:/);
+  assert.doesNotMatch(verifyWorkflow, /run package|electron-builder/);
+});
+
+test("desktop workflows omit the unused Squirrel peer dependency", () => {
+  const packageWorkflow = fs.readFileSync(packageWorkflowUrl, "utf8");
+  const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
+
+  assert.doesNotMatch(packageWorkflow, /npm ci --ignore-scripts\s*$/m);
+  assert.match(packageWorkflow, /npm ci --ignore-scripts --omit=peer/g);
+  assert.match(verifyWorkflow, /npm ci --ignore-scripts --omit=peer/);
 });
 
 test("desktop release workflow pins actions and limits write permission to publishing", () => {

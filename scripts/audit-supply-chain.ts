@@ -32,6 +32,7 @@ const [npmCommand, npmAuditArgs] = npmInvocation([
   "audit",
   "--package-lock-only",
   "--ignore-scripts",
+  "--omit=peer",
   "--audit-level=low",
 ]);
 run("npm vulnerability audit", npmCommand, npmAuditArgs);
