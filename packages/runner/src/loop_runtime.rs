@@ -1256,6 +1256,7 @@ mod tests {
             compaction_count: std::sync::atomic::AtomicU32::new(0),
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
+            lsp: None,
             workspace_graph: None,
             turn: std::sync::Mutex::new(None),
         };
@@ -1297,6 +1298,7 @@ mod tests {
             compaction_count: std::sync::atomic::AtomicU32::new(0),
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
+            lsp: None,
             workspace_graph: None,
             turn: std::sync::Mutex::new(None),
         };

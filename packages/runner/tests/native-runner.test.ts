@@ -51,7 +51,36 @@ async function startProvider() {
     }
     const encoded = JSON.stringify(body.messages ?? []);
     response.writeHead(200, { "Content-Type": "text/event-stream", "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE") ? "change" : "" });
-    if (encoded.includes("READ_FILE") && !encoded.includes("read: README.md (ok)")) {
+    if (encoded.includes("LSP_DEGRADED") && !encoded.includes("freshness")) {
+      response.end(sse({ choices: [{ delta: { tool_calls: [{
+        index: 0,
+        id: "lsp-degraded-1",
+        function: { name: "lsp", arguments: "{\"action\":\"hover\",\"filePath\":\"main.ts\",\"line\":1,\"character\":1}" },
+      }] } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("LSP_CODE_INTELLIGENCE") && !encoded.includes("freshness")) {
+      response.end(sse({ choices: [{ delta: { tool_calls: [
+        {
+          index: 0,
+          id: "lsp-definition-1",
+          function: { name: "lsp", arguments: "{\"action\":\"definition\",\"filePath\":\"main.ts\",\"line\":2,\"character\":16}" },
+        },
+        {
+          index: 1,
+          id: "lsp-references-1",
+          function: { name: "lsp", arguments: "{\"action\":\"references\",\"filePath\":\"main.ts\",\"line\":2,\"character\":16}" },
+        },
+        {
+          index: 2,
+          id: "lsp-hover-1",
+          function: { name: "lsp", arguments: "{\"action\":\"hover\",\"filePath\":\"main.ts\",\"line\":2,\"character\":16}" },
+        },
+        {
+          index: 3,
+          id: "lsp-symbols-1",
+          function: { name: "lsp", arguments: "{\"action\":\"symbols\",\"filePath\":\"main.ts\"}" },
+        },
+      ] } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("READ_FILE") && !encoded.includes("read: README.md (ok)")) {
       response.end(sse({ choices: [{ delta: { content: "Internal plan must stay hidden.", tool_calls: [{ index: 0, id: "read-1", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":2}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("WRITE_FILE") && !encoded.includes("write: note.txt (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "write-1", function: { name: "write", arguments: "{\"filePath\":\"note.txt\",\"content\":\"native write\\n\"}" } }] } }] }) + "data: [DONE]\n\n");
@@ -231,6 +260,151 @@ async function createSession(run: Awaited<ReturnType<typeof startRunner>>, conte
   assert.match(response.headers.get("cache-control") ?? "", /no-store/);
   return response.json() as Promise<{ id: string }>;
 }
+
+test("native runner gates and executes workspace-relative LSP code intelligence", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-lsp-"));
+  const sourcePath = path.join(cwd, "main.ts");
+  const stubPath = path.join(cwd, "lsp-stub.mjs");
+  fs.writeFileSync(sourcePath, "export const answer = 42;\nconsole.log(answer);\n");
+  fs.writeFileSync(stubPath, `
+let buffer = Buffer.alloc(0);
+function send(value) {
+  const body = Buffer.from(JSON.stringify(value));
+  process.stdout.write(Buffer.from("Content-Length: " + body.length + "\\r\\n\\r\\n"));
+  process.stdout.write(body);
+}
+function inspect() {
+  while (true) {
+    const boundary = buffer.indexOf("\\r\\n\\r\\n");
+    if (boundary < 0) return;
+    const header = buffer.subarray(0, boundary).toString("ascii");
+    const match = header.match(/Content-Length:\\s*(\\d+)/i);
+    if (!match) process.exit(2);
+    const length = Number(match[1]);
+    if (buffer.length < boundary + 4 + length) return;
+    const message = JSON.parse(buffer.subarray(boundary + 4, boundary + 4 + length).toString("utf8"));
+    buffer = buffer.subarray(boundary + 4 + length);
+    if (message.method === "initialize") {
+      send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { definitionProvider: true } } });
+    } else if (message.method === "textDocument/definition") {
+      send({ jsonrpc: "2.0", id: message.id, result: [{
+        uri: new URL("./main.ts", import.meta.url).href,
+        range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }
+      }] });
+    } else if (message.method === "textDocument/references") {
+      send({ jsonrpc: "2.0", id: message.id, result: [
+        {
+          uri: new URL("./main.ts", import.meta.url).href,
+          range: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }
+        },
+        {
+          uri: new URL("./main.ts", import.meta.url).href,
+          range: { start: { line: 1, character: 12 }, end: { line: 1, character: 18 } }
+        }
+      ] });
+    } else if (message.method === "textDocument/hover") {
+      send({ jsonrpc: "2.0", id: message.id, result: {
+        contents: { kind: "markdown", value: "const answer: 42" }
+      } });
+    } else if (message.method === "textDocument/documentSymbol") {
+      send({ jsonrpc: "2.0", id: message.id, result: [{
+        name: "answer",
+        kind: 14,
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 25 } },
+        selectionRange: { start: { line: 0, character: 13 }, end: { line: 0, character: 19 } }
+      }] });
+    } else if (message.method === "shutdown") {
+      send({ jsonrpc: "2.0", id: message.id, result: null });
+    } else if (message.method === "exit") {
+      process.exit(0);
+    }
+  }
+}
+process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); inspect(); });
+`);
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+    enabledTools: ["read", "search", "lsp"],
+    lspServers: [{
+      id: "typescript-language-server",
+      command: process.execPath,
+      args: [stubPath],
+      languageIds: ["typescript"],
+      extensions: ["ts"],
+    }],
+  });
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "LSP_CODE_INTELLIGENCE")).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    const firstChat = provider.requests.find((request) => request.path === "/api/engineering/chat");
+    const toolNames = ((firstChat?.body.tools ?? []) as Array<{ function?: { name?: string } }>)
+      .map((tool) => tool.function?.name);
+    assert.ok(toolNames.includes("lsp"));
+    const outputs = new Map(
+      events.events
+        .filter((event) => event.type === "tool.output" && String(event.toolCallId).startsWith("lsp-"))
+        .map((event) => [event.toolCallId, String(event.text)]),
+    );
+    assert.match(outputs.get("lsp-definition-1") ?? "", /"path":"main\.ts"/);
+    assert.match(outputs.get("lsp-references-1") ?? "", /Found 2 references/);
+    assert.match(outputs.get("lsp-hover-1") ?? "", /const answer: 42/);
+    assert.match(outputs.get("lsp-symbols-1") ?? "", /"name":"answer"/);
+    for (const output of outputs.values()) {
+      assert.match(output, /"freshness":"ready"/);
+      assert.doesNotMatch(output, new RegExp(cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    let cleanupError: unknown;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        fs.rmSync(cwd, { recursive: true, force: true });
+        cleanupError = undefined;
+        break;
+      } catch (error) {
+        cleanupError = error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    if (cleanupError) throw cleanupError;
+  }
+});
+
+test("native runner degrades a crashed language server without failing the task", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-lsp-degraded-"));
+  fs.writeFileSync(path.join(cwd, "main.ts"), "export const answer = 42;\n");
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+    enabledTools: ["read", "lsp"],
+    lspServers: [{
+      id: "typescript-language-server",
+      command: process.execPath,
+      args: ["-e", "process.exit(1)"],
+      languageIds: ["typescript"],
+      extensions: ["ts"],
+    }],
+  });
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "LSP_DEGRADED")).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    const output = events.events.find((event) => event.type === "tool.output" && event.toolCallId === "lsp-degraded-1");
+    assert.match(String(output?.text), /"freshness":"degraded"/);
+    assert.match(String(output?.text), /unavailable for this session/);
+    const finished = events.events.find((event) => event.type === "tool.finished" && event.toolCallId === "lsp-degraded-1");
+    assert.equal(finished?.status, "success");
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("native runner semantically compacts a durable prefix and persists the validated handoff", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-compaction-"));

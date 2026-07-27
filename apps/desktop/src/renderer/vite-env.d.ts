@@ -36,7 +36,7 @@ type UmbraticCapabilityProbeReport = {
 };
 type UmbraticWorkspaceKind = "git" | "folder";
 type UmbraticWorkspaceMode = "local" | "worktree";
-type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "command";
+type UmbraticRunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
 type UmbraticRequiredToolContractRequirement = "file_change";
 type UmbraticRequiredToolContractReason =
   | "file_tools_disabled"

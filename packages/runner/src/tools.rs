@@ -23,8 +23,8 @@ use crate::{
     context::compress_tool_result,
     events::now_iso,
     policy::{
-        confirm_workspace_write_path, is_blocked_path, is_generated_runtime_path, redact_stream_text,
-        redact_text, resolve_workspace_path,
+        confirm_workspace_write_path, is_blocked_path, is_generated_runtime_path,
+        redact_stream_text, redact_text, resolve_workspace_path,
     },
     safety::{CommandPermit, SafetyAction, SafetyDecisionV1, evaluate_command},
     session::{EventSink, Session},
@@ -175,6 +175,15 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
             "limit",
             "maxResults",
         ],
+        "lsp" => &[
+            "action",
+            "filePath",
+            "path",
+            "line",
+            "character",
+            "query",
+            "limit",
+        ],
         "workspace_graph" => &[
             "action",
             "query",
@@ -204,6 +213,8 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
         "depth",
         "maxDepth",
         "timeoutMs",
+        "line",
+        "character",
     ] {
         if input.contains_key(key) && !input.get(key).is_some_and(Value::is_number) {
             return Err(format!("{name} argument {key} must be a number"));
@@ -225,6 +236,7 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
         "read_attachment" => vec![string_arg(input, &["attachmentId"])],
         "retrieve_context" => vec![string_arg(input, &["hash"])],
         "workspace_graph" => vec![string_arg(input, &["action"])],
+        "lsp" => vec![string_arg(input, &["action"])],
         "edit"
             if input.get("mode").and_then(Value::as_str) == Some("patch")
                 || (input.contains_key("patch")
@@ -1698,6 +1710,21 @@ pub async fn enabled_tool_specs(session: &Session, include_tools: bool) -> Vec<V
             &[],
         ));
     }
+    if enabled.iter().any(|name| name == "lsp") && session.lsp.is_some() {
+        specs.push(tool_definition(
+            "lsp",
+            "Query read-only language-server evidence. Use one-based line and character positions. Verify returned locations with read before an edit.",
+            json!({
+                "action":{"type":"string","enum":["definition","references","hover","symbols"]},
+                "filePath":{"type":"string"},
+                "line":{"type":"number"},
+                "character":{"type":"number"},
+                "query":{"type":"string"},
+                "limit":{"type":"number"}
+            }),
+            &["action"],
+        ));
+    }
     if enabled.iter().any(|name| name == "workspace_graph") && session.workspace_graph.is_some() {
         specs.push(tool_definition("workspace_graph", "Query bounded source-backed workspace graph evidence.", json!({ "action":{"type":"string","enum":["summary","query","explain","path","affected"]}, "query":{"type":"string"}, "symbol":{"type":"string"}, "from":{"type":"string"}, "to":{"type":"string"}, "files":{"type":"array","items":{"type":"string"}}, "symbols":{"type":"array","items":{"type":"string"}}, "depth":{"type":"number"}, "limit":{"type":"number"}, "maxDepth":{"type":"number"}, "direction":{"type":"string","enum":["incoming","outgoing","both"]} }), &["action"]));
     }
@@ -1786,6 +1813,11 @@ pub async fn execute_tool(
             "search" => format!(
                 "search {}",
                 string_arg(args, &["query", "pattern", "term", "text"])
+            ),
+            "lsp" => format!(
+                "lsp {} {}",
+                string_arg(args, &["action"]),
+                string_arg(args, &["filePath", "path"])
             ),
             "command" => redact_text(&string_arg(args, &["command", "cmd", "script"]), 320),
             other => other.to_owned(),
@@ -1878,6 +1910,15 @@ pub async fn execute_tool(
         "write" => write_tool(&session, &sink, &args, &permissions).await,
         "edit" => edit_tool(&session, &sink, &args, &permissions).await,
         "search" => search_tool(&session, &args).await,
+        "lsp" => match session.lsp.as_ref() {
+            Some(service) => service.query(&args, &session).await.map(|value| {
+                ToolResult::success(
+                    format!("lsp {}", string_arg(&args, &["action"])),
+                    value.to_string(),
+                )
+            }),
+            None => Err("Language-server support is not configured for this session.".to_owned()),
+        },
         "workspace_graph" => session
             .workspace_graph
             .as_ref()
@@ -2012,7 +2053,11 @@ mod tests {
     #[test]
     fn command_children_use_trusted_shell_and_minimal_path() {
         let shell = resolve_trusted_shell().expect("trusted shell");
-        assert!(shell.is_absolute(), "shell must be absolute: {}", shell.display());
+        assert!(
+            shell.is_absolute(),
+            "shell must be absolute: {}",
+            shell.display()
+        );
         assert!(shell.is_file(), "shell must exist: {}", shell.display());
         #[cfg(windows)]
         assert!(
@@ -2118,6 +2163,12 @@ mod tests {
             json!(["patch"])
         );
         assert!(named("search")["function"]["parameters"]["properties"]["path"].is_object());
+        assert!(
+            specs
+                .iter()
+                .all(|spec| spec["function"]["name"] != "lsp"),
+            "lsp must be omitted when no approved server is configured"
+        );
     }
 
     #[tokio::test]
@@ -2252,6 +2303,7 @@ mod tests {
             compaction_count: std::sync::atomic::AtomicU32::new(0),
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
+            lsp: None,
             workspace_graph: None,
             turn: std::sync::Mutex::new(None),
         });
@@ -2369,6 +2421,7 @@ mod tests {
             compaction_count: std::sync::atomic::AtomicU32::new(0),
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
+            lsp: None,
             workspace_graph: None,
             turn: std::sync::Mutex::new(None),
         };
@@ -2484,6 +2537,7 @@ mod tests {
             compaction_count: std::sync::atomic::AtomicU32::new(0),
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
+            lsp: None,
             workspace_graph: None,
             turn: std::sync::Mutex::new(None),
         });

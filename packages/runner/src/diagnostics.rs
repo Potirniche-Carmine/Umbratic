@@ -137,11 +137,11 @@ impl RunnerDiagnostics {
                 data.insert(key.to_owned(), Value::String(redact_text(value, 1000)));
             }
         }
-        if let Some(Value::String(text)) = event.get("text") {
-            if self.config.include_tool_output != "none" {
-                data.insert("textChars".into(), json!(text.chars().count()));
-                data.insert("text".into(), Value::String(redact_text(text, 1600)));
-            }
+        if let Some(Value::String(text)) = event.get("text")
+            && self.config.include_tool_output != "none"
+        {
+            data.insert("textChars".into(), json!(text.chars().count()));
+            data.insert("text".into(), Value::String(redact_text(text, 1600)));
         }
         if let Some(Value::String(cwd)) = event.get("cwd") {
             data.insert("cwdHash".into(), Value::String(short_hash_value(cwd)));

@@ -7,7 +7,7 @@ export type PermissionMode = "normal" | "auto_safe";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
-export type RunnerToolId = "read" | "write" | "edit" | "search" | "command";
+export type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
 export type RequiredToolContractRequirement = "file_change";
 export type RequiredToolContractReason =
   | "file_tools_disabled"
@@ -217,6 +217,14 @@ export type CapabilityProbeReport = {
     recommendedMissing: number;
     optionalMissing: number;
   };
+};
+
+export type LspServerLaunchConfig = {
+  id: string;
+  command: string;
+  args: string[];
+  languageIds: string[];
+  extensions: string[];
 };
 
 export type CapabilityTelemetryProbe = {

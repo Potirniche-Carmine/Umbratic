@@ -233,3 +233,62 @@ test("runnerBinaryPath prefers the packaged runner resource", () => {
     }
   }
 });
+
+test("runner config enables LSP only for a successful approved probe", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-lsp-"));
+  const serverPath = path.join(userData, process.platform === "win32" ? "typescript-language-server.cmd" : "typescript-language-server");
+  fs.writeFileSync(serverPath, "fixture");
+  const { adapter } = loadRunnerAdapter(userData);
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "http://127.0.0.1:8080",
+  };
+  const task = {
+    id: "task-lsp",
+    repositoryId: "repo-1",
+    prompt: "Find a definition",
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    enabledTools: ["read", "search", "lsp"],
+    worktreePath: userData,
+  };
+  const baseReport = {
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    summary: { available: 1, missing: 0, error: 0, unknown: 0, requiredMissing: 0, recommendedMissing: 0, optionalMissing: 0 },
+  };
+  const available = {
+    ...baseReport,
+    probes: [{
+      id: "typescript-language-server",
+      label: "TypeScript language server",
+      category: "optional-engineering",
+      importance: "optional",
+      status: "available",
+      executablePath: serverPath,
+      purpose: "Code intelligence.",
+      installHint: "Install it.",
+      workflows: ["code intelligence"],
+      checkedAt: baseReport.checkedAt,
+    }],
+  };
+  const enabled = adapter.buildUmbraticRunnerConfig(task, model, undefined, available);
+  assert.deepEqual(plain(enabled.enabledTools), ["read", "search", "lsp"]);
+  assert.deepEqual(plain(enabled.lspServers), [{
+    id: "typescript-language-server",
+    command: fs.realpathSync(serverPath),
+    args: ["--stdio"],
+    languageIds: ["typescript", "typescriptreact", "javascript", "javascriptreact"],
+    extensions: ["ts", "tsx", "js", "jsx"],
+  }]);
+
+  const missing = adapter.buildUmbraticRunnerConfig(task, model, undefined, {
+    ...baseReport,
+    summary: { ...baseReport.summary, available: 0, missing: 1, optionalMissing: 1 },
+    probes: [{ ...available.probes[0], status: "missing", executablePath: undefined }],
+  });
+  assert.deepEqual(plain(missing.enabledTools), ["read", "search"]);
+  assert.deepEqual(plain(missing.lspServers), []);
+});

@@ -14,6 +14,7 @@ The runner owns:
 - `context.rs` and `session.rs`: bounded context, history, cancellation, and session state.
 - `events.rs` and `diagnostics.rs`: stable external contracts and redacted diagnostics.
 - `workspace_graph.rs`: bounded workspace relationship data.
+- `lsp/`: probe-gated, read-only language-server lifecycle, protocol framing, and workspace-relative code-intelligence results.
 
 Keep modules cohesive and keep security decisions at the boundary that has enough information to enforce them.
 

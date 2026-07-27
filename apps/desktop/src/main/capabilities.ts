@@ -433,6 +433,26 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     workflows: ["Git", "worktree review", "engineering"],
   },
   {
+    id: "typescript-language-server",
+    label: "TypeScript language server",
+    category: "optional-engineering",
+    importance: "optional",
+    commands: ["typescript-language-server"],
+    purpose: "Provides TypeScript and JavaScript definitions, references, hover information, and symbols.",
+    installHint: "Install typescript-language-server and TypeScript, then make the command available on PATH.",
+    workflows: ["code intelligence", "TypeScript", "JavaScript"],
+  },
+  {
+    id: "rust-analyzer",
+    label: "rust-analyzer",
+    category: "optional-engineering",
+    importance: "optional",
+    commands: ["rust-analyzer"],
+    purpose: "Provides Rust definitions, references, hover information, and symbols.",
+    installHint: "Install rust-analyzer with rustup or your system package manager.",
+    workflows: ["code intelligence", "Rust"],
+  },
+  {
     id: "uv",
     label: "uv",
     category: "recommended",
@@ -738,6 +758,13 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     `- checked at ${report.checkedAt}`,
   ];
   const requiredMissing = missingRequiredLabels(report);
+  const languageServers = ["typescript-language-server", "rust-analyzer"]
+    .map((id) => capabilityById(report, id))
+    .filter((probe): probe is CapabilityProbeResult => probe?.status === "available")
+    .map((probe) => probe.label);
+  if (languageServers.length > 0) {
+    lines.push(`- LSP code intelligence is available: ${languageServers.join(", ")}`);
+  }
   if (requiredMissing.length) {
     lines.push(`- setup problem: missing required capability ${requiredMissing.join(", ")}`);
   }

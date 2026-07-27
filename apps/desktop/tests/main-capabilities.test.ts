@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
@@ -146,5 +149,31 @@ test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabil
   assert.equal(byId.get("pdftoppm").affectedCurrentRun, true);
   assert.equal(byId.get("tesseract").affectedCurrentRun, true);
   assert.equal(byId.get("node-runtime").versionFamily, "22.0");
+});
+
+test("language-server probes record an approved absolute executable path", async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-lsp-probes-"));
+  const typescriptServer = path.join(bin, "typescript-language-server");
+  fs.writeFileSync(typescriptServer, "fixture");
+  try {
+    const report = await capabilities.probeLocalCapabilities({
+      force: true,
+      env: { PATH: bin },
+      execFile(file, _args, _options, callback) {
+        queueMicrotask(() => {
+          if (file === "typescript-language-server") callback(null, "4.3.0\n", "");
+          else callback(execError("ENOENT", `spawn ${file} ENOENT`), "", "");
+        });
+        return { kill: () => undefined };
+      },
+      resolvePackage: () => null,
+    });
+    const probe = report.probes.find((item) => item.id === "typescript-language-server");
+    assert.equal(probe.status, "available");
+    assert.equal(probe.executablePath, typescriptServer);
+    assert.match(capabilities.capabilityPromptGuidance(report, {}), /LSP code intelligence is available/);
+  } finally {
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
 });
 

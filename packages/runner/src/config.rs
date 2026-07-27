@@ -4,11 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
-pub const RUNNER_TOOL_NAMES: [&str; 6] = [
+pub const RUNNER_TOOL_NAMES: [&str; 7] = [
     "read",
     "write",
     "edit",
     "search",
+    "lsp",
     "workspace_graph",
     "command",
 ];
@@ -79,6 +80,15 @@ pub struct WorkspaceGraphConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct LspServerConfig {
+    pub id: String,
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub language_ids: Vec<String>,
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RunnerConfig {
     pub task_id: Option<String>,
     pub cwd: PathBuf,
@@ -91,6 +101,7 @@ pub struct RunnerConfig {
     pub skills: Vec<RunnerSkillConfig>,
     pub permission_mode: PermissionMode,
     pub enabled_tools: Vec<String>,
+    pub lsp_servers: Vec<LspServerConfig>,
     pub workspace_graph: Option<WorkspaceGraphConfig>,
     pub diagnostics: DiagnosticsConfig,
     pub provider: ProviderConfig,
@@ -275,6 +286,96 @@ fn parse_diagnostics(value: Option<&Value>) -> DiagnosticsConfig {
     }
 }
 
+fn parse_lsp_servers(value: Option<&Value>) -> Vec<LspServerConfig> {
+    let mut servers = BTreeMap::new();
+    for item in value.and_then(Value::as_array).into_iter().flatten() {
+        let Some(server) = item.as_object() else {
+            continue;
+        };
+        let Some(id) = optional_string(server.get("id")) else {
+            continue;
+        };
+        if id.len() > 96
+            || !id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            continue;
+        }
+        let Some(command) = optional_string(server.get("command")).map(PathBuf::from) else {
+            continue;
+        };
+        if !command.is_absolute() || !command.is_file() {
+            continue;
+        }
+        let Ok(command) = command.canonicalize() else {
+            continue;
+        };
+        let args = server
+            .get("args")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|argument| argument.len() <= 512 && !argument.contains('\0'))
+            .map(str::to_owned)
+            .take(16)
+            .collect::<Vec<_>>();
+        let language_ids = server
+            .get("languageIds")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|language| {
+                !language.is_empty()
+                    && language.len() <= 64
+                    && language.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                    })
+            })
+            .map(str::to_owned)
+            .take(16)
+            .collect::<Vec<_>>();
+        let extensions = server
+            .get("extensions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|extension| {
+                extension
+                    .trim()
+                    .trim_start_matches('.')
+                    .to_ascii_lowercase()
+            })
+            .filter(|extension| {
+                !extension.is_empty()
+                    && extension.len() <= 16
+                    && extension
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric())
+            })
+            .take(32)
+            .collect::<Vec<_>>();
+        if language_ids.is_empty() || extensions.is_empty() {
+            continue;
+        }
+        servers.insert(
+            id.clone(),
+            LspServerConfig {
+                id,
+                command,
+                args,
+                language_ids,
+                extensions,
+            },
+        );
+    }
+    servers.into_values().take(3).collect()
+}
+
 fn parse_mtls(value: &Value) -> Result<MtlsConfig, String> {
     let value = value
         .as_object()
@@ -404,6 +505,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             PermissionMode::Normal
         },
         enabled_tools,
+        lsp_servers: parse_lsp_servers(config.get("lspServers")),
         workspace_graph: config
             .get("workspaceGraph")
             .and_then(Value::as_object)
@@ -555,6 +657,38 @@ mod tests {
         let invalid =
             parse_diagnostics(Some(&serde_json::json!({"includeToolOutput":"everything"})));
         assert_eq!(invalid.include_tool_output, "stderr");
+    }
+
+    #[test]
+    fn lsp_server_config_accepts_only_absolute_existing_bounded_commands() {
+        let directory = tempfile::tempdir().unwrap();
+        let command = directory.path().join("language-server");
+        std::fs::write(&command, "fixture").unwrap();
+        let servers = parse_lsp_servers(Some(&serde_json::json!([
+            {
+                "id": "typescript-language-server",
+                "command": command,
+                "args": ["--stdio"],
+                "languageIds": ["typescript", "typescriptreact"],
+                "extensions": [".ts", "tsx"]
+            },
+            {
+                "id": "relative",
+                "command": "language-server",
+                "languageIds": ["typescript"],
+                "extensions": ["ts"]
+            },
+            {
+                "id": "missing",
+                "command": directory.path().join("missing"),
+                "languageIds": ["rust"],
+                "extensions": ["rs"]
+            }
+        ])));
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].id, "typescript-language-server");
+        assert_eq!(servers[0].args, ["--stdio"]);
+        assert_eq!(servers[0].extensions, ["ts", "tsx"]);
     }
 
     #[test]

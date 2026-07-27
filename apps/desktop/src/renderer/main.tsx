@@ -109,7 +109,7 @@ type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
 type WorkspaceKind = "git" | "folder";
 type WorkspaceMode = "local" | "worktree";
-type RunnerToolId = "read" | "write" | "edit" | "search" | "command";
+type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
 type RequiredToolContractRequirement = "file_change";
 type RequiredToolContractReason =
   | "file_tools_disabled"

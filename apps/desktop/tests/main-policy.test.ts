@@ -75,6 +75,7 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
     modelBoundary: "managed",
     permissionMode: "normal",
     enabledTools: ["read", "search"],
+    lspServers: [],
     provider: {
       id: "company-endpoint",
       modelId: "veil-managed",
@@ -99,6 +100,7 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     write: true,
     edit: true,
     search: true,
+    lsp: true,
     command: true,
   });
   assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "legacy-tool"])), ["read", "command"]);
@@ -107,6 +109,7 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     write: false,
     edit: false,
     search: false,
+    lsp: false,
     command: false,
   });
 });

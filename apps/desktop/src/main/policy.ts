@@ -383,6 +383,30 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
     Array.isArray(config.enabledTools) && config.enabledTools.every((tool) => isRunnerToolId(tool)),
     "enabled tools must be explicit valid runner tool ids",
   );
+  const lspServers = config.lspServers;
+  assert(Array.isArray(lspServers) && lspServers.length <= 3, "LSP servers must be a bounded explicit list");
+  assert(
+    lspServers.every((server) => {
+      if (!server || typeof server !== "object" || Array.isArray(server)) return false;
+      const value = server as Record<string, unknown>;
+      return (
+        typeof value.id === "string"
+        && typeof value.command === "string"
+        && path.isAbsolute(value.command)
+        && Array.isArray(value.args)
+        && value.args.every((argument) => typeof argument === "string")
+        && Array.isArray(value.languageIds)
+        && value.languageIds.every((language) => typeof language === "string")
+        && Array.isArray(value.extensions)
+        && value.extensions.every((extension) => typeof extension === "string")
+      );
+    }),
+    "LSP server commands must be approved absolute launch records",
+  );
+  assert(
+    !config.enabledTools.includes("lsp") || lspServers.length > 0,
+    "LSP must not be enabled without an approved server",
+  );
   assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic private endpoint allowlist");
 
   const provider = config.provider as Record<string, unknown> | undefined;

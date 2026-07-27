@@ -17,6 +17,7 @@ use crate::{
     context_state::ContextStateV1,
     diagnostics::RunnerDiagnostics,
     events::RunnerEvent,
+    lsp::LspService,
     permission::PermissionBroker,
     workspace_graph::WorkspaceGraphService,
 };
@@ -55,6 +56,7 @@ pub struct Session {
     pub compaction_count: AtomicU32,
     pub context_calibration: Mutex<Option<ContextCalibration>>,
     pub context_store: Mutex<SessionContextStore>,
+    pub lsp: Option<LspService>,
     pub workspace_graph: Option<WorkspaceGraphService>,
     /// At most one in-flight turn per session. Abort is scoped to the active turn id.
     pub(crate) turn: std::sync::Mutex<Option<ActiveTurn>>,
@@ -170,6 +172,8 @@ impl SessionStore {
         let workspace_graph = self.config.workspace_graph.as_ref().map(|graph| {
             WorkspaceGraphService::new(self.config.cwd.clone(), graph.artifact_path.clone())
         });
+        let lsp = (!self.config.lsp_servers.is_empty())
+            .then(|| LspService::new(self.config.cwd.clone(), self.config.lsp_servers.clone()));
         let messages = context_state
             .as_ref()
             .map(ContextStateV1::seeded_messages)
@@ -185,6 +189,7 @@ impl SessionStore {
             compaction_count: AtomicU32::new(0),
             context_calibration: Mutex::new(None),
             context_store: Mutex::new(SessionContextStore::default()),
+            lsp,
             workspace_graph,
             turn: std::sync::Mutex::new(None),
         });
@@ -206,6 +211,15 @@ impl SessionStore {
         session.abort();
         self.permissions.deny_all(&self.sink, &session.task_id);
         Ok(())
+    }
+
+    pub async fn shutdown(&self) {
+        let sessions = self.sessions.read().await.values().cloned().collect::<Vec<_>>();
+        for session in sessions {
+            if let Some(lsp) = session.lsp.as_ref() {
+                lsp.shutdown().await;
+            }
+        }
     }
 
     pub fn diagnostic_metadata(&self) -> Value {
@@ -231,6 +245,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
+        lsp_servers: Vec::new(),
         workspace_graph: None,
         diagnostics: crate::config::DiagnosticsConfig {
             enabled: false,
@@ -278,6 +293,7 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         compaction_count: AtomicU32::new(0),
         context_calibration: Mutex::new(None),
         context_store: Mutex::new(SessionContextStore::default()),
+        lsp: None,
         workspace_graph: None,
         turn: std::sync::Mutex::new(None),
     })

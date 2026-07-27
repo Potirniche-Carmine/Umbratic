@@ -83,6 +83,7 @@ pub struct RunnerServer {
     url: String,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
+    store: Arc<SessionStore>,
 }
 
 impl RunnerServer {
@@ -94,6 +95,7 @@ impl RunnerServer {
             let _ = shutdown.send(());
         }
         let _ = self.task.await;
+        self.store.shutdown().await;
     }
 }
 
@@ -568,7 +570,7 @@ pub async fn listen(hostname: &str, port: u16, password: String) -> Result<Runne
     require_loopback(hostname)?;
     let store = SessionStore::new()?;
     let state = AppState {
-        store,
+        store: store.clone(),
         password: Arc::from(password),
     };
     let app = Router::new()
@@ -600,6 +602,7 @@ pub async fn listen(hostname: &str, port: u16, password: String) -> Result<Runne
         url,
         shutdown: Some(shutdown_tx),
         task,
+        store,
     })
 }
 

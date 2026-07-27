@@ -5,12 +5,22 @@ import * as net from "node:net";
 import * as path from "node:path";
 
 import { localProviderCatalog } from "./config";
+import { probeLocalCapabilities } from "./capabilities";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { enabledPromptSkills } from "./skills";
 import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
-import type { HarnessProfileId, LocalModelInfo, RunnerProcess, SseStream, TaskRecord } from "./types";
+import type {
+  CapabilityProbeReport,
+  HarnessProfileId,
+  LocalModelInfo,
+  LspServerLaunchConfig,
+  RunnerProcess,
+  RunnerToolId,
+  SseStream,
+  TaskRecord,
+} from "./types";
 import { isRecord } from "./utils";
 
 type HarnessRouteConfig = {
@@ -31,12 +41,19 @@ export function buildUmbraticRunnerConfig(
   task: TaskRecord,
   selectedModel: LocalModelInfo,
   attachmentDirectory?: string,
+  capabilityReport?: CapabilityProbeReport,
 ): Record<string, unknown> {
   const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   const endpointSettings = readModelEndpointSettings();
   const localVeil = endpointSettings.mode === "local" ? currentLocalVeilConnection() : null;
   const harnessProfile = readHarnessProfileSetting();
   const route = harnessRouteConfig(harnessProfile);
+  const requestedTools = normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
+  const lspServers = approvedLspServers(capabilityReport);
+  const enabledTools = requestedTools.filter((tool) => tool !== "lsp") as RunnerToolId[];
+  if (requestedTools.includes("lsp") && lspServers.length > 0) {
+    enabledTools.splice(Math.min(4, enabledTools.length), 0, "lsp" as RunnerToolId);
+  }
   return {
     taskId: task.id,
     cwd: task.worktreePath,
@@ -55,7 +72,8 @@ export function buildUmbraticRunnerConfig(
     })),
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
-    enabledTools: normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({})),
+    enabledTools,
+    lspServers,
     diagnostics: {
       enabled: false,
     },
@@ -76,6 +94,39 @@ export function buildUmbraticRunnerConfig(
   };
 }
 
+export function approvedLspServers(report?: CapabilityProbeReport): LspServerLaunchConfig[] {
+  if (!report) return [];
+  const definitions: Record<string, Omit<LspServerLaunchConfig, "command">> = {
+    "typescript-language-server": {
+      id: "typescript-language-server",
+      args: ["--stdio"],
+      languageIds: ["typescript", "typescriptreact", "javascript", "javascriptreact"],
+      extensions: ["ts", "tsx", "js", "jsx"],
+    },
+    "rust-analyzer": {
+      id: "rust-analyzer",
+      args: [],
+      languageIds: ["rust"],
+      extensions: ["rs"],
+    },
+  };
+  const servers: LspServerLaunchConfig[] = [];
+  for (const probe of report.probes) {
+    const definition = definitions[probe.id];
+    if (!definition || probe.status !== "available" || !probe.executablePath || !path.isAbsolute(probe.executablePath)) {
+      continue;
+    }
+    try {
+      const command = fs.realpathSync(probe.executablePath);
+      if (!fs.statSync(command).isFile()) continue;
+      servers.push({ ...definition, command });
+    } catch {
+      // A stale probe must not approve a missing executable.
+    }
+  }
+  return servers.slice(0, 3);
+}
+
 export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   const runtimeRoot = path.join(worktreePath, ".umbratic", "runtime");
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
@@ -93,6 +144,7 @@ export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   const allowedExact = new Set([
     "HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP", "LANG", "TERM", "NO_PROXY",
     "SystemRoot", "SystemDrive", "WINDIR", "COMSPEC", "PATHEXT", "NODE_ENV",
+    "CARGO_HOME", "RUSTUP_HOME",
   ].map((name) => name.toLowerCase()));
   for (const [name, value] of Object.entries(process.env)) {
     if (!value || name.toLowerCase() === pathKey.toLowerCase()) continue;
@@ -150,9 +202,16 @@ async function freeLocalPort(): Promise<number> {
 
 export function stopRunnerProcess(run: RunnerProcess) {
   run.abortController.abort();
-  if (!run.child.killed) {
-    run.child.kill();
+  if (run.child.killed || run.child.exitCode !== null) return;
+  if (process.platform === "win32" && run.child.pid) {
+    const terminator = spawn("taskkill", ["/pid", String(run.child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    terminator.unref();
+    return;
   }
+  run.child.kill();
 }
 
 function runnerAuthHeader(run: RunnerProcess): string {
@@ -200,7 +259,8 @@ export async function startUmbraticRunnerServer(
   }
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
-  const config = buildUmbraticRunnerConfig(task, model, attachmentDirectory);
+  const capabilityReport = await probeLocalCapabilities({ runnerPath: binaryPath });
+  const config = buildUmbraticRunnerConfig(task, model, attachmentDirectory, capabilityReport);
   const diagnostics = isRecord(config.diagnostics) && typeof config.diagnostics.logPath === "string"
     ? { diagnosticLogPath: config.diagnostics.logPath }
     : {};

@@ -4,6 +4,7 @@ pub mod context_state;
 pub mod diagnostics;
 pub mod events;
 pub mod loop_runtime;
+pub mod lsp;
 pub mod permission;
 pub mod policy;
 pub mod provider;
