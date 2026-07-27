@@ -100,7 +100,7 @@ impl ToolRequest {
                 arguments,
             }),
             "command" => {
-                let command = string_arg(&arguments, &["command", "cmd", "script"]);
+                let command = command_display(&arguments);
                 let safety = evaluate_command(&command, cwd);
                 Self::Command(CommandRequest {
                     arguments,
@@ -286,7 +286,7 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
             "maxDepth",
             "direction",
         ],
-        "command" => &["command", "cmd", "script", "timeoutMs"],
+        "command" => &["command", "cmd", "script", "programId", "args", "timeoutMs"],
         "read_skill" => &["skillId", "resource", "offset", "limit"],
         "read_attachment" => &["attachmentId", "offset", "limit"],
         "retrieve_context" => &["hash", "offset", "limit"],
@@ -320,7 +320,7 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
             string_arg(input, &["path", "directory", "filePath"]),
             string_list_arg(input, &["glob", "filePattern"]).join(""),
         ],
-        "command" => vec![string_arg(input, &["command", "cmd", "script"])],
+        "command" => vec![],
         "read_skill" => vec![string_arg(input, &["skillId"])],
         "read_attachment" => vec![string_arg(input, &["attachmentId"])],
         "retrieve_context" => vec![string_arg(input, &["hash"])],
@@ -380,6 +380,33 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
     {
         return Err("write argument content must be a string".into());
     }
+    if name == "command" {
+        let command = string_arg(input, &["command", "cmd", "script"]);
+        let program_id = string_arg(input, &["programId"]);
+        if command.is_empty() && program_id.is_empty() {
+            return Err("command requires command or programId".into());
+        }
+        if !command.is_empty() && !program_id.is_empty() {
+            return Err("command must use either command or programId, not both".into());
+        }
+        if let Some(args) = input.get("args") {
+            if program_id.is_empty() {
+                return Err("command args require programId".into());
+            }
+            let Some(args) = args.as_array() else {
+                return Err("command argument args must be an array of strings".into());
+            };
+            if args.len() > 128
+                || args.iter().any(|argument| {
+                    !argument
+                        .as_str()
+                        .is_some_and(|value| value.len() <= 4096 && !value.contains('\0'))
+                })
+            {
+                return Err("command args exceed the bounded string argument limits".into());
+            }
+        }
+    }
     if name == "edit" {
         let mode = input
             .get("mode")
@@ -400,4 +427,18 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+pub(super) fn command_display(input: &Map<String, Value>) -> String {
+    let command = string_arg(input, &["command", "cmd", "script"]);
+    if !command.is_empty() {
+        return command;
+    }
+    let program_id = string_arg(input, &["programId"]);
+    let args = string_list_arg(input, &["args"]);
+    std::iter::once(program_id)
+        .chain(args)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }

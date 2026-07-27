@@ -289,3 +289,70 @@ test("runner config enables LSP only for a successful approved probe", () => {
   assert.deepEqual(plain(missing.enabledTools), ["read", "search"]);
   assert.deepEqual(plain(missing.lspServers), []);
 });
+
+test("runner config passes only verified command executables", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-executables-"));
+  const { adapter } = loadRunnerAdapter(userData);
+  const config = adapter.buildUmbraticRunnerConfig(
+    {
+      id: "task-executables",
+      repositoryId: "repo-1",
+      prompt: "Run Python",
+      workspaceKind: "folder",
+      workspaceMode: "local",
+      enabledTools: ["command"],
+      worktreePath: userData,
+    },
+    {
+      providerId: "company-endpoint",
+      providerName: "Umbratic Veil",
+      modelId: "veil-managed",
+      displayName: "Veil",
+      baseUrl: "http://127.0.0.1:8080",
+    },
+    undefined,
+    {
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      summary: {
+        available: 2,
+        missing: 0,
+        error: 0,
+        unknown: 0,
+        requiredMissing: 0,
+        recommendedMissing: 0,
+        optionalMissing: 0,
+      },
+      probes: [
+        {
+          id: "uv",
+          label: "uv",
+          category: "recommended",
+          importance: "recommended",
+          status: "available",
+          executablePath: process.execPath,
+          detectedCommand: "uv",
+          purpose: "Python runtime.",
+          installHint: "Install uv.",
+          workflows: ["Python"],
+          checkedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "node-runtime",
+          label: "Node",
+          category: "required",
+          importance: "required",
+          status: "available",
+          executablePath: process.execPath,
+          purpose: "Desktop runtime.",
+          installHint: "Bundled.",
+          workflows: ["desktop"],
+          checkedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    },
+  );
+  assert.deepEqual(plain(config.approvedExecutables), [{
+    id: "uv",
+    command: fs.realpathSync(process.execPath),
+  }]);
+});

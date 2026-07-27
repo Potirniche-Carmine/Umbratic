@@ -37,6 +37,9 @@ func main() {
 	server := &http.Server{
 		Handler:           httpapi.NewServer(cfg, modelClient),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    64 * 1024,
 	}
 
 	log.Printf("umbratic veil listening on %s", listener.Addr().String())

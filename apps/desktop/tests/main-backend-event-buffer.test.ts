@@ -22,7 +22,7 @@ test("backend stream buffering coalesces compatible deltas and preserves boundar
     at: "2026-01-01T00:00:00.020Z",
   });
   appendBufferedBackendEvent(events, {
-    type: "assistant.reasoning.delta",
+    type: "assistant.progress.delta",
     taskId: "task-1",
     text: "checking",
   });
@@ -35,7 +35,7 @@ test("backend stream buffering coalesces compatible deltas and preserves boundar
       at: "2026-01-01T00:00:00.000Z",
       endedAt: "2026-01-01T00:00:00.020Z",
     },
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "checking" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "checking" },
   ]);
   assert.equal(shouldBufferBackendEvent(events[0]), true);
   assert.equal(shouldBufferBackendEvent({ type: "assistant.done", taskId: "task-1" }), false);
@@ -59,11 +59,11 @@ test("command output only coalesces within the same command and stream", () => {
 test("stream buffers retain only the visible tail of large internal output", () => {
   const { appendBufferedBackendEvent } = loadTypeScriptModule(bufferPath);
   const events = [];
-  appendBufferedBackendEvent(events, { type: "command.output", taskId: "task-1", id: "one", stream: "stdout", text: `start-${"x".repeat(12_000)}` });
+  appendBufferedBackendEvent(events, { type: "command.output", taskId: "task-1", id: "one", stream: "stdout", text: `start-${"x".repeat(20_000)}` });
   appendBufferedBackendEvent(events, { type: "command.output", taskId: "task-1", id: "one", stream: "stdout", text: "-end" });
-  appendBufferedBackendEvent(events, { type: "assistant.reasoning.delta", taskId: "task-1", text: "y".repeat(30_000) });
+  appendBufferedBackendEvent(events, { type: "assistant.progress.delta", taskId: "task-1", text: "y".repeat(30_000) });
 
-  assert.equal(events[0].text.length, 12_000);
+  assert.equal(events[0].text.length, 16_384);
   assert.equal(events[0].text.endsWith("-end"), true);
   assert.equal(events[1].text.length, 24_000);
 });

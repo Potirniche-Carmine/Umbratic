@@ -187,7 +187,7 @@ import {
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, type ContextPromptPart } from "./promptContext";
+import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
 import { findAgentInstructionFiles } from "./repositoryInstructions";
 
 const isDev = !app.isPackaged;
@@ -198,7 +198,6 @@ type RunnerPrompt = string | RunnerPromptPart[];
 type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
-
 const activeRunnerProcesses = new Map<string, RunnerProcess>();
 const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
@@ -448,7 +447,7 @@ function flushPendingTaskEvents() {
 }
 
 function shouldDeferTaskEventFlush(event: BackendUiEvent): boolean {
-  return event.type === "assistant.delta" || event.type === "assistant.reasoning.delta" || event.type === "command.output";
+  return event.type === "assistant.delta" || event.type === "assistant.progress.delta" || event.type === "command.output";
 }
 
 function scheduleTaskEventFlush(delayMs = streamingTaskEventCrashCheckpointMs) {
@@ -1800,7 +1799,7 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
     case "context.retrieved":
       return null;
     case "assistant.done":
-    case "assistant.reasoning.delta":
+    case "assistant.progress.delta":
     case "response.feedback":
     case "tool.failed":
     case "worktree.requested":
@@ -1951,6 +1950,7 @@ async function runnerPromptForTask(
   contextLength: number,
   options: { useDurableContext?: boolean } = {},
 ): Promise<RunnerPromptPart[]> {
+  if (!shouldIncludeWorkspaceContext(userPrompt, attachments.length)) return [{ type: "text", text: userPrompt }];
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
@@ -3183,12 +3183,12 @@ async function runCommandForTask(
     }, options.timeout ?? 180000);
     child.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      stdout = `${stdout}${text}`.slice(-12000);
+      stdout = `${stdout}${text}`.slice(-16_384);
       emit({ type: "command.output", taskId: task.id, id, stream: "stdout", text });
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      stderr = `${stderr}${text}`.slice(-12000);
+      stderr = `${stderr}${text}`.slice(-16_384);
       emit({ type: "command.output", taskId: task.id, id, stream: "stderr", text });
     });
     child.once("error", (error) => {

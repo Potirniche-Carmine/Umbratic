@@ -151,7 +151,7 @@ test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabil
   assert.equal(byId.get("node-runtime").versionFamily, "22.0");
 });
 
-test("language-server probes record an approved absolute executable path", async () => {
+test("command probes execute and record the resolved absolute executable path", async () => {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-lsp-probes-"));
   const typescriptServer = path.join(bin, "typescript-language-server");
   fs.writeFileSync(typescriptServer, "fixture");
@@ -161,7 +161,7 @@ test("language-server probes record an approved absolute executable path", async
       env: { PATH: bin },
       execFile(file, _args, _options, callback) {
         queueMicrotask(() => {
-          if (file === "typescript-language-server") callback(null, "4.3.0\n", "");
+          if (file === typescriptServer) callback(null, "4.3.0\n", "");
           else callback(execError("ENOENT", `spawn ${file} ENOENT`), "", "");
         });
         return { kill: () => undefined };

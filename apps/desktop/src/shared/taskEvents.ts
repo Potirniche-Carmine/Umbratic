@@ -3,7 +3,7 @@ import { BACKEND_EVENT_VERSION, type BackendUiEventInput } from "./backendEvents
 export type TaskUiEvent = BackendUiEventInput;
 
 const REASONING_TEXT_LIMIT = 24_000;
-const COMMAND_OUTPUT_TEXT_LIMIT = 12_000;
+const COMMAND_OUTPUT_TEXT_LIMIT = 16_384;
 
 function eventSignature(event: TaskUiEvent): string {
   if (event.type === "user.message") {
@@ -82,7 +82,7 @@ export function appendTaskEvent(events: TaskUiEvent[], event: TaskUiEvent, limit
   }
   if (
     last
-    && (nextEvent.type === "assistant.delta" || nextEvent.type === "assistant.reasoning.delta")
+    && (nextEvent.type === "assistant.delta" || nextEvent.type === "assistant.progress.delta")
     && last.type === nextEvent.type
     && last.taskId === nextEvent.taskId
   ) {
@@ -90,7 +90,7 @@ export function appendTaskEvent(events: TaskUiEvent[], event: TaskUiEvent, limit
       ...existing.slice(0, -1),
       {
         ...last,
-        text: nextEvent.type === "assistant.reasoning.delta"
+        text: nextEvent.type === "assistant.progress.delta"
           ? `${last.text}${nextEvent.text}`.slice(-REASONING_TEXT_LIMIT)
           : `${last.text}${nextEvent.text}`,
         endedAt: nextEvent.endedAt ?? nextEvent.at ?? last.endedAt ?? last.at,
@@ -114,7 +114,7 @@ export function appendTaskEvent(events: TaskUiEvent[], event: TaskUiEvent, limit
       },
     ], limit);
   }
-  const boundedEvent = nextEvent.type === "assistant.reasoning.delta"
+  const boundedEvent = nextEvent.type === "assistant.progress.delta"
     ? { ...nextEvent, text: nextEvent.text.slice(-REASONING_TEXT_LIMIT) }
     : nextEvent.type === "command.output"
       ? { ...nextEvent, text: nextEvent.text.slice(-COMMAND_OUTPUT_TEXT_LIMIT) }

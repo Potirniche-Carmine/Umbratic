@@ -57,17 +57,45 @@ pub async fn enabled_tool_specs(session: &Session, include_tools: bool) -> Vec<V
         specs.push(tool_definition("workspace_graph", "Query bounded source-backed workspace graph evidence.", json!({ "action":{"type":"string","enum":["summary","query","explain","path","affected"]}, "query":{"type":"string"}, "symbol":{"type":"string"}, "from":{"type":"string"}, "to":{"type":"string"}, "files":{"type":"array","items":{"type":"string"}}, "symbols":{"type":"array","items":{"type":"string"}}, "depth":{"type":"number"}, "limit":{"type":"number"}, "maxDepth":{"type":"number"}, "direction":{"type":"string","enum":["incoming","outgoing","both"]} }), &["action"]));
     }
     if enabled.iter().any(|name| name == "command") {
-        let description = if cfg!(windows) {
+        let mut description = if cfg!(windows) {
             "Run a local workspace command in Windows PowerShell after policy and permission checks. Prefer read and search for file inspection."
         } else {
             "Run a local workspace command in /bin/sh after policy and permission checks. Prefer read and search for file inspection."
+        }
+        .to_owned();
+        let approved_ids = session
+            .config
+            .approved_executables
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let has_approved_executables = !approved_ids.is_empty();
+        if has_approved_executables {
+            description.push_str(
+                " For an approved executable, use programId and args. This runs the exact verified executable without shell lookup.",
+            );
+        }
+        let required: &[&str] = if has_approved_executables {
+            &[]
+        } else {
+            &["command"]
         };
-        specs.push(tool_definition(
+        let mut command_spec = tool_definition(
             "command",
-            description,
-            json!({ "command":{"type":"string"}, "timeoutMs":{"type":"number"} }),
-            &["command"],
-        ));
+            &description,
+            json!({
+                "command":{"type":"string"},
+                "programId":{"type":"string","enum":approved_ids},
+                "args":{"type":"array","items":{"type":"string"},"maxItems":128},
+                "timeoutMs":{"type":"number"}
+            }),
+            required,
+        );
+        if has_approved_executables {
+            command_spec["function"]["parameters"]["anyOf"] =
+                json!([{"required":["command"]}, {"required":["programId"]}]);
+        }
+        specs.push(command_spec);
     }
     if !session.config.skills.is_empty() {
         specs.push(tool_definition("read_skill", "Read complete instructions for one enabled skill before applying it.", json!({ "skillId":{"type":"string"}, "resource":{"type":"string"}, "offset":{"type":"number"}, "limit":{"type":"number"} }), &["skillId"]));

@@ -165,6 +165,33 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecisionV1 {
         );
     }
     let lower = trimmed.to_ascii_lowercase();
+    let unresolved_path_expansion = lower.contains("$env:")
+        || lower.contains("${home}")
+        || lower.contains("$home")
+        || lower.contains("${userprofile}")
+        || lower.contains("$userprofile")
+        || lower.contains("%userprofile%")
+        || lower.contains("%home%")
+        || lower.starts_with("~/")
+        || lower.starts_with("~\\")
+        || lower.contains(" ~/")
+        || lower.contains(" ~\\");
+    if unresolved_path_expansion {
+        return decision(
+            command,
+            cwd,
+            DecisionSpec {
+                action: SafetyAction::Deny,
+                severity: SafetySeverity::High,
+                certainty: SafetyCertainty::Exact,
+                command_class: "external-directory",
+                rule_id: "unresolved_path_expansion",
+                explanation: "The command contains a path expansion that cannot be proved to stay in the workspace.",
+                suggestion: Some("Use a workspace-relative path or a structured workspace tool."),
+            },
+            started,
+        );
+    }
     let destructive_root = lower.contains("rm -rf /")
         || lower.contains("rm -fr /")
         || (lower.contains("remove-item -recurse")
@@ -404,6 +431,16 @@ mod tests {
             SafetyAction::Confirm
         );
         assert_eq!(evaluate_command("rm -rf /", cwd).action, SafetyAction::Deny);
+        for command in [
+            r#"Get-ChildItem "$env:USERPROFILE" -Recurse"#,
+            r#"type "%USERPROFILE%\secret.txt""#,
+            "cat $HOME/secret.txt",
+            "cat ~/secret.txt",
+        ] {
+            let decision = evaluate_command(command, cwd);
+            assert_eq!(decision.action, SafetyAction::Deny, "{command}");
+            assert_eq!(decision.rule_id, "unresolved_path_expansion");
+        }
         assert_eq!(
             evaluate_command("echo $(generated)", cwd).certainty,
             SafetyCertainty::Unknown

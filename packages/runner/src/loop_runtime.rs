@@ -17,8 +17,8 @@ use crate::{
 };
 
 const MAX_TOOL_TURNS: usize = 64;
-const MAX_FAILED_TURNS: usize = 5;
-const MAX_REPEATED_TURNS: usize = 5;
+const MAX_FAILED_TURNS: usize = 3;
+const MAX_REPEATED_TURNS: usize = 2;
 const MAX_RETAINED_TOOL_EXCHANGES: usize = 12;
 const MAX_PROVIDER_MESSAGES: usize = 60;
 const MAX_TOOL_HISTORY_SUMMARY_CHARS: usize = 8_000;
@@ -702,9 +702,8 @@ async fn update_context_calibration(
     };
     *session.context_calibration.lock().await = Some(calibration);
 }
-
 fn empty_summary() -> Value {
-    json!({ "status":"completed", "turns":0, "assistantTextChars":0, "reasoningTextChars":0, "toolCalls":0, "failedToolCalls":0, "attempts":[] })
+    json!({ "status":"completed", "turns":0, "assistantTextChars":0, "progressTextChars":0, "toolCalls":0, "failedToolCalls":0, "attempts":[] })
 }
 
 fn increment(summary: &mut Value, key: &str, amount: u64) {
@@ -789,7 +788,6 @@ async fn final_without_tools(
             }
             increment(summary, "turns", 1);
             increment(summary, "assistantTextChars", result.content.len() as u64);
-            increment(summary, "reasoningTextChars", result.reasoning.len() as u64);
             session
                 .messages
                 .lock()
@@ -903,11 +901,13 @@ pub async fn run_turn(
             "assistantTextChars",
             result.content.len() as u64,
         );
-        increment(
-            &mut summary,
-            "reasoningTextChars",
-            result.reasoning.len() as u64,
-        );
+        if !result.tool_calls.is_empty() {
+            increment(
+                &mut summary,
+                "progressTextChars",
+                result.content.len().min(2 * 1024) as u64,
+            );
+        }
         if let Some(event) = observed_context_event(&session, &result, prepared.max_output_tokens) {
             sink.emit(event);
         }

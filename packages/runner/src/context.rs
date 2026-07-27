@@ -5,11 +5,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const MIN_COMPRESS_BYTES: usize = 16 * 1024;
-const MAX_DISPLAYED_BYTES: usize = 12 * 1024;
+const MAX_DISPLAYED_BYTES: usize = 16 * 1024;
 const MAX_STORED_BYTES: usize = 512 * 1024;
 const MAX_ENTRIES: usize = 64;
-const RETRIEVAL_DEFAULT_BYTES: usize = 12 * 1024;
-const RETRIEVAL_MAX_BYTES: usize = 24 * 1024;
+const RETRIEVAL_DEFAULT_BYTES: usize = 16 * 1024;
+const RETRIEVAL_MAX_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct StoredContextEntry {

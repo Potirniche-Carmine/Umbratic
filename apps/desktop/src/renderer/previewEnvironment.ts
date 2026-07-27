@@ -93,7 +93,7 @@ const composerTestEvents: BackendUiEvent[] = [
     at: new Date(Date.now() - 18_000).toISOString(),
   },
   {
-    type: "assistant.reasoning.delta",
+    type: "assistant.progress.delta",
     taskId: "composer-test",
     text: "Checking message scale, markdown rhythm, escaped pipes, and attachment chips before composing the answer.",
     at: new Date(Date.now() - 12_000).toISOString(),
@@ -162,7 +162,7 @@ const composerTestEvents: BackendUiEvent[] = [
       "### Surface Notes",
       "",
       "- Prompt chips should feel soft, not like raised badges.",
-      "- Thinking should stay compact and secondary.",
+      "- Planning should stay compact and secondary.",
       "- Code blocks should arrive smoothly without dominating the page.",
       "",
       "| Check | Render target |",

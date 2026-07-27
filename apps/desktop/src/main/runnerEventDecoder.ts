@@ -7,7 +7,7 @@ type RunnerEventBase = {
 export type RunnerEvent =
   | (RunnerEventBase & { type: "assistant.delta"; text: string })
   | (RunnerEventBase & { type: "assistant.answer.started" })
-  | (RunnerEventBase & { type: "assistant.reasoning.delta"; text: string })
+  | (RunnerEventBase & { type: "assistant.progress.delta"; text: string })
   | (RunnerEventBase & {
       type: "tool.requested";
       toolCallId: string;
@@ -93,7 +93,7 @@ export type RunnerEventDecodeResult =
 const handledTypes = new Set<RunnerEvent["type"]>([
   "assistant.delta",
   "assistant.answer.started",
-  "assistant.reasoning.delta",
+  "assistant.progress.delta",
   "tool.requested",
   "command.safety.decision",
   "tool.output",
@@ -137,7 +137,7 @@ function validTimestamps(value: Record<string, unknown>): boolean {
 function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"]): boolean {
   switch (type) {
     case "assistant.delta":
-    case "assistant.reasoning.delta":
+    case "assistant.progress.delta":
       return hasString(value, "text");
     case "assistant.answer.started":
     case "command.safety.decision":

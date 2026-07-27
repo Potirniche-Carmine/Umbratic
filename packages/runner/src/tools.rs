@@ -51,10 +51,10 @@ pub use dispatch::execute_tool;
 pub use error::ToolResult;
 use error::{ToolError, ToolExecutionResult};
 use read::{read_attachment_tool, read_tool};
-use request::ToolRequest;
 pub use request::canonical_tool_name;
 #[cfg(test)]
 use request::parse_arguments;
+use request::{ToolRequest, command_display};
 pub use schema::enabled_tool_specs;
 use search::search_tool;
 #[cfg(test)]
@@ -221,6 +221,26 @@ mod tests {
             Some("README.md")
         );
     }
+
+    #[test]
+    fn command_arguments_cannot_become_an_implicit_shell_command() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            ToolRequest::parse(
+                "command",
+                &json!({"args":["echo","unsafe implicit command"]}),
+                directory.path(),
+            )
+            .unwrap_err()
+            .contains("requires command or programId")
+        );
+        assert!(
+            ToolRequest::parse("command", &json!({}), directory.path())
+                .unwrap_err()
+                .contains("requires command or programId")
+        );
+    }
+
     #[test]
     fn search_query_supports_constraints_globs_smart_case_and_locations() {
         let parsed = parse_search_query(
@@ -278,6 +298,31 @@ mod tests {
         assert!(
             specs.iter().all(|spec| spec["function"]["name"] != "lsp"),
             "lsp must be omitted when no approved server is configured"
+        );
+        assert_eq!(
+            named("command")["function"]["parameters"]["required"],
+            json!(["command"])
+        );
+    }
+
+    #[tokio::test]
+    async fn command_schema_requires_one_explicit_execution_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("runtime");
+        std::fs::write(&executable, "fixture").unwrap();
+        let mut session = crate::session::test_session(directory.path());
+        Arc::get_mut(&mut Arc::get_mut(&mut session).unwrap().config)
+            .unwrap()
+            .approved_executables
+            .insert("runtime".into(), executable);
+        let specs = enabled_tool_specs(&session, true).await;
+        let command = specs
+            .iter()
+            .find(|spec| spec["function"]["name"] == "command")
+            .unwrap();
+        assert_eq!(
+            command["function"]["parameters"]["anyOf"],
+            json!([{"required":["command"]}, {"required":["programId"]}])
         );
     }
 

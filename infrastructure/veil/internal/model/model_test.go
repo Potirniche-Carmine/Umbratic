@@ -489,6 +489,39 @@ func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 	}
 }
 
+func TestWriteOpenAIChatSSEStripsPrivateReasoningFromVLLM(t *testing.T) {
+	src := strings.NewReader(strings.Join([]string{
+		`data: {"choices":[{"delta":{"role":"assistant","reasoning_content":"hidden plan"}}]}`,
+		`data: {"choices":[{"delta":{"content":"Safe progress.","thinking":"hidden thought"}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n"))
+	var dst bytes.Buffer
+	if err := WriteOpenAIChatSSE(ProtocolVLLM, &dst, src); err != nil {
+		t.Fatal(err)
+	}
+	body := dst.String()
+	if strings.Contains(body, "hidden plan") || strings.Contains(body, "hidden thought") || strings.Contains(body, "reasoning_content") || strings.Contains(body, `"thinking"`) {
+		t.Fatalf("private reasoning leaked through: %q", body)
+	}
+	if !strings.Contains(body, `"content":"Safe progress."`) || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("safe content or completion marker was lost: %q", body)
+	}
+}
+
+func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
+	for name, stream := range map[string]string{
+		"missing completion": `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
+		"oversized line":     "data: " + strings.Repeat("x", 4*1024*1024+1) + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := WriteOpenAIChatSSE(ProtocolVLLM, &bytes.Buffer{}, strings.NewReader(stream)); err == nil {
+				t.Fatal("expected invalid stream error")
+			}
+		})
+	}
+}
+
 func TestWriteOpenAIChatSSERejectsTruncatedOllamaStream(t *testing.T) {
 	err := WriteOpenAIChatSSE(ProtocolOllama, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"))
 	if err == nil {

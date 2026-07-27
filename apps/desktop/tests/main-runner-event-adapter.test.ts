@@ -35,7 +35,7 @@ function adapterHarness() {
 test("runner event adapter translates one typed tool lifecycle", () => {
   const harness = adapterHarness();
   harness.adapter.handle({
-    type: "assistant.delta",
+    type: "assistant.progress.delta",
     taskId: "task-1",
     text: "I will inspect the file.",
     at: "2026-01-01T00:00:00.000Z",
@@ -75,7 +75,7 @@ test("runner event adapter translates one typed tool lifecycle", () => {
   assert.deepEqual(
     plain(harness.emitted.map((event) => event.type)),
     [
-      "assistant.reasoning.delta",
+      "assistant.progress.delta",
       "command.started",
       "command.output",
       "command.finished",
@@ -83,6 +83,18 @@ test("runner event adapter translates one typed tool lifecycle", () => {
   );
   assert.equal(harness.finished(), 1);
   assert.deepEqual(plain(harness.failures), []);
+});
+
+test("runner event adapter rejects the removed raw reasoning event", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.reasoning.delta",
+    taskId: "task-1",
+    text: "private chain of thought",
+  });
+  assert.equal(harness.invalid.length, 1);
+  assert.equal(harness.invalid[0].code, "unknown_type");
+  assert.deepEqual(plain(harness.emitted), []);
 });
 
 test("runner event adapter quarantines malformed and foreign events", () => {

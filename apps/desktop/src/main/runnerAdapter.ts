@@ -50,6 +50,7 @@ export function buildUmbraticRunnerConfig(
   const route = harnessRouteConfig(harnessProfile);
   const requestedTools = normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
   const lspServers = approvedLspServers(capabilityReport);
+  const approvedExecutables = approvedCommandExecutables(capabilityReport);
   const enabledTools = requestedTools.filter((tool) => tool !== "lsp") as RunnerToolId[];
   if (requestedTools.includes("lsp") && lspServers.length > 0) {
     enabledTools.splice(Math.min(4, enabledTools.length), 0, "lsp" as RunnerToolId);
@@ -72,6 +73,7 @@ export function buildUmbraticRunnerConfig(
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
     enabledTools,
+    approvedExecutables,
     lspServers,
     diagnostics: {
       enabled: false,
@@ -91,6 +93,31 @@ export function buildUmbraticRunnerConfig(
       mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
     },
   };
+}
+
+export function approvedCommandExecutables(
+  report?: CapabilityProbeReport,
+): Array<{ id: string; command: string }> {
+  if (!report) return [];
+  const approved: Array<{ id: string; command: string }> = [];
+  for (const probe of report.probes) {
+    if (
+      probe.status !== "available"
+      || !probe.detectedCommand
+      || !probe.executablePath
+      || !path.isAbsolute(probe.executablePath)
+    ) {
+      continue;
+    }
+    try {
+      const command = fs.realpathSync(probe.executablePath);
+      if (!fs.statSync(command).isFile()) continue;
+      approved.push({ id: probe.id, command });
+    } catch {
+      // A stale capability report must not approve a missing executable.
+    }
+  }
+  return approved.slice(0, 32);
 }
 
 export function approvedLspServers(report?: CapabilityProbeReport): LspServerLaunchConfig[] {

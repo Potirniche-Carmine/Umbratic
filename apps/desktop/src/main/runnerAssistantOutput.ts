@@ -1,5 +1,5 @@
 export type BufferedRunnerAssistantOutput = {
-  kind: "assistant" | "reasoning";
+  kind: "assistant" | "progress";
   text: string;
   at?: string;
   endedAt?: string;
@@ -23,14 +23,14 @@ export class RunnerAssistantOutputBuffer {
   }
 
   startAnswer(): BufferedRunnerAssistantOutput | null {
-    const working = this.drain("reasoning");
+    const working = this.drain("progress");
     this.answerStarted = true;
     return working;
   }
 
   continueWorking(): BufferedRunnerAssistantOutput | null {
     this.answerStarted = false;
-    return this.drain("reasoning");
+    return this.drain("progress");
   }
 
   complete(): BufferedRunnerAssistantOutput | null {
@@ -40,7 +40,7 @@ export class RunnerAssistantOutputBuffer {
 
   fail(): BufferedRunnerAssistantOutput | null {
     this.answerStarted = false;
-    return this.drain("reasoning");
+    return this.drain("progress");
   }
 
   private drain(kind: BufferedRunnerAssistantOutput["kind"]): BufferedRunnerAssistantOutput | null {

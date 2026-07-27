@@ -250,6 +250,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
+        approved_executables: std::collections::BTreeMap::new(),
         lsp_servers: Vec::new(),
         workspace_graph: None,
         diagnostics: crate::config::DiagnosticsConfig {

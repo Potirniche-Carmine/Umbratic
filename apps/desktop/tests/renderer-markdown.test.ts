@@ -181,7 +181,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
 
   const events = [
     { type: "user.message", taskId: "task-1", text: "Run tests", at: "2026-01-01T00:00:00.000Z" },
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Thinking", at: "2026-01-01T00:00:01.000Z", endedAt: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Planning", at: "2026-01-01T00:00:01.000Z", endedAt: "2026-01-01T00:00:03.000Z" },
     { type: "command.started", taskId: "task-1", id: "cmd-1", command: "npm run test", cwd: "C:/repo", kind: "bash", commandClass: "package-manager", at: "2026-01-01T00:00:03.000Z" },
     { type: "command.output", taskId: "task-1", id: "cmd-1", stream: "stdout", text: "ok\n", at: "2026-01-01T00:00:04.000Z" },
     { type: "command.finished", taskId: "task-1", id: "cmd-1", exitCode: 0, at: "2026-01-01T00:00:05.000Z" },
@@ -225,31 +225,31 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.deepEqual(delayedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
   const repeatedReasoningTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "First thought.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "First step.", at: "2026-01-01T00:00:01.000Z" },
     events[2],
     events[3],
     events[4],
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Second thought.", at: "2026-01-01T00:00:05.500Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Second step.", at: "2026-01-01T00:00:05.500Z" },
     events[5],
   ])));
   assert.deepEqual(repeatedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
-  assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First thought.\n\nSecond thought.");
+  assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First step.\n\nSecond step.");
   const interleavedTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "First thought.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "First step.", at: "2026-01-01T00:00:01.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
     events[2],
     events[3],
     events[4],
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Second thought.", at: "2026-01-01T00:00:05.500Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Second step.", at: "2026-01-01T00:00:05.500Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
   assert.deepEqual(interleavedTimeline.map((item) => item.type), ["user", "activity", "activity", "assistant"]);
   assert.equal(interleavedTimeline.filter((item) => item.type === "activity").length, 2);
   assert.equal(interleavedTimeline.filter((item) => item.type === "assistant").length, 1);
-  assert.equal(interleavedTimeline[1].segments[0].text, "First thought.");
-  assert.equal(interleavedTimeline[2].segments[0].text, "Second thought.");
+  assert.equal(interleavedTimeline[1].segments[0].text, "First step.");
+  assert.equal(interleavedTimeline[2].segments[0].text, "Second step.");
   assert.equal(interleavedTimeline[3].text, "I’ll inspect the project.\n\nHere is the complete answer.");
 
   const failedToolTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
@@ -263,7 +263,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
 
   const delayedFirstTokenTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "I have the document in context.", at: "2026-01-01T00:01:05.000Z", endedAt: "2026-01-01T00:01:07.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "I have the document in context.", at: "2026-01-01T00:01:05.000Z", endedAt: "2026-01-01T00:01:07.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Summary", at: "2026-01-01T00:01:08.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:01:10.000Z" },
   ], undefined, "completed")));
@@ -284,14 +284,14 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
 
   const preAnswerTimeline = composerTimelineFromEvents([
     events[0],
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
   ], undefined, "running");
   const openedDisclosure = reconcileActivityDisclosureState(new Set(), preAnswerTimeline, "task-1", new Set());
   assert.deepEqual([...openedDisclosure.expandedIds], ["activity-1"]);
   assert.deepEqual([...openedDisclosure.autoOpenedKeys], ["task-1:activity-1"]);
   const streamingAnswerTimeline = composerTimelineFromEvents([
     events[0],
-    { type: "assistant.reasoning.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Here is the answer", at: "2026-01-01T00:00:02.000Z" },
   ], undefined, "running");
   assert.equal(streamingAnswerTimeline[1].type, "activity");

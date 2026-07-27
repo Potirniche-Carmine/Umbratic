@@ -50,7 +50,11 @@ async function startProvider() {
       return;
     }
     const encoded = JSON.stringify(body.messages ?? []);
-    response.writeHead(200, { "Content-Type": "text/event-stream", "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE") ? "change" : "" });
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE") ? "change" : "",
+      "X-Umbratic-Stream-Version": "2",
+    });
     if (encoded.includes("LSP_DEGRADED") && !encoded.includes("freshness")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{
         index: 0,
@@ -81,11 +85,27 @@ async function startProvider() {
         },
       ] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("READ_FILE") && !encoded.includes("read: README.md (ok)")) {
-      response.end(sse({ choices: [{ delta: { content: "Internal plan must stay hidden.", tool_calls: [{ index: 0, id: "read-1", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":2}" } }] } }] }) + "data: [DONE]\n\n");
+      response.end(sse({ choices: [{ delta: {
+        content: "I will read the requested file.",
+        reasoning_content: "RAW_REASONING_MARKER",
+        tool_calls: [{ index: 0, id: "read-1", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":2}" } }],
+      } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("WRITE_FILE") && !encoded.includes("write: note.txt (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "write-1", function: { name: "write", arguments: "{\"filePath\":\"note.txt\",\"content\":\"native write\\n\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("BLOCK_NETWORK") && !encoded.includes("policy_blocked")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "command-1", function: { name: "command", arguments: "{\"command\":\"curl https://example.com; printf spawned > blocked-command-spawned.txt\"}" } }] } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("APPROVED_EXECUTABLE") && !encoded.includes("approved-runtime-ok")) {
+      response.end(sse({ choices: [{ delta: { content: "I will run the verified runtime.", tool_calls: [{
+        index: 0,
+        id: "approved-command-1",
+        function: {
+          name: "command",
+          arguments: JSON.stringify({
+            programId: "node",
+            args: ["-e", "console.log('approved-runtime-ok')"],
+          }),
+        },
+      }] } }] }) + "data: [DONE]\n\n");
     } else if (encoded.includes("DUPLICATE_IDS") && !encoded.includes("read: README.md (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [
         { index: 0, id: "duplicate", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } },
@@ -103,7 +123,7 @@ async function startProvider() {
       const failedAttempts = new Set(
         Array.from(encoded.matchAll(/missing-(\d+)\.txt/g), (match) => match[1]),
       ).size;
-      if (failedAttempts < 4) {
+      if (failedAttempts < 2) {
         response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: `recover-${failedAttempts}`, function: { name: "read", arguments: JSON.stringify({ filePath: `missing-${failedAttempts}.txt` }) } }] } }] }) + "data: [DONE]\n\n");
       } else if (!encoded.includes("read: README.md (ok)")) {
         response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "recover-success", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
@@ -514,7 +534,7 @@ test("native runner rejects a second prompt while a turn is active and scopes ab
   const provider = http.createServer(async (request, response) => {
     const body = await requestBody(request) as Record<string, unknown>;
     const encoded = JSON.stringify(body.messages ?? []);
-    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.writeHead(200, { "Content-Type": "text/event-stream", "X-Umbratic-Stream-Version": "2" });
     if (encoded.includes("HOLD_TURN")) {
       // Flush headers so the runner leaves .send() and enters the abort-aware stream loop.
       response.write(": held\n\n");
@@ -577,7 +597,9 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
   fs.writeFileSync(path.join(cwd, "README.md"), "first\nsecond\n", "utf8");
   const logPath = path.join(cwd, "runner.jsonl");
   const provider = await startProvider();
-  const run = await startRunner(cwd, provider.url, logPath);
+  const run = await startRunner(cwd, provider.url, logPath, {
+    approvedExecutables: [{ id: "node", command: process.execPath }],
+  });
   let events: Awaited<ReturnType<typeof eventCollector>> | undefined;
   try {
     assert.equal((await fetch(new URL("/session", run.url), { method: "POST" })).status, 401);
@@ -601,9 +623,14 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     );
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === readSession.id);
     assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "Internal plan must stay hidden."),
+      events.events.some((event) => event.type === "assistant.progress.delta" && event.text === "I will read the requested file."),
       true,
-      "tool-aware prose streams with the first model pass",
+      "tool-aware prose becomes a bounded progress update",
+    );
+    assert.equal(
+      JSON.stringify(events.events).includes("RAW_REASONING_MARKER"),
+      false,
+      "provider reasoning fields must never become runner events",
     );
 
     const writeSession = await createSession(run);
@@ -613,6 +640,32 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(reply.status, 200);
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === writeSession.id);
     assert.equal(fs.readFileSync(path.join(cwd, "note.txt"), "utf8"), "native write\n");
+
+    const approvedSession = await createSession(run);
+    assert.equal((await prompt(run, approvedSession.id, "APPROVED_EXECUTABLE")).status, 204);
+    const approvedPermission = await events.waitFor((event) =>
+      event.type === "permission.requested"
+      && String(event.summary).includes("approved-runtime-ok")
+    );
+    const approvedReply = await run.request(`/permission/${approvedPermission.permissionId}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reply: "once" }),
+    });
+    assert.equal(approvedReply.status, 200);
+    const approvedFinished = await events.waitFor((event) =>
+      event.type === "tool.finished" && event.toolCallId === "approved-command-1"
+    );
+    assert.equal(approvedFinished.status, "success");
+    assert.equal(
+      events.events.some((event) =>
+        event.type === "tool.output"
+        && event.toolCallId === "approved-command-1"
+        && String(event.text).includes("approved-runtime-ok")
+      ),
+      true,
+    );
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === approvedSession.id);
 
     const blockedSession = await createSession(run);
     assert.equal((await prompt(run, blockedSession.id, "BLOCK_NETWORK")).status, 204);
@@ -657,6 +710,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(diagnostics.status, 200);
     assert.equal((await diagnostics.json() as { enabled: boolean }).enabled, true);
     assert.ok(fs.readFileSync(logPath, "utf8").includes("tool.finished"));
+    assert.equal(fs.readFileSync(logPath, "utf8").includes("RAW_REASONING_MARKER"), false);
 
     assert.ok(provider.requests.length >= 4);
     const firstRequest = provider.requests[0];
@@ -854,12 +908,12 @@ test("native runner accepts an unterminated final SSE line, stops repeated tools
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === repeatedSession.id);
     assert.equal(
       events.events.filter((event) => event.type === "tool.finished" && event.toolCallId === "repeat").length,
-      5,
+      2,
     );
     assert.equal(
       provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL")).length,
-      6,
-      "five repeated tool turns must be followed by exactly one tool-free final request",
+      3,
+      "two repeated tool turns must be followed by exactly one tool-free final request",
     );
 
     const recoveringSession = await createSession(run);
@@ -867,7 +921,7 @@ test("native runner accepts an unterminated final SSE line, stops repeated tools
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === recoveringSession.id);
     assert.equal(
       events.events.filter((event) => event.type === "tool.finished" && /^recover-\d+$/.test(String(event.toolCallId)) && event.status !== "success").length,
-      4,
+      2,
     );
     assert.equal(
       events.events.some((event) => event.type === "tool.finished" && event.toolCallId === "recover-success" && event.status === "success"),

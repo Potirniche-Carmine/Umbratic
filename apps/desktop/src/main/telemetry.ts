@@ -134,7 +134,7 @@ function telemetryEventSummary(events: BackendUiEvent[]) {
       summary.messages.assistantChars += event.text.length;
       continue;
     }
-    if (event.type === "assistant.reasoning.delta") {
+    if (event.type === "assistant.progress.delta") {
       summary.messages.reasoningChars += event.text.length;
       continue;
     }

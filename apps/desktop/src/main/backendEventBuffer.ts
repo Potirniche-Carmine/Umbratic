@@ -1,19 +1,19 @@
 import type { BackendUiEvent } from "./types";
 
-const commandOutputLimit = 12_000;
-const reasoningOutputLimit = 24_000;
+const commandOutputLimit = 16_384;
+const progressOutputLimit = 24_000;
 
 function boundedStreamText(event: BackendUiEvent, text: string): string {
   if (event.type === "command.output") return text.slice(-commandOutputLimit);
-  if (event.type === "assistant.reasoning.delta") return text.slice(-reasoningOutputLimit);
+  if (event.type === "assistant.progress.delta") return text.slice(-progressOutputLimit);
   return text;
 }
 
 function isStreamingEvent(event: BackendUiEvent): event is Extract<
   BackendUiEvent,
-  { type: "assistant.delta" | "assistant.reasoning.delta" | "command.output" }
+  { type: "assistant.delta" | "assistant.progress.delta" | "command.output" }
 > {
-  return event.type === "assistant.delta" || event.type === "assistant.reasoning.delta" || event.type === "command.output";
+  return event.type === "assistant.delta" || event.type === "assistant.progress.delta" || event.type === "command.output";
 }
 
 function sameStream(left: BackendUiEvent, right: BackendUiEvent): boolean {

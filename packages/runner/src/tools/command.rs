@@ -8,12 +8,12 @@ pub(super) async fn command_tool(
     call_id: &str,
     safety: &SafetyDecisionV1,
 ) -> ToolExecutionResult {
-    let command = string_arg(input, &["command", "cmd", "script"])
-        .trim()
-        .to_owned();
+    let command = command_display(input).trim().to_owned();
     if command.is_empty() {
-        return Err("command requires command".into());
+        return Err("command requires command or programId".into());
     }
+    let program_id = string_arg(input, &["programId"]);
+    let program_args = string_list_arg(input, &["args"]);
     sink.emit(json!({
         "type": "command.safety.decision",
         "taskId": session.task_id,
@@ -59,8 +59,27 @@ pub(super) async fn command_tool(
         .and_then(Value::as_u64)
         .unwrap_or(10 * 60 * 1000)
         .clamp(100, 30 * 60 * 1000);
-    let shell = resolve_trusted_shell()?;
-    let mut process = if cfg!(windows) {
+    let mut process = if !program_id.is_empty() {
+        let configured = session
+            .config
+            .approved_executables
+            .get(&program_id)
+            .ok_or_else(|| {
+                ToolError::policy(format!("Executable {program_id} is not approved."))
+            })?;
+        let executable = configured.canonicalize().map_err(|_| {
+            ToolError::policy(format!("Approved executable {program_id} is unavailable."))
+        })?;
+        if &executable != configured || !executable.is_file() {
+            return Err(ToolError::policy(format!(
+                "Approved executable {program_id} changed after startup."
+            )));
+        }
+        let mut value = Command::new(executable);
+        value.args(&program_args);
+        value
+    } else if cfg!(windows) {
+        let shell = resolve_trusted_shell()?;
         let mut value = Command::new(&shell);
         value.args([
             "-NoLogo",
@@ -71,6 +90,7 @@ pub(super) async fn command_tool(
         ]);
         value
     } else {
+        let shell = resolve_trusted_shell()?;
         let mut value = Command::new(&shell);
         value.args(["-c", &command]);
         value
@@ -107,23 +127,48 @@ pub(super) async fn command_tool(
         call_id: String,
         stream: &'static str,
     ) -> String {
+        const MAX_UI_OUTPUT_BYTES: usize = 16 * 1024;
+        const MAX_CAPTURED_OUTPUT_BYTES: usize = 512 * 1024;
         let mut collected = String::new();
+        let mut total_bytes = 0usize;
+        let mut shown_bytes = 0usize;
         let mut buffer = vec![0u8; 8192];
         while let Ok(count) = reader.read(&mut buffer).await {
             if count == 0 {
                 break;
             }
             let text = redact_stream_text(&String::from_utf8_lossy(&buffer[..count]), 64 * 1024);
-            if collected.len() < 64 * 1024 {
-                let mut end = text.len().min(64 * 1024 - collected.len());
+            total_bytes = total_bytes.saturating_add(text.len());
+            if collected.len() < MAX_CAPTURED_OUTPUT_BYTES {
+                let mut end = text.len().min(MAX_CAPTURED_OUTPUT_BYTES - collected.len());
                 while end > 0 && !text.is_char_boundary(end) {
                     end -= 1;
                 }
                 collected.push_str(&text[..end]);
             }
-            if !text.is_empty() {
-                sink.emit(json!({ "type":"tool.output", "taskId":task_id, "toolCallId":call_id, "stream":stream, "text":text, "redacted":true, "at":now_iso() }));
+            if !text.is_empty() && shown_bytes < MAX_UI_OUTPUT_BYTES {
+                let mut end = text.len().min(MAX_UI_OUTPUT_BYTES - shown_bytes);
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let shown = &text[..end];
+                shown_bytes += shown.len();
+                if !shown.is_empty() {
+                    sink.emit(json!({ "type":"tool.output", "taskId":task_id, "toolCallId":call_id, "stream":stream, "text":shown, "redacted":true, "originalBytes":total_bytes, "shownBytes":shown_bytes, "truncated":false, "at":now_iso() }));
+                }
             }
+        }
+        if total_bytes > shown_bytes {
+            let marker = format!(
+                "\n...[output preview truncated: shownBytes={shown_bytes} originalBytes={total_bytes}]"
+            );
+            sink.emit(json!({ "type":"tool.output", "taskId":task_id, "toolCallId":call_id, "stream":stream, "text":marker, "redacted":true, "originalBytes":total_bytes, "shownBytes":shown_bytes, "truncated":true, "at":now_iso() }));
+        }
+        if total_bytes > collected.len() {
+            collected.push_str(&format!(
+                "\n...[captured output truncated: storedBytes={} originalBytes={total_bytes}]",
+                collected.len()
+            ));
         }
         collected
     }

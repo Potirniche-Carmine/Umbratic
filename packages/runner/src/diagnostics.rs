@@ -85,7 +85,10 @@ impl RunnerDiagnostics {
 
     fn data_for(&self, event: &RunnerEvent) -> Option<(String, Map<String, Value>)> {
         let kind = event_type(event);
-        if matches!(kind, "assistant.delta" | "assistant.reasoning.delta") {
+        if matches!(
+            kind,
+            "assistant.delta" | "assistant.progress.delta" | "assistant.reasoning.delta"
+        ) {
             return None;
         }
         if kind == "tool.output" {
@@ -214,6 +217,9 @@ mod tests {
         );
         diagnostics.record(
             &json!({"type":"assistant.delta","taskId":"task","text":"secret","at":now_iso()}),
+        );
+        diagnostics.record(
+            &json!({"type":"assistant.progress.delta","taskId":"task","text":"safe progress","at":now_iso()}),
         );
         diagnostics.record(&json!({"type":"tool.output","taskId":"task","stream":"stdout","text":"secret","at":now_iso()}));
         assert!(!path.exists());

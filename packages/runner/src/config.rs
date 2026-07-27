@@ -93,6 +93,7 @@ pub struct RunnerConfig {
     pub skills: Vec<RunnerSkillConfig>,
     pub permission_mode: PermissionMode,
     pub enabled_tools: Vec<String>,
+    pub approved_executables: BTreeMap<String, PathBuf>,
     pub lsp_servers: Vec<LspServerConfig>,
     pub workspace_graph: Option<WorkspaceGraphConfig>,
     pub diagnostics: DiagnosticsConfig,
@@ -368,6 +369,36 @@ fn parse_lsp_servers(value: Option<&Value>) -> Vec<LspServerConfig> {
     servers.into_values().take(3).collect()
 }
 
+fn parse_approved_executables(value: Option<&Value>) -> BTreeMap<String, PathBuf> {
+    let mut executables = BTreeMap::new();
+    for item in value.and_then(Value::as_array).into_iter().flatten() {
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        let Some(id) = optional_string(item.get("id")) else {
+            continue;
+        };
+        if id.len() > 64
+            || !id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+        {
+            continue;
+        }
+        let Some(command) = optional_string(item.get("command")).map(PathBuf::from) else {
+            continue;
+        };
+        if !command.is_absolute() || !command.is_file() {
+            continue;
+        }
+        let Ok(command) = command.canonicalize() else {
+            continue;
+        };
+        executables.insert(id, command);
+    }
+    executables.into_iter().take(32).collect()
+}
+
 fn parse_mtls(value: &Value) -> Result<MtlsConfig, String> {
     let value = value
         .as_object()
@@ -486,6 +517,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             PermissionMode::Normal
         },
         enabled_tools,
+        approved_executables: parse_approved_executables(config.get("approvedExecutables")),
         lsp_servers: parse_lsp_servers(config.get("lspServers")),
         workspace_graph: config
             .get("workspaceGraph")
@@ -658,6 +690,24 @@ mod tests {
         assert_eq!(servers[0].id, "typescript-language-server");
         assert_eq!(servers[0].args, ["--stdio"]);
         assert_eq!(servers[0].extensions, ["ts", "tsx"]);
+    }
+
+    #[test]
+    fn approved_executables_accept_only_existing_absolute_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let command = directory.path().join("uv");
+        std::fs::write(&command, "fixture").unwrap();
+        let executables = parse_approved_executables(Some(&serde_json::json!([
+            {"id":"uv","command":command},
+            {"id":"bad/id","command":command},
+            {"id":"relative","command":"uv"},
+            {"id":"missing","command":directory.path().join("missing")}
+        ])));
+        assert_eq!(executables.len(), 1);
+        assert_eq!(
+            executables.get("uv"),
+            Some(&command.canonicalize().unwrap())
+        );
     }
 
     #[test]

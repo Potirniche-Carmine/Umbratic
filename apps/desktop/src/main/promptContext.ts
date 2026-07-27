@@ -2,6 +2,25 @@ export type ContextPromptPart =
   | { type: "text"; text: string }
   | { type: "image"; data_url: string };
 
+export function isCasualConversationPrompt(prompt: string): boolean {
+  const normalized = prompt
+    .trim()
+    .toLowerCase()
+    .replace(/[!?.,]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(?:hi|hello|hey|hey there|good morning|good afternoon|good evening)(?: (?:tell me about yourself|who are you|how are you|what can you do))?$/.test(
+    normalized,
+  );
+}
+
+export function shouldIncludeWorkspaceContext(
+  prompt: string,
+  attachmentCount: number,
+): boolean {
+  return attachmentCount > 0 || !isCasualConversationPrompt(prompt);
+}
+
 export function limitPromptImages(
   parts: readonly ContextPromptPart[],
   maxImages: number,

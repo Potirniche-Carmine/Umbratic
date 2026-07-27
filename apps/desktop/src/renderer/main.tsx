@@ -815,7 +815,7 @@ function eventTitle(event: BackendUiEvent): string {
       return "user";
     case "assistant.delta":
       return "assistant";
-    case "assistant.reasoning.delta":
+    case "assistant.progress.delta":
       return "thinking";
     case "assistant.done":
       return "assistant done";
@@ -866,7 +866,7 @@ function eventDetail(event: BackendUiEvent): string {
       return event.text.trim();
     case "assistant.delta":
       return event.text.trim();
-    case "assistant.reasoning.delta":
+    case "assistant.progress.delta":
       return event.text.trim();
     case "assistant.done":
       return "stream complete";
@@ -1592,7 +1592,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       assistantNeedsSeparator = false;
       continue;
     }
-    if (event.type === "assistant.reasoning.delta") {
+    if (event.type === "assistant.progress.delta") {
       if (assistantBuffer.trim()) assistantNeedsSeparator = true;
       reasoningStartedAt = reasoningStartedAt ?? event.at;
       reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
@@ -5289,7 +5289,7 @@ function App() {
                                   .map((segment) => (
                                     <section className="activityLogEntry reasoningLog" key={segment.id}>
                                       <div className="activityLogHeader">
-                                        <span>Thinking</span>
+                                        <span>Planning</span>
                                       </div>
                                       <pre>{segment.text.trim()}</pre>
                                     </section>
@@ -6404,7 +6404,7 @@ function App() {
                         <div className="settingsListRow">
                           <span>Local diagnostics</span>
                           <p>
-                            SQLite logs, successful tool output, and assistant reasoning stay on this computer.
+                            SQLite logs, successful tool output, and safe progress updates stay on this computer.
                           </p>
                         </div>
                       </div>

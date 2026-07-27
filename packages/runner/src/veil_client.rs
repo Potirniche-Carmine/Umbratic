@@ -22,7 +22,6 @@ static SHARED_HTTP_CLIENT_ERROR: OnceLock<String> = OnceLock::new();
 #[derive(Debug, Clone, Default)]
 pub struct VeilChatResult {
     pub content: String,
-    pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
     pub action_requirement: String,
     pub prompt_tokens: Option<u64>,
@@ -257,34 +256,45 @@ fn text_content(value: Option<&Value>) -> String {
     }
 }
 
-fn emit_content(
-    sink: &EventSink,
-    session: &Session,
-    result: &mut VeilChatResult,
-    text: String,
-    answer_started: &mut bool,
-    suppress_output: bool,
-) {
+fn append_content(result: &mut VeilChatResult, text: String) {
     if text.is_empty() {
         return;
     }
     result.content.push_str(&text);
-    if suppress_output {
-        return;
-    }
-    if !*answer_started {
-        sink.emit(json!({ "type": "assistant.answer.started", "taskId": session.task_id, "at": now_iso() }));
-        *answer_started = true;
-    }
-    sink.emit(json!({ "type": "assistant.delta", "taskId": session.task_id, "text": text, "at": now_iso() }));
 }
 
-fn emit_reasoning(sink: &EventSink, session: &Session, result: &mut VeilChatResult, text: String) {
-    if text.is_empty() {
+fn bounded_progress(value: &str) -> String {
+    const MAX_PROGRESS_BYTES: usize = 2 * 1024;
+    if value.len() <= MAX_PROGRESS_BYTES {
+        return value.to_owned();
+    }
+    let mut end = MAX_PROGRESS_BYTES;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", value[..end].trim_end())
+}
+
+fn emit_completed_output(
+    sink: &EventSink,
+    session: &Session,
+    result: &VeilChatResult,
+    suppress_output: bool,
+) {
+    if suppress_output || result.content.is_empty() {
         return;
     }
-    result.reasoning.push_str(&text);
-    sink.emit(json!({ "type": "assistant.reasoning.delta", "taskId": session.task_id, "text": text, "at": now_iso() }));
+    if result.tool_calls.is_empty() {
+        sink.emit(json!({ "type": "assistant.answer.started", "taskId": session.task_id, "at": now_iso() }));
+        sink.emit(json!({ "type": "assistant.delta", "taskId": session.task_id, "text": result.content, "at": now_iso() }));
+    } else {
+        sink.emit(json!({
+            "type": "assistant.progress.delta",
+            "taskId": session.task_id,
+            "text": bounded_progress(&result.content),
+            "at": now_iso()
+        }));
+    }
 }
 
 fn append_veil_delta(
@@ -339,10 +349,6 @@ fn process_veil_payload(
     payload: Value,
     result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
-    sink: &EventSink,
-    session: &Session,
-    answer_started: &mut bool,
-    suppress_output: bool,
 ) {
     if let Some(usage) = payload.get("usage") {
         update_usage(result, usage);
@@ -358,18 +364,7 @@ fn process_veil_payload(
     let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
         return;
     };
-    emit_content(
-        sink,
-        session,
-        result,
-        text_content(delta.get("content")),
-        answer_started,
-        suppress_output,
-    );
-    let reasoning = text_content(delta.get("reasoning_content"))
-        .or_else_nonempty(|| text_content(delta.get("reasoning")))
-        .or_else_nonempty(|| text_content(delta.get("thinking")));
-    emit_reasoning(sink, session, result, reasoning);
+    append_content(result, text_content(delta.get("content")));
     append_veil_delta(result, delta, partial);
 }
 
@@ -396,6 +391,7 @@ fn update_usage(result: &mut VeilChatResult, usage: &Value) {
 }
 
 fn complete_utf8_lines(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<Vec<String>, String> {
+    const MAX_STREAM_LINE_BYTES: usize = 4 * 1024 * 1024;
     buffer.extend_from_slice(chunk);
     let mut lines = Vec::new();
     while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
@@ -404,11 +400,17 @@ fn complete_utf8_lines(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<Vec<String>
         if line.last() == Some(&b'\r') {
             line.pop();
         }
+        if line.len() > MAX_STREAM_LINE_BYTES {
+            return Err("model stream line exceeded the 4 MiB limit".into());
+        }
         lines.push(
             std::str::from_utf8(&line)
                 .map_err(|_| "model stream contained invalid UTF-8".to_owned())?
                 .to_owned(),
         );
+    }
+    if buffer.len() > MAX_STREAM_LINE_BYTES {
+        return Err("model stream line exceeded the 4 MiB limit".into());
     }
     Ok(lines)
 }
@@ -465,29 +467,17 @@ fn process_veil_line(
     line: &str,
     result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
-    sink: &EventSink,
-    session: &Session,
-    answer_started: &mut bool,
-    suppress_output: bool,
-) -> bool {
+) -> Result<bool, String> {
     let Some(data) = sse_data(line) else {
-        return false;
+        return Ok(false);
     };
     if data.trim() == "[DONE]" {
-        return true;
+        return Ok(true);
     }
-    if let Ok(payload) = serde_json::from_str::<Value>(data) {
-        process_veil_payload(
-            payload,
-            result,
-            partial,
-            sink,
-            session,
-            answer_started,
-            suppress_output,
-        );
-    }
-    false
+    let payload = serde_json::from_str::<Value>(data)
+        .map_err(|_| "Veil stream contained invalid JSON".to_owned())?;
+    process_veil_payload(payload, result, partial);
+    Ok(false)
 }
 
 fn normalize_tool_call_ids(calls: &mut [ToolCall]) {
@@ -505,15 +495,6 @@ fn normalize_tool_call_ids(calls: &mut [ToolCall]) {
             candidate = format!("{base}-{suffix}");
         }
         call.id = candidate;
-    }
-}
-
-trait NonEmptyFallback {
-    fn or_else_nonempty(self, fallback: impl FnOnce() -> String) -> String;
-}
-impl NonEmptyFallback for String {
-    fn or_else_nonempty(self, fallback: impl FnOnce() -> String) -> String {
-        if self.is_empty() { fallback() } else { self }
     }
 }
 
@@ -608,6 +589,14 @@ pub async fn stream_veil_chat(
             veil_failure_message(Some(status.as_u16()), payload.as_ref())
         ));
     }
+    if response
+        .headers()
+        .get("x-umbratic-stream-version")
+        .and_then(|value| value.to_str().ok())
+        != Some("2")
+    {
+        return Err("Veil stream contract version 2 is required".into());
+    }
     let action = response
         .headers()
         .get("x-umbratic-action-required")
@@ -625,7 +614,6 @@ pub async fn stream_veil_chat(
         ..VeilChatResult::default()
     };
     let mut partial = BTreeMap::new();
-    let mut answer_started = false;
     let mut buffer = Vec::new();
     let mut completed = false;
     let mut stream = response.bytes_stream();
@@ -644,15 +632,7 @@ pub async fn stream_veil_chat(
             if let Some(error) = veil_stream_error(&line) {
                 return Err(error);
             }
-            if process_veil_line(
-                &line,
-                &mut result,
-                &mut partial,
-                sink,
-                session,
-                &mut answer_started,
-                suppress_output,
-            ) {
+            if process_veil_line(&line, &mut result, &mut partial)? {
                 completed = true;
             }
         }
@@ -664,15 +644,7 @@ pub async fn stream_veil_chat(
         if let Some(error) = veil_stream_error(trailing) {
             return Err(error);
         }
-        if process_veil_line(
-            trailing,
-            &mut result,
-            &mut partial,
-            sink,
-            session,
-            &mut answer_started,
-            suppress_output,
-        ) {
+        if process_veil_line(trailing, &mut result, &mut partial)? {
             completed = true;
         }
     }
@@ -685,6 +657,7 @@ pub async fn stream_veil_chat(
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
+    emit_completed_output(sink, session, &result, suppress_output);
     Ok(result)
 }
 
@@ -801,6 +774,30 @@ mod tests {
         assert_eq!(
             complete_utf8_lines(&mut buffer, b"data: \xff\n").unwrap_err(),
             "model stream contained invalid UTF-8"
+        );
+    }
+
+    #[test]
+    fn stream_lines_and_json_are_bounded_and_strict() {
+        let mut buffer = Vec::new();
+        assert!(
+            complete_utf8_lines(&mut buffer, &vec![b'x'; 4 * 1024 * 1024 + 1])
+                .unwrap_err()
+                .contains("4 MiB")
+        );
+        buffer.clear();
+        let mut complete_oversized = vec![b'x'; 4 * 1024 * 1024 + 1];
+        complete_oversized.push(b'\n');
+        assert!(
+            complete_utf8_lines(&mut buffer, &complete_oversized)
+                .unwrap_err()
+                .contains("4 MiB")
+        );
+        let mut result = VeilChatResult::default();
+        let mut partial = BTreeMap::new();
+        assert_eq!(
+            process_veil_line("data: not-json", &mut result, &mut partial).unwrap_err(),
+            "Veil stream contained invalid JSON"
         );
     }
 

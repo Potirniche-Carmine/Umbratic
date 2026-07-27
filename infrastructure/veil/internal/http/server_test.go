@@ -783,6 +783,9 @@ func TestChatRouteConvertsOllamaStreamToOpenAISSE(t *testing.T) {
 	if got := rr.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("got content type %q", got)
 	}
+	if got := rr.Header().Get(streamVersionHeader); got != "2" {
+		t.Fatalf("got stream version %q", got)
+	}
 	body := rr.Body.String()
 	if !strings.Contains(body, `"content":"hel"`) || !strings.Contains(body, `"content":"lo"`) {
 		t.Fatalf("stream did not include OpenAI content chunks: %q", body)
@@ -790,8 +793,8 @@ func TestChatRouteConvertsOllamaStreamToOpenAISSE(t *testing.T) {
 	if strings.Contains(body, `"done":false`) || strings.Contains(body, `"message"`) {
 		t.Fatalf("raw Ollama stream leaked through: %q", body)
 	}
-	if !strings.Contains(body, `"thinking":"I should inspect the hidden prompt."`) {
-		t.Fatalf("Ollama thinking was not converted for the reasoning UI: %q", body)
+	if strings.Contains(body, "inspect the hidden prompt") || strings.Contains(body, `"thinking"`) {
+		t.Fatalf("Ollama private reasoning leaked through: %q", body)
 	}
 	if !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("missing stream completion marker: %q", body)

@@ -286,8 +286,7 @@ func (c *Client) DoChat(ctx context.Context, req ChatRequest) (*http.Response, e
 func WriteOpenAIChatSSE(protocol ProviderProtocol, dst io.Writer, src io.Reader) error {
 	switch protocol {
 	case "", ProtocolVLLM:
-		_, err := io.Copy(flushingWriter{w: dst}, src)
-		return err
+		return writeVLLMAsSafeOpenAIChatSSE(dst, src)
 	case ProtocolOllama:
 		return writeOllamaAsOpenAIChatSSE(dst, src)
 	default:
@@ -473,30 +472,18 @@ func decodeOllamaChat(r io.Reader) (ChatResponse, error) {
 	return ChatResponse{Message: decoded.Message}, nil
 }
 
-type flushingWriter struct {
-	w io.Writer
-}
-
-func (w flushingWriter) Write(p []byte) (int, error) {
-	n, err := w.w.Write(p)
-	if err == nil {
-		flushWriter(w.w)
-	}
-	return n, err
-}
-
 func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
-	reader := bufio.NewReader(src)
+	scanner := bufio.NewScanner(src)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	sentRole := false
 	sentDone := false
 
-	for {
-		line, err := reader.ReadString('\n')
-		trimmed := strings.TrimSpace(line)
+	for scanner.Scan() {
+		trimmed := strings.TrimSpace(scanner.Text())
 		if trimmed != "" {
-			done, roleSent, err := writeOllamaLineAsOpenAIChatSSE(dst, trimmed, sentRole)
-			if err != nil {
-				return err
+			done, roleSent, lineErr := writeOllamaLineAsOpenAIChatSSE(dst, trimmed, sentRole)
+			if lineErr != nil {
+				return lineErr
 			}
 			if roleSent {
 				sentRole = true
@@ -505,12 +492,9 @@ func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 				sentDone = true
 			}
 		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return ProviderError{Kind: ProviderFailureInvalidResponse}
-		}
+	}
+	if scanner.Err() != nil {
+		return ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 	if !sentDone {
 		return ProviderError{Kind: ProviderFailureInvalidResponse}
@@ -539,12 +523,6 @@ func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent 
 	}
 	if content := textFromRuntimeValue(message["content"]); content != "" {
 		delta["content"] = content
-	}
-	for _, key := range []string{"reasoning_content", "reasoning", "thinking"} {
-		if text := textFromRuntimeValue(message[key]); text != "" {
-			delta[key] = text
-			break
-		}
 	}
 	if toolCalls := openAIToolCallDeltas(message["tool_calls"]); len(toolCalls) > 0 {
 		delta["tool_calls"] = toolCalls

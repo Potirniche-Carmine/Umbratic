@@ -35,6 +35,7 @@ type Server struct {
 }
 
 const actionRequiredHeader = "X-Umbratic-Action-Required"
+const streamVersionHeader = "X-Umbratic-Stream-Version"
 
 func NewServer(cfg config.Config, modelClient ModelClient) http.Handler {
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
@@ -437,6 +438,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, route pr
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set(streamVersionHeader, "2")
 	w.WriteHeader(http.StatusOK)
 	if err := model.WriteOpenAIChatSSE(s.cfg.ProviderProtocol, w, resp.Body); err != nil {
 		failure := modelFailure{Status: http.StatusBadGateway, Code: "model_service_stream_incomplete", Message: "model service stream ended unexpectedly"}

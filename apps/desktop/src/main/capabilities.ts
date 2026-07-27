@@ -220,7 +220,7 @@ async function probeCommand(spec: CommandProbeSpec, options: CapabilityProbeOpti
   const at = checkedAt(options);
   for (const command of spec.commands) {
     const executablePath = findExecutablePath(command, env, platform);
-    const result = await runExecFile(command, spec.versionArgs ?? ["--version"], options);
+    const result = await runExecFile(executablePath ?? command, spec.versionArgs ?? ["--version"], options);
     if (result.ok) {
       return baseProbe(spec, "available", at, {
         version: firstVersionLine(result.stdout, result.stderr),

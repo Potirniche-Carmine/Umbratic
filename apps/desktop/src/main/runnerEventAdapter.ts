@@ -91,9 +91,9 @@ export class RunnerEventAdapter {
       case "assistant.answer.started":
         this.emitBuffered(this.assistantOutput.startAnswer());
         return;
-      case "assistant.reasoning.delta":
+      case "assistant.progress.delta":
         this.emitBuffered(this.assistantOutput.continueWorking());
-        this.emitReasoning(
+        this.emitProgress(
           event.text,
           eventAt(event),
           eventEndedAt(event),
@@ -177,10 +177,10 @@ export class RunnerEventAdapter {
     });
   }
 
-  private emitReasoning(text: string, at?: string, endedAt?: string): void {
+  private emitProgress(text: string, at?: string, endedAt?: string): void {
     if (!text || this.options.task.reasoningMode !== "reasoning") return;
     this.options.emit({
-      type: "assistant.reasoning.delta",
+      type: "assistant.progress.delta",
       taskId: this.options.task.id,
       text,
       at,
@@ -193,7 +193,7 @@ export class RunnerEventAdapter {
     if (output.kind === "assistant") {
       this.emitAssistant(output.text, output.at, output.endedAt);
     } else {
-      this.emitReasoning(output.text, output.at, output.endedAt);
+      this.emitProgress(output.text, output.at, output.endedAt);
     }
   }
 
@@ -288,14 +288,14 @@ export class RunnerEventAdapter {
     );
     if (!event.text) return;
     current[event.stream] = [
-      `${current[event.stream].join("")}${event.text}`.slice(-12_000),
+      `${current[event.stream].join("")}${event.text}`.slice(-16_384),
     ];
     this.options.emit({
       type: "command.output",
       taskId: this.options.task.id,
       id: current.commandId,
       stream: event.stream,
-      text: event.text.slice(0, 12_000),
+      text: event.text.slice(0, 16_384),
       at: eventAt(event),
       endedAt: eventEndedAt(event),
     });

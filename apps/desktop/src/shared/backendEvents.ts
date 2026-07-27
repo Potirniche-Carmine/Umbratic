@@ -42,7 +42,7 @@ type BackendEventMeta = { version: typeof BACKEND_EVENT_VERSION; at?: string; en
 export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "user.message"; taskId: string; text: string; attachedFiles?: BackendChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
-  | { type: "assistant.reasoning.delta"; taskId: string; text: string }
+  | { type: "assistant.progress.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
@@ -89,7 +89,7 @@ export type BackendEventParseResult =
 const eventTypes = new Set([
   "user.message",
   "assistant.delta",
-  "assistant.reasoning.delta",
+  "assistant.progress.delta",
   "assistant.done",
   "worktree.requested",
   "worktree.created",
@@ -140,7 +140,7 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
   switch (type) {
     case "user.message":
     case "assistant.delta":
-    case "assistant.reasoning.delta":
+    case "assistant.progress.delta":
     case "task.error":
       return hasString(value, type === "task.error" ? "message" : "text")
         && (type !== "task.error" || (
