@@ -23,8 +23,8 @@ use crate::{
     context::compress_tool_result,
     events::now_iso,
     policy::{
-        is_blocked_path, is_generated_runtime_path, redact_stream_text, redact_text,
-        resolve_workspace_path,
+        confirm_workspace_write_path, is_blocked_path, is_generated_runtime_path, redact_stream_text,
+        redact_text, resolve_workspace_path,
     },
     safety::{CommandPermit, SafetyAction, SafetyDecisionV1, evaluate_command},
     session::{EventSink, Session},
@@ -542,7 +542,8 @@ async fn write_tool(
     if let Some(parent) = absolute.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::write(&absolute, content).map_err(|error| error.to_string())?;
+    let target = confirm_workspace_write_path(&session.config.cwd, &absolute)?;
+    fs::write(&target, content).map_err(|error| error.to_string())?;
     Ok(ToolResult::success(
         relative.clone(),
         "Wrote file successfully.",
@@ -790,9 +791,11 @@ async fn edit_tool(
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
                 }
-                fs::write(path, content).map_err(|error| error.to_string())?;
+                let target = confirm_workspace_write_path(&session.config.cwd, &path)?;
+                fs::write(target, content).map_err(|error| error.to_string())?;
             } else if path.exists() {
-                fs::remove_file(path).map_err(|error| error.to_string())?;
+                let target = confirm_workspace_write_path(&session.config.cwd, &path)?;
+                fs::remove_file(target).map_err(|error| error.to_string())?;
             }
         }
         return Ok(ToolResult::success(
@@ -833,7 +836,8 @@ async fn edit_tool(
     if decision != "allow" {
         return Err(format!("Edit denied: {relative}"));
     }
-    fs::write(absolute, updated).map_err(|error| error.to_string())?;
+    let target = confirm_workspace_write_path(&session.config.cwd, &absolute)?;
+    fs::write(target, updated).map_err(|error| error.to_string())?;
     Ok(ToolResult::success(relative, "Edited file successfully."))
 }
 
@@ -1292,8 +1296,9 @@ async fn command_tool(
         .and_then(Value::as_u64)
         .unwrap_or(10 * 60 * 1000)
         .clamp(100, 30 * 60 * 1000);
+    let shell = resolve_trusted_shell()?;
     let mut process = if cfg!(windows) {
-        let mut value = Command::new("powershell.exe");
+        let mut value = Command::new(&shell);
         value.args([
             "-NoLogo",
             "-NoProfile",
@@ -1303,7 +1308,7 @@ async fn command_tool(
         ]);
         value
     } else {
-        let mut value = Command::new("/bin/sh");
+        let mut value = Command::new(&shell);
         value.args(["-c", &command]);
         value
     };
@@ -1496,8 +1501,60 @@ where
         .collect()
 }
 
+fn resolve_trusted_shell() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var_os("SystemRoot")
+            .or_else(|| std::env::var_os("WINDIR"))
+            .ok_or_else(|| "SystemRoot is required to resolve a trusted PowerShell".to_owned())?;
+        let candidate = PathBuf::from(system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        if candidate.is_file() {
+            Ok(candidate)
+        } else {
+            Err(format!(
+                "Trusted PowerShell was not found at {}.",
+                candidate.display()
+            ))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for candidate in ["/bin/sh", "/usr/bin/sh"] {
+            let path = PathBuf::from(candidate);
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+        Err("Trusted shell (/bin/sh) was not found.".into())
+    }
+}
+
+fn trusted_command_path() -> String {
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var("SystemRoot")
+            .or_else(|_| std::env::var("WINDIR"))
+            .unwrap_or_else(|_| r"C:\Windows".into());
+        let root = system_root.trim_end_matches(['\\', '/']).to_owned();
+        let system32 = format!(r"{root}\System32");
+        format!(r"{system32};{root};{system32}\Wbem;{system32}\WindowsPowerShell\v1.0")
+    }
+    #[cfg(not(windows))]
+    {
+        "/usr/bin:/bin:/usr/sbin:/sbin".into()
+    }
+}
+
 fn safe_command_environment() -> BTreeMap<String, String> {
-    filtered_command_environment(std::env::vars())
+    let mut env = filtered_command_environment(std::env::vars());
+    // Never inherit a parent PATH that may prefer workspace-controlled runtimes.
+    env.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
+    env.insert("PATH".into(), trusted_command_path());
+    env
 }
 
 async fn terminate_command_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
@@ -1951,6 +2008,47 @@ mod tests {
         assert_eq!(filtered.get("SystemDrive").map(String::as_str), Some("C:"));
         assert_eq!(filtered.len(), 4);
     }
+
+    #[test]
+    fn command_children_use_trusted_shell_and_minimal_path() {
+        let shell = resolve_trusted_shell().expect("trusted shell");
+        assert!(shell.is_absolute(), "shell must be absolute: {}", shell.display());
+        assert!(shell.is_file(), "shell must exist: {}", shell.display());
+        #[cfg(windows)]
+        assert!(
+            shell
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("powershell.exe"))
+        );
+        #[cfg(not(windows))]
+        assert_eq!(shell.file_name().and_then(|name| name.to_str()), Some("sh"));
+
+        let trusted = trusted_command_path();
+        assert!(
+            !trusted.contains(".umbratic"),
+            "trusted PATH must not include workspace runtime: {trusted}"
+        );
+        #[cfg(windows)]
+        assert!(
+            trusted.to_ascii_lowercase().contains("system32"),
+            "trusted Windows PATH should include System32: {trusted}"
+        );
+        #[cfg(not(windows))]
+        assert!(
+            trusted
+                .split(':')
+                .any(|entry| entry == "/usr/bin" || entry == "/bin"),
+            "trusted Unix PATH should include system bins: {trusted}"
+        );
+
+        let env = safe_command_environment();
+        assert_eq!(
+            env.get("PATH").map(String::as_str),
+            Some(trusted.as_str()),
+            "command children must replace inherited PATH with the trusted minimal PATH"
+        );
+    }
     #[test]
     fn markdown_fenced_arguments_parse() {
         let value = Value::String("```json\n{\"filePath\":\"README.md\"}\n```".into());
@@ -2155,15 +2253,19 @@ mod tests {
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
             workspace_graph: None,
-            aborted: std::sync::atomic::AtomicBool::new(false),
+            turn: std::sync::Mutex::new(None),
         });
         let permissions = Arc::new(crate::permission::PermissionBroker::default());
         for (id, expected) in [("disabled", "tool_disabled"), ("aborted", "aborted")] {
             let sink = crate::session::test_sink(directory.path());
             let mut events = sink.subscribe();
-            if id == "aborted" {
+            let _turn = if id == "aborted" {
+                let turn = session.try_begin_turn().expect("active turn for abort");
                 session.abort();
-            }
+                Some(turn)
+            } else {
+                None
+            };
             let result = execute_tool(
                 session.clone(),
                 sink,
@@ -2268,7 +2370,7 @@ mod tests {
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
             workspace_graph: None,
-            aborted: std::sync::atomic::AtomicBool::new(false),
+            turn: std::sync::Mutex::new(None),
         };
 
         let specs = enabled_tool_specs(&session, true).await;
@@ -2383,7 +2485,7 @@ mod tests {
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
             workspace_graph: None,
-            aborted: std::sync::atomic::AtomicBool::new(false),
+            turn: std::sync::Mutex::new(None),
         });
         let permissions = Arc::new(crate::permission::PermissionBroker::default());
         let allowed = execute_tool(

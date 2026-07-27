@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -506,5 +507,69 @@ func TestWriteOpenAIChatSSERejectsUnsupportedProtocol(t *testing.T) {
 	err := WriteOpenAIChatSSE(ProviderProtocol("raw"), &bytes.Buffer{}, strings.NewReader(""))
 	if err == nil {
 		t.Fatal("expected unsupported protocol error")
+	}
+}
+
+func TestAllowedProviderIP(t *testing.T) {
+	for _, test := range []struct {
+		ip   string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"10.0.0.4", true},
+		{"192.168.1.4", true},
+		{"169.254.169.254", false},
+		{"8.8.8.8", false},
+		{"0.0.0.0", false},
+	} {
+		if got := allowedProviderIP(net.ParseIP(test.ip)); got != test.want {
+			t.Errorf("allowedProviderIP(%s)=%v want %v", test.ip, got, test.want)
+		}
+	}
+}
+
+func TestHardenedTransportRejectsRedirectsAndIgnoresProxy(t *testing.T) {
+	redirects := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirects++
+		http.Redirect(w, r, "/final", http.StatusFound)
+	}))
+	defer server.Close()
+
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+	t.Setenv("ALL_PROXY", "http://127.0.0.1:9")
+	t.Setenv("http_proxy", "http://127.0.0.1:9")
+
+	client, err := NewClient(ClientConfig{
+		Protocol: ProtocolOllama,
+		BaseURL:  server.URL,
+		Timeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected redirect rejection")
+	}
+	if redirects != 1 {
+		t.Fatalf("expected exactly one redirect response without following, got %d (err=%v)", redirects, err)
+	}
+}
+
+func TestHardenedTransportRejectsPublicProviderIP(t *testing.T) {
+	client := hardenedHTTPClient(time.Second)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://8.8.8.8/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(request)
+	if err == nil {
+		t.Fatal("expected public IP rejection")
+	}
+	if !strings.Contains(err.Error(), "loopback or private") && !strings.Contains(err.Error(), "disallowed") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

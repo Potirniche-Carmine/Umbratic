@@ -456,24 +456,59 @@ async fn prompt(
             "System prompts are managed by Veil.",
         );
     }
+    let turn = match session.try_begin_turn() {
+        Ok(turn) => turn,
+        Err(_) => {
+            return error_response(
+                StatusCode::CONFLICT,
+                "turn_in_progress",
+                "A turn is already in progress for this session.",
+            );
+        }
+    };
     let parts = input_parts(&body);
     let sink = state.store.sink.clone();
     let permissions = state.store.permissions.clone();
+    let turn_id = turn.turn_id().to_owned();
     tokio::spawn(async move {
-        match run_turn(session.clone(), parts, sink.clone(), permissions).await {
-            Ok(summary) => sink.emit(json!({ "type":"session.idle", "taskId":session.task_id, "sessionId":session.id, "summary":summary, "at":now_iso() })),
+        let result = run_turn(session.clone(), parts, sink.clone(), permissions).await;
+        match result {
+            Ok(summary) => sink.emit(json!({
+                "type":"session.idle",
+                "taskId":session.task_id,
+                "sessionId":session.id,
+                "turnId":turn_id,
+                "summary":summary,
+                "at":now_iso()
+            })),
             Err(error) => {
                 let detail = redact_text(&error.split_whitespace().collect::<Vec<_>>().join(" "), 1000);
                 let (category, code) = runner_failure_classification(&detail);
-                sink.emit(json!({ "type":"runner.error", "taskId":session.task_id, "category":category, "code":code, "message":format!("Runner turn failed: {detail}"), "detail":detail, "at":now_iso() }));
+                sink.emit(json!({
+                    "type":"runner.error",
+                    "taskId":session.task_id,
+                    "sessionId":session.id,
+                    "turnId":turn_id,
+                    "category":category,
+                    "code":code,
+                    "message":format!("Runner turn failed: {detail}"),
+                    "detail":detail,
+                    "at":now_iso()
+                }));
             }
         }
+        // Keep the busy guard until terminal events are emitted so clients never see
+        // a free slot while this turn's idle/error is still in flight.
+        drop(turn);
     });
     StatusCode::NO_CONTENT.into_response()
 }
 
 fn runner_failure_classification(detail: &str) -> (&'static str, &'static str) {
     let normalized = detail.to_ascii_lowercase();
+    if normalized.contains("aborted") {
+        return ("abort", "turn_aborted");
+    }
     if normalized.contains("context window is full") {
         return ("context", "context_window_full");
     }

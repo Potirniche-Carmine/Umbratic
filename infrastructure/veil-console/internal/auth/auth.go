@@ -21,6 +21,15 @@ const (
 	saltLen      = 16
 )
 
+// Limit concurrent Argon2id work so login/confirm storms cannot exhaust CPU/RAM.
+var argonWork = make(chan struct{}, 1)
+
+func withArgon2(fn func()) {
+	argonWork <- struct{}{}
+	defer func() { <-argonWork }()
+	fn()
+}
+
 func ValidatePassword(password string) error {
 	if !utf8.ValidString(password) {
 		return errors.New("password must be valid UTF-8")
@@ -40,7 +49,10 @@ func HashPassword(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	var key []byte
+	withArgon2(func() {
+		key = argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	})
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
 }
@@ -69,7 +81,10 @@ func VerifyPassword(encoded, password string) bool {
 	if err != nil || len(want) != argonKeyLen {
 		return false
 	}
-	got := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want)))
+	var got []byte
+	withArgon2(func() {
+		got = argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want)))
+	})
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

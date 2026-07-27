@@ -197,7 +197,7 @@ and Server remains selectable in Settings:
 npm run local
 ```
 
-When Local is selected, the desktop app starts and owns the local Veil process, just as the packaged app does. The helper may read development-only local runtime defaults from `infrastructure/veil/.env`, but the app does not force Local mode and packaged users do not need that file. Users do not configure a Veil URL or token in Local mode. Veil binds to loopback, uses an app-generated transient credential, and starts with telemetry ingestion disabled. Override local runtime values for one run when needed:
+When Local is selected, the desktop app starts and owns the local Veil process, just as the packaged app does. The helper does not read `infrastructure/veil/.env`, and the app does not force Local mode. Users do not configure a Veil URL or token in Local mode. Veil binds to loopback, uses an app-generated transient credential, and starts with telemetry ingestion disabled. Override local runtime values for one run when needed:
 
 ```sh
 npm run local -- --model llama3.2

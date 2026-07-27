@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -28,14 +29,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+	listener, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	server := &http.Server{
-		Addr:              cfg.Addr,
 		Handler:           httpapi.NewServer(cfg, modelClient),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("umbratic veil listening on %s", cfg.Addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	log.Printf("umbratic veil listening on %s", listener.Addr().String())
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

@@ -1,13 +1,10 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
 import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
-const veilRoot = path.join(repoRoot, "infrastructure/veil");
-const veilEnvPath = path.join(veilRoot, ".env");
 
 function readFlag(args, name) {
   const index = args.indexOf(name);
@@ -35,22 +32,6 @@ function usage() {
     "",
     "Starts with Local as the first-run default. You can switch between Local and Server in Settings.",
   ].join("\n");
-}
-
-function readDotEnv(filePath) {
-  if (!fs.existsSync(filePath)) return {};
-  const values = {};
-  for (const rawLine of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const separator = line.indexOf("=");
-    if (separator === -1) continue;
-    const key = line.slice(0, separator).trim();
-    const rawValue = line.slice(separator + 1).trim();
-    if (!key) continue;
-    values[key] = rawValue.replace(/^["']|["']$/g, "");
-  }
-  return values;
 }
 
 function envWithOverrides(args, baseEnv) {
@@ -91,11 +72,9 @@ function localEnv(args) {
     console.log(usage());
     process.exit(0);
   }
-  const dotEnv = readDotEnv(veilEnvPath);
   const veilEnv = envWithOverrides(args, { ...process.env });
-  const effectiveVeilEnv = { ...dotEnv, ...veilEnv };
   return {
-    desktopEnv: desktopEnvFromVeil(effectiveVeilEnv),
+    desktopEnv: desktopEnvFromVeil(veilEnv),
   };
 }
 
@@ -118,7 +97,6 @@ function main() {
   console.log("Starting Umbratic with packaged-app connection behavior");
   console.log(`Default local runtime: ${desktopEnv.UMBRATIC_LOCAL_RUNTIME_BASE_URL}`);
   console.log(`Default local model: ${desktopEnv.UMBRATIC_LOCAL_MODEL_ID || "configure in Settings > Connection"}`);
-  console.log(fs.existsSync(veilEnvPath) ? `Optional local defaults: ${veilEnvPath}` : "Optional local defaults: none");
 
   const children = [];
 

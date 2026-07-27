@@ -157,10 +157,29 @@ func (s *Supervisor) Restart(ctx context.Context, cfg config.Veil, token string)
 		return ErrBusy
 	}
 	defer s.actionMu.Unlock()
+	return s.restartLocked(ctx, cfg, token)
+}
+
+func (s *Supervisor) restartLocked(ctx context.Context, cfg config.Veil, token string) error {
 	if err := s.stopLocked(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return s.startLocked(ctx, cfg, token)
+}
+
+// RunExclusive serializes apply, rotate, start, stop, and restart callers that need
+// store + process mutations under one critical section.
+func (s *Supervisor) RunExclusive(fn func() error) error {
+	if !s.actionMu.TryLock() {
+		return ErrBusy
+	}
+	defer s.actionMu.Unlock()
+	return fn()
+}
+
+// RestartExclusive restarts Veil while already holding actionMu via RunExclusive.
+func (s *Supervisor) RestartExclusive(ctx context.Context, cfg config.Veil, token string) error {
+	return s.restartLocked(ctx, cfg, token)
 }
 
 // Apply starts the candidate. It restores the previous configuration when the candidate fails.

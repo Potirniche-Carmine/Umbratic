@@ -189,7 +189,7 @@ test("business harness modes use their Veil route with business system skills", 
   assert.equal("system" in config, false);
 });
 
-test("runtimeEnv prepends workspace-managed runtime directories and hardening vars are stable", () => {
+test("runtimeEnv keeps UV dirs but does not prepend workspace runtime onto PATH", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-env-"));
   const { adapter } = loadRunnerAdapter(userData);
   const previousSystemDrive = process.env.SystemDrive;
@@ -204,7 +204,7 @@ test("runtimeEnv prepends workspace-managed runtime directories and hardening va
   })();
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 
-  assert.match(env[pathKey], /\.umbratic[\\/]runtime/);
+  assert.equal(env[pathKey]?.includes(".umbratic"), false);
   assert.match(env.UV_INSTALL_DIR, /\.umbratic[\\/]runtime[\\/]uv$/);
   assert.equal(env.UV_NO_MODIFY_PATH, "1");
   assert.equal(env.SystemDrive, "C:");

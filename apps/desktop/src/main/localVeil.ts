@@ -2,8 +2,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
-import * as net from "node:net";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import { isLocalhostUrl } from "./policy";
@@ -67,19 +65,46 @@ function localVeilKey(settings: ModelEndpointSettings, contextLength: number): s
   });
 }
 
-async function freeLocalPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Unable to allocate a local Veil port.")));
-        return;
-      }
-      server.close(() => resolve(address.port));
-    });
-  });
+function parseListeningAddress(output: string): string | null {
+  const match = output.match(/umbratic veil listening on\s+(127\.0\.0\.1:\d+)/i);
+  return match?.[1] ?? null;
+}
+
+function hostRuntimeEnvironment(includeGoToolchain: boolean): NodeJS.ProcessEnv {
+  const names = [
+    "HOME",
+    "USERPROFILE",
+    "TMP",
+    "TEMP",
+    "TMPDIR",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "LANG",
+    "LC_ALL",
+  ];
+  if (includeGoToolchain) {
+    names.push(
+      "PATH",
+      "Path",
+      "PATHEXT",
+      "GOROOT",
+      "GOPATH",
+      "GOPROXY",
+      "GOSUMDB",
+      "GOCACHE",
+      "GOTOOLCHAIN",
+      "GOFLAGS",
+      "LOCALAPPDATA",
+    );
+  }
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of names) {
+    const value = process.env[name];
+    if (value) env[name] = value;
+  }
+  return env;
 }
 
 function packagedVeilBinaryPath(): string | null {
@@ -125,7 +150,9 @@ function probeLocalVeil(baseUrl: string, authToken: string, onReady: () => void)
       timeout: 1000,
     }, (response) => {
       response.resume();
-      onReady();
+      // Require an authenticated healthy response. Any other status means the
+      // bearer may have reached the wrong process or Veil is not ready yet.
+      if (response.statusCode === 200) onReady();
     });
     request.once("timeout", () => request.destroy());
     request.once("error", () => undefined);
@@ -163,12 +190,15 @@ export function localVeilEnvironment(
   address: string,
   authToken: string,
   contextLength = DEFAULT_CONTEXT_LENGTH,
+  options: { includeGoToolchain?: boolean } = {},
 ): NodeJS.ProcessEnv {
+  // Allowlisted host vars only. Never spread Electron process.env — that would
+  // inherit proxies and unrelated VEIL_* overrides. Settings/SQLite own runtime.
   return {
-    ...process.env,
+    ...hostRuntimeEnvironment(options.includeGoToolchain === true),
     VEIL_ADDR: address,
     VEIL_AUTH_TOKEN: authToken,
-    VEIL_ENV_FILE: path.join(os.tmpdir(), "umbratic-managed-veil-no-env"),
+    VEIL_ENV_FILE: "-",
     VEIL_MODEL: settings.modelId.trim(),
     // Large local-document prompts can spend more than a minute in prompt
     // evaluation before Ollama emits the first response byte. The runner still
@@ -224,26 +254,29 @@ async function startLocalVeil(
     throw new Error("Local mode only connects to model runtimes on this computer. Use Server mode for remote infrastructure.");
   }
 
-  const port = await freeLocalPort();
-  const baseUrl = `http://127.0.0.1:${port}`;
   const authToken = crypto.randomBytes(24).toString("base64url");
   const launch = localVeilCommand();
+  // Bind ephemeral port inside Veil (127.0.0.1:0) and learn the real address from
+  // its listen log — avoids the freeLocalPort close/rebind race.
   const child = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: localVeilEnvironment(settings, `127.0.0.1:${port}`, authToken, contextLength),
+    env: localVeilEnvironment(settings, "127.0.0.1:0", authToken, contextLength, {
+      includeGoToolchain: launch.command === "go",
+    }),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
   launchingChild = child;
 
   let output = "";
+  let baseUrl = "";
+  let stopProbing: (() => void) | undefined;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => finish(new Error(`Timed out waiting for local Veil to start.${output.trim() ? ` ${output.trim()}` : ""}`)), 15000);
-    const stopProbing = probeLocalVeil(baseUrl, authToken, () => finish());
     const cleanup = () => {
       clearTimeout(timer);
-      stopProbing();
+      stopProbing?.();
       child.stdout?.off("data", onData);
       child.stderr?.off("data", onData);
       child.off("error", onError);
@@ -256,9 +289,15 @@ async function startLocalVeil(
       if (error) reject(error);
       else resolve();
     };
+    const beginProbing = (listeningAddress: string) => {
+      if (baseUrl) return;
+      baseUrl = `http://${listeningAddress}`;
+      stopProbing = probeLocalVeil(baseUrl, authToken, () => finish());
+    };
     const onData = (chunk: Buffer | string) => {
       output = `${output}${chunk.toString()}`.slice(-4000);
-      if (/umbratic veil listening on\s+127\.0\.0\.1:/i.test(output)) finish();
+      const listening = parseListeningAddress(output);
+      if (listening) beginProbing(listening);
     };
     const onError = (error: Error) => finish(error);
     const onExit = (code: number | null) =>

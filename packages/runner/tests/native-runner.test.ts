@@ -330,6 +330,77 @@ async function prompt(run: Awaited<ReturnType<typeof startRunner>>, id: string, 
   return run.request(`/session/${id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text }) });
 }
 
+test("native runner rejects a second prompt while a turn is active and scopes abort to that turn", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-turn-guard-"));
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let heldRequestSeen!: () => void;
+  const heldRequest = new Promise<void>((resolve) => {
+    heldRequestSeen = resolve;
+  });
+  const provider = http.createServer(async (request, response) => {
+    const body = await requestBody(request) as Record<string, unknown>;
+    const encoded = JSON.stringify(body.messages ?? []);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (encoded.includes("HOLD_TURN")) {
+      // Flush headers so the runner leaves .send() and enters the abort-aware stream loop.
+      response.write(": held\n\n");
+      heldRequestSeen();
+      await firstGate;
+      response.end(sse({ choices: [{ delta: { content: "Held turn complete." } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    if (encoded.includes("AFTER_ABORT")) {
+      response.end(sse({ choices: [{ delta: { content: "Follow-up after abort." } }] }) + "data: [DONE]\n\n");
+      return;
+    }
+    response.end(sse({ choices: [{ delta: { content: "Native runner complete." } }] }) + "data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolve, reject) => provider.listen(0, "127.0.0.1", resolve).once("error", reject));
+  const address = provider.address();
+  assert.ok(address && typeof address !== "string");
+  const providerUrl = `http://127.0.0.1:${address.port}`;
+  const run = await startRunner(cwd, providerUrl, path.join(cwd, "runner.jsonl"), "managed", { enabledTools: [] });
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "HOLD_TURN")).status, 204);
+    await heldRequest;
+    const busy = await prompt(run, session.id, "should be rejected");
+    assert.equal(busy.status, 409);
+    const busyBody = await busy.json() as { code?: string; error?: string };
+    assert.equal(busyBody.code, "turn_in_progress");
+
+    assert.equal((await run.request(`/session/${session.id}/abort`, { method: "POST" })).status, 204);
+    const aborted = await events.waitFor((event) =>
+      event.type === "runner.error"
+      && event.sessionId === session.id
+      && event.code === "turn_aborted"
+    );
+    assert.equal(aborted.category, "abort");
+    assert.equal(events.events.some((event) => event.type === "session.idle" && event.sessionId === session.id), false);
+
+    // Releasing the held provider after abort must not revive the turn into session.idle.
+    releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(events.events.some((event) => event.type === "session.idle" && event.sessionId === session.id), false);
+
+    assert.equal((await prompt(run, session.id, "AFTER_ABORT")).status, 204);
+    const idle = await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    assert.match(String(idle.turnId ?? ""), /^turn-/);
+    assert.equal(events.events.filter((event) => event.type === "session.idle" && event.sessionId === session.id).length, 1);
+  } finally {
+    releaseFirst();
+    await events.close();
+    await run.close();
+    await new Promise<void>((resolve, reject) => provider.close((error) => error ? reject(error) : resolve()));
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+
 test("native runner preserves authenticated API, streaming tools, permissions, policy, and diagnostics", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-runner-"));
   fs.writeFileSync(path.join(cwd, "README.md"), "first\nsecond\n", "utf8");
@@ -360,8 +431,8 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === readSession.id);
     assert.equal(
       events.events.some((event) => event.type === "assistant.delta" && event.text === "Internal plan must stay hidden."),
-      false,
-      "provisional prose from a tool-call response must not escape as a final answer",
+      true,
+      "tool-aware prose streams with the first model pass",
     );
 
     const writeSession = await createSession(run);
@@ -392,24 +463,20 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
 
     const streamingSession = await createSession(run);
     assert.equal((await prompt(run, streamingSession.id, "STREAM_RESPONSE")).status, 204);
-    const firstStreamed = await events.waitFor(
-      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "First streamed ",
+    const streamedAnswer = await events.waitFor(
+      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "Buffered planning answer.",
     );
-    assert.equal(firstStreamed.text, "First streamed ");
-    assert.equal(
-      events.events.some((event) => event.type === "session.idle" && event.sessionId === streamingSession.id),
-      false,
-      "the first final-answer delta must arrive before the session becomes idle",
-    );
-    await events.waitFor(
-      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "second streamed.",
-    );
+    assert.equal(streamedAnswer.text, "Buffered planning answer.");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === streamingSession.id);
     assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "Buffered planning answer."),
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "First streamed "),
       false,
-      "the private tool-aware pass must not escape as assistant output",
+      "a non-empty tool-aware answer must not trigger a second tool-free model request",
     );
+    const streamRequests = provider.requests.filter(({ body }) =>
+      JSON.stringify(body.messages).includes("STREAM_RESPONSE")
+    );
+    assert.equal(streamRequests.length, 1, "no-tool answers make exactly one model request");
 
     const system = await run.request(`/session/${blockedSession.id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: "x", system: "override" }) });
     assert.equal(system.status, 400);
@@ -502,10 +569,8 @@ test("native runner sends the adaptive response allowance selected during prefli
 
     assert.ok([1_000, 2_000, 3_000].includes(Number(preflight.reserveTokens)));
     assert.equal(preflight.protectedTokens, 2_048);
-    assert.equal(provider.requests.length, 2);
+    assert.equal(provider.requests.length, 1, "no-tool turns make one model request");
     assert.equal(provider.requests[0].body.max_output_tokens, preflight.reserveTokens);
-    assert.equal(provider.requests[1].body.max_output_tokens, preflight.reserveTokens);
-    assert.equal("tools" in provider.requests[1].body, false);
   } finally {
     await events.close();
     await run.close();

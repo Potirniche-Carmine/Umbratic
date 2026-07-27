@@ -817,7 +817,8 @@ pub async fn run_turn(
     sink: EventSink,
     permissions: Arc<PermissionBroker>,
 ) -> Result<Value, String> {
-    session.reset_abort();
+    // Abort is owned by the active TurnGuard created by /prompt_async. Starting a turn
+    // must not clear another turn's abort flag.
     session
         .messages
         .lock()
@@ -862,9 +863,9 @@ pub async fn run_turn(
                 require_tool_call: !action_requirement.is_empty()
                     && action_retries > 0
                     && !ready_for_answer,
-                // Tool-aware passes are private planning passes. The separate
-                // tool-free pass below owns the public streamed answer.
-                suppress_output: true,
+                // Stream the tool-aware answer. A second model request is only used
+                // for empty answers and safety-limit fallbacks.
+                suppress_output: false,
             },
         )
         .await;
@@ -888,7 +889,7 @@ pub async fn run_turn(
                         require_tool_call: !action_requirement.is_empty()
                             && action_retries > 0
                             && !ready_for_answer,
-                        suppress_output: true,
+                        suppress_output: false,
                     },
                 )
                 .await;
@@ -935,15 +936,23 @@ pub async fn run_turn(
                     .push(json!({"role":"assistant","content":fallback}));
                 return Ok(summary);
             }
-            // A tool-aware response cannot be public while it is streaming:
-            // providers can emit prose before a later tool call. Generate the
-            // public answer in a tool-free pass so every emitted delta is final.
-            let fallback = if result.content.trim().is_empty() {
-                "The model did not provide a final answer."
-            } else {
-                result.content.as_str()
-            };
-            final_without_tools(&session, &sink, &mut summary, fallback).await;
+            if !result.content.trim().is_empty() {
+                // The tool-aware pass already streamed this answer. Skip the
+                // duplicate tool-free model request.
+                session
+                    .messages
+                    .lock()
+                    .await
+                    .push(json!({"role":"assistant","content":result.content}));
+                return Ok(summary);
+            }
+            final_without_tools(
+                &session,
+                &sink,
+                &mut summary,
+                "The model did not provide a final answer.",
+            )
+            .await;
             return Ok(summary);
         }
         let signature = calls
@@ -1041,7 +1050,7 @@ pub async fn run_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::AtomicBool};
+    use std::sync::Arc;
 
     use crate::{context::SessionContextStore, session::test_config};
     #[test]
@@ -1248,7 +1257,7 @@ mod tests {
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
             workspace_graph: None,
-            aborted: AtomicBool::new(false),
+            turn: std::sync::Mutex::new(None),
         };
 
         let prepared = prepared_messages(&session, &[]).await.unwrap();
@@ -1289,7 +1298,7 @@ mod tests {
             context_calibration: tokio::sync::Mutex::new(None),
             context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
             workspace_graph: None,
-            aborted: AtomicBool::new(false),
+            turn: std::sync::Mutex::new(None),
         };
 
         let error = prepared_messages(&session, &[]).await.unwrap_err();

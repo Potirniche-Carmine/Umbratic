@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -26,25 +26,74 @@ function isFileSearchResult(value: unknown): value is FileSearchResult {
     && (value.match === "path" || value.match === "content");
 }
 
+const activeSearches = new Map<string, ChildProcessWithoutNullStreams>();
+
+export function cancelRootSearch(rootPath: string): void {
+  const key = path.resolve(rootPath);
+  const child = activeSearches.get(key);
+  if (!child) return;
+  activeSearches.delete(key);
+  try {
+    child.kill();
+  } catch {
+    /* already exited */
+  }
+}
+
 export async function searchRootFiles(rootPath: string, query: string, limit: number): Promise<FileSearchResult[]> {
+  const key = path.resolve(rootPath);
+  cancelRootSearch(key);
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = spawn(
       desktopCoreBinaryPath(),
       ["search-files", `--root=${rootPath}`, `--query=${query}`, `--limit=${limit}`],
-      { windowsHide: true, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(`Native file search failed: ${String(stderr).trim() || error.message}`));
-          return;
-        }
-        try {
-          const parsed: unknown = JSON.parse(String(stdout));
-          if (!Array.isArray(parsed) || !parsed.every(isFileSearchResult)) throw new Error("invalid native result shape");
-          resolve(parsed);
-        } catch (cause) {
-          reject(new Error(`Native file search returned invalid JSON: ${cause instanceof Error ? cause.message : String(cause)}`));
-        }
-      },
+      { windowsHide: true },
     );
+    activeSearches.set(key, child);
+    const chunks: Buffer[] = [];
+    const errors: Buffer[] = [];
+    let settled = false;
+    const timeout = setTimeout(() => {
+      cancelRootSearch(key);
+      finish(new Error("Native file search timed out."));
+    }, 15_000);
+
+    const finish = (error?: Error, results?: FileSearchResult[]) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (activeSearches.get(key) === child) activeSearches.delete(key);
+      if (error) reject(error);
+      else resolve(results ?? []);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+      const total = chunks.reduce((sum, part) => sum + part.length, 0);
+      if (total > 4 * 1024 * 1024) {
+        cancelRootSearch(key);
+        finish(new Error("Native file search exceeded the output budget."));
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      errors.push(chunk);
+    });
+    child.on("error", (error) => {
+      finish(new Error(`Native file search failed: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      if (code !== 0) {
+        finish(new Error(`Native file search failed: ${Buffer.concat(errors).toString("utf8").trim() || `exit ${code ?? "unknown"}`}`));
+        return;
+      }
+      try {
+        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (!Array.isArray(parsed) || !parsed.every(isFileSearchResult)) throw new Error("invalid native result shape");
+        finish(undefined, parsed);
+      } catch (cause) {
+        finish(new Error(`Native file search returned invalid JSON: ${cause instanceof Error ? cause.message : String(cause)}`));
+      }
+    });
   });
 }

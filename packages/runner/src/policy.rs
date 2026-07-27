@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs,
     path::{Component, Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -100,6 +101,53 @@ pub fn path_inside(root: &Path, candidate: &Path) -> bool {
             Component::ParentDir | Component::RootDir | Component::Prefix(_)
         )
     })
+}
+
+fn path_is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+/// Re-validate a resolved write target immediately before mutating the filesystem.
+/// Refuses leaf or ancestor symlinks so a TOCTOU swap after permission cannot escape.
+pub fn confirm_workspace_write_path(cwd: &Path, absolute: &Path) -> Result<PathBuf, String> {
+    let root = cwd
+        .canonicalize()
+        .map_err(|error| format!("Unable to resolve workspace: {error}"))?;
+    let mut cursor = PathBuf::new();
+    let components: Vec<_> = absolute.components().collect();
+    for (index, component) in components.iter().enumerate() {
+        cursor.push(component.as_os_str());
+        let is_final = index + 1 == components.len();
+        if !cursor.exists() {
+            if is_final {
+                break;
+            }
+            continue;
+        }
+        if path_is_symlink(&cursor) {
+            return Err(format!(
+                "Refusing symlink, junction, or path outside workspace: {}",
+                absolute.display()
+            ));
+        }
+    }
+    let normalized = canonicalize_with_existing_ancestor(absolute)
+        .ok_or_else(|| "Unable to resolve workspace path".to_owned())?;
+    if !path_inside(&root, &normalized) {
+        return Err(format!(
+            "Refusing symlink, junction, or path outside workspace: {}",
+            absolute.display()
+        ));
+    }
+    if path_is_symlink(&normalized) {
+        return Err(format!(
+            "Refusing symlink, junction, or path outside workspace: {}",
+            absolute.display()
+        ));
+    }
+    Ok(normalized)
 }
 
 fn canonicalize_with_existing_ancestor(path: &Path) -> Option<PathBuf> {
@@ -440,6 +488,36 @@ mod tests {
                 .canonicalize()
                 .unwrap()
                 .join("bubble_sort.py")
+        );
+    }
+
+    #[test]
+    fn write_confirmation_rejects_symlink_leaves() {
+        let parent = tempfile::tempdir().unwrap();
+        let workspace = parent.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let outside = parent.path().join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        let link = workspace.join("link.txt");
+        let created = {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&outside, &link).is_ok()
+            }
+            #[cfg(windows)]
+            {
+                std::os::windows::fs::symlink_file(&outside, &link).is_ok()
+            }
+        };
+        if created {
+            let err = confirm_workspace_write_path(&workspace, &link).unwrap_err();
+            assert!(err.to_ascii_lowercase().contains("symlink"), "{err}");
+        }
+        let safe = workspace.join("safe.txt");
+        let confirmed = confirm_workspace_write_path(&workspace, &safe).unwrap();
+        assert_eq!(
+            confirmed,
+            workspace.canonicalize().unwrap().join("safe.txt")
         );
     }
 }

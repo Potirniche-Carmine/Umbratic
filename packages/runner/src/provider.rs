@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     net::ToSocketAddrs,
+    sync::OnceLock,
 };
 
 use futures_util::StreamExt;
@@ -14,6 +15,9 @@ use crate::{
     session::{EventSink, Session},
     tools::ToolCall,
 };
+
+static SHARED_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+static SHARED_HTTP_CLIENT_ERROR: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
 pub struct ProviderResult {
@@ -58,7 +62,7 @@ pub async fn compact_context(
         "maxSummaryTokens": max_summary_tokens.min(4_096),
         "sourceDigest": source_digest,
     });
-    let client = client_for(&session.config.provider)?;
+    let client = shared_client(&session.config.provider)?;
     let mut request = client
         .post(endpoint)
         .header("Content-Type", "application/json");
@@ -104,6 +108,25 @@ pub async fn compact_context(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| "context compaction response did not contain a summary".to_owned())
+}
+
+fn shared_client(provider: &ProviderConfig) -> Result<Client, String> {
+    if let Some(client) = SHARED_HTTP_CLIENT.get() {
+        return Ok(client.clone());
+    }
+    if let Some(error) = SHARED_HTTP_CLIENT_ERROR.get() {
+        return Err(error.clone());
+    }
+    match client_for(provider) {
+        Ok(client) => {
+            let _ = SHARED_HTTP_CLIENT.set(client.clone());
+            Ok(client)
+        }
+        Err(error) => {
+            let _ = SHARED_HTTP_CLIENT_ERROR.set(error.clone());
+            Err(error)
+        }
+    }
 }
 
 fn client_for(provider: &ProviderConfig) -> Result<Client, String> {
@@ -649,7 +672,7 @@ pub async fn stream_provider_chat(
             object.insert("parallel_tool_calls".into(), Value::Bool(true));
         }
     }
-    let client = client_for(&session.config.provider)?;
+    let client = shared_client(&session.config.provider)?;
     let mut request = client
         .post(endpoint.clone())
         .header("Content-Type", "application/json");
@@ -662,11 +685,19 @@ pub async fn stream_provider_chat(
     for (name, value) in &session.config.provider.headers {
         request = request.header(name, value);
     }
-    let response = request
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("model request failed: {error}"))?;
+    let send_future = request.json(&body).send();
+    tokio::pin!(send_future);
+    let response = loop {
+        if session.is_aborted() {
+            return Err("model request aborted".into());
+        }
+        tokio::select! {
+            result = &mut send_future => {
+                break result.map_err(|error| format!("model request failed: {error}"))?;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+        }
+    };
     verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
     if !status.is_success() {
@@ -698,10 +729,16 @@ pub async fn stream_provider_chat(
     let mut buffer = Vec::new();
     let mut completed = ollama;
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
         if session.is_aborted() {
             return Err("model request aborted".into());
         }
+        let chunk = match tokio::time::timeout(std::time::Duration::from_millis(25), stream.next()).await
+        {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => continue,
+        };
         let chunk = chunk.map_err(|error| error.to_string())?;
         for line in complete_utf8_lines(&mut buffer, &chunk)? {
             if ollama {

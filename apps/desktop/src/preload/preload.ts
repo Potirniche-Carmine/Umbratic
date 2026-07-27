@@ -36,8 +36,8 @@ const umbraticApi = {
   updateChatProject: (input: { chatId: string; repositoryName: string; repositoryPath: string }) =>
     ipcRenderer.invoke("umbratic:update-chat-project", input),
   deleteChat: (input: { chatId: string }) => ipcRenderer.invoke("umbratic:delete-chat", input),
-  deleteProjectChats: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:delete-project-chats", input),
-  deleteProject: (input: { repositoryPath: string }) => ipcRenderer.invoke("umbratic:delete-project", input),
+  deleteProjectChats: (input: { projectId: string }) => ipcRenderer.invoke("umbratic:delete-project-chats", input),
+  deleteProject: (input: { projectId: string }) => ipcRenderer.invoke("umbratic:delete-project", input),
   getNotes: () => ipcRenderer.invoke("umbratic:get-notes"),
   updateNotes: (input: { content: string }) => ipcRenderer.invoke("umbratic:update-notes", input),
   getTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:get-task", input),
@@ -121,7 +121,7 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:approve-worktree-creation", input),
   respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>
     ipcRenderer.invoke("umbratic:respond-tool-permission", input),
-  openRepositoryInIde: (input: { repositoryId?: string; repositoryPath?: string; ideId: string }) =>
+  openRepositoryInIde: (input: { repositoryId: string; ideId: string }) =>
     ipcRenderer.invoke("umbratic:open-repository-in-ide", input),
   openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
     ipcRenderer.invoke("umbratic:open-task-in-ide", input),

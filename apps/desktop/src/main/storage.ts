@@ -121,20 +121,81 @@ export type LocalDiagnosticInput = {
 
 type RecordTableName = "projects" | "tasks" | "chats";
 
-function withStorageDatabase<T>(filePath: string, action: (db: DatabaseSync) => T): T {
+type RetainedDatabase = {
+  db: DatabaseSync;
+  filePath: string;
+};
+
+const retainedDatabases = new Map<string, RetainedDatabase>();
+
+function configureStorageDatabase(db: DatabaseSync): void {
+  db.exec("PRAGMA foreign_keys = ON;");
+  // WAL keeps the process-lifetime handles usable while tests and recovery
+  // readers open the same files briefly.
+  db.exec("PRAGMA journal_mode = WAL;");
+  ensureStorageSchema(db);
+}
+
+function openRetainedStorageDatabase(filePath: string): DatabaseSync {
+  const existing = retainedDatabases.get(filePath);
+  if (existing) {
+    // Re-check user_version so schema bumps still apply if another connection
+    // or recovery path changed the on-disk version. CREATE IF NOT EXISTS is cheap.
+    ensureStorageSchema(existing.db);
+    return existing.db;
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const db = new DatabaseSync(filePath);
+  configureStorageDatabase(db);
+  retainedDatabases.set(filePath, { db, filePath });
+  return db;
+}
+
+function withEphemeralStorageDatabase<T>(filePath: string, action: (db: DatabaseSync) => T): T {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const db = new DatabaseSync(filePath);
   try {
-    db.exec("PRAGMA foreign_keys = ON;");
-    ensureStorageSchema(db);
+    configureStorageDatabase(db);
     return action(db);
   } finally {
     db.close();
   }
 }
 
+function withStorageDatabase<T>(filePath: string, action: (db: DatabaseSync) => T, retain = false): T {
+  if (retain) {
+    return action(openRetainedStorageDatabase(filePath));
+  }
+  const existing = retainedDatabases.get(filePath);
+  if (existing) {
+    return action(existing.db);
+  }
+  return withEphemeralStorageDatabase(filePath, action);
+}
+
 function withAppDatabase<T>(action: (db: DatabaseSync) => T): T {
-  return withStorageDatabase(appDatabasePath(), action);
+  return withStorageDatabase(appDatabasePath(), action, true);
+}
+
+function withChatsDatabase<T>(action: (db: DatabaseSync) => T): T {
+  return withStorageDatabase(chatsDatabasePath(), action, true);
+}
+
+/** Close process-lifetime SQLite handles. Safe to call more than once. */
+export function closeStorageDatabases(): void {
+  for (const { db } of retainedDatabases.values()) {
+    try {
+      db.close();
+    } catch {
+      /* Best-effort shutdown; a later open recreates the handle. */
+    }
+  }
+  retainedDatabases.clear();
+}
+
+/** Test helper: number of retained SQLite handles in this process. */
+export function retainedStorageDatabaseCount(): number {
+  return retainedDatabases.size;
 }
 
 function ensureStorageSchema(db: DatabaseSync) {
@@ -268,6 +329,9 @@ function normalizedDiagnosticText(value: string | undefined, limit: number): str
   return normalized.slice(0, limit);
 }
 
+const maxLocalDiagnosticEntries = 2000;
+const maxLocalDiagnosticBytes = 8 * 1024 * 1024;
+
 export function appendLocalDiagnostic(input: LocalDiagnosticInput): void {
   if (input.level !== "warn" && input.level !== "error") return;
   const source = normalizedDiagnosticText(input.source, 80);
@@ -288,6 +352,39 @@ export function appendLocalDiagnostic(input: LocalDiagnosticInput): void {
       normalizedDiagnosticText(input.message, 4000) ?? null,
       data,
     );
+    const overflow = db.prepare(`
+      SELECT COUNT(*) AS entries FROM diagnostic_logs
+    `).get() as { entries: number };
+    const excess = Math.max(0, Number(overflow.entries) - maxLocalDiagnosticEntries);
+    if (excess > 0) {
+      db.prepare(`
+        DELETE FROM diagnostic_logs WHERE id IN (
+          SELECT id FROM diagnostic_logs ORDER BY id ASC LIMIT ?
+        )
+      `).run(excess);
+    }
+    for (;;) {
+      const stats = db.prepare(`
+        SELECT
+          COUNT(*) AS entries,
+          COALESCE(SUM(
+            LENGTH(CAST(at AS BLOB)) +
+            LENGTH(CAST(level AS BLOB)) +
+            LENGTH(CAST(source AS BLOB)) +
+            LENGTH(CAST(event AS BLOB)) +
+            COALESCE(LENGTH(CAST(task_id AS BLOB)), 0) +
+            COALESCE(LENGTH(CAST(message AS BLOB)), 0) +
+            LENGTH(CAST(data AS BLOB))
+          ), 0) AS bytes
+        FROM diagnostic_logs
+      `).get() as DiagnosticStatsRow;
+      if ((Number(stats.entries) || 0) === 0 || (Number(stats.bytes) || 0) <= maxLocalDiagnosticBytes) break;
+      db.prepare(`
+        DELETE FROM diagnostic_logs WHERE id = (
+          SELECT id FROM diagnostic_logs ORDER BY id ASC LIMIT 1
+        )
+      `).run();
+    }
   });
 }
 
@@ -937,15 +1034,17 @@ function upsertChatInDatabase(db: DatabaseSync, chat: ChatRecord) {
 
 function readChatsFromDatabase(filePath: string): ChatRecord[] {
   if (!fs.existsSync(filePath)) return [];
-  return withStorageDatabase(filePath, (db) => normalizeChats(readPayloads(db, "chats")));
+  const retain = filePath === appDatabasePath() || filePath === chatsDatabasePath();
+  return withStorageDatabase(filePath, (db) => normalizeChats(readPayloads(db, "chats")), retain);
 }
 
 function readChatFromDatabase(filePath: string, chatId: string): ChatRecord | null {
   if (!fs.existsSync(filePath)) return null;
+  const retain = filePath === appDatabasePath() || filePath === chatsDatabasePath();
   return withStorageDatabase(filePath, (db) => {
     const row = db.prepare("SELECT payload FROM chats WHERE id = ?").get(chatId) as PayloadRow | undefined;
     return row ? normalizeChatRecord(parsePayload(row.payload)) : null;
-  });
+  }, retain);
 }
 
 function legacyProjectDatabasePath(rootPath: string): string {
@@ -957,7 +1056,7 @@ function readLegacyProjectChats(project: RepositoryInfo): ChatRecord[] {
 }
 
 function writeChatsToDatabase(chats: ChatRecord[]) {
-  withStorageDatabase(chatsDatabasePath(), (db) => replaceChatsInDatabase(db, chats));
+  withChatsDatabase((db) => replaceChatsInDatabase(db, chats));
 }
 
 function readLegacyAppChats(): ChatRecord[] {
@@ -1017,7 +1116,7 @@ function chatWithProjectMetadata(chat: ChatRecord): ChatRecord {
 export function writeChat(chat: ChatRecord) {
   const normalized = normalizeChatRecord(chat);
   if (!normalized) return;
-  withStorageDatabase(chatsDatabasePath(), (db) => upsertChatInDatabase(db, chatWithProjectMetadata(normalized)));
+  withChatsDatabase((db) => upsertChatInDatabase(db, chatWithProjectMetadata(normalized)));
 }
 
 export function writeChats(chats: ChatRecord[]) {

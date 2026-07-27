@@ -10,6 +10,7 @@ test("local launcher matches packaged connection switching behavior", () => {
   assert.match(launcher, /UMBRATIC_DEFAULT_ENDPOINT_MODE: "local"/);
   assert.match(launcher, /UMBRATIC_ALLOW_ENDPOINT_EDIT:/);
   assert.doesNotMatch(launcher, /UMBRATIC_FORCE_LOCAL_ENDPOINT/);
+  assert.doesNotMatch(launcher, /readDotEnv|veilEnvPath|Optional local defaults/);
 });
 
 

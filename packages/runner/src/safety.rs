@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::policy::classify_command_text;
 
-pub const COMMAND_POLICY_VERSION: &str = "command-safety-v2";
+pub const COMMAND_POLICY_VERSION: &str = "command-safety-v3";
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_SEGMENTS: usize = 32;
 
@@ -106,69 +106,6 @@ fn split_segments(command: &str) -> Result<Vec<&str>, &'static str> {
         return Err("too_many_segments");
     }
     Ok(segments)
-}
-
-fn command_program_name(command: &str) -> String {
-    let trimmed = command.trim();
-    let trimmed = trimmed
-        .strip_prefix("run ")
-        .or_else(|| trimmed.strip_prefix("RUN "))
-        .unwrap_or(trimmed)
-        .trim_start();
-    let program = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_matches(['\'', '"'])
-        .replace('\\', "/")
-        .to_ascii_lowercase();
-    program
-        .rsplit('/')
-        .next()
-        .unwrap_or(&program)
-        .to_owned()
-}
-
-fn uv_tokens(command: &str) -> Vec<String> {
-    let trimmed = command.trim();
-    let trimmed = trimmed
-        .strip_prefix("run ")
-        .or_else(|| trimmed.strip_prefix("RUN "))
-        .unwrap_or(trimmed)
-        .trim_start();
-    trimmed
-        .split_whitespace()
-        .map(|token| token.trim_matches(['\'', '"']).to_ascii_lowercase())
-        .collect()
-}
-
-fn is_auto_safe_uv_invocation(command: &str) -> bool {
-    let tokens = uv_tokens(command);
-    let Some(program) = tokens.first() else {
-        return false;
-    };
-    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    if !matches!(name, "uv" | "uv.exe") {
-        return false;
-    }
-    // Only local execution helpers are auto-safe. Install/add/sync/tool/python
-    // mutations can reach the network and must confirm like other package managers.
-    match tokens.get(1).map(String::as_str) {
-        Some("run") => true,
-        Some("tool") if tokens.get(2).map(String::as_str) == Some("run") => true,
-        _ => false,
-    }
-}
-
-fn is_auto_safe_python_runtime(command: &str) -> bool {
-    let name = command_program_name(command);
-    if matches!(name.as_str(), "uv" | "uv.exe") {
-        return is_auto_safe_uv_invocation(command);
-    }
-    matches!(
-        name.as_str(),
-        "python" | "python.exe" | "python3" | "python3.exe" | "py" | "py.exe" | "pytest" | "pytest.exe"
-    )
 }
 
 #[derive(Clone, Copy)]
@@ -312,20 +249,18 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecisionV1 {
                     "The command can remove or discard workspace state.",
                     Some("Create a checkpoint or preview the affected paths first."),
                 ),
-                "python-runtime" if !dynamic && is_auto_safe_python_runtime(segment) => (
-                    SafetyAction::Allow,
-                    SafetySeverity::Info,
-                    SafetyCertainty::Heuristic,
-                    "workspace_python_runtime",
-                    "The command uses the approved local Python or uv runtime.",
-                    None,
-                ),
-                "package-manager" | "cmake-build" | "compiler" | "python-runtime" => (
+                // Interpreters, test runners, package managers, and shells always Confirm.
+                // AutoSafe must not execute workspace-controlled code without approval.
+                "package-manager" | "cmake-build" | "compiler" | "python-runtime" | "shell" => (
                     SafetyAction::Confirm,
                     SafetySeverity::Medium,
-                    SafetyCertainty::Heuristic,
+                    if dynamic {
+                        SafetyCertainty::Unknown
+                    } else {
+                        SafetyCertainty::Heuristic
+                    },
                     "repository_code_execution",
-                    "The command executes repository-controlled code or changes dependencies.",
+                    "The command executes repository-controlled code, a shell, or changes dependencies.",
                     None,
                 ),
                 _ => (
@@ -425,11 +360,15 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("python bubble_sort.py", cwd).action,
-            SafetyAction::Allow
+            SafetyAction::Confirm
         );
         assert_eq!(
             evaluate_command("py bubble_sort.py", cwd).action,
-            SafetyAction::Allow
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("pytest", cwd).action,
+            SafetyAction::Confirm
         );
         assert_eq!(
             evaluate_command("uv python install 3.12", cwd).action,
@@ -449,14 +388,18 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("uv run python bubble_sort.py", cwd).action,
-            SafetyAction::Allow
+            SafetyAction::Confirm
         );
         assert_eq!(
             evaluate_command("uv tool run ruff check .", cwd).action,
-            SafetyAction::Allow
+            SafetyAction::Confirm
         );
         assert_eq!(
             evaluate_command("pip install example", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("powershell -Command Get-ChildItem", cwd).action,
             SafetyAction::Confirm
         );
         assert_eq!(evaluate_command("rm -rf /", cwd).action, SafetyAction::Deny);

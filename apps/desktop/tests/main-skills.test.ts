@@ -61,7 +61,7 @@ test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skill
   assert.match(pythonSkill, /Prose, code fences, and proposed commands do not create or run anything/i);
 });
 
-function storedZip(entries) {
+function storedZip(entries, options = {}) {
   const locals = [];
   const centrals = [];
   let offset = 0;
@@ -98,7 +98,7 @@ function storedZip(entries) {
     central.writeUInt16LE(0, 32);
     central.writeUInt16LE(0, 34);
     central.writeUInt16LE(0, 36);
-    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(options.externalAttrs?.[name] ?? 0, 38);
     central.writeUInt32LE(offset, 42);
     nameBuffer.copy(central, 46);
     centrals.push(central);
@@ -385,6 +385,39 @@ test("importSkill imports a zip skill archive with one skill folder", async () =
     assert.equal(selected.find((skill) => skill.id === "zip-skill").instructionPath, path.join(directory, "zip-skill", "SKILL.md"));
   } finally {
     fs.rmSync(zipPath, { force: true });
+  }
+});
+
+test("importSkill rejects zip archives with too many entries or symlink entries", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-"));
+  const skills = loadSkills(userData);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-zip-limits-target-"));
+  const crowded = Object.fromEntries(
+    Array.from({ length: 257 }, (_, index) => [`entry-${index}.md`, `# ${index}`]),
+  );
+  const crowdedPath = path.join(os.tmpdir(), `umbratic-skill-crowded-${Date.now()}.zip`);
+  const symlinkPath = path.join(os.tmpdir(), `umbratic-skill-symlink-${Date.now()}.zip`);
+  fs.writeFileSync(crowdedPath, storedZip(crowded));
+  fs.writeFileSync(
+    symlinkPath,
+    storedZip(
+      {
+        "symlink-skill/SKILL.md": "---\nname: Symlink Skill\ndescription: Bad.\n---\n\nBody.",
+        "symlink-skill/link.md": "target",
+      },
+      { externalAttrs: { "symlink-skill/link.md": (0o120000 << 16) >>> 0 } },
+    ),
+  );
+  try {
+    const tooMany = await skills.importSkill({ sourcePath: crowdedPath }, directory);
+    assert.equal(tooMany.ok, false);
+    assert.match(tooMany.message, /too many zip entries/i);
+    const symlink = await skills.importSkill({ sourcePath: symlinkPath }, directory);
+    assert.equal(symlink.ok, false);
+    assert.match(symlink.message, /symlink/i);
+  } finally {
+    fs.rmSync(crowdedPath, { force: true });
+    fs.rmSync(symlinkPath, { force: true });
   }
 });
 

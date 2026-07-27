@@ -358,8 +358,8 @@ declare global {
       updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: UmbraticChatAttachment[] }): Promise<UmbraticChatRecord>;
       updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<UmbraticChatRecord>;
       deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
-      deleteProjectChats(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
-      deleteProject(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
+      deleteProjectChats(input: { projectId: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
+      deleteProject(input: { projectId: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
       getNotes(): Promise<UmbraticUserNotes>;
       updateNotes(input: { content: string }): Promise<UmbraticUserNotes>;
       getTask(input: { taskId: string }): Promise<UmbraticTaskInfo | null>;
@@ -485,7 +485,7 @@ declare global {
       }): Promise<UmbraticTaskInfo>;
       approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
       respondToToolPermission(input: UmbraticPermissionDecision): Promise<void>;
-      openRepositoryInIde(input: { repositoryId?: string; repositoryPath?: string; ideId: string }): Promise<UmbraticIdeOpenResult>;
+      openRepositoryInIde(input: { repositoryId: string; ideId: string }): Promise<UmbraticIdeOpenResult>;
       openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<UmbraticIdeOpenResult>;
       approveTaskMerge(input: { taskId: string }): Promise<UmbraticApproveResult>;
       rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;

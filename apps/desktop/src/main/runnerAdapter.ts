@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import { localProviderCatalog } from "./config";
@@ -80,15 +79,10 @@ export function buildUmbraticRunnerConfig(
 export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
   const runtimeRoot = path.join(worktreePath, ".umbratic", "runtime");
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-  const pathEntries = [
-    path.join(os.homedir(), ".local", "bin"),
-    path.join(runtimeRoot, "uv"),
-    path.join(runtimeRoot, "uv", "bin"),
-    path.join(runtimeRoot, "uv", "Scripts"),
-    process.env[pathKey] ?? "",
-  ].filter(Boolean);
+  // Keep UV_* install dirs for confirmed tooling, but never prepend workspace-controlled
+  // .umbratic/runtime onto PATH — that lets a malicious repo win executable lookup.
   const env: NodeJS.ProcessEnv = {
-    [pathKey]: pathEntries.join(path.delimiter),
+    [pathKey]: process.env[pathKey] ?? "",
     UV_INSTALL_DIR: path.join(runtimeRoot, "uv"),
     UV_UNMANAGED_INSTALL: path.join(runtimeRoot, "uv"),
     UV_NO_MODIFY_PATH: "1",

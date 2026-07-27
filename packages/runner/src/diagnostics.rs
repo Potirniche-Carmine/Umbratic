@@ -105,19 +105,46 @@ impl RunnerDiagnostics {
         } else {
             "info"
         };
-        let mut data = event.as_object().cloned().unwrap_or_default();
-        for key in ["type", "taskId", "at"] {
-            data.remove(key);
-        }
-        data.remove("arguments");
-        data.remove("response");
-        for key in ["message", "detail", "summary", "errorMessage", "text"] {
-            if let Some(Value::String(value)) = data.get_mut(key) {
-                *value = redact_text(value, if key == "text" { 1600 } else { 1000 });
+        // Allowlisted typed fields only — never clone untrusted leftover maps.
+        let mut data = Map::new();
+        for key in [
+            "toolCallId",
+            "toolKind",
+            "commandClass",
+            "exitCode",
+            "status",
+            "errorCode",
+            "stream",
+            "stage",
+            "outcome",
+            "reason",
+            "kind",
+            "strategy",
+            "hash",
+            "originalBytes",
+            "outputBytes",
+            "durationMs",
+            "phase",
+            "source",
+            "confidence",
+        ] {
+            if let Some(value) = event.get(key) {
+                data.insert(key.to_owned(), value.clone());
             }
         }
-        if let Some(Value::String(cwd)) = data.remove("cwd") {
-            data.insert("cwdHash".into(), Value::String(short_hash_value(&cwd)));
+        for key in ["message", "detail", "summary", "errorMessage"] {
+            if let Some(Value::String(value)) = event.get(key) {
+                data.insert(key.to_owned(), Value::String(redact_text(value, 1000)));
+            }
+        }
+        if let Some(Value::String(text)) = event.get("text") {
+            if self.config.include_tool_output != "none" {
+                data.insert("textChars".into(), json!(text.chars().count()));
+                data.insert("text".into(), Value::String(redact_text(text, 1600)));
+            }
+        }
+        if let Some(Value::String(cwd)) = event.get("cwd") {
+            data.insert("cwdHash".into(), Value::String(short_hash_value(cwd)));
         }
         Some((level.to_owned(), data))
     }
@@ -218,17 +245,24 @@ mod tests {
             "type":"tool.requested",
             "taskId":"task",
             "arguments":{"token":"raw-tool-token"},
+            "prompt":"raw system prompt",
             "at":now_iso()
         }));
         diagnostics.record(&json!({
             "type":"tool.finished",
             "taskId":"task",
             "response":"raw-tool-response",
+            "status":"success",
+            "exitCode":0,
             "at":now_iso()
         }));
         let content = fs::read_to_string(&path).unwrap();
         assert!(!content.contains("raw-tool-token"));
         assert!(!content.contains("raw-tool-response"));
+        assert!(!content.contains("raw system prompt"));
+        assert!(!content.contains("\"arguments\""));
+        assert!(!content.contains("\"prompt\""));
+        assert!(content.contains("\"status\":\"success\""));
     }
 
     #[test]

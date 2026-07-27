@@ -371,6 +371,7 @@ type ChatProjectGroup = {
   worktrees: WorktreeChatGroup[];
 };
 type ProjectDeleteTarget = {
+  id: string;
   key: string;
   name: string;
   path: string;
@@ -466,8 +467,8 @@ type DesktopApi = {
   updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
   updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<ChatRecord>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
-  deleteProjectChats(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
-  deleteProject(input: { repositoryPath: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
+  deleteProjectChats(input: { projectId: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
+  deleteProject(input: { projectId: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
   getNotes(): Promise<UserNotes>;
   updateNotes(input: { content: string }): Promise<UserNotes>;
   getTask(input: { taskId: string }): Promise<TaskInfo | null>;
@@ -556,7 +557,7 @@ type DesktopApi = {
   }): Promise<TaskInfo>;
   approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
   respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
-  openRepositoryInIde(input: { repositoryId?: string; repositoryPath?: string; ideId: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+  openRepositoryInIde(input: { repositoryId: string; ideId: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
   approveTaskMerge(input: { taskId: string }): Promise<
     | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }
@@ -1442,18 +1443,26 @@ const fallbackApi: DesktopApi = {
     return { ok: true };
   },
   deleteProjectChats: async (input) => {
+    const project = readPreviewProjects().find((row) => row.id === input.projectId);
+    const repositoryPath = project?.rootPath;
     const deletedChatIds = readPreviewChats()
-      .filter((chat) => chat.repositoryPath === input.repositoryPath)
+      .filter((chat) => repositoryPath && chat.repositoryPath === repositoryPath)
       .map((chat) => chat.id);
-    writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== input.repositoryPath));
+    if (repositoryPath) {
+      writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== repositoryPath));
+    }
     return { ok: true, deletedChatIds };
   },
   deleteProject: async (input) => {
+    const project = readPreviewProjects().find((row) => row.id === input.projectId);
+    const repositoryPath = project?.rootPath;
     const deletedChatIds = readPreviewChats()
-      .filter((chat) => chat.repositoryPath === input.repositoryPath)
+      .filter((chat) => repositoryPath && chat.repositoryPath === repositoryPath)
       .map((chat) => chat.id);
-    writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== input.repositoryPath));
-    writePreviewProjects(readPreviewProjects().filter((project) => project.rootPath !== input.repositoryPath));
+    if (repositoryPath) {
+      writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== repositoryPath));
+      writePreviewProjects(readPreviewProjects().filter((row) => row.rootPath !== repositoryPath));
+    }
     return { ok: true, deletedChatIds };
   },
   getNotes: async () => readPreviewNotes(),
@@ -3538,10 +3547,12 @@ function App() {
     }
     return comments;
   }, [visibleEvents]);
-  const composerItems = useMemo(
-    () => composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state),
-    [task?.prompt, task?.state, visibleEvents],
-  );
+  const composerItems = useMemo(() => {
+    const items = composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state);
+    // Soft bound for very long chats: keep the newest composer items without a full virtualizer rewrite.
+    const composerItemSoftLimit = 120;
+    return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
+  }, [task?.prompt, task?.state, visibleEvents]);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
@@ -5279,7 +5290,7 @@ function App() {
   async function openIde(ideId: string) {
     if (!repository) return;
     setIdeMenuOpen(null);
-    const result = await api.openRepositoryInIde({ repositoryId: repository.id, repositoryPath: repository.rootPath, ideId });
+    const result = await api.openRepositoryInIde({ repositoryId: repository.id, ideId });
     if (!result.ok) setError(result.message);
   }
 
@@ -6035,8 +6046,11 @@ function App() {
 
   function chatProjectTarget(group: ChatProjectGroup): ProjectDeleteTarget | null {
     if (!group.path) return null;
+    const project = projects.find((row) => row.rootPath === group.path);
+    if (!project) return null;
     const worktreeChatCount = group.worktrees.reduce((count, worktree) => count + worktree.chats.length, 0);
     return {
+      id: project.id,
       key: group.key,
       name: group.name,
       path: group.path,
@@ -6066,14 +6080,14 @@ function App() {
         await api.deleteChat({ chatId: target.chat.id });
         removeDeletedChats([target.chat.id]);
       } else if (target.kind === "projectChats") {
-        const result = await api.deleteProjectChats({ repositoryPath: target.project.path });
+        const result = await api.deleteProjectChats({ projectId: target.project.id });
         const localDeletedChatIds = chats.filter((chat) => chat.repositoryPath === target.project.path).map((chat) => chat.id);
         removeDeletedChats(Array.from(new Set([...result.deletedChatIds, ...localDeletedChatIds])));
       } else {
-        const result = await api.deleteProject({ repositoryPath: target.project.path });
+        const result = await api.deleteProject({ projectId: target.project.id });
         const localDeletedChatIds = chats.filter((chat) => chat.repositoryPath === target.project.path).map((chat) => chat.id);
         removeDeletedChats(Array.from(new Set([...result.deletedChatIds, ...localDeletedChatIds])));
-        setProjects((current) => current.filter((project) => project.rootPath !== target.project.path));
+        setProjects((current) => current.filter((project) => project.id !== target.project.id));
         if (projectMatchesRepository(target.project, repository)) {
           setRepository(null);
         }

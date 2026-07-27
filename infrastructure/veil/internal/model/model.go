@@ -146,10 +146,85 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		generateEndpoint: generateEndpoint,
 		showEndpoint:     showEndpoint,
 		contextLength:    cfg.ContextLength,
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		client:           hardenedHTTPClient(timeout),
 	}, nil
+}
+
+func hardenedHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("provider redirects are not allowed")
+		},
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           dialPrivateProvider,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: timeout,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     false,
+		},
+	}
+}
+
+func allowedProviderIP(ip net.IP) bool {
+	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate()
+}
+
+func dialPrivateProvider(ctx context.Context, network, destination string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(destination)
+	if err != nil {
+		return nil, errors.New("provider destination is invalid")
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if ip := net.ParseIP(host); ip != nil {
+		if !allowedProviderIP(ip) {
+			return nil, errors.New("provider host must be a loopback or private address")
+		}
+		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		return ensurePrivateRemote(conn)
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(addresses) == 0 {
+		return nil, errors.New("provider host could not be resolved")
+	}
+	var lastErr error
+	for _, address := range addresses {
+		if !allowedProviderIP(address.IP) {
+			lastErr = errors.New("provider host must resolve only to loopback or private addresses")
+			continue
+		}
+		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(address.IP.String(), port))
+		if dialErr != nil {
+			lastErr = dialErr
+			continue
+		}
+		secured, secureErr := ensurePrivateRemote(conn)
+		if secureErr != nil {
+			lastErr = secureErr
+			continue
+		}
+		return secured, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("provider host must resolve only to loopback or private addresses")
+	}
+	return nil, lastErr
+}
+
+func ensurePrivateRemote(conn net.Conn) (net.Conn, error) {
+	remote, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok || !allowedProviderIP(remote.IP) {
+		_ = conn.Close()
+		return nil, errors.New("provider connected to a disallowed address")
+	}
+	return conn, nil
 }
 
 func (c *Client) ActivateModel(ctx context.Context, modelID string) error {

@@ -657,3 +657,84 @@ test("tool, skill, harness, permission, and notes settings sanitize invalid inpu
   assert.equal(fs.existsSync(path.join(userData, "notes.json")), false);
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
+
+test("local diagnostics prune oldest rows after the entry budget", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-diagnostics-prune-"));
+  const storage = loadStorage(userData);
+  for (let index = 0; index < 2010; index += 1) {
+    storage.appendLocalDiagnostic({
+      level: "warn",
+      source: "desktop",
+      event: `event-${index}`,
+      message: `warning ${index}`,
+    });
+  }
+  const info = storage.readLocalDiagnosticInfo();
+  assert.ok(info.entries <= 2000);
+  assert.ok(info.entries >= 1990);
+  const events = storage.readLocalDiagnostics().map((entry) => entry.event);
+  assert.equal(events.includes("event-0"), false);
+  assert.equal(events.includes("event-2009"), true);
+});
+
+test("app and chat databases keep one process-lifetime handle and migrate once", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-lifetime-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-home-lifetime-"));
+  const storage = loadStorage(userData, home);
+  const task = (id, prompt) => ({
+    id,
+    repositoryId: "repo",
+    chatId: "chat-lifetime",
+    prompt,
+    originalRepoPath: userData,
+    worktreePath: userData,
+    workspaceKind: "git",
+    workspaceMode: "local",
+    state: "completed",
+    originalBranch: "main",
+    baseCommit: "abc",
+    agentBranch: "",
+    permissionMode: "normal",
+    reasoningMode: "reasoning",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    changedFiles: [],
+    reviewFiles: [],
+    events: [],
+  });
+
+  assert.equal(storage.retainedStorageDatabaseCount(), 0);
+
+  storage.writeTask(task("task-lifetime", "hello"));
+  assert.equal(storage.retainedStorageDatabaseCount(), 1);
+
+  storage.writeTask(task("task-lifetime-2", "again"));
+  assert.equal(storage.retainedStorageDatabaseCount(), 1, "repeated app writes must reuse the open handle");
+
+  storage.writeChat({
+    id: "chat-lifetime",
+    title: "Lifetime",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    attachedFiles: [],
+  });
+  assert.equal(storage.retainedStorageDatabaseCount(), 2, "chat DB is a second retained handle");
+
+  storage.writeChat({
+    id: "chat-lifetime-2",
+    title: "Lifetime two",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:01.000Z",
+    attachedFiles: [],
+  });
+  assert.equal(storage.retainedStorageDatabaseCount(), 2);
+
+  assert.equal(storage.readTasks().length, 2);
+  assert.equal(storage.readChats().length, 2);
+
+  storage.closeStorageDatabases();
+  assert.equal(storage.retainedStorageDatabaseCount(), 0);
+
+  assert.equal(storage.readTask("task-lifetime")?.prompt, "hello");
+  assert.equal(storage.retainedStorageDatabaseCount(), 1, "reads reopen a retained handle after close");
+  storage.closeStorageDatabases();
+});

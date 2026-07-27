@@ -56,18 +56,80 @@ pub struct Session {
     pub context_calibration: Mutex<Option<ContextCalibration>>,
     pub context_store: Mutex<SessionContextStore>,
     pub workspace_graph: Option<WorkspaceGraphService>,
-    pub aborted: AtomicBool,
+    /// At most one in-flight turn per session. Abort is scoped to the active turn id.
+    pub(crate) turn: std::sync::Mutex<Option<ActiveTurn>>,
+}
+
+pub(crate) struct ActiveTurn {
+    id: String,
+    aborted: AtomicBool,
+}
+
+/// RAII handle that clears the active turn when the owning prompt task ends.
+pub struct TurnGuard {
+    session: Arc<Session>,
+    turn_id: String,
+}
+
+impl TurnGuard {
+    pub fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+}
+
+impl Drop for TurnGuard {
+    fn drop(&mut self) {
+        self.session.end_turn(&self.turn_id);
+    }
 }
 
 impl Session {
+    pub fn try_begin_turn(self: &Arc<Self>) -> Result<TurnGuard, &'static str> {
+        let mut turn = self
+            .turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if turn.is_some() {
+            return Err("turn_in_progress");
+        }
+        let turn_id = format!("turn-{}", Uuid::new_v4());
+        *turn = Some(ActiveTurn {
+            id: turn_id.clone(),
+            aborted: AtomicBool::new(false),
+        });
+        Ok(TurnGuard {
+            session: Arc::clone(self),
+            turn_id,
+        })
+    }
+
+    fn end_turn(&self, turn_id: &str) {
+        let mut turn = self
+            .turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if turn.as_ref().is_some_and(|active| active.id == turn_id) {
+            *turn = None;
+        }
+    }
+
     pub fn abort(&self) {
-        self.aborted.store(true, Ordering::SeqCst);
+        if let Some(active) = self
+            .turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            active.aborted.store(true, Ordering::SeqCst);
+        }
     }
-    pub fn reset_abort(&self) {
-        self.aborted.store(false, Ordering::SeqCst);
-    }
+
     pub fn is_aborted(&self) -> bool {
-        self.aborted.load(Ordering::SeqCst)
+        self.turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|active| active.aborted.load(Ordering::SeqCst))
     }
 }
 
@@ -124,7 +186,7 @@ impl SessionStore {
             context_calibration: Mutex::new(None),
             context_store: Mutex::new(SessionContextStore::default()),
             workspace_graph,
-            aborted: AtomicBool::new(false),
+            turn: std::sync::Mutex::new(None),
         });
         self.sessions.write().await.insert(id, session.clone());
         Ok(session)
@@ -217,7 +279,7 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         context_calibration: Mutex::new(None),
         context_store: Mutex::new(SessionContextStore::default()),
         workspace_graph: None,
-        aborted: AtomicBool::new(false),
+        turn: std::sync::Mutex::new(None),
     })
 }
 
@@ -226,14 +288,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abort_state_is_local_to_each_session_and_can_be_reset() {
+    fn abort_state_is_scoped_to_the_active_turn_and_sessions_are_independent() {
         let directory = tempfile::tempdir().unwrap();
         let first = test_session(directory.path());
         let second = test_session(directory.path());
+        let first_turn = first.try_begin_turn().expect("first turn");
+        let _second_turn = second.try_begin_turn().expect("second session turn");
         first.abort();
         assert!(first.is_aborted());
         assert!(!second.is_aborted());
-        first.reset_abort();
+        drop(first_turn);
         assert!(!first.is_aborted());
+        let next = first.try_begin_turn().expect("next turn after prior ends");
+        assert!(!first.is_aborted());
+        assert!(next.turn_id().starts_with("turn-"));
+    }
+
+    #[test]
+    fn second_begin_turn_is_rejected_while_a_turn_is_active() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = test_session(directory.path());
+        let _active = session.try_begin_turn().expect("first turn");
+        assert_eq!(session.try_begin_turn().err(), Some("turn_in_progress"));
+        session.abort();
+        assert!(session.is_aborted());
+        // A second begin must still fail; abort must not clear the active turn.
+        assert_eq!(session.try_begin_turn().err(), Some("turn_in_progress"));
     }
 }

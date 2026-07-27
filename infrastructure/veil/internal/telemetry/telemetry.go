@@ -167,16 +167,47 @@ func validateFailedTools(value any) error {
 		if err := requiredString(record, "toolKind", 80); err != nil {
 			return err
 		}
-		if _, exists := record["input"]; !exists {
-			return fmt.Errorf("%w: failed tool input is required", ErrInvalidBundle)
+		if _, exists := record["input"]; exists {
+			return fmt.Errorf("%w: failed tool input dumps are not allowed", ErrInvalidBundle)
 		}
-		response, ok := record["response"].(map[string]any)
+		if _, exists := record["response"]; exists {
+			return fmt.Errorf("%w: failed tool response dumps are not allowed", ErrInvalidBundle)
+		}
+		inputMeta, ok := record["inputMeta"].(map[string]any)
 		if !ok {
-			return fmt.Errorf("%w: failed tool response is required", ErrInvalidBundle)
+			return fmt.Errorf("%w: failed tool inputMeta is required", ErrInvalidBundle)
 		}
-		for _, key := range []string{"stdout", "stderr"} {
-			if _, ok := response[key].(string); !ok {
-				return fmt.Errorf("%w: failed tool %s is required", ErrInvalidBundle, key)
+		if keys, exists := inputMeta["argKeys"]; exists {
+			list, ok := keys.([]any)
+			if !ok || len(list) > 40 {
+				return fmt.Errorf("%w: failed tool argKeys are invalid", ErrInvalidBundle)
+			}
+		}
+		responseMeta, ok := record["responseMeta"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: failed tool responseMeta is required", ErrInvalidBundle)
+		}
+		for _, key := range []string{"stdoutChars", "stderrChars", "toolResponseChars"} {
+			if value, exists := responseMeta[key]; exists {
+				switch typed := value.(type) {
+				case float64:
+					if typed < 0 {
+						return fmt.Errorf("%w: failed tool %s must be a number", ErrInvalidBundle, key)
+					}
+				case json.Number:
+					parsed, err := typed.Int64()
+					if err != nil || parsed < 0 {
+						return fmt.Errorf("%w: failed tool %s must be a number", ErrInvalidBundle, key)
+					}
+				default:
+					return fmt.Errorf("%w: failed tool %s must be a number", ErrInvalidBundle, key)
+				}
+			}
+		}
+		if message, exists := responseMeta["errorMessage"]; exists {
+			text, ok := message.(string)
+			if !ok || len(text) > 400 {
+				return fmt.Errorf("%w: failed tool errorMessage is invalid", ErrInvalidBundle)
 			}
 		}
 	}

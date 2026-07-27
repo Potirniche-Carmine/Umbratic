@@ -464,8 +464,11 @@ func selectiveTelemetryBody() string {
 			"failedTools": [{
 				"id": "tool-1",
 				"toolKind": "edit",
-				"input": {"filePath": "parser.ts", "oldText": "a", "newText": "b"},
-				"response": {"stdout": "", "stderr": "oldText was not found", "exitCode": 1}
+				"exitCode": 1,
+				"status": "validation_error",
+				"errorCode": "invalid_arguments",
+				"inputMeta": {"pathHash": "abc123", "argKeys": ["filePath", "oldText", "newText"]},
+				"responseMeta": {"stdoutChars": 0, "stderrChars": 0, "toolResponseChars": 21, "errorMessage": "oldText was not found"}
 			}],
 			"contextTriggers": [{"threshold": 75, "estimatedTokens": 750, "contextLength": 1000}]
 		}]

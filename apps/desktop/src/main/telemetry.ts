@@ -2,7 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { BackendUiEvent, LocalDiagnosticRecord, ProductTelemetryEvent, RepositoryInfo, ReviewFile, TaskRecord } from "./types";
-import { classifyCommandText, redactText } from "./policy";
+import { classifyCommandText, redactText, shortHashValue } from "./policy";
+import { isRecord } from "./utils";
 
 function diffStats(diff: string): { additions: number; deletions: number } {
   return diff.split(/\r?\n/).reduce(
@@ -269,13 +270,44 @@ function feedbackTelemetry(task: TaskRecord, conversation: TelemetryConversation
 function failedToolTelemetry(task: TaskRecord) {
   return (task.events ?? [])
     .filter((event): event is Extract<BackendUiEvent, { type: "tool.failed" }> => event.type === "tool.failed")
-    .map((event) => ({
-      id: event.id,
-      toolKind: event.toolKind,
-      input: event.input,
-      response: event.response,
-      at: event.at,
-    }));
+    .map((event) => {
+      const input = isRecord(event.input) ? event.input : {};
+      const pathValue =
+        typeof input.filePath === "string"
+          ? input.filePath
+          : typeof input.path === "string"
+            ? input.path
+            : undefined;
+      const command = typeof input.command === "string" ? input.command : undefined;
+      const query = typeof input.query === "string" ? input.query : undefined;
+      return {
+        id: event.id,
+        toolKind: event.toolKind,
+        at: event.at,
+        exitCode: event.response.exitCode ?? null,
+        status: event.response.status,
+        errorCode: event.response.errorCode,
+        inputMeta: {
+          ...(pathValue ? { pathHash: shortHashValue(pathValue) } : {}),
+          ...(query ? { queryChars: query.length } : {}),
+          ...(command
+            ? {
+                commandClass: classifyCommandText(command).commandClass,
+                commandChars: command.length,
+              }
+            : {}),
+          argKeys: Object.keys(input).slice(0, 20),
+        },
+        responseMeta: {
+          stdoutChars: (event.response.stdout ?? "").length,
+          stderrChars: (event.response.stderr ?? "").length,
+          toolResponseChars: (event.response.toolResponse ?? "").length,
+          ...(event.response.errorMessage
+            ? { errorMessage: redactText(event.response.errorMessage, 320) }
+            : {}),
+        },
+      };
+    });
 }
 
 function contextTriggerTelemetry(task: TaskRecord) {
@@ -315,7 +347,7 @@ export function buildRedactedTelemetryBundle(
 ) {
   const conversations = conversationByChat(tasks);
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     exportedAt: new Date().toISOString(),
     productEvents,
     localDiagnostics: localDiagnosticSummary(localDiagnostics),

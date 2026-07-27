@@ -48,8 +48,12 @@ type SkillManifest = {
 
 const skillFileByteLimit = 512 * 1024;
 const skillImportTotalByteLimit = 10 * 1024 * 1024;
+const skillImportArchiveByteLimit = 10 * 1024 * 1024;
+const skillImportMaxEntries = 256;
+const skillImportMaxEntryBytes = 2 * 1024 * 1024;
 const skillImportTempPrefix = "umbratic-skill-import-";
 const skillManifestFileName = ".manifest.json";
+const zipUnixSymlinkMode = 0o120000;
 
 const systemSkillDefinitions: SystemSkillDefinition[] = [
   { id: "umbratic-skill-creator" },
@@ -665,6 +669,10 @@ function safeZipEntryName(name: string): string | null {
 }
 
 function extractZipToDirectory(zipFile: string, outputDir: string) {
+  const archiveStat = fs.lstatSync(zipFile);
+  if (archiveStat.isSymbolicLink()) throw new Error("Skill zip path must not be a symbolic link.");
+  if (!archiveStat.isFile()) throw new Error("Skill zip path must be a regular file.");
+  if (archiveStat.size > skillImportArchiveByteLimit) throw new Error("Skill import archive is too large.");
   const data = fs.readFileSync(zipFile);
   let eocd = -1;
   const min = Math.max(0, data.length - 0xffff - 22);
@@ -676,6 +684,7 @@ function extractZipToDirectory(zipFile: string, outputDir: string) {
   }
   if (eocd < 0) throw new Error("Zip file is missing a central directory.");
   const entryCount = data.readUInt16LE(eocd + 10);
+  if (entryCount > skillImportMaxEntries) throw new Error("Skill import has too many zip entries.");
   let centralOffset = data.readUInt32LE(eocd + 16);
   let totalBytes = 0;
   for (let entry = 0; entry < entryCount; entry += 1) {
@@ -687,27 +696,38 @@ function extractZipToDirectory(zipFile: string, outputDir: string) {
     const nameLength = data.readUInt16LE(centralOffset + 28);
     const extraLength = data.readUInt16LE(centralOffset + 30);
     const commentLength = data.readUInt16LE(centralOffset + 32);
+    const externalAttrs = data.readUInt32LE(centralOffset + 38);
     const localOffset = data.readUInt32LE(centralOffset + 42);
     const entryName = safeZipEntryName(data.subarray(centralOffset + 46, centralOffset + 46 + nameLength).toString("utf8"));
     centralOffset += 46 + nameLength + extraLength + commentLength;
 
     if (!entryName || entryName.endsWith("/")) continue;
+    const unixMode = (externalAttrs >>> 16) & 0xffff;
+    if ((unixMode & 0o170000) === zipUnixSymlinkMode) {
+      throw new Error("Zip symlinks are not supported.");
+    }
     if ((flags & 1) !== 0) throw new Error("Encrypted zip entries are not supported.");
     if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff) {
       throw new Error("Zip64 skill imports are not supported.");
     }
-    totalBytes += uncompressedSize;
-    if (totalBytes > skillImportTotalByteLimit) throw new Error("Skill import is too large.");
+    if (uncompressedSize > skillImportMaxEntryBytes) throw new Error("Skill import entry is too large.");
+    if (totalBytes + uncompressedSize > skillImportTotalByteLimit) throw new Error("Skill import is too large.");
     if (data.readUInt32LE(localOffset) !== 0x04034b50) throw new Error("Zip local file header is invalid.");
     const localNameLength = data.readUInt16LE(localOffset + 26);
     const localExtraLength = data.readUInt16LE(localOffset + 28);
     const contentStart = localOffset + 30 + localNameLength + localExtraLength;
+    if (contentStart + compressedSize > data.length) throw new Error("Zip entry content is truncated.");
     const compressed = data.subarray(contentStart, contentStart + compressedSize);
     const content = method === 0
       ? compressed
       : method === 8
-        ? zlib.inflateRawSync(compressed)
+        ? zlib.inflateRawSync(compressed, { maxOutputLength: uncompressedSize })
         : (() => { throw new Error(`Unsupported zip compression method ${method}.`); })();
+    if (content.length !== uncompressedSize) {
+      throw new Error("Zip entry size does not match the claimed uncompressed size.");
+    }
+    totalBytes += content.length;
+    if (totalBytes > skillImportTotalByteLimit) throw new Error("Skill import is too large.");
     const destination = path.resolve(outputDir, entryName);
     if (!pathInside(outputDir, destination)) throw new Error("Zip entry escaped the import directory.");
     fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -737,7 +757,8 @@ function importedSkillRoot(sourcePath: string): string | null {
 function copyDirectoryContents(sourceDir: string, targetDir: string) {
   let totalBytes = 0;
   const copyEntry = (source: string, target: string) => {
-    const stat = fs.statSync(source);
+    const stat = fs.lstatSync(source);
+    if (stat.isSymbolicLink()) throw new Error("Skill import refuses symbolic links.");
     if (stat.isDirectory()) {
       fs.mkdirSync(target, { recursive: true });
       for (const entry of fs.readdirSync(source)) {

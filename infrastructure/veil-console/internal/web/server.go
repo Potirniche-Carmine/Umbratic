@@ -533,17 +533,23 @@ func (s *Server) tokenRotate(w http.ResponseWriter, r *http.Request) {
 		s.renderStatus(w, "dashboard.html", http.StatusInternalServerError, s.dashboardData(r, "The active configuration could not be read.", ""))
 		return
 	}
-	secrets.VeilToken = newToken
-	err = s.saveSecrets(secrets)
-	if err == nil && configured && s.supervisor.Status().Running {
-		err = s.supervisor.Restart(r.Context(), cfg, newToken)
-	}
-	if err != nil {
-		secrets.VeilToken = oldToken
-		_ = s.saveSecrets(secrets)
-		if configured {
-			_ = s.supervisor.Restart(context.Background(), cfg, oldToken)
+	wasRunning := configured && s.supervisor.Status().Running
+	err = s.supervisor.RunExclusive(func() error {
+		secrets.VeilToken = newToken
+		if saveErr := s.saveSecrets(secrets); saveErr != nil {
+			return saveErr
 		}
+		if wasRunning {
+			if restartErr := s.supervisor.RestartExclusive(r.Context(), cfg, newToken); restartErr != nil {
+				secrets.VeilToken = oldToken
+				_ = s.saveSecrets(secrets)
+				_ = s.supervisor.RestartExclusive(context.Background(), cfg, oldToken)
+				return restartErr
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		s.renderStatus(w, "dashboard.html", statusFor(err), s.dashboardData(r, "Token rotation failed.", ""))
 		return
 	}
@@ -594,9 +600,16 @@ var errPasswordConfirmation = errors.New("password confirmation failed")
 
 func (s *Server) freshPassword(w http.ResponseWriter, r *http.Request) error {
 	session := r.Context().Value(sessionKey).(requestSession)
-	if !s.store.VerifyOwner(r.Context(), session.Data.Username, r.FormValue("password")) {
+	key := "confirm|" + session.Data.Username
+	if wait := s.throttle.Wait(key, time.Now()); wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		return errPasswordConfirmation
 	}
+	if !s.store.VerifyOwner(r.Context(), session.Data.Username, r.FormValue("password")) {
+		s.throttle.Failed(key, time.Now())
+		return errPasswordConfirmation
+	}
+	s.throttle.Success(key)
 	token, csrf, err := s.store.RotateSession(r.Context(), session.Token, session.Data.Username, time.Now())
 	if err != nil {
 		return errors.New("session rotation failed")

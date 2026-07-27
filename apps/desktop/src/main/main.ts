@@ -102,6 +102,7 @@ import {
   writeProductTelemetryEvent,
   writeTask,
   writeTasks,
+  closeStorageDatabases,
 } from "./storage";
 import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
 import { buildRedactedTelemetryBundle } from "./telemetry";
@@ -174,12 +175,13 @@ import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactS
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
 import { readTaskDocumentReview } from "./documentReview";
 import {
+  assertFolderRejectBaseline,
   createTaskCheckpoint,
   createTurnCheckpoint,
   forkTaskFromCheckpoint,
   removeTaskCheckpoint,
+  restoreIsolatedWorktreeForReject,
   restoreTaskCheckpoint,
-  restoreTurnCheckpoint,
   setTaskCheckpointPinned,
 } from "./checkpoints/service";
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
@@ -264,7 +266,9 @@ let pendingTaskEventFlushTimer: NodeJS.Timeout | null = null;
 const pendingRendererEvents: BackendUiEvent[] = [];
 let pendingRendererEventFlushTimer: NodeJS.Timeout | null = null;
 let telemetrySyncTimer: NodeJS.Timeout | null = null;
-const streamingTaskEventFlushDelayMs = 2000;
+// Streaming deltas stay in memory. An optional long crash checkpoint may flush
+// the blob; durable writes happen on turn complete / fail / abort / permission wait.
+const streamingTaskEventCrashCheckpointMs = 30_000;
 const rendererEventFlushDelayMs = 20;
 
 function recordProductTelemetry(
@@ -447,7 +451,7 @@ function shouldDeferTaskEventFlush(event: BackendUiEvent): boolean {
   return event.type === "assistant.delta" || event.type === "assistant.reasoning.delta" || event.type === "command.output";
 }
 
-function scheduleTaskEventFlush(delayMs = streamingTaskEventFlushDelayMs) {
+function scheduleTaskEventFlush(delayMs = streamingTaskEventCrashCheckpointMs) {
   if (pendingTaskEventFlushTimer) {
     if (delayMs > 0) return;
     clearTimeout(pendingTaskEventFlushTimer);
@@ -1130,11 +1134,19 @@ function pathKey(pathValue: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function repositoryPathFromInput(input: unknown, action: string): string {
+function projectFromId(input: unknown, action: string): RepositoryInfo {
   if (!isRecord(input)) {
     throw new Error(`Invalid ${action} input.`);
   }
-  return path.resolve(requiredString(input.repositoryPath, "repositoryPath"));
+  const projectId = requiredString(
+    typeof input.projectId === "string" ? input.projectId : input.repositoryId,
+    "projectId",
+  );
+  const project = readProjects().find((row) => row.id === projectId);
+  if (!project) {
+    throw new Error("Project not found.");
+  }
+  return project;
 }
 
 function deleteChatManagedFiles(chatIdValue: string) {
@@ -1155,15 +1167,15 @@ function deleteChatsForRepositoryPath(repositoryPath: string): string[] {
 }
 
 function deleteProjectChats(input: unknown): { ok: true; deletedChatIds: string[] } {
-  const repositoryPath = repositoryPathFromInput(input, "project chat delete");
-  return { ok: true, deletedChatIds: deleteChatsForRepositoryPath(repositoryPath) };
+  const project = projectFromId(input, "project chat delete");
+  return { ok: true, deletedChatIds: deleteChatsForRepositoryPath(project.rootPath) };
 }
 
 function deleteProject(input: unknown): { ok: true; deletedChatIds: string[] } {
-  const repositoryPath = repositoryPathFromInput(input, "project delete");
-  const repositoryKey = pathKey(repositoryPath);
-  const deletedChatIds = deleteChatsForRepositoryPath(repositoryPath);
-  writeProjects(readProjects().filter((project) => pathKey(project.rootPath) !== repositoryKey));
+  const project = projectFromId(input, "project delete");
+  const repositoryKey = pathKey(project.rootPath);
+  const deletedChatIds = deleteChatsForRepositoryPath(project.rootPath);
+  writeProjects(readProjects().filter((row) => pathKey(row.rootPath) !== repositoryKey));
   return { ok: true, deletedChatIds };
 }
 
@@ -2108,7 +2120,7 @@ function recordTaskEvent(event: BackendUiEvent) {
   if (isReviewReadyAssistantEvent(event) || event.type === "review.ready") return;
   const events = pendingTaskEvents.get(event.taskId) ?? [];
   pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
-  scheduleTaskEventFlush(shouldDeferTaskEventFlush(event) ? streamingTaskEventFlushDelayMs : 0);
+  scheduleTaskEventFlush(shouldDeferTaskEventFlush(event) ? streamingTaskEventCrashCheckpointMs : 0);
 }
 
 function flushRendererEvents() {
@@ -2632,10 +2644,8 @@ async function openSkillInEditor(input: unknown): Promise<{ ok: true; path: stri
   return { ok: true, path: result.skill.path };
 }
 
-async function importSkillFromDialog(input?: { sourcePath?: string }) {
-  if (typeof input?.sourcePath === "string" && input.sourcePath.trim()) {
-    return importSkillService({ sourcePath: input.sourcePath });
-  }
+async function importSkillFromDialog(_input?: unknown) {
+  // Ignore renderer-supplied paths. Only dialog-selected paths are trusted.
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, {
         title: "Import Umbratic Skill",
@@ -3102,17 +3112,7 @@ async function prepareTaskTurnCheckpoint(task: TaskRecord): Promise<void> {
     : snapshotFolder(rootPath);
   task.turnCheckpointId = undefined;
   if (taskUsesIsolatedWorktree(task)) {
-    try {
-      await createTurnCheckpoint(task);
-    } catch (error) {
-      recordLocalDiagnostic({
-        level: "warn",
-        source: "desktop",
-        event: "turn_checkpoint.unavailable",
-        message: "Automatic turn checkpoint was unavailable. Text-file undo remains available.",
-        data: { taskId: task.id, detail: String(error instanceof Error ? error.message : error).slice(0, 500) },
-      });
-    }
+    await createTurnCheckpoint(task);
   }
   saveTask(task);
 }
@@ -3490,6 +3490,9 @@ async function handleRunnerPermission(
     onAllow: () => replyRunnerPermission(run, id, true),
     onDeny: () => replyRunnerPermission(run, id, false),
   });
+  // Persist the in-memory transcript at permission wait so a crash does not
+  // lose the turn so far while the UI is parked on approval.
+  saveTask(task);
   return "pending";
 }
 
@@ -4502,31 +4505,20 @@ async function rejectTask(input: unknown): Promise<void> {
   clearPendingPermissionsForTask(task.id);
   const cleanup = input.cleanup === true;
   emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
-  if (taskUsesIsolatedWorktree(task) && cleanup && taskStatesThatCanOpen.has(task.state)) {
-    const restoredCheckpoint = fs.existsSync(task.worktreePath) && task.turnCheckpointId
-      ? await restoreTurnCheckpoint(task)
-      : false;
-    if (!restoredCheckpoint) {
-      if (task.workspaceKind === "git" && fs.existsSync(task.worktreePath) && /^[a-f0-9]{40,64}$/i.test(task.baseCommit)) {
-        const reset = await gitResult(task.worktreePath, ["reset", "--hard", task.baseCommit]);
-        if (!reset.success) {
-          throw new Error((reset.stderr || reset.stdout || "Failed to restore the Git worktree.").trim());
-        }
-        const cleaned = await gitResult(task.worktreePath, ["clean", "-fd"]);
-        if (!cleaned.success) {
-          throw new Error((cleaned.stderr || cleaned.stdout || "Failed to clean the Git worktree.").trim());
-        }
-      } else {
-        const reviewFiles = await refreshReview(task);
-        restoreFolderTaskChanges(task, reviewFiles);
-      }
+  if (cleanup && taskStatesThatCanOpen.has(task.state)) {
+    if (taskUsesIsolatedWorktree(task)) {
+      await restoreIsolatedWorktreeForReject(task, fs.existsSync(task.worktreePath));
+      task.changedFiles = [];
+      task.reviewFiles = [];
+    } else {
+      assertFolderRejectBaseline(task);
+      restoreFolderTaskChanges(task, await refreshReview(task));
+      task.changedFiles = [];
+      task.reviewFiles = [];
     }
-    task.changedFiles = [];
-    task.reviewFiles = [];
-  }
-  if (!taskUsesIsolatedWorktree(task) && cleanup) {
-    const reviewFiles = await refreshReview(task);
-    restoreFolderTaskChanges(task, reviewFiles);
+  } else if (!taskUsesIsolatedWorktree(task) && cleanup) {
+    assertFolderRejectBaseline(task);
+    restoreFolderTaskChanges(task, await refreshReview(task));
     task.changedFiles = [];
     task.reviewFiles = [];
   }
@@ -4775,16 +4767,17 @@ async function openRepositoryInIde(input: unknown): Promise<IdeOpenResult> {
     throw new Error("Invalid repository IDE input.");
   }
   const ideId = requiredString(input.ideId, "ideId");
-  const repositoryPath = await resolveRepositoryPath(input);
-  if (!repositoryPath) {
-    return { ok: false, message: "Select a folder first." };
+  const repositoryId = requiredString(input.repositoryId, "repositoryId");
+  const project = readProjects().find((row) => row.id === repositoryId);
+  if (!project) {
+    return { ok: false, message: "Repository has not been selected." };
   }
-  if (!fs.existsSync(repositoryPath)) {
+  if (!fs.existsSync(project.rootPath)) {
     return { ok: false, message: "Selected folder no longer exists." };
   }
-  const result = await openPathInIde(ideId, repositoryPath, "folder");
+  const result = await openPathInIde(ideId, project.rootPath, "folder");
   recordProductTelemetry("ide.opened", {
-    repositoryId: typeof input.repositoryId === "string" ? input.repositoryId : undefined,
+    repositoryId: project.id,
     data: { ideId, target: "workspace", result: result.ok ? "success" : "failed" },
   });
   return result;
@@ -4967,7 +4960,7 @@ async function createWindow() {
       allowRunningInsecureContent: false,
       experimentalFeatures: false,
       webviewTag: false,
-      backgroundThrottling: false,
+      backgroundThrottling: true,
     },
   });
 
@@ -5028,18 +5021,6 @@ app.whenReady().then(async () => {
     });
     console.error("Unable to install bundled skills.", error);
   }
-  finishInterruptedRunningTasks();
-  compactClosedTaskStorage();
-  const checkpointRecovery = await reconcileCheckpointLifecycle((task) => worktreeRootForRepo(task.originalRepoPath));
-  if (checkpointRecovery.inspectedTasks > 0) {
-    recordLocalDiagnostic({
-      level: checkpointRecovery.missingActiveWorkspaces > 0 ? "error" : "warn",
-      source: "desktop",
-      event: "checkpoint.reconciled",
-      message: "Recovered interrupted checkpoint lifecycle records.",
-      data: checkpointRecovery,
-    });
-  }
   handleIpc("umbratic:list-projects", () => readProjects());
   handleIpc("umbratic:list-chats", () => readChats());
   handleIpc("umbratic:create-chat", (input) => createChat(input));
@@ -5090,7 +5071,7 @@ app.whenReady().then(async () => {
   handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
   handleIpc("umbratic:open-runner-diagnostics-folder", () => openRunnerDiagnosticsFolder());
   handleIpc("umbratic:open-skill-in-editor", (input) => openSkillInEditor(input));
-  handleIpc("umbratic:import-skill", (input) => importSkillFromDialog(input as { sourcePath?: string } | undefined));
+  handleIpc("umbratic:import-skill", (input) => importSkillFromDialog(input));
   handleIpc("umbratic:create-skill", (input) => createSkillService(input as { name?: string }));
   handleIpc("umbratic:get-skill-document", (input) => getSkillDocumentService(input as { id?: string }));
   handleIpc("umbratic:save-skill-document", (input) => saveSkillDocumentService(input as { id?: string; content?: string }));
@@ -5122,8 +5103,41 @@ app.whenReady().then(async () => {
       message: String(cause instanceof Error ? cause.message : cause),
     });
   });
+  // Heavy repair runs after the window is up so startup stays responsive.
+  setImmediate(() => {
+    try {
+      finishInterruptedRunningTasks();
+      compactClosedTaskStorage();
+    } catch (error) {
+      recordLocalDiagnostic({
+        level: "error",
+        source: "desktop",
+        event: "startup.task_repair.failed",
+        message: String(error instanceof Error ? error.message : error),
+      });
+    }
+    void reconcileCheckpointLifecycle((task) => worktreeRootForRepo(task.originalRepoPath))
+      .then((checkpointRecovery) => {
+        if (checkpointRecovery.inspectedTasks > 0) {
+          recordLocalDiagnostic({
+            level: checkpointRecovery.missingActiveWorkspaces > 0 ? "error" : "warn",
+            source: "desktop",
+            event: "checkpoint.reconciled",
+            message: "Recovered interrupted checkpoint lifecycle records.",
+            data: checkpointRecovery,
+          });
+        }
+      })
+      .catch((error) => {
+        recordLocalDiagnostic({
+          level: "error",
+          source: "desktop",
+          event: "checkpoint.reconcile.failed",
+          message: String(error instanceof Error ? error.message : error),
+        });
+      });
+  });
 });
-
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
@@ -5134,6 +5148,7 @@ app.on("before-quit", () => {
   stopLocalVeil();
   flushRendererEvents();
   flushPendingTaskEvents();
+  closeStorageDatabases();
   for (const [id, pending] of pendingPermissions) {
     pendingPermissions.delete(id);
     void pending.onDeny();

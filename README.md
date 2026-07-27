@@ -40,7 +40,7 @@ Out of scope:
 - Scheduled jobs, reminders, durable memory, or background automations.
 - Generic provider marketplaces or direct public model passthrough.
 
-Diagnostic logs stay in the desktop SQLite database and are never uploaded. Managed telemetry sends compact workflow events, full conversations only when a response is rated, and exact attempted input/response only for failed tools. Unrated conversations, successful tool content, diffs, attachments, and local logs are excluded. Managed deployments should store telemetry only on company-controlled servers.
+Diagnostic logs stay in the desktop SQLite database and are never uploaded. Managed telemetry sends compact workflow events, full conversations only when a response is rated, and typed failed-tool metadata (kinds, codes, sizes, path hashes) without raw prompt or command dumps. Unrated conversations, successful tool content, diffs, attachments, and local logs are excluded. Managed deployments should store telemetry only on company-controlled servers.
 
 Harness modes select a Veil route, not a client-side system prompt. The desktop sends factual workspace context, and Veil adds the protected global and route guidance for both an app-launched local Veil and a hosted Veil server. System and personal skills are visible in Skills settings, can be toggled, and can be edited; system skills are editable files under `~/.umbratic/skills/system/<id>/SKILL.md`, while personal skills remain stored under `~/.umbratic/skills`. Every enabled skill is exposed to the model by id, name, description, and source only. When a skill is relevant, Veil requires the model to use the local `read_skill` tool and finish reading `SKILL.md` before applying it.
 

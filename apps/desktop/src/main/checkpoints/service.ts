@@ -142,6 +142,32 @@ export async function restoreTurnCheckpoint(task: TaskRecord): Promise<boolean> 
   return true;
 }
 
+export const REJECT_UNSAFE_NO_CHECKPOINT =
+  "Automatic reject is unsafe: no verified pre-turn checkpoint.";
+export const REJECT_UNSAFE_NO_BASELINE =
+  "Automatic reject is unsafe: no verified undo baseline.";
+
+/** Fail-closed reject restore for isolated git worktrees. Never resets to task.baseCommit. */
+export async function restoreIsolatedWorktreeForReject(
+  task: TaskRecord,
+  worktreeExists: boolean = true,
+): Promise<void> {
+  if (!worktreeExists || !task.turnCheckpointId) {
+    throw new Error(REJECT_UNSAFE_NO_CHECKPOINT);
+  }
+  const restored = await restoreTurnCheckpoint(task);
+  if (!restored) {
+    throw new Error(REJECT_UNSAFE_NO_CHECKPOINT);
+  }
+}
+
+/** Fail-closed gate for folder / non-worktree text undo. */
+export function assertFolderRejectBaseline(task: TaskRecord): void {
+  if (!task.baselineFiles) {
+    throw new Error(REJECT_UNSAFE_NO_BASELINE);
+  }
+}
+
 export function setTaskCheckpointPinned(taskId: string, checkpointId: string, pinned: boolean): TaskCheckpoint {
   const checkpoint = readyCheckpoint(taskId, checkpointId);
   if (checkpoint.source !== "manual" && !pinned) {
