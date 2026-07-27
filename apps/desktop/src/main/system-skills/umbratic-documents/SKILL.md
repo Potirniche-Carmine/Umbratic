@@ -24,31 +24,6 @@ Common document types include memos, proposals, briefs, reports, SOPs, manuals, 
 - If LibreOffice render/export is missing, do not claim visual QA. You may still perform structural checks, but state that rendered-page verification was unavailable.
 - Work in normal writable workspace paths. Do not modify managed dependency directories.
 
-## In-App Review Snapshot
-
-When creating or updating a DOCX under `.umbratic/artifacts/docx/`, also write a compact review snapshot beside it using the exact name `<document>.docx.review.json`. Keep the snapshot synchronized with the final visible document text. It is a local review aid, not a deliverable, and must not be linked in the final response.
-
-Use this exact contract:
-
-```json
-{
-  "schemaVersion": 1,
-  "documentPath": ".umbratic/artifacts/docx/proposal.docx",
-  "title": "Proposal",
-  "blocks": [
-    { "id": "title", "style": "title", "text": "Proposal" },
-    { "id": "opening", "style": "paragraph", "text": "First sentence. Second sentence." }
-  ]
-}
-```
-
-- `documentPath` must be the repository-relative path of the sibling DOCX.
-- Block ids must be unique, stable, and use only letters, numbers, `.`, `_`, `:`, or `-`.
-- Supported styles are `title`, `subtitle`, `heading1`, `heading2`, `heading3`, `paragraph`, `bullet`, `numbered`, and `quote`.
-- Preserve reading order and visible wording. Put each heading, paragraph, or list item in its own block.
-- Include text only. Do not include HTML, formatting instructions, images, URLs, secrets, source notes, or hidden document metadata.
-- If the snapshot cannot be kept synchronized, omit it instead of writing stale review text.
-
 ## Non-Negotiable Visual QA
 
 You do not know a DOCX is satisfactory until it has been rendered or exported and visually inspected, when the environment supports that.

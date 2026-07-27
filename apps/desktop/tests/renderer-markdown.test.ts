@@ -281,6 +281,17 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     activitySummary(waitingTimeline[1], Date.parse("2026-01-01T00:00:42.000Z")),
     "Working · 42 seconds",
   );
+  assert.equal(waitingTimeline[1].segments.length, 0);
+  const waitingDisclosure = reconcileActivityDisclosureState(new Set(), waitingTimeline, "task-1", new Set());
+  assert.deepEqual([...waitingDisclosure.expandedIds], []);
+
+  const directAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "Hey, tell me about yourself", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "I’m Umbratic.", at: "2026-01-01T00:00:07.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:08.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(directAnswerTimeline.map((item) => item.type), ["user", "assistant"]);
+  assert.equal("responseDurationMs" in directAnswerTimeline[1], false);
 
   const preAnswerTimeline = composerTimelineFromEvents([
     events[0],
@@ -298,14 +309,30 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(streamingAnswerTimeline[1].finished, true);
   assert.equal(streamingAnswerTimeline[2].type, "assistant");
   assert.equal(streamingAnswerTimeline[2].streaming, true);
-  const closedDisclosure = reconcileActivityDisclosureState(
+  const streamingDisclosure = reconcileActivityDisclosureState(
     openedDisclosure.expandedIds,
     streamingAnswerTimeline,
     "task-1",
     openedDisclosure.autoOpenedKeys,
   );
-  assert.deepEqual([...closedDisclosure.expandedIds], []);
-  assert.deepEqual([...closedDisclosure.autoOpenedKeys], []);
+  assert.deepEqual([...streamingDisclosure.expandedIds], ["activity-1"]);
+  assert.deepEqual([...streamingDisclosure.autoOpenedKeys], ["task-1:activity-1"]);
+  const completedAnswerTimeline = composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Here is the answer", at: "2026-01-01T00:00:02.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:03.000Z" },
+  ], undefined, "completed");
+  const completedDisclosure = reconcileActivityDisclosureState(
+    streamingDisclosure.expandedIds,
+    completedAnswerTimeline,
+    "task-1",
+    streamingDisclosure.autoOpenedKeys,
+  );
+  assert.deepEqual([...completedDisclosure.expandedIds], []);
+  assert.deepEqual([...completedDisclosure.autoOpenedKeys], []);
+  const loadedCompletedDisclosure = reconcileActivityDisclosureState(new Set(), completedAnswerTimeline, "task-1", new Set());
+  assert.deepEqual([...loadedCompletedDisclosure.expandedIds], []);
   const modelFacingPrompt = "Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nRun tests";
   const displayTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([events[0]], modelFacingPrompt)));
   assert.equal(displayTimeline.length, 1);

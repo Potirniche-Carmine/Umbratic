@@ -64,13 +64,17 @@ import {
 export function createPreviewEnvironment() {
 const composerTestParams = new URLSearchParams(window.location.search);
 const composerTestRunning = composerTestParams.get("composerTest") === "running";
+const composerTestDirectAnswer = composerTestParams.has("directAnswer");
+const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
 const composerTestToolIssue = composerTestParams.has("toolIssue");
-const composerTestAttachments: ChatAttachment[] = [
+const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
 ];
 const composerTestPrompt =
-  'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
+  composerTestDirectAnswer || composerTestWaitingOnly
+    ? composerTestWaitingOnly ? "Summarize this conversation." : "Hey, tell me about yourself."
+    : 'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
 const composerTestVisiblePrompt = composerTestParams.has("reviewFeedback")
   ? `${composerTestPrompt}\n\nPlease address this review feedback:\n\n**apps/desktop/src/renderer/review-panel.tsx · Lines 14-16**\n\n> <h2>Review</h2>\n> <p className="reviewHint">Inspect focused changes before accepting.</p>\n\nKeep this feedback easy to revisit from the conversation.`
   : composerTestPrompt;
@@ -84,7 +88,13 @@ const composerTestRepository: RepositoryInfo = {
   dirty: false,
   statusSummary: "preview",
 };
-const composerTestEvents: BackendUiEvent[] = [
+const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
+  { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
+] : composerTestDirectAnswer ? [
+  { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "I’m Umbratic, a private AI assistant that can answer questions and complete practical work.", at: new Date(Date.now() - 1_000).toISOString() },
+  { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
+] : [
   {
     type: "user.message",
     taskId: "composer-test",

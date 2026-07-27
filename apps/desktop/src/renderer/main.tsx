@@ -107,6 +107,8 @@ import {
   type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
+import { activitySummary, thoughtDurationMs } from "./activityTiming";
+export { activitySummary } from "./activityTiming";
 
 type AppearanceTheme = "system" | "light" | "dark";
 type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
@@ -1350,48 +1352,10 @@ export function pendingPermissionFromEvents(events: BackendUiEvent[]): Permissio
   return Array.from(requests.values()).at(-1) ?? null;
 }
 
-function eventTimeMs(value?: string): number | undefined {
-  if (!value) return undefined;
-  const time = Date.parse(value);
-  return Number.isFinite(time) ? time : undefined;
-}
-
-function thoughtDurationMs(startedAt?: string, endedAt?: string, finished = true): number | null {
-  const start = eventTimeMs(startedAt);
-  if (start === undefined) return null;
-  const end = eventTimeMs(endedAt) ?? (finished ? start : Date.now());
-  return Math.max(0, end - start);
-}
-
-function formatDuration(value: number | null): string {
-  if (value === null) return "";
-  const totalSeconds = Math.max(1, Math.round(value / 1000));
-  if (totalSeconds < 60) return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const minuteLabel = `${minutes} minute${minutes === 1 ? "" : "s"}`;
-  return seconds ? `${minuteLabel} ${seconds} second${seconds === 1 ? "" : "s"}` : minuteLabel;
-}
-
 function formatFileSize(bytes: number): string {
   const value = Math.max(0, Number.isFinite(bytes) ? bytes : 0);
   if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 2 : 1)} MB`;
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function activityDurationMs(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): number | null {
-  const start = eventTimeMs(item.startedAt);
-  if (start === undefined) return null;
-  const end = item.finished ? eventTimeMs(item.endedAt) ?? start : now;
-  return Math.max(0, end - start);
-}
-
-export function activitySummary(item: Extract<ComposerTimelineItem, { type: "activity" }>, now = Date.now()): string {
-  const duration = formatDuration(activityDurationMs(item, now));
-  if (!item.finished) {
-    return ["Working", duration].filter(Boolean).join(" · ");
-  }
-  return duration ? `Worked for ${duration}` : "Work complete";
 }
 
 function activityToolLabel(command: string): { key: string; label: string } {
@@ -1474,7 +1438,12 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       return;
     }
     assistantIndex += 1;
-    items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text, streaming: streaming || undefined });
+    items.push({
+      type: "assistant",
+      id: `assistant-${assistantIndex}`,
+      text,
+      streaming: streaming || undefined,
+    });
     assistantBuffer = "";
     assistantNeedsSeparator = false;
   };
@@ -1502,10 +1471,18 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   };
 
   const flushActivity = (finished = true) => {
-    if (
-      !activitySegments.length
-      && (!activityStartedAt || (finished && !activityEndedAt))
-    ) {
+    if (!activitySegments.length) {
+      if (activityStartedAt && !finished) {
+        activityIndex += 1;
+        items.push({
+          type: "activity",
+          id: `activity-${activityIndex}`,
+          segments: [],
+          startedAt: activityStartedAt,
+          endedAt: activityEndedAt,
+          finished: false,
+        });
+      }
       activityStartedAt = undefined;
       activityEndedAt = undefined;
       return;
@@ -1730,16 +1707,17 @@ export function reconcileActivityDisclosureState(
   const nextExpandedIds = new Set(currentExpandedIds);
   const nextAutoOpenedKeys = new Set(currentAutoOpenedKeys);
   const newlyOpenedIds: string[] = [];
+  const responseIsStreaming = items.some((item) => item.type === "assistant" && item.streaming);
 
   for (const activity of activities) {
     const key = activityKey(activity.id);
-    if (!activity.finished && !nextAutoOpenedKeys.has(key)) {
+    if (!activity.finished && activity.segments.length > 0 && !nextAutoOpenedKeys.has(key)) {
       nextAutoOpenedKeys.add(key);
       nextExpandedIds.add(activity.id);
       newlyOpenedIds.push(activity.id);
       continue;
     }
-    if (activity.finished && nextAutoOpenedKeys.delete(key)) {
+    if ((activity.segments.length === 0 || (activity.finished && !responseIsStreaming)) && nextAutoOpenedKeys.delete(key)) {
       nextExpandedIds.delete(activity.id);
     }
   }
@@ -5232,6 +5210,22 @@ function App() {
                       })()
                     ) : (
                       (() => {
+                        if (item.segments.length === 0) {
+                          return (
+                            <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>
+                              <div className="activityHeader" role="status">
+                                <span className="activityHeaderText">
+                                  <strong>
+                                    {activitySummary(item, activityClock)}
+                                    <span className="activityDots" aria-hidden="true">
+                                      <span>.</span><span>.</span><span>.</span>
+                                    </span>
+                                  </strong>
+                                </span>
+                              </div>
+                            </article>
+                          );
+                        }
                         const expanded = expandedActivityIds.has(item.id);
                         return (
                           <article

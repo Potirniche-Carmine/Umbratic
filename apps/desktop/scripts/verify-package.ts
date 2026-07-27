@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { extractFile } from "@electron/asar";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const releaseRoot = path.join(desktopRoot, "release");
@@ -36,9 +37,27 @@ function verifyBinary(file: string, expected: RegExp, env = process.env) {
   }
 }
 
+function normalizeText(value: string) {
+  return value.replace(/\r\n/g, "\n").trimEnd();
+}
+
+function verifyDocumentsSkill(appArchive: string) {
+  const relativePath = path.join("dist-electron", "main", "system-skills", "umbratic-documents", "SKILL.md");
+  const sourcePath = path.join(desktopRoot, "src", "main", "system-skills", "umbratic-documents", "SKILL.md");
+  const source = fs.readFileSync(sourcePath, "utf8");
+  const packaged = extractFile(appArchive, relativePath).toString("utf8");
+  if (normalizeText(packaged) !== normalizeText(source)) {
+    throw new Error("Packaged Documents skill differs from its bundled source.");
+  }
+  if (/In-App Review Snapshot|\.docx\.review\.json/.test(packaged)) {
+    throw new Error("Packaged Documents skill retained removed review snapshot rules.");
+  }
+}
+
 const resources = packagedResources();
 const executable = (name: string) => process.platform === "win32" ? `${name}.exe` : name;
-requireFile(path.join(resources, "app.asar"));
+const appArchive = requireFile(path.join(resources, "app.asar"));
+verifyDocumentsSkill(appArchive);
 verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /UmbraticRunner/);
 verifyBinary(path.join(resources, "desktop-core", executable("umbratic-desktop-core")), /usage: umbratic-desktop-core/);
 verifyBinary(

@@ -286,6 +286,8 @@
   animation: none;
 }
 
+.timelineActivity.isStatusOnly::before { display: none; }
+
 .timelineActivity:hover,
 .timelineActivity:focus-within {
   background: transparent;

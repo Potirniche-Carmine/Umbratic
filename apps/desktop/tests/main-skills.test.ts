@@ -52,6 +52,9 @@ test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skill
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-markdown", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-spreadsheets", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-data-analysis", "SKILL.md")), true);
+  const documentsSkill = fs.readFileSync(path.join(directory, "system", "umbratic-documents", "SKILL.md"), "utf8");
+  assert.match(documentsSkill, /Non-Negotiable Visual QA/);
+  assert.doesNotMatch(documentsSkill, /In-App Review Snapshot|\.docx\.review\.json/);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-cmake")), false);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-ocr")), false);
   assert.match(fs.readFileSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md"), "utf8"), /OCR Workflow/);
