@@ -484,7 +484,10 @@ async fn prompt(
                 "at":now_iso()
             })),
             Err(error) => {
-                let detail = redact_text(&error.split_whitespace().collect::<Vec<_>>().join(" "), 1000);
+                let detail = redact_text(
+                    &error.split_whitespace().collect::<Vec<_>>().join(" "),
+                    1000,
+                );
                 let (category, code) = runner_failure_classification(&detail);
                 sink.emit(json!({
                     "type":"runner.error",

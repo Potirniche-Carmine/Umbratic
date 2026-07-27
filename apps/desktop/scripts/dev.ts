@@ -3,8 +3,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createServer } from "vite";
+import { build, createServer } from "vite";
 
+import { prepareRendererDevelopmentEnvironment } from "./devEnvironment.ts";
 import { resolveInstalledElectron } from "./electron-runtime.ts";
 
 const require = createRequire(import.meta.url);
@@ -113,12 +114,16 @@ async function buildDesktopProcessFiles() {
     child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`cargo build exited with code ${code ?? "unknown"}`)));
   });
   await runNodeScript(tsc, ["-p", "tsconfig.main.json"]);
+  await build({
+    configFile: path.join(desktopRoot, "vite.preload.config.ts"),
+  });
   await runNodeScript(copySystemSkillsScript, []);
 }
 
 async function main() {
   const cliEnv = devEndpointEnv(process.argv.slice(2));
   await buildDesktopProcessFiles();
+  prepareRendererDevelopmentEnvironment(process.env);
 
   const viteServer = await createServer({
     configFile: path.join(desktopRoot, "vite.config.ts"),

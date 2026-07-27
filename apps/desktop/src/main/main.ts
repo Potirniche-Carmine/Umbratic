@@ -2,7 +2,6 @@ import {
   app,
   BrowserWindow,
   dialog,
-  ipcMain,
   IpcMainInvokeEvent,
   Menu,
   MenuItemConstructorOptions,
@@ -113,7 +112,7 @@ import {
   type TelemetryUploadEndpoint,
 } from "./telemetrySync";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
-import { RunnerAssistantOutputBuffer, type BufferedRunnerAssistantOutput } from "./runnerAssistantOutput";
+import { RunnerEventAdapter } from "./runnerEventAdapter";
 import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
 import {
   applyHarnessSystemSkillSettings,
@@ -137,8 +136,6 @@ import type {
   CommandClass,
   CommandOutput,
   CommandResult,
-  ContextCompressionStrategy,
-  ContextContentKind,
   ContextStateV1,
   FileSearchResult,
   HarnessProfileId,
@@ -163,8 +160,6 @@ import type {
   TaskCheckpoint,
   TaskRecord,
   TaskState,
-  ToolErrorCode,
-  ToolResultStatus,
   UserNotes,
   WorkspaceKind,
   WorkspaceMode,
@@ -173,6 +168,11 @@ import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, path
 import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
 import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, taskEventSignature } from "../shared/taskEvents";
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
+import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
+import {
+  registerDesktopIpcHandlers,
+  type DesktopIpcHandlers,
+} from "./ipcRegistry";
 import { readTaskDocumentReview } from "./documentReview";
 import {
   assertFolderRejectBaseline,
@@ -2116,7 +2116,7 @@ function taskMetadataPath(task: TaskRecord): string {
   return path.join(app.getPath("userData"), "task-metadata", `${task.id}.json`);
 }
 
-function recordTaskEvent(event: BackendUiEvent) {
+function recordTaskEvent(event: BackendUiEventV1) {
   if (isReviewReadyAssistantEvent(event) || event.type === "review.ready") return;
   const events = pendingTaskEvents.get(event.taskId) ?? [];
   pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
@@ -2135,7 +2135,7 @@ function flushRendererEvents() {
   }
 }
 
-function dispatchRendererEvent(event: BackendUiEvent) {
+function dispatchRendererEvent(event: BackendUiEventV1) {
   if (!shouldBufferBackendEvent(event)) {
     flushRendererEvents();
     mainWindow?.webContents.send("umbratic:backend-event", event);
@@ -2147,10 +2147,26 @@ function dispatchRendererEvent(event: BackendUiEvent) {
   }
 }
 
-function persistBackendEvent(stampedEvent: BackendUiEvent) {
-  recordBackendEventDiagnostic(stampedEvent);
-  recordTaskEvent(stampedEvent);
-  dispatchRendererEvent(stampedEvent);
+function validatedBackendEvent(value: unknown): BackendUiEventV1 | null {
+  const parsed = parseBackendUiEvent(value);
+  if (parsed.ok) return parsed.event;
+  recordLocalDiagnostic({
+    level: "warn",
+    source: "runner",
+    event: "backend.event.invalid",
+    message: backendEventDiagnostic(parsed),
+    data: { code: parsed.code, type: parsed.type },
+  });
+  return null;
+}
+
+function persistBackendEvent(value: unknown): BackendUiEventV1 | null {
+  const event = validatedBackendEvent(value);
+  if (!event) return null;
+  recordBackendEventDiagnostic(event);
+  recordTaskEvent(event);
+  dispatchRendererEvent(event);
+  return event;
 }
 
 function contextThresholdEvents(event: Extract<BackendUiEvent, { type: "context.usage" }>): BackendUiEvent[] {
@@ -2185,23 +2201,30 @@ function contextThresholdEvents(event: Extract<BackendUiEvent, { type: "context.
 }
 
 function emit(event: BackendUiEvent) {
-  const stampedEvent = { ...event, version: 1 as const, at: event.at ?? new Date().toISOString() } as BackendUiEvent;
-  persistBackendEvent(stampedEvent);
+  const stampedEvent = persistBackendEvent({
+    ...event,
+    version: 1 as const,
+    at: event.at ?? new Date().toISOString(),
+  });
+  if (!stampedEvent) return;
   if (stampedEvent.type === "context.usage") {
     for (const thresholdEvent of contextThresholdEvents(stampedEvent)) {
-      persistBackendEvent({ ...thresholdEvent, version: 1 as const } as BackendUiEvent);
+      persistBackendEvent({ ...thresholdEvent, version: 1 as const });
     }
   }
 }
 
 function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAttachment[]) {
-  const event = {
+  const event = validatedBackendEvent({
     type: "user.message",
     taskId: task.id,
     text,
     attachedFiles,
     at: new Date().toISOString(),
-  } satisfies BackendUiEvent;
+  } satisfies BackendUiEvent);
+  if (!event) {
+    throw new Error("The user message event did not match the desktop event contract.");
+  }
   task.events = appendTaskEvent(task.events ?? [], event, 500);
   saveTask(task);
   dispatchRendererEvent(event);
@@ -3542,23 +3565,11 @@ async function runRunnerTask(
     task.diagnosticLogPath = run.diagnosticLogPath;
     saveTask(task);
 
-    const toolRuns = new Map<string, {
-      commandId: string;
-      command: string;
-      kind: PermissionRequest["kind"];
-      toolKind?: string;
-      input: unknown;
-      stdout: string[];
-      stderr: string[];
-      finished: boolean;
-    }>();
-    let latestCommandSafety: Record<string, unknown> | undefined;
-    const assistantOutput = new RunnerAssistantOutputBuffer();
     let delegatedToWorktree = false;
     let completed = false;
     let resolveCompletion!: () => void;
     let rejectCompletion!: (error: Error) => void;
-    let completion: Promise<void>;
+    let completion!: Promise<void>;
     const armCompletion = () => {
       completed = false;
       completion = new Promise<void>((resolve, reject) => {
@@ -3574,309 +3585,50 @@ async function runRunnerTask(
       resolveCompletion();
     };
 
-    const finishOpenToolRuns = () => {
-      for (const current of toolRuns.values()) {
-        if (current.finished) continue;
-        current.finished = true;
-        emit({ type: "command.finished", taskId: task.id, id: current.commandId, exitCode: 0 });
-      }
-    };
-
     const fail = (message: string) => {
       if (completed) return;
       completed = true;
       rejectCompletion(new Error(message));
     };
 
-    const eventAt = (event: Record<string, unknown>): string | undefined => (
-      typeof event.at === "string" ? event.at : undefined
-    );
-    const eventEndedAt = (event: Record<string, unknown>): string | undefined => (
-      typeof event.endedAt === "string" ? event.endedAt : undefined
-    );
-
-    const emitAssistantText = (text: string, at?: string, endedAt?: string) => {
-      if (!text || text.trim() === "Ready for review.") return;
-      emit({ type: "assistant.delta", taskId: task.id, text, at, endedAt });
-    };
-
-    const emitReasoningText = (text: string, at?: string, endedAt?: string) => {
-      if (!text || task.reasoningMode !== "reasoning") return;
-      emit({ type: "assistant.reasoning.delta", taskId: task.id, text, at, endedAt });
-    };
-
-    const emitBufferedAssistantOutput = (output: BufferedRunnerAssistantOutput | null) => {
-      if (!output) return;
-      if (output.kind === "assistant") {
-        emitAssistantText(output.text, output.at, output.endedAt);
-        return;
-      }
-      emitReasoningText(output.text, output.at, output.endedAt);
-    };
-
-    const ensureToolRun = (
-      toolCallId: string,
-      command: string,
-      kind: PermissionRequest["kind"],
-      commandClass: CommandClass,
-      toolKind?: string,
-      input?: unknown,
-    ) => {
-      const existing = toolRuns.get(toolCallId);
-      if (existing) {
-        if (toolKind && !existing.toolKind) existing.toolKind = toolKind;
-        if (input !== undefined) existing.input = input;
-        return existing;
-      }
-      const current = {
-        commandId: `ar-${toolCallId}`,
-        command,
-        kind,
-        toolKind,
-        input: input ?? {},
-        stdout: [] as string[],
-        stderr: [] as string[],
-        finished: false,
-      };
-      toolRuns.set(toolCallId, current);
-      emit({
-        type: "command.started",
-        taskId: task.id,
-        id: current.commandId,
-        command,
-        cwd: task.worktreePath,
-        kind,
-        commandClass,
-        toolKind,
-        input,
-      });
-      return current;
-    };
-
-    const onEvent = (event: Record<string, unknown>) => {
-      const type = typeof event.type === "string" ? event.type : "";
-      const eventTaskId = typeof event.taskId === "string" ? event.taskId : task.id;
-      if (eventTaskId !== task.id) return;
-
-      if (type === "assistant.delta" && typeof event.text === "string") {
-        emitBufferedAssistantOutput(assistantOutput.append(event.text, eventAt(event), eventEndedAt(event)));
-        return;
-      }
-
-      if (type === "assistant.answer.started") {
-        emitBufferedAssistantOutput(assistantOutput.startAnswer());
-        return;
-      }
-
-      if (type === "assistant.reasoning.delta" && typeof event.text === "string") {
-        emitBufferedAssistantOutput(assistantOutput.continueWorking());
-        emitReasoningText(event.text, eventAt(event), eventEndedAt(event));
-        return;
-      }
-
-      if (type === "tool.requested") {
-        emitBufferedAssistantOutput(assistantOutput.continueWorking());
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : `tool-${toolRuns.size + 1}`;
-        const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
-        const runnerToolKind = (
-          toolKind === "read" || toolKind === "write" || toolKind === "edit" || toolKind === "search" || toolKind === "command"
-        ) ? toolKind as RunnerToolId : undefined;
-        const command = typeof event.summary === "string" && event.summary.trim() ? event.summary.trim() : toolKind;
-        const kind: PermissionRequest["kind"] =
-          toolKind === "command"
-            ? "bash"
-            : toolKind === "read" || toolKind === "search" || toolKind === "read_skill"
-              ? "read"
-              : "edit";
-        const fallbackClass = kind === "bash" ? classifyCommandText(command, task.worktreePath).commandClass : kind;
-        const commandClass = typeof event.commandClass === "string" ? event.commandClass as CommandClass : fallbackClass;
-        ensureToolRun(toolCallId, command, kind, commandClass, runnerToolKind ?? toolKind, event.arguments);
-        return;
-      }
-
-      if (type === "command.safety.decision") {
-        latestCommandSafety = event;
-        return;
-      }
-
-      if (type === "tool.output") {
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
-        if (!toolCallId) return;
-        const stream = event.stream === "stderr" ? "stderr" : "stdout";
-        const text = typeof event.text === "string" ? event.text : "";
-        const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
-        if (text) {
-          current[stream] = [`${current[stream].join("")}${text}`.slice(-12_000)];
-          emit({
-            type: "command.output",
-            taskId: task.id,
-            id: current.commandId,
-            stream,
-            text: text.slice(0, 12000),
-            at: eventAt(event),
-            endedAt: eventEndedAt(event),
-          });
-        }
-        return;
-      }
-
-      if (type === "tool.finished") {
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
-        if (!toolCallId) return;
-        const current = ensureToolRun(toolCallId, toolCallId, "bash", "shell");
-        if (!current.finished) {
-          current.finished = true;
-          const exitCode = typeof event.exitCode === "number" ? event.exitCode : null;
-          const status = typeof event.status === "string" ? event.status as ToolResultStatus : undefined;
-          const errorCode = typeof event.errorCode === "string" ? event.errorCode as ToolErrorCode : undefined;
-          const errorMessage = typeof event.errorMessage === "string" ? event.errorMessage : undefined;
-          const durationMs = typeof event.durationMs === "number" && Number.isFinite(event.durationMs) ? event.durationMs : undefined;
-          emit({
-            type: "command.finished",
-            taskId: task.id,
-            id: current.commandId,
-            exitCode,
-            ...(status ? { status } : {}),
-            ...(errorCode ? { errorCode } : {}),
-            ...(errorMessage ? { errorMessage: errorMessage.slice(0, 1000) } : {}),
-            ...(durationMs !== undefined ? { durationMs } : {}),
-            at: eventAt(event),
-          });
-          if (exitCode !== 0 || (status && status !== "success")) {
-            emit({
-              type: "tool.failed",
-              taskId: task.id,
-              id: current.commandId,
-              toolKind: current.toolKind ?? "tool",
-              input: current.input,
-              response: {
-                stdout: current.stdout.join(""),
-                stderr: current.stderr.join(""),
-                ...(typeof event.response === "string" ? { toolResponse: event.response } : {}),
-                exitCode,
-                ...(status ? { status } : {}),
-                ...(errorCode ? { errorCode } : {}),
-                ...(errorMessage ? { errorMessage } : {}),
-              },
-              at: eventAt(event),
-            });
-          }
-        }
-        return;
-      }
-
-      if (type === "context.compressed") {
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
-        const toolKind = typeof event.toolKind === "string" ? event.toolKind : "tool";
-        const kind = (typeof event.kind === "string" ? event.kind : "plain_text") as ContextContentKind;
-        const strategy = (typeof event.strategy === "string" ? event.strategy : "passthrough") as ContextCompressionStrategy;
-        const originalBytes = typeof event.originalBytes === "number" && Number.isFinite(event.originalBytes) ? event.originalBytes : 0;
-        const outputBytes = typeof event.outputBytes === "number" && Number.isFinite(event.outputBytes) ? event.outputBytes : 0;
-        emit({
-          type: "context.compressed",
-          taskId: task.id,
-          toolCallId,
-          toolKind,
-          kind,
-          strategy,
-          ...(typeof event.hash === "string" ? { hash: event.hash } : {}),
-          originalBytes,
-          outputBytes,
-          at: eventAt(event),
-        });
-        return;
-      }
-
-      if (type === "context.usage") {
-        const validNonNegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
-        if (!(validNonNegative(event.contextLength) && event.contextLength > 0)
-          || !validNonNegative(event.contentTokens)
-          || !validNonNegative(event.reserveTokens)) return;
-        if (event.promptTokens !== undefined && (!validNonNegative(event.promptTokens) || event.promptTokens !== event.contentTokens)) return;
-        if (event.completionTokens !== undefined && !validNonNegative(event.completionTokens)) return;
-        const contextLength = event.contextLength;
-        const contentTokens = event.contentTokens;
-        const reserveTokens = event.reserveTokens;
-        const estimatedTokens = contentTokens + reserveTokens;
-        emit({
-          type: "context.usage",
-          taskId: task.id,
-          contextLength,
-          contentTokens,
-          ...(event.promptTokens !== undefined ? { promptTokens: event.promptTokens } : {}),
-          ...(event.completionTokens !== undefined ? { completionTokens: event.completionTokens } : {}),
-          reserveTokens,
-          estimatedTokens,
-          ...(event.phase === "preflight" || event.phase === "observed" ? { phase: event.phase } : {}),
-          ...(event.source === "heuristic" || event.source === "provider" ? { source: event.source } : {}),
-          ...(event.confidence === "low" || event.confidence === "high" ? { confidence: event.confidence } : {}),
-          at: eventAt(event),
-        });
-        return;
-      }
-
-      if (type === "context.retrieved") {
-        const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : "";
-        const hash = typeof event.hash === "string" ? event.hash : "";
-        const offset = typeof event.offset === "number" && Number.isFinite(event.offset) ? event.offset : 0;
-        const bytesShown = typeof event.bytesShown === "number" && Number.isFinite(event.bytesShown) ? event.bytesShown : 0;
-        const totalBytes = typeof event.totalBytes === "number" && Number.isFinite(event.totalBytes) ? event.totalBytes : 0;
-        emit({
-          type: "context.retrieved",
-          taskId: task.id,
-          toolCallId,
-          hash,
-          offset,
-          bytesShown,
-          totalBytes,
-          at: eventAt(event),
-        });
-        return;
-      }
-
-      if (type === "permission.requested") {
-        const permission = {
-          id: typeof event.permissionId === "string" ? event.permissionId : "",
-          type: typeof event.permissionKind === "string" ? event.permissionKind : "tool",
-          title: typeof event.summary === "string" ? event.summary : "",
-        };
-        const safety = latestCommandSafety;
-        latestCommandSafety = undefined;
-        void handleRunnerPermission(task, run as RunnerProcess, permission, prompt, intent, safety)
-          .then((result) => {
-            if (result === "worktree_requested") {
-              delegatedToWorktree = true;
-              finish();
-            }
-          })
-          .catch((error) => fail(String(error instanceof Error ? error.message : error)));
-        return;
-      }
-
-      if (type === "runner.error") {
-        emitBufferedAssistantOutput(assistantOutput.fail());
-        const message = typeof event.message === "string" && event.message.trim() ? event.message : "Umbratic runner failed.";
-        runnerFailureDetails = {
-          ...(typeof event.category === "string" ? { category: event.category.slice(0, 80) } : {}),
-          ...(typeof event.code === "string" ? { code: event.code.slice(0, 120) } : {}),
-          ...(typeof event.detail === "string" ? { detail: event.detail.slice(0, 1000) } : {}),
-        };
+    const runnerEvents = new RunnerEventAdapter({
+      task,
+      emit,
+      onPermission: (permission, safety) =>
+        handleRunnerPermission(
+          task,
+          run as RunnerProcess,
+          permission,
+          prompt,
+          intent,
+          safety,
+        ),
+      onDelegated: () => {
+        delegatedToWorktree = true;
+      },
+      onFinish: finish,
+      onFailure: (message, details) => {
+        if (details) runnerFailureDetails = details;
         fail(message);
-        return;
-      }
+      },
+      onInvalid: (invalid) => {
+        recordLocalDiagnostic({
+          level: "warn",
+          source: "runner",
+          event: "runner.event.invalid",
+          taskId: task.id,
+          message: invalid.message,
+          data: { code: invalid.code, type: invalid.type },
+        });
+      },
+    });
 
-      if (type === "session.idle") {
-        finishOpenToolRuns();
-        emitBufferedAssistantOutput(assistantOutput.complete());
-        finish();
-      }
-    };
-
-    const stream = beginRunnerEventStream(run, onEvent);
+    const stream = beginRunnerEventStream(run, runnerEvents.handle);
     void stream.done.catch((error) => {
       if (!run?.abortController.signal.aborted) {
-        emitBufferedAssistantOutput(assistantOutput.fail());
-        fail(String(error instanceof Error ? error.message : error));
+        runnerEvents.failStream(
+          String(error instanceof Error ? error.message : error),
+        );
       }
     });
     await stream.ready;
@@ -4865,36 +4617,7 @@ function trustedSender(event: IpcMainInvokeEvent): boolean {
   }
 }
 
-function assertTrustedSender(event: IpcMainInvokeEvent) {
-  if (!trustedSender(event)) {
-    throw new Error("Blocked IPC from an untrusted renderer.");
-  }
-}
-
-function handleIpc<T>(channel: string, handler: (input: unknown, event: IpcMainInvokeEvent) => Promise<T> | T) {
-  ipcMain.handle(channel, async (event, input: unknown) => {
-    try {
-      assertTrustedSender(event);
-      return await handler(input, event);
-    } catch (cause) {
-      const message = String(cause instanceof Error ? cause.message : cause);
-      recordLocalDiagnostic({
-        level: "error",
-        source: "ipc",
-        event: channel,
-        taskId: isRecord(input) && typeof input.taskId === "string" ? input.taskId : undefined,
-        message,
-        data: {
-          input: sanitizeDiagnosticValue(input),
-          stack: cause instanceof Error ? cause.stack : undefined,
-        },
-      });
-      throw cause;
-    }
-  });
-}
-
-function setWindowChromeTheme(theme: "dark" | "light") {
+function setWindowChromeTheme(theme: "dark" | "light"): { ok: true } {
   if (process.platform !== "win32" || !mainWindow) return { ok: true };
   mainWindow.setTitleBarOverlay({
     color: theme === "light" ? windowChromeLight : windowChromeDark,
@@ -5008,6 +4731,102 @@ async function createWindow() {
   }
 }
 
+function desktopIpcHandlers(): DesktopIpcHandlers {
+  return {
+    listProjects: () => readProjects(),
+    listChats: () => readChats(),
+    createChat: (input) => createChat(input),
+    updateChatDraft: (input) => updateChatDraft(input),
+    updateChatProject: (input) => updateChatProject(input),
+    deleteChat: (input) => deleteChat(input),
+    deleteProjectChats: (input) => deleteProjectChats(input),
+    deleteProject: (input) => deleteProject(input),
+    getNotes: () => getNotes(),
+    updateNotes: (input) => updateNotes(input),
+    getTask: (input) => publicTaskById(input),
+    listTaskCheckpoints: (input) => listTaskCheckpoints(input),
+    createTaskCheckpoint: (input) => createCheckpoint(input),
+    setTaskCheckpointPinned: (input) => setCheckpointPinned(input),
+    deleteTaskCheckpoint: (input) => deleteCheckpoint(input),
+    forkTaskCheckpoint: (input) => forkCheckpoint(input),
+    restoreTaskCheckpoint: (input) => restoreCheckpoint(input),
+    refreshTaskReview: (input) => refreshTaskReview(input),
+    refreshWorkspaceReview: (input) => refreshWorkspaceReview(input),
+    readDocumentReview: (input) => readDocumentReview(input),
+    searchFiles: (input) => searchRepositoryFiles(input),
+    pickRepository: () => pickRepository(),
+    pickAttachmentFiles: (input) => pickAttachmentFiles(input),
+    savePastedAttachments: (input) => savePastedAttachments(input),
+    openChatAttachment: (input) => openChatAttachment(input),
+    getRepository: (input) => getRepository(input),
+    listRepositoryBranches: (input) => listRepositoryBranches(input),
+    checkoutRepositoryBranch: (input) => checkoutRepositoryBranch(input),
+    getBackendStatus: () => getBackendStatus(),
+    getCapabilityProbes: (input) => getCapabilityProbes(input),
+    getModelEndpointSettings: () =>
+      publicModelEndpointSettings(readModelEndpointSettings()),
+    saveModelEndpointSettings: (input) =>
+      saveModelEndpointSettings(
+        input as Partial<ReturnType<typeof readModelEndpointSettings>>,
+      ),
+    getHarnessProfile: () => readHarnessProfileSetting(),
+    saveHarnessProfile: (input) => saveHarnessProfileSetting(input),
+    getContextLength: () => readContextLengthSetting(),
+    saveContextLength: (input) => saveContextLengthSetting(input),
+    exportTelemetry: () => exportTelemetryBundle(),
+    exportLocalDiagnostics: () => exportLocalDiagnostics(),
+    clearLocalDiagnostics: () => clearLocalDiagnosticLogs(),
+    recordProductEvent: (input) => recordRendererProductEvent(input),
+    listSkills: () => listSkillsService(),
+    saveSkillSettings: (input) => saveSkillSettingsService(input),
+    openSkillsFolder: () => openSkillsFolder(),
+    openRunnerDiagnosticsFolder: () => openRunnerDiagnosticsFolder(),
+    openSkillInEditor: (input) => openSkillInEditor(input),
+    importSkill: (input) => importSkillFromDialog(input),
+    createSkill: (input) => createSkillService(input),
+    getSkillDocument: (input) => getSkillDocumentService(input),
+    saveSkillDocument: (input) => saveSkillDocumentService(input),
+    resetSystemSkill: (input) => resetSystemSkillService(input),
+    setPermissionMode: (mode) => setPermissionMode(mode),
+    listAvailableIdes: () => listAvailableIdes(),
+    openRepositoryInIde: (input) => openRepositoryInIde(input),
+    startTask: (input) => startTask(input),
+    approveWorktreeCreation: (input) => approveWorktreeCreation(input),
+    respondToToolPermission: (input) => respondToToolPermission(input),
+    openTaskInIde: (input) => openTaskInIde(input),
+    approveTaskMerge: (input) => approveTaskMerge(input),
+    rejectTask: (input) => rejectTask(input),
+    keepWorktree: (input) => keepWorktree(input),
+    cancelTask: (input) => cancelTask(input),
+    setResponseFeedback: (input) => setResponseFeedback(input),
+    setWindowChromeTheme: (input) =>
+      setWindowChromeTheme(input === "light" ? "light" : "dark"),
+  };
+}
+
+function registerMainIpc(): void {
+  registerDesktopIpcHandlers(desktopIpcHandlers(), {
+    trustedSender,
+    onError: ({ channel, request, cause }) => {
+      const message = String(cause instanceof Error ? cause.message : cause);
+      recordLocalDiagnostic({
+        level: "error",
+        source: "ipc",
+        event: channel,
+        taskId:
+          isRecord(request) && typeof request.taskId === "string"
+            ? request.taskId
+            : undefined,
+        message,
+        data: {
+          input: sanitizeDiagnosticValue(request),
+          stack: cause instanceof Error ? cause.stack : undefined,
+        },
+      });
+    },
+  });
+}
+
 app.whenReady().then(async () => {
   try {
     installBundledSystemSkillsService();
@@ -5021,77 +4840,7 @@ app.whenReady().then(async () => {
     });
     console.error("Unable to install bundled skills.", error);
   }
-  handleIpc("umbratic:list-projects", () => readProjects());
-  handleIpc("umbratic:list-chats", () => readChats());
-  handleIpc("umbratic:create-chat", (input) => createChat(input));
-  handleIpc("umbratic:update-chat-draft", (input) => updateChatDraft(input));
-  handleIpc("umbratic:update-chat-project", (input) => updateChatProject(input));
-  handleIpc("umbratic:delete-chat", (input) => deleteChat(input));
-  handleIpc("umbratic:delete-project-chats", (input) => deleteProjectChats(input));
-  handleIpc("umbratic:delete-project", (input) => deleteProject(input));
-  handleIpc("umbratic:get-notes", () => getNotes());
-  handleIpc("umbratic:update-notes", (input) => updateNotes(input));
-  handleIpc("umbratic:get-task", (input) => publicTaskById(input));
-  handleIpc("umbratic:list-task-checkpoints", (input) => listTaskCheckpoints(input));
-  handleIpc("umbratic:create-task-checkpoint", (input) => createCheckpoint(input));
-  handleIpc("umbratic:set-task-checkpoint-pinned", (input) => setCheckpointPinned(input));
-  handleIpc("umbratic:delete-task-checkpoint", (input) => deleteCheckpoint(input));
-  handleIpc("umbratic:fork-task-checkpoint", (input) => forkCheckpoint(input));
-  handleIpc("umbratic:restore-task-checkpoint", (input) => restoreCheckpoint(input));
-  handleIpc("umbratic:refresh-task-review", (input) => refreshTaskReview(input));
-  handleIpc("umbratic:refresh-workspace-review", (input) => refreshWorkspaceReview(input));
-  handleIpc("umbratic:read-document-review", (input) => readDocumentReview(input));
-  handleIpc("umbratic:search-files", (input) => searchRepositoryFiles(input));
-  handleIpc("umbratic:pick-repository", () => pickRepository());
-  handleIpc("umbratic:pick-attachment-files", (input) => pickAttachmentFiles(input));
-  handleIpc("umbratic:save-pasted-attachments", (input) => savePastedAttachments(input));
-  handleIpc("umbratic:open-chat-attachment", (input) => openChatAttachment(input));
-  handleIpc("umbratic:get-repository", (input) => getRepository(input));
-  handleIpc("umbratic:list-repository-branches", (input) => listRepositoryBranches(input));
-  handleIpc("umbratic:checkout-repository-branch", (input) => checkoutRepositoryBranch(input));
-  handleIpc("umbratic:get-backend-status", () => getBackendStatus());
-  handleIpc("umbratic:get-capability-probes", (input) => getCapabilityProbes(input));
-  handleIpc("umbratic:get-model-endpoint-settings", () => {
-    const settings = readModelEndpointSettings();
-    return publicModelEndpointSettings(settings);
-  });
-  handleIpc("umbratic:save-model-endpoint-settings", (input) =>
-    saveModelEndpointSettings(input as Partial<ReturnType<typeof readModelEndpointSettings>>),
-  );
-  handleIpc("umbratic:get-harness-profile", () => readHarnessProfileSetting());
-  handleIpc("umbratic:save-harness-profile", (input) => saveHarnessProfileSetting(input));
-  handleIpc("umbratic:get-context-length", () => readContextLengthSetting());
-  handleIpc("umbratic:save-context-length", (input) => saveContextLengthSetting(input));
-  handleIpc("umbratic:export-telemetry", () => exportTelemetryBundle());
-  handleIpc("umbratic:export-local-diagnostics", () => exportLocalDiagnostics());
-  handleIpc("umbratic:clear-local-diagnostics", () => clearLocalDiagnosticLogs());
-  handleIpc("umbratic:record-product-event", (input) => recordRendererProductEvent(input));
-  handleIpc("umbratic:list-skills", () => listSkillsService());
-  handleIpc("umbratic:save-skill-settings", (input) => saveSkillSettingsService(input));
-  handleIpc("umbratic:open-skills-folder", () => openSkillsFolder());
-  handleIpc("umbratic:open-runner-diagnostics-folder", () => openRunnerDiagnosticsFolder());
-  handleIpc("umbratic:open-skill-in-editor", (input) => openSkillInEditor(input));
-  handleIpc("umbratic:import-skill", (input) => importSkillFromDialog(input));
-  handleIpc("umbratic:create-skill", (input) => createSkillService(input as { name?: string }));
-  handleIpc("umbratic:get-skill-document", (input) => getSkillDocumentService(input as { id?: string }));
-  handleIpc("umbratic:save-skill-document", (input) => saveSkillDocumentService(input as { id?: string; content?: string }));
-  handleIpc("umbratic:reset-system-skill", (input) => resetSystemSkillService(input as { id?: string }));
-  handleIpc("umbratic:set-permission-mode", (mode) => setPermissionMode(mode));
-  handleIpc("umbratic:list-available-ides", () => listAvailableIdes());
-  handleIpc("umbratic:open-repository-in-ide", (input) => openRepositoryInIde(input));
-  handleIpc("umbratic:start-task", (input) => startTask(input));
-  handleIpc("umbratic:approve-worktree-creation", (input) => approveWorktreeCreation(input));
-  handleIpc("umbratic:respond-tool-permission", (input) => respondToToolPermission(input));
-  handleIpc("umbratic:open-task-in-ide", (input) => openTaskInIde(input));
-  handleIpc("umbratic:approve-task-merge", (input) => approveTaskMerge(input));
-  handleIpc("umbratic:reject-task", (input) => rejectTask(input));
-  handleIpc("umbratic:keep-worktree", (input) => keepWorktree(input));
-  handleIpc("umbratic:cancel-task", (input) => cancelTask(input));
-  handleIpc("umbratic:set-response-feedback", (input) => setResponseFeedback(input));
-  handleIpc("umbratic:set-window-chrome-theme", (input) => {
-    const theme = input === "light" ? "light" : "dark";
-    return setWindowChromeTheme(theme);
-  });
+  registerMainIpc();
   Menu.setApplicationMenu(null);
   await createWindow();
   void getBackendStatus();

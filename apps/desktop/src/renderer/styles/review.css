@@ -1,0 +1,892 @@
+.reviewPanel {
+  position: relative;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.reviewTopbar {
+  position: relative;
+  z-index: 40;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 51px;
+  padding: 9px 14px;
+  margin: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.036), rgba(255, 255, 255, 0.014)),
+    rgba(8, 9, 12, 0.1);
+}
+
+.reviewChangeSummary {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 32px;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--app-font);
+  font-size: 15.5px;
+  font-optical-sizing: auto;
+  font-weight: 660;
+  letter-spacing: -0.022em;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+}
+
+.composerReviewFeedback {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 8px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 76%, transparent);
+  border-radius: 999px;
+  color: var(--reference-token-text);
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  box-shadow:
+    0 5px 16px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.065);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+  backdrop-filter: blur(16px) saturate(135%);
+  font-size: 11px;
+  font-weight: 660;
+  transition: transform 120ms ease-out, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.composerReviewFeedback:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-strong));
+  background: color-mix(in srgb, var(--surface-2) 94%, transparent);
+  box-shadow:
+    0 7px 18px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.composerReviewFeedback:active {
+  transform: scale(0.97);
+}
+
+.composerReviewFeedbackIcon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--accent) 68%, var(--text));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.composerReviewFeedback small,
+.reviewFeedbackDialog header small {
+  display: inline-flex;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.composerReviewFeedbackChevron {
+  color: var(--faint);
+  transition: transform 160ms ease-out, color 160ms ease;
+}
+
+.composerReviewFeedback:hover .composerReviewFeedbackChevron {
+  color: var(--muted);
+  transform: translateX(1px);
+}
+
+.reviewFeedbackDialog header,
+.reviewFeedbackDialog header > span,
+.reviewFeedbackDialog article > div,
+.reviewFeedbackDialog footer {
+  display: flex;
+  align-items: center;
+}
+
+.reviewFeedbackScrim {
+  z-index: 120;
+}
+
+.reviewFeedbackDialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 97%, transparent);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+}
+
+.reviewFeedbackDialog header {
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reviewFeedbackDialog header > span { gap: 7px; }
+.reviewFeedbackDialog header button,
+.reviewFeedbackDialog article > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.reviewFeedbackDialog > div {
+  display: grid;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.reviewFeedbackDialog article {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding: 11px 40px 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--control-bg);
+}
+
+.reviewFeedbackDialog article > div { gap: 8px; }
+.reviewFeedbackFileLink {
+  min-width: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  overflow: hidden;
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--accent) 74%, var(--text));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reviewFeedbackFileLink:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.reviewFeedbackFileLink:active { transform: scale(0.98); }
+.reviewFeedbackFileLink:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.reviewFeedbackDialog article small {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 680;
+}
+.reviewFeedbackDialog article p { margin: 0; }
+.reviewFeedbackDialog article p { color: var(--text); font-size: 12px; line-height: 1.45; }
+.reviewFeedbackDialog article > button { position: absolute; top: 7px; right: 7px; }
+.reviewFeedbackDialog footer {
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.reviewResizeHandle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  z-index: 60;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.reviewResizeHandle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: transparent;
+  content: "";
+}
+
+.isResizing .reviewResizeHandle::after {
+  background: color-mix(in srgb, var(--accent) 72%, transparent);
+}
+
+.reviewChangeSummary svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.reviewChangeSummary strong {
+  overflow: hidden;
+  color: var(--text);
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reviewStats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--app-font);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.reviewStats span:first-child {
+  overflow: hidden;
+  line-height: 1;
+  text-overflow: ellipsis;
+}
+
+.reviewStats .additions,
+.reviewStats .deletions {
+  flex: 0 0 auto;
+}
+
+.reviewTopActions {
+  position: relative;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  justify-self: end;
+  min-width: 0;
+}
+
+.reviewTextButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 30px;
+  min-width: 32px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.022);
+  font-weight: 700;
+}
+
+.reviewTextButton span {
+  display: none;
+}
+
+.reviewTextButton:hover:not(:disabled) {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.reviewHideButton {
+  margin-left: -2px;
+}
+
+.diffWorkspace {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 14px 14px;
+}
+
+.changedFiles {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.012)),
+    rgba(8, 9, 12, 0.1);
+}
+
+.reviewFile {
+  flex: 0 0 auto;
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.072);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.014)),
+    rgba(15, 17, 21, 0.36);
+}
+
+.reviewFile.status-added {
+  border-color: color-mix(in srgb, var(--diff-add) 20%, rgba(255, 255, 255, 0.072));
+}
+
+.reviewFile.status-deleted {
+  border-color: color-mix(in srgb, var(--diff-remove) 18%, rgba(255, 255, 255, 0.072));
+}
+
+.reviewFile.status-modified {
+  border-color: color-mix(in srgb, var(--amber) 20%, rgba(255, 255, 255, 0.072));
+}
+
+.reviewFile:last-child {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.072);
+}
+
+.reviewFileHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px 26px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 9px 9px 9px 10px;
+  color: var(--text);
+  text-align: left;
+}
+
+.status-added .reviewFileHeader {
+  border-left: 2px solid color-mix(in srgb, var(--diff-add) 68%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 5%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.012);
+}
+
+.status-deleted .reviewFileHeader {
+  border-left: 2px solid color-mix(in srgb, var(--diff-remove) 64%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 5%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.012);
+}
+
+.status-modified .reviewFileHeader {
+  border-left: 2px solid color-mix(in srgb, var(--amber) 62%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 5%, transparent), transparent 52%),
+    rgba(255, 255, 255, 0.012);
+}
+
+.reviewFileHeader:hover,
+.reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.07), transparent 72%),
+    rgba(255, 255, 255, 0.028);
+}
+
+.status-added .reviewFileHeader:hover,
+.status-added .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 6.5%, transparent), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.status-deleted .reviewFileHeader:hover,
+.status-deleted .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 6.5%, transparent), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.status-modified .reviewFileHeader:hover,
+.status-modified .reviewFileHeader.active {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 6.5%, transparent), transparent 60%),
+    rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme="light"] .status-added .reviewFileHeader,
+:root[data-theme="light"] .status-added .reviewFileHeader:hover,
+:root[data-theme="light"] .status-added .reviewFileHeader.active {
+  border-left-color: color-mix(in srgb, var(--diff-add) 68%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 5%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.38);
+}
+
+:root[data-theme="light"] .status-deleted .reviewFileHeader,
+:root[data-theme="light"] .status-deleted .reviewFileHeader:hover,
+:root[data-theme="light"] .status-deleted .reviewFileHeader.active {
+  border-left-color: color-mix(in srgb, var(--diff-remove) 64%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 5%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.38);
+}
+
+:root[data-theme="light"] .status-modified .reviewFileHeader,
+:root[data-theme="light"] .status-modified .reviewFileHeader:hover,
+:root[data-theme="light"] .status-modified .reviewFileHeader.active {
+  border-left-color: color-mix(in srgb, var(--amber) 62%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 5%, transparent), transparent 58%),
+    rgba(255, 255, 255, 0.38);
+}
+
+.openReviewFileButton,
+.reviewFileChevronButton {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--faint);
+}
+
+.openReviewFileButton:hover:not(:disabled),
+.reviewFileChevronButton:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.openReviewFileButton:disabled {
+  color: var(--faint);
+  opacity: 1;
+}
+
+.reviewFileToggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: 28px;
+  color: var(--text);
+  text-align: left;
+}
+
+.reviewFileChevron {
+  color: var(--muted);
+  transition: transform 0.14s ease;
+}
+
+.reviewFile.expanded .reviewFileChevron {
+  transform: rotate(180deg);
+}
+
+.reviewFileDiff {
+  padding: 6px 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.062);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.016), transparent 26%),
+    rgba(5, 7, 10, 0.22);
+}
+
+.changedFileMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.changedFilePath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.changeStats {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 5px;
+  align-items: center;
+  min-width: 64px;
+  color: var(--faint);
+  font-family: var(--app-font);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.additions {
+  display: inline-flex;
+  align-items: center;
+  color: var(--diff-add);
+}
+
+.deletions {
+  display: inline-flex;
+  align-items: center;
+  color: var(--diff-remove);
+}
+
+.diffRows {
+  min-height: 0;
+  overflow-x: auto;
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  line-height: 1.55;
+  scrollbar-width: thin;
+}
+
+.diffRowsInner {
+  display: grid;
+  align-content: start;
+  width: 100%;
+  min-width: max-content;
+  padding: 0 8px;
+}
+
+.diffRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2px 44px 44px 18px minmax(0, 1fr);
+  align-items: stretch;
+  width: 100%;
+  min-height: 21px;
+  overflow: hidden;
+  border-radius: 0;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+}
+
+.diffRow code {
+  min-width: 0;
+  padding: 1px 14px 1px 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  overflow: visible;
+  white-space: pre;
+}
+
+.diffRow::before {
+  width: 2px;
+  margin: 0;
+  border-radius: 0;
+  content: "";
+  background: transparent;
+}
+
+.diffLineNumber,
+.diffMarker {
+  color: var(--faint);
+  user-select: none;
+}
+
+.diffLineNumber {
+  padding: 1px 7px 1px 4px;
+  text-align: right;
+}
+
+.diffMarker {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+.diffMarker::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  content: "";
+  background: rgba(178, 186, 197, 0.16);
+}
+
+.diffRow.add {
+  color: color-mix(in srgb, var(--diff-add) 16%, var(--text));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-add) 12%, transparent),
+      color-mix(in srgb, var(--diff-add) 6.5%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-add) 2.2%, transparent);
+}
+
+.diffRow.remove {
+  color: color-mix(in srgb, var(--diff-remove) 16%, var(--text));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-remove) 12%, transparent),
+      color-mix(in srgb, var(--diff-remove) 6.5%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-remove) 2.2%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.add {
+  color: #174832;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-add) 12%, transparent),
+      color-mix(in srgb, var(--diff-add) 5.5%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-add) 3.2%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.remove {
+  color: #4a2027;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--diff-remove) 13%, transparent),
+      color-mix(in srgb, var(--diff-remove) 6%, transparent) 100%
+    ),
+    color-mix(in srgb, var(--diff-remove) 3.5%, transparent);
+}
+
+.diffRow.add::before {
+  background: color-mix(in srgb, var(--diff-add) 68%, transparent);
+}
+
+.diffRow.remove::before {
+  background: color-mix(in srgb, var(--diff-remove) 62%, transparent);
+}
+
+.diffRow.add .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-add) 72%, transparent);
+}
+
+.diffRow.remove .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-remove) 66%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.add::before,
+:root[data-theme="light"] .diffRow.add .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-add) 72%, transparent);
+}
+
+:root[data-theme="light"] .diffRow.remove::before,
+:root[data-theme="light"] .diffRow.remove .diffMarker::before {
+  background: color-mix(in srgb, var(--diff-remove) 68%, transparent);
+}
+
+.diffRow.context .diffMarker::before {
+  opacity: 0;
+}
+
+.reviewFooter {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 14px 14px;
+}
+
+.idePicker {
+  position: relative;
+  z-index: 60;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: stretch;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.07);
+  overflow: visible;
+}
+
+.idePicker.isDisabled {
+  opacity: 0.48;
+}
+
+.idePicker.isDisabled,
+.idePicker.isDisabled button {
+  cursor: default;
+}
+
+.idePickerOpen,
+.idePickerToggle {
+  display: grid;
+  place-items: center;
+  color: var(--text);
+}
+
+.idePickerOpen {
+  width: 36px;
+}
+
+.idePickerToggle {
+  width: 26px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.idePickerOpen:hover:not(:disabled),
+.idePickerToggle:hover:not(:disabled),
+.idePicker:not(.isDisabled):focus-within {
+  background: var(--control-hover);
+}
+
+.ideMenu {
+  position: absolute;
+  right: 0;
+  left: auto;
+  top: calc(100% + 7px);
+  z-index: 90;
+  display: grid;
+  gap: 3px;
+  min-width: 176px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
+  box-shadow: 0 18px 48px var(--shadow-color);
+}
+
+.ideMenu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.ideMenu button:hover,
+.ideMenu button.active {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.ideMenu span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ideLogo {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.approvalActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.checkList {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 7px;
+  padding: 10px 14px 0;
+}
+
+.checkRow {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.checkRow.passed svg {
+  color: var(--green);
+}
+
+.checkRow.failed svg {
+  color: var(--red);
+}
+
+.checkRow.running svg {
+  color: var(--amber);
+}
+
+.checkRow span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.checkRow em {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  font-size: 11px;
+}
+
+.emptyState {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 90px;
+  color: var(--faint);
+  text-align: center;
+}
+
+.composerGreeting {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  padding: 24px;
+  color: var(--text);
+  text-align: center;
+  font-size: 34px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.composerGreeting span {
+  min-width: 0;
+  max-width: min(760px, 100%);
+}
+
+.modalScrim {
+  position: fixed;
+  inset: 36px 0 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.18);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62);
+  backdrop-filter: blur(10px) brightness(0.62);
+}
+

@@ -72,7 +72,6 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
   const config = {
     taskId: "task-1",
     cwd: "C:/repo",
-    modelBoundary: "managed",
     permissionMode: "normal",
     enabledTools: ["read", "search"],
     lspServers: [],

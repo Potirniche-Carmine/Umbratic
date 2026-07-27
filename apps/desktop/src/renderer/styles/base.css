@@ -1,0 +1,349 @@
+:root {
+  color-scheme: dark;
+  font-family: var(--app-font, system-ui, sans-serif);
+  --app-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #0b0d10;
+  --chrome: #14171b;
+  --sidebar: #111418;
+  --surface: #161a20;
+  --surface-2: #1c2229;
+  --surface-3: #252c35;
+  --text: #eceff3;
+  --muted: #a4abb5;
+  --faint: #6f7782;
+  --line: rgba(225, 230, 238, 0.1);
+  --line-strong: rgba(225, 230, 238, 0.17);
+  --control-bg: #191f26;
+  --control-hover-soft: #1d242c;
+  --control-hover: #242b34;
+  --control-active: #29313b;
+  --panel-tint: #141a20;
+  --modal-bg: #181d23;
+  --code-bg: #101319;
+  --code-header-bg: #191d24;
+  --inline-code-bg: rgba(255, 255, 255, 0.08);
+  --inline-code-text: #dfe6ee;
+  --reference-token-text: #b5c4d8;
+  --reference-token-hover-text: #d0dbea;
+  --reasoning-text: #c3c9d1;
+  --reasoning-border: rgba(178, 186, 197, 0.14);
+  --reasoning-hover-border: rgba(178, 186, 197, 0.2);
+  --reasoning-hover-bg: rgba(178, 186, 197, 0.045);
+  --shadow-color: rgba(0, 0, 0, 0.36);
+  --sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --review-sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --glass: #191f26;
+  --glass-strong: #202732;
+  --composer-glow: transparent;
+  --accent: #a7b0bb;
+  --accent-2: #7d8794;
+  --accent-warm: #d6c9aa;
+  --blue: #579dff;
+  --green: #49d38a;
+  --amber: #e7b84f;
+  --red: #ff6f7a;
+  --diff-add: #49d38a;
+  --diff-remove: #ff6f7a;
+  --response-content-width: 980px;
+  --radius: 8px;
+  --timeline-card-width: 900px;
+  --prompt-width: min(100%, 980px);
+  background: var(--bg);
+  color: var(--text);
+  /* Keep the established 13px visual baseline while letting new tokens scale with browser text settings. */
+  font-size: 81.25%;
+  --type-xs: 0.6875rem;
+  --type-sm: 0.75rem;
+  --type-body: 0.8125rem;
+  --material-structural: color-mix(in srgb, var(--sidebar) 84%, transparent);
+  --material-floating: color-mix(in srgb, var(--surface) 76%, transparent);
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--blue) 78%, transparent), 0 0 0 4px color-mix(in srgb, var(--bg) 72%, transparent);
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6f8;
+  --chrome: #ffffff;
+  --sidebar: #edf1f5;
+  --surface: #ffffff;
+  --surface-2: #f0f3f6;
+  --surface-3: #e3e8ee;
+  --text: #161a20;
+  --muted: #526071;
+  --faint: #788394;
+  --line: rgba(18, 24, 32, 0.11);
+  --line-strong: rgba(18, 24, 32, 0.18);
+  --control-bg: #eef2f6;
+  --control-hover-soft: #e7ecf2;
+  --control-hover: #dfe6ee;
+  --control-active: #d7e0e9;
+  --panel-tint: #f1f4f7;
+  --modal-bg: #ffffff;
+  --code-bg: #f7f9fc;
+  --code-header-bg: #eef2f7;
+  --inline-code-bg: rgba(14, 31, 51, 0.08);
+  --inline-code-text: #1f354d;
+  --reference-token-text: #385674;
+  --reference-token-hover-text: #243e5c;
+  --reasoning-text: #4c5562;
+  --reasoning-border: rgba(92, 101, 113, 0.16);
+  --reasoning-hover-border: rgba(92, 101, 113, 0.24);
+  --reasoning-hover-bg: rgba(92, 101, 113, 0.08);
+  --shadow-color: rgba(20, 35, 55, 0.18);
+  --sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --review-sidebar-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --glass: #eef2f6;
+  --glass-strong: #ffffff;
+  --composer-glow: transparent;
+  --accent: #5c6571;
+  --accent-2: #758092;
+  --accent-warm: #9a6700;
+  --blue: #1f6feb;
+  --green: #168a53;
+  --amber: #9a6700;
+  --red: #d1242f;
+  --diff-add: #087a45;
+  --diff-remove: #b4232e;
+}
+
+:root[data-theme="light"] .workspace {
+  background: var(--bg);
+}
+
+:root[data-theme="light"] .promptDock {
+  background: var(--bg);
+}
+
+:root[data-theme="light"] .promptDock::after {
+  background: var(--bg);
+}
+
+:root[data-theme="light"] .promptInputShell,
+:root[data-theme="light"] .userMessageBubble {
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .sidebar,
+:root[data-theme="light"] .reviewSidebar {
+  border-color: var(--line);
+  background: var(--material-structural);
+}
+
+:root[data-theme="light"] .reviewSidebar {
+  background: var(--material-structural);
+}
+
+:root[data-theme="light"] .chatRow.active,
+:root[data-theme="light"] .workspaceCard,
+:root[data-theme="light"] .taskCard,
+:root[data-theme="light"] .changedFiles {
+  border-color: rgba(40, 48, 58, 0.08);
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .changedFiles {
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .reviewFile {
+  border-color: rgba(18, 24, 32, 0.1);
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .reviewFileHeader:hover,
+:root[data-theme="light"] .reviewFileHeader.active {
+  background: var(--control-hover-soft);
+}
+
+:root[data-theme="light"] .reviewFileDiff {
+  border-top-color: rgba(18, 24, 32, 0.08);
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .reviewTopbar {
+  border-bottom-color: rgba(18, 24, 32, 0.08);
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .diffLineNumber,
+:root[data-theme="light"] .diffMarker {
+  color: rgba(74, 91, 112, 0.58);
+}
+
+:root[data-theme="light"] .attachmentPreview,
+:root[data-theme="light"] .userMessageBubble {
+  box-shadow: 0 3px 10px rgba(40, 48, 58, 0.035);
+}
+
+:root[data-theme="light"] .attachmentPreviewFileIcon {
+  color: #385674;
+  background: rgba(56, 86, 116, 0.08);
+}
+
+:root[data-theme="light"] .attachmentPreviewFileName {
+  color: #385674;
+}
+
+:root[data-theme="light"] .composerReviewToggle {
+  border-color: rgba(40, 48, 58, 0.13);
+  background: var(--control-bg);
+}
+
+:root[data-theme="light"] .composerReviewToggle:hover {
+  border-color: rgba(40, 48, 58, 0.2);
+  background: var(--control-hover);
+}
+
+:root[data-theme="light"] .reviewTextButton:hover:not(:disabled) {
+  border-color: rgba(40, 48, 58, 0.16);
+  background: rgba(18, 24, 32, 0.075);
+}
+
+:root[data-theme="light"] .inlineMentionToken,
+:root[data-theme="light"] .promptMentionToken {
+  color: var(--reference-token-text);
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .promptInputShell {
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .promptInputShell:focus-within {
+  box-shadow: 0 0 0 3px rgba(92, 101, 113, 0.045);
+}
+
+:root[data-theme="light"] .markdownCodeBlock,
+:root[data-theme="light"] .branchMenu,
+:root[data-theme="light"] .workspaceModeMenu,
+:root[data-theme="light"] .permissionMenu,
+:root[data-theme="light"] .attachmentMenu {
+  box-shadow: 0 18px 46px rgba(40, 48, 58, 0.16);
+}
+
+:root[data-theme="light"] .attachmentMenu {
+  border-color: rgba(40, 48, 58, 0.16);
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .floatingApproval {
+  border-color: rgba(31, 111, 235, 0.24);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.82),
+    0 14px 34px rgba(40, 48, 58, 0.12);
+}
+
+:root[data-theme="light"] .settingsPlaceholder {
+  border-color: rgba(40, 48, 58, 0.14);
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  background: var(--control-bg);
+}
+
+:root[data-theme="light"] .settingsPlaceholder:hover {
+  border-color: rgba(40, 48, 58, 0.24);
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+:root[data-theme="light"] .attachmentCount {
+  color: #ffffff;
+  background: #596271;
+}
+
+:root[data-theme="light"] .riskDialog {
+  box-shadow: 0 12px 34px rgba(40, 48, 58, 0.12);
+}
+
+:root[data-theme="light"] .settingsDialog,
+:root[data-theme="light"] .imagePreviewDialog {
+  box-shadow: 0 16px 42px rgba(40, 48, 58, 0.13);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body,
+#root {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+body.isKeyboardTyping input,
+body.isKeyboardTyping textarea {
+  cursor: none;
+}
+
+button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
+select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--control-bg);
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  color: #eceff3;
+  background-color: #202329;
+}
+
+select option:checked {
+  color: #ffffff;
+  background-color: #1f6feb;
+}
+
+:root[data-theme="light"] select {
+  color-scheme: light;
+}
+
+:root[data-theme="light"] select option,
+:root[data-theme="light"] select optgroup {
+  color: #161a20;
+  background-color: #ffffff;
+}
+
+h2 {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+

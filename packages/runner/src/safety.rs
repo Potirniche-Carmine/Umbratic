@@ -215,71 +215,72 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecisionV1 {
     let mut strictest: Option<DecisionSpec> = None;
     for segment in &segments {
         let classified = classify_command_text(segment, Some(cwd));
-        let (action, severity, certainty, rule, explanation, suggestion) =
-            match classified.command_class {
-                "network" => (
-                    SafetyAction::Deny,
-                    SafetySeverity::Critical,
-                    SafetyCertainty::Exact,
-                    "network_denied",
-                    "Network transfer commands and visible network URLs are blocked.",
-                    None,
-                ),
-                "external-directory" => (
-                    SafetyAction::Deny,
-                    SafetySeverity::Critical,
-                    SafetyCertainty::Heuristic,
-                    "outside_workspace",
-                    "The command references a path outside the active workspace.",
-                    None,
-                ),
-                "read" | "git-read" if !dynamic => (
-                    SafetyAction::Allow,
-                    SafetySeverity::Info,
-                    SafetyCertainty::Exact,
-                    "audited_read_only",
-                    "The command is an audited read-only operation.",
-                    None,
-                ),
-                "destructive-file" => (
-                    SafetyAction::Confirm,
-                    SafetySeverity::High,
-                    SafetyCertainty::Exact,
-                    "destructive_workspace_mutation",
-                    "The command can remove or discard workspace state.",
-                    Some("Create a checkpoint or preview the affected paths first."),
-                ),
-                // Interpreters, test runners, package managers, and shells always Confirm.
-                // AutoSafe must not execute workspace-controlled code without approval.
-                "package-manager" | "cmake-build" | "compiler" | "python-runtime" | "shell" => (
-                    SafetyAction::Confirm,
-                    SafetySeverity::Medium,
-                    if dynamic {
-                        SafetyCertainty::Unknown
-                    } else {
-                        SafetyCertainty::Heuristic
-                    },
-                    "repository_code_execution",
-                    "The command executes repository-controlled code, a shell, or changes dependencies.",
-                    None,
-                ),
-                _ => (
-                    SafetyAction::Confirm,
-                    SafetySeverity::Medium,
-                    if dynamic {
-                        SafetyCertainty::Unknown
-                    } else {
-                        SafetyCertainty::Heuristic
-                    },
-                    if dynamic {
-                        "unsupported_dynamic_code"
-                    } else {
-                        "unproven_command"
-                    },
-                    "The command is not proven read-only and requires one-time approval.",
-                    None,
-                ),
-            };
+        let (action, severity, certainty, rule, explanation, suggestion) = match classified
+            .command_class
+        {
+            "network" => (
+                SafetyAction::Deny,
+                SafetySeverity::Critical,
+                SafetyCertainty::Exact,
+                "network_denied",
+                "Network transfer commands and visible network URLs are blocked.",
+                None,
+            ),
+            "external-directory" => (
+                SafetyAction::Deny,
+                SafetySeverity::Critical,
+                SafetyCertainty::Heuristic,
+                "outside_workspace",
+                "The command references a path outside the active workspace.",
+                None,
+            ),
+            "read" | "git-read" if !dynamic => (
+                SafetyAction::Allow,
+                SafetySeverity::Info,
+                SafetyCertainty::Exact,
+                "audited_read_only",
+                "The command is an audited read-only operation.",
+                None,
+            ),
+            "destructive-file" => (
+                SafetyAction::Confirm,
+                SafetySeverity::High,
+                SafetyCertainty::Exact,
+                "destructive_workspace_mutation",
+                "The command can remove or discard workspace state.",
+                Some("Create a checkpoint or preview the affected paths first."),
+            ),
+            // Interpreters, test runners, package managers, and shells always Confirm.
+            // AutoSafe must not execute workspace-controlled code without approval.
+            "package-manager" | "cmake-build" | "compiler" | "python-runtime" | "shell" => (
+                SafetyAction::Confirm,
+                SafetySeverity::Medium,
+                if dynamic {
+                    SafetyCertainty::Unknown
+                } else {
+                    SafetyCertainty::Heuristic
+                },
+                "repository_code_execution",
+                "The command executes repository-controlled code, a shell, or changes dependencies.",
+                None,
+            ),
+            _ => (
+                SafetyAction::Confirm,
+                SafetySeverity::Medium,
+                if dynamic {
+                    SafetyCertainty::Unknown
+                } else {
+                    SafetyCertainty::Heuristic
+                },
+                if dynamic {
+                    "unsupported_dynamic_code"
+                } else {
+                    "unproven_command"
+                },
+                "The command is not proven read-only and requires one-time approval.",
+                None,
+            ),
+        };
         if strictest
             .as_ref()
             .is_none_or(|current| action > current.action)

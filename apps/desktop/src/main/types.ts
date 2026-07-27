@@ -19,7 +19,7 @@ export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
 export type ModelEndpointSoftware = "ollama" | "vllm";
-export type ModelEndpointSettings = {
+export type ActiveModelEndpointSettings = {
   mode: ModelEndpointMode;
   software: ModelEndpointSoftware;
   baseUrl: string;

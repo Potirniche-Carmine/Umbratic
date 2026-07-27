@@ -11,9 +11,9 @@ use crate::{
     },
     events::now_iso,
     permission::PermissionBroker,
-    provider::{ProviderRequestOptions, ProviderResult, compact_context, stream_provider_chat},
     session::{EventSink, InputPart, Session},
     tools::{ToolCall, ToolResult, canonical_tool_name, enabled_tool_specs, execute_tool},
+    veil_client::{VeilChatResult, VeilRequestOptions, compact_context, stream_veil_chat},
 };
 
 const MAX_TOOL_TURNS: usize = 64;
@@ -54,7 +54,7 @@ fn structured_tool_history(session: &Session) -> bool {
     })
 }
 
-fn assistant_tool_message(result: &ProviderResult, calls: &[ToolCall]) -> Value {
+fn assistant_tool_message(result: &VeilChatResult, calls: &[ToolCall]) -> Value {
     json!({
         "role": "assistant",
         "content": if result.content.is_empty() { Value::Null } else { Value::String(result.content.clone()) },
@@ -367,7 +367,7 @@ fn observed_context_usage(
 
 fn observed_context_event(
     session: &Session,
-    result: &ProviderResult,
+    result: &VeilChatResult,
     reserve_tokens: u64,
 ) -> Option<Value> {
     let usage = observed_context_usage(
@@ -687,7 +687,7 @@ async fn attempt_semantic_compaction(
 async fn update_context_calibration(
     session: &Session,
     prepared: &PreparedRequest,
-    result: &ProviderResult,
+    result: &VeilChatResult,
 ) {
     let Some(observed_prompt_tokens) = result.prompt_tokens else {
         return;
@@ -741,12 +741,12 @@ async fn final_without_tools(
         return;
     };
     sink.emit(context_event(session, prepared.usage));
-    let mut response = stream_provider_chat(
+    let mut response = stream_veil_chat(
         session,
         sink,
         &prepared.messages,
         &[],
-        ProviderRequestOptions {
+        VeilRequestOptions {
             max_output_tokens: prepared.max_output_tokens,
             include_tools: false,
             require_tool_call: false,
@@ -763,12 +763,12 @@ async fn final_without_tools(
             drop(messages);
             if let Ok(retry) = prepared_messages(session, &[]).await {
                 prepared = retry;
-                response = stream_provider_chat(
+                response = stream_veil_chat(
                     session,
                     sink,
                     &prepared.messages,
                     &[],
-                    ProviderRequestOptions {
+                    VeilRequestOptions {
                         max_output_tokens: prepared.max_output_tokens,
                         include_tools: false,
                         require_tool_call: false,
@@ -852,12 +852,12 @@ pub async fn run_turn(
         let tools = enabled_tool_specs(&session, true).await;
         let mut prepared = prepared_messages(&session, &tools).await?;
         sink.emit(context_event(&session, prepared.usage));
-        let mut response = stream_provider_chat(
+        let mut response = stream_veil_chat(
             &session,
             &sink,
             &prepared.messages,
             &tools,
-            ProviderRequestOptions {
+            VeilRequestOptions {
                 max_output_tokens: prepared.max_output_tokens,
                 include_tools: true,
                 require_tool_call: !action_requirement.is_empty()
@@ -878,12 +878,12 @@ pub async fn run_turn(
                 drop(messages);
                 prepared = prepared_messages(&session, &tools).await?;
                 sink.emit(context_event(&session, prepared.usage));
-                response = stream_provider_chat(
+                response = stream_veil_chat(
                     &session,
                     &sink,
                     &prepared.messages,
                     &tools,
-                    ProviderRequestOptions {
+                    VeilRequestOptions {
                         max_output_tokens: prepared.max_output_tokens,
                         include_tools: true,
                         require_tool_call: !action_requirement.is_empty()

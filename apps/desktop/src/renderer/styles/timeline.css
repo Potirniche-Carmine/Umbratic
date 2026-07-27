@@ -1,0 +1,994 @@
+.workspace {
+  grid-area: main;
+  position: relative;
+  container: workspace / inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding-left: var(--sidebar-reserved-width, 230px);
+  background: var(--bg);
+  isolation: isolate;
+}
+
+.workspace::before {
+  display: none;
+}
+
+.workspace::after {
+  position: absolute;
+  top: 0;
+  left: var(--sidebar-width, 230px);
+  z-index: 12;
+  width: var(--sidebar-visual-gap, 0px);
+  height: 51px;
+  pointer-events: none;
+  content: "";
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.workspace.approvalPending .composerPanel,
+.workspace.approvalPending .promptDock {
+  filter: blur(1.4px) brightness(0.72);
+  opacity: 0.76;
+  pointer-events: none;
+  transition: filter 150ms ease, opacity 150ms ease;
+}
+
+.workArea {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-tint);
+}
+
+.composerPanel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 220px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.composerHeader {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  min-height: 50px;
+  padding: 9px 14px 9px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.composerHeaderTitle {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.composerHeaderTitle strong,
+.composerHeaderTitle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composerHeaderTitle strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.composerHeaderTitle span {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.composerHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  justify-self: end;
+}
+
+.composerReviewToggle {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  border: 1px solid var(--line);
+}
+
+.composerBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  padding: clamp(22px, 4vh, 44px) clamp(22px, 4vw, 64px) clamp(44px, 8vh, 96px);
+  line-height: 1.65;
+  scroll-behavior: auto;
+}
+
+.timeline {
+  display: grid;
+  gap: clamp(20px, 3vh, 34px);
+  width: min(100%, 1060px);
+  max-width: 1060px;
+  margin: 0 auto;
+}
+
+.timelineMessage {
+  position: relative;
+  min-width: 0;
+  padding: 0 88px 0 0;
+  color: var(--text);
+}
+
+.timelineMessage.userMessage {
+  margin-left: auto;
+  max-width: min(760px, 88%);
+  padding: 0;
+}
+
+.userMessageBubble {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 12px 14px;
+  border: 1px solid rgba(178, 186, 197, 0.2);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: none;
+  transform-origin: 100% 100%;
+}
+
+.userMessage > .messageAttachmentList {
+  max-width: 100%;
+  margin: 0 0 6px auto;
+}
+
+.userMessageBubble .markdownContent:only-child,
+.userMessageBubble .markdownContent p:first-child {
+  margin-top: 0;
+}
+
+.messageReviewFeedback {
+  display: flex;
+  width: min(320px, 100%);
+  min-height: 48px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 6%, var(--control-bg));
+  text-align: left;
+  transition: background 140ms ease, border-color 140ms ease, transform 100ms ease-out;
+}
+
+.messageReviewFeedback:first-child { margin-top: 0; }
+.messageReviewFeedback:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent) 11%, var(--control-bg));
+}
+.messageReviewFeedback:active { transform: scale(0.985); }
+.messageReviewFeedback:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.messageReviewFeedbackIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.messageReviewFeedback > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+
+.messageReviewFeedback strong { font-size: 11.5px; font-weight: 680; }
+.messageReviewFeedback small { color: var(--faint); font-size: 10px; }
+.messageReviewFeedback > svg { flex: 0 0 auto; color: var(--faint); }
+
+.timelineMessage.assistantMessage {
+  width: 100%;
+  max-width: 980px;
+  padding: 0 0 0 18px;
+}
+
+.timelineActivity + .timelineMessage.assistantMessage {
+  margin-top: clamp(-16px, -1.5vh, -10px);
+}
+
+.timelineMessage.assistantMessage::before {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 1px;
+  border-radius: 999px;
+  content: "";
+  background: linear-gradient(180deg, transparent, var(--accent), rgba(178, 186, 197, 0.54), transparent);
+  opacity: 0.8;
+  transform-origin: 50% 0;
+}
+
+.timelineActivity {
+  position: relative;
+  width: min(calc(100% - 18px), 980px);
+  max-width: 980px;
+  margin-left: 18px;
+  min-width: 0;
+  padding: 0 0 8px;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  backdrop-filter: none;
+}
+
+.timelineActivity::before {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 31px;
+  height: 1px;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(90deg, rgba(178, 186, 197, 0.3), rgba(178, 186, 197, 0.06), transparent);
+  opacity: 0.66;
+  transform: none;
+}
+
+.timelineActivity.isFinished {
+  background: transparent;
+  opacity: 0.74;
+}
+
+.timelineActivity.isGenerating::before {
+  opacity: 0.74;
+  animation: none;
+}
+
+.timelineActivity:hover,
+.timelineActivity:focus-within {
+  background: transparent;
+  opacity: 1;
+}
+
+.activityHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 29px;
+  padding: 0;
+  color: color-mix(in srgb, var(--reasoning-text) 68%, var(--muted));
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 680;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+.activityHeader:hover {
+  color: color-mix(in srgb, var(--reasoning-text) 86%, var(--text));
+}
+
+.activityHeader:active,
+.activityToolToggle:active,
+.idePickerToggle:active {
+  transform: none;
+}
+
+.activityHeaderText {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.activityHeaderText strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.activityHeaderText strong {
+  display: inline-flex;
+  align-items: baseline;
+  color: inherit;
+  font-weight: 720;
+}
+
+.activityDots {
+  display: inline-flex;
+  width: 16px;
+  margin-left: 2px;
+}
+
+.activityDots span {
+  display: inline-block;
+  animation: activityDotPulse 1.2s ease-in-out infinite both;
+}
+
+.activityDots span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.activityDots span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+.activityChevron {
+  display: block;
+  justify-self: end;
+  color: var(--faint);
+}
+
+.timelineActivity.isExpanded .activityChevron {
+  color: color-mix(in srgb, var(--reasoning-text) 82%, var(--muted));
+}
+
+.activityBody {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    grid-template-rows 180ms ease-out,
+    opacity 140ms ease-out;
+  will-change: grid-template-rows, opacity;
+}
+
+.activityBody.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.activityBodyInner {
+  max-height: min(48vh, 420px);
+  min-height: 0;
+  padding: 0 10px 0 0;
+  overflow: hidden;
+  overscroll-behavior: auto;
+  scroll-behavior: auto;
+  scroll-padding-bottom: 18px;
+  scrollbar-color: color-mix(in srgb, var(--reasoning-text) 30%, transparent) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  transition: none;
+}
+
+.activityBody.open .activityBodyInner {
+  padding: 14px 10px 18px 0;
+  overflow: auto;
+}
+
+.activityBodyInner::-webkit-scrollbar {
+  width: 8px;
+}
+
+.activityBodyInner::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.activityBodyInner::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reasoning-text) 28%, transparent);
+  background-clip: content-box;
+}
+
+.activityBodyInner::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--reasoning-text) 42%, transparent);
+  background-clip: content-box;
+}
+
+.activityLogEntry {
+  min-width: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.activityLogEntry.commandLog {
+  padding-top: 3px;
+}
+
+.activityLogEntry:first-child {
+  border-top: 0;
+}
+
+.activityLogEntry:last-child {
+  padding-bottom: 6px;
+}
+
+.activityLogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 5px;
+  color: color-mix(in srgb, var(--text) 68%, var(--muted));
+}
+
+.activityLogHeader span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityToolToggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 12px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 22px;
+  padding: 0;
+  color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.activityToolToggle:hover {
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+.activityToolToggle span {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 660;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityToolToggle svg {
+  display: block;
+  justify-self: end;
+  color: var(--faint);
+}
+
+.activityLogEntry pre {
+  margin: 0;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
+  font-family: var(--mono-font);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.commandLog pre {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.activityToolGroupDetails > div + div {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 62%, transparent);
+}
+
+.timelineMessage .markdownContent > :last-child {
+  margin-bottom: 0;
+}
+
+.streamingTextContent p {
+  white-space: pre-wrap;
+}
+
+.streamingTextCaret {
+  display: inline-block;
+  width: 0;
+  height: 1em;
+  margin-left: 2px;
+  border-right: 2px solid currentColor;
+  opacity: 0.45;
+  transform: translateY(2px);
+  animation: streamingCaretBlink 1s steps(2, start) infinite;
+}
+
+.messageActions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  gap: 3px;
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+
+.messageOverflowNotice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--control-bg);
+  font-size: 12px;
+}
+
+.messageOverflowNotice button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+
+.messageOverflowNotice button:hover {
+  background: var(--control-hover);
+}
+
+.userMessage .messageActions {
+  position: static;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 9px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.assistantMessage .messageActions {
+  position: static;
+  margin-top: 10px;
+  opacity: 0.82;
+}
+
+.documentResponseLinks {
+  display: grid;
+  width: min(100%, var(--response-content-width));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.documentResponseLink {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--blue) 15%, var(--line-strong));
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--blue) 3%, var(--surface));
+  text-align: left;
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out,
+    transform 100ms ease-out;
+}
+
+.documentResponseLink:hover {
+  border-color: color-mix(in srgb, var(--blue) 30%, var(--line-strong));
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+}
+
+.documentResponseLink:active {
+  transform: scale(0.995);
+}
+
+.documentResponseLink:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.documentResponseIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 11%, transparent);
+}
+
+.documentResponseIdentity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.documentResponseIdentity strong,
+.documentResponseIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documentResponseIdentity strong {
+  font-size: 12.5px;
+  font-weight: 680;
+  line-height: 1.25;
+}
+
+.documentResponseIdentity small {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.documentResponseAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.documentResponseLink:hover .documentResponseAction {
+  color: var(--text);
+}
+
+.assistantMessage .messageActions:has(.messageAction[aria-pressed="true"]) {
+  opacity: 1;
+}
+
+.userMessage:hover .messageActions,
+.userMessage:focus-within .messageActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.messageAction {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.messageAction:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: var(--control-hover);
+  transform: translateY(-1px);
+}
+
+.messageAction.feedbackGood.active,
+.messageAction.feedbackGood[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line-strong));
+  color: color-mix(in srgb, var(--green) 62%, var(--text));
+  background: color-mix(in srgb, var(--green) 11%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--green) 7%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.messageAction.feedbackBad.active,
+.messageAction.feedbackBad[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--red) 32%, var(--line-strong));
+  color: color-mix(in srgb, var(--red) 58%, var(--text));
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--red) 6%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.messageAction.feedbackGood[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.messageAction.feedbackBad[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--red) 13%, transparent);
+}
+
+.responseFeedbackNote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(100%, 420px);
+  margin-top: 7px;
+}
+
+.responseFeedbackNote input {
+  min-width: 0;
+  min-height: 30px;
+  flex: 1 1 auto;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--control-bg) 86%, transparent);
+  font: inherit;
+  font-size: 12px;
+}
+
+.responseFeedbackNote input::placeholder {
+  color: var(--faint);
+}
+
+.responseFeedbackNote input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.responseFeedbackNote button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--control-bg);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.responseFeedbackNote button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.responseFeedbackNote button:disabled {
+  opacity: 0.45;
+}
+
+.timelineCommand {
+  position: relative;
+  width: min(calc(100% - 18px), 980px);
+  max-width: 980px;
+  margin-left: 18px;
+  padding-bottom: 10px;
+  color: var(--muted);
+}
+
+.timelineCommand::before {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(90deg, rgba(178, 186, 197, 0.22), rgba(178, 186, 197, 0.045), transparent);
+  opacity: 0.58;
+}
+
+.reviewSummaryCard {
+  width: min(100%, var(--response-content-width));
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.reviewSummaryHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.reviewSummaryHeader:hover {
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.07), transparent 70%),
+    rgba(255, 255, 255, 0.026);
+}
+
+.reviewSummaryTitle,
+.reviewSummaryReviewButton,
+.reviewSummaryFileButton {
+  display: flex;
+  align-items: center;
+}
+
+.reviewSummaryTitle {
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+  line-height: 1;
+}
+
+.reviewSummaryTitle svg,
+.reviewSummaryReviewButton svg,
+.reviewSummaryOpenIcon,
+.reviewTopActions svg,
+.openReviewFileButton svg,
+.reviewFileChevronButton svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.reviewSummaryTitle .additions,
+.reviewSummaryTitle .deletions {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.reviewSummaryTitle strong {
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reviewSummaryReviewButton {
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.reviewSummaryHeader:hover .reviewSummaryReviewButton {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.reviewSummaryFiles {
+  display: grid;
+  min-width: 0;
+}
+
+.reviewSummaryFile {
+  position: relative;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.reviewSummaryFile::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  content: "";
+  background: transparent;
+  opacity: 0.58;
+}
+
+.reviewSummaryFile.status-added {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.004);
+}
+
+.reviewSummaryFile.status-added::before {
+  background: var(--diff-add);
+}
+
+.reviewSummaryFile.status-deleted {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.004);
+}
+
+.reviewSummaryFile.status-deleted::before {
+  background: var(--diff-remove);
+}
+
+.reviewSummaryFile.status-modified {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.004);
+}
+
+.reviewSummaryFile.status-modified::before {
+  background: var(--amber);
+}
+
+:root[data-theme="light"] .reviewSummaryFile.status-added {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.2);
+}
+
+:root[data-theme="light"] .reviewSummaryFile.status-deleted {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.2);
+}
+
+:root[data-theme="light"] .reviewSummaryFile.status-modified {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 3.5%, transparent), transparent 54%),
+    rgba(255, 255, 255, 0.2);
+}
+
+.reviewSummaryFile:last-child {
+  border-bottom: 0;
+}
+
+.reviewSummaryFileButton {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px 18px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: var(--text);
+  text-align: left;
+}
+
+.reviewSummaryFileButton:hover {
+  background: rgba(178, 186, 197, 0.045);
+}
+
+.reviewSummaryPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.reviewSummaryOpenIcon {
+  color: var(--muted);
+  justify-self: center;
+}
+

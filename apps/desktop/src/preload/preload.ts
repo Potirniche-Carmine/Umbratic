@@ -1,32 +1,15 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
-import type { BackendUiEventV1 } from "../shared/backendEvents";
+import { parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
+import type {
+  ChatAttachment,
+  DesktopApi,
+  HarnessProfileId,
+  PastedAttachmentInput,
+  PermissionMode,
+  ReasoningMode,
+} from "../shared/desktopApi";
 
-type PermissionMode = "normal" | "auto_safe";
-type ReasoningMode = "fast" | "reasoning";
-type HarnessProfileId = "marketing" | "sales" | "engineering";
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string };
-type ChatAttachment = {
-  path: string;
-  name: string;
-  source?: "workspace" | "chat";
-  storedPath?: string;
-  originalPath?: string;
-  previewDataUrl?: string;
-  contextTokens?: number;
-};
-type PastedAttachmentInput = {
-  name?: string;
-  mimeType?: string;
-  dataUrl: string;
-};
-function normalizedBackendEvent(value: unknown): BackendUiEventV1 | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const event = value as Record<string, unknown>;
-  if (typeof event.type !== "string" || typeof event.taskId !== "string") return null;
-  if (event.version !== undefined && event.version !== 1) return null;
-  return { ...event, version: 1 } as BackendUiEventV1;
-}
-
 const umbraticApi = {
   listProjects: () => ipcRenderer.invoke("umbratic:list-projects"),
   listChats: () => ipcRenderer.invoke("umbratic:list-chats"),
@@ -134,12 +117,12 @@ const umbraticApi = {
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {
     const listener = (_event: IpcRendererEvent, value: unknown) => {
-      const event = normalizedBackendEvent(value);
-      if (event) callback(event);
+      const parsed = parseBackendUiEvent(value);
+      if (parsed.ok) callback(parsed.event);
     };
     ipcRenderer.on("umbratic:backend-event", listener);
     return () => ipcRenderer.removeListener("umbratic:backend-event", listener);
   },
-};
+} satisfies DesktopApi;
 
 contextBridge.exposeInMainWorld("umbratic", umbraticApi);

@@ -415,7 +415,6 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(provider.id === selectedModel.providerId, "provider id must match the selected endpoint");
   assert(provider.modelId === selectedModel.modelId, "provider model token must match the selected endpoint");
   assert(provider.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
-  assert(config.modelBoundary === "managed", "runner model boundary must be managed");
   assert(typeof provider.chatEndpointPath === "string", "provider must use an explicit Veil chat route");
   assert(
     isApprovedVeilChatRoute(configuredEndpointUrl(selectedModel.baseUrl, provider.chatEndpointPath)),

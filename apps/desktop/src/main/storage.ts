@@ -35,7 +35,7 @@ import type {
   LocalDiagnosticLevel,
   LocalDiagnosticRecord,
   ModelEndpointMode,
-  ModelEndpointSettings,
+  ActiveModelEndpointSettings,
   PermissionMode,
   ProductTelemetryEvent,
   RepositoryInfo,
@@ -1142,7 +1142,7 @@ export function writeChats(chats: ChatRecord[]) {
 
 type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
-  modelEndpoint?: Partial<Omit<ModelEndpointSettings, "headers" | "secret">> & {
+  modelEndpoint?: Partial<Omit<ActiveModelEndpointSettings, "headers" | "secret">> & {
     version?: unknown;
     secret?: unknown;
     headers?: unknown;
@@ -1186,13 +1186,13 @@ type StoredProtectedString = {
   encrypted: string;
 };
 
-type StoredModelEndpointSettings = Omit<ModelEndpointSettings, "headers" | "secret"> & {
+type StoredModelEndpointSettings = Omit<ActiveModelEndpointSettings, "headers" | "secret"> & {
   version: typeof modelEndpointSettingsVersion;
   secret: "" | StoredProtectedString;
   headers: Array<{ name: string; value: "" | StoredProtectedString }>;
 };
 
-export type PublicModelEndpointSettings = Omit<ModelEndpointSettings, "headers"> & {
+export type PublicModelEndpointSettings = Omit<ActiveModelEndpointSettings, "headers"> & {
   secretConfigured: boolean;
   headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
 };
@@ -1251,7 +1251,7 @@ export function hasStoredModelEndpointSettings(): boolean {
   return !!activeModelEndpointSettings(settings);
 }
 
-export function readModelEndpointSettings(): ModelEndpointSettings {
+export function readModelEndpointSettings(): ActiveModelEndpointSettings {
   const settings = readRawSettings();
   const endpoint = activeModelEndpointSettings(settings) ?? {};
   const managed = managedModelEndpointDefaults();
@@ -1291,7 +1291,7 @@ export function readModelEndpointSettings(): ModelEndpointSettings {
   };
 }
 
-export function publicModelEndpointSettings(settings: ModelEndpointSettings): PublicModelEndpointSettings {
+export function publicModelEndpointSettings(settings: ActiveModelEndpointSettings): PublicModelEndpointSettings {
   return {
     ...settings,
     secret: "",
@@ -1304,7 +1304,7 @@ export function publicModelEndpointSettings(settings: ModelEndpointSettings): Pu
   };
 }
 
-function protectEndpointSettings(settings: ModelEndpointSettings): StoredModelEndpointSettings {
+function protectEndpointSettings(settings: ActiveModelEndpointSettings): StoredModelEndpointSettings {
   return {
     ...settings,
     version: modelEndpointSettingsVersion,
@@ -1316,7 +1316,7 @@ function protectEndpointSettings(settings: ModelEndpointSettings): StoredModelEn
   };
 }
 
-export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>): ModelEndpointSettings {
+export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSettings>): ActiveModelEndpointSettings {
   const current = readModelEndpointSettings();
   const managed = managedModelEndpointDefaults();
   const hasManagedEndpoint = !!(managed?.baseUrl || managed?.mode || managed?.software);
@@ -1332,7 +1332,7 @@ export function writeModelEndpointSettings(input: Partial<ModelEndpointSettings>
         ? current.software
         : defaultEndpointSoftware(nextMode);
   const rejectedLocalVllm = nextMode === "local" && input.software === "vllm";
-  const next: ModelEndpointSettings = {
+  const next: ActiveModelEndpointSettings = {
     mode: nextMode,
     software: nextSoftware,
     baseUrl:
@@ -1471,7 +1471,7 @@ export function writePermissionModeSetting(value: unknown): PermissionMode {
   return permissionMode;
 }
 
-export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ModelEndpointSettings; harnessProfile: HarnessProfileId } {
+export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ActiveModelEndpointSettings; harnessProfile: HarnessProfileId } {
   const modelEndpoint = readModelEndpointSettings();
   const harnessProfile = readHarnessProfileSetting();
   if (modelEndpoint.modelId.trim()) {

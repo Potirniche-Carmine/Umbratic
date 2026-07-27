@@ -108,6 +108,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   assert.equal(listeners.has("umbratic:backend-event"), true);
   listeners.get("umbratic:backend-event")({}, { type: "assistant.done", taskId: "task-1" });
   listeners.get("umbratic:backend-event")({}, { version: 2, type: "assistant.done", taskId: "task-1" });
+  listeners.get("umbratic:backend-event")({}, { type: "assistant.delta", taskId: "task-1", text: 42 });
+  listeners.get("umbratic:backend-event")({}, { type: "permission.resolved", taskId: "task-1", id: "p", decision: "later" });
   assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1", version: 1 }]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);

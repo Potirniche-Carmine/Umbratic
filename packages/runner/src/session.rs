@@ -214,7 +214,13 @@ impl SessionStore {
     }
 
     pub async fn shutdown(&self) {
-        let sessions = self.sessions.read().await.values().cloned().collect::<Vec<_>>();
+        let sessions = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         for session in sessions {
             if let Some(lsp) = session.lsp.as_ref() {
                 lsp.shutdown().await;
@@ -238,7 +244,6 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
         protected_prompt_reserve_tokens: 4_096,
         attachment_directory: None,
         workspace_mode: "local".into(),
-        model_boundary: crate::config::ModelBoundary::Managed,
         skills: Vec::new(),
         permission_mode: crate::config::PermissionMode::AutoSafe,
         enabled_tools: crate::config::RUNNER_TOOL_NAMES

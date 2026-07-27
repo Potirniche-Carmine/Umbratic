@@ -1,0 +1,668 @@
+.promptDock {
+  position: relative;
+  z-index: 24;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px clamp(22px, 4vw, 48px) 14px;
+  border-top: 0;
+  background: var(--bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  overflow: visible;
+}
+
+.promptDock::after {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  bottom: 0;
+  z-index: 0;
+  width: var(--sidebar-visual-gap, 0px);
+  pointer-events: none;
+  content: "";
+  border-top: 0;
+  background: var(--bg);
+  backdrop-filter: none;
+}
+
+.promptDock::before {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -14px;
+  height: 14px;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(to top, var(--bg), transparent);
+}
+
+.promptControls {
+  position: relative;
+  z-index: 34;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  width: var(--prompt-width);
+  min-width: 0;
+  min-height: 30px;
+  overflow: visible;
+  padding: 0 4px;
+  color: var(--muted);
+}
+
+.closedChatNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: var(--prompt-width);
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid rgba(178, 186, 197, 0.24);
+  border-radius: var(--radius);
+  color: color-mix(in srgb, var(--accent) 24%, var(--text));
+  background: rgba(178, 186, 197, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.closedChatNotice svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.closedChatNotice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceCluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 280px;
+  background: transparent;
+}
+
+.workspaceControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  background: var(--control-bg);
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.workspaceControl {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.workspaceControl:hover {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  transform: translateY(-1px);
+}
+
+.controlIcon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.workspaceControl:hover .controlIcon {
+  color: var(--text);
+}
+
+.branchControl {
+  position: relative;
+  z-index: 44;
+  display: flex;
+  align-items: center;
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.branchTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 140px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.branchTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+  transform: translateY(-1px);
+}
+
+.branchTrigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchTrigger svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.branchMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 120;
+  display: grid;
+  gap: 1px;
+  width: max-content;
+  min-width: 132px;
+  max-width: min(320px, calc(100vw - 24px));
+  max-height: 300px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  backdrop-filter: none;
+  animation: menuRise 180ms ease both;
+}
+
+.branchMenuHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 6px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.branchRefreshButton {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.branchRefreshButton:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.branchMenu button {
+  display: grid;
+  grid-template-columns: 14px minmax(0, max-content);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.branchMenu button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.branchMenu button.active {
+  color: var(--text);
+}
+
+.branchMenu button svg {
+  color: var(--text);
+}
+
+.branchSpacer {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.branchMenu button span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchMenuEmpty,
+.branchMenuError {
+  padding: 8px 8px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.branchMenuError {
+  color: #ffb4bb;
+}
+
+.workspaceControl > span:not(.controlIcon) {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspaceControl strong,
+.workspaceControl em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceControl strong {
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.permissionControl {
+  position: relative;
+  z-index: 44;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.workspaceModeControl {
+  position: relative;
+  z-index: 44;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.workspaceModeTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--control-bg);
+  font-weight: 500;
+  font-size: 12px;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.workspaceModeTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.workspaceModeControl.isWorktree .workspaceModeTrigger {
+  color: color-mix(in srgb, var(--text) 82%, var(--accent));
+  border-color: var(--line-strong);
+  background: var(--control-active);
+}
+
+.workspaceModeControl.isWorktree .workspaceModeTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.workspaceModeTrigger svg {
+  flex: 0 0 auto;
+}
+
+.workspaceModeTrigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceModeMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 120;
+  display: grid;
+  gap: 3px;
+  min-width: 154px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  backdrop-filter: none;
+  animation: menuRise 180ms ease both;
+}
+
+.workspaceModeMenu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 600;
+}
+
+.workspaceModeMenu button:hover,
+.workspaceModeMenu button.active {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.workspaceModeMenu button.active svg {
+  color: var(--accent);
+}
+
+.permissionTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  background: var(--control-bg);
+  font-weight: 500;
+  font-size: 12px;
+  text-align: left;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.permissionTrigger:hover {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  transform: translateY(-1px);
+}
+
+.permissionTrigger svg:first-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.permissionTrigger:hover svg:first-child {
+  color: var(--text);
+}
+
+.permissionTrigger svg:last-child {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.permissionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permissionControl.isElevated .permissionTrigger {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  border-color: color-mix(in srgb, var(--line-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--control-bg) 86%, var(--surface-3));
+}
+
+.permissionControl.isElevated .permissionTrigger:hover {
+  background: var(--control-hover);
+}
+
+.permissionControl.isElevated .permissionTrigger svg:first-child {
+  color: var(--muted);
+}
+
+.elevatedPermissionsIcon {
+  color: var(--muted);
+}
+
+.permissionMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 120;
+  display: grid;
+  gap: 3px;
+  min-width: 168px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  backdrop-filter: none;
+  animation: menuRise 180ms ease both;
+}
+
+.permissionMenu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 600;
+}
+
+.permissionMenu button:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.permissionMenu button.active {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.bypassMark {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 157, 166, 0.42);
+  color: #ffb4bb;
+  background: rgba(255, 111, 122, 0.12);
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.attachmentControl {
+  display: flex;
+  position: relative;
+  z-index: 44;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.attachmentTrigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--control-bg);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.attachmentTrigger:hover:not(:disabled),
+.attachmentTrigger.isActive {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  transform: translateY(-1px);
+}
+
+.attachmentTrigger.isActive {
+  color: var(--accent);
+  background: var(--control-active);
+}
+
+.attachmentTrigger:disabled {
+  opacity: 0.42;
+}
+
+.attachmentCount {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  place-items: center;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  color: #061426;
+  background: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.promptRisk {
+  max-width: 780px;
+}
+
+@container workspace (max-width: 760px) {
+  .branchTrigger {
+    max-width: 100px;
+  }
+
+  .workspaceControl {
+    max-width: 200px;
+  }
+}
+
+@container workspace (max-width: 600px) {
+  .branchTrigger {
+    max-width: 80px;
+    padding: 0 7px;
+  }
+
+  .workspaceControl {
+    padding: 0 8px;
+    max-width: 160px;
+  }
+}
+
+@container workspace (max-width: 460px) {
+  .permissionLabel {
+    display: none;
+  }
+
+  .workspaceModeTrigger span {
+    display: none;
+  }
+
+  .permissionTrigger {
+    padding: 0 7px;
+    gap: 4px;
+  }
+
+  .branchTrigger {
+    max-width: 70px;
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .workspaceControl {
+    padding: 0 7px;
+    max-width: 130px;
+  }
+
+  .workspaceControl strong {
+    font-size: 11px;
+  }
+}
+
+@container workspace (max-width: 340px) {
+  .workspaceCluster .branchControl {
+    display: none;
+  }
+}
+
+@container workspace (max-width: 260px) {
+  .workspaceControl > span:not(.controlIcon) {
+    display: none;
+  }
+
+  .workspaceControl {
+    padding: 0 6px;
+  }
+}
+

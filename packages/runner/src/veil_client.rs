@@ -20,7 +20,7 @@ static SHARED_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static SHARED_HTTP_CLIENT_ERROR: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
-pub struct ProviderResult {
+pub struct VeilChatResult {
     pub content: String,
     pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
@@ -30,7 +30,7 @@ pub struct ProviderResult {
     pub truncated_tool_arguments: bool,
 }
 
-pub struct ProviderRequestOptions {
+pub struct VeilRequestOptions {
     pub max_output_tokens: u64,
     pub include_tools: bool,
     pub require_tool_call: bool,
@@ -260,7 +260,7 @@ fn text_content(value: Option<&Value>) -> String {
 fn emit_content(
     sink: &EventSink,
     session: &Session,
-    result: &mut ProviderResult,
+    result: &mut VeilChatResult,
     text: String,
     answer_started: &mut bool,
     suppress_output: bool,
@@ -279,7 +279,7 @@ fn emit_content(
     sink.emit(json!({ "type": "assistant.delta", "taskId": session.task_id, "text": text, "at": now_iso() }));
 }
 
-fn emit_reasoning(sink: &EventSink, session: &Session, result: &mut ProviderResult, text: String) {
+fn emit_reasoning(sink: &EventSink, session: &Session, result: &mut VeilChatResult, text: String) {
     if text.is_empty() {
         return;
     }
@@ -287,8 +287,8 @@ fn emit_reasoning(sink: &EventSink, session: &Session, result: &mut ProviderResu
     sink.emit(json!({ "type": "assistant.reasoning.delta", "taskId": session.task_id, "text": text, "at": now_iso() }));
 }
 
-fn append_openai_delta(
-    result: &mut ProviderResult,
+fn append_veil_delta(
+    result: &mut VeilChatResult,
     delta: &Map<String, Value>,
     partial: &mut BTreeMap<usize, (String, String, String)>,
 ) {
@@ -335,9 +335,9 @@ fn append_openai_delta(
         .collect();
 }
 
-fn process_openai_payload(
+fn process_veil_payload(
     payload: Value,
-    result: &mut ProviderResult,
+    result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
     sink: &EventSink,
     session: &Session,
@@ -370,10 +370,10 @@ fn process_openai_payload(
         .or_else_nonempty(|| text_content(delta.get("reasoning")))
         .or_else_nonempty(|| text_content(delta.get("thinking")));
     emit_reasoning(sink, session, result, reasoning);
-    append_openai_delta(result, delta, partial);
+    append_veil_delta(result, delta, partial);
 }
 
-fn update_usage(result: &mut ProviderResult, usage: &Value) {
+fn update_usage(result: &mut VeilChatResult, usage: &Value) {
     let total = usage.get("total_tokens").and_then(Value::as_u64);
     let prompt = usage
         .get("prompt_tokens")
@@ -461,9 +461,9 @@ fn veil_stream_error(line: &str) -> Option<String> {
     ))
 }
 
-fn process_openai_line(
+fn process_veil_line(
     line: &str,
-    result: &mut ProviderResult,
+    result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
     sink: &EventSink,
     session: &Session,
@@ -477,7 +477,7 @@ fn process_openai_line(
         return true;
     }
     if let Ok(payload) = serde_json::from_str::<Value>(data) {
-        process_openai_payload(
+        process_veil_payload(
             payload,
             result,
             partial,
@@ -517,102 +517,22 @@ impl NonEmptyFallback for String {
     }
 }
 
-fn process_ollama_payload(
-    payload: Value,
-    result: &mut ProviderResult,
-    sink: &EventSink,
-    session: &Session,
-    answer_started: &mut bool,
-    suppress_output: bool,
-) {
-    result.prompt_tokens = payload
-        .get("prompt_eval_count")
-        .and_then(Value::as_u64)
-        .or(result.prompt_tokens);
-    result.completion_tokens = payload
-        .get("eval_count")
-        .and_then(Value::as_u64)
-        .or(result.completion_tokens);
-    let Some(message) = payload.get("message").and_then(Value::as_object) else {
-        return;
-    };
-    emit_content(
-        sink,
-        session,
-        result,
-        text_content(message.get("content")),
-        answer_started,
-        suppress_output,
-    );
-    let reasoning = text_content(message.get("reasoning_content"))
-        .or_else_nonempty(|| text_content(message.get("reasoning")))
-        .or_else_nonempty(|| text_content(message.get("thinking")));
-    emit_reasoning(sink, session, result, reasoning);
-    for raw in message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(call) = raw.as_object() else {
-            continue;
-        };
-        let function = call
-            .get("function")
-            .and_then(Value::as_object)
-            .unwrap_or(call);
-        let arguments = function
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        result.tool_calls.push(ToolCall {
-            id: call
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("tool-call-{}", result.tool_calls.len())),
-            name: function
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-            arguments,
-            index: result.tool_calls.len(),
-        });
-    }
-}
-
-fn encoded_messages(messages: &[Value], ollama: bool, veil: bool) -> Vec<Value> {
+fn encoded_messages(messages: &[Value]) -> Vec<Value> {
     messages
         .iter()
-        .filter(|message| !(veil && message.get("role").and_then(Value::as_str) == Some("system")))
-        .map(|message| {
-            if !ollama {
-                return message.clone();
-            }
-            let mut value = message.clone();
-            if let Some(object) = value.as_object_mut() {
-                let content = match object.get("content") {
-                    Some(Value::Array(_)) => text_content(object.get("content")),
-                    Some(Value::Null) | None => String::new(),
-                    Some(Value::String(value)) => value.clone(),
-                    _ => String::new(),
-                };
-                object.insert("content".into(), Value::String(content));
-            }
-            value
-        })
+        .filter(|message| message.get("role").and_then(Value::as_str) != Some("system"))
+        .cloned()
         .collect()
 }
 
-pub async fn stream_provider_chat(
+pub async fn stream_veil_chat(
     session: &Session,
     sink: &EventSink,
     messages: &[Value],
     tools: &[Value],
-    options: ProviderRequestOptions,
-) -> Result<ProviderResult, String> {
-    let ProviderRequestOptions {
+    options: VeilRequestOptions,
+) -> Result<VeilChatResult, String> {
+    let VeilRequestOptions {
         max_output_tokens,
         include_tools,
         require_tool_call,
@@ -623,54 +543,34 @@ pub async fn stream_provider_chat(
     }
     let (endpoint, host_header) = request_endpoint(&session.config.provider)?;
     let path = endpoint.path().trim_end_matches('/').to_ascii_lowercase();
-    let ollama = path.ends_with("/api/chat")
-        && !matches!(
-            path.as_str(),
-            "/api/engineering/chat" | "/api/marketing/chat" | "/api/sales/chat"
-        );
-    let veil = matches!(
+    if !matches!(
         path.as_str(),
         "/api/engineering/chat" | "/api/marketing/chat" | "/api/sales/chat"
-    );
-    let mut body = json!({ "messages": encoded_messages(messages, ollama, veil), "stream": true });
+    ) {
+        return Err("model request must target an approved Veil chat route".into());
+    }
+    let mut body = json!({
+        "messages": encoded_messages(messages),
+        "stream": true,
+        "max_output_tokens": max_output_tokens
+    });
     let object = body.as_object_mut().unwrap();
-    if !veil {
-        object.insert(
-            "model".into(),
-            Value::String(session.config.provider.model_id.clone()),
-        );
-    }
-    if ollama {
-        object.insert(
-            "options".into(),
-            json!({ "num_ctx": session.config.context_length, "num_predict": max_output_tokens }),
-        );
-    } else if veil {
-        object.insert("max_output_tokens".into(), Value::from(max_output_tokens));
-    } else {
-        object.insert("max_tokens".into(), Value::from(max_output_tokens));
-    }
-    if veil && !session.config.skills.is_empty() {
+    if !session.config.skills.is_empty() {
         object.insert("skills".into(), Value::Array(session.config.skills.iter().map(|skill| json!({ "id":skill.id, "name":skill.name, "description":skill.description, "source":skill.source })).collect()));
     }
     if include_tools && !tools.is_empty() {
         object.insert("tools".into(), Value::Array(tools.to_vec()));
-        if !ollama {
-            object.insert(
-                "tool_choice".into(),
-                Value::String(
-                    if require_tool_call {
-                        "required"
-                    } else {
-                        "auto"
-                    }
-                    .into(),
-                ),
-            );
-        }
-        if !ollama && !veil {
-            object.insert("parallel_tool_calls".into(), Value::Bool(true));
-        }
+        object.insert(
+            "tool_choice".into(),
+            Value::String(
+                if require_tool_call {
+                    "required"
+                } else {
+                    "auto"
+                }
+                .into(),
+            ),
+        );
     }
     let client = shared_client(&session.config.provider)?;
     let mut request = client
@@ -720,77 +620,32 @@ pub async fn stream_provider_chat(
         })
         .unwrap_or("")
         .to_owned();
-    let mut result = ProviderResult {
+    let mut result = VeilChatResult {
         action_requirement: action,
-        ..ProviderResult::default()
+        ..VeilChatResult::default()
     };
     let mut partial = BTreeMap::new();
     let mut answer_started = false;
     let mut buffer = Vec::new();
-    let mut completed = ollama;
+    let mut completed = false;
     let mut stream = response.bytes_stream();
     loop {
         if session.is_aborted() {
             return Err("model request aborted".into());
         }
-        let chunk = match tokio::time::timeout(std::time::Duration::from_millis(25), stream.next()).await
-        {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(_) => continue,
-        };
+        let chunk =
+            match tokio::time::timeout(std::time::Duration::from_millis(25), stream.next()).await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => continue,
+            };
         let chunk = chunk.map_err(|error| error.to_string())?;
         for line in complete_utf8_lines(&mut buffer, &chunk)? {
-            if ollama {
-                if let Ok(payload) = serde_json::from_str::<Value>(line.trim()) {
-                    process_ollama_payload(
-                        payload,
-                        &mut result,
-                        sink,
-                        session,
-                        &mut answer_started,
-                        suppress_output,
-                    );
-                }
-            } else {
-                if let Some(error) = veil_stream_error(&line) {
-                    return Err(error);
-                }
-                if process_openai_line(
-                    &line,
-                    &mut result,
-                    &mut partial,
-                    sink,
-                    session,
-                    &mut answer_started,
-                    suppress_output,
-                ) {
-                    completed = true;
-                }
-            }
-        }
-    }
-    let trailing = std::str::from_utf8(&buffer)
-        .map_err(|_| "model stream ended with invalid UTF-8".to_owned())?;
-    if !trailing.trim().is_empty() {
-        if ollama {
-            if let Ok(payload) = serde_json::from_str::<Value>(trailing.trim()) {
-                process_ollama_payload(
-                    payload,
-                    &mut result,
-                    sink,
-                    session,
-                    &mut answer_started,
-                    suppress_output,
-                );
-            }
-        } else {
-            let trailing = trailing.trim_end_matches(['\r', '\n']);
-            if let Some(error) = veil_stream_error(trailing) {
+            if let Some(error) = veil_stream_error(&line) {
                 return Err(error);
             }
-            if process_openai_line(
-                trailing,
+            if process_veil_line(
+                &line,
                 &mut result,
                 &mut partial,
                 sink,
@@ -800,6 +655,25 @@ pub async fn stream_provider_chat(
             ) {
                 completed = true;
             }
+        }
+    }
+    let trailing = std::str::from_utf8(&buffer)
+        .map_err(|_| "model stream ended with invalid UTF-8".to_owned())?;
+    if !trailing.trim().is_empty() {
+        let trailing = trailing.trim_end_matches(['\r', '\n']);
+        if let Some(error) = veil_stream_error(trailing) {
+            return Err(error);
+        }
+        if process_veil_line(
+            trailing,
+            &mut result,
+            &mut partial,
+            sink,
+            session,
+            &mut answer_started,
+            suppress_output,
+        ) {
+            completed = true;
         }
     }
     if !completed {
@@ -820,10 +694,10 @@ mod tests {
     use crate::config::MtlsConfig;
     #[test]
     fn tool_deltas_accumulate_by_index() {
-        let mut result = ProviderResult::default();
+        let mut result = VeilChatResult::default();
         let mut calls = BTreeMap::new();
-        append_openai_delta(&mut result, json!({"tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{\"file"}}]}).as_object().unwrap(), &mut calls);
-        append_openai_delta(
+        append_veil_delta(&mut result, json!({"tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{\"file"}}]}).as_object().unwrap(), &mut calls);
+        append_veil_delta(
             &mut result,
             json!({"tool_calls":[{"index":0,"function":{"arguments":"Path\":\"README.md\"}"}}]})
                 .as_object()
@@ -904,17 +778,17 @@ mod tests {
 
     #[test]
     fn total_only_usage_completes_a_partial_provider_measurement() {
-        let mut result = ProviderResult {
+        let mut result = VeilChatResult {
             prompt_tokens: Some(1200),
-            ..ProviderResult::default()
+            ..VeilChatResult::default()
         };
         update_usage(&mut result, &json!({"total_tokens": 1300}));
         assert_eq!(result.prompt_tokens, Some(1200));
         assert_eq!(result.completion_tokens, Some(100));
 
-        let mut result = ProviderResult {
+        let mut result = VeilChatResult {
             completion_tokens: Some(100),
-            ..ProviderResult::default()
+            ..VeilChatResult::default()
         };
         update_usage(&mut result, &json!({"total_tokens": 1300}));
         assert_eq!(result.prompt_tokens, Some(1200));

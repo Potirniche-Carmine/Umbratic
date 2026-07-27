@@ -1,5 +1,33 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { BackendUiEventInput } from "../shared/backendEvents";
+import type {
+  BackendStatus,
+  BackendUiEvent,
+  CapabilityProbeCategory,
+  CapabilityProbeImportance,
+  CapabilityProbeReport,
+  CapabilityProbeResult,
+  CapabilityProbeStatus,
+  ChatAttachment,
+  ChatRecord,
+  DesktopApi,
+  FileSearchResult,
+  HarnessProfileId,
+  IdeInfo,
+  LocalModelInfo,
+  ModelEndpointMode,
+  ModelEndpointSoftware,
+  PastedAttachmentInput,
+  PermissionMode,
+  PublicModelEndpointSettings,
+  ReasoningMode,
+  RepositoryInfo,
+  SkillDocument,
+  SkillInfo,
+  TaskInfo,
+  TaskState,
+  UserNotes,
+  WorkspaceMode,
+} from "../shared/desktopApi";
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   CONTEXT_LENGTH_OPTIONS,
@@ -71,44 +99,16 @@ import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../sh
 import { appendTaskEvent, compactTaskEvents } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
+import {
+  reduceApprovalChecks,
+  reducePendingPermission,
+  reduceVisibleTask,
+  taskEventEffects,
+  type ApprovalCheck,
+  type TaskPermissionRequest,
+} from "./taskEventReducer";
 
-type ServiceStatus = "ready" | "degraded" | "unavailable";
-type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
-type CapabilityProbeCategory = "required" | "recommended" | "optional-engineering" | "optional-artifacts";
-type CapabilityProbeImportance = "required" | "recommended" | "optional";
-type CapabilityProbeResult = {
-  id: string;
-  label: string;
-  category: CapabilityProbeCategory;
-  importance: CapabilityProbeImportance;
-  status: CapabilityProbeStatus;
-  version?: string;
-  executablePath?: string;
-  detectedCommand?: string;
-  purpose: string;
-  installHint: string;
-  workflows: string[];
-  checkedAt: string;
-  message?: string;
-};
-type CapabilityProbeReport = {
-  checkedAt: string;
-  probes: CapabilityProbeResult[];
-  summary: {
-    available: number;
-    missing: number;
-    error: number;
-    unknown: number;
-    requiredMissing: number;
-    recommendedMissing: number;
-    optionalMissing: number;
-  };
-};
-type PermissionMode = "normal" | "auto_safe";
-type ReasoningMode = "fast" | "reasoning";
 type AppearanceTheme = "system" | "light" | "dark";
-type WorkspaceKind = "git" | "folder";
-type WorkspaceMode = "local" | "worktree";
 type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
 type RequiredToolContractRequirement = "file_change";
 type RequiredToolContractReason =
@@ -117,19 +117,7 @@ type RequiredToolContractReason =
   | "agent_reported_blocker"
   | "attempted_tool_failed"
   | "no_review_changes";
-type HarnessProfileId = "marketing" | "sales" | "engineering";
-type LocalProviderId = "company-endpoint";
-type ModelEndpointMode = "local" | "server";
-type ModelEndpointSoftware = "ollama" | "vllm";
-type ModelEndpointSettings = {
-  mode: ModelEndpointMode;
-  software: ModelEndpointSoftware;
-  baseUrl: string;
-  modelId: string;
-  secret: string;
-  secretConfigured: boolean;
-  headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
-};
+type ModelEndpointSettings = PublicModelEndpointSettings;
 type CommandClass =
   | "read"
   | "edit"
@@ -159,200 +147,9 @@ type ToolErrorCode =
   | "process_error"
   | "missing_dependency"
   | "runtime_error";
-type TaskState =
-  | "awaiting_worktree_approval"
-  | "running"
-  | "completed"
-  | "review_ready"
-  | "approving"
-  | "approved"
-  | "merged"
-  | "rejected"
-  | "failed";
-
-type RepositoryInfo = {
-  id: string;
-  name: string;
-  rootPath: string;
-  kind: WorkspaceKind;
-  originalBranch: string;
-  baseCommit: string;
-  dirty: boolean;
-  statusSummary: string;
-};
-
-type BackendStatus = {
-  runner: ServiceStatus;
-  endpoint: ServiceStatus;
-  model: LocalModelInfo | null;
-  models: LocalModelInfo[];
-  providers: LocalModelProvider[];
-  permissionMode: PermissionMode;
-  endpointConfig: {
-    source: "local-default" | "server-default" | "stored" | "managed";
-    endpointEditingAllowed: boolean;
-  };
-  privacy: {
-    share: "disabled";
-    enabledProviders: LocalProviderId[];
-    webTools: "disabled";
-  };
-  diagnostics: BackendDiagnostics;
-  message?: string;
-};
-
-type BackendDiagnostics = {
-  runnerName: string;
-  runnerVersion: string;
-  runnerContractVersion: string;
-  policyVersion: string;
-  runnerBinary: "present" | "missing";
-  configAssertions: "enabled";
-  providerAllowlist: LocalProviderId[];
-  localhostOnlyModels: boolean;
-  commandClassifier: "enabled";
-  runnerDiagnosticsDirectory: string;
-  localLogs: LocalDiagnosticInfo;
-  telemetry: TelemetryPolicyInfo;
-  runtimes: {
-    python: {
-      runtimeVersion: string;
-      barePythonVerification: "allowed_uv_preferred";
-      generatedPaths: string[];
-    };
-    markdown: {
-      docsOnlyClassification: "enabled";
-    };
-    cmake: {
-      runtimeVersion: string;
-      buildDir: ".umbratic/build";
-    };
-    toolchain: {
-      bundledHelperCommands: string[];
-      optionalCapabilityCommands: string[];
-    };
-    shell: {
-      platform: string;
-      preferred: "pwsh" | "powershell" | "posix";
-      nonInteractive: boolean;
-    };
-  };
-  capabilities: CapabilityProbeReport;
-};
-
-type LocalDiagnosticInfo = { bytes: number; entries: number };
-
-type TelemetryPolicyInfo = {
-  mode: "developer_toggle" | "managed_required" | "managed_disabled";
-  localEnabled: boolean;
-  syncEnabled: boolean;
-  retentionDays: number;
-  exportFormat: "redacted-json";
-  storage: "company-managed-telemetry" | "task-event-snapshots";
-};
-
-type LocalModelInfo = {
-  providerId: LocalProviderId;
-  providerName: string;
-  modelId: string;
-  displayName: string;
-  baseUrl: string;
-  contextLength?: number;
-};
-
-type LocalModelProvider = {
-  providerId: LocalProviderId;
-  providerName: string;
-  baseUrl: string;
-  status: ServiceStatus;
-  models: LocalModelInfo[];
-  message?: string;
-};
-
-type TestResult = {
-  command: string;
-  output: string;
-  passed: boolean;
-  exitCode: number | null;
-  completedAt: string;
-};
-
 type ReviewFile = NormalizedReviewFile;
 
-type IdeChoice = {
-  id: string;
-  label: string;
-  icon: "vscode" | "visualstudio" | "explorer" | "finder" | "files";
-};
-
-type ChatAttachment = {
-  path: string;
-  name: string;
-  source?: "workspace" | "chat";
-  storedPath?: string;
-  originalPath?: string;
-  previewDataUrl?: string;
-  contextTokens?: number;
-};
-
-type PastedAttachmentInput = {
-  name?: string;
-  mimeType?: string;
-  dataUrl: string;
-};
-
-type FileSearchResult = ChatAttachment & {
-  match: "path" | "content";
-};
-
-type TaskInfo = {
-  id: string;
-  chatId?: string;
-  worktreeRootTaskId?: string;
-  repositoryId: string;
-  prompt: string;
-  workspaceKind: WorkspaceKind;
-  workspaceMode: WorkspaceMode;
-  state: TaskState;
-  originalBranch: string;
-  baseCommit: string;
-  agentBranch: string;
-  worktreePath: string;
-  permissionMode: PermissionMode;
-  reasoningMode?: ReasoningMode;
-  runnerName?: string;
-  runnerVersion?: string;
-  policyVersion?: string;
-  createdAt: string;
-  changedFiles: string[];
-  reviewFiles: ReviewFile[];
-  events: BackendUiEvent[];
-  latestTest?: TestResult;
-  reviewPatchHash?: string;
-  reviewScope?: "task" | "worktree";
-  reviewBaselineLabel?: string;
-  reviewBaselineOid?: string;
-  patchHash?: string;
-  error?: string;
-};
-
-type ChatRecord = {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  repositoryName?: string;
-  repositoryPath?: string;
-  taskId?: string;
-  taskState?: TaskState;
-  changedFiles?: number;
-  worktreeRootTaskId?: string;
-  worktreePath?: string;
-  worktreeBranch?: string;
-  worktreeBaseCommit?: string;
-  draftPrompt?: string;
-  attachedFiles?: ChatAttachment[];
-};
+type IdeChoice = IdeInfo;
 
 type WorktreeChatGroup = {
   key: string;
@@ -382,36 +179,13 @@ type DeleteCandidate =
   | { kind: "projectChats"; project: ProjectDeleteTarget }
   | { kind: "project"; project: ProjectDeleteTarget };
 
-type UserNotes = {
-  content: string;
-  updatedAt: string;
-};
-
 type AppearanceSettings = {
   theme: AppearanceTheme;
   uiFont: string;
   monoFont: string;
 };
 
-type PermissionRequest = {
-  id: string;
-  kind: "read" | "edit" | "bash";
-  summary: string;
-  command: string;
-  commandClass?: CommandClass;
-  cwd: string;
-  consequence?: string;
-  riskyFragment?: string;
-  suggestion?: string;
-};
-
-type BackendUiEvent = BackendUiEventInput;
-
-type ApprovalCheck = {
-  name: string;
-  status: "running" | "passed" | "failed";
-  detail?: string;
-};
+type PermissionRequest = TaskPermissionRequest;
 
 type CommandRun = {
   id: string;
@@ -444,147 +218,16 @@ type ComposerTimelineItem =
     }
   | { type: "assistant"; id: string; text: string; streaming?: boolean };
 
-type SkillInfo = {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  source?: "system" | "local";
-  readOnly?: boolean;
-  checksum?: string;
-  checksumStatus?: "known_good" | "modified" | "untracked";
-  modified?: boolean;
-  provenance?: "bundled" | "created" | "imported";
-};
-type SkillDocument = SkillInfo & { path: string; content: string };
 type SkillSourceFilter = "local" | "system";
 type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };
 
-type DesktopApi = {
-  listProjects(): Promise<RepositoryInfo[]>;
-  listChats(): Promise<ChatRecord[]>;
-  createChat(input?: { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string }): Promise<ChatRecord>;
-  updateChatDraft(input: { chatId: string; draftPrompt: string; attachedFiles: ChatAttachment[] }): Promise<ChatRecord>;
-  updateChatProject(input: { chatId: string; repositoryName: string; repositoryPath: string }): Promise<ChatRecord>;
-  deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
-  deleteProjectChats(input: { projectId: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
-  deleteProject(input: { projectId: string }): Promise<{ ok: true; deletedChatIds: string[] }>;
-  getNotes(): Promise<UserNotes>;
-  updateNotes(input: { content: string }): Promise<UserNotes>;
-  getTask(input: { taskId: string }): Promise<TaskInfo | null>;
-  refreshTaskReview(input: { taskId: string; scope?: "task" | "worktree"; repositoryPath?: string }): Promise<TaskInfo | null>;
-  refreshWorkspaceReview(input: { repositoryPath: string }): Promise<{ reviewFiles: ReviewFile[]; baselineOid: string }>;
-  readDocumentReview(input: { taskId: string; documentPath: string }): Promise<
-    | { ok: true; preview: DocumentReviewSnapshot }
-    | { ok: false; code: "not_available" | "invalid" | "unsafe" | "too_large"; message: string }
-  >;
-  searchFiles(input: { repositoryId: string; query: string; limit?: number }): Promise<FileSearchResult[]>;
-  pickRepository(): Promise<{ canceled: true } | { canceled: false; repository: RepositoryInfo }>;
-  pickAttachmentFiles(input: { chatId: string; repositoryId?: string }): Promise<{ canceled: true } | { canceled: false; files: ChatAttachment[] }>;
-  savePastedAttachments(input: { chatId: string; files: PastedAttachmentInput[] }): Promise<{ files: ChatAttachment[] }>;
-  openChatAttachment(input: { attachment: ChatAttachment; repositoryId?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
-  getRepository(input: { repositoryId?: string; repositoryPath?: string }): Promise<RepositoryInfo | null>;
-  listRepositoryBranches(input: { repositoryId?: string; repositoryPath?: string }): Promise<
-    { ok: true; current: string; branches: string[] } | { ok: false; message: string }
-  >;
-  checkoutRepositoryBranch(input: { repositoryId?: string; repositoryPath?: string; branch: string }): Promise<
-    { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
-  >;
-  getBackendStatus(): Promise<BackendStatus>;
-  getCapabilityProbes(input?: { force?: boolean }): Promise<CapabilityProbeReport>;
-  getHarnessProfile(): Promise<HarnessProfileId>;
-  saveHarnessProfile(input: HarnessProfileId): Promise<{
-    settings: HarnessProfileId;
-    status: BackendStatus;
-  }>;
-  getContextLength(): Promise<number>;
-  saveContextLength(input: number): Promise<{
-    contextLength: number;
-    status: BackendStatus;
-  }>;
-  getModelEndpointSettings(): Promise<ModelEndpointSettings>;
-  saveModelEndpointSettings(input: ModelEndpointSettings): Promise<{
-    settings: ModelEndpointSettings;
-    status: BackendStatus;
-  }>;
-  exportTelemetry(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
-  exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
-  clearLocalDiagnostics(): Promise<LocalDiagnosticInfo>;
-  recordProductEvent(input: {
-    type: "review.opened" | "ide.selected";
-    taskId?: string;
-    repositoryId?: string;
-    scope?: "task" | "worktree";
-    target?: "task" | "project";
-    ideId?: string;
-    surface?: "composer" | "review";
-  }): Promise<void>;
-  listSkills(): Promise<{ skills: SkillInfo[]; directory: string }>;
-  saveSkillSettings(input: Record<string, boolean>): Promise<{ skills: SkillInfo[]; directory: string }>;
-  openSkillsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
-  openRunnerDiagnosticsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
-  openSkillInEditor(input: { id: string }): Promise<{ ok: true; path: string } | { ok: false; message: string }>;
-  importSkill(input?: { sourcePath?: string }): Promise<
-    | { ok: true; skill: SkillInfo; skills: SkillInfo[]; directory: string }
-    | { ok: false; message: string }
-  >;
-  createSkill(input: { name: string }): Promise<
-    | { ok: true; skill: SkillInfo; directory: string }
-    | { ok: false; message: string }
-  >;
-  getSkillDocument(input: { id: string }): Promise<
-    | { ok: true; skill: SkillDocument; directory: string }
-    | { ok: false; message: string }
-  >;
-  saveSkillDocument(input: { id: string; content: string }): Promise<
-    | { ok: true; skill: SkillDocument; skills: SkillInfo[]; directory: string }
-    | { ok: false; message: string }
-  >;
-  resetSystemSkill(input: { id: string }): Promise<
-    | { ok: true; skill: SkillDocument; skills: SkillInfo[]; directory: string }
-    | { ok: false; message: string }
-  >;
-  setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
-  listAvailableIdes(): Promise<IdeChoice[]>;
-  startTask(input: {
-    repositoryId?: string;
-    prompt: string;
-    chatId?: string;
-    attachedFiles?: ChatAttachment[];
-    reasoningMode?: ReasoningMode;
-    useWorktree?: boolean;
-    worktreeTaskId?: string;
-  }): Promise<TaskInfo>;
-  approveWorktreeCreation(input: { taskId: string; approved: boolean }): Promise<void>;
-  respondToToolPermission(input: { taskId: string; id: string; decision: "allow" | "deny" }): Promise<void>;
-  openRepositoryInIde(input: { repositoryId: string; ideId: string }): Promise<{ ok: true } | { ok: false; message: string }>;
-  openTaskInIde(input: { taskId: string; ideId: string; filePath?: string }): Promise<{ ok: true } | { ok: false; message: string }>;
-  approveTaskMerge(input: { taskId: string }): Promise<
-    | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }
-    | { ok: false; message: string }
-  >;
-  rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
-  keepWorktree(input: { taskId: string }): Promise<void>;
-  cancelTask(input: { taskId: string }): Promise<void>;
-  setResponseFeedback(input: { taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }): Promise<void>;
-  setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
-  onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
-};
-
-const previewProjectsKey = "umbratic-preview-projects";
-const previewChatsKey = "umbratic-preview-chats";
-const previewNotesKey = "umbratic-preview-notes";
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
-const previewHarnessProfileKey = "umbratic-preview-harness-profile";
-const previewContextLengthKey = "umbratic-preview-context-length";
-const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 const markdownPreviewCharacterLimit = 60000;
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 const commandOutputPreviewLineLimit = 5;
-let previewPermissionMode: PermissionMode = "normal";
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
 const defaultAppearanceSettings: AppearanceSettings = {
   theme: "system",
@@ -644,27 +287,6 @@ const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: 
     description: "Codebase inspection, implementation, debugging, tests, verification, and precise repository changes.",
   },
 ];
-const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
-  engineering: new Set(["umbratic-skill-creator", "umbratic-git-worktree", "umbratic-markdown", "umbratic-python"]),
-  marketing: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-  ]),
-  sales: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-  ]),
-};
 type LocalFontDescriptor = {
   family?: string;
   fullName?: string;
@@ -676,48 +298,6 @@ type LocalFontWindow = Window & {
 
 function isAppearanceTheme(value: unknown): value is AppearanceTheme {
   return value === "system" || value === "light" || value === "dark";
-}
-
-function readPreviewProjects(): RepositoryInfo[] {
-  try {
-    return JSON.parse(window.localStorage.getItem(previewProjectsKey) ?? "[]") as RepositoryInfo[];
-  } catch {
-    return [];
-  }
-}
-
-function writePreviewProjects(projects: RepositoryInfo[]) {
-  window.localStorage.setItem(previewProjectsKey, JSON.stringify(projects));
-}
-
-function readPreviewChats(): ChatRecord[] {
-  try {
-    return JSON.parse(window.localStorage.getItem(previewChatsKey) ?? "[]") as ChatRecord[];
-  } catch {
-    return [];
-  }
-}
-
-function writePreviewChats(chats: ChatRecord[]) {
-  window.localStorage.setItem(previewChatsKey, JSON.stringify(chats));
-}
-
-function readPreviewNotes(): UserNotes {
-  try {
-    const notes = JSON.parse(window.localStorage.getItem(previewNotesKey) ?? "{}") as Partial<UserNotes>;
-    return {
-      content: typeof notes.content === "string" ? notes.content : "",
-      updatedAt: typeof notes.updatedAt === "string" ? notes.updatedAt : "",
-    };
-  } catch {
-    return { content: "", updatedAt: "" };
-  }
-}
-
-function writePreviewNotes(content: string): UserNotes {
-  const notes = { content, updatedAt: new Date().toISOString() };
-  window.localStorage.setItem(previewNotesKey, JSON.stringify(notes));
-  return notes;
 }
 
 function readAppearanceSettings(): AppearanceSettings {
@@ -747,23 +327,6 @@ function writeWorkspaceMode(mode: WorkspaceMode) {
 
 function isHarnessProfileId(value: unknown): value is HarnessProfileId {
   return value === "marketing" || value === "sales" || value === "engineering";
-}
-
-function readPreviewHarnessProfile(): HarnessProfileId {
-  const profileId = window.localStorage.getItem(previewHarnessProfileKey);
-  return isHarnessProfileId(profileId) ? profileId : defaultHarnessProfileId;
-}
-
-function writePreviewHarnessProfile(profileId: HarnessProfileId) {
-  window.localStorage.setItem(previewHarnessProfileKey, profileId);
-}
-
-function readPreviewContextLength(): number {
-  return normalizeContextLength(window.localStorage.getItem(previewContextLengthKey) ?? DEFAULT_CONTEXT_LENGTH);
-}
-
-function writePreviewContextLength(contextLength: number) {
-  window.localStorage.setItem(previewContextLengthKey, String(normalizeContextLength(contextLength)));
 }
 
 function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string; valueConfigured: boolean }> {
@@ -836,31 +399,6 @@ function endpointValidationMessage(settings: ModelEndpointSettings): string | nu
   return null;
 }
 
-function readPreviewEndpointSettings(): ModelEndpointSettings {
-  try {
-    return normalizeEndpointSettings(JSON.parse(window.localStorage.getItem(previewEndpointSettingsKey) ?? "{}"));
-  } catch {
-    return { ...defaultModelEndpointSettings };
-  }
-}
-
-function writePreviewEndpointSettings(settings: ModelEndpointSettings) {
-  window.localStorage.setItem(previewEndpointSettingsKey, JSON.stringify(settings));
-}
-
-function publicPreviewEndpointSettings(settings: ModelEndpointSettings): ModelEndpointSettings {
-  return {
-    ...settings,
-    secret: "",
-    secretConfigured: settings.secretConfigured || !!settings.secret,
-    headers: settings.headers.map((header) => ({
-      name: header.name,
-      value: "",
-      valueConfigured: header.valueConfigured || !!header.value,
-    })),
-  };
-}
-
 function uniqueFonts(fonts: string[]): string[] {
   return Array.from(new Set(fonts.map((font) => font.trim()).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" }),
@@ -894,768 +432,15 @@ const defaultIdeChoices: IdeChoice[] = [
   { id: "visualstudio", label: "Visual Studio", icon: "visualstudio" },
   { id: "explorer", label: isMacLike ? "Finder" : "Explorer", icon: isMacLike ? "finder" : "explorer" },
 ];
-const composerTestParams = new URLSearchParams(window.location.search);
-const composerTestMode = composerTestParams.has("composerTest");
-const composerTestRunning = composerTestParams.get("composerTest") === "running";
-const composerTestToolIssue = composerTestParams.has("toolIssue");
-const composerTestAttachments: ChatAttachment[] = [
-  { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
-  { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
-];
-const composerTestPrompt =
-  'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
-const composerTestVisiblePrompt = composerTestParams.has("reviewFeedback")
-  ? `${composerTestPrompt}\n\nPlease address this review feedback:\n\n**apps/desktop/src/renderer/review-panel.tsx · Lines 14-16**\n\n> <h2>Review</h2>\n> <p className="reviewHint">Inspect focused changes before accepting.</p>\n\nKeep this feedback easy to revisit from the conversation.`
-  : composerTestPrompt;
-const composerTestRepository: RepositoryInfo = {
-  id: "preview-umbratic",
-  name: "Umbratic",
-  rootPath: "/Users/carminep/Projects/Umbratic",
-  kind: "git",
-  originalBranch: "main",
-  baseCommit: "preview",
-  dirty: false,
-  statusSummary: "preview",
-};
-const composerTestEvents: BackendUiEvent[] = [
-  {
-    type: "user.message",
-    taskId: "composer-test",
-    text: composerTestVisiblePrompt,
-    attachedFiles: composerTestAttachments,
-    at: new Date(Date.now() - 18_000).toISOString(),
-  },
-  {
-    type: "assistant.reasoning.delta",
-    taskId: "composer-test",
-    text: "Checking message scale, markdown rhythm, escaped pipes, and attachment chips before composing the answer.",
-    at: new Date(Date.now() - 12_000).toISOString(),
-    endedAt: new Date(Date.now() - 8_000).toISOString(),
-  },
-  {
-    type: "command.started",
-    taskId: "composer-test",
-    id: "composer-fixture-search",
-    command: "read apps/desktop/src/renderer/styles.css",
-    cwd: "/Users/carminep/Projects/Umbratic",
-    kind: "read",
-    commandClass: "read",
-  },
-  {
-    type: "command.output",
-    taskId: "composer-test",
-    id: "composer-fixture-search",
-    stream: "stdout",
-    text: [
-      "Read composer styles",
-      "1: .timelineActivity {",
-      "2:   display: grid;",
-      "3:   gap: 0.5rem;",
-      "4:   min-width: 0;",
-      "5:   color: var(--text);",
-      "6: }",
-    ].join("\n"),
-  },
-  {
-    type: "command.finished",
-    taskId: "composer-test",
-    id: "composer-fixture-search",
-    exitCode: composerTestToolIssue ? 1 : 0,
-  },
-  {
-    type: "command.started",
-    taskId: "composer-test",
-    id: "composer-fixture-test",
-    command: "npm --workspace @umbratic/desktop run test:composer",
-    cwd: "/Users/carminep/Projects/Umbratic",
-    kind: "bash",
-    commandClass: "package-manager",
-  },
-  {
-    type: "command.output",
-    taskId: "composer-test",
-    id: "composer-fixture-test",
-    stream: "stdout",
-    text: "composer text tests passed\n",
-  },
-  {
-    type: "command.finished",
-    taskId: "composer-test",
-    id: "composer-fixture-test",
-    exitCode: 0,
-  },
-  {
-    type: "assistant.delta",
-    taskId: "composer-test",
-    text: [
-      "## Composer Fixture",
-      "",
-      "This response is intentionally plain text with a calmer visual rhythm. It checks **bold copy**, *italic copy*, inline `code`, escaped characters like `<tag>`, and a path reference to @main.tsx.",
-      "",
-      "### Surface Notes",
-      "",
-      "- Prompt chips should feel soft, not like raised badges.",
-      "- Thinking should stay compact and secondary.",
-      "- Code blocks should arrive smoothly without dominating the page.",
-      "",
-      "| Check | Render target |",
-      "| --- | --- |",
-      "| Escaped pipe | A\\|B stays in one cell |",
-      "| Inline code | `const value = \"A|B\";` |",
-      "",
-      "```tsx",
-      'const tone = "quiet";',
-      'const escaped = "A\\\\|B <safe> & visible";',
-      "return <Composer mood={tone} label={escaped} />;",
-      "```",
-      "",
-      "A final paragraph gives the stream a normal ending so spacing after code blocks can be checked against ordinary prose.",
-    ].join("\n"),
-    at: new Date(Date.now() - 5_000).toISOString(),
-  },
-];
+const previewBuildEnabled =
+  typeof __UMBRATIC_PREVIEW_BUILD__ !== "undefined" && __UMBRATIC_PREVIEW_BUILD__;
+const composerTestMode =
+  previewBuildEnabled && window.__UMBRATIC_PREVIEW__ === true;
 
-const composerTestCodeReviewFiles: ReviewFile[] = [
-  {
-    path: "apps/desktop/src/features/review/new-panel.ts",
-    status: "added",
-    diff: [
-      "diff --git a/apps/desktop/src/features/review/new-panel.ts b/apps/desktop/src/features/review/new-panel.ts",
-      "new file mode 100644",
-      "index 0000000..f4a17de",
-      "--- /dev/null",
-      "+++ b/apps/desktop/src/features/review/new-panel.ts",
-      "@@ -0,0 +1,11 @@",
-      "+export type ReviewPanelTone = \"calm\" | \"focused\";",
-      "+",
-      "+export function reviewPanelTitle(fileCount: number) {",
-      "+  if (fileCount === 0) return \"No active review\";",
-      "+  if (fileCount === 1) return \"1 file ready\";",
-      "+  return `${fileCount} files ready`;",
-      "+}",
-      "+",
-      "+export const reviewPanelTone: ReviewPanelTone = \"calm\";",
-      "+export const reviewPanelDensity = \"comfortable\";",
-      "+",
-    ].join("\n"),
-  },
-  {
-    path: "apps/desktop/src/legacy/review-banner.ts",
-    status: "deleted",
-    diff: [
-      "diff --git a/apps/desktop/src/legacy/review-banner.ts b/apps/desktop/src/legacy/review-banner.ts",
-      "deleted file mode 100644",
-      "index 24c118a..0000000",
-      "--- a/apps/desktop/src/legacy/review-banner.ts",
-      "+++ /dev/null",
-      "@@ -1,9 +0,0 @@",
-      "-export function legacyReviewBanner() {",
-      "-  return {",
-      "-    tone: \"warning\",",
-      "-    label: \"Pending patch\",",
-      "-    showRawMarkers: true,",
-      "-  };",
-      "-}",
-      "-",
-      "-export const reviewBannerVersion = 1;",
-    ].join("\n"),
-  },
-  {
-    path: "apps/desktop/src/renderer/review-panel.tsx",
-    status: "modified",
-    diff: [
-      "diff --git a/apps/desktop/src/renderer/review-panel.tsx b/apps/desktop/src/renderer/review-panel.tsx",
-      "index 9ac21d0..b7f53ce 100644",
-      "--- a/apps/desktop/src/renderer/review-panel.tsx",
-      "+++ b/apps/desktop/src/renderer/review-panel.tsx",
-      "@@ -12,13 +12,16 @@ export function ReviewPanel({ files }: ReviewPanelProps) {",
-      "   return (",
-      "     <section className=\"reviewPanel\">",
-      "-      <h2>Patch review</h2>",
-      "-      <p className=\"reviewHint\">Inspect the raw diff below.</p>",
-      "+      <h2>Review</h2>",
-      "+      <p className=\"reviewHint\">Inspect focused changes before accepting.</p>",
-      "       <div className=\"reviewFiles\">",
-      "         {files.map((file) => (",
-      "-          <RawDiff key={file.path} file={file} />",
-      "+          <ReviewFileCard key={file.path} file={file} />",
-      "         ))}",
-      "       </div>",
-      "+      <ReviewActions compact />",
-      "     </section>",
-      "   );",
-      " }",
-    ].join("\n"),
-  },
-].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; diff: string }));
-
-const composerTestDocumentPath = ".umbratic/artifacts/docx/narrative-proposal.docx";
-const composerTestDocumentPreview: DocumentReviewSnapshot = {
-  schemaVersion: 1,
-  documentPath: composerTestDocumentPath,
-  title: "Narrative Proposal",
-  blocks: [
-    { id: "title", style: "title", text: "Narrative Proposal" },
-    { id: "subtitle", style: "subtitle", text: "A calmer document review workflow" },
-    {
-      id: "overview",
-      style: "heading1",
-      text: "Executive overview",
-    },
-    {
-      id: "opening",
-      style: "paragraph",
-      text: "Umbratic keeps document review close to the conversation. Reviewers can select one sentence or an entire paragraph without opening another application.",
-    },
-    {
-      id: "workflow",
-      style: "paragraph",
-      text: "Selected feedback is attached to the next prompt with the relevant excerpt. The document remains the source of truth while the review experience stays focused.",
-    },
-    { id: "benefit-one", style: "bullet", text: "Keep feedback specific and easy to revisit." },
-    { id: "benefit-two", style: "bullet", text: "Use the same interaction pattern as code review." },
-    {
-      id: "close",
-      style: "quote",
-      text: "The result is a lightweight review loop that feels native to the composer.",
-    },
-  ],
-};
-const composerTestDocumentFile = normalizeReviewFile({
-  path: composerTestDocumentPath,
-  status: "binary",
-  diff: [
-    `diff --git a/${composerTestDocumentPath} b/${composerTestDocumentPath}`,
-    "new file mode 100644",
-    `Binary files /dev/null and b/${composerTestDocumentPath} differ`,
-  ].join("\n"),
-});
-const composerTestReviewFiles: ReviewFile[] = composerTestParams.has("documents")
-  ? [composerTestDocumentFile, ...composerTestCodeReviewFiles]
-  : composerTestCodeReviewFiles;
-
-const composerTestWholeDiffFiles: ReviewFile[] = [
-  ...composerTestReviewFiles,
-  normalizeReviewFile({
-    path: "apps/desktop/.env.example",
-    status: "modified",
-    diff: [
-      "diff --git a/apps/desktop/.env.example b/apps/desktop/.env.example",
-      "index 711bd13..fc94e20 100644",
-      "--- a/apps/desktop/.env.example",
-      "+++ b/apps/desktop/.env.example",
-      "@@ -2,2 +2,3 @@",
-      " UMBRATIC_LOG_LEVEL=info",
-      "+UMBRATIC_PREVIEW_PORT=5173",
-      " UMBRATIC_TELEMETRY=off",
-    ].join("\n"),
-  }),
-];
-
-const composerTestTask: TaskInfo = {
-  id: "composer-test",
-  chatId: "composer-test-chat",
-  repositoryId: composerTestRepository.id,
-  prompt: composerTestVisiblePrompt,
-  workspaceKind: "git",
-  workspaceMode: "local",
-  state: composerTestRunning ? "running" : "review_ready",
-  originalBranch: "main",
-  baseCommit: "preview",
-  agentBranch: "preview",
-  worktreePath: composerTestRepository.rootPath,
-  permissionMode: "normal",
-  reasoningMode: "reasoning",
-  createdAt: new Date(Date.now() - 20_000).toISOString(),
-  changedFiles: composerTestReviewFiles.map((file) => file.path),
-  reviewFiles: composerTestReviewFiles,
-  reviewScope: "task",
-  reviewBaselineLabel: "Turn changes",
-  reviewBaselineOid: "task start",
-  events: composerTestEvents,
-};
-
-function previewCapabilityReport(): CapabilityProbeReport {
-  const checkedAt = new Date().toISOString();
-  const probes: CapabilityProbeResult[] = [
-    {
-      id: "node-runtime",
-      label: "Node runtime",
-      category: "required",
-      importance: "required",
-      status: "available",
-      version: "browser preview",
-      purpose: "Runs the desktop and local harness code.",
-      installHint: "Open the Electron app for real runtime probes.",
-      workflows: ["desktop", "runner"],
-      checkedAt,
-    },
-    {
-      id: "runner-binary",
-      label: "Umbratic runner",
-      category: "required",
-      importance: "required",
-      status: "missing",
-      purpose: "Starts local workspace tools for read, search, write, edit, and command execution.",
-      installHint: "Open the Electron app to check the runner bundle.",
-      workflows: ["runner", "workspace tools"],
-      checkedAt,
-      message: "Electron preload is not available in browser preview.",
-    },
-    {
-      id: "rg",
-      label: "ripgrep",
-      category: "recommended",
-      importance: "recommended",
-      status: "unknown",
-      purpose: "Fast text search in workspaces.",
-      installHint: "Open the Electron app to run local command probes.",
-      workflows: ["workspace search"],
-      checkedAt,
-    },
-    {
-      id: "uv",
-      label: "uv",
-      category: "recommended",
-      importance: "recommended",
-      status: "unknown",
-      purpose: "Creates repeatable Python environments.",
-      installHint: "Open the Electron app to run local command probes.",
-      workflows: ["Python", "artifacts"],
-      checkedAt,
-    },
-    {
-      id: "pdftoppm",
-      label: "Poppler pdftoppm",
-      category: "optional-artifacts",
-      importance: "optional",
-      status: "unknown",
-      purpose: "Renders PDF pages to images for visual QA.",
-      installHint: "Open the Electron app to run local command probes.",
-      workflows: ["PDF artifact", "visual QA"],
-      checkedAt,
-    },
-    {
-      id: "tesseract",
-      label: "Tesseract OCR",
-      category: "optional-artifacts",
-      importance: "optional",
-      status: "unknown",
-      purpose: "Runs local OCR for image and scanned-PDF attachment digests.",
-      installHint: "Open the Electron app to run local command probes.",
-      workflows: ["OCR artifact", "image attachment", "scanned PDF"],
-      checkedAt,
-    },
-  ];
-  const summary = probes.reduce<CapabilityProbeReport["summary"]>(
-    (total, probe) => {
-      total[probe.status] += 1;
-      if (probe.status !== "available") {
-        if (probe.importance === "required") total.requiredMissing += 1;
-        if (probe.importance === "recommended") total.recommendedMissing += 1;
-        if (probe.importance === "optional") total.optionalMissing += 1;
-      }
-      return total;
-    },
-    { available: 0, missing: 0, error: 0, unknown: 0, requiredMissing: 0, recommendedMissing: 0, optionalMissing: 0 },
-  );
-  return { checkedAt, probes, summary };
-}
-
-const previewDefaultSkills: SkillInfo[] = [
-  {
-    id: "umbratic-skill-creator",
-    name: "Skill Creator",
-    description: "Use to create, revise, structure, and validate reusable Umbratic personal skills and their bundled resources.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-git-worktree",
-    name: "Git Worktree",
-    description: "Use for Git worktree isolation, branch/base awareness, review diffs, merge safety, and Umbratic task worktree behavior.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-markdown",
-    name: "Markdown",
-    description: "Use for Markdown structure, readable formatting, tables, docs, and plain-text artifact source.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-python",
-    name: "Python",
-    description: "Use for Python scripts, packages, tests, virtual environments, dependency setup, and Python-based verification.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-data-analysis",
-    name: "Data Analysis",
-    description: "Use for source-grounded analysis with pandas, data cleaning, validation, summaries, charts, and reproducible outputs.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-pdf",
-    name: "PDF & OCR",
-    description: "Use for PDF reading, page-aware review, polished PDF artifacts, and OCR of images or scanned documents.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-presentations",
-    name: "Presentations",
-    description: "Use for PowerPoint/PPTX outlines, slide copy, speaker notes, proposals, and customer-facing decks.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-documents",
-    name: "Documents",
-    description: "Use for DOCX/Word drafts, redlines, memos, proposals, and rendered document QA.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-  {
-    id: "umbratic-spreadsheets",
-    name: "Spreadsheets",
-    description: "Use for XLSX/Excel workbooks, spreadsheet-ready tables, formulas, forecasts, and chart specs.",
-    enabled: true,
-    source: "system",
-    readOnly: false,
-  },
-];
-let previewSkills = previewDefaultSkills.map((skill) => ({
-  ...skill,
-  enabled: harnessSystemSkillIds[readPreviewHarnessProfile()].has(skill.id),
-}));
-
-const previewDefaultSkillGuidance: Record<string, string[]> = {
-  "umbratic-skill-creator": [
-    "Capture the intended triggers, workflow, outputs, and success criteria before drafting a skill.",
-    "Keep SKILL.md concise, put detailed material in explicitly referenced resources, and validate the finished folder before handoff.",
-    "Draft personal skills in the current workspace, then explain how to import and enable them from Umbratic's Skills settings.",
-  ],
-  "umbratic-git-worktree": [
-    "Use the current worktree path as authoritative when an engineering run is isolated.",
-    "Keep original branch, task branch, and base commit distinct when explaining Git state.",
-    "Inspect status and diffs with non-destructive Git commands before summarizing or changing branch state.",
-  ],
-  "umbratic-markdown": [
-    "Use clean Markdown when the user asks for docs, README content, tables, briefs, or paste-ready formatted text.",
-    "Prefer simple headings, short paragraphs, bullets, and tables only when they improve scanning.",
-    "Inspect nearby docs and config before using repository-local Markdown tooling.",
-  ],
-  "umbratic-python": [
-    "Keep Python work inside the current workspace and prefer a workspace `.venv`.",
-    "Prefer `uv` when available. Bare Python commands are allowed; if one fails because of the interpreter, environment, or dependencies, retry it through `uv run`.",
-    "State runtime or dependency gaps when they affect verification.",
-  ],
-  "umbratic-data-analysis": [
-    "Inspect columns, types, missing values, duplicates, ranges, and category cardinality before drawing conclusions.",
-    "Use reproducible pandas scripts for cleaning, joins, aggregations, statistics, and chart-ready tables.",
-    "Keep source data unchanged, label assumptions, and save derived outputs separately with validation checks.",
-  ],
-  "umbratic-pdf": [
-    "Use local PDFs as page-aware source material; use extraction for text checks and rendered pages for layout fidelity.",
-    "Use local OCR digests for images and scanned PDFs, preserving page locations, confidence warnings, and uncertain text.",
-    "Generate PDFs with the configured Python artifact runtime and keep final files under `.umbratic/artifacts/pdf/` unless directed otherwise.",
-    "Render with Poppler and inspect pages before claiming visual QA; state extraction, generation, or render gaps plainly.",
-  ],
-  "umbratic-presentations": [
-    "Use this default for local PowerPoint/PPTX work only; do not route to Google Slides workflows from this guidance.",
-    "Define audience, narrative, slide sequence, visual system, and speaker notes while keeping slide copy concise.",
-    "Export or render with LibreOffice and inspect every slide before claiming visual QA; state PPTX runtime or export gaps plainly.",
-  ],
-  "umbratic-documents": [
-    "Use this default for local DOCX/Word work only; do not route to Google Docs workflows from this guidance.",
-    "Create documents with explicit styles, numbering, margins, table geometry, headers, footers, and stable page behavior.",
-    "Render or export with LibreOffice and inspect every page before claiming visual QA; state DOCX runtime or render gaps plainly.",
-  ],
-  "umbratic-spreadsheets": [
-    "Produce stable columns, short cell values, explicit formulas, and clear assumptions.",
-    "Separate provided values, derived values, assumptions, and formulas.",
-    "Provide paste-ready tables when an XLSX runtime is unavailable.",
-  ],
-};
-
-function previewSkillContent(skill: SkillInfo): string {
-  const guidance = previewDefaultSkillGuidance[skill.id] ?? [skill.description];
-  return `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n# ${skill.name}\n\n${guidance.map((line) => `- ${line}`).join("\n")}\n`;
-}
-
-const fallbackApi: DesktopApi = {
-  listProjects: async () => readPreviewProjects(),
-  listChats: async () => readPreviewChats(),
-  createChat: async (input) => {
-    const now = new Date().toISOString();
-    const chat: ChatRecord = {
-      id: input?.id ?? `preview-${Date.now().toString(36)}`,
-      title: input?.title?.trim() || "New chat",
-      createdAt: now,
-      updatedAt: now,
-      repositoryName: input?.repositoryName,
-      repositoryPath: input?.repositoryPath,
-      draftPrompt: "",
-      attachedFiles: [],
-    };
-    writePreviewChats([chat, ...readPreviewChats().filter((row) => row.id !== chat.id)]);
-    return chat;
-  },
-  updateChatDraft: async (input) => {
-    const chats = readPreviewChats();
-    const existing = chats.find((chat) => chat.id === input.chatId);
-    if (!existing) throw new Error("Chat was not found.");
-    const next = {
-      ...existing,
-      draftPrompt: input.draftPrompt,
-      attachedFiles: input.attachedFiles.map(normalizeAttachment),
-      updatedAt: new Date().toISOString(),
-    };
-    writePreviewChats([next, ...chats.filter((chat) => chat.id !== input.chatId)]);
-    return next;
-  },
-  updateChatProject: async (input) => {
-    const chats = readPreviewChats();
-    const existing = chats.find((chat) => chat.id === input.chatId);
-    if (!existing) throw new Error("Chat was not found.");
-    const next = {
-      ...existing,
-      repositoryName: input.repositoryName,
-      repositoryPath: input.repositoryPath,
-    };
-    writePreviewChats([next, ...chats.filter((chat) => chat.id !== input.chatId)]);
-    return next;
-  },
-  deleteChat: async (input) => {
-    writePreviewChats(readPreviewChats().filter((chat) => chat.id !== input.chatId));
-    return { ok: true };
-  },
-  deleteProjectChats: async (input) => {
-    const project = readPreviewProjects().find((row) => row.id === input.projectId);
-    const repositoryPath = project?.rootPath;
-    const deletedChatIds = readPreviewChats()
-      .filter((chat) => repositoryPath && chat.repositoryPath === repositoryPath)
-      .map((chat) => chat.id);
-    if (repositoryPath) {
-      writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== repositoryPath));
-    }
-    return { ok: true, deletedChatIds };
-  },
-  deleteProject: async (input) => {
-    const project = readPreviewProjects().find((row) => row.id === input.projectId);
-    const repositoryPath = project?.rootPath;
-    const deletedChatIds = readPreviewChats()
-      .filter((chat) => repositoryPath && chat.repositoryPath === repositoryPath)
-      .map((chat) => chat.id);
-    if (repositoryPath) {
-      writePreviewChats(readPreviewChats().filter((chat) => chat.repositoryPath !== repositoryPath));
-      writePreviewProjects(readPreviewProjects().filter((row) => row.rootPath !== repositoryPath));
-    }
-    return { ok: true, deletedChatIds };
-  },
-  getNotes: async () => readPreviewNotes(),
-  updateNotes: async (input) => writePreviewNotes(input.content),
-  getTask: async () => null,
-  refreshTaskReview: async (input) => {
-    const scope = input.scope === "worktree" ? "worktree" : "task";
-    const reviewFiles = scope === "worktree" ? composerTestWholeDiffFiles : composerTestReviewFiles;
-    return {
-      ...composerTestTask,
-      changedFiles: reviewFiles.map((file) => file.path),
-      reviewFiles,
-      reviewScope: scope,
-      reviewBaselineLabel: scope === "worktree" ? "Whole diff" : "Turn changes",
-      reviewBaselineOid: scope === "worktree" ? "HEAD" : "task start",
-    };
-  },
-  refreshWorkspaceReview: async () => ({ reviewFiles: composerTestWholeDiffFiles, baselineOid: "HEAD" }),
-  readDocumentReview: async (input) => input.documentPath === composerTestDocumentPath
-    ? { ok: true, preview: composerTestDocumentPreview }
-    : { ok: false, code: "not_available", message: "This document does not include a review preview." },
-  searchFiles: async (input) =>
-    [
-      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", match: "path" as const },
-      { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", match: "path" as const },
-      { path: "apps/desktop/src/main/main.ts", name: "main.ts", match: "content" as const },
-    ].filter((file) => file.path.toLowerCase().includes(input.query.toLowerCase())),
-  pickRepository: async () => {
-    const repository = {
-      id: "preview-umbratic",
-      name: "Umbratic",
-      rootPath: "C:\\Users\\potir\\Documents\\Umbratic",
-      kind: "folder",
-      originalBranch: "folder",
-      baseCommit: "preview",
-      dirty: false,
-      statusSummary: "preview",
-    } satisfies RepositoryInfo;
-    writePreviewProjects([repository, ...readPreviewProjects().filter((project) => project.id !== repository.id)]);
-    return {
-      canceled: false,
-      repository,
-    };
-  },
-  pickAttachmentFiles: async () => ({
-    canceled: false,
-    files: [{ path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" }],
-  }),
-  savePastedAttachments: async (input) => ({
-    files: input.files.map((file, index) =>
-      normalizeAttachment({
-        path: `attachments/preview-${index}-${file.name || "pasted-file"}`,
-        name: file.name || "pasted-file",
-        source: "chat",
-        originalPath: "clipboard",
-        previewDataUrl: file.dataUrl.startsWith("data:image/") ? file.dataUrl : undefined,
-      }),
-    ),
-  }),
-  openChatAttachment: async () => ({ ok: false, message: "Electron preload is not available." }),
-  getRepository: async (input) =>
-    input.repositoryPath
-      ? {
-          id: `preview-${input.repositoryPath}`,
-          name: input.repositoryPath.split(/[\\/]/).filter(Boolean).pop() || input.repositoryPath,
-          rootPath: input.repositoryPath,
-          kind: "folder",
-          originalBranch: "folder",
-          baseCommit: "preview",
-          dirty: false,
-          statusSummary: "preview",
-        }
-      : null,
-  listRepositoryBranches: async () => ({ ok: true, current: "main", branches: ["main", "develop"] }),
-  checkoutRepositoryBranch: async () => ({ ok: false, message: "Open the Electron app to switch branches." }),
-  getBackendStatus: async () => ({
-    runner: "unavailable",
-    endpoint: "unavailable",
-    model: null,
-    models: [],
-    providers: [],
-    permissionMode: previewPermissionMode,
-    endpointConfig: {
-      source: "local-default",
-      endpointEditingAllowed: true,
-    },
-    privacy: {
-      share: "disabled",
-      enabledProviders: [],
-      webTools: "disabled",
-    },
-    diagnostics: {
-      runnerName: "UmbraticRunner",
-      runnerVersion: "package-adapter-1",
-      runnerContractVersion: "umbratic-runner-1",
-      policyVersion: "umbratic-enterprise-mvp-1",
-      runnerBinary: "missing",
-      configAssertions: "enabled",
-      providerAllowlist: ["company-endpoint"],
-      localhostOnlyModels: false,
-      commandClassifier: "enabled",
-      runnerDiagnosticsDirectory: "~/.umbratic/runner-diagnostics",
-      localLogs: { bytes: 0, entries: 0 },
-      telemetry: {
-        mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",
-        localEnabled: false,
-        syncEnabled: readPreviewEndpointSettings().mode === "server",
-        retentionDays: readPreviewEndpointSettings().mode === "server" ? 30 : 0,
-        exportFormat: "redacted-json",
-        storage: readPreviewEndpointSettings().mode === "server" ? "company-managed-telemetry" : "task-event-snapshots",
-      },
-      runtimes: {
-        python: {
-          runtimeVersion: "python-uv-venv-1",
-          barePythonVerification: "allowed_uv_preferred",
-          generatedPaths: [".venv", "__pycache__", ".pyc", ".umbratic/runtime"],
-        },
-        markdown: { docsOnlyClassification: "enabled" },
-        cmake: { runtimeVersion: "cmake-umbratic-build-1", buildDir: ".umbratic/build" },
-        toolchain: {
-          bundledHelperCommands: ["rg", "fd/fdfind", "tree-sitter", "bat/batcat"],
-          optionalCapabilityCommands: ["jq", "yq", "cmake", "compiler", "build backend"],
-        },
-        shell: { platform: navigator.platform, preferred: "posix", nonInteractive: true },
-      },
-      capabilities: previewCapabilityReport(),
-    },
-    message: "Electron preload is not available in this browser preview.",
-  }),
-  getCapabilityProbes: async () => previewCapabilityReport(),
-  getHarnessProfile: async () => readPreviewHarnessProfile(),
-  saveHarnessProfile: async (input) => {
-    const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
-    writePreviewHarnessProfile(settings);
-    previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: harnessSystemSkillIds[settings].has(skill.id) }));
-    return { settings, status: await fallbackApi.getBackendStatus() };
-  },
-  getContextLength: async () => readPreviewContextLength(),
-  saveContextLength: async (input) => {
-    const contextLength = normalizeContextLength(input);
-    writePreviewContextLength(contextLength);
-    return { contextLength, status: await fallbackApi.getBackendStatus() };
-  },
-  getModelEndpointSettings: async () => readPreviewEndpointSettings(),
-  saveModelEndpointSettings: async (input) => {
-    const settings = publicPreviewEndpointSettings(normalizeEndpointSettings(input));
-    writePreviewEndpointSettings(settings);
-    return { settings, status: await fallbackApi.getBackendStatus() };
-  },
-  exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
-  exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),
-  clearLocalDiagnostics: async () => ({ bytes: 0, entries: 0 }),
-  recordProductEvent: async () => undefined,
-  listSkills: async () => ({ skills: previewSkills, directory: "~/.umbratic/skills" }),
-  saveSkillSettings: async (input) => {
-    previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: input[skill.id] ?? skill.enabled }));
-    return { skills: previewSkills, directory: "~/.umbratic/skills" };
-  },
-  openSkillsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
-  openRunnerDiagnosticsFolder: async () => ({ ok: false, message: "Electron preload is not available." }),
-  openSkillInEditor: async () => ({ ok: false, message: "Electron preload is not available." }),
-  importSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
-  createSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
-  getSkillDocument: async (input) => {
-    const skill = previewSkills.find((row) => row.id === input.id);
-    return skill
-      ? { ok: true, skill: { ...skill, path: `~/.umbratic/skills/${skill.id}.md`, content: previewSkillContent(skill) }, directory: "~/.umbratic/skills" }
-      : { ok: false, message: "Electron preload is not available." };
-  },
-  saveSkillDocument: async () => ({ ok: false, message: "Electron preload is not available." }),
-  resetSystemSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
-  setPermissionMode: async (mode) => {
-    previewPermissionMode = mode;
-    return fallbackApi.getBackendStatus();
-  },
-  listAvailableIdes: async () => defaultIdeChoices,
-  startTask: async () => {
-    throw new Error("Open the Electron app to run a task.");
-  },
-  approveWorktreeCreation: async () => undefined,
-  respondToToolPermission: async () => undefined,
-  openRepositoryInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
-  openTaskInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
-  approveTaskMerge: async () => ({ ok: false, message: "Electron preload is not available." }),
-  rejectTask: async () => undefined,
-  keepWorktree: async () => undefined,
-  cancelTask: async () => undefined,
-  setResponseFeedback: async () => undefined,
-  setWindowChromeTheme: async () => ({ ok: true }),
-  onBackendEvent: () => () => undefined,
-};
-
-const api = window.umbratic ?? fallbackApi;
+const previewEnvironment = composerTestMode
+  ? window.__UMBRATIC_PREVIEW_ENVIRONMENT__ ?? null
+  : null;
+let api: DesktopApi;
 
 function VsCodeLogo(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -3306,19 +2091,19 @@ function placeElementAtBottom(node: HTMLElement) {
 
 function App() {
   const [backend, setBackend] = useState<BackendStatus | null>(null);
-  const [repository, setRepository] = useState<RepositoryInfo | null>(composerTestMode ? composerTestRepository : null);
+  const [repository, setRepository] = useState<RepositoryInfo | null>(previewEnvironment?.repository ?? null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
   const reasoningMode: ReasoningMode = "reasoning";
-  const [projects, setProjects] = useState<RepositoryInfo[]>(composerTestMode ? [composerTestRepository] : []);
+  const [projects, setProjects] = useState<RepositoryInfo[]>(previewEnvironment ? [previewEnvironment.repository] : []);
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [task, setTask] = useState<TaskInfo | null>(composerTestMode ? composerTestTask : null);
-  const [prompt, setPrompt] = useState(composerTestMode ? composerTestPrompt : initialPrompt);
+  const [task, setTask] = useState<TaskInfo | null>(previewEnvironment?.task ?? null);
+  const [prompt, setPrompt] = useState(previewEnvironment?.prompt ?? initialPrompt);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
   const [reviewFeedbackPreview, setReviewFeedbackPreview] = useState<ReviewFeedbackReference[] | null>(null);
-  const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(composerTestMode ? composerTestAttachments : []);
+  const [attachedFiles, setAttachedFiles] = useState<ChatAttachment[]>(previewEnvironment?.attachments ?? []);
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [mention, setMention] = useState<PromptMention | null>(null);
@@ -3329,12 +2114,12 @@ function App() {
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => new Set());
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
-  const [events, setEvents] = useState<BackendUiEvent[]>(composerTestMode ? composerTestEvents : []);
+  const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
   const [feedbackDrafts, setFeedbackDrafts] = useState<Map<string, string>>(() => new Map());
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
-    composerTestMode ? new Set(composerTestReviewFiles.map((file) => file.path)) : new Set(),
+    previewEnvironment ? new Set(previewEnvironment.reviewFiles.map((file) => file.path)) : new Set(),
   );
   const [expandedActivityIds, setExpandedActivityIds] = useState<Set<string>>(() => new Set());
   const autoOpenedActivityIdsRef = useRef<Set<string>>(new Set());
@@ -3368,8 +2153,8 @@ function App() {
   const [harnessSaving, setHarnessSaving] = useState(false);
   const [appearanceSettings, setAppearanceSettings] = useState<AppearanceSettings>(() => {
     const saved = readAppearanceSettings();
-    const fixtureTheme = composerTestParams.get("theme");
-    return composerTestMode && (fixtureTheme === "light" || fixtureTheme === "dark")
+    const fixtureTheme = previewEnvironment?.params.get("theme");
+    return previewEnvironment && (fixtureTheme === "light" || fixtureTheme === "dark")
       ? { ...saved, theme: fixtureTheme }
       : saved;
   });
@@ -3430,7 +2215,7 @@ function App() {
   const activityBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const activityFollowScrollRef = useRef<Map<string, boolean>>(new Map());
   const activityScrollInputRef = useRef<Set<string>>(new Set());
-  const visibleTaskIdRef = useRef<string | null>(composerTestMode ? composerTestTask.id : null);
+  const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
   const latestTaskId = task?.id;
@@ -3858,92 +2643,22 @@ function App() {
       }
       for (const event of visibleBatch) {
         const isVisibleTaskEvent = event.taskId === visibleTaskIdRef.current;
-        if (event.type === "assistant.done") {
-          if (isVisibleTaskEvent) {
-            setTask((current) =>
-              current && current.id === event.taskId && current.state === "running" ? { ...current, state: "completed" } : current,
-            );
-          }
-          void loadChats();
-        }
-        if (event.type === "permission.requested" && isVisibleTaskEvent) setPendingPermission(event.request);
-        if (event.type === "permission.resolved" && isVisibleTaskEvent) {
-          setPendingPermission((current) => (current?.id === event.id ? null : current));
-        }
-        if (event.type === "worktree.requested") {
-          if (isVisibleTaskEvent) {
-            setTask((current) =>
-              current && current.id === event.taskId
-                ? { ...current, state: "awaiting_worktree_approval", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
-                : current,
-            );
-          }
-          void loadChats();
-        }
-        if (event.type === "worktree.created") {
-          if (isVisibleTaskEvent) {
-            setTask((current) =>
-              current && current.id === event.taskId
-                ? { ...current, state: "running", workspaceMode: "worktree", worktreePath: event.path, agentBranch: event.branch }
-                : current,
-            );
-          }
-          void loadChats();
-        }
-        if (event.type === "review.ready") {
-          if (isVisibleTaskEvent) {
-            setTask((current) =>
-              current && current.id === event.taskId
-                ? {
-                    ...current,
-                    state: "review_ready",
-                    changedFiles: event.changedFiles,
-                    reviewFiles: event.reviewFiles,
-                    latestTest: event.latestTest,
-                }
-                : current,
-            );
-            setExpandedReviewPaths(new Set());
+        const effects = taskEventEffects(event);
+        if (isVisibleTaskEvent) {
+          setTask((current) => reduceVisibleTask(current, event));
+          setPendingPermission((current) => reducePendingPermission(current, event));
+          setApprovalChecks((current) => reduceApprovalChecks(current, event));
+          if (effects.errorMessage) setError(effects.errorMessage);
+          if (effects.resetExpandedReview) setExpandedReviewPaths(new Set());
+          if (effects.refreshReview) {
             window.setTimeout(() => {
               if (visibleTaskIdRef.current === event.taskId) {
                 void refreshTaskReviewById(event.taskId);
               }
             }, 120);
           }
-          void loadChats();
         }
-        if (event.type === "approval.check" && isVisibleTaskEvent) {
-          setApprovalChecks((current) => {
-            const next = current.filter((check) => check.name !== event.name);
-            next.push({ name: event.name, status: event.status, detail: event.detail });
-            return next;
-          });
-        }
-        if (event.type === "approval.completed") {
-          if (isVisibleTaskEvent) {
-            setTask((current) =>
-              current && current.id === event.taskId ? { ...current, state: "approved", patchHash: event.patchHash } : current,
-            );
-          }
-          void loadChats();
-        }
-        if (event.type === "merge.completed") {
-          if (isVisibleTaskEvent) {
-            setTask((current) =>
-              current && current.id === event.taskId ? { ...current, state: "merged", patchHash: event.patchHash } : current,
-            );
-          }
-          void loadChats();
-        }
-        if (event.type === "task.error") {
-          if (isVisibleTaskEvent) {
-            setError(event.message);
-            setTask((current) =>
-              current && current.id === event.taskId ? { ...current, state: "failed", error: event.message } : current,
-            );
-          }
-          void loadChats();
-        }
+        if (effects.reloadChats) void loadChats();
       }
       if (pendingBackendEvents.length) scheduleBackendEventFlush();
     };
@@ -7829,6 +6544,11 @@ type RootElement = HTMLElement & {
 
 const rootElement = typeof document === "undefined" ? null : document.getElementById("root") as RootElement | null;
 if (rootElement) {
+  api = window.umbratic
+    ?? previewEnvironment?.api
+    ?? (() => {
+      throw new Error("The Umbratic preload API is not available. The desktop app cannot start.");
+    })();
   rootElement.umbraticRoot ??= createRoot(rootElement);
   rootElement.umbraticRoot.render(<App />);
 }

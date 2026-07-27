@@ -1,0 +1,631 @@
+.skillSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.skillSectionHeader h4 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.skillSectionActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skillFilter {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 260px);
+}
+
+.skillCreateForm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-2) 52%, transparent);
+}
+
+.skillCreateForm input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--code-bg) 80%, transparent);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.skillCreateForm input[type="text"]:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.skillList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-2) 46%, transparent);
+}
+
+.skillRow {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+  transition: background 120ms ease;
+}
+
+.skillRow:last-child {
+  border-bottom: none;
+}
+
+.skillRow:hover,
+.skillRow:focus-within {
+  background: color-mix(in srgb, var(--surface-3) 44%, transparent);
+}
+
+.skillRow.isSelected {
+  background:
+    linear-gradient(90deg, rgba(178, 186, 197, 0.085), transparent 62%),
+    color-mix(in srgb, var(--surface-3) 38%, transparent);
+}
+
+.skillRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.skillRowButton {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 12px 14px;
+  color: inherit;
+  text-align: left;
+}
+
+.skillRowTop > .toggle {
+  margin-right: 14px;
+}
+
+.skillExpandIcon {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform 120ms ease, color 120ms ease;
+}
+
+.skillRow.isSelected .skillExpandIcon {
+  color: var(--text);
+  transform: rotate(90deg);
+}
+
+.harnessOptionGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.harnessOption {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-height: 76px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 7px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.harnessOption:hover,
+.harnessOption:focus-visible {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface-3) 46%, transparent);
+}
+
+.harnessOption.isActive {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.13), rgba(178, 186, 197, 0.055)),
+    color-mix(in srgb, var(--surface-2) 50%, transparent);
+}
+
+.harnessOptionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.harnessOptionHead strong {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harnessOptionHead svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+
+.harnessOption em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.localLogsControl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+}
+
+.localLogsControl > strong {
+  color: var(--text);
+  font-family: var(--mono-font);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.localLogsControl > div {
+  display: flex;
+  gap: 7px;
+}
+
+.localLogsControl .settingsInlineButton {
+  min-height: 28px;
+}
+
+.contextLengthGroup {
+  gap: 12px;
+  transition: opacity 150ms ease;
+}
+
+.contextLengthGroup.isDisabled {
+  opacity: 0.56;
+}
+
+.contextLengthHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.contextLengthHead > div {
+  min-width: 0;
+}
+
+.contextLengthHead p,
+.contextLengthHint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.contextLengthSliderShell {
+  position: relative;
+  padding: 2px 8px 0;
+}
+
+.contextLengthSlider {
+  display: block;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.contextLengthSlider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 78%, var(--text)) 0 var(--context-slider-progress),
+    color-mix(in srgb, var(--line-strong) 82%, transparent) var(--context-slider-progress) 100%
+  );
+}
+
+.contextLengthSlider::-webkit-slider-thumb {
+  width: 17px;
+  height: 17px;
+  margin-top: -6.5px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: color-mix(in srgb, var(--accent) 82%, var(--text));
+  box-shadow: 0 0 0 1px var(--line-strong), 0 3px 9px var(--shadow-color);
+  transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.contextLengthSlider:hover:not(:disabled)::-webkit-slider-thumb,
+.contextLengthSlider:focus-visible::-webkit-slider-thumb {
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--line-strong), 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent), 0 3px 9px var(--shadow-color);
+  transform: scale(1.06);
+}
+
+.contextLengthSlider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line-strong) 82%, transparent);
+}
+
+.contextLengthSlider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+.contextLengthSlider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 82%, var(--text));
+  box-shadow: 0 0 0 1px var(--line-strong), 0 3px 9px var(--shadow-color);
+}
+
+.contextLengthSlider:disabled {
+  cursor: not-allowed;
+}
+
+.contextLengthSlider:focus-visible {
+  box-shadow: none;
+}
+
+.contextLengthSliderLabels {
+  position: relative;
+  height: 28px;
+  margin-top: 3px;
+}
+
+.contextLengthSliderLabels > span {
+  position: absolute;
+  top: 0;
+  display: grid;
+  justify-items: center;
+  gap: 0;
+  color: var(--faint);
+  line-height: 1.15;
+  transform: translateX(-50%);
+  transition: color 140ms ease;
+}
+
+.contextLengthSliderLabels > span.isActive {
+  color: var(--text);
+}
+
+.contextLengthSliderLabels strong {
+  font-size: 10.5px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+
+.contextLengthSliderLabels small {
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 8.5px;
+  font-weight: 560;
+}
+
+.contextLengthHint {
+  margin-top: 0;
+  color: var(--faint);
+}
+
+.harnessSettingsActions {
+  align-items: flex-start;
+}
+
+.skillRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skillRowText strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.skillRowText em {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.skillGovernance {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+.skillGovernance.isModified {
+  color: color-mix(in srgb, var(--amber) 64%, var(--muted));
+}
+
+.skillGovernance.isModified::before {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--amber) 72%, var(--text));
+  content: "";
+}
+
+.skillPreviewPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin: 0 10px 10px 37px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 7px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-2) 46%, transparent);
+}
+
+.skillPreviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.skillPreviewActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.skillPreviewHeader > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.skillPreviewBody {
+  min-width: 0;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface) 34%, transparent);
+}
+
+.skillPreviewBody .markdownContent {
+  max-width: none;
+  font-size: 12.5px;
+}
+
+.skillPreviewBody .markdownContent > :last-child {
+  margin-bottom: 0;
+}
+
+.skillPreviewEmpty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+  padding: 0;
+}
+
+.toggle:hover,
+.toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.toggle .toggleKnob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.toggle.isOn {
+  background: color-mix(in srgb, var(--accent) 48%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.toggle.isOn .toggleKnob {
+  transform: translateX(14px);
+  background: #fff;
+}
+
+.settingsActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settingsInlineButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settingsInlineButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
+}
+
+.settingsInlineButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.connectionSaveButton {
+  width: min(152px, 100%);
+}
+
+.connectionSaveButton:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.settingsMessage {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.riskDialog {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  width: min(410px, calc(100vw - 48px));
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--red) 24%, var(--line-strong));
+  border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 46%),
+    color-mix(in srgb, var(--modal-bg) 96%, transparent);
+  box-shadow: 0 16px 44px color-mix(in srgb, var(--shadow-color) 70%, transparent);
+}
+
+.safePermissionDialog {
+  grid-template-columns: 30px minmax(0, 1fr);
+  width: min(430px, calc(100vw - 48px));
+  border-color: color-mix(in srgb, var(--green) 28%, var(--line-strong));
+}
+
+.safePermissionIcon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 13%, var(--control-bg));
+}
+
+.deleteDialog {
+  grid-template-columns: 22px minmax(0, 1fr);
+  width: min(440px, calc(100vw - 48px));
+}
+
+@media (max-width: 760px) {
+  .settingsLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settingsNav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .settingsNavItem {
+    flex-shrink: 0;
+  }
+
+  .settingsListRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .settingsFieldRow,
+  .endpointHeaderRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connectionModeGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Focused code-review workspace. The panel is a parallel material layer, not a modal. */

@@ -7,11 +7,11 @@ pub mod loop_runtime;
 pub mod lsp;
 pub mod permission;
 pub mod policy;
-pub mod provider;
 pub mod safety;
 pub mod server;
 pub mod session;
 pub mod tools;
+pub mod veil_client;
 pub mod workspace_graph;
 
 pub const RUNNER_NAME: &str = "UmbraticRunner";

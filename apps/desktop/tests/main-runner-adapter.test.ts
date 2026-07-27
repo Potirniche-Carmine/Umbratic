@@ -90,7 +90,6 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   const config = adapter.buildUmbraticRunnerConfig(task, model, "C:/app-data/chat-attachments/chat-1");
   assert.equal(config.taskId, "task-1");
   assert.equal(config.cwd, "C:/repo/.umbratic/worktree");
-  assert.equal(config.modelBoundary, "managed");
   assert.equal(config.permissionMode, "normal");
   assert.equal(config.contextLength, 128000);
   assert.equal(config.maxResponseTokens, 8192);
@@ -149,7 +148,6 @@ test("engineering harness mode uses its Veil route without runtime prompt profil
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), false);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-data-analysis"), false);
   assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
-  assert.equal(config.modelBoundary, "managed");
   assert.equal(config.contextLength, 32768);
   assert.equal("system" in config, false);
 });
@@ -185,7 +183,6 @@ test("business harness modes use their Veil route with business system skills", 
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-pdf"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
   assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
-  assert.equal(config.modelBoundary, "managed");
   assert.equal("system" in config, false);
 });
 

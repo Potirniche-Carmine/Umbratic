@@ -5,7 +5,7 @@ import * as http from "node:http";
 import * as path from "node:path";
 
 import { isLocalhostUrl } from "./policy";
-import type { ModelEndpointSettings } from "./types";
+import type { ActiveModelEndpointSettings } from "./types";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 
 export type LocalVeilConnection = {
@@ -56,7 +56,7 @@ export function parseLocalVeilDiagnosticLine(line: string): LocalVeilDiagnostic 
   }
 }
 
-function localVeilKey(settings: ModelEndpointSettings, contextLength: number): string {
+function localVeilKey(settings: ActiveModelEndpointSettings, contextLength: number): string {
   return JSON.stringify({
     software: "ollama",
     runtimeBaseUrl: settings.baseUrl.trim().replace(/\/+$/, ""),
@@ -186,7 +186,7 @@ function activateLocalVeil(baseUrl: string, authToken: string): Promise<void> {
 }
 
 export function localVeilEnvironment(
-  settings: ModelEndpointSettings,
+  settings: ActiveModelEndpointSettings,
   address: string,
   authToken: string,
   contextLength = DEFAULT_CONTEXT_LENGTH,
@@ -237,7 +237,7 @@ export function currentLocalVeilConnection(): LocalVeilConnection | null {
 }
 
 async function startLocalVeil(
-  settings: ModelEndpointSettings,
+  settings: ActiveModelEndpointSettings,
   contextLength: number,
   key: string,
   onDiagnostic: LocalVeilDiagnosticSink,
@@ -347,7 +347,7 @@ async function startLocalVeil(
 }
 
 export async function ensureLocalVeil(
-  settings: ModelEndpointSettings,
+  settings: ActiveModelEndpointSettings,
   configuredContextLength = DEFAULT_CONTEXT_LENGTH,
   onDiagnostic: LocalVeilDiagnosticSink = () => undefined,
 ): Promise<LocalVeilConnection> {

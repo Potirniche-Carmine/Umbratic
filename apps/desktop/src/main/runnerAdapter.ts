@@ -62,7 +62,6 @@ export function buildUmbraticRunnerConfig(
     protectedPromptReserveTokens: 2_048,
     attachmentDirectory,
     workspaceMode: task.workspaceMode,
-    modelBoundary: "managed",
     skills: enabledPromptSkills().map((skill) => ({
       id: skill.id,
       name: skill.name,

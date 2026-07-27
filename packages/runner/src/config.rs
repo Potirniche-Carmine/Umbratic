@@ -26,13 +26,6 @@ pub enum PermissionMode {
     AutoSafe,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModelBoundary {
-    Development,
-    Managed,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunnerSkillConfig {
@@ -97,7 +90,6 @@ pub struct RunnerConfig {
     pub protected_prompt_reserve_tokens: u64,
     pub attachment_directory: Option<PathBuf>,
     pub workspace_mode: String,
-    pub model_boundary: ModelBoundary,
     pub skills: Vec<RunnerSkillConfig>,
     pub permission_mode: PermissionMode,
     pub enabled_tools: Vec<String>,
@@ -174,7 +166,7 @@ pub fn provider_endpoint_url(provider: &ProviderConfig) -> Result<Url, String> {
     configured_endpoint_url(&provider.base_url, provider.chat_endpoint_path.as_deref())
 }
 
-fn validate_provider(provider: &ProviderConfig, _boundary: ModelBoundary) -> Result<(), String> {
+fn validate_provider(provider: &ProviderConfig) -> Result<(), String> {
     if provider.id != "company-endpoint" {
         return Err("provider id must be company-endpoint".to_owned());
     }
@@ -405,22 +397,12 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         .get("provider")
         .ok_or_else(|| "runner config missing provider".to_owned())?;
     let provider_object = object(provider_value)?;
-    let model_boundary = match config.get("modelBoundary").and_then(Value::as_str) {
-        Some("managed") => ModelBoundary::Managed,
-        Some("development") => ModelBoundary::Development,
-        _ if env::var("NODE_ENV").ok().as_deref() == Some("production") => ModelBoundary::Managed,
-        _ => ModelBoundary::Development,
-    };
     if config
         .get("system")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty())
     {
         return Err("runner config must not include a client system prompt".to_owned());
-    }
-    let provider_id = optional_string(provider_object.get("id")).unwrap_or_default();
-    if model_boundary == ModelBoundary::Managed && provider_id != "company-endpoint" {
-        return Err("managed runner config requires provider.id company-endpoint".to_owned());
     }
     let headers = provider_object
         .get("headers")
@@ -460,7 +442,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         headers,
         mtls,
     };
-    validate_provider(&provider, model_boundary)?;
+    validate_provider(&provider)?;
     let enabled_set = config
         .get("enabledTools")
         .and_then(Value::as_array)
@@ -494,7 +476,6 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
                 "local"
             }
             .to_owned(),
-        model_boundary,
         skills: parse_skills(config.get("skills")),
         permission_mode: if matches!(
             config.get("permissionMode").and_then(Value::as_str),
@@ -580,37 +561,25 @@ mod tests {
     #[test]
     fn remote_plain_http_and_unapproved_managed_routes_are_rejected() {
         assert_eq!(
-            validate_provider(
-                &provider("http://example.com", "/api/engineering/chat"),
-                ModelBoundary::Managed
-            )
-            .unwrap_err(),
+            validate_provider(&provider("http://example.com", "/api/engineering/chat"))
+                .unwrap_err(),
             "remote provider baseURL must use HTTPS"
         );
         assert!(
-            validate_provider(
-                &provider("https://veil.example", "/v1/chat/completions"),
-                ModelBoundary::Managed
-            )
-            .unwrap_err()
-            .contains("approved Veil chat route")
+            validate_provider(&provider("https://veil.example", "/v1/chat/completions"))
+                .unwrap_err()
+                .contains("approved Veil chat route")
         );
         assert!(
-            validate_provider(
-                &provider("https://veil.example", "/v1/chat/completions"),
-                ModelBoundary::Development
-            )
-            .unwrap_err()
-            .contains("approved Veil chat route")
+            validate_provider(&provider("https://veil.example", "/v1/chat/completions"))
+                .unwrap_err()
+                .contains("approved Veil chat route")
         );
         assert!(
-            validate_provider(
-                &provider(
-                    "https://veil.example",
-                    "https://other.example/api/engineering/chat"
-                ),
-                ModelBoundary::Managed
-            )
+            validate_provider(&provider(
+                "https://veil.example",
+                "https://other.example/api/engineering/chat"
+            ))
             .unwrap_err()
             .contains("relative Veil route")
         );

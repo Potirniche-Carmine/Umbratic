@@ -149,14 +149,12 @@ function config(
   cwd: string,
   providerUrl: string,
   diagnosticLogPath: string,
-  modelBoundary = "managed",
   overrides: Record<string, unknown> = {},
 ) {
   return {
     taskId: "native-test-task",
     cwd,
     workspaceMode: "local",
-    modelBoundary,
     permissionMode: "normal",
     enabledTools: ["read", "write", "edit", "search", "command"],
     diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
@@ -169,7 +167,6 @@ async function startRunner(
   cwd: string,
   providerUrl: string,
   diagnosticLogPath: string,
-  modelBoundary = "managed",
   overrides: Record<string, unknown> = {},
 ) {
   const password = "native-test-secret";
@@ -178,7 +175,7 @@ async function startRunner(
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  child.stdin.end(JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, modelBoundary, overrides)));
+  child.stdin.end(JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, overrides)));
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`runner startup timed out: ${output}`)), 5_000);
@@ -323,7 +320,7 @@ function inspect() {
 process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); inspect(); });
 `);
   const provider = await startProvider();
-  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
     enabledTools: ["read", "search", "lsp"],
     lspServers: [{
       id: "typescript-language-server",
@@ -378,7 +375,7 @@ test("native runner degrades a crashed language server without failing the task"
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-lsp-degraded-"));
   fs.writeFileSync(path.join(cwd, "main.ts"), "export const answer = 42;\n");
   const provider = await startProvider();
-  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
     enabledTools: ["read", "lsp"],
     lspServers: [{
       id: "typescript-language-server",
@@ -409,7 +406,7 @@ test("native runner degrades a crashed language server without failing the task"
 test("native runner semantically compacts a durable prefix and persists the validated handoff", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-compaction-"));
   const provider = await startProvider();
-  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
     contextLength: 10_000,
     maxResponseTokens: 4_096,
     protectedPromptReserveTokens: 2_048,
@@ -444,7 +441,7 @@ test("32K and 64K compaction evaluation preserves latest-request recall without 
   for (const contextLength of [32_000, 64_000]) {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `umbratic-context-${contextLength}-`));
     const provider = await startProvider();
-    const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "managed", {
+    const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
       contextLength,
       maxResponseTokens: 8_192,
       protectedPromptReserveTokens: 2_048,
@@ -536,7 +533,7 @@ test("native runner rejects a second prompt while a turn is active and scopes ab
   const address = provider.address();
   assert.ok(address && typeof address !== "string");
   const providerUrl = `http://127.0.0.1:${address.port}`;
-  const run = await startRunner(cwd, providerUrl, path.join(cwd, "runner.jsonl"), "managed", { enabledTools: [] });
+  const run = await startRunner(cwd, providerUrl, path.join(cwd, "runner.jsonl"), { enabledTools: [] });
   const events = await eventCollector(run);
   try {
     const session = await createSession(run);
@@ -726,7 +723,6 @@ test("native runner sends the adaptive response allowance selected during prefli
     cwd,
     provider.url,
     path.join(cwd, "runner.jsonl"),
-    "managed",
     {
       contextLength: 16_000,
       maxResponseTokens: 8_192,
@@ -763,7 +759,6 @@ test("native runner retrieves a complete chat attachment across bounded tool cal
     cwd,
     provider.url,
     path.join(cwd, "runner.jsonl"),
-    "managed",
     { attachmentDirectory, enabledTools: [] },
   );
   const events = await eventCollector(run);
@@ -793,10 +788,10 @@ test("native runner retrieves a complete chat attachment across bounded tool cal
   }
 });
 
-test("native runner rejects client system prompts in development mode", async () => {
+test("native runner rejects client system prompts", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-system-"));
   const provider = await startProvider();
-  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), "development");
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
   try {
     const session = await createSession(run);
     const response = await run.request(`/session/${session.id}/prompt_async`, {

@@ -1,0 +1,375 @@
+@media (prefers-reduced-transparency: reduce) {
+  .reviewPanel,
+  .reviewTopbar,
+  .reviewFileToolbar,
+  .reviewFeedbackTray,
+  .reviewScopeMenu {
+    background: var(--surface) !important;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.dialogIcon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--red) 74%, var(--text));
+  background: transparent;
+}
+
+.deleteIcon {
+  color: color-mix(in srgb, var(--red) 74%, var(--text));
+}
+
+.riskDialog h3 {
+  margin: 0 0 5px;
+  font-size: 14px;
+}
+
+.riskDialog p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.42;
+}
+
+.dialogActions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.dangerAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  color: color-mix(in srgb, var(--red) 16%, var(--text));
+  border: 1px solid color-mix(in srgb, var(--red) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 14%, var(--control-bg));
+  font-weight: 800;
+}
+
+.dangerAction:hover {
+  background: color-mix(in srgb, var(--red) 20%, var(--control-hover));
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 24px;
+  gap: 9px;
+  align-items: center;
+  width: min(560px, calc(100vw - 36px));
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 111, 122, 0.42);
+  border-radius: var(--radius);
+  background: rgba(83, 24, 28, 0.96);
+  color: #ffd3d6;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+}
+
+.toast span {
+  line-height: 20px;
+}
+
+.toast button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.toast button:hover {
+  background: var(--control-hover);
+}
+
+.warnText {
+  color: var(--amber);
+}
+
+.goodText {
+  color: var(--green) !important;
+}
+
+.badText {
+  color: var(--red);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes reasoningWave {
+  0% {
+    transform: translateX(-82%);
+  }
+
+  48%,
+  100% {
+    transform: translateX(82%);
+  }
+}
+
+@keyframes commandDetailsIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes activityDotPulse {
+  0%,
+  72%,
+  100% {
+    opacity: 0.22;
+    transform: translateY(0);
+  }
+
+  36% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes streamPulse {
+  0%,
+  100% {
+    opacity: 0.38;
+    transform: scaleY(0.82);
+  }
+
+  45% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes streamingCaretBlink {
+  0%,
+  48% {
+    opacity: 0.45;
+  }
+
+  49%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes menuRise {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes reviewPanelSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(calc(100% + 18px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes reviewPanelSlideOut {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(calc(100% + 18px));
+  }
+}
+
+@keyframes promptDockIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 160ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 160ms !important;
+  }
+
+  .reviewSidebar { transform: none !important; }
+
+  .streamingTextCaret {
+    animation: none !important;
+    opacity: 0.35;
+  }
+}
+
+button,
+[role="button"],
+[role="menuitem"] {
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms ease-out, background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+button:active:not(:disabled),
+[role="button"]:active,
+[role="menuitem"]:active {
+  transform: scale(0.97);
+}
+
+/* Quiet disclosures should acknowledge the press without moving their label or content. */
+.timelineActivity .activityHeader:active:not(:disabled),
+.activityToolToggle:active:not(:disabled),
+.idePickerToggle:active:not(:disabled),
+.skillRowButton:active:not(:disabled) {
+  transform: none;
+  opacity: 0.72;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="separator"]:focus-visible,
+[role="menuitem"]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .sidebar,
+  .reviewSidebar,
+  .promptDock,
+  .chatProjectMenu,
+  .ideMenu,
+  .contextMeterTooltip {
+    background: var(--surface) !important;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .sidebar,
+  .reviewSidebar,
+  .promptDock,
+  .chatProjectMenu,
+  .ideMenu,
+  .contextMeterTooltip {
+    border-color: var(--text) !important;
+  }
+}
+
+.sidebarBrand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 2px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.sidebarBrandLogo {
+  display: block;
+  width: 104px;
+  height: 32px;
+  background: var(--faint);
+  opacity: 0.95;
+  mask: url("../../../assets/brand/Umbratic/umbratic-full-horizontal-transparent.png") center / contain no-repeat;
+  -webkit-mask: url("../../../assets/brand/Umbratic/umbratic-full-horizontal-transparent.png") center / contain no-repeat;
+}
+
+.confidentialMark {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--faint);
+  opacity: 0.9;
+}
+
+@media (max-width: 1120px) {
+  .reviewSidebar {
+    width: min(var(--review-width, 65vw), 95vw, calc(100vw - 24px));
+    max-width: min(95vw, calc(100vw - 24px));
+  }
+
+  .promptDock {
+    padding-inline: clamp(18px, 3vw, 34px);
+  }
+}
+
+@media (max-width: 760px) {
+  .sidebar {
+    width: min(var(--sidebar-width, 230px), calc(100vw - 42px));
+    min-width: min(168px, calc(100vw - 42px));
+  }
+
+  .reviewSidebar {
+    width: min(var(--review-width, 65vw), 95vw, calc(100vw - 30px));
+    max-width: min(95vw, calc(100vw - 30px));
+  }
+
+  .promptDock {
+    padding: 13px 12px 16px;
+  }
+
+  .composerBody {
+    padding-inline: 16px;
+  }
+}
