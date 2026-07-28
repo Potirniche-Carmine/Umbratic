@@ -4,60 +4,6 @@ Umbratic is a private AI workbench for teams running local or company-managed mo
 
 Umbratic is not a public connector platform. The supported harness surface is intentionally small: local workspace tools, local skills, Veil-owned prompts, worktree review, approval flows, and redacted operational telemetry retained on company-managed servers.
 
-## Architecture
-
-```text
-Electron/React desktop shell
-  -> native Rust desktop core for bounded repository search
-  -> native Rust runner on 127.0.0.1
-    -> Veil authenticated model boundary
-      -> private Ollama or vLLM runtime
-  -> local workspace files and commands
-  -> local ~/.umbratic/skills
-  -> optional local document artifact runtime
-  -> task, review, and telemetry storage
-```
-
-## Product Boundary
-
-In scope:
-
-- Read, search, edit, write, and command tools inside the selected workspace.
-- Veil as the only supported model endpoint path.
-- Admin-configured Ollama or vLLM runtimes hidden behind Veil.
-- Local skills stored under `~/.umbratic/skills`.
-- Veil-owned global, route, and skill-use prompts for both local and server modes.
-- Local document artifact workflows for PDF, DOCX, PPTX, and XLSX when installed runtime support is available.
-- Worktree-based review and approval before changes are accepted.
-- Local-only SQLite diagnostics plus selective server telemetry for workflow activity, rated conversations, failed tools, and context thresholds.
-
-Out of scope:
-
-- Browser automation and web extraction.
-- Web search.
-- MCP or third-party connectors.
-- Public skill marketplaces or internet skill downloads.
-- Scheduled jobs, reminders, durable memory, or background automations.
-- Generic provider marketplaces or direct public model passthrough.
-
-Diagnostic logs stay in the desktop SQLite database and are never uploaded. Managed telemetry sends compact workflow events, full conversations only when a response is rated, and typed failed-tool metadata (kinds, codes, sizes, path hashes) without raw prompt or command dumps. Unrated conversations, successful tool content, diffs, attachments, and local logs are excluded. Managed deployments should store telemetry only on company-controlled servers.
-
-Harness modes select a Veil route, not a client-side system prompt. The desktop sends factual workspace context, and Veil adds the protected global and route guidance for both an app-launched local Veil and a hosted Veil server. System and personal skills are visible in Skills settings, can be toggled, and can be edited; system skills are editable files under `~/.umbratic/skills/system/<id>/SKILL.md`, while personal skills remain stored under `~/.umbratic/skills`. Every enabled skill is exposed to the model by id, name, description, and source only. When a skill is relevant, Veil requires the model to use the local `read_skill` tool and finish reading `SKILL.md` before applying it.
-
-## Install Runtime Expectations
-
-Umbratic should install or validate a small versioned local runtime instead of depending on whatever happens to be on the user's global `PATH`.
-
-Recommended installer bundle:
-
-- Core: signed native Rust runner and desktop-core binaries, the Electron runtime, Git, and a private Veil endpoint configuration.
-- Engineering helpers: `rg`, `fd`, `uv`, CMake, Ninja, compiler toolchains, `jq`, `yq`, `tree-sitter`, and `bat` when engineering mode is enabled.
-- PDF artifacts: Poppler commands such as `pdftoppm` and `pdfinfo`, plus Python packages `reportlab`, `pdfplumber`, and `pypdf`.
-- DOCX/PPTX/XLSX artifacts: a bundled Node artifact runtime for Office files, plus LibreOffice or another local render/export path for visual QA.
-- Skills: system skills for skill creation, Markdown, PDF, document, presentation, spreadsheet, and engineering workflows under `~/.umbratic/skills/system/<id>/SKILL.md`, plus personal skills under `~/.umbratic/skills`.
-
-The app probes these dependencies as execution capabilities, not as prompt profiles. Actual runtimes are still needed when a tool must run Python, CMake, OCR, or artifact generation; they no longer inject behavioral guidance from the harness. PDF text extraction is useful for quick checks, but final PDF, DOCX, PPTX, and XLSX work should use render/export verification before claiming visual QA.
-
 ## Project Structure
 
 - `apps/desktop/` - Electron/Vite/React TypeScript shell plus the native Rust desktop core in `native/`.
@@ -93,7 +39,7 @@ npm run desktop:build
 ```
 
 Run the desktop app with packaged-app connection behavior. Local is the first-run
-default, and you can switch between Local and Server in Settings:
+default, and you can switch between Local and Company server in Settings:
 
 ```sh
 npm run local -- --model llama3.2
@@ -101,6 +47,14 @@ npm run local -- --model llama3.2
 
 In Local mode the desktop owns the Veil process and supplies its configuration at
 launch. Packaged users do not need a Veil `.env` file.
+
+In Company server mode, an administrator creates an assigned user in Veil Console
+and gives the user one Enrollment code. The desktop uses the code once to enroll
+one device. It then uses a device key and short sessions. A shared company bearer
+token cannot access chat or telemetry.
+
+See [`docs/enterprise-licensing.md`](docs/enterprise-licensing.md) for customer
+release, entitlement, backup, and recovery procedures.
 
 Run Veil by itself for server development:
 

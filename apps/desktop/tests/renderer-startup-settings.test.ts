@@ -18,3 +18,12 @@ test("changing Auto-run does not wait for model status", () => {
   assert.match(implementation, /return permissionMode/);
   assert.doesNotMatch(implementation, /getBackendStatus/);
 });
+
+test("the top connection refresh owns local model discovery", () => {
+  const renderer = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  const picker = fs.readFileSync(new URL("../src/renderer/LocalModelPicker.tsx", import.meta.url), "utf8");
+  const start = renderer.indexOf("async function refreshConnectionStatus");
+  const end = renderer.indexOf("\n  async function saveEndpointSettings", start);
+  assert.match(renderer.slice(start, end), /api\.probeLocalModels/);
+  assert.doesNotMatch(picker, /probeLocalModels|RefreshCw|setTimeout/);
+});

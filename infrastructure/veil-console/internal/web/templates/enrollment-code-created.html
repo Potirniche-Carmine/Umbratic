@@ -1,0 +1,32 @@
+{{define "enrollment-code-created.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/favicon.ico?v=10">
+  <link rel="stylesheet" href="/assets/style.css?v=10">
+  <link rel="stylesheet" href="/assets/access.css?v=10">
+  <script defer src="/assets/console.js?v=10"></script>
+</head>
+<body>
+<main class="app-shell">
+  {{template "topbar" .}}
+  <div class="page">
+    <header class="page-header"><h1>Enrollment code</h1></header>
+    <section class="panel one-time-secret">
+      <div>
+        <h2>Copy this code now</h2>
+        <p>Veil Console will not show it again.</p>
+      </div>
+      <pre aria-label="Enrollment code" data-token>{{.EnrollmentCode}}</pre>
+      <p class="access-muted">Expires {{.EnrollmentExpires}}</p>
+      <div class="secret-actions">
+        <button type="button" data-copy-token>Copy code</button>
+        <a class="button secondary" href="/access">Return to Management</a>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>{{end}}

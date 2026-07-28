@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, env, io::Read, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    env,
+    io::Read,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -61,7 +67,7 @@ pub struct ProviderConfig {
     pub name: String,
     pub base_url: String,
     pub chat_endpoint_path: Option<String>,
-    pub api_key: String,
+    pub api_key: Arc<RwLock<String>>,
     pub model_id: String,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
@@ -464,11 +470,13 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .trim_end_matches('/')
             .to_owned(),
         chat_endpoint_path: optional_string(provider_object.get("chatEndpointPath")),
-        api_key: provider_object
-            .get("apiKey")
-            .and_then(Value::as_str)
-            .unwrap_or("local")
-            .to_owned(),
+        api_key: Arc::new(RwLock::new(
+            provider_object
+                .get("apiKey")
+                .and_then(Value::as_str)
+                .unwrap_or("local")
+                .to_owned(),
+        )),
         model_id: string_value(provider_object.get("modelId"), "provider.modelId")?,
         headers,
         mtls,
@@ -566,7 +574,7 @@ mod tests {
             name: "Veil".into(),
             base_url: "http://127.0.0.1:1234".into(),
             chat_endpoint_path: Some("/api/engineering/chat".into()),
-            api_key: String::new(),
+            api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
             headers: BTreeMap::new(),
             mtls: None,
@@ -583,7 +591,7 @@ mod tests {
             name: "Veil".into(),
             base_url: base_url.into(),
             chat_endpoint_path: Some(endpoint.into()),
-            api_key: String::new(),
+            api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
             headers: BTreeMap::new(),
             mtls: None,

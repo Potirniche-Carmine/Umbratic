@@ -268,6 +268,48 @@ func TestSetupLoginAndAuthenticatedPage(t *testing.T) {
 	}
 }
 
+func TestWrongLoginUsesFloatingErrorAndRequiresRetryDelay(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+
+	emptyPage := httptest.NewRecorder()
+	server.render(emptyPage, "login.html", pageData{Title: "Sign in", CSRF: "csrf"})
+	if body := emptyPage.Body.String(); !strings.Contains(body, `class="error auth-error is-empty"`) ||
+		!strings.Contains(body, `data-retry-after="0"`) ||
+		!strings.Contains(body, `/assets/style.css?v=8`) ||
+		!strings.Contains(body, `/assets/console.js?v=8`) {
+		t.Fatalf("login page did not render the hidden error and current assets: %s", body)
+	}
+
+	csrfResponse := httptest.NewRecorder()
+	csrfRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8177/login", nil)
+	csrf := server.publicCSRF(csrfResponse, csrfRequest)
+	form := url.Values{"csrf": {csrf}, "username": {"owner"}, "password": {"wrong password"}}
+	request := formRequest(http.MethodPost, "/login", form, csrfResponse.Result().Cookies()...)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || response.Header().Get("Retry-After") != "2" {
+		t.Fatalf("wrong login returned %d with retry %q", response.Code, response.Header().Get("Retry-After"))
+	}
+	if body := response.Body.String(); !strings.Contains(body, `class="error auth-error"`) ||
+		strings.Contains(body, `auth-error is-empty`) || !strings.Contains(body, `data-retry-after="2"`) {
+		t.Fatalf("wrong login did not render a stable retry state: %s", body)
+	}
+}
+
+func TestLoginRetryDelayStaysAtTwoSeconds(t *testing.T) {
+	throttle := newLoginThrottle()
+	now := time.Now()
+	throttle.Failed("owner", now)
+	if wait := throttle.Wait("owner", now); wait != 2*time.Second {
+		t.Fatalf("first retry delay was %s", wait)
+	}
+	throttle.Failed("owner", now.Add(3*time.Second))
+	if wait := throttle.Wait("owner", now.Add(3*time.Second)); wait != 2*time.Second {
+		t.Fatalf("repeated retry delay was %s", wait)
+	}
+}
+
 func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
 	server, closeServer := testServer(t)
 	defer closeServer()

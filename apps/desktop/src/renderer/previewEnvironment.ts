@@ -13,6 +13,7 @@ import type {
   CapabilityProbeResult,
   ChatAttachment,
   ChatRecord,
+  CompanyConnectionStatus,
   DesktopApi,
   HarnessProfileId,
   IdeInfo,
@@ -586,6 +587,7 @@ function previewSkillContent(skill: SkillInfo): string {
 }
 
 function createPreviewApi(): DesktopApi {
+  let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   const previewApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -808,6 +810,7 @@ function createPreviewApi(): DesktopApi {
   getStartupSettings: async () => ({
     permissionMode: getPreviewPermissionMode(),
     modelEndpoint: readPreviewEndpointSettings(),
+    companyConnection: previewCompanyConnection,
     harnessProfile: readPreviewHarnessProfile(),
     contextLength: readPreviewContextLength(),
   }),
@@ -826,10 +829,38 @@ function createPreviewApi(): DesktopApi {
     return { contextLength, status: await previewApi.getBackendStatus() };
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
+  probeLocalModels: async () => ({ status: "ready", models: ["llama3.2", "qwen3:8b"] }),
   saveModelEndpointSettings: async (input) => {
     const settings = publicPreviewEndpointSettings(normalizeEndpointSettings(input));
     writePreviewEndpointSettings(settings);
     return { settings, status: await previewApi.getBackendStatus() };
+  },
+  getCompanyConnectionStatus: async () => previewCompanyConnection,
+  enrollCompanyConnection: async (input) => {
+    const settings = publicPreviewEndpointSettings(normalizeEndpointSettings({
+      ...readPreviewEndpointSettings(),
+      mode: "server",
+      software: "vllm",
+      baseUrl: input.baseUrl,
+      modelId: "veil-managed",
+      secret: "",
+    }));
+    writePreviewEndpointSettings(settings);
+    previewCompanyConnection = {
+      state: "enrolled",
+      baseUrl: input.baseUrl,
+      orgName: "Preview organization",
+      deviceLabel: "Preview device",
+    };
+    return { connection: previewCompanyConnection, settings, status: await previewApi.getBackendStatus() };
+  },
+  disconnectCompanyConnection: async () => {
+    previewCompanyConnection = { state: "not_enrolled" };
+    return {
+      connection: previewCompanyConnection,
+      settings: readPreviewEndpointSettings(),
+      status: await previewApi.getBackendStatus(),
+    };
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),

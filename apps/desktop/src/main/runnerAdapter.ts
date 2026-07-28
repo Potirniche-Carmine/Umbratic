@@ -83,11 +83,11 @@ export function buildUmbraticRunnerConfig(
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
       chatEndpointPath: route.chatEndpointPath,
-      apiKey: localVeil?.authToken ?? endpointSettings.secret.trim(),
+      apiKey: localVeil?.authToken ?? "",
       modelId: selectedModel.modelId,
       headers: Object.fromEntries(
         (endpointSettings.mode === "local" ? [] : endpointSettings.headers)
-          .filter((header) => header.name.trim() && header.value)
+          .filter((header) => header.name.trim().toLowerCase() !== "authorization" && header.value)
           .map((header) => [header.name.trim(), header.value]),
       ),
       mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
@@ -227,6 +227,10 @@ async function freeLocalPort(): Promise<number> {
 }
 
 export function stopRunnerProcess(run: RunnerProcess) {
+  if (run.providerSessionRefresh) {
+    clearInterval(run.providerSessionRefresh);
+    run.providerSessionRefresh = undefined;
+  }
   run.abortController.abort();
   if (run.child.killed || run.child.exitCode !== null) return;
   if (process.platform === "win32" && run.child.pid) {
@@ -272,6 +276,13 @@ export async function runnerRequest<T>(
     return undefined as T;
   }
   return response.json() as Promise<T>;
+}
+
+export async function setRunnerProviderSession(run: RunnerProcess, session: string): Promise<void> {
+  await runnerRequest<void>(run, "/provider/session", {
+    method: "POST",
+    body: { session },
+  });
 }
 
 export async function startUmbraticRunnerServer(

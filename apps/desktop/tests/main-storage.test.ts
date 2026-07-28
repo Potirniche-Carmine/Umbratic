@@ -579,6 +579,38 @@ test("endpoint settings default to local and migrate the old local Veil URL sema
   assert.doesNotMatch(JSON.stringify(rawSettings), /must-not-be-stored|also-not-stored/);
 });
 
+test("local model settings remain in SQLite after a switch to a company server", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-modes-"));
+  const storage = loadStorage(userData);
+
+  storage.writeModelEndpointSettings({
+    mode: "local",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    modelId: "qwen3:8b",
+  });
+  storage.writeModelEndpointSettings({
+    mode: "server",
+    software: "vllm",
+    baseUrl: "https://veil.example.internal",
+    modelId: "veil-managed",
+  });
+
+  assert.equal(storage.readModelEndpointSettings().mode, "server");
+  assert.deepEqual(plain(storage.readModelEndpointSettingsForMode("local")), {
+    mode: "local",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    modelId: "qwen3:8b",
+    secret: "",
+    headers: [{ name: "", value: "" }, { name: "", value: "" }],
+  });
+
+  const rawSettings = JSON.parse(readSettingsPayloadText(userData));
+  assert.equal(rawSettings.modelEndpoints.local.modelId, "qwen3:8b");
+  assert.equal(rawSettings.modelEndpoints.server.baseUrl, "https://veil.example.internal");
+});
+
 test("an explicitly forced local configuration overrides a stored server endpoint for the session", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-forced-local-"));
   loadStorage(userData).readModelEndpointSettings();
@@ -737,6 +769,34 @@ test("app and chat databases keep one process-lifetime handle and migrate once",
   assert.equal(storage.readTask("task-lifetime")?.prompt, "hello");
   assert.equal(storage.retainedStorageDatabaseCount(), 1, "reads reopen a retained handle after close");
   storage.closeStorageDatabases();
+});
+
+test("company device credentials keep the private key in safeStorage and expose only status", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-company-credential-"));
+  const storage = loadStorage(userData);
+  const credential = {
+    version: 2,
+    baseUrl: "https://veil.example.com",
+    orgUid: "org_enterprise",
+    orgName: "Northwind",
+    userUid: "usr_alice",
+    deviceUid: "dev_laptop",
+    deviceLabel: "Work laptop",
+    publicKey: "public-key",
+    privateKeyPkcs8: "private-key-material",
+  };
+  storage.writeCompanyDeviceCredential(credential);
+  assert.deepEqual(plain(storage.readCompanyDeviceCredential()), credential);
+  assert.deepEqual(plain(storage.companyConnectionStatus()), {
+    state: "enrolled",
+    baseUrl: credential.baseUrl,
+    orgName: credential.orgName,
+    deviceLabel: credential.deviceLabel,
+  });
+  assert.doesNotMatch(readSettingsPayloadText(userData), /private-key-material/);
+  assert.equal(storage.readStartupSettings().companyConnection.state, "enrolled");
+  storage.clearCompanyDeviceCredential();
+  assert.deepEqual(plain(storage.companyConnectionStatus()), { state: "not_enrolled" });
 });
 
 test("current SQLite schemas do not repeat schema DDL on retained handles", () => {

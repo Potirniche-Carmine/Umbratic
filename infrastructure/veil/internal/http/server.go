@@ -7,11 +7,15 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"umbratic-veil/internal/config"
+	"umbratic-veil/internal/entitlement"
+	"umbratic-veil/internal/identity"
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
 	"umbratic-veil/internal/prompts"
@@ -30,6 +34,9 @@ type ModelClient interface {
 type Server struct {
 	cfg          config.Config
 	model        ModelClient
+	identity     *identity.Store
+	identityErr  error
+	identityRate *identityRateLimiter
 	templateErr  error
 	templateData templates.Registry
 }
@@ -39,7 +46,19 @@ const streamVersionHeader = "X-Umbratic-Stream-Version"
 
 func NewServer(cfg config.Config, modelClient ModelClient) http.Handler {
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
-	return &Server{cfg: cfg, model: modelClient, templateData: registry, templateErr: err}
+	server := &Server{
+		cfg: cfg, model: modelClient, templateData: registry, templateErr: err,
+		identityRate: &identityRateLimiter{entries: map[string]rateEntry{}},
+	}
+	if cfg.CompanyIdentityMode {
+		license, licenseErr := entitlement.Load(cfg.EntitlementPath, time.Now())
+		if licenseErr != nil {
+			server.identityErr = licenseErr
+		} else {
+			server.identity, server.identityErr = identity.Open(cfg.IdentityStorePath, license)
+		}
+	}
+	return server
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +66,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if !s.authorized(r.Header.Get("Authorization")) {
+
+	if s.cfg.CompanyIdentityMode {
+		if s.identity == nil {
+			writeCodedError(w, http.StatusServiceUnavailable, "identity_unavailable", "Company access is unavailable.")
+			return
+		}
+		if s.handleCompanyIdentityRoute(w, r) {
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/control/") {
+			if !s.controlAuthorized(r.Header.Get("Authorization")) {
+				writeCodedError(w, http.StatusUnauthorized, "control_unauthorized", "Unauthorized.")
+				return
+			}
+			s.handleControlRoute(w, r)
+			return
+		}
+		deviceUID, sessionErr := s.authenticateProduct(r.Header.Get("Authorization"))
+		if r.URL.Path == "/api/health" && sessionErr != nil && s.controlAuthorized(r.Header.Get("Authorization")) {
+			sessionErr = nil
+		}
+		if sessionErr != nil {
+			writeIdentityError(w, sessionErr)
+			return
+		}
+		if isActivityProductRoute(r.URL.Path) {
+			if err := s.identity.Touch(deviceUID); err != nil {
+				writeCodedError(w, http.StatusServiceUnavailable, "activity_update_failed", "Company access is unavailable.")
+				return
+			}
+		}
+	} else if !s.authorized(r.Header.Get("Authorization")) {
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -89,6 +139,291 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleTelemetry(w, r)
 	default:
 		writeJSONError(w, http.StatusNotFound, "unknown route")
+	}
+}
+
+func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/enrollment/enroll":
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return true
+		}
+		if !s.allowIdentityRequest(w, r, "enroll", 10) {
+			return true
+		}
+		var input struct {
+			EnrollmentCode string `json:"enrollment_code"`
+			PublicKey      string `json:"public_key"`
+			DeviceLabel    string `json:"device_label"`
+		}
+		if !decodeStrictJSON(w, r, 64<<10, &input) {
+			s.recordIdentityFailure(r, "enroll")
+			return true
+		}
+		result, err := s.identity.Enroll(input.EnrollmentCode, input.PublicKey, input.DeviceLabel)
+		if err != nil {
+			s.recordIdentityFailure(r, "enroll")
+			writeIdentityError(w, err)
+			return true
+		}
+		writeJSON(w, http.StatusCreated, result)
+		return true
+	case "/api/session/challenge":
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return true
+		}
+		if !s.allowIdentityRequest(w, r, "challenge", 30) {
+			return true
+		}
+		var input struct {
+			DeviceUID string `json:"device_uid"`
+		}
+		if !decodeStrictJSON(w, r, 16<<10, &input) {
+			s.recordIdentityFailure(r, "challenge")
+			return true
+		}
+		result, err := s.identity.NewChallenge(strings.TrimSpace(input.DeviceUID))
+		if err != nil {
+			s.recordIdentityFailure(r, "challenge")
+			writeIdentityError(w, err)
+			return true
+		}
+		writeJSON(w, http.StatusCreated, result)
+		return true
+	case "/api/session":
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return true
+		}
+		var input struct {
+			ChallengeUID string `json:"challenge_uid"`
+			Signature    string `json:"signature"`
+		}
+		if !decodeStrictJSON(w, r, 16<<10, &input) {
+			return true
+		}
+		result, err := s.identity.NewSession(strings.TrimSpace(input.ChallengeUID), strings.TrimSpace(input.Signature))
+		if err != nil {
+			writeIdentityError(w, err)
+			return true
+		}
+		writeJSON(w, http.StatusCreated, result)
+		return true
+	case "/api/session/logout":
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return true
+		}
+		token := bearerToken(r.Header.Get("Authorization"))
+		if _, err := s.identity.Authenticate(token); err != nil {
+			writeIdentityError(w, err)
+			return true
+		}
+		if err := s.identity.Logout(token); err != nil {
+			writeCodedError(w, http.StatusServiceUnavailable, "logout_failed", "Logout failed.")
+			return true
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	default:
+		return false
+	}
+}
+
+type rateEntry struct {
+	window time.Time
+	count  int
+}
+
+type identityRateLimiter struct {
+	mu      sync.Mutex
+	entries map[string]rateEntry
+}
+
+func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, action string, limit int) bool {
+	key := identityRateKey(r, action)
+	now := time.Now()
+	s.identityRate.mu.Lock()
+	entry := s.identityRate.entries[key]
+	if !entry.window.IsZero() && now.Sub(entry.window) >= time.Minute {
+		delete(s.identityRate.entries, key)
+		entry = rateEntry{}
+	}
+	allowed := entry.count < limit
+	s.identityRate.mu.Unlock()
+	if allowed {
+		return true
+	}
+	w.Header().Set("Retry-After", "60")
+	writeCodedError(w, http.StatusTooManyRequests, "rate_limited", "Try again later.")
+	return false
+}
+
+func (s *Server) recordIdentityFailure(r *http.Request, action string) {
+	key := identityRateKey(r, action)
+	now := time.Now()
+	s.identityRate.mu.Lock()
+	defer s.identityRate.mu.Unlock()
+	entry := s.identityRate.entries[key]
+	if entry.window.IsZero() || now.Sub(entry.window) >= time.Minute {
+		entry = rateEntry{window: now}
+	}
+	entry.count++
+	s.identityRate.entries[key] = entry
+	if len(s.identityRate.entries) > 4096 {
+		for candidate, value := range s.identityRate.entries {
+			if now.Sub(value.window) >= time.Minute {
+				delete(s.identityRate.entries, candidate)
+			}
+		}
+	}
+}
+
+func identityRateKey(r *http.Request, action string) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return action + "|" + host
+}
+
+func (s *Server) handleControlRoute(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/control/access" {
+		if r.Method != http.MethodGet {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.identity.Snapshot())
+		return
+	}
+	if r.URL.Path == "/api/control/organization" {
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return
+		}
+		var input struct {
+			Name string `json:"name"`
+		}
+		if !decodeStrictJSON(w, r, 16<<10, &input) {
+			return
+		}
+		writeControlMutation(w, s.identity.SetOrganizationName(input.Name))
+		return
+	}
+	if r.URL.Path == "/api/control/users" {
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return
+		}
+		var input struct {
+			Label         string `json:"label"`
+			ActiveForDays int    `json:"active_for_days"`
+		}
+		if !decodeStrictJSON(w, r, 16<<10, &input) {
+			return
+		}
+		user, err := s.identity.CreateUser(input.Label, input.ActiveForDays)
+		if err != nil {
+			writeIdentityError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, user)
+		return
+	}
+
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/control/"), "/")
+	if len(parts) == 3 && parts[0] == "users" {
+		userUID, action := parts[1], parts[2]
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return
+		}
+		switch action {
+		case "deactivate":
+			writeControlMutation(w, s.identity.DeactivateUser(userUID))
+		case "reactivate":
+			writeControlMutation(w, s.identity.ReactivateUser(userUID))
+		case "enrollment-codes":
+			result, err := s.identity.IssueEnrollmentCode(userUID)
+			if err != nil {
+				writeIdentityError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, result)
+		default:
+			writeCodedError(w, http.StatusNotFound, "control_route_not_found", "Not found.")
+		}
+		return
+	}
+	if len(parts) == 3 && parts[0] == "enrollment-codes" && parts[2] == "revoke" {
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return
+		}
+		writeControlMutation(w, s.identity.RevokeEnrollmentCode(parts[1]))
+		return
+	}
+	if len(parts) == 3 && parts[0] == "devices" && parts[2] == "revoke" {
+		if r.Method != http.MethodPost {
+			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return
+		}
+		writeControlMutation(w, s.identity.RevokeDevice(parts[1]))
+		return
+	}
+	writeCodedError(w, http.StatusNotFound, "control_route_not_found", "Not found.")
+}
+
+func writeControlMutation(w http.ResponseWriter, err error) {
+	if err != nil {
+		writeIdentityError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func decodeStrictJSON(w http.ResponseWriter, r *http.Request, limit int64, output any) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); err != nil {
+		writeCodedError(w, http.StatusBadRequest, "invalid_request", "Request body is invalid.")
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		writeCodedError(w, http.StatusBadRequest, "invalid_request", "Request body is invalid.")
+		return false
+	}
+	return true
+}
+
+func writeIdentityError(w http.ResponseWriter, err error) {
+	var identityError *identity.Error
+	if !errors.As(err, &identityError) {
+		writeCodedError(w, http.StatusInternalServerError, "identity_error", "Company access failed.")
+		return
+	}
+	status := http.StatusBadRequest
+	switch identityError.Code {
+	case "session_invalid", "session_expired", "device_not_authorized", "challenge_proof_invalid", "challenge_invalid", "enrollment_code_invalid", "enrollment_code_expired":
+		status = http.StatusUnauthorized
+	case "seat_limit_reached", "device_limit_reached", "device_already_enrolled", "enrollment_code_not_pending", "user_deactivated", "user_expired":
+		status = http.StatusConflict
+	case "user_not_found", "device_not_found", "enrollment_code_not_found":
+		status = http.StatusNotFound
+	}
+	writeCodedError(w, status, identityError.Code, identityError.Message)
+}
+
+func isActivityProductRoute(path string) bool {
+	switch path {
+	case "/api/model/connect", "/api/model/context", "/api/engineering/chat", "/api/marketing/chat",
+		"/api/sales/chat", "/api/internal/context/compact", "/api/telemetry":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -449,18 +784,34 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, route pr
 }
 
 func (s *Server) authorized(header string) bool {
+	return tokenAuthorized(bearerToken(header), s.cfg.AuthToken)
+}
+
+func (s *Server) controlAuthorized(header string) bool {
+	return tokenAuthorized(bearerToken(header), s.cfg.ControlToken)
+}
+
+func (s *Server) authenticateProduct(header string) (string, error) {
+	token := bearerToken(header)
+	if token == "" {
+		return "", &identity.Error{Code: "session_invalid", Message: "The session is invalid."}
+	}
+	return s.identity.Authenticate(token)
+}
+
+func bearerToken(header string) string {
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(header, prefix))
+}
+
+func tokenAuthorized(token, expected string) bool {
+	if token == "" || expected == "" || len(token) != len(expected) {
 		return false
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
-	if token == "" || s.cfg.AuthToken == "" {
-		return false
-	}
-	if len(token) != len(s.cfg.AuthToken) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.AuthToken)) == 1
+	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -471,4 +822,8 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeCodedError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]string{"error": message, "code": code})
 }

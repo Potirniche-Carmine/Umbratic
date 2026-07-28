@@ -51,7 +51,7 @@ Enter the setup code, choose the owner username, and choose a password with at l
 
 Veil and Veil Console do not accept a model-provider API key. They support only local or private Ollama and vLLM runtimes.
 
-Use **Test connection** to verify the selected runtime. **Apply and restart** validates the submitted values, deploys them, and restarts Veil. The first successful apply shows the Veil client token once. Save this token for the Umbratic client.
+Use **Test connection** to verify the selected runtime. **Apply and restart** validates the submitted values, deploys them, and restarts Veil. In a customer release, go to **Access**, create an assigned user, and give that user the one-time Enrollment code.
 
 Stop Console with `Ctrl+C`. The next start uses the saved owner account and last known-good configuration. It also starts Veil again.
 
@@ -63,13 +63,13 @@ Run these commands from the repository root:
 npm run veil-console:dev
 npm run veil-console:smoke
 npm run veil-console:test
-npm run veil-console:release -- --version 0.1.0
+npm run veil-console:release -- --version 0.1.0 --seats 30 --signing-key-file "$HOME/umbratic-entitlement-signing.key"
 ```
 
 - `veil-console:dev` builds and starts Console with persistent native development state.
 - `veil-console:smoke` runs the Ubuntu release smoke environment. On Windows, it uses Ubuntu WSL.
 - `veil-console:test` runs the normal Console tests as part of `npm run test:all`.
-- `veil-console:release` builds the reviewed Ubuntu `amd64` installation zip.
+- `veil-console:release` builds one reviewed Ubuntu `amd64` customer installation zip. It requires a positive seat limit and a protected Ed25519 signing key. The device limit defaults to two devices for each assigned user.
 
 To select another development state directory for one start:
 
@@ -147,8 +147,13 @@ Use an administration domain that is available only through a VPN or an IP allow
 Build the installation archive from Ubuntu or Ubuntu WSL:
 
 ```sh
-npm run veil-console:release -- --version 0.1.0
+umask 077 && openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$HOME/umbratic-entitlement-signing.key" && chmod 600 "$HOME/umbratic-entitlement-signing.key"
+npm run veil-console:release -- --version 0.1.0 --seats 30 --devices-per-user 2 --signing-key-file "$HOME/umbratic-entitlement-signing.key"
 ```
+
+The zip contains a new organization UID and a signed `entitlement.json`. The same
+trusted public key is in the Veil and Console binaries. A local change to the seat,
+device, organization, or term fields makes startup fail.
 
 The zip appears in `artifacts/releases/`. Copy it to the server, extract it, and run:
 
@@ -165,11 +170,7 @@ sudo ./install.sh --dnsname console.example.com --port 8400
 `--host` and `--https-port` are aliases for `--port`. The advanced `--console-port` and `--veil-port` options change only the private loopback ports:
 
 ```sh
-sudo ./install.sh \
-  --dnsname console.example.com \
-  --port 8400 \
-  --console-port 8177 \
-  --veil-port 8080
+sudo ./install.sh --dnsname console.example.com --port 8400 --console-port 8177 --veil-port 8080
 ```
 
 The installer adds the system account, installs the two compiled binaries, writes the systemd and Caddy configuration, validates Caddy, and starts the services. It does not install Ollama, vLLM, or a model because model and hardware requirements differ by server.
@@ -201,6 +202,18 @@ Treat direct public access as an unsupported high-risk deployment. Put the HTTPS
 
 Console accepts only the exact HTTPS origin supplied to it. HTTPS mode also marks session and CSRF cookies as `Secure`.
 
-## Single-owner scope
+## Access scope
 
-Veil Console intentionally supports one owner account. It is an internal administration and debugging tool, not a user identity service. End users must not receive Console access. Keep application accounts, licenses, and device identity outside this service if the product needs them later.
+Veil Console supports one owner account. The owner uses **Access** to assign seats,
+issue or revoke Enrollment codes, deactivate or reactivate users, and revoke
+devices. End users must not receive Console access.
+
+The customer release works without an Umbratic license service. It does not send
+employee identity or license activity to Umbratic. The signed entitlement enforces
+the organization, seat, and device limits inside Veil. It does not stop a customer
+from copying the complete zip. This redistribution limit is contractual in version
+1. A future organization UID heartbeat can add online validation without a change
+to the desktop enrollment flow.
+
+For entitlement reissue, key rotation, backup, and recovery steps, see
+[`../../docs/enterprise-licensing.md`](../../docs/enterprise-licensing.md).

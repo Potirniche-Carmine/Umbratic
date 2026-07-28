@@ -57,7 +57,10 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     software: "vllm",
     baseUrl: "https://veil.example.internal",
     secret: "endpoint-token",
-    headers: [{ name: " X-Team ", value: "engineering" }],
+    headers: [
+      { name: "Authorization", value: "legacy-shared-token" },
+      { name: " X-Team ", value: "engineering" },
+    ],
   });
 
   const model = {
@@ -113,7 +116,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.skills.every((skill) => !("content" in skill) && !("fullContent" in skill)), true);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
   assert.equal("system" in config, false);
-  assert.equal(config.provider.apiKey, "endpoint-token");
+  assert.equal(config.provider.apiKey, "");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });
 });
 

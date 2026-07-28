@@ -1,4 +1,4 @@
-import { app, safeStorage } from "electron";
+import { app } from "electron";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,6 +24,10 @@ import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSett
 import { normalizeReviewFile } from "../shared/reviewDiff";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 import type { DesktopStartupSettings } from "../shared/desktopApi";
+import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
+import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
+import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
+import { activeStoredEndpoint, endpointModesWithNext, storedEndpointForMode, type RawModelEndpointSettings } from "./endpointModeStorage";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -1140,16 +1144,14 @@ export function writeChats(chats: ChatRecord[]) {
 
 type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
-  modelEndpoint?: Partial<Omit<ActiveModelEndpointSettings, "headers" | "secret">> & {
-    version?: unknown;
-    secret?: unknown;
-    headers?: unknown;
-  };
+  modelEndpoint?: RawModelEndpointSettings;
+  modelEndpoints?: Partial<Record<ModelEndpointMode, RawModelEndpointSettings>>;
   tools?: Partial<Record<RunnerToolId, boolean>>;
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
   contextLength?: unknown;
   permissionMode?: unknown;
+  companyCredential?: unknown;
 };
 
 type SettingsRow = {
@@ -1179,11 +1181,6 @@ function writeRawSettings(settings: RawSettings) {
   });
 }
 
-type StoredProtectedString = {
-  encoding: "electron-safe-storage-v1";
-  encrypted: string;
-};
-
 type StoredModelEndpointSettings = Omit<ActiveModelEndpointSettings, "headers" | "secret"> & {
   version: typeof modelEndpointSettingsVersion;
   secret: "" | StoredProtectedString;
@@ -1194,27 +1191,6 @@ export type PublicModelEndpointSettings = Omit<ActiveModelEndpointSettings, "hea
   secretConfigured: boolean;
   headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
 };
-
-function readProtectedString(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (!isRecord(value) || value.encoding !== "electron-safe-storage-v1" || typeof value.encrypted !== "string") return undefined;
-  try {
-    return safeStorage.decryptString(Buffer.from(value.encrypted, "base64"));
-  } catch {
-    return undefined;
-  }
-}
-
-function writeProtectedString(value: string): "" | StoredProtectedString {
-  if (!value) return "";
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error("Secure storage is not available, so endpoint tokens were not saved.");
-  }
-  return {
-    encoding: "electron-safe-storage-v1",
-    encrypted: safeStorage.encryptString(value).toString("base64"),
-  };
-}
 
 function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
   const rows = Array.isArray(value) ? value : [];
@@ -1230,32 +1206,27 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
   return headers;
 }
 
-function activeModelEndpointSettings(settings: RawSettings): RawSettings["modelEndpoint"] | undefined {
-  const endpoint = settings.modelEndpoint;
-  if (!endpoint) return undefined;
-  if (endpoint.version === modelEndpointSettingsVersion) return endpoint;
-  if (endpoint.mode !== "local") return endpoint;
-  // Version 2 stored the local Veil URL in baseUrl. Version 3 stores the
-  // underlying Ollama/vLLM URL instead, so preserve the mode while resetting
-  // the fields whose meaning changed.
-  return {
-    mode: "local",
-    software: endpoint.software,
-  };
-}
+const activeModelEndpointSettings = (settings: RawSettings) => activeStoredEndpoint(settings, modelEndpointSettingsVersion);
+const storedModelEndpointSettings = (settings: RawSettings, mode: ModelEndpointMode) =>
+  storedEndpointForMode(settings, mode, modelEndpointSettingsVersion);
 
 export function hasStoredModelEndpointSettings(): boolean {
   const settings = readRawSettings();
   return !!activeModelEndpointSettings(settings);
 }
 
-function modelEndpointSettings(settings: RawSettings): ActiveModelEndpointSettings {
-  const endpoint = activeModelEndpointSettings(settings) ?? {};
+function modelEndpointSettings(
+  settings: RawSettings,
+  requestedMode?: ModelEndpointMode,
+): ActiveModelEndpointSettings {
+  const activeEndpoint = activeModelEndpointSettings(settings) ?? {};
   const managed = managedModelEndpointDefaults();
   const forceLocal = localEndpointForced();
   const mode =
     forceLocal ? "local" : managed?.mode ??
-    (endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode());
+    requestedMode ??
+    (activeEndpoint.mode === "local" || activeEndpoint.mode === "server" ? activeEndpoint.mode : defaultModelEndpointMode());
+  const endpoint = storedModelEndpointSettings(settings, mode) ?? {};
   const managedBaseUrl = forceLocal ? undefined : managed?.baseUrl;
   const managedSoftware = forceLocal ? undefined : managed?.software;
   const storedLocalEndpoint = endpoint.mode === "local";
@@ -1288,7 +1259,32 @@ function modelEndpointSettings(settings: RawSettings): ActiveModelEndpointSettin
   };
 }
 
+export function readCompanyDeviceCredential(): CompanyDeviceCredential | null {
+  return decodeCompanyDeviceCredential(readRawSettings().companyCredential);
+}
+
+export function writeCompanyDeviceCredential(input: CompanyDeviceCredential): CompanyDeviceCredential {
+  const settings = readRawSettings();
+  writeRawSettings({ ...settings, companyCredential: encodeCompanyDeviceCredential(input) });
+  return input;
+}
+
+export { assertCompanyCredentialStorageAvailable };
+
+export function clearCompanyDeviceCredential(): void {
+  const settings = readRawSettings();
+  writeRawSettings({ ...settings, companyCredential: undefined });
+}
+
+export function companyConnectionStatus() {
+  return companyConnectionStatusFromValue(readRawSettings().companyCredential);
+}
+
 export function readModelEndpointSettings(): ActiveModelEndpointSettings { return modelEndpointSettings(readRawSettings()); }
+
+export function readModelEndpointSettingsForMode(mode: ModelEndpointMode): ActiveModelEndpointSettings {
+  return modelEndpointSettings(readRawSettings(), mode);
+}
 
 export function publicModelEndpointSettings(settings: ActiveModelEndpointSettings): PublicModelEndpointSettings {
   return {
@@ -1363,10 +1359,12 @@ export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSet
           })),
   };
   const settings = readRawSettings();
+  const protectedNext = protectEndpointSettings(next);
   writeRawSettings({
     ...settings,
     selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
-    modelEndpoint: protectEndpointSettings(next),
+    modelEndpoint: protectedNext,
+    modelEndpoints: endpointModesWithNext(settings, protectedNext, modelEndpointSettingsVersion),
   });
   return next;
 }
@@ -1465,6 +1463,7 @@ export function readStartupSettings(): DesktopStartupSettings {
   return {
     permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
     modelEndpoint: publicModelEndpointSettings(modelEndpointSettings(settings)),
+    companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
   };

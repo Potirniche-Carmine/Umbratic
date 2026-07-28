@@ -9,6 +9,7 @@ import type {
   CapabilityProbeStatus,
   ChatAttachment,
   ChatRecord,
+  CompanyConnectionStatus,
   DesktopStartupSettings,
   DesktopApi,
   FileSearchResult,
@@ -16,10 +17,8 @@ import type {
   IdeInfo,
   LocalModelInfo,
   ModelEndpointMode,
-  ModelEndpointSoftware,
   PastedAttachmentInput,
   PermissionMode,
-  PublicModelEndpointSettings,
   ReasoningMode,
   RepositoryInfo,
   SkillDocument,
@@ -99,6 +98,15 @@ import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "..
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
 import { appendTaskEvent, compactTaskEvents } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
+import { LocalModelPicker, type LocalModelDiscoveryStatus } from "./LocalModelPicker";
+import {
+  defaultEndpointBaseUrlForMode,
+  defaultModelEndpointSettings,
+  endpointDefaultsForMode,
+  endpointValidationMessage,
+  normalizeEndpointSettings,
+  type ModelEndpointSettings,
+} from "./endpointSettings";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
   reduceApprovalChecks,
@@ -120,7 +128,6 @@ type RequiredToolContractReason =
   | "agent_reported_blocker"
   | "attempted_tool_failed"
   | "no_review_changes";
-type ModelEndpointSettings = PublicModelEndpointSettings;
 type CommandClass =
   | "read"
   | "edit"
@@ -260,25 +267,13 @@ const defaultMonoFontChoices = [
   "ui-monospace",
 ];
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
-const defaultModelEndpointSettings: ModelEndpointSettings = {
-  mode: "local",
-  software: "ollama",
-  baseUrl: "http://127.0.0.1:11434",
-  modelId: "",
-  secret: "",
-  secretConfigured: false,
-  headers: [
-    { name: "", value: "", valueConfigured: false },
-    { name: "", value: "", valueConfigured: false },
-  ],
-};
 const defaultStartupSettings: DesktopStartupSettings = {
   permissionMode: "normal",
   modelEndpoint: defaultModelEndpointSettings,
+  companyConnection: { state: "not_enrolled" },
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
 };
-const savedEndpointSecretPlaceholder = "••••••••••••  Saved securely";
 const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
   {
     id: "marketing",
@@ -336,76 +331,6 @@ function writeWorkspaceMode(mode: WorkspaceMode) {
 
 function isHarnessProfileId(value: unknown): value is HarnessProfileId {
   return value === "marketing" || value === "sales" || value === "engineering";
-}
-
-function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string; valueConfigured: boolean }> {
-  const rows = Array.isArray(value) ? value : [];
-  const headers = rows.slice(0, 2).map((row) => {
-    if (!row || typeof row !== "object" || Array.isArray(row)) return { name: "", value: "", valueConfigured: false };
-    const record = row as Record<string, unknown>;
-    return {
-      name: typeof record.name === "string" ? record.name : "",
-      value: typeof record.value === "string" ? record.value : "",
-      valueConfigured: record.valueConfigured === true,
-    };
-  });
-  while (headers.length < 2) headers.push({ name: "", value: "", valueConfigured: false });
-  return headers;
-}
-
-function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
-  if (mode === "local") return "http://127.0.0.1:11434";
-  return "https://your-veil-server.example";
-}
-
-function normalizeEndpointSettings(value: unknown): ModelEndpointSettings {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultModelEndpointSettings };
-  const settings = value as Partial<ModelEndpointSettings>;
-  const mode = settings.mode === "local" || settings.mode === "server" ? settings.mode : defaultModelEndpointSettings.mode;
-  const software = mode === "local"
-    ? "ollama"
-    : settings.software === "ollama" || settings.software === "vllm"
-      ? settings.software
-      : "vllm";
-  const baseUrl =
-    typeof settings.baseUrl === "string" ? settings.baseUrl : defaultEndpointBaseUrlForMode(mode, software);
-  return {
-    mode,
-    software,
-    baseUrl,
-    modelId: typeof settings.modelId === "string" ? settings.modelId : mode === "local" ? "" : "veil-managed",
-    secret: typeof settings.secret === "string" ? settings.secret : "",
-    secretConfigured: settings.secretConfigured === true,
-    headers: normalizeEndpointHeaders(settings.headers),
-  };
-}
-
-function endpointDefaultsForMode(mode: ModelEndpointMode): ModelEndpointSettings {
-  const software: ModelEndpointSoftware = mode === "local" ? "ollama" : "vllm";
-  return {
-    mode,
-    software,
-    baseUrl: defaultEndpointBaseUrlForMode(mode, software),
-    modelId: mode === "local" ? "" : "veil-managed",
-    secret: "",
-    secretConfigured: false,
-    headers: normalizeEndpointHeaders([]),
-  };
-}
-
-function endpointValidationMessage(settings: ModelEndpointSettings): string | null {
-  try {
-    const url = new URL(settings.baseUrl.trim());
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "Use an HTTP or HTTPS URL.";
-    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    if (settings.mode === "local" && hostname !== "localhost" && hostname !== "::1" && !hostname.startsWith("127.")) {
-      return "Local mode only connects to a model runtime on this computer.";
-    }
-  } catch {
-    return `${settings.mode === "local" ? "Runtime" : "Server"} URL is invalid.`;
-  }
-  if (settings.mode === "local" && !settings.modelId.trim()) return "Enter the model name installed in your local runtime.";
-  return null;
 }
 
 function uniqueFonts(fonts: string[]): string[] {
@@ -2135,8 +2060,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(initialEndpointSettings);
   const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(initialEndpointSettings);
+  const [companyConnection, setCompanyConnection] = useState<CompanyConnectionStatus>(startupSettings.companyConnection);
   const [endpointSaving, setEndpointSaving] = useState(false);
   const [endpointRefreshing, setEndpointRefreshing] = useState(false);
+  const [localModelDiscovery, setLocalModelDiscovery] = useState<{
+    baseUrl: string; models: string[]; status: LocalModelDiscoveryStatus;
+  }>({ baseUrl: "", models: [], status: "idle" });
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
@@ -2194,6 +2123,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const endpointSaveSequenceRef = useRef(0);
+  const endpointModeLoadSequenceRef = useRef(0);
   const endpointModeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({ [initialEndpointSettings.mode]: initialEndpointSettings });
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
@@ -2252,9 +2182,23 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const connectionStatusLabel =
     backend?.endpoint === "ready" || backend?.endpoint === "degraded" ? "Connected" : backend ? "Unavailable" : "Checking";
   const endpointDirty = JSON.stringify(endpointDraftSettings) !== JSON.stringify(endpointSettings);
-  const endpointValidation = endpointValidationMessage(endpointDraftSettings);
+  const companyEnrollmentRequired =
+    endpointDraftSettings.mode === "server"
+    && (companyConnection.state !== "enrolled" || endpointDraftSettings.baseUrl.trim() !== companyConnection.baseUrl);
+  const endpointValidation =
+    endpointValidationMessage(endpointDraftSettings)
+    ?? (companyEnrollmentRequired && !endpointDraftSettings.secret.trim() ? "Enter the Enrollment code." : null);
   const endpointEditingEnabled = backend?.endpointConfig.endpointEditingAllowed ?? true;
   const endpointFormDisabled = endpointSaving || !endpointEditingEnabled;
+  const localRuntimeUrlValid = endpointValidationMessage({ ...endpointDraftSettings, modelId: "__probe__" }) === null;
+  const localModelDiscoveryCurrent =
+    localModelDiscovery.baseUrl === endpointDraftSettings.baseUrl.trim().replace(/\/+$/, "");
+  const localModelStatus = endpointRefreshing && endpointDraftSettings.mode === "local"
+    ? "loading"
+    : localModelDiscoveryCurrent ? localModelDiscovery.status : "idle";
+  const localModels = localModelDiscoveryCurrent ? localModelDiscovery.models : [];
+  const connectionRefreshDisabled = endpointRefreshing || endpointSaving
+    || (endpointDraftSettings.mode === "server" ? endpointDirty : !localRuntimeUrlValid);
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -3168,7 +3112,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if ("mode" in patch) {
         const mode = patch.mode === "server" ? "server" : "local";
         endpointModeDraftsRef.current[current.mode] = current;
-        const next = endpointModeDraftsRef.current[mode] ?? endpointDefaultsForMode(mode);
+        const defaults = endpointDefaultsForMode(mode);
+        const next = endpointModeDraftsRef.current[mode]
+          ?? (mode === "server" && companyConnection.baseUrl
+            ? { ...defaults, baseUrl: companyConnection.baseUrl }
+            : defaults);
         endpointModeDraftsRef.current[mode] = next;
         return next;
       }
@@ -3183,18 +3131,20 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setAccountMessage(null);
   }
 
-  function updateEndpointHeader(index: number, patch: Partial<{ name: string; value: string; valueConfigured: boolean }>) {
-    endpointSaveSequenceRef.current += 1;
-    setEndpointSaving(false);
-    setEndpointRefreshing(false);
-    setEndpointDraftSettings((current) => {
-      const headers = normalizeEndpointHeaders(current.headers);
-      headers[index] = { ...headers[index], ...patch };
-      const next = normalizeEndpointSettings({ ...current, headers });
-      endpointModeDraftsRef.current[next.mode] = next;
-      return next;
-    });
-    setAccountMessage(null);
+  async function selectEndpointMode(mode: ModelEndpointMode) {
+    const cached = endpointModeDraftsRef.current[mode];
+    updateEndpointDraft({ mode });
+    if (cached) return;
+    const requestId = endpointModeLoadSequenceRef.current + 1;
+    endpointModeLoadSequenceRef.current = requestId;
+    try {
+      const saved = normalizeEndpointSettings(await api.getModelEndpointSettings({ mode }));
+      if (requestId !== endpointModeLoadSequenceRef.current || saved.mode !== mode) return;
+      endpointModeDraftsRef.current[mode] = saved;
+      setEndpointDraftSettings((current) => current.mode === mode ? saved : current);
+    } catch {
+      // The mode defaults remain usable when stored settings cannot be read.
+    }
   }
 
   function closeSettingsDialog() {
@@ -3207,20 +3157,40 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setSettingsOpen(false);
   }
 
+  useEffect(() => {
+    if (!settingsOpen || settingsTab !== "account") return;
+    let active = true;
+    void api.getCompanyConnectionStatus().then((connection) => {
+      if (active) setCompanyConnection(connection);
+    });
+    return () => {
+      active = false;
+    };
+  }, [api, settingsOpen, settingsTab]);
+
   async function refreshConnectionStatus() {
-    if (endpointSaving || endpointRefreshing || endpointDirty) return;
+    if (connectionRefreshDisabled) return;
     const requestId = endpointSaveSequenceRef.current + 1;
     endpointSaveSequenceRef.current = requestId;
     const startedAt = Date.now();
+    const localMode = endpointDraftSettings.mode === "local";
+    const probeBaseUrl = endpointDraftSettings.baseUrl.trim().replace(/\/+$/, "");
     setEndpointRefreshing(true);
+    if (localMode) setLocalModelDiscovery({ baseUrl: probeBaseUrl, models: [], status: "loading" });
     setAccountMessage(null);
     try {
-      await refreshStatus();
+      const [, modelProbe] = await Promise.all([
+        endpointDirty ? Promise.resolve(null) : refreshStatus(),
+        localMode
+          ? api.probeLocalModels({ baseUrl: probeBaseUrl }).catch(() => ({ status: "unavailable" as const, models: [] as [] }))
+          : Promise.resolve(null),
+      ]);
       const remainingAnimationMs = Math.max(0, 300 - (Date.now() - startedAt));
       if (remainingAnimationMs > 0) {
         await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationMs));
       }
       if (requestId !== endpointSaveSequenceRef.current) return;
+      if (modelProbe) setLocalModelDiscovery({ baseUrl: probeBaseUrl, ...modelProbe });
     } finally {
       if (requestId === endpointSaveSequenceRef.current) setEndpointRefreshing(false);
     }
@@ -3228,7 +3198,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   async function saveEndpointSettings() {
     if (endpointSaving || endpointRefreshing || !endpointDirty || !endpointEditingEnabled) return;
-    const validationMessage = endpointValidationMessage(endpointDraftSettings);
+    const validationMessage = endpointValidation;
     if (validationMessage) {
       setAccountMessage(validationMessage);
       return;
@@ -3241,10 +3211,20 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
     setEndpointSaving(true);
     setAccountMessage(null);
+    if (nextDraft.mode === "server" && nextDraft.secret) {
+      setEndpointDraftSettings({ ...nextDraft, secret: "" });
+    }
     try {
-      const result = await api.saveModelEndpointSettings(nextDraft);
+      const result =
+        nextDraft.mode === "server" && companyEnrollmentRequired
+          ? await api.enrollCompanyConnection({
+              baseUrl: nextDraft.baseUrl,
+              enrollmentCode: nextDraft.secret,
+            })
+          : await api.saveModelEndpointSettings(nextDraft);
       if (requestId !== endpointSaveSequenceRef.current) return;
       const normalized = normalizeEndpointSettings(result.settings);
+      if ("connection" in result) setCompanyConnection(result.connection as CompanyConnectionStatus);
       setEndpointSettings(normalized);
       setEndpointDraftSettings(normalized);
       setBackend(result.status);
@@ -3255,6 +3235,26 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setAccountMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
       if (requestId === endpointSaveSequenceRef.current) setEndpointSaving(false);
+    }
+  }
+
+  async function disconnectCompanyConnection() {
+    if (endpointSaving || endpointRefreshing) return;
+    setEndpointSaving(true);
+    setAccountMessage(null);
+    try {
+      const result = await api.disconnectCompanyConnection();
+      const normalized = normalizeEndpointSettings(result.settings);
+      setCompanyConnection(result.connection);
+      setEndpointSettings(normalized);
+      setEndpointDraftSettings(normalized);
+      setBackend(result.status);
+      setPermissionModeState(result.status.permissionMode);
+      endpointModeDraftsRef.current = { [normalized.mode]: normalized };
+    } catch (cause) {
+      setAccountMessage(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setEndpointSaving(false);
     }
   }
 
@@ -5777,7 +5777,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     <div className="settingsPanelHead connectionPanelHead">
                       <div>
                         <h3>Connection</h3>
-                        <p>Run through local Ollama, or connect to a Veil server managing Ollama or vLLM.</p>
+                        <p>Use Local or connect this device to a company server.</p>
                       </div>
                       <div className="connectionCompactStatus">
                         <span
@@ -5792,9 +5792,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                           className="settingsIconButton connectionRefreshButton"
                           type="button"
                           onClick={() => void refreshConnectionStatus()}
-                          disabled={endpointRefreshing || endpointSaving || endpointDirty}
-                          title={endpointDirty ? "Save changes before checking" : "Check connection"}
-                          aria-label="Check connection"
+                          disabled={connectionRefreshDisabled}
+                          title={endpointDraftSettings.mode === "local"
+                            ? localRuntimeUrlValid ? "Check runtime and models" : "Enter a valid local runtime URL"
+                            : endpointDirty ? "Save changes before checking" : "Check connection"}
+                          aria-label={endpointDraftSettings.mode === "local" ? "Check runtime and models" : "Check connection"}
                         >
                           <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
                         </button>
@@ -5809,7 +5811,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                               type="button"
                               disabled={endpointFormDisabled}
                               aria-pressed={endpointDraftSettings.mode === "local"}
-                              onClick={() => updateEndpointDraft({ mode: "local" })}
+                              onClick={() => void selectEndpointMode("local")}
                             >
                               <span className="connectionModeIcon"><Monitor size={16} /></span>
                               <strong>Local</strong>
@@ -5820,17 +5822,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                               type="button"
                               disabled={endpointFormDisabled}
                               aria-pressed={endpointDraftSettings.mode === "server"}
-                              onClick={() => updateEndpointDraft({ mode: "server" })}
+                              onClick={() => void selectEndpointMode("server")}
                             >
                               <span className="connectionModeIcon"><Cloud size={16} /></span>
-                              <strong>Server</strong>
+                              <strong>Company server</strong>
                               {endpointDraftSettings.mode === "server" ? <Check size={14} /> : null}
                             </button>
                           </div>
                         </div>
 
                         <div className="settingsGroup">
-                          <h4>{endpointDraftSettings.mode === "local" ? "Local model" : "Server connection"}</h4>
+                          <h4>{endpointDraftSettings.mode === "local" ? "Local model" : "Company server"}</h4>
                           {endpointDraftSettings.mode === "local" ? (
                             <>
                               <label className="settingsField">
@@ -5843,16 +5845,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                   spellCheck={false}
                                 />
                               </label>
-                              <label className="settingsField">
-                                <span>Model</span>
-                                <input
-                                  value={endpointDraftSettings.modelId}
-                                  disabled={endpointFormDisabled}
-                                  onChange={(event) => updateEndpointDraft({ modelId: event.currentTarget.value })}
-                                  placeholder="llama3.2"
-                                  spellCheck={false}
-                                />
-                              </label>
+                              <LocalModelPicker
+                                disabled={endpointFormDisabled}
+                                models={localModels}
+                                selectedModel={endpointDraftSettings.modelId}
+                                status={localModelStatus}
+                                onModelChange={(modelId) => updateEndpointDraft({ modelId })}
+                              />
                             </>
                           ) : (
                             <>
@@ -5866,44 +5865,36 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                   spellCheck={false}
                                 />
                               </label>
-                              <label className="settingsField">
-                                <span>Bearer token</span>
-                                <input
-                                  value={endpointDraftSettings.secret}
-                                  disabled={endpointFormDisabled}
-                                  onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
-                                  placeholder={endpointDraftSettings.secretConfigured ? savedEndpointSecretPlaceholder : "Bearer token from your Veil server"}
-                                  type="password"
-                                  spellCheck={false}
-                                />
-                              </label>
-                              <div className="endpointHeaders">
-                                {normalizeEndpointHeaders(endpointDraftSettings.headers).map((header, index) => (
-                                  <div className="endpointHeaderRow" key={index}>
-                                    <label className="settingsField">
-                                      <span>{`Custom header ${index + 1}`}</span>
-                                      <input
-                                        value={header.name}
-                                        disabled={endpointFormDisabled}
-                                        onChange={(event) => updateEndpointHeader(index, { name: event.currentTarget.value })}
-                                        placeholder="Header name"
-                                        spellCheck={false}
-                                      />
-                                    </label>
-                                    <label className="settingsField">
-                                      <span>Value</span>
-                                      <input
-                                        value={header.value}
-                                        disabled={endpointFormDisabled}
-                                        onChange={(event) => updateEndpointHeader(index, { value: event.currentTarget.value })}
-                                        placeholder={header.valueConfigured ? savedEndpointSecretPlaceholder : "Header value"}
-                                        type="password"
-                                        spellCheck={false}
-                                      />
-                                    </label>
+                              {companyEnrollmentRequired ? (
+                                <label className="settingsField">
+                                  <span>Enrollment code</span>
+                                  <input
+                                    value={endpointDraftSettings.secret}
+                                    disabled={endpointFormDisabled}
+                                    onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
+                                    placeholder="Enrollment code"
+                                    type="password"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    aria-label="Enrollment code"
+                                  />
+                                </label>
+                              ) : companyConnection.state === "enrolled" ? (
+                                <div className="companyEnrollmentStatus">
+                                  <div>
+                                    <strong>{companyConnection.orgName}</strong>
+                                    <span>{companyConnection.deviceLabel}</span>
                                   </div>
-                                ))}
-                              </div>
+                                  <button
+                                    className="settingsInlineButton"
+                                    type="button"
+                                    onClick={() => void disconnectCompanyConnection()}
+                                    disabled={endpointFormDisabled}
+                                  >
+                                    Disconnect
+                                  </button>
+                                </div>
+                              ) : null}
                             </>
                           )}
                           <div className="connectionActions">
@@ -5920,7 +5911,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                           </div>
                           <div className="connectionFeedback" aria-live="polite">
                             {!endpointEditingEnabled ? <p className="settingsMessage">This connection is managed by your organization.</p> : null}
-                            {endpointDirty && endpointValidation ? <p className="settingsMessage settingsMessageError">{endpointValidation}</p> : null}
                             {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
                           </div>
                     </div>

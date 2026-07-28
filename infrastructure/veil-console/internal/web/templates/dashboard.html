@@ -44,18 +44,12 @@
       {{end}}
     </section>
     {{if .Configured}}
-    <section class="panel management-grid">
+    <section class="panel management-grid management-grid-single">
       <form class="management-action" method="post" action="/veil/stop">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <div><h2>Stop Veil</h2></div>
         <label class="field"><span>Owner password</span><input type="password" name="password" autocomplete="current-password" required></label>
         <button class="button danger" type="submit">Stop Veil</button>
-      </form>
-      <form class="management-action" method="post" action="/token/rotate">
-        <input type="hidden" name="csrf" value="{{.CSRF}}">
-        <div><h2>Rotate client token</h2></div>
-        <label class="field"><span>Owner password</span><input type="password" name="password" autocomplete="current-password" required></label>
-        <button class="button secondary" type="submit">Rotate token</button>
       </form>
     </section>
     {{end}}

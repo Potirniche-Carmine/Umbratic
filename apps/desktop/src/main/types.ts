@@ -510,6 +510,7 @@ export type RunnerProcess = {
   child: ChildProcess;
   abortController: AbortController;
   sessionId?: string;
+  providerSessionRefresh?: ReturnType<typeof setInterval>;
 };
 
 export type PendingPermission = {

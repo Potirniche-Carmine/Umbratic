@@ -112,3 +112,27 @@ test("managed local Veil diagnostics retain safe failure metadata and ignore ord
   assert.equal(localVeil.parseLocalVeilDiagnosticLine("go: downloading a build dependency"), null);
   assert.equal(localVeil.parseLocalVeilDiagnosticLine("VEIL_DIAGNOSTIC not-json"), null);
 });
+
+test("local model discovery accepts only bounded model IDs and removes duplicates", () => {
+  assert.deepEqual(
+    plain(localVeil.parseLocalModelProbeOutput(JSON.stringify([
+      { id: "qwen3:8b", context_length: 32768 },
+      { id: " llama3.2 " },
+      { id: "qwen3:8b" },
+      { id: "" },
+      { name: "not-an-id" },
+    ]))),
+    ["llama3.2", "qwen3:8b"],
+  );
+  assert.throws(
+    () => localVeil.parseLocalModelProbeOutput('{"models":[]}'),
+    /invalid data/,
+  );
+});
+
+test("local model discovery returns a safe unavailable state instead of an IPC error", async () => {
+  assert.deepEqual(
+    plain(await localVeil.probeLocalModels("")),
+    { status: "unavailable", models: [] },
+  );
+});

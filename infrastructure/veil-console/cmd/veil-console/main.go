@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"umbratic-veil-console/internal/config"
+	"umbratic-veil-console/internal/entitlement"
 	"umbratic-veil-console/internal/state"
 	"umbratic-veil-console/internal/supervisor"
 	"umbratic-veil-console/internal/web"
@@ -27,6 +28,7 @@ func main() {
 	flag.StringVar(&startup.StateDir, "state-dir", "/var/lib/veil-console", "Console state directory")
 	flag.StringVar(&startup.VeilBinary, "veil-binary", "./veil", "fixed Veil executable path")
 	flag.StringVar(&startup.VeilAddress, "veil-address", "127.0.0.1:8080", "fixed loopback Veil address")
+	flag.StringVar(&startup.EntitlementPath, "entitlement", "", "signed customer entitlement path")
 	flag.StringVar(&startup.TrustedOrigin, "trusted-origin", "", "exact HTTPS reverse-proxy origin")
 	flag.Parse()
 	if flag.NArg() != 0 {
@@ -34,6 +36,11 @@ func main() {
 	}
 	if err := config.ValidateStartup(&startup); err != nil {
 		log.Fatal(err)
+	}
+	if startup.EntitlementPath != "" {
+		if _, err := entitlement.Load(startup.EntitlementPath, time.Now()); err != nil {
+			log.Fatal(err)
+		}
 	}
 	store, err := state.Open(startup.StateDir)
 	if err != nil {
@@ -56,6 +63,11 @@ func main() {
 		announceSetup(startup, code)
 	}
 	process := supervisor.New(startup.VeilBinary, startup.VeilAddress)
+	if startup.EntitlementPath != "" {
+		if err := process.EnableCompanyIdentity(startup.EntitlementPath, filepath.Join(startup.StateDir, "veil-identity.json")); err != nil {
+			log.Fatal(err)
+		}
+	}
 	console, err := web.New(startup, store, secrets, process)
 	if err != nil {
 		log.Fatal(err)

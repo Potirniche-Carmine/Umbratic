@@ -33,8 +33,9 @@ type Session struct {
 }
 
 type Secrets struct {
-	VeilToken string `json:"veil_token"`
-	CSRFKey   string `json:"csrf_key"`
+	VeilToken    string `json:"veil_token"`
+	ControlToken string `json:"control_token"`
+	CSRFKey      string `json:"csrf_key"`
 }
 
 const (
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   event TEXT NOT NULL, outcome TEXT NOT NULL
 );
 INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, unixepoch());
+INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, unixepoch());
 `
 
 func Open(dir string) (*Store, error) {
@@ -343,7 +345,14 @@ func (s *Store) LoadOrCreateSecrets() (Secrets, error) {
 		if info, statErr := os.Stat(path); statErr != nil || unsafeSecretPermissions(info.Mode()) {
 			return Secrets{}, errors.New("secret store permissions are unsafe")
 		}
-		if bytes.Contains(payload, []byte(`"provider_key"`)) {
+		if secrets.ControlToken == "" {
+			controlToken, _, tokenErr := auth.NewToken()
+			if tokenErr != nil {
+				return Secrets{}, tokenErr
+			}
+			secrets.ControlToken = controlToken
+		}
+		if bytes.Contains(payload, []byte(`"provider_key"`)) || !bytes.Contains(payload, []byte(`"control_token"`)) {
 			if err := s.SaveSecrets(secrets); err != nil {
 				return Secrets{}, err
 			}
@@ -361,7 +370,11 @@ func (s *Store) LoadOrCreateSecrets() (Secrets, error) {
 	if err != nil {
 		return Secrets{}, err
 	}
-	secrets := Secrets{VeilToken: veilToken, CSRFKey: csrfKey}
+	controlToken, _, err := auth.NewToken()
+	if err != nil {
+		return Secrets{}, err
+	}
+	secrets := Secrets{VeilToken: veilToken, ControlToken: controlToken, CSRFKey: csrfKey}
 	return secrets, s.SaveSecrets(secrets)
 }
 

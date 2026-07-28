@@ -16,6 +16,14 @@ use crate::{
     tools::ToolCall,
 };
 
+fn provider_bearer(provider: &ProviderConfig) -> String {
+    provider
+        .api_key
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 static SHARED_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static SHARED_HTTP_CLIENT_ERROR: OnceLock<String> = OnceLock::new();
 
@@ -68,8 +76,9 @@ pub async fn compact_context(
     if let Some(host) = host_header {
         request = request.header("Host", host);
     }
-    if !session.config.provider.api_key.trim().is_empty() {
-        request = request.bearer_auth(&session.config.provider.api_key);
+    let bearer = provider_bearer(&session.config.provider);
+    if !bearer.trim().is_empty() {
+        request = request.bearer_auth(&bearer);
     }
     for (name, value) in &session.config.provider.headers {
         request = request.header(name, value);
@@ -585,8 +594,9 @@ pub async fn stream_veil_chat(
     if let Some(host) = host_header {
         request = request.header("Host", host);
     }
-    if !session.config.provider.api_key.trim().is_empty() {
-        request = request.bearer_auth(&session.config.provider.api_key);
+    let bearer = provider_bearer(&session.config.provider);
+    if !bearer.trim().is_empty() {
+        request = request.bearer_auth(&bearer);
     }
     for (name, value) in &session.config.provider.headers {
         request = request.header(name, value);
@@ -878,7 +888,7 @@ mod tests {
             name: "test".into(),
             base_url: "https://127.0.0.1".into(),
             chat_endpoint_path: Some("/v1/chat/completions".into()),
-            api_key: String::new(),
+            api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
             headers: BTreeMap::new(),
             mtls: Some(mtls),

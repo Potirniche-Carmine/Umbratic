@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,14 +14,40 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"umbratic-veil/internal/config"
+	"umbratic-veil/internal/entitlement"
+	"umbratic-veil/internal/identity"
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
 )
+
+func signedTestEntitlement(t *testing.T, path string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := entitlement.Payload{
+		Version: 1, OrgUID: "org_httpintegration",
+		MaxAuthorizedUsers: 1, MaxDevicesPerUser: 2,
+	}
+	canonical, _ := json.Marshal(payload)
+	document, _ := json.Marshal(entitlement.Document{
+		Payload:   payload,
+		Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, canonical)),
+	})
+	if err := os.WriteFile(path, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := entitlement.TrustedPublicKey
+	entitlement.TrustedPublicKey = base64.RawURLEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() { entitlement.TrustedPublicKey = previous })
+}
 
 type fakeModelClient struct {
 	req               model.ChatRequest
@@ -107,6 +136,126 @@ func testConfig() config.Config {
 		RequestTimeout:         time.Second,
 		MaxBodyBytes:           1 << 20,
 		MaxOutputTokens:        4096,
+	}
+}
+
+func TestCompanyModeRequiresDeviceSessionAndTracksProductUse(t *testing.T) {
+	dir := t.TempDir()
+	entitlementPath := filepath.Join(dir, "entitlement.json")
+	signedTestEntitlement(t, entitlementPath)
+	cfg := testConfig()
+	cfg.CompanyIdentityMode = true
+	cfg.ControlToken = "control-token"
+	cfg.EntitlementPath = entitlementPath
+	cfg.IdentityStorePath = filepath.Join(dir, "identity.json")
+	server := NewServer(cfg, &fakeModelClient{})
+
+	request := func(method, path, token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	created := request(http.MethodPost, "/api/control/users", cfg.ControlToken, `{"label":"Alice","active_for_days":30}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create user: %d %s", created.Code, created.Body.String())
+	}
+	organization := request(http.MethodPost, "/api/control/organization", cfg.ControlToken, `{"name":"Northwind"}`)
+	if organization.Code != http.StatusOK {
+		t.Fatalf("update organization: %d %s", organization.Code, organization.Body.String())
+	}
+	var user identity.User
+	if err := json.Unmarshal(created.Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	issued := request(http.MethodPost, "/api/control/users/"+user.UID+"/enrollment-codes", cfg.ControlToken, `{}`)
+	var code identity.CodeResult
+	if issued.Code != http.StatusCreated || json.Unmarshal(issued.Body.Bytes(), &code) != nil {
+		t.Fatalf("issue code: %d %s", issued.Code, issued.Body.String())
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentBody, _ := json.Marshal(map[string]string{
+		"enrollment_code": code.EnrollmentCode,
+		"public_key":      base64.RawURLEncoding.EncodeToString(publicKey),
+		"device_label":    "Work laptop",
+	})
+	enrolled := request(http.MethodPost, "/api/enrollment/enroll", "", string(enrollmentBody))
+	var enrollment identity.EnrollmentResult
+	if enrolled.Code != http.StatusCreated || json.Unmarshal(enrolled.Body.Bytes(), &enrollment) != nil {
+		t.Fatalf("enroll: %d %s", enrolled.Code, enrolled.Body.String())
+	}
+	if enrollment.OrgName != "Northwind" || !strings.HasPrefix(code.EnrollmentCode, "umbr_") {
+		t.Fatalf("enrollment metadata is wrong: %#v %q", enrollment, code.EnrollmentCode)
+	}
+	challengeResponse := request(http.MethodPost, "/api/session/challenge", "", `{"device_uid":"`+enrollment.DeviceUID+`"}`)
+	var challenge identity.ChallengeResult
+	if challengeResponse.Code != http.StatusCreated || json.Unmarshal(challengeResponse.Body.Bytes(), &challenge) != nil {
+		t.Fatalf("challenge: %d %s", challengeResponse.Code, challengeResponse.Body.String())
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(challenge.Challenge)))
+	sessionResponse := request(http.MethodPost, "/api/session", "", `{"challenge_uid":"`+challenge.ChallengeUID+`","signature":"`+signature+`"}`)
+	var session identity.SessionResult
+	if sessionResponse.Code != http.StatusCreated || json.Unmarshal(sessionResponse.Body.Bytes(), &session) != nil {
+		t.Fatalf("session: %d %s", sessionResponse.Code, sessionResponse.Body.String())
+	}
+	if session.OrgName != "Northwind" {
+		t.Fatalf("session did not include the organization name: %#v", session)
+	}
+
+	if response := request(http.MethodPost, "/api/engineering/chat", cfg.AuthToken, `{"input":"hello"}`); response.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy token bypassed company access: %d %s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/api/health", session.Token, ""); response.Code != http.StatusOK {
+		t.Fatalf("session health failed: %d %s", response.Code, response.Body.String())
+	}
+	snapshotResponse := request(http.MethodGet, "/api/control/access", cfg.ControlToken, "")
+	var snapshot identity.Snapshot
+	if json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil || snapshot.Users[0].LastSeenAt != nil {
+		t.Fatal("health or Console snapshot changed Last seen")
+	}
+	if response := request(http.MethodPost, "/api/engineering/chat", session.Token, `{"input":"hello"}`); response.Code != http.StatusOK {
+		t.Fatalf("session chat failed: %d %s", response.Code, response.Body.String())
+	}
+	snapshotResponse = request(http.MethodGet, "/api/control/access", cfg.ControlToken, "")
+	if json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil || snapshot.Users[0].LastSeenAt == nil {
+		t.Fatal("successful product request did not update Last seen")
+	}
+}
+
+func TestIdentityRateLimitCountsFailuresOnly(t *testing.T) {
+	server := &Server{identityRate: &identityRateLimiter{entries: map[string]rateEntry{}}}
+	request := httptest.NewRequest(http.MethodPost, "/api/session/challenge", strings.NewReader(`{}`))
+	for range 35 {
+		recorder := httptest.NewRecorder()
+		if !server.allowIdentityRequest(recorder, request, "challenge", 30) {
+			t.Fatalf("successful request consumed the rate limit: %d %s", recorder.Code, recorder.Body.String())
+		}
+	}
+
+	for attempt := range 11 {
+		request = httptest.NewRequest(http.MethodPost, "/api/enrollment/enroll", strings.NewReader(`{`))
+		recorder := httptest.NewRecorder()
+		if !server.handleCompanyIdentityRoute(recorder, request) {
+			t.Fatal("enrollment route was not handled")
+		}
+		if attempt < 10 && recorder.Code != http.StatusBadRequest {
+			t.Fatalf("attempt %d: got %d %s", attempt+1, recorder.Code, recorder.Body.String())
+		}
+		if attempt == 10 {
+			if recorder.Code != http.StatusTooManyRequests {
+				t.Fatalf("rate limit: got %d %s", recorder.Code, recorder.Body.String())
+			}
+			if recorder.Header().Get("Retry-After") != "60" {
+				t.Fatal("rate limit response did not include Retry-After")
+			}
+		}
 	}
 }
 

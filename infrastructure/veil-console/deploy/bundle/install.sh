@@ -44,6 +44,7 @@ fi
 
 install -d -o root -g root -m 0755 /usr/local/lib/veil-console
 install -o root -g root -m 0755 "$script_dir/veil" "$script_dir/veil-console" /usr/local/lib/veil-console/
+install -o root -g root -m 0644 "$script_dir/entitlement.json" /usr/local/lib/veil-console/entitlement.json
 
 bash "$script_dir/render-production-config.sh" \
   "$dns_name" "$work_dir" "$https_port" "$console_port" "$veil_port"

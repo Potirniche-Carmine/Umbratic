@@ -1,17 +1,17 @@
 {{define "login.html"}}<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}}</title><link rel="icon" href="/favicon.ico?v=6"><link rel="stylesheet" href="/assets/style.css?v=6"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}}</title><link rel="icon" href="/favicon.ico?v=8"><link rel="stylesheet" href="/assets/style.css?v=8"><script defer src="/assets/console.js?v=8"></script></head>
 <body>
 <main class="auth-page">
   <section class="card auth-card">
     <div class="auth-brand">{{template "brand-mark"}}<span>Veil Console</span></div>
     <header><h1>Sign in</h1></header>
-    {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
-    <form method="post" action="/login">
+    <p class="error auth-error{{if not .Error}} is-empty{{end}}" role="alert">{{.Error}}</p>
+    <form method="post" action="/login" data-login-form data-retry-after="{{.RetryAfterSeconds}}">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <label>Username<input name="username" autocomplete="username" required autofocus></label>
       <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-      <button class="button primary full-button" type="submit">Sign in</button>
+      <button class="button primary full-button" type="submit" data-login-submit>Sign in</button>
     </form>
   </section>
 </main>

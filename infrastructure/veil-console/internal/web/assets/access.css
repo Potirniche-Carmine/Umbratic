@@ -1,0 +1,483 @@
+.access-page {
+  width: min(100%, 1040px);
+}
+
+.access-page-header,
+.unavailable-panel,
+.organization-form,
+.capacity-summary,
+.tool-heading,
+.add-user-controls,
+.choice-segments,
+.access-user > summary,
+.enrollment-action,
+.devices-heading,
+.device-row,
+.user-actions,
+.dialog-actions {
+  display: flex;
+  align-items: center;
+}
+
+.access-page-header,
+.unavailable-panel,
+.tool-heading,
+.access-user > summary,
+.enrollment-action,
+.devices-heading,
+.device-row {
+  justify-content: space-between;
+}
+
+.management-summary {
+  gap: 1.15rem;
+}
+
+.organization-form {
+  gap: 0.65rem;
+}
+
+.organization-form .field {
+  flex: 1;
+}
+
+.capacity-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--line);
+}
+
+.capacity-summary div {
+  display: grid;
+  gap: 0.1rem;
+  padding: 1.1rem 0 0.15rem;
+}
+
+.capacity-summary strong {
+  font-size: clamp(1.35rem, 3vw, 1.8rem);
+  letter-spacing: -0.035em;
+}
+
+.capacity-summary span,
+.tool-heading span,
+.user-activity,
+.device-count,
+.enrollment-action span,
+.devices-heading span,
+.device-row span,
+.empty-device {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.add-user-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.add-user-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(360px, 0.9fr) auto;
+  align-items: end;
+  gap: 0.7rem;
+}
+
+.active-period {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.active-period legend {
+  margin-bottom: 0.42rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 640;
+}
+
+.choice-segments {
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(3, 6, 10, 0.28);
+}
+
+.segment-option {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.segment-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segment-option span {
+  display: grid;
+  min-height: 36px;
+  place-items: center;
+  width: 100%;
+  padding: 0 0.55rem;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.76rem;
+  font-weight: 680;
+  transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.segment-option:hover span {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.segment-option input:checked + span {
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.segment-option input:focus-visible + span {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.segment-option input:disabled + span {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.access-filters {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(21, 25, 31, 0.78);
+}
+
+.access-filters a {
+  min-width: max-content;
+  padding: 0.5rem 0.78rem;
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 680;
+  text-decoration: none;
+}
+
+.access-filters a:hover,
+.access-filters a[aria-current="page"] {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.access-users {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.access-user {
+  padding: 0;
+  overflow: clip;
+}
+
+.access-user > summary {
+  min-height: 78px;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+  list-style: none;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.access-user > summary::-webkit-details-marker {
+  display: none;
+}
+
+.access-user > summary:hover {
+  background: var(--control-hover);
+}
+
+.user-name {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.user-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-state {
+  padding: 0.14rem 0.42rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.user-activity,
+.device-count {
+  min-width: 120px;
+  text-align: right;
+}
+
+.disclosure-chevron {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 200ms var(--ease-out);
+}
+
+.access-user[open] .disclosure-chevron {
+  transform: rotate(225deg);
+}
+
+.access-user-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1.15rem 1.15rem;
+  border-top: 1px solid var(--line);
+}
+
+.enrollment-action {
+  gap: 1rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(10, 132, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(10, 132, 255, 0.07);
+}
+
+.enrollment-action > div,
+.device-row > div {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.devices {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.devices-heading {
+  min-height: 30px;
+}
+
+.devices-heading h3 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.device-row {
+  min-height: 60px;
+  gap: 1rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(27, 33, 41, 0.5);
+}
+
+.empty-device {
+  margin: 0;
+  padding: 0.8rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: 11px;
+}
+
+.text-button {
+  min-height: 32px;
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.73rem;
+}
+
+.text-button:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.danger-text,
+.danger-text:hover {
+  color: #ff9da6;
+}
+
+.user-actions {
+  justify-content: flex-end;
+  min-height: 36px;
+}
+
+.confirm-dialog {
+  width: min(calc(100% - 2rem), 420px);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  color: var(--text);
+  background: rgba(25, 30, 37, 0.96);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: scale(0.97);
+  transition: opacity 180ms ease, transform 180ms var(--ease-out);
+}
+
+.confirm-dialog[open] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(2, 5, 9, 0.65);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.confirm-dialog form {
+  display: grid;
+  gap: 0.7rem;
+  padding: 1.2rem;
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 0.45rem;
+}
+
+.access-empty,
+.unavailable-panel {
+  min-height: 130px;
+}
+
+.unavailable-panel div {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.unavailable-panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.one-time-secret {
+  max-width: 680px;
+}
+
+.one-time-secret > div {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.one-time-secret p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.one-time-secret pre {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: var(--control);
+}
+
+.secret-actions {
+  display: flex;
+  gap: 0.55rem;
+}
+
+@media (max-width: 720px) {
+  .add-user-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .capacity-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .access-user > summary {
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+
+  .user-activity,
+  .device-count {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .disclosure-chevron {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 560px) {
+  .access-page-header,
+  .unavailable-panel,
+  .organization-form,
+  .enrollment-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .capacity-summary,
+  .add-user-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .choice-segments {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dialog-actions {
+    flex-direction: column-reverse;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  .device-row {
+    background: rgba(241, 243, 246, 0.72);
+  }
+
+  .confirm-dialog {
+    background: rgba(252, 253, 255, 0.98);
+  }
+
+  .danger-text,
+  .danger-text:hover {
+    color: #a31e31;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .access-user > summary,
+  .disclosure-chevron,
+  .confirm-dialog {
+    transition: none;
+  }
+}

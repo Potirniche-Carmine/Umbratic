@@ -28,7 +28,6 @@ import {
 
 import {
   endpointEditingAllowed,
-  localProviderCatalog,
   managedModelEndpointDefaults,
   taskStatesThatCanOpen,
 } from "./config";
@@ -48,6 +47,7 @@ import {
   runnerBinaryPath,
   runnerDiagnosticsDirectory,
   replyRunnerPermission,
+  setRunnerProviderSession,
   startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
@@ -69,7 +69,15 @@ import {
   telemetryPolicyForMode,
 } from "./policy";
 import { getProviderJson } from "./providerClient";
-import { ensureLocalVeil, stopLocalVeil, currentLocalVeilConnection } from "./localVeil";
+import {
+  companyConnectionStatus,
+  disconnectCompanyDevice,
+  enrollCompanyDevice,
+  ensureCompanySession,
+  renewCompanySession,
+} from "./companyIdentity";
+import { companyTransportOptions, configuredEndpointModel, configuredEndpointRoute, endpointHealthRoute, endpointProvider, endpointRequestHeaders, normalizeBaseUrl } from "./endpointConfig";
+import { ensureLocalVeil, probeLocalModels, stopLocalVeil } from "./localVeil";
 import { loadWindowWithModelWarmup } from "./modelWarmup";
 import { probeVeilContextLength, shouldProbeVeilContext } from "./veilContext";
 import {
@@ -81,6 +89,7 @@ import {
   readLocalDiagnostics,
   readHarnessProfileSetting,
   readModelEndpointSettings,
+  readModelEndpointSettingsForMode,
   publicModelEndpointSettings,
   readNotes,
   readPermissionModeSetting,
@@ -242,11 +251,7 @@ app.setName("Umbratic");
 const appDataDirectory = app.getPath("appData");
 const benchmarkUserData = process.env.UMBRATIC_USER_DATA_DIR?.trim();
 const cleanUserData = benchmarkUserData ? path.resolve(benchmarkUserData) : path.join(appDataDirectory, "Umbratic");
-const legacyUserData = path.join(appDataDirectory, "Umbratic AI");
 try {
-  if (!fs.existsSync(cleanUserData) && fs.existsSync(legacyUserData)) {
-    fs.cpSync(legacyUserData, cleanUserData, { recursive: true });
-  }
   fs.mkdirSync(cleanUserData, { recursive: true });
   app.setPath("userData", cleanUserData);
   if (isDev) {
@@ -2351,80 +2356,6 @@ async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]
   }));
 }
 
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
-}
-
-const veilManagedModelId = "veil-managed";
-
-function endpointHeaders(headers: ReturnType<typeof readModelEndpointSettings>["headers"]): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const header of headers) {
-    if (!header.name.trim() || !header.value) continue;
-    next[header.name.trim()] = header.value;
-  }
-  return next;
-}
-
-function endpointProvider(): (typeof localProviderCatalog)[number] & {
-  baseUrl: string;
-  software: ReturnType<typeof readModelEndpointSettings>["software"];
-  headers: Record<string, string>;
-} {
-  const provider = localProviderCatalog[0];
-  const settings = readModelEndpointSettings();
-  const localConnection = settings.mode === "local" ? currentLocalVeilConnection() : null;
-  return {
-    ...provider,
-    providerName: "Umbratic Veil",
-    software: settings.software,
-    baseUrl: normalizeBaseUrl(localConnection?.baseUrl ?? settings.baseUrl),
-    apiKey: localConnection?.authToken ?? settings.secret.trim(),
-    headers: settings.mode === "local" ? {} : endpointHeaders(settings.headers),
-    mtls: settings.mode === "server" ? provider.mtls : undefined,
-  };
-}
-
-function configuredEndpointModel(): LocalModelInfo {
-  const provider = endpointProvider();
-  const settings = readModelEndpointSettings();
-  return {
-    providerId: provider.providerId,
-    providerName: provider.providerName,
-    modelId: veilManagedModelId,
-    displayName: settings.mode === "local" ? settings.modelId : provider.providerName,
-    baseUrl: provider.baseUrl,
-  };
-}
-
-function configuredEndpointRoute(baseUrl: string, route: string): string {
-  if (/^https?:\/\//i.test(route)) return route;
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
-  let normalizedRoute = route.replace(/^\/+/, "");
-  if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedRoute)) {
-    normalizedRoute = normalizedRoute.replace(/^v\d+\//i, "");
-  }
-  const baseSegment = new URL(normalizedBaseUrl).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
-  const routeSegment = normalizedRoute.split("/").filter(Boolean)[0];
-  if (baseSegment && baseSegment === routeSegment) {
-    normalizedRoute = normalizedRoute.split("/").filter(Boolean).slice(1).join("/");
-  }
-  return new URL(normalizedRoute, `${normalizedBaseUrl}/`).toString();
-}
-
-function endpointHealthRoute(provider: ReturnType<typeof endpointProvider>): string {
-  return configuredEndpointRoute(provider.baseUrl, "/api/health");
-}
-
-function endpointRequestHeaders(provider: ReturnType<typeof endpointProvider>): Record<string, string> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (provider.apiKey) {
-    headers.Authorization = `Bearer ${provider.apiKey}`;
-  }
-  Object.assign(headers, provider.headers);
-  return headers;
-}
-
 async function modelWithFreshContextLength(selected: LocalModelInfo): Promise<LocalModelInfo> {
   const provider = endpointProvider();
   const detected = await probeVeilContextLength({
@@ -2500,9 +2431,53 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
   if (candidate.mode === "local" && !candidate.modelId?.trim()) {
     throw new Error("Enter the local model name before connecting.");
   }
+  if (candidate.mode === "server") {
+    const connection = companyConnectionStatus();
+    if (connection.state !== "enrolled" || normalizeBaseUrl(connection.baseUrl ?? "") !== normalizeBaseUrl(baseUrl)) {
+      throw new Error("Use an Enrollment code to connect to a company server.");
+    }
+  }
   const settings = writeModelEndpointSettings(candidate);
   const status = await getBackendStatus();
   return { settings: publicModelEndpointSettings(settings), status };
+}
+
+async function enrollCompanyConnection(input: unknown) {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before changing the company connection.");
+  }
+  if (!isRecord(input)) {
+    throw new Error("Company connection details are invalid.");
+  }
+  const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+  const enrollmentCode = typeof input.enrollmentCode === "string" ? input.enrollmentCode : "";
+  const label = typeof input.deviceLabel === "string" ? input.deviceLabel : undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Veil server URL is invalid.");
+  }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocalhostUrl(baseUrl))) {
+    throw new Error("Remote Veil servers must use HTTPS.");
+  }
+  stopLocalVeil();
+  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions());
+  const settings = writeModelEndpointSettings({
+    mode: "server", software: "vllm", baseUrl, modelId: "veil-managed", secret: "",
+  });
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
+}
+
+async function disconnectCompanyConnection() {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before disconnecting this device.");
+  }
+  await disconnectCompanyDevice(companyTransportOptions());
+  const settings = readModelEndpointSettings();
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
 }
 
 async function saveHarnessProfileSetting(input: unknown) {
@@ -2534,6 +2509,7 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
       });
     } else {
       stopLocalVeil();
+      await ensureCompanySession(companyTransportOptions());
     }
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -3559,6 +3535,18 @@ async function runRunnerTask(
       selectedForRun,
       task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
     );
+    if (readModelEndpointSettings().mode === "server") {
+      const sessionToken = await ensureCompanySession(companyTransportOptions());
+      await setRunnerProviderSession(run, sessionToken);
+      run.providerSessionRefresh = setInterval(() => {
+        void renewCompanySession(companyTransportOptions())
+          .then((token) => setRunnerProviderSession(run as RunnerProcess, token))
+          .catch(() => {
+            if (run) stopRunnerProcess(run);
+          });
+      }, 8 * 60 * 1000);
+      run.providerSessionRefresh.unref();
+    }
     if (!taskStillRunning(task)) {
       return;
     }
@@ -4765,11 +4753,23 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getBackendStatus: () => getBackendStatus(),
     getStartupSettings: () => readStartupSettings(),
     getCapabilityProbes: (input) => getCapabilityProbes(input),
-    getModelEndpointSettings: () => publicModelEndpointSettings(readModelEndpointSettings()),
+    getModelEndpointSettings: (input) => {
+      const mode = input?.mode;
+      return publicModelEndpointSettings(mode ? readModelEndpointSettingsForMode(mode) : readModelEndpointSettings());
+    },
+    probeLocalModels: (input) => probeLocalModels(input?.baseUrl ?? ""),
     saveModelEndpointSettings: (input) =>
       saveModelEndpointSettings(
         input as Partial<ReturnType<typeof readModelEndpointSettings>>,
       ),
+    getCompanyConnectionStatus: async () => {
+      if (companyConnectionStatus().state === "enrolled") {
+        await renewCompanySession(companyTransportOptions()).catch(() => undefined);
+      }
+      return companyConnectionStatus();
+    },
+    enrollCompanyConnection: (input) => enrollCompanyConnection(input),
+    disconnectCompanyConnection: () => disconnectCompanyConnection(),
     getHarnessProfile: () => readHarnessProfileSetting(),
     saveHarnessProfile: (input) => saveHarnessProfileSetting(input),
     getContextLength: () => readContextLengthSetting(),

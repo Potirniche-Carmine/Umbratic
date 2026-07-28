@@ -17,7 +17,12 @@ In the main Umbratic monorepo, the active desktop app lives at `apps/desktop/`.
 
 ## API
 
-All API routes require `Authorization: Bearer <VEIL_AUTH_TOKEN>`.
+Veil has two authentication modes.
+
+- Local and development mode use `Authorization: Bearer <VEIL_AUTH_TOKEN>`.
+- Company identity mode uses a short device session for product routes and a
+  separate Console control token for administration routes. The legacy
+  `VEIL_AUTH_TOKEN` cannot access product routes in this mode.
 
 ```text
 GET  /api/health
@@ -25,9 +30,24 @@ POST /api/engineering/chat
 POST /api/marketing/chat
 POST /api/sales/chat
 POST /api/telemetry
+
+POST /api/enrollment/enroll
+POST /api/session/challenge
+POST /api/session
+POST /api/session/logout
+
+GET  /api/control/access
+POST /api/control/users
+POST /api/control/users/{user_uid}/deactivate
+POST /api/control/users/{user_uid}/reactivate
+POST /api/control/users/{user_uid}/enrollment-codes
+POST /api/control/enrollment-codes/{code_uid}/revoke
+POST /api/control/devices/{device_uid}/revoke
 ```
 
-There is no unauthenticated health endpoint and no generic provider passthrough route.
+Enrollment and challenge requests are public, bounded, and rate limited. All other
+routes require the correct authentication class. There is no unauthenticated
+health endpoint and no generic provider passthrough route.
 
 Chat requests may include a validated `skills` catalog containing only each enabled skill's id, name, description, and source. Veil injects the protected rules that require the model to call `read_skill` and finish reading the relevant local `SKILL.md` before using it. Full skill bodies are never sent in the initial request, and `runtime_profiles` are not supported.
 
@@ -55,15 +75,20 @@ VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
 VEIL_MODEL=llama3
 ```
 
-`VEIL_AUTH_TOKEN` authenticates Umbratic clients. `VEIL_PROVIDER_BASE_URL` is the
-private Ollama or vLLM address that Veil can reach. `VEIL_MODEL` must exactly match
-a model returned by the provider's models endpoint.
+`VEIL_AUTH_TOKEN` authenticates a local or development client. In company identity
+mode it is an internal legacy credential and cannot access product routes.
+`VEIL_PROVIDER_BASE_URL` is the private Ollama or vLLM address that Veil can reach.
+`VEIL_MODEL` must exactly match a model returned by the provider's models endpoint.
 
 ### Complete environment reference
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `VEIL_AUTH_TOKEN` | Yes | None | Bearer token required by every Veil API route. Use a long, random secret. |
+| `VEIL_AUTH_TOKEN` | Yes | None | Local/development bearer token. In company identity mode, Console supplies a separate internal value that cannot access product routes. |
+| `VEIL_COMPANY_IDENTITY_MODE` | No | `false` | Enables signed entitlement, user, device, and session access control. |
+| `VEIL_CONTROL_TOKEN` | In company mode | None | Console-only control credential. It must differ from `VEIL_AUTH_TOKEN`. |
+| `VEIL_ENTITLEMENT_PATH` | In company mode | None | Signed customer entitlement file. Veil fails closed if verification fails. |
+| `VEIL_IDENTITY_STORE_PATH` | In company mode | None | Customer-managed Veil identity state file. |
 | `VEIL_PROVIDER_BASE_URL` | Yes | None | Base URL of the private model runtime. Keep this runtime inaccessible to public clients. |
 | `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. |
 | `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
@@ -175,13 +200,15 @@ When `VEIL_TEMPLATE_REGISTRY_PATH` is set, Veil reads a server-owned JSON regist
 }
 ```
 
-`POST /api/telemetry` accepts the desktop app's selective telemetry bundles using the same bearer token as chat. The contract includes compact product events, rated conversations, failed-tool input/response, and context thresholds; it rejects raw top-level task fields and unscoped task-event dumps. It applies `VEIL_TELEMETRY_MAX_BODY_BYTES` and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
+`POST /api/telemetry` accepts the desktop app's selective telemetry bundles using the same authentication class as chat. The contract includes compact product events, rated conversations, failed-tool input/response, and context thresholds; it rejects raw top-level task fields and unscoped task-event dumps. It applies `VEIL_TELEMETRY_MAX_BODY_BYTES` and persists accepted JSON bundles under `VEIL_TELEMETRY_STORE_PATH` when that path is set. `VEIL_TELEMETRY_ENABLED=false` disables ingestion by admin policy, while `VEIL_TELEMETRY_RETENTION_DAYS` controls local pruning for stored bundles.
 
 ## Network
 
 Use Cloudflare Tunnel to expose Veil to Umbratic when Veil runs on a private server. The tunnel should point to Veil, for example `http://127.0.0.1:8080`, and the Ollama or vLLM runtime should stay private behind Veil.
 
-Do not expose Ollama or vLLM directly. Umbratic only needs the Veil tunnel URL and the bearer token.
+Do not expose Ollama or vLLM directly. In company identity mode, Umbratic needs
+only the Veil URL and a one-time Enrollment code. The desktop does not keep the
+Enrollment code after enrollment.
 
 ## Run
 
@@ -191,7 +218,7 @@ go run ./cmd/veil
 
 From the monorepo root, use the local helper to start the desktop app with the same
 connection switching behavior as the packaged app. Local is the first-run default,
-and Server remains selectable in Settings:
+and Company server remains selectable in Settings:
 
 ```sh
 npm run local
@@ -226,11 +253,12 @@ Runtime URL:  http://127.0.0.1:11434
 Model:        llama3.2
 ```
 
-Packaged Umbratic includes the Veil executable and starts it on demand. Server mode instead points Umbratic at an existing Veil deployment:
+Packaged Umbratic includes the Veil executable and starts it on demand. Company
+server mode instead points Umbratic at an existing customer Veil deployment:
 
 ```text
 Server URL:   https://veil.umbratic.ai
-Bearer token: VEIL_AUTH_TOKEN
+Enrollment code: one-time value from Veil Console
 ```
 
 Umbratic knows the Veil API routes. It calls `/api/health` to check that Veil can reach its configured model runtime, and picks the chat route from the selected harness profile:

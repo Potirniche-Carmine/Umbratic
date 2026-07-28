@@ -46,10 +46,27 @@ function parsePort(name, value, fallback) {
 
 const explicitStateDir = takeOption("--state-dir");
 const explicitVersion = takeOption("--version");
+const explicitSeats = takeOption("--seats");
+const explicitDevicesPerUser = takeOption("--devices-per-user");
+const explicitSigningKeyFile = takeOption("--signing-key-file");
+const explicitOrgUid = takeOption("--org-uid");
 const explicitConsolePort = takeOption("--port");
 const explicitVeilPort = takeOption("--veil-port");
 const consolePort = parsePort("--port", explicitConsolePort, 8177);
 const veilPort = parsePort("--veil-port", explicitVeilPort, 8080);
+
+function parsePositiveInteger(name, value, maximum = Number.MAX_SAFE_INTEGER) {
+  if (!value || !/^\d+$/.test(value)) {
+    console.error(`${name} must be a positive integer.`);
+    process.exit(2);
+  }
+  const parsed = Number(value);
+  if (parsed < 1 || parsed > maximum) {
+    console.error(`${name} must be between 1 and ${maximum}.`);
+    process.exit(2);
+  }
+  return parsed;
+}
 
 if (commandArguments.length > 0) {
   console.error(`Unknown option: ${commandArguments[0]}`);
@@ -67,6 +84,17 @@ if (explicitVersion && action !== "release") {
   console.error("--version is available only for a release.");
   process.exit(2);
 }
+if ((explicitSeats || explicitDevicesPerUser || explicitSigningKeyFile || explicitOrgUid) && action !== "release") {
+  console.error("--seats, --devices-per-user, --signing-key-file, and --org-uid are available only for a release.");
+  process.exit(2);
+}
+const releaseSeats = action === "release" ? parsePositiveInteger("--seats", explicitSeats) : 0;
+const releaseDevicesPerUser =
+  action === "release" ? parsePositiveInteger("--devices-per-user", explicitDevicesPerUser || "2", 32) : 0;
+if (action === "release" && !explicitSigningKeyFile) {
+  console.error("--signing-key-file is required for a release.");
+  process.exit(2);
+}
 
 function windowsPathToWSL(value) {
   const resolved = path.resolve(value);
@@ -75,6 +103,13 @@ function windowsPathToWSL(value) {
     throw new Error(`Cannot convert the repository path to a WSL path: ${resolved}`);
   }
   return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+}
+
+function signingKeyPathForLinux(value) {
+  if (process.platform !== "win32") {
+    return path.resolve(value);
+  }
+  return value.startsWith("/") ? value : windowsPathToWSL(value);
 }
 
 function defaultStateDirectory() {
@@ -149,13 +184,11 @@ async function runDevelopment() {
   );
 }
 
-async function runLinuxWorkflow(workflow, argument = "") {
+async function runLinuxWorkflow(workflow, argumentsForWorkflow = []) {
   const rootInLinux = process.platform === "win32" ? windowsPathToWSL(root) : root;
   const launcher = `${rootInLinux}/infrastructure/veil-console/scripts/run-wsl.sh`;
   const launcherArguments = [launcher, workflow];
-  if (argument) {
-    launcherArguments.push(argument);
-  }
+  launcherArguments.push(...argumentsForWorkflow);
   if (process.platform === "win32") {
     await run(
       "wsl.exe",
@@ -178,9 +211,23 @@ try {
     case "smoke":
       await runLinuxWorkflow("smoke");
       break;
-    case "release":
-      await runLinuxWorkflow("release", explicitVersion || "dev");
+    case "release": {
+      const releaseArguments = [
+        "--version",
+        explicitVersion || "dev",
+        "--seats",
+        String(releaseSeats),
+        "--devices-per-user",
+        String(releaseDevicesPerUser),
+        "--signing-key-file",
+        signingKeyPathForLinux(explicitSigningKeyFile),
+      ];
+      if (explicitOrgUid) {
+        releaseArguments.push("--org-uid", explicitOrgUid);
+      }
+      await runLinuxWorkflow("release", releaseArguments);
       break;
+    }
   }
 } catch (error) {
   console.error(`Veil Console command failed: ${error instanceof Error ? error.message : String(error)}`);

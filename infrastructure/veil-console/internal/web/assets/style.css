@@ -303,9 +303,9 @@ input::placeholder {
   color: var(--faint);
 }
 
-select {
-  cursor: pointer;
-}
+select { appearance: none; padding-right: 2.5rem; cursor: pointer; }
+.select-control { position: relative; display: block; }
+.select-mark { position: absolute; top: 50%; right: 1rem; width: 0.48rem; height: 0.48rem; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); pointer-events: none; transform: translateY(-70%) rotate(45deg); }
 
 .input-suffix {
   position: relative;
@@ -479,10 +479,8 @@ button:disabled,
   width: 100%;
 }
 
-.disclosure {
-  padding: 0;
-  overflow: clip;
-}
+.disclosure { display: block; padding: 0; overflow: clip; }
+.disclosure:not([open]) summary { border-radius: calc(var(--radius) - 1px); }
 
 .disclosure summary {
   display: flex;
@@ -601,7 +599,7 @@ button:disabled,
     transform: translate(-50%, -6px) scale(0.99);
   }
 
-  .error:not(.banner),
+  .error:not(.banner):not(.auth-error),
   .notice:not(.banner) {
     opacity: 0;
     transform: scale(0.98);
@@ -627,7 +625,7 @@ button:disabled,
 }
 
 @starting-style {
-  .card {
+  .card:not(.auth-card) {
     opacity: 0;
     transform: scale(0.985);
   }
@@ -660,6 +658,9 @@ button:disabled,
   margin: 0;
   color: var(--muted);
 }
+
+.auth-error { position: fixed; top: 1.25rem; left: 50%; z-index: 40; width: min(calc(100% - 2rem), 430px); transform: translateX(-50%); }
+.auth-error.is-empty { visibility: hidden; }
 
 .card form {
   display: grid;
@@ -770,6 +771,10 @@ pre {
   align-items: stretch;
 }
 
+.management-grid-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .management-action {
   display: grid;
   align-content: start;
@@ -800,8 +805,27 @@ pre {
 
   .field-grid,
   .apply-panel,
-  .management-grid {
+  .management-grid,
+  .access-controls {
     grid-template-columns: 1fr;
+  }
+
+  .capacity-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .access-user > summary,
+  .device-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .user-summary-meta {
+    justify-items: start;
+  }
+
+  .device-last-seen {
+    text-align: left;
   }
 
   .field-full {
@@ -874,6 +898,12 @@ pre {
     padding-top: 2rem;
   }
 
+  .capacity-facts,
+  .add-user-form,
+  .threshold-form {
+    grid-template-columns: 1fr;
+  }
+
   h1 {
     font-size: 2.25rem;
   }
@@ -886,6 +916,50 @@ pre {
   button,
   .button {
     min-height: 44px;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --chrome: #ffffff;
+    --surface: #ffffff;
+    --surface-raised: #f6f8fa;
+    --control: #f1f3f6;
+    --control-hover: #e8ecf1;
+    --text: #171a1f;
+    --muted: #59616d;
+    --faint: #747d89;
+    --line: rgba(18, 25, 35, 0.11);
+    --line-strong: rgba(18, 25, 35, 0.2);
+    --focus-ring: 0 0 0 2px rgba(0, 104, 218, 0.75), 0 0 0 5px rgba(245, 246, 248, 0.9);
+  }
+
+  body {
+    background: radial-gradient(circle at 50% -12rem, rgba(59, 127, 224, 0.1), transparent 34rem), var(--bg);
+  }
+
+  .topbar,
+  .panel,
+  .card {
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 14px 44px rgba(28, 39, 54, 0.09);
+  }
+
+  .nav-links,
+  .device-row,
+  .management-action {
+    background: rgba(241, 243, 246, 0.8);
+  }
+
+  .status-pill.activity {
+    color: #075fae;
+  }
+
+  .field-error,
+  .confirm-action > summary {
+    color: #a31e31 !important;
   }
 }
 

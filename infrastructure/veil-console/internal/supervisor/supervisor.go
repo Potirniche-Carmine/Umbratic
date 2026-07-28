@@ -3,13 +3,12 @@ package supervisor
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -28,17 +27,34 @@ type Status struct {
 }
 
 type Supervisor struct {
-	binary      string
-	veilAddress string
-	actionMu    sync.Mutex
-	stateMu     sync.RWMutex
-	cmd         *exec.Cmd
-	status      Status
-	logs        *safeBuffer
+	binary            string
+	veilAddress       string
+	actionMu          sync.Mutex
+	stateMu           sync.RWMutex
+	cmd               *exec.Cmd
+	status            Status
+	logs              *safeBuffer
+	entitlementPath   string
+	identityStorePath string
+	legacyToken       string
 }
 
 func New(binary, veilAddress string) *Supervisor {
 	return &Supervisor{binary: binary, veilAddress: veilAddress, logs: newSafeBuffer(32 << 10)}
+}
+
+func (s *Supervisor) EnableCompanyIdentity(entitlementPath, identityStorePath string) error {
+	if strings.TrimSpace(entitlementPath) == "" || strings.TrimSpace(identityStorePath) == "" {
+		return errors.New("company identity paths are required")
+	}
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return err
+	}
+	s.entitlementPath = entitlementPath
+	s.identityStorePath = identityStorePath
+	s.legacyToken = base64.RawURLEncoding.EncodeToString(value)
+	return nil
 }
 
 func (s *Supervisor) Status() Status {
@@ -67,10 +83,15 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	if running {
 		return errors.New("Veil is already running")
 	}
-	s.logs.SetSecrets(token)
+	s.logs.SetSecrets(token, s.legacyToken)
 	cmd := exec.Command(s.binary)
 	configureProcess(cmd)
-	cmd.Env = cfg.Environment(s.veilAddress, token)
+	healthToken := token
+	if s.entitlementPath != "" {
+		cmd.Env = cfg.CompanyEnvironment(s.veilAddress, s.legacyToken, token, s.entitlementPath, s.identityStorePath)
+	} else {
+		cmd.Env = cfg.Environment(s.veilAddress, token)
+	}
 	cmd.Stdout, cmd.Stderr = s.logs, s.logs
 	if err := cmd.Start(); err != nil {
 		return errors.New("Veil did not start")
@@ -82,7 +103,7 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	go s.wait(cmd)
 	healthCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := waitForHealth(healthCtx, s.veilAddress, token); err != nil {
+	if err := waitForHealth(healthCtx, s.veilAddress, healthToken); err != nil {
 		_ = s.stopLocked(context.Background())
 		return errors.New("Veil health check failed")
 	}
@@ -224,117 +245,6 @@ func waitForHealth(ctx context.Context, address, token string) error {
 		case <-ticker.C:
 		}
 	}
-}
-
-func TestProvider(ctx context.Context, cfg config.Veil) error {
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	testCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	base, _ := url.Parse(cfg.ProviderBaseURL)
-	host := base.Hostname()
-	resolver := net.DefaultResolver
-	addresses, err := resolver.LookupIPAddr(testCtx, host)
-	if err != nil || len(addresses) == 0 {
-		return errors.New("provider host could not be resolved")
-	}
-	for _, address := range addresses {
-		if !allowedProviderIP(address.IP) {
-			return errors.New("provider host must resolve only to loopback or private addresses")
-		}
-	}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(dialCtx context.Context, network, destination string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(destination)
-			if err != nil {
-				return nil, errors.New("provider destination is invalid")
-			}
-			for _, address := range addresses {
-				if !allowedProviderIP(address.IP) {
-					continue
-				}
-				conn, dialErr := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(dialCtx, network, net.JoinHostPort(address.IP.String(), port))
-				if dialErr == nil {
-					return conn, nil
-				}
-			}
-			return nil, errors.New("provider connection failed")
-		},
-		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second,
-	}
-	client := &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return errors.New("provider redirects are not allowed")
-	}}
-	path := "/v1/models"
-	if cfg.Protocol == "ollama" {
-		path = "/api/tags"
-	}
-	base.Path = providerPath(base.Path, path)
-	request, _ := http.NewRequestWithContext(testCtx, http.MethodGet, base.String(), nil)
-	resp, err := client.Do(request)
-	if err != nil {
-		return errors.New("provider health test failed")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return errors.New("provider health test failed")
-	}
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil || !json.Valid(payload) {
-		return errors.New("provider returned an invalid response")
-	}
-	if !containsModel(payload, cfg.Model) {
-		return errors.New("selected model is not available")
-	}
-	return nil
-}
-
-func providerPath(basePath, endpoint string) string {
-	basePath = strings.TrimRight(basePath, "/")
-	lastSlash := strings.LastIndex(endpoint, "/")
-	if lastSlash > 0 && strings.HasSuffix(basePath, endpoint[:lastSlash]) {
-		return basePath + endpoint[lastSlash:]
-	}
-	return basePath + endpoint
-}
-
-func containsModel(payload []byte, selected string) bool {
-	var value any
-	if json.Unmarshal(payload, &value) != nil {
-		return false
-	}
-	var visit func(any) bool
-	visit = func(current any) bool {
-		switch typed := current.(type) {
-		case map[string]any:
-			for key, child := range typed {
-				if (key == "id" || key == "name" || key == "model") && child == selected {
-					return true
-				}
-				if visit(child) {
-					return true
-				}
-			}
-		case []any:
-			for _, child := range typed {
-				if visit(child) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	return visit(value)
-}
-
-func allowedProviderIP(ip net.IP) bool {
-	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return false
-	}
-	return ip.IsLoopback() || ip.IsPrivate()
 }
 
 type safeBuffer struct {

@@ -11,6 +11,10 @@ func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("VEIL_ENV_FILE", "testdata/missing.env")
 	t.Setenv("VEIL_AUTH_TOKEN", "token")
+	t.Setenv("VEIL_CONTROL_TOKEN", "")
+	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "")
+	t.Setenv("VEIL_ENTITLEMENT_PATH", "")
+	t.Setenv("VEIL_IDENTITY_STORE_PATH", "")
 	t.Setenv("VEIL_PROVIDER_PROTOCOL", "")
 	t.Setenv("VEIL_PROVIDER_BASE_URL", "http://provider.test")
 	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
@@ -57,6 +61,25 @@ func TestLoadRequiresAuthToken(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected missing auth token error")
+	}
+}
+
+func TestLoadCompanyModeRequiresSeparateControlAndIdentityFiles(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "true")
+	t.Setenv("VEIL_CONTROL_TOKEN", "control")
+	t.Setenv("VEIL_ENTITLEMENT_PATH", "entitlement.json")
+	t.Setenv("VEIL_IDENTITY_STORE_PATH", "identity.json")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CompanyIdentityMode || cfg.ControlToken != "control" {
+		t.Fatalf("company identity settings were not loaded: %#v", cfg)
+	}
+	t.Setenv("VEIL_CONTROL_TOKEN", "token")
+	if _, err := Load(); err == nil {
+		t.Fatal("shared product and control token was accepted")
 	}
 }
 

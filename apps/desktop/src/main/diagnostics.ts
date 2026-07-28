@@ -2,7 +2,7 @@ import type { BackendUiEvent } from "./types";
 import { redactText, shortHashValue } from "./policy";
 import { appendLocalDiagnostic, type LocalDiagnosticInput } from "./storage";
 
-const sensitiveKey = /(?:authorization|cookie|credential|api[_-]?key|secret|token|password)/i;
+const sensitiveKey = /(?:authorization|cookie|credential|api[_-]?key|secret|token|password|enrollment[_-]?code|private[_-]?key|session)/i;
 const safeTokenCountKey = /^(?:context|content|prompt|completion|reserve|protected|estimated|maxOutput|total)Tokens$/i;
 const absolutePath = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/;
 
