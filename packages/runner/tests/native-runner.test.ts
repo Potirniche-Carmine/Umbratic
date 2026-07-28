@@ -52,7 +52,11 @@ async function startProvider() {
     const encoded = JSON.stringify(body.messages ?? []);
     response.writeHead(200, {
       "Content-Type": "text/event-stream",
-      "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE") ? "change" : "",
+      "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE")
+        ? "change"
+        : encoded.includes("READ_FILE")
+          ? "inspect"
+          : "",
       "X-Umbratic-Stream-Version": "2",
     });
     if (encoded.includes("LSP_DEGRADED") && !encoded.includes("freshness")) {
@@ -139,7 +143,10 @@ async function startProvider() {
     } else if (encoded.includes("DONE_WITHOUT_NEWLINE")) {
       response.end(sse({ choices: [{ delta: { content: "complete without newline" } }] }) + "data:[DONE]");
     } else if (encoded.includes("STREAM_RESPONSE") && Array.isArray(body.tools)) {
-      response.end(sse({ choices: [{ delta: { content: "Buffered planning answer." } }] }) + "data: [DONE]\n\n");
+      response.write(sse({ choices: [{ delta: { content: "First live " } }] }));
+      setTimeout(() => {
+        response.end(sse({ choices: [{ delta: { content: "second live." } }] }) + "data: [DONE]\n\n");
+      }, 80);
     } else if (encoded.includes("STREAM_RESPONSE")) {
       response.write(sse({ choices: [{ delta: { content: "First streamed " } }] }));
       setTimeout(() => {
@@ -687,10 +694,19 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
 
     const streamingSession = await createSession(run);
     assert.equal((await prompt(run, streamingSession.id, "STREAM_RESPONSE")).status, 204);
-    const streamedAnswer = await events.waitFor(
-      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "Buffered planning answer.",
+    const firstStreamedAnswer = await events.waitFor(
+      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "First live ",
     );
-    assert.equal(streamedAnswer.text, "Buffered planning answer.");
+    assert.equal(firstStreamedAnswer.text, "First live ");
+    assert.equal(
+      events.events.some((event) => event.type === "session.idle" && event.sessionId === streamingSession.id),
+      false,
+      "the first answer delta reaches the client before the model stream completes",
+    );
+    const secondStreamedAnswer = await events.waitFor(
+      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "second live.",
+    );
+    assert.equal(secondStreamedAnswer.text, "second live.");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === streamingSession.id);
     assert.equal(
       events.events.some((event) => event.type === "assistant.delta" && event.text === "First streamed "),

@@ -23,6 +23,7 @@ import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { normalizeReviewFile } from "../shared/reviewDiff";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
+import type { DesktopStartupSettings } from "../shared/desktopApi";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -30,7 +31,6 @@ import type {
   CapabilityTelemetryProbe,
   ChatRecord,
   HarnessProfileId,
-  LocalProviderId,
   LocalDiagnosticInfo,
   LocalDiagnosticLevel,
   LocalDiagnosticRecord,
@@ -45,11 +45,9 @@ import type {
   TaskWorkspace,
   UserNotes,
 } from "./types";
-
 function dataFile(name: string): string {
   return path.join(app.getPath("userData"), name);
 }
-
 function appDatabasePath(): string {
   return dataFile("umbratic.sqlite");
 }
@@ -139,8 +137,7 @@ function configureStorageDatabase(db: DatabaseSync): void {
 function openRetainedStorageDatabase(filePath: string): DatabaseSync {
   const existing = retainedDatabases.get(filePath);
   if (existing) {
-    // Re-check user_version so schema bumps still apply if another connection
-    // or recovery path changed the on-disk version. CREATE IF NOT EXISTS is cheap.
+    // Re-check user_version; current schemas return before any DDL runs.
     ensureStorageSchema(existing.db);
     return existing.db;
   }
@@ -200,6 +197,7 @@ export function retainedStorageDatabaseCount(): number {
 
 function ensureStorageSchema(db: DatabaseSync) {
   const schemaVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version?: number }).user_version) || 0;
+  if (schemaVersion >= 5) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY NOT NULL,
@@ -1251,8 +1249,7 @@ export function hasStoredModelEndpointSettings(): boolean {
   return !!activeModelEndpointSettings(settings);
 }
 
-export function readModelEndpointSettings(): ActiveModelEndpointSettings {
-  const settings = readRawSettings();
+function modelEndpointSettings(settings: RawSettings): ActiveModelEndpointSettings {
   const endpoint = activeModelEndpointSettings(settings) ?? {};
   const managed = managedModelEndpointDefaults();
   const forceLocal = localEndpointForced();
@@ -1290,6 +1287,8 @@ export function readModelEndpointSettings(): ActiveModelEndpointSettings {
     headers: mode === "local" ? normalizeEndpointHeaders([]) : normalizeEndpointHeaders(endpoint.headers),
   };
 }
+
+export function readModelEndpointSettings(): ActiveModelEndpointSettings { return modelEndpointSettings(readRawSettings()); }
 
 export function publicModelEndpointSettings(settings: ActiveModelEndpointSettings): PublicModelEndpointSettings {
   return {
@@ -1461,6 +1460,16 @@ export function readPermissionModeSetting(): PermissionMode {
   return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
 }
 
+export function readStartupSettings(): DesktopStartupSettings {
+  const settings = readRawSettings();
+  return {
+    permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
+    modelEndpoint: publicModelEndpointSettings(modelEndpointSettings(settings)),
+    harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
+    contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
+  };
+}
+
 export function writePermissionModeSetting(value: unknown): PermissionMode {
   const permissionMode: PermissionMode = value === "auto_safe" || value === "bypass" ? "auto_safe" : "normal";
   const settings = readRawSettings();
@@ -1469,15 +1478,6 @@ export function writePermissionModeSetting(value: unknown): PermissionMode {
     permissionMode,
   });
   return permissionMode;
-}
-
-export function readSettings(): { selectedModel?: { providerId: LocalProviderId; modelId: string }; modelEndpoint: ActiveModelEndpointSettings; harnessProfile: HarnessProfileId } {
-  const modelEndpoint = readModelEndpointSettings();
-  const harnessProfile = readHarnessProfileSetting();
-  if (modelEndpoint.modelId.trim()) {
-    return { selectedModel: { providerId: "company-endpoint", modelId: modelEndpoint.modelId.trim() }, modelEndpoint, harnessProfile };
-  }
-  return { modelEndpoint, harnessProfile };
 }
 
 export function readNotes(): UserNotes {

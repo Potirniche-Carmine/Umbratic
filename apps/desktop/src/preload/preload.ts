@@ -50,6 +50,7 @@ const umbraticApi = {
   checkoutRepositoryBranch: (input: { repositoryId?: string; repositoryPath?: string; branch: string }) =>
     ipcRenderer.invoke("umbratic:checkout-repository-branch", input),
   getBackendStatus: () => ipcRenderer.invoke("umbratic:get-backend-status"),
+  getStartupSettings: () => ipcRenderer.invoke("umbratic:get-startup-settings"),
   getCapabilityProbes: (input?: { force?: boolean }) => ipcRenderer.invoke("umbratic:get-capability-probes", input ?? {}),
   getHarnessProfile: () => ipcRenderer.invoke("umbratic:get-harness-profile"),
   saveHarnessProfile: (input: HarnessProfileId) => ipcRenderer.invoke("umbratic:save-harness-profile", input),

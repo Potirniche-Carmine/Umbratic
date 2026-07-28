@@ -26,6 +26,13 @@ export type PublicModelEndpointSettings = {
   }>;
 };
 
+export type DesktopStartupSettings = {
+  permissionMode: PermissionMode;
+  modelEndpoint: PublicModelEndpointSettings;
+  harnessProfile: HarnessProfileId;
+  contextLength: number;
+};
+
 export type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
 export type CapabilityProbeCategory =
   | "required"
@@ -435,6 +442,7 @@ export type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
+  getStartupSettings(): Promise<DesktopStartupSettings>;
   getCapabilityProbes(input?: {
     force?: boolean;
   }): Promise<CapabilityProbeReport>;
@@ -513,7 +521,7 @@ export type DesktopApi = {
       }
     | { ok: false; message: string }
   >;
-  setPermissionMode(mode: PermissionMode): Promise<BackendStatus>;
+  setPermissionMode(mode: PermissionMode): Promise<PermissionMode>;
   listAvailableIdes(): Promise<IdeInfo[]>;
   startTask(input: {
     repositoryId?: string;
@@ -595,6 +603,7 @@ export const desktopIpcChannels = {
   listRepositoryBranches: "umbratic:list-repository-branches",
   checkoutRepositoryBranch: "umbratic:checkout-repository-branch",
   getBackendStatus: "umbratic:get-backend-status",
+  getStartupSettings: "umbratic:get-startup-settings",
   getCapabilityProbes: "umbratic:get-capability-probes",
   getHarnessProfile: "umbratic:get-harness-profile",
   saveHarnessProfile: "umbratic:save-harness-profile",

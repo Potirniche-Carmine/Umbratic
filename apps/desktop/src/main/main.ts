@@ -70,6 +70,7 @@ import {
 } from "./policy";
 import { getProviderJson } from "./providerClient";
 import { ensureLocalVeil, stopLocalVeil, currentLocalVeilConnection } from "./localVeil";
+import { loadWindowWithModelWarmup } from "./modelWarmup";
 import { probeVeilContextLength, shouldProbeVeilContext } from "./veilContext";
 import {
   readChat,
@@ -85,7 +86,7 @@ import {
   readPermissionModeSetting,
   readProjects,
   readProductTelemetryEvents,
-  readTask,
+  readStartupSettings, readTask,
   readTaskCheckpoints,
   readTasks,
   clearLocalDiagnostics,
@@ -4566,10 +4567,10 @@ async function openPathInIde(
   return error ? { ok: false, message: error } : { ok: true };
 }
 
-function setPermissionMode(input: unknown): Promise<BackendStatus> {
+function setPermissionMode(input: unknown): PermissionMode {
   permissionMode = writePermissionModeSetting(input);
   recordProductTelemetry("permission.mode_changed", { data: { mode: permissionMode } });
-  return getBackendStatus();
+  return permissionMode;
 }
 
 function devServerUrl(): URL {
@@ -4762,9 +4763,9 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     listRepositoryBranches: (input) => listRepositoryBranches(input),
     checkoutRepositoryBranch: (input) => checkoutRepositoryBranch(input),
     getBackendStatus: () => getBackendStatus(),
+    getStartupSettings: () => readStartupSettings(),
     getCapabilityProbes: (input) => getCapabilityProbes(input),
-    getModelEndpointSettings: () =>
-      publicModelEndpointSettings(readModelEndpointSettings()),
+    getModelEndpointSettings: () => publicModelEndpointSettings(readModelEndpointSettings()),
     saveModelEndpointSettings: (input) =>
       saveModelEndpointSettings(
         input as Partial<ReturnType<typeof readModelEndpointSettings>>,
@@ -4842,8 +4843,7 @@ app.whenReady().then(async () => {
   }
   registerMainIpc();
   Menu.setApplicationMenu(null);
-  await createWindow();
-  void getBackendStatus();
+  await loadWindowWithModelWarmup(createWindow);
   void retryTelemetrySpoolQueue().catch((cause) => {
     recordLocalDiagnostic({
       level: "warn",

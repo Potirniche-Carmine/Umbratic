@@ -9,6 +9,7 @@ import type {
   CapabilityProbeStatus,
   ChatAttachment,
   ChatRecord,
+  DesktopStartupSettings,
   DesktopApi,
   FileSearchResult,
   HarnessProfileId,
@@ -270,6 +271,12 @@ const defaultModelEndpointSettings: ModelEndpointSettings = {
     { name: "", value: "", valueConfigured: false },
     { name: "", value: "", valueConfigured: false },
   ],
+};
+const defaultStartupSettings: DesktopStartupSettings = {
+  permissionMode: "normal",
+  modelEndpoint: defaultModelEndpointSettings,
+  harnessProfile: defaultHarnessProfileId,
+  contextLength: DEFAULT_CONTEXT_LENGTH,
 };
 const savedEndpointSecretPlaceholder = "••••••••••••  Saved securely";
 const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
@@ -1398,10 +1405,9 @@ function stripAssistantSpeakerPrefix(text: string): string {
 }
 
 export function assistantTextFromEvents(events: BackendUiEvent[]): string {
-  const text = events
-    .filter((event): event is Extract<BackendUiEvent, { type: "assistant.delta" }> => event.type === "assistant.delta")
-    .map((event) => event.text)
-    .filter((text) => !isReviewReadyText(text))
+  const text = composerTimelineFromEvents(events)
+    .filter((item): item is Extract<ComposerTimelineItem, { type: "assistant" }> => item.type === "assistant")
+    .map((item) => item.text)
     .join("")
     .trim();
   return stripAssistantSpeakerPrefix(text).trim();
@@ -1432,11 +1438,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
 
   const flushAssistant = (streaming = false) => {
     const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
-    if (!text) {
-      assistantBuffer = "";
-      assistantNeedsSeparator = false;
-      return;
-    }
+    if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
     assistantIndex += 1;
     items.push({
       type: "assistant",
@@ -1444,8 +1446,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       text,
       streaming: streaming || undefined,
     });
-    assistantBuffer = "";
-    assistantNeedsSeparator = false;
+    assistantBuffer = ""; assistantNeedsSeparator = false;
   };
 
   const markActivityTime = (startedAt?: string, endedAt?: string) => {
@@ -1536,6 +1537,15 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     reasoningEndedAt = undefined;
   };
 
+  const flushAssistantAsReasoning = () => {
+    const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
+    if (text) {
+      reasoningBuffer = `${reasoningBuffer}${reasoningBuffer.trim() ? "\n\n" : ""}${text}`;
+      assistantBuffer = ""; assistantNeedsSeparator = false;
+    }
+    flushReasoning();
+  };
+
   for (const event of events) {
     if (event.type === "user.message") {
       flushReasoning();
@@ -1584,7 +1594,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.started") {
-      flushReasoning();
+      flushAssistantAsReasoning();
       if (assistantBuffer.trim()) assistantNeedsSeparator = true;
       const existingRun = runs.get(event.id);
       if (existingRun) {
@@ -1619,6 +1629,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.output") {
+      flushAssistantAsReasoning();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -1647,6 +1658,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.finished") {
+      flushAssistantAsReasoning();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -2067,10 +2079,13 @@ function placeElementAtBottom(node: HTMLElement) {
   node.scrollTop = node.scrollHeight;
 }
 
-function App() {
+function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
+  const initialEndpointSettings = normalizeEndpointSettings(startupSettings.modelEndpoint);
+  const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
+  const initialContextLength = normalizeContextLength(startupSettings.contextLength);
   const [backend, setBackend] = useState<BackendStatus | null>(null);
   const [repository, setRepository] = useState<RepositoryInfo | null>(previewEnvironment?.repository ?? null);
-  const [permissionMode, setPermissionModeState] = useState<PermissionMode>("normal");
+  const [permissionMode, setPermissionModeState] = useState<PermissionMode>(startupSettings.permissionMode);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
   const reasoningMode: ReasoningMode = "reasoning";
   const [projects, setProjects] = useState<RepositoryInfo[]>(previewEnvironment ? [previewEnvironment.repository] : []);
@@ -2118,15 +2133,14 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "skills" | "telemetry">("account");
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
-  const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
-  const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(() => ({ ...defaultModelEndpointSettings }));
-  const [endpointSettingsLoaded, setEndpointSettingsLoaded] = useState(false);
+  const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(initialEndpointSettings);
+  const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(initialEndpointSettings);
   const [endpointSaving, setEndpointSaving] = useState(false);
   const [endpointRefreshing, setEndpointRefreshing] = useState(false);
-  const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
-  const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(defaultHarnessProfileId);
-  const [contextLength, setContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
-  const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
+  const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
+  const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
+  const [contextLength, setContextLength] = useState(initialContextLength);
+  const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
   const [appearanceSettings, setAppearanceSettings] = useState<AppearanceSettings>(() => {
@@ -2180,7 +2194,7 @@ function App() {
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const endpointSaveSequenceRef = useRef(0);
-  const endpointModeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({});
+  const endpointModeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({ [initialEndpointSettings.mode]: initialEndpointSettings });
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
@@ -2593,8 +2607,6 @@ function App() {
 
   useEffect(() => {
     void refreshStatus();
-    void loadEndpointSettings();
-    void loadHarnessProfile();
     void loadAvailableIdes();
     void loadProjects();
     void loadChats();
@@ -3148,20 +3160,6 @@ function App() {
     }
   }
 
-  async function loadEndpointSettings() {
-    try {
-      const settings = normalizeEndpointSettings(await api.getModelEndpointSettings());
-      setEndpointSettings(settings);
-      setEndpointDraftSettings(settings);
-      endpointModeDraftsRef.current = { [settings.mode]: settings };
-      setAccountMessage(null);
-    } catch (cause) {
-      setAccountMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setEndpointSettingsLoaded(true);
-    }
-  }
-
   function updateEndpointDraft(patch: Partial<ModelEndpointSettings>) {
     endpointSaveSequenceRef.current += 1;
     setEndpointSaving(false);
@@ -3667,9 +3665,7 @@ function App() {
     setError(null);
     setPermissionModeState(mode);
     try {
-      const status = await api.setPermissionMode(mode);
-      setBackend(status);
-      setPermissionModeState(status.permissionMode);
+      setPermissionModeState(await api.setPermissionMode(mode));
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -3680,9 +3676,7 @@ function App() {
     setError(null);
     setPermissionModeState("auto_safe");
     try {
-      const status = await api.setPermissionMode("auto_safe");
-      setBackend(status);
-      setPermissionModeState(status.permissionMode);
+      setPermissionModeState(await api.setPermissionMode("auto_safe"));
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -5785,38 +5779,29 @@ function App() {
                         <h3>Connection</h3>
                         <p>Run through local Ollama, or connect to a Veil server managing Ollama or vLLM.</p>
                       </div>
-                      {endpointSettingsLoaded ? (
-                        <div className="connectionCompactStatus">
-                          <span
-                            className={`serverHealthText ${connectionDisplayState}`}
-                            role="status"
-                            aria-label={connectionStatusLabel}
-                            title={connectionStatusLabel}
-                          >
-                            <span className="serverStatusDot" aria-hidden="true" />
-                          </span>
-                          <button
-                            className="settingsIconButton connectionRefreshButton"
-                            type="button"
-                            onClick={() => void refreshConnectionStatus()}
-                            disabled={endpointRefreshing || endpointSaving || endpointDirty}
-                            title={endpointDirty ? "Save changes before checking" : "Check connection"}
-                            aria-label="Check connection"
-                          >
-                            <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
-                          </button>
-                        </div>
-                      ) : null}
+                      <div className="connectionCompactStatus">
+                        <span
+                          className={`serverHealthText ${connectionDisplayState}`}
+                          role="status"
+                          aria-label={connectionStatusLabel}
+                          title={connectionStatusLabel}
+                        >
+                          <span className="serverStatusDot" aria-hidden="true" />
+                        </span>
+                        <button
+                          className="settingsIconButton connectionRefreshButton"
+                          type="button"
+                          onClick={() => void refreshConnectionStatus()}
+                          disabled={endpointRefreshing || endpointSaving || endpointDirty}
+                          title={endpointDirty ? "Save changes before checking" : "Check connection"}
+                          aria-label="Check connection"
+                        >
+                          <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
+                        </button>
+                      </div>
                     </div>
 
-                    {!endpointSettingsLoaded ? (
-                      <div className="connectionLoading" aria-label="Loading connection settings">
-                        <Loader2 className="spin" size={16} />
-                        <span>Loading connection settings</span>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="settingsGroup">
+                    <div className="settingsGroup">
                           <h4>Run mode</h4>
                           <div className="connectionModeGrid" aria-label="Model connection type">
                             <button
@@ -5938,9 +5923,7 @@ function App() {
                             {endpointDirty && endpointValidation ? <p className="settingsMessage settingsMessageError">{endpointValidation}</p> : null}
                             {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
                           </div>
-                        </div>
-                      </>
-                    )}
+                    </div>
                   </div>
                 ) : null}
 
@@ -6543,6 +6526,9 @@ if (rootElement) {
     ?? (() => {
       throw new Error("The Umbratic preload API is not available. The desktop app cannot start.");
     })();
-  rootElement.umbraticRoot ??= createRoot(rootElement);
-  rootElement.umbraticRoot.render(<App />);
+  const renderApp = (startupSettings: DesktopStartupSettings) => {
+    rootElement.umbraticRoot ??= createRoot(rootElement);
+    rootElement.umbraticRoot.render(<App startupSettings={startupSettings} />);
+  };
+  void api.getStartupSettings().then(renderApp, () => renderApp(defaultStartupSettings));
 }

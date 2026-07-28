@@ -738,3 +738,52 @@ test("app and chat databases keep one process-lifetime handle and migrate once",
   assert.equal(storage.retainedStorageDatabaseCount(), 1, "reads reopen a retained handle after close");
   storage.closeStorageDatabases();
 });
+
+test("current SQLite schemas do not repeat schema DDL on retained handles", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-schema-"));
+  const storage = loadStorage(userData);
+  const originalExec = DatabaseSync.prototype.exec;
+  let schemaSetupCount = 0;
+  DatabaseSync.prototype.exec = function trackedExec(sql) {
+    if (String(sql).includes("CREATE TABLE IF NOT EXISTS projects")) {
+      schemaSetupCount += 1;
+    }
+    return originalExec.call(this, sql);
+  };
+
+  try {
+    storage.readProjects();
+    storage.readTasks();
+    storage.readModelEndpointSettings();
+    assert.equal(schemaSetupCount, 1);
+  } finally {
+    DatabaseSync.prototype.exec = originalExec;
+    storage.closeStorageDatabases();
+  }
+});
+
+test("startup settings use one SQLite settings-row read", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-startup-settings-"));
+  const storage = loadStorage(userData);
+  storage.writeHarnessProfileSetting("sales");
+  storage.writeContextLengthSetting(128000);
+  storage.writePermissionModeSetting("auto_safe");
+  const originalPrepare = DatabaseSync.prototype.prepare;
+  let settingsReads = 0;
+  DatabaseSync.prototype.prepare = function trackedPrepare(sql) {
+    if (String(sql).includes("SELECT payload FROM settings WHERE key")) settingsReads += 1;
+    return originalPrepare.call(this, sql);
+  };
+
+  try {
+    const settings = storage.readStartupSettings();
+    assert.equal(settings.permissionMode, "auto_safe");
+    assert.equal(settings.harnessProfile, "sales");
+    assert.equal(settings.contextLength, 128000);
+    assert.equal(settings.modelEndpoint.mode, "local");
+    assert.equal(settingsReads, 1);
+  } finally {
+    DatabaseSync.prototype.prepare = originalPrepare;
+    storage.closeStorageDatabases();
+  }
+});

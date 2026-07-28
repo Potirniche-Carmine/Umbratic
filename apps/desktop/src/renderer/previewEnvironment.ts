@@ -66,13 +66,16 @@ const composerTestParams = new URLSearchParams(window.location.search);
 const composerTestRunning = composerTestParams.get("composerTest") === "running";
 const composerTestDirectAnswer = composerTestParams.has("directAnswer");
 const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
+const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
 const composerTestToolIssue = composerTestParams.has("toolIssue");
-const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly ? [] : [
+const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
 ];
 const composerTestPrompt =
-  composerTestDirectAnswer || composerTestWaitingOnly
+  composerTestEscapedPlan
+    ? "write me bubble sort algorithm in python and verify that it runs"
+    : composerTestDirectAnswer || composerTestWaitingOnly
     ? composerTestWaitingOnly ? "Summarize this conversation." : "Hey, tell me about yourself."
     : 'Make the composer feel fluid using @main.tsx and @styles.css. Keep escaped text safe: `a\\|b`, "<tag>", and {"ok":true}.';
 const composerTestVisiblePrompt = composerTestParams.has("reviewFeedback")
@@ -90,6 +93,16 @@ const composerTestRepository: RepositoryInfo = {
 };
 const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
+] : composerTestEscapedPlan ? [
+  { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 11_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.", at: new Date(Date.now() - 10_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "write-bubble-sort", command: "write bubble_sort.py", cwd: "/workspace/Umbratic", kind: "edit", commandClass: "edit", at: new Date(Date.now() - 9_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "write-bubble-sort", exitCode: 0, at: new Date(Date.now() - 8_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "run-bubble-sort", command: "uv run bubble_sort.py", cwd: "/workspace/Umbratic", kind: "bash", commandClass: "package-manager", at: new Date(Date.now() - 7_000).toISOString() },
+  { type: "command.output", taskId: "composer-test", id: "run-bubble-sort", stream: "stdout", text: "5 tests passed\n", at: new Date(Date.now() - 6_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "run-bubble-sort", exitCode: 0, at: new Date(Date.now() - 5_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "Done — saved `bubble_sort.py` and verified it with five test cases.", at: new Date(Date.now() - 2_000).toISOString() },
+  { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : composerTestDirectAnswer ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
   { type: "assistant.delta", taskId: "composer-test", text: "I’m Umbratic, a private AI assistant that can answer questions and complete practical work.", at: new Date(Date.now() - 1_000).toISOString() },
@@ -792,6 +805,12 @@ function createPreviewApi(): DesktopApi {
     },
     message: "Electron preload is not available in this browser preview.",
   }),
+  getStartupSettings: async () => ({
+    permissionMode: getPreviewPermissionMode(),
+    modelEndpoint: readPreviewEndpointSettings(),
+    harnessProfile: readPreviewHarnessProfile(),
+    contextLength: readPreviewContextLength(),
+  }),
   getCapabilityProbes: async () => previewCapabilityReport(),
   getHarnessProfile: async () => readPreviewHarnessProfile(),
   saveHarnessProfile: async (input) => {
@@ -836,7 +855,7 @@ function createPreviewApi(): DesktopApi {
   resetSystemSkill: async () => ({ ok: false, message: "Electron preload is not available." }),
   setPermissionMode: async (mode) => {
     setPreviewPermissionMode(mode);
-    return previewApi.getBackendStatus();
+    return getPreviewPermissionMode();
   },
   listAvailableIdes: async () => defaultIdeChoices,
   startTask: async () => {

@@ -59,6 +59,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["listRepositoryBranches", [{ repositoryId: "repo" }], "umbratic:list-repository-branches"],
     ["checkoutRepositoryBranch", [{ repositoryId: "repo", branch: "main" }], "umbratic:checkout-repository-branch"],
     ["getBackendStatus", [], "umbratic:get-backend-status", undefined],
+    ["getStartupSettings", [], "umbratic:get-startup-settings", undefined],
     ["getCapabilityProbes", [{ force: true }], "umbratic:get-capability-probes"],
     ["getHarnessProfile", [], "umbratic:get-harness-profile", undefined],
     ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],

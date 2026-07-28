@@ -249,8 +249,31 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(interleavedTimeline.filter((item) => item.type === "activity").length, 2);
   assert.equal(interleavedTimeline.filter((item) => item.type === "assistant").length, 1);
   assert.equal(interleavedTimeline[1].segments[0].text, "First step.");
-  assert.equal(interleavedTimeline[2].segments[0].text, "Second step.");
-  assert.equal(interleavedTimeline[3].text, "I’ll inspect the project.\n\nHere is the complete answer.");
+  assert.equal(interleavedTimeline[2].segments[0].text, "I’ll inspect the project.\n\nSecond step.");
+  assert.equal(interleavedTimeline[3].text, "Here is the complete answer.");
+  assert.equal(assistantTextFromEvents([
+    events[0],
+    { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
+    events[2],
+    events[3],
+    events[4],
+    { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
+  ]), "Here is the complete answer.");
+
+  const escapedPlanTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "write me bubble sort algorithm in python and verify that it runs", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.started", taskId: "task-1", id: "write-1", command: "write bubble_sort.py", cwd: "C:/repo", kind: "edit", commandClass: "edit", at: "2026-01-01T00:00:02.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "write-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
+    { type: "command.started", taskId: "task-1", id: "run-1", command: "uv run bubble_sort.py", cwd: "C:/repo", kind: "bash", commandClass: "package-manager", at: "2026-01-01T00:00:04.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "run-1", exitCode: 0, at: "2026-01-01T00:00:05.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Done — the script passed five test cases.", at: "2026-01-01T00:00:06.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(escapedPlanTimeline[1].segments[0].type, "reasoning");
+  assert.equal(escapedPlanTimeline[1].segments[0].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
+  assert.equal(escapedPlanTimeline[2].text, "Done — the script passed five test cases.");
 
   const failedToolTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],

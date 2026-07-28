@@ -280,14 +280,15 @@ fn emit_completed_output(
     session: &Session,
     result: &VeilChatResult,
     suppress_output: bool,
+    answer_streamed: bool,
 ) {
     if suppress_output || result.content.is_empty() {
         return;
     }
-    if result.tool_calls.is_empty() {
+    if result.tool_calls.is_empty() && !answer_streamed {
         sink.emit(json!({ "type": "assistant.answer.started", "taskId": session.task_id, "at": now_iso() }));
         sink.emit(json!({ "type": "assistant.delta", "taskId": session.task_id, "text": result.content, "at": now_iso() }));
-    } else {
+    } else if !result.tool_calls.is_empty() && !answer_streamed {
         sink.emit(json!({
             "type": "assistant.progress.delta",
             "taskId": session.task_id,
@@ -349,7 +350,7 @@ fn process_veil_payload(
     payload: Value,
     result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
-) {
+) -> String {
     if let Some(usage) = payload.get("usage") {
         update_usage(result, usage);
     }
@@ -357,15 +358,19 @@ fn process_veil_payload(
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|values| values.first());
-    let Some(choice) = choice else { return };
+    let Some(choice) = choice else {
+        return String::new();
+    };
     if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
         result.truncated_tool_arguments = true;
     }
     let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
-        return;
+        return String::new();
     };
-    append_content(result, text_content(delta.get("content")));
+    let content = text_content(delta.get("content"));
+    append_content(result, content.clone());
     append_veil_delta(result, delta, partial);
+    content
 }
 
 fn update_usage(result: &mut VeilChatResult, usage: &Value) {
@@ -467,17 +472,37 @@ fn process_veil_line(
     line: &str,
     result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
-) -> Result<bool, String> {
+) -> Result<(bool, String), String> {
     let Some(data) = sse_data(line) else {
-        return Ok(false);
+        return Ok((false, String::new()));
     };
     if data.trim() == "[DONE]" {
-        return Ok(true);
+        return Ok((true, String::new()));
     }
     let payload = serde_json::from_str::<Value>(data)
         .map_err(|_| "Veil stream contained invalid JSON".to_owned())?;
-    process_veil_payload(payload, result, partial);
-    Ok(false)
+    let content = process_veil_payload(payload, result, partial);
+    Ok((false, content))
+}
+
+fn emit_answer_delta(sink: &EventSink, session: &Session, text: &str, answer_started: &mut bool) {
+    if text.is_empty() {
+        return;
+    }
+    if !*answer_started {
+        sink.emit(json!({
+            "type": "assistant.answer.started",
+            "taskId": session.task_id,
+            "at": now_iso()
+        }));
+        *answer_started = true;
+    }
+    sink.emit(json!({
+        "type": "assistant.delta",
+        "taskId": session.task_id,
+        "text": text,
+        "at": now_iso()
+    }));
 }
 
 fn normalize_tool_call_ids(calls: &mut [ToolCall]) {
@@ -609,6 +634,7 @@ pub async fn stream_veil_chat(
         })
         .unwrap_or("")
         .to_owned();
+    let stream_answer = !suppress_output && (action.is_empty() || !include_tools);
     let mut result = VeilChatResult {
         action_requirement: action,
         ..VeilChatResult::default()
@@ -616,6 +642,11 @@ pub async fn stream_veil_chat(
     let mut partial = BTreeMap::new();
     let mut buffer = Vec::new();
     let mut completed = false;
+    // Veil classifies workspace actions before it starts the response body. A
+    // response with no required workspace action is a direct answer, so its
+    // public content can reach the desktop as each validated SSE delta arrives.
+    // Tool-required turns remain buffered until their tool-call shape is known.
+    let mut answer_started = false;
     let mut stream = response.bytes_stream();
     loop {
         if session.is_aborted() {
@@ -632,7 +663,11 @@ pub async fn stream_veil_chat(
             if let Some(error) = veil_stream_error(&line) {
                 return Err(error);
             }
-            if process_veil_line(&line, &mut result, &mut partial)? {
+            let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)?;
+            if stream_answer {
+                emit_answer_delta(sink, session, &content, &mut answer_started);
+            }
+            if line_completed {
                 completed = true;
             }
         }
@@ -644,7 +679,11 @@ pub async fn stream_veil_chat(
         if let Some(error) = veil_stream_error(trailing) {
             return Err(error);
         }
-        if process_veil_line(trailing, &mut result, &mut partial)? {
+        let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)?;
+        if stream_answer {
+            emit_answer_delta(sink, session, &content, &mut answer_started);
+        }
+        if line_completed {
             completed = true;
         }
     }
@@ -657,7 +696,7 @@ pub async fn stream_veil_chat(
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
-    emit_completed_output(sink, session, &result, suppress_output);
+    emit_completed_output(sink, session, &result, suppress_output, answer_started);
     Ok(result)
 }
 

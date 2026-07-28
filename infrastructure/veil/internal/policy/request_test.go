@@ -34,6 +34,7 @@ func TestWorkspaceActionRequirement(t *testing.T) {
 		want    string
 	}{
 		{"Can you create a hello world script and verify it works?", ActionChangeAndExecute},
+		{"write me bubble sort algorithm in python and verify that it runs", ActionChangeAndExecute},
 		{"can you write me a markdown with suggestions to improve it", ActionChange},
 		{"Please fix the parser", ActionChange},
 		{"run the tests", ActionExecute},
