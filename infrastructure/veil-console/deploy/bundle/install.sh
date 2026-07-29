@@ -42,9 +42,9 @@ if ! id veil-console >/dev/null 2>&1; then
   useradd --system --home /var/lib/veil-console --shell /usr/sbin/nologin veil-console
 fi
 
-install -d -o root -g root -m 0755 /usr/local/lib/veil-console
-install -o root -g root -m 0755 "$script_dir/veil" "$script_dir/veil-console" /usr/local/lib/veil-console/
-install -o root -g root -m 0644 "$script_dir/entitlement.json" /usr/local/lib/veil-console/entitlement.json
+install -d -o root -g root -m 0755 /opt/umbratic/veil-console
+install -o root -g root -m 0755 "$script_dir/veil" "$script_dir/veil-console" /opt/umbratic/veil-console/
+install -o root -g root -m 0644 "$script_dir/entitlement.json" /opt/umbratic/veil-console/entitlement.json
 
 bash "$script_dir/render-production-config.sh" \
   "$dns_name" "$work_dir" "$https_port" "$console_port" "$veil_port"

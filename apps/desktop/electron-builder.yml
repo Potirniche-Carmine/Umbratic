@@ -30,6 +30,7 @@ win:
   target:
     - nsis
 nsis:
+  include: scripts/installer.nsh
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

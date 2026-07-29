@@ -711,6 +711,10 @@ pre {
   gap: 0.1rem;
 }
 
+.service-endpoint { display: grid; min-width: 180px; gap: 0.1rem; }
+.service-endpoint span { color: var(--faint); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.055em; text-transform: uppercase; }
+.service-endpoint strong { color: var(--text); font: 650 0.8rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+
 .status-label {
   margin: 0;
   color: var(--faint);
@@ -851,6 +855,8 @@ pre {
   .status-panel {
     grid-template-columns: 1fr;
   }
+
+  .service-endpoint { min-width: 0; }
 
   .service-actions {
     width: 100%;

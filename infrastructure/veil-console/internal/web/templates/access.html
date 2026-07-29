@@ -6,8 +6,8 @@
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/access.css?v=11">
-  <script defer src="/assets/console.js?v=10"></script>
+  <link rel="stylesheet" href="/assets/access.css?v=13">
+  <script defer src="/assets/console.js?v=11"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -125,7 +125,7 @@
             {{end}}
 
             <div class="devices">
-              <div class="devices-heading"><h3>Devices</h3><span>{{.EnrolledDevices}} enrolled</span></div>
+              <div class="devices-heading"><h3>Devices</h3></div>
               {{if not .Devices}}<p class="empty-device">No devices are enrolled.</p>{{end}}
               {{range .Devices}}
               <article class="device-row">

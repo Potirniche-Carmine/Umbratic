@@ -34,11 +34,18 @@
 }
 
 .organization-form {
+  align-items: flex-end;
   gap: 0.65rem;
 }
 
 .organization-form .field {
   flex: 1;
+}
+
+.organization-form > button,
+.add-user-controls > button,
+.choice-segments {
+  height: 46px;
 }
 
 .capacity-summary {
@@ -121,7 +128,7 @@
 
 .segment-option span {
   display: grid;
-  min-height: 36px;
+  min-height: 38px;
   place-items: center;
   width: 100%;
   padding: 0 0.55rem;
@@ -186,6 +193,7 @@
 }
 
 .access-user {
+  display: block;
   padding: 0;
   overflow: clip;
 }

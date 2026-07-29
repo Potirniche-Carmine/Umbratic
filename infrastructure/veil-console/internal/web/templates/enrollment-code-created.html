@@ -6,8 +6,8 @@
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/access.css?v=10">
-  <script defer src="/assets/console.js?v=10"></script>
+  <link rel="stylesheet" href="/assets/access.css?v=12">
+  <script defer src="/assets/console.js?v=11"></script>
 </head>
 <body>
 <main class="app-shell">
@@ -22,8 +22,7 @@
       <pre aria-label="Enrollment code" data-token>{{.EnrollmentCode}}</pre>
       <p class="access-muted">Expires {{.EnrollmentExpires}}</p>
       <div class="secret-actions">
-        <button type="button" data-copy-token>Copy code</button>
-        <a class="button secondary" href="/access">Return to Management</a>
+        <button type="button" data-copy-token data-copy-exit="/access">Copy &amp; exit</button>
       </div>
     </section>
   </div>

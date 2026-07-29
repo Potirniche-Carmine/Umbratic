@@ -4,6 +4,10 @@
   copyButton?.addEventListener("click", async () => {
     if (!token) return;
     await navigator.clipboard.writeText(token.textContent.trim());
+    if (copyButton.dataset.copyExit) {
+      window.location.assign(copyButton.dataset.copyExit);
+      return;
+    }
     copyButton.textContent = "Copied";
   });
 

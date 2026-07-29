@@ -82,8 +82,25 @@ func TestAccessViewShowsOnlyUsefulCurrentDeviceState(t *testing.T) {
 		}
 	}
 	if strings.Contains(body, "Fingerprint") || strings.Contains(body, "Enrolled 2026") ||
-		strings.Contains(body, `<details class="panel access-user" open>`) {
+		strings.Contains(body, `<details class="panel access-user" open>`) ||
+		strings.Contains(body, `<div class="devices-heading"><h3>Devices</h3><span>1 enrolled</span></div>`) {
 		t.Fatalf("management page contains hidden implementation data or opens every row: %s", body)
+	}
+}
+
+func TestEnrollmentCodeUsesOneCopyAndExitAction(t *testing.T) {
+	server, closeServer := testServer(t)
+	defer closeServer()
+	response := httptest.NewRecorder()
+	server.render(response, "enrollment-code-created.html", pageData{
+		Title: "Enrollment code", EnrollmentCode: "example-code", EnrollmentExpires: "tomorrow",
+	})
+	body := response.Body.String()
+	if !strings.Contains(body, `data-copy-exit="/access"`) || !strings.Contains(body, "Copy &amp; exit") {
+		t.Fatalf("enrollment code page is missing the combined action: %s", body)
+	}
+	if strings.Contains(body, "Return to Management") || strings.Contains(body, ">Copy code<") {
+		t.Fatalf("enrollment code page still has duplicate actions: %s", body)
 	}
 }
 

@@ -155,11 +155,19 @@ The zip contains a new organization UID and a signed `entitlement.json`. The sam
 trusted public key is in the Veil and Console binaries. A local change to the seat,
 device, organization, or term fields makes startup fail.
 
-The zip appears in `artifacts/releases/`. Copy it to the server, extract it, and run:
+The zip appears in `artifacts/releases/`. Copy it to `/tmp` on the server,
+extract it there, and run:
 
 ```sh
+cd /tmp
+unzip umbratic-veil-console-0.1.0-linux-amd64.zip
+cd umbratic-veil-console-0.1.0-linux-amd64
 sudo ./install.sh --dnsname console.example.com
 ```
+
+The installer puts read-only program files in `/opt/umbratic/veil-console` and
+writable service state in `/var/lib/veil-console`. Remove the zip and extracted
+directory from `/tmp` after the installation succeeds.
 
 The public HTTPS port defaults to `8432`. To select another public port:
 

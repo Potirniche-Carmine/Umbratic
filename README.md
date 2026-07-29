@@ -56,6 +56,9 @@ token cannot access chat or telemetry.
 See [`docs/enterprise-licensing.md`](docs/enterprise-licensing.md) for customer
 release, entitlement, backup, and recovery procedures.
 
+See [`docs/storage-layout.md`](docs/storage-layout.md) for desktop and server
+installation, state, cache, and log locations.
+
 Run Veil by itself for server development:
 
 ```sh

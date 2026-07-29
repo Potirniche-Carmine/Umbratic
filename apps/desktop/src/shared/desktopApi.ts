@@ -288,6 +288,7 @@ export type ChatRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  modelEndpointMode?: ModelEndpointMode;
   repositoryName?: string;
   repositoryPath?: string;
   taskId?: string;

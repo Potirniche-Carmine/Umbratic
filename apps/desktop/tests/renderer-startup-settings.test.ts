@@ -27,3 +27,20 @@ test("the top connection refresh owns local model discovery", () => {
   assert.match(renderer.slice(start, end), /api\.probeLocalModels/);
   assert.doesNotMatch(picker, /probeLocalModels|RefreshCw|setTimeout/);
 });
+
+test("active task updates preserve the chat connection marker", () => {
+  const source = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  const start = source.indexOf("function upsertChatFromTask");
+  const end = source.indexOf("\n  async function loadChats", start);
+  assert.match(
+    source.slice(start, end),
+    /modelEndpointMode: existing\?\.modelEndpointMode \?\? endpointSettings\.mode/,
+  );
+});
+
+test("an enrolled company server shows only its connected state", () => {
+  const source = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  assert.match(source, /const companyServerConnected =/);
+  assert.match(source, /\{companyServerConnected && companyConnection\.state === "enrolled" \? \(/);
+  assert.match(source, /\{!companyServerConnected \? <div className="connectionActions">/);
+});

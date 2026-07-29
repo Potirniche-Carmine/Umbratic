@@ -205,7 +205,9 @@ test("runtimeEnv keeps UV dirs but does not prepend workspace runtime onto PATH"
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 
   assert.equal(env[pathKey]?.includes(".umbratic"), false);
-  assert.match(env.UV_INSTALL_DIR, /\.umbratic[\\/]runtime[\\/]uv$/);
+  assert.equal(path.relative(path.join(userData, "runtimes"), env.UV_INSTALL_DIR).startsWith(".."), false);
+  assert.equal(path.basename(env.UV_INSTALL_DIR), "uv");
+  assert.equal(env.UV_CACHE_DIR, path.join(path.dirname(env.UV_INSTALL_DIR), "uv-cache"));
   assert.equal(env.UV_NO_MODIFY_PATH, "1");
   assert.equal(env.SystemDrive, "C:");
   assert.equal("UMBRATIC_RUNNER_CONFIG" in env, false);

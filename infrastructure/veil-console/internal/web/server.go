@@ -64,6 +64,7 @@ type pageData struct {
 	PasswordError     bool
 	Running           bool
 	Healthy           bool
+	VeilURL           string
 	EnterpriseEnabled bool
 	Access            accessView
 	Models            []string
@@ -373,7 +374,8 @@ func (s *Server) dashboardData(r *http.Request, errorMessage, noticeMessage stri
 	return pageData{
 		Title: "Veil Console", CSRF: csrfCookie(r), Username: session.Data.Username,
 		Configured: configured, Status: processStatus.String(), Running: processStatus.Running, Healthy: processStatus.Healthy,
-		Error: errorMessage, Notice: noticeMessage,
+		VeilURL: "http://" + s.startup.VeilAddress,
+		Error:   errorMessage, Notice: noticeMessage,
 	}
 }
 

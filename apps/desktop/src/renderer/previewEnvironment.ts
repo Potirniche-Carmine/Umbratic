@@ -598,6 +598,7 @@ function createPreviewApi(): DesktopApi {
       title: input?.title?.trim() || "New chat",
       createdAt: now,
       updatedAt: now,
+      modelEndpointMode: readPreviewEndpointSettings().mode,
       repositoryName: input?.repositoryName,
       repositoryPath: input?.repositoryPath,
       draftPrompt: "",
@@ -779,7 +780,7 @@ function createPreviewApi(): DesktopApi {
       providerAllowlist: ["company-endpoint"],
       localhostOnlyModels: false,
       commandClassifier: "enabled",
-      runnerDiagnosticsDirectory: "~/.umbratic/runner-diagnostics",
+      runnerDiagnosticsDirectory: "Umbratic/logs/runner",
       localLogs: { bytes: 0, entries: 0 },
       telemetry: {
         mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",

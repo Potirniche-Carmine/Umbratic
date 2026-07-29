@@ -1,6 +1,5 @@
 import { app } from "electron";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -28,6 +27,7 @@ import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromVal
 import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
 import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
 import { activeStoredEndpoint, endpointModesWithNext, storedEndpointForMode, type RawModelEndpointSettings } from "./endpointModeStorage";
+import { appDatabaseFile, chatsDatabaseFile } from "./appPaths";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -49,11 +49,8 @@ import type {
   TaskWorkspace,
   UserNotes,
 } from "./types";
-function dataFile(name: string): string {
-  return path.join(app.getPath("userData"), name);
-}
 function appDatabasePath(): string {
-  return dataFile("umbratic.sqlite");
+  return appDatabaseFile(app.getPath("userData"));
 }
 
 export function localDatabasePath(): string {
@@ -61,7 +58,7 @@ export function localDatabasePath(): string {
 }
 
 function chatsDatabasePath(): string {
-  return path.join(os.homedir(), ".umbratic", "chats", "umbratic.sqlite");
+  return chatsDatabaseFile(app.getPath("userData"));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -135,6 +132,11 @@ function configureStorageDatabase(db: DatabaseSync): void {
   // WAL keeps the process-lifetime handles usable while tests and recovery
   // readers open the same files briefly.
   db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA journal_size_limit = 16777216;");
+  db.exec("PRAGMA wal_autocheckpoint = 1000;");
+  const pageSize = Number((db.prepare("PRAGMA page_size").get() as { page_size?: number }).page_size) || 4096;
+  const maximumDatabaseBytes = 512 * 1024 * 1024;
+  db.exec(`PRAGMA max_page_count = ${Math.max(1, Math.floor(maximumDatabaseBytes / pageSize))};`);
   ensureStorageSchema(db);
 }
 
@@ -623,6 +625,7 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
     ...(storedTask as TaskRecord),
     workspaceKind: task.workspaceKind === "folder" ? "folder" : "git",
     workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
+    modelEndpointMode: isModelEndpointMode(task.modelEndpointMode) ? task.modelEndpointMode : undefined,
     permissionMode: task.permissionMode === "auto_safe" || task.permissionMode === "bypass" ? "auto_safe" : "normal",
     reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
     runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
@@ -641,7 +644,6 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
     events: Array.isArray(task.events) ? (task.events as TaskRecord["events"]) : [],
   };
 }
-
 function normalizeTasks(tasks: unknown[]): TaskRecord[] {
   return tasks
     .map((task) => normalizeTaskRecord(task))
@@ -944,6 +946,7 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
       : undefined;
   return {
     ...chat,
+    modelEndpointMode: isModelEndpointMode(chat.modelEndpointMode) ? chat.modelEndpointMode : undefined,
     repositoryName:
       typeof chat.repositoryName === "string" && chat.repositoryName.trim()
         ? chat.repositoryName.trim().slice(0, 120)
@@ -1049,49 +1052,11 @@ function readChatFromDatabase(filePath: string, chatId: string): ChatRecord | nu
   }, retain);
 }
 
-function legacyProjectDatabasePath(rootPath: string): string {
-  return path.join(rootPath, ".umbratic", "umbratic.sqlite");
-}
-
-function readLegacyProjectChats(project: RepositoryInfo): ChatRecord[] {
-  return readChatsFromDatabase(legacyProjectDatabasePath(project.rootPath));
-}
-
 function writeChatsToDatabase(chats: ChatRecord[]) {
   withChatsDatabase((db) => replaceChatsInDatabase(db, chats));
 }
 
-function readLegacyAppChats(): ChatRecord[] {
-  return readChatsFromDatabase(appDatabasePath());
-}
-
-function migrateLegacyChatsToHomeDatabase() {
-  const dbPath = chatsDatabasePath();
-  if (fs.existsSync(dbPath)) return;
-  const chats = new Map<string, ChatRecord>();
-  for (const chat of readLegacyAppChats()) {
-    putNewestChat(chats, chat);
-  }
-  for (const project of readProjects()) {
-    const projectKey = pathKey(project.rootPath);
-    for (const chat of readLegacyProjectChats(project)) {
-      if (chat.repositoryPath && pathKey(chat.repositoryPath) !== projectKey) {
-        continue;
-      }
-      putNewestChat(chats, {
-        ...chat,
-        repositoryName: chat.repositoryName ?? project.name,
-        repositoryPath: project.rootPath,
-      });
-    }
-  }
-  if (chats.size > 0) {
-    writeChatsToDatabase(Array.from(chats.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
-  }
-}
-
 export function readChats(): ChatRecord[] {
-  migrateLegacyChatsToHomeDatabase();
   const chats = new Map<string, ChatRecord>();
   for (const chat of readChatsFromDatabase(chatsDatabasePath())) {
     putNewestChat(chats, chat);
@@ -1100,7 +1065,6 @@ export function readChats(): ChatRecord[] {
 }
 
 export function readChat(chatId: string): ChatRecord | null {
-  migrateLegacyChatsToHomeDatabase();
   return readChatFromDatabase(chatsDatabasePath(), chatId);
 }
 

@@ -3,7 +3,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import { app } from "electron";
 
+import { runnerLogsDirectory, workspaceRuntimeDirectory } from "./appPaths";
 import { localProviderCatalog } from "./config";
 import { probeLocalCapabilities } from "./capabilities";
 import { currentLocalVeilConnection } from "./localVeil";
@@ -28,7 +30,7 @@ type HarnessRouteConfig = {
 };
 
 export function runnerDiagnosticsDirectory(userDataPath: string): string {
-  return path.join(userDataPath, "runner-diagnostics");
+  return runnerLogsDirectory(userDataPath);
 }
 
 export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteConfig {
@@ -154,7 +156,7 @@ export function approvedLspServers(report?: CapabilityProbeReport): LspServerLau
 }
 
 export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
-  const runtimeRoot = path.join(worktreePath, ".umbratic", "runtime");
+  const runtimeRoot = workspaceRuntimeDirectory(app.getPath("userData"), worktreePath);
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   // Keep UV_* install dirs for confirmed tooling, but never prepend workspace-controlled
   // .umbratic/runtime onto PATH — that lets a malicious repo win executable lookup.

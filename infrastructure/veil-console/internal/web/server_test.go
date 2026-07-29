@@ -316,6 +316,7 @@ func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.render(response, "dashboard.html", pageData{
 		Title: "Veil Console", CSRF: "test", Configured: true, Running: true, Healthy: true, Status: "Running",
+		VeilURL: "http://127.0.0.1:8080",
 	})
 	body := response.Body.String()
 	if strings.Contains(body, `action="/veil/start"`) {
@@ -326,6 +327,9 @@ func TestDashboardHidesStartWhenVeilIsRunning(t *testing.T) {
 	}
 	if !strings.Contains(body, `name="password"`) {
 		t.Fatal("Restart did not require the owner password")
+	}
+	if !strings.Contains(body, "Connect at") || !strings.Contains(body, "http://127.0.0.1:8080") {
+		t.Fatal("dashboard did not show the Veil connection address")
 	}
 
 	response = httptest.NewRecorder()

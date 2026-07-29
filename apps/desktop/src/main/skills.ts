@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+import { app } from "electron";
 
+import { skillsDirectory } from "./appPaths";
 import { readSkillSettings, writeSkillSettings } from "./storage";
 import type { HarnessProfileId } from "./types";
 import { pathInside } from "./utils";
@@ -234,7 +236,7 @@ export function parseSkillFrontmatter(content: string): { name?: string; descrip
 }
 
 export function skillsDirectoryPath(): string {
-  return path.join(os.homedir(), ".umbratic", "skills");
+  return skillsDirectory(app.getPath("userData"));
 }
 
 export function isValidSkillId(value: string): boolean {

@@ -29,11 +29,16 @@ The signed release appears in `artifacts/releases/`.
 Copy the zip to the Ubuntu server. Do not copy the signing key.
 
 ```sh
+cd /tmp
 unzip umbratic-veil-console-0.0.1-linux-amd64.zip
 cd umbratic-veil-console-0.0.1-linux-amd64
 sha256sum -c SHA256SUMS
 sudo ./install.sh --dnsname console.example.com
 ```
+
+The installer puts the binaries and signed entitlement in
+`/opt/umbratic/veil-console`. Writable state stays in `/var/lib/veil-console`.
+Remove the zip and extracted directory from `/tmp` after installation.
 
 Read the one-time owner setup code:
 
@@ -59,7 +64,7 @@ unchanged so the existing identity store remains valid.
 
 Stop Veil Console and back up these files together:
 
-- `entitlement.json`
+- `/opt/umbratic/veil-console/entitlement.json`
 - `/var/lib/veil-console/veil-identity.json`
 - `/var/lib/veil-console/console.db`
 - `/var/lib/veil-console/secrets.json`

@@ -2185,6 +2185,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const companyEnrollmentRequired =
     endpointDraftSettings.mode === "server"
     && (companyConnection.state !== "enrolled" || endpointDraftSettings.baseUrl.trim() !== companyConnection.baseUrl);
+  const companyServerConnected =
+    endpointDraftSettings.mode === "server"
+    && companyConnection.state === "enrolled"
+    && !companyEnrollmentRequired;
   const endpointValidation =
     endpointValidationMessage(endpointDraftSettings)
     ?? (companyEnrollmentRequired && !endpointDraftSettings.secret.trim() ? "Enter the Enrollment code." : null);
@@ -2951,6 +2955,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           ...chat,
           title: stableChatTitle(existing?.title, nextTask.prompt),
           createdAt: existing?.createdAt ?? chat.createdAt,
+          modelEndpointMode: existing?.modelEndpointMode ?? endpointSettings.mode,
           repositoryName: chat.repositoryName ?? existing?.repositoryName,
           repositoryPath: chat.repositoryPath ?? existing?.repositoryPath,
           worktreeRootTaskId: chat.worktreeRootTaskId ?? existing?.worktreeRootTaskId,
@@ -4842,6 +4847,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function renderChatRow(chat: ChatRecord) {
+    const connectionLabel = chat.modelEndpointMode === "server"
+      ? "Company server"
+      : chat.modelEndpointMode === "local"
+        ? "Local model"
+        : "";
     return (
       <div
         className={`chatRow ${activeChatId === chat.id ? "active" : ""} ${
@@ -4850,7 +4860,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         key={chat.id}
       >
         <button className="chatRowMain" type="button" onClick={() => selectChat(chat)}>
-          <span>
+          <span className={`chatRowContent ${connectionLabel ? "hasConnection" : ""}`}>
+            {connectionLabel ? (
+              <span className="chatConnectionIcon" role="img" aria-label={connectionLabel} title={connectionLabel}>
+                {chat.modelEndpointMode === "server" ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
+              </span>
+            ) : null}
             <strong>{chatDisplayTitle(chat)}</strong>
             <em>{chatSubline(chat)}</em>
           </span>
@@ -5855,31 +5870,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                             </>
                           ) : (
                             <>
-                              <label className="settingsField">
-                                <span>Veil server URL</span>
-                                <input
-                                  value={endpointDraftSettings.baseUrl}
-                                  disabled={endpointFormDisabled}
-                                  onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                                  placeholder="https://veil.example.com"
-                                  spellCheck={false}
-                                />
-                              </label>
-                              {companyEnrollmentRequired ? (
-                                <label className="settingsField">
-                                  <span>Enrollment code</span>
-                                  <input
-                                    value={endpointDraftSettings.secret}
-                                    disabled={endpointFormDisabled}
-                                    onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
-                                    placeholder="Enrollment code"
-                                    type="password"
-                                    autoComplete="off"
-                                    spellCheck={false}
-                                    aria-label="Enrollment code"
-                                  />
-                                </label>
-                              ) : companyConnection.state === "enrolled" ? (
+                              {companyServerConnected && companyConnection.state === "enrolled" ? (
                                 <div className="companyEnrollmentStatus">
                                   <div>
                                     <strong>{companyConnection.orgName}</strong>
@@ -5894,10 +5885,36 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                     Disconnect
                                   </button>
                                 </div>
-                              ) : null}
+                              ) : (
+                                <>
+                                  <label className="settingsField">
+                                    <span>Veil server URL</span>
+                                    <input
+                                      value={endpointDraftSettings.baseUrl}
+                                      disabled={endpointFormDisabled}
+                                      onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
+                                      placeholder="https://veil.example.com"
+                                      spellCheck={false}
+                                    />
+                                  </label>
+                                  <label className="settingsField">
+                                    <span>Enrollment code</span>
+                                    <input
+                                      value={endpointDraftSettings.secret}
+                                      disabled={endpointFormDisabled}
+                                      onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
+                                      placeholder="Enrollment code"
+                                      type="password"
+                                      autoComplete="off"
+                                      spellCheck={false}
+                                      aria-label="Enrollment code"
+                                    />
+                                  </label>
+                                </>
+                              )}
                             </>
                           )}
-                          <div className="connectionActions">
+                          {!companyServerConnected ? <div className="connectionActions">
                             <button
                               className="settingsInlineButton connectionSaveButton"
                               type="button"
@@ -5908,7 +5925,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                               <span>{endpointSaving ? "Connecting" : "Save & connect"}</span>
                             </button>
                             {endpointDirty ? <span className="connectionUnsaved">Unsaved changes</span> : null}
-                          </div>
+                          </div> : null}
                           <div className="connectionFeedback" aria-live="polite">
                             {!endpointEditingEnabled ? <p className="settingsMessage">This connection is managed by your organization.</p> : null}
                             {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}

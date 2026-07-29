@@ -398,6 +398,7 @@ export type ChatRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  modelEndpointMode?: ModelEndpointMode;
   repositoryName?: string;
   repositoryPath?: string;
   taskId?: string;
@@ -416,6 +417,7 @@ export type TaskRecord = TaskInfo & {
   workspaceMode: WorkspaceMode;
   originalRepoPath: string;
   originalWasDirty: boolean;
+  modelEndpointMode?: ModelEndpointMode;
   hiddenWorkspace?: boolean;
   baselineFiles?: Record<string, string>;
   model?: LocalModelInfo;

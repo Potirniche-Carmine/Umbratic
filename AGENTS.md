@@ -54,6 +54,8 @@ Keep outside dependencies as small as practical:
 
 Preserve unrelated user changes and keep edits focused. Do not perform broad cleanup as part of an unrelated task.
 
+Before the end of each turn, stop all processes that you started during that turn. Confirm that they have stopped before you return control to the user.
+
 ## UI Copy Rules
 
 Avoid redundant microcopy: non-essential explanatory text that merely restates a control, exposes implementation details, repeats visible state, or adds decorative status prose. Prefer the shortest useful label and keep helper text only when it changes a user decision or explains an action that is not otherwise clear.

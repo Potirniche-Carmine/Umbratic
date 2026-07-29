@@ -37,12 +37,12 @@ function seedSkillsDirectory() {
   return directory;
 }
 
-test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skills layout", () => {
+test("installBundledSystemSkills provisions the central skills layout", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-install-settings-"));
   const skills = loadSkills(userData);
-  const directory = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-install-")), ".umbratic", "skills");
+  const directory = path.join(userData, "skills");
 
-  assert.equal(skills.skillsDirectoryPath(), path.join(os.homedir(), ".umbratic", "skills"));
+  assert.equal(skills.skillsDirectoryPath(), directory);
   assert.equal(skills.installBundledSystemSkills(directory), path.resolve(directory));
   const creatorSkillPath = path.join(directory, "system", "umbratic-skill-creator", "SKILL.md");
   assert.equal(fs.existsSync(creatorSkillPath), true);

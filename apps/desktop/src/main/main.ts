@@ -199,7 +199,8 @@ import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
 import { findAgentInstructionFiles } from "./repositoryInstructions";
-
+import * as appPaths from "./appPaths";
+import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
 const isDev = !app.isPackaged;
 const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
@@ -248,12 +249,10 @@ function clearPendingPermissionsForTask(taskIdValue: string) {
 app.enableSandbox();
 app.setName("Umbratic");
 
-const appDataDirectory = app.getPath("appData");
 const benchmarkUserData = process.env.UMBRATIC_USER_DATA_DIR?.trim();
-const cleanUserData = benchmarkUserData ? path.resolve(benchmarkUserData) : path.join(appDataDirectory, "Umbratic");
+const cleanUserData = benchmarkUserData ? path.resolve(benchmarkUserData) : appPaths.defaultDesktopDataRoot();
 try {
-  fs.mkdirSync(cleanUserData, { recursive: true });
-  app.setPath("userData", cleanUserData);
+  appPaths.configureDesktopAppPaths(app, cleanUserData);
   if (isDev) {
     app.commandLine.appendSwitch("disable-http-cache");
     app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
@@ -890,7 +889,7 @@ function stableRepositoryId(rootPath: string): string {
 }
 
 function hiddenChatWorkspacePath(chatIdValue: string): string {
-  return path.join(os.homedir(), ".umbratic", "chats", chatIdValue);
+  return path.join(appPaths.hiddenChatsDirectory(app.getPath("userData")), chatIdValue);
 }
 
 function hiddenChatRepository(chatIdValue: string): RepositoryInfo {
@@ -921,7 +920,7 @@ function chatId(): string {
 }
 
 function chatAttachmentRoot(): string {
-  return path.join(app.getPath("userData"), "chat-attachments");
+  return appPaths.chatAttachmentsDirectory(app.getPath("userData"));
 }
 
 function safeChatId(value: string): string {
@@ -1042,6 +1041,7 @@ function createChat(input: unknown): ChatRecord {
     title,
     createdAt: now,
     updatedAt: now,
+    modelEndpointMode: readModelEndpointSettings().mode,
     repositoryName,
     repositoryPath,
     worktreeRootTaskId: reusableWorktree ? worktreeRootTaskId(reusableWorktree) : undefined,
@@ -1054,7 +1054,6 @@ function createChat(input: unknown): ChatRecord {
   saveChat(chat);
   return chat;
 }
-
 function updateChatDraft(input: unknown): ChatRecord {
   if (!isRecord(input)) {
     throw new Error("Invalid chat draft input.");
@@ -1100,7 +1099,6 @@ function updateChatDraft(input: unknown): ChatRecord {
   writeChat(next);
   return next;
 }
-
 function updateChatProject(input: unknown): ChatRecord {
   if (!isRecord(input)) {
     throw new Error("Invalid chat project input.");
@@ -1120,7 +1118,6 @@ function updateChatProject(input: unknown): ChatRecord {
   writeChat(next);
   return next;
 }
-
 function deleteChat(input: unknown): { ok: true } {
   if (!isRecord(input)) {
     throw new Error("Invalid chat delete input.");
@@ -1208,6 +1205,7 @@ function updateChatFromTask(task: TaskRecord) {
     title: stableChatTitle(existing?.title, task.prompt),
     createdAt: existing?.createdAt ?? task.createdAt,
     updatedAt: new Date().toISOString(),
+    modelEndpointMode: task.modelEndpointMode ?? existing?.modelEndpointMode,
     taskId: task.id,
     taskState: task.state,
     repositoryName: repository?.name ?? existing?.repositoryName,
@@ -1517,7 +1515,7 @@ type OcrAttachmentArtifactResult =
   | { status: "missing" | "failed"; message: string };
 
 function ocrArtifactOutputDirectory(rootPath: string): string {
-  return path.join(rootPath, ".umbratic", "artifacts", "ocr");
+  return appPaths.workspaceOcrDirectory(app.getPath("userData"), rootPath);
 }
 
 function ocrArtifactBaseName(label: string, document: OcrDocument, fallback: string): string {
@@ -2061,11 +2059,11 @@ function buildSnapshotDiff(filePath: string, before: string | null, after: strin
 
 function worktreeRootForRepo(repoRoot: string): string {
   const resolved = path.resolve(repoRoot);
-  return path.join(os.homedir(), ".umbratic", "worktrees", `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
+  return path.join(appPaths.worktreesDirectory(app.getPath("userData")), `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
 }
 
 function umbraticWorktreesRoot(): string {
-  return path.join(os.homedir(), ".umbratic", "worktrees");
+  return appPaths.worktreesDirectory(app.getPath("userData"));
 }
 
 function directoryIsEmpty(directory: string): boolean {
@@ -2119,7 +2117,7 @@ async function removeGitWorktree(task: TaskRecord) {
 }
 
 function taskMetadataPath(task: TaskRecord): string {
-  return path.join(app.getPath("userData"), "task-metadata", `${task.id}.json`);
+  return path.join(appPaths.taskMetadataDirectory(app.getPath("userData")), `${task.id}.json`);
 }
 
 function recordTaskEvent(event: BackendUiEventV1) {
@@ -3923,7 +3921,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
-
+  const modelEndpointMode = readModelEndpointSettings().mode;
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
     if (closedMessage) {
@@ -3945,6 +3943,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
+    existingTask.modelEndpointMode = modelEndpointMode;
     existingTask.enabledTools = requestedEnabledTools;
     existingTask.capabilityProbes = taskCapabilityProbes;
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
@@ -3985,7 +3984,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     void runRunnerTask(existingTask.id, undefined, prompt, attachments);
     return publicTask(existingTask);
   }
-
   if (reusableWorktreeTask && requestedWorkspaceMode === "worktree") {
     assertReusableWorktreeForRepository(reusableWorktreeTask, refreshed);
     const id = taskId();
@@ -3997,6 +3995,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       prompt,
       workspaceKind: "git",
       workspaceMode: "worktree",
+      modelEndpointMode,
       hiddenWorkspace,
       state: "running",
       originalBranch: reusableWorktreeTask.originalBranch,
@@ -4023,7 +4022,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     void runRunnerTask(task.id, undefined, prompt, attachments);
     return publicTask(task);
   }
-
   const id = taskId();
   const shouldCreateWorktree = requestedWorkspaceMode === "worktree";
   const branch = shouldCreateWorktree ? `umbratic/${id}-${slugify(prompt)}` : "";
@@ -4035,6 +4033,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     prompt,
     workspaceKind: refreshed.kind,
     workspaceMode: shouldCreateWorktree ? "worktree" : "local",
+    modelEndpointMode,
     hiddenWorkspace,
     state: "running",
     originalBranch: refreshed.originalBranch,
@@ -4827,7 +4826,6 @@ function registerMainIpc(): void {
     },
   });
 }
-
 app.whenReady().then(async () => {
   try {
     installBundledSystemSkillsService();
@@ -4841,6 +4839,7 @@ app.whenReady().then(async () => {
     });
     console.error("Unable to install bundled skills.", error);
   }
+  await startLocalCacheMaintenance(session.defaultSession, appPaths.runtimesDirectory(app.getPath("userData")), () => activeRunnerProcesses.size === 0, (error) => recordLocalDiagnostic({ level: "warn", source: "desktop", event: "cache.maintenance.failed", message: error instanceof Error ? error.message : String(error) }));
   registerMainIpc();
   Menu.setApplicationMenu(null);
   await loadWindowWithModelWarmup(createWindow);
@@ -4894,6 +4893,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopLocalCacheMaintenance();
   stopLocalVeil();
   flushRendererEvents();
   flushPendingTaskEvents();
