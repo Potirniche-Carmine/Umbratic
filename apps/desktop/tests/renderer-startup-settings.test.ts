@@ -38,9 +38,15 @@ test("active task updates preserve the chat connection marker", () => {
   );
 });
 
-test("an enrolled company server shows only its connected state", () => {
+test("an enrolled company server can reconnect or unregister with confirmation", () => {
   const source = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  const actions = fs.readFileSync(new URL("../src/renderer/CompanyServerActions.tsx", import.meta.url), "utf8");
   assert.match(source, /const companyServerConnected =/);
+  assert.match(source, /const companyServerActive =/);
   assert.match(source, /\{companyServerConnected && companyConnection\.state === "enrolled" \? \(/);
+  assert.match(source, /<CompanyServerActions/);
+  assert.match(actions, /\{busy \? "Connecting" : "Connect"\}/);
+  assert.match(actions, /Unregister this device\?/);
+  assert.match(actions, /ask your administrator for a new enrollment key/);
   assert.match(source, /\{!companyServerConnected \? <div className="connectionActions">/);
 });

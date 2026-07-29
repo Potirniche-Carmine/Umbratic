@@ -756,15 +756,73 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--green) 34%, var(--line));
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--green) 8%, var(--surface-2));
+  background: var(--surface-2);
+  box-shadow: inset 0 1px color-mix(in srgb, white 5%, transparent);
 }
 
-.companyEnrollmentStatus > div {
+.companyEnrollmentIdentity {
   display: grid;
   min-width: 0;
+  flex: 1;
   gap: 2px;
+}
+
+.companyEnrollmentActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primaryAction.companyServerConnectAction {
+  min-height: 32px;
+  padding-inline: 14px;
+  color: color-mix(in srgb, var(--text) 94%, var(--green));
+  border: 1px solid color-mix(in srgb, var(--green) 24%, var(--line-strong));
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--green) 16%, var(--control-hover)),
+      color-mix(in srgb, var(--green) 10%, var(--control-bg)));
+  box-shadow:
+    inset 0 1px color-mix(in srgb, white 7%, transparent),
+    0 3px 10px color-mix(in srgb, var(--green) 9%, transparent);
+  cursor: pointer;
+  transition: transform 100ms ease-out, border-color 140ms ease, background 140ms ease;
+}
+
+.primaryAction.companyServerConnectAction:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line-strong));
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--green) 20%, var(--control-hover)),
+      color-mix(in srgb, var(--green) 13%, var(--control-bg)));
+}
+
+.primaryAction.companyServerConnectAction:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.companyServerUnregisterAction {
+  color: color-mix(in srgb, var(--red) 66%, var(--text));
+  border-color: color-mix(in srgb, var(--red) 24%, var(--line));
+}
+
+.companyServerUnregisterAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 10%, var(--control-hover));
+}
+
+.unregisterCompanyDialog {
+  grid-template-columns: 22px minmax(0, 1fr);
+  width: min(460px, calc(100vw - 48px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primaryAction.companyServerConnectAction {
+    transition: none;
+  }
 }
 
 .companyEnrollmentStatus strong {

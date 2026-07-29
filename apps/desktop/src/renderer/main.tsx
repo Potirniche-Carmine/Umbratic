@@ -99,6 +99,7 @@ import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../sh
 import { appendTaskEvent, compactTaskEvents } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { LocalModelPicker, type LocalModelDiscoveryStatus } from "./LocalModelPicker";
+import { CompanyServerActions } from "./CompanyServerActions";
 import {
   defaultEndpointBaseUrlForMode,
   defaultModelEndpointSettings,
@@ -2189,6 +2190,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     endpointDraftSettings.mode === "server"
     && companyConnection.state === "enrolled"
     && !companyEnrollmentRequired;
+  const companyServerActive = companyServerConnected && endpointSettings.mode === "server" && !endpointDirty;
   const endpointValidation =
     endpointValidationMessage(endpointDraftSettings)
     ?? (companyEnrollmentRequired && !endpointDraftSettings.secret.trim() ? "Enter the Enrollment code." : null);
@@ -5872,18 +5874,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                             <>
                               {companyServerConnected && companyConnection.state === "enrolled" ? (
                                 <div className="companyEnrollmentStatus">
-                                  <div>
+                                  <div className="companyEnrollmentIdentity">
                                     <strong>{companyConnection.orgName}</strong>
                                     <span>{companyConnection.deviceLabel}</span>
                                   </div>
-                                  <button
-                                    className="settingsInlineButton"
-                                    type="button"
-                                    onClick={() => void disconnectCompanyConnection()}
-                                    disabled={endpointFormDisabled}
-                                  >
-                                    Disconnect
-                                  </button>
+                                  <CompanyServerActions
+                                    active={companyServerActive}
+                                    busy={endpointFormDisabled}
+                                    connectDisabled={endpointSaving || endpointRefreshing || !endpointDirty || !!endpointValidation || !endpointEditingEnabled}
+                                    onConnect={() => void saveEndpointSettings()}
+                                    onUnregister={() => void disconnectCompanyConnection()}
+                                  />
                                 </div>
                               ) : (
                                 <>
