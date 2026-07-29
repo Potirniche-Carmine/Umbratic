@@ -19,7 +19,7 @@ function diffStats(diff: string): { additions: number; deletions: number } {
 function reviewSummary(files: ReviewFile[]) {
   const totals = files.reduce(
     (total, file) => {
-      const stats = diffStats(file.diff);
+      const stats = diffStats(file.patch);
       total.additions += stats.additions;
       total.deletions += stats.deletions;
       return total;

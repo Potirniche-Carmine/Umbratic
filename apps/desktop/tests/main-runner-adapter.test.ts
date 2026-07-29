@@ -45,6 +45,34 @@ test("harnessRouteConfig maps every profile to its purpose-built Veil API", () =
   assert.equal(adapter.harnessRouteConfig("sales").chatEndpointPath, "/api/sales/chat");
 });
 
+test("every harness receives the scratch workspace as its runner directory", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-scratch-"));
+  const { adapter, storage } = loadRunnerAdapter(userData);
+  const scratchPath = path.join(userData, "workspaces", "scratch", "chat-1");
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "http://127.0.0.1:8080",
+  };
+  const task = {
+    id: "task-scratch",
+    repositoryId: "hidden-chat-1",
+    prompt: "Create a document",
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    hiddenWorkspace: true,
+    enabledTools: ["read", "write"],
+    worktreePath: scratchPath,
+  };
+
+  for (const profile of ["engineering", "marketing", "sales"]) {
+    storage.writeHarnessProfileSetting(profile);
+    assert.equal(adapter.buildUmbraticRunnerConfig(task, model).cwd, scratchPath);
+  }
+});
+
 test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled tools, and skill metadata", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-"));
   const { adapter, skills, storage } = loadRunnerAdapter(userData);
@@ -58,7 +86,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     baseUrl: "https://veil.example.internal",
     secret: "endpoint-token",
     headers: [
-      { name: "Authorization", value: "legacy-shared-token" },
+      { name: "Authorization", value: "internal-shared-token" },
       { name: " X-Team ", value: "engineering" },
     ],
   });
@@ -76,7 +104,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     prompt: "Debug a segfault in the C harness",
     workspaceKind: "git",
     workspaceMode: "worktree",
-    enabledTools: ["read", "legacy-tool", "bad"],
+    enabledTools: ["read", "unknown-tool", "bad"],
     capabilityProbes: [
       {
         id: "uv",

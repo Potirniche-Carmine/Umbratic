@@ -38,7 +38,7 @@ import {
   type CapabilityPromptNeeds,
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { materializedChatAttachmentReviewPaths, priorChatAttachments } from "./attachmentContext";
+import { priorChatAttachments } from "./attachmentContext";
 import { searchRootFiles } from "./fileSearch";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
@@ -554,12 +554,8 @@ function publicTask(task: TaskRecord): TaskInfo {
   };
 }
 
-function hiddenChatAttachmentReviewPaths(task: TaskRecord): Set<string> {
-  return materializedChatAttachmentReviewPaths(task.events ?? [], isHiddenChatTask(task));
-}
-
 function hiddenRendererReviewPaths(task: TaskRecord): Set<string> {
-  const hidden = new Set(hiddenChatAttachmentReviewPaths(task));
+  const hidden = new Set<string>();
   for (const file of task.reviewFiles ?? []) {
     const relativePath = normalizeRelativePath(file.path);
     if (isDocumentReviewSidecarPath(relativePath)) hidden.add(relativePath);
@@ -579,7 +575,7 @@ function filterReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlyS
 
 function rendererReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
   return filterReviewFiles(files, ignoredPaths).map((file) => file.tooLarge
-    ? { ...file, patch: "", diff: "", hunks: [] }
+    ? { ...file, patch: "", hunks: [] }
     : file);
 }
 
@@ -889,7 +885,7 @@ function stableRepositoryId(rootPath: string): string {
 }
 
 function hiddenChatWorkspacePath(chatIdValue: string): string {
-  return path.join(appPaths.hiddenChatsDirectory(app.getPath("userData")), chatIdValue);
+  return path.join(appPaths.scratchWorkspacesDirectory(app.getPath("userData")), chatIdValue);
 }
 
 function hiddenChatRepository(chatIdValue: string): RepositoryInfo {
@@ -2046,7 +2042,7 @@ function buildBinaryDiff(filePath: string, before: string | null, after: string 
   return normalizeReviewFile({
     path: filePath,
     status,
-    diff: [...header, `Binary file ${status}: ${filePath}`].join("\n"),
+    patch: [...header, `Binary file ${status}: ${filePath}`].join("\n"),
   });
 }
 
@@ -2711,9 +2707,9 @@ async function exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { 
 
 function clearLocalDiagnosticLogs(): LocalDiagnosticInfo {
   const info = clearLocalDiagnostics();
-  const legacyDirectory = path.resolve(runnerDiagnosticsDirectory(app.getPath("userData")));
-  if (pathInside(app.getPath("userData"), legacyDirectory) && fs.existsSync(legacyDirectory)) {
-    fs.rmSync(legacyDirectory, { recursive: true, force: true });
+  const logsDirectory = path.resolve(runnerDiagnosticsDirectory(app.getPath("userData")));
+  if (pathInside(app.getPath("userData"), logsDirectory) && fs.existsSync(logsDirectory)) {
+    fs.rmSync(logsDirectory, { recursive: true, force: true });
   }
   return info;
 }
@@ -3239,7 +3235,7 @@ async function gitWorkspaceReviewFile(repositoryPath: string, baseline: string, 
   const diff = await gitOutput(repositoryPath, ["diff", "--no-ext-diff", "--binary", "--find-renames", "--find-copies", `--unified=${reviewContextLines}`, baseline, "--", file]).catch(
     () => "",
   );
-  if (diff.trim()) return normalizeReviewFile({ path: file, status, diff });
+  if (diff.trim()) return normalizeReviewFile({ path: file, status, patch: diff });
   const text = readTextFileIfSafe(absolute);
   if (text !== null) return buildTextDiff(file, null, text);
   return buildBinaryDiff(
@@ -3312,7 +3308,7 @@ async function refreshReview(
     : scope === "worktree"
       ? await gitReviewFiles(task, "HEAD", workspacePath)
       : await gitReviewFiles(task);
-  const reviewFiles = filterReviewFiles(discoveredReviewFiles, hiddenChatAttachmentReviewPaths(task));
+  const reviewFiles = discoveredReviewFiles;
   task.reviewFiles = reviewFiles;
   task.changedFiles = reviewFiles.map((file) => file.path);
   task.reviewScope = scope;
@@ -3327,7 +3323,7 @@ async function refreshReview(
 
 function reviewPatchHash(reviewFiles: ReviewFile[]): string {
   const normalized = reviewFiles
-    .map((file) => `${file.path}\0${file.status}\0${file.diff}`)
+    .map((file) => `${file.path}\0${file.status}\0${file.patch}`)
     .sort()
     .join("\0");
   return crypto.createHash("sha256").update(normalized).digest("hex");
@@ -4171,7 +4167,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       return `${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}`;
     });
     await approvalCheck(task, "secret scan", async () => {
-      const patch = task.reviewFiles.map((file) => file.diff).join("\n");
+      const patch = task.reviewFiles.map((file) => file.patch).join("\n");
       const diffHit = secretScanText(patch);
       if (diffHit) {
         throw new Error(`Potential ${diffHit} in patch.`);
@@ -4189,7 +4185,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       return "passed";
     });
     await approvalCheck(task, "record metadata", async () => {
-      const patch = task.reviewFiles.map((file) => file.diff).join("\n");
+      const patch = task.reviewFiles.map((file) => file.patch).join("\n");
       patchHash = crypto.createHash("sha256").update(patch).digest("hex");
       task.state = "approved";
       task.approvedAt = new Date().toISOString();

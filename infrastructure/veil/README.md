@@ -21,7 +21,7 @@ Veil has two authentication modes.
 
 - Local and development mode use `Authorization: Bearer <VEIL_AUTH_TOKEN>`.
 - Company identity mode uses a short device session for product routes and a
-  separate Console control token for administration routes. The legacy
+  separate Console control token for administration routes. The internal
   `VEIL_AUTH_TOKEN` cannot access product routes in this mode.
 
 ```text
@@ -76,7 +76,7 @@ VEIL_MODEL=llama3
 ```
 
 `VEIL_AUTH_TOKEN` authenticates a local or development client. In company identity
-mode it is an internal legacy credential and cannot access product routes.
+mode it is an internal process credential and cannot access product routes.
 `VEIL_PROVIDER_BASE_URL` is the private Ollama or vLLM address that Veil can reach.
 `VEIL_MODEL` must exactly match a model returned by the provider's models endpoint.
 
@@ -106,10 +106,6 @@ mode it is an internal legacy credential and cannot access product routes.
 | `VEIL_MODEL_TIMEOUT` | No | `60s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
 | `VEIL_REQUEST_TIMEOUT` | No | `75s` | Overall timeout applied by Veil to health, connection, and chat operations. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
 | `VEIL_MAX_BODY_BYTES` | No | `67108864` | Positive maximum request-body size in bytes for bounded multimodal chat requests. Text and decoded image limits are enforced separately. |
-
-`VEIL_PROVIDER_ENDPOINT_PATH` and `VEIL_PROVIDER_MODELS_ENDPOINT_PATH` are legacy
-aliases for `VEIL_PROVIDER_CHAT_PATH` and `VEIL_PROVIDER_MODELS_PATH`. The newer
-names take precedence when both are set.
 
 Chat policy accepts at most 64 client messages, 256 KiB of encoded text content
 per message, and 12 base64 image parts of at most 10 MiB decoded each. The overall

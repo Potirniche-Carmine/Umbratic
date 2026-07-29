@@ -18,9 +18,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_PROVIDER_PROTOCOL", "")
 	t.Setenv("VEIL_PROVIDER_BASE_URL", "http://provider.test")
 	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
-	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
-	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_MODEL", "default-model")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "")
 	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
@@ -86,8 +84,8 @@ func TestLoadCompanyModeRequiresSeparateControlAndIdentityFiles(t *testing.T) {
 func TestLoadUsesConfiguredModel(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_PROVIDER_PROTOCOL", "ollama")
-	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "/api/chat")
-	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "/api/tags")
+	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "/api/chat")
+	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "/api/tags")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "12s")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "20")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "64000")
@@ -291,9 +289,7 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
-	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
-	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 
 	cfg, err := Load()
 	if err != nil {

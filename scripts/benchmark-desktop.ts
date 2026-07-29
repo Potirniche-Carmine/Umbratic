@@ -125,7 +125,7 @@ async function sampleDesktop(index) {
       UMBRATIC_USER_DATA_DIR: userData,
       UMBRATIC_ALLOW_ENDPOINT_EDIT: "1",
       // Keep Veil out of the measured process tree. It is unchanged by this
-      // migration and development mode otherwise compiles it with `go run`.
+      // benchmark and development mode otherwise compiles it with `go run`.
       UMBRATIC_MANAGED_ENDPOINT_MODE: "server",
       UMBRATIC_MANAGED_MODEL_BASE_URL: "https://127.0.0.1:9",
       UMBRATIC_MANAGED_MODEL_SOFTWARE: "vllm",

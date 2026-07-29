@@ -107,7 +107,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
           {
             path: "src/app.ts",
             status: "modified",
-            diff: ["@@ -1,1 +1,2 @@", "-old", "+new", "+token=abcdefghijklmnopqrstuvwxyz"].join("\n"),
+            patch: ["@@ -1,1 +1,2 @@", "-old", "+new", "+token=abcdefghijklmnopqrstuvwxyz"].join("\n"),
           },
         ],
         latestTest: {
@@ -236,7 +236,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
               {
                 path: "src/app.ts",
                 status: "modified",
-                diff: ["@@ -1,1 +1,2 @@", "-old", "+new"].join("\n"),
+                patch: ["@@ -1,1 +1,2 @@", "-old", "+new"].join("\n"),
               },
             ],
             latestTest: {

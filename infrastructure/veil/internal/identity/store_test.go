@@ -42,11 +42,11 @@ func identityCode(t *testing.T, err error) string {
 
 func TestOpenRejectsPreviousIdentityState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	legacy, err := json.Marshal(persisted{Version: 2, OrgUID: testLicense().OrgUID, OrgName: "Northwind"})
+	previous, err := json.Marshal(persisted{Version: 2, OrgUID: testLicense().OrgUID, OrgName: "Northwind"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+	if err := os.WriteFile(path, previous, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(path, testLicense()); err == nil {

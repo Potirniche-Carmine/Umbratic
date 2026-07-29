@@ -42,36 +42,3 @@ test("prior chat attachments are deduplicated and bounded by recency", () => {
 
   assert.deepEqual(plain(attachmentContext.priorChatAttachments(events, "Continue", 1)), [second]);
 });
-
-test("legacy materialized chat paths are identified exactly without hiding neighboring files", () => {
-  const events = [
-    {
-      type: "user.message",
-      taskId: "task-1",
-      text: "Review these",
-      attachedFiles: [
-        {
-          path: "./attachments/stored-report.docx",
-          name: "report.docx",
-          source: "chat",
-          storedPath: "/app-data/chat-attachments/chat-1/stored-report.docx",
-        },
-        {
-          path: "attachments/workspace-notes.md",
-          name: "workspace-notes.md",
-          source: "workspace",
-        },
-      ],
-    },
-  ];
-
-  assert.deepEqual(
-    [...attachmentContext.materializedChatAttachmentReviewPaths(events, true)],
-    ["attachments/stored-report.docx"],
-  );
-  assert.deepEqual(
-    [...attachmentContext.materializedChatAttachmentReviewPaths(events, false)],
-    [],
-    "real repository reviews must not suppress matching paths",
-  );
-});

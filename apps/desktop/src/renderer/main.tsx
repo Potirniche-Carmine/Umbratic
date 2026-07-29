@@ -2160,7 +2160,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     [reviewFiles],
   );
   const reviewDiffs = useMemo(
-    () => new Map(reviewFiles.map((file) => [file.path, parseUnifiedDiff(file.diff)])),
+    () => new Map(reviewFiles.map((file) => [file.path, parseUnifiedDiff(file.patch)])),
     [reviewFiles],
   );
   const codeReviewTotals = useMemo(

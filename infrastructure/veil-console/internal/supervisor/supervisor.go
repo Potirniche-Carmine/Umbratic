@@ -36,7 +36,7 @@ type Supervisor struct {
 	logs              *safeBuffer
 	entitlementPath   string
 	identityStorePath string
-	legacyToken       string
+	internalToken     string
 }
 
 func New(binary, veilAddress string) *Supervisor {
@@ -53,7 +53,7 @@ func (s *Supervisor) EnableCompanyIdentity(entitlementPath, identityStorePath st
 	}
 	s.entitlementPath = entitlementPath
 	s.identityStorePath = identityStorePath
-	s.legacyToken = base64.RawURLEncoding.EncodeToString(value)
+	s.internalToken = base64.RawURLEncoding.EncodeToString(value)
 	return nil
 }
 
@@ -83,12 +83,12 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	if running {
 		return errors.New("Veil is already running")
 	}
-	s.logs.SetSecrets(token, s.legacyToken)
+	s.logs.SetSecrets(token, s.internalToken)
 	cmd := exec.Command(s.binary)
 	configureProcess(cmd)
 	healthToken := token
 	if s.entitlementPath != "" {
-		cmd.Env = cfg.CompanyEnvironment(s.veilAddress, s.legacyToken, token, s.entitlementPath, s.identityStorePath)
+		cmd.Env = cfg.CompanyEnvironment(s.veilAddress, s.internalToken, token, s.entitlementPath, s.identityStorePath)
 	} else {
 		cmd.Env = cfg.Environment(s.veilAddress, token)
 	}

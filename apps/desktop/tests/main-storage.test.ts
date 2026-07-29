@@ -115,8 +115,8 @@ test("projects and chats are normalized from SQLite storage", () => {
   const storage = loadStorage(userData);
 
   storage.writeProjects([
-    { id: "repo", name: "Repo", rootPath: repo, originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
-    { id: "missing", name: "Missing", rootPath: path.join(userData, "missing"), originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
+    { id: "repo", name: "Repo", rootPath: repo, kind: "git", originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
+    { id: "missing", name: "Missing", rootPath: path.join(userData, "missing"), kind: "git", originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
   ]);
   assert.deepEqual(plain(storage.readProjects()).map((project) => project.id), ["repo"]);
   assert.equal(storage.readProjects()[0].kind, "git");
@@ -229,7 +229,7 @@ test("project chats are stored under the central data root", () => {
   ]));
 });
 
-test("tasks drop legacy runtime profiles and normalize tool settings and event defaults", () => {
+test("tasks normalize current tool settings", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-tasks-"));
   const storage = loadStorage(userData);
 
@@ -241,20 +241,21 @@ test("tasks drop legacy runtime profiles and normalize tool settings and event d
     originalRepoPath: userData,
     worktreePath: userData,
     workspaceKind: "git",
+    workspaceMode: "local",
     state: "running",
     originalBranch: "main",
     baseCommit: "abc",
     agentBranch: "",
-    permissionMode: "bypass",
+    permissionMode: "auto_safe",
+    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: [],
     enabledTools: ["read", "bogus", "command", "read"],
-    reviewFiles: "bad",
-    events: "bad",
+    reviewFiles: [],
+    events: [],
   });
 
   const [task] = storage.readTasks();
-  assert.equal("runtimeProfile" in task, false);
   assert.equal(task.workspaceMode, "local");
   assert.equal(task.reasoningMode, "reasoning");
   assert.equal(task.permissionMode, "auto_safe");
@@ -417,28 +418,6 @@ test("local diagnostics report logical size, exportable records, and clear indep
   assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
 });
 
-test("local diagnostics migration removes previously stored debug and info records", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-diagnostics-migration-"));
-  const storage = loadStorage(userData);
-
-  storage.appendLocalDiagnostic({
-    level: "warn",
-    source: "desktop",
-    event: "command.finished",
-    message: "Command failed.",
-  });
-  withDb(appDbPath(userData), (db) => {
-    db.prepare(`
-      INSERT INTO diagnostic_logs (at, level, source, event, task_id, message, data)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run("2026-01-01T00:00:00.000Z", "info", "desktop", "permission.requested", null, null, "{}");
-    db.exec("PRAGMA user_version = 2;");
-  });
-
-  assert.deepEqual(plain(storage.readLocalDiagnostics()).map((entry) => entry.level), ["warn"]);
-  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 5);
-});
-
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-"));
   const storage = loadStorage(userData);
@@ -480,31 +459,13 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   assert.doesNotMatch(rawSettings, /org-secret/);
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
-test("endpoint settings default to local and migrate the old local Veil URL semantics", () => {
+test("endpoint settings default to the local model runtime", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-default-"));
   const storage = loadStorage(userData);
 
   assert.equal(storage.hasStoredModelEndpointSettings(), false);
   assert.equal(storage.readModelEndpointSettings().mode, "local");
   assert.equal(storage.readModelEndpointSettings().software, "ollama");
-  assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
-  assert.equal(storage.readModelEndpointSettings().modelId, "");
-
-  writeSettingsPayload(userData, {
-    modelEndpoint: {
-      mode: "local",
-      software: "ollama",
-      baseUrl: "http://127.0.0.1:8080",
-      modelId: "veil-managed",
-      secret: "",
-      headers: [
-        { name: "", value: "" },
-        { name: "", value: "" },
-      ],
-    },
-  });
-  assert.equal(storage.hasStoredModelEndpointSettings(), true);
-  assert.equal(storage.readModelEndpointSettings().mode, "local");
   assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
   assert.equal(storage.readModelEndpointSettings().modelId, "");
 
@@ -620,16 +581,16 @@ test("tool, skill, harness, permission, and notes settings sanitize invalid inpu
   writeSettingsPayload(userData, { harnessProfile: "invalid" });
   assert.equal(storage.readHarnessProfileSetting(), "engineering");
   assert.equal(storage.readPermissionModeSetting(), "normal");
-  assert.equal(storage.writePermissionModeSetting("bypass"), "auto_safe");
+  assert.equal(storage.writePermissionModeSetting("bypass"), "normal");
   assert.equal(storage.writePermissionModeSetting("invalid"), "normal");
 
   writeSettingsPayload(userData, {
-    tools: { read: false, write: "no", legacyTool: true, nope: false },
+    tools: { read: false, write: "no", unknownTool: true, nope: false },
     skills: { "good-skill": false, "../bad": true, also_good: true, bad: "yes" },
   });
   assert.equal(storage.readToolSettings().read, false);
   assert.equal(storage.readToolSettings().write, true);
-  assert.equal(Object.hasOwn(storage.readToolSettings(), "legacyTool"), false);
+  assert.equal(Object.hasOwn(storage.readToolSettings(), "unknownTool"), false);
   assert.deepEqual(plain(storage.readSkillSettings()), { "good-skill": false, also_good: true });
 
   const notes = storage.writeNotes("a".repeat(5));

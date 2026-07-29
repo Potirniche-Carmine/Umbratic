@@ -162,8 +162,8 @@ func (v Veil) Environment(veilAddress, token string) []string {
 	return values
 }
 
-func (v Veil) CompanyEnvironment(veilAddress, legacyToken, controlToken, entitlementPath, identityStorePath string) []string {
-	values := v.Environment(veilAddress, legacyToken)
+func (v Veil) CompanyEnvironment(veilAddress, internalToken, controlToken, entitlementPath, identityStorePath string) []string {
+	values := v.Environment(veilAddress, internalToken)
 	values = append(values,
 		"VEIL_COMPANY_IDENTITY_MODE=true",
 		"VEIL_CONTROL_TOKEN="+controlToken,

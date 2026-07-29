@@ -210,7 +210,7 @@ func TestCompanyModeRequiresDeviceSessionAndTracksProductUse(t *testing.T) {
 	}
 
 	if response := request(http.MethodPost, "/api/engineering/chat", cfg.AuthToken, `{"input":"hello"}`); response.Code != http.StatusUnauthorized {
-		t.Fatalf("legacy token bypassed company access: %d %s", response.Code, response.Body.String())
+		t.Fatalf("internal token bypassed company access: %d %s", response.Code, response.Body.String())
 	}
 	if response := request(http.MethodGet, "/api/health", session.Token, ""); response.Code != http.StatusOK {
 		t.Fatalf("session health failed: %d %s", response.Code, response.Body.String())

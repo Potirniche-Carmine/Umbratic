@@ -191,8 +191,8 @@ test("added, renamed, and binary metadata normalize safely", () => {
   assert.equal(binary.status, "binary");
 });
 
-test("malformed input and legacy review records normalize without throwing", () => {
-  const malformed = review.normalizeReviewFile({ path: "odd.txt", diff: "not a patch" });
+test("malformed review patches normalize without throwing", () => {
+  const malformed = review.normalizeReviewFile({ path: "odd.txt", patch: "not a patch" });
   assert.equal(malformed.path, "odd.txt");
   assert.deepEqual(plain(malformed.hunks), []);
   assert.equal(typeof malformed.contentHash, "string");
@@ -226,9 +226,9 @@ test("buildTextDiff produces a patience unified patch for local snapshots", () =
   const file = review.buildTextDiff("notes.txt", "alpha\nbeta\n", "alpha\ngamma\n");
   assert.equal(file?.path, "notes.txt");
   assert.equal(file?.status, "modified");
-  assert.match(file?.diff ?? "", /diff --git a\/notes\.txt b\/notes\.txt/);
-  assert.match(file?.diff ?? "", /-beta/);
-  assert.match(file?.diff ?? "", /\+gamma/);
+  assert.match(file?.patch ?? "", /diff --git a\/notes\.txt b\/notes\.txt/);
+  assert.match(file?.patch ?? "", /-beta/);
+  assert.match(file?.patch ?? "", /\+gamma/);
   assert.equal(file?.hunks.length, 1);
 });
 

@@ -94,8 +94,8 @@ func Load() (Config, error) {
 		IdentityStorePath:          strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
 		ProviderProtocol:           protocol,
 		ProviderBaseURL:            strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
-		ProviderChatEndpointPath:   envFirst("VEIL_PROVIDER_CHAT_PATH", "VEIL_PROVIDER_ENDPOINT_PATH"),
-		ProviderModelsEndpointPath: envFirst("VEIL_PROVIDER_MODELS_PATH", "VEIL_PROVIDER_MODELS_ENDPOINT_PATH"),
+		ProviderChatEndpointPath:   strings.TrimSpace(os.Getenv("VEIL_PROVIDER_CHAT_PATH")),
+		ProviderModelsEndpointPath: strings.TrimSpace(os.Getenv("VEIL_PROVIDER_MODELS_PATH")),
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:              contextLength,
 		MaxOutputTokens:            maxOutputTokens,
@@ -163,16 +163,6 @@ func envString(name, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func envFirst(names ...string) string {
-	for _, name := range names {
-		value := strings.TrimSpace(os.Getenv(name))
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func envDuration(name string, fallback time.Duration) (time.Duration, error) {

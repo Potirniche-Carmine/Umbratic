@@ -8,8 +8,8 @@ veil_port=8080
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dnsname|--domain) dns_name="${2:-}"; shift 2 ;;
-    --port|--host|--https-port) https_port="${2:-}"; shift 2 ;;
+    --dnsname) dns_name="${2:-}"; shift 2 ;;
+    --port) https_port="${2:-}"; shift 2 ;;
     --console-port) console_port="${2:-}"; shift 2 ;;
     --veil-port) veil_port="${2:-}"; shift 2 ;;
     *)

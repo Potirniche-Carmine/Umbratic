@@ -236,8 +236,6 @@ export function ReviewPanel({
       filePath: selectedFile.path,
       hunkId: documentDetails ? `document:${documentPreview!.documentPath}` : selection!.hunkId,
       side: documentDetails ? "new" : selection!.side,
-      startLine: selectedLines[0],
-      endLine: selectedLines[selectedLines.length - 1],
       lineNumbers: selectedLines,
       body: commentBody.trim(),
       excerpt: documentDetails ? documentDetails.excerpt : selectedExcerpt(selectedFile, selection!),

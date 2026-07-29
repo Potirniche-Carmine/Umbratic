@@ -279,7 +279,7 @@ func TestOllamaClientContextLengthUsesModelMetadata(t *testing.T) {
 	}
 }
 
-func TestParseProviderProtocolAliases(t *testing.T) {
+func TestParseProviderProtocolValues(t *testing.T) {
 	cases := map[string]ProviderProtocol{
 		"":       ProtocolVLLM,
 		"vllm":   ProtocolVLLM,

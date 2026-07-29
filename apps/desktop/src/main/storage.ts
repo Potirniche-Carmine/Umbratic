@@ -18,7 +18,6 @@ import {
   localEndpointForced,
   managedModelEndpointDefaults,
 } from "./config";
-import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { normalizeReviewFile } from "../shared/reviewDiff";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
@@ -143,8 +142,6 @@ function configureStorageDatabase(db: DatabaseSync): void {
 function openRetainedStorageDatabase(filePath: string): DatabaseSync {
   const existing = retainedDatabases.get(filePath);
   if (existing) {
-    // Re-check user_version; current schemas return before any DDL runs.
-    ensureStorageSchema(existing.db);
     return existing.db;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -202,8 +199,6 @@ export function retainedStorageDatabaseCount(): number {
 }
 
 function ensureStorageSchema(db: DatabaseSync) {
-  const schemaVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version?: number }).user_version) || 0;
-  if (schemaVersion >= 5) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY NOT NULL,
@@ -277,6 +272,7 @@ function ensureStorageSchema(db: DatabaseSync) {
       label TEXT,
       commit_oid TEXT NOT NULL,
       tree_oid TEXT NOT NULL,
+      index_tree_oid TEXT,
       created_at TEXT NOT NULL,
       state TEXT NOT NULL,
       pinned INTEGER NOT NULL DEFAULT 0,
@@ -311,19 +307,6 @@ function ensureStorageSchema(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS task_checkpoints_task_state_created_index ON task_checkpoints(task_id, state, created_at DESC);
     CREATE INDEX IF NOT EXISTS task_workspaces_task_state_created_index ON task_workspaces(task_id, state, created_at DESC);
   `);
-  if (schemaVersion < 4) {
-    db.exec(`
-      DELETE FROM diagnostic_logs WHERE level NOT IN ('warn', 'error');
-      PRAGMA user_version = 4;
-    `);
-  }
-  if (schemaVersion < 5) {
-    const checkpointColumns = db.prepare("PRAGMA table_info(task_checkpoints)").all() as Array<{ name: string }>;
-    if (!checkpointColumns.some((column) => column.name === "index_tree_oid")) {
-      db.exec("ALTER TABLE task_checkpoints ADD COLUMN index_tree_oid TEXT;");
-    }
-    db.exec("PRAGMA user_version = 5;");
-  }
 }
 
 function normalizedDiagnosticText(value: string | undefined, limit: number): string | undefined {
@@ -499,15 +482,13 @@ function normalizeProjectRecord(project: unknown): RepositoryInfo | null {
     typeof project.baseCommit !== "string" ||
     typeof project.dirty !== "boolean" ||
     typeof project.statusSummary !== "string" ||
+    (project.kind !== "folder" && project.kind !== "git") ||
     !fs.existsSync(project.rootPath)
   ) {
     return null;
   }
-  const kind = project.kind === "folder" || project.kind === "git" || project.kind === undefined ? (project.kind ?? "git") : null;
-  if (!kind) return null;
   return {
     ...(project as RepositoryInfo),
-    kind,
   };
 }
 
@@ -615,33 +596,28 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
     !isRecord(task) ||
     typeof task.id !== "string" ||
     typeof task.originalRepoPath !== "string" ||
-    typeof task.worktreePath !== "string"
+    typeof task.worktreePath !== "string" ||
+    (task.workspaceKind !== "git" && task.workspaceKind !== "folder") ||
+    (task.workspaceMode !== "local" && task.workspaceMode !== "worktree") ||
+    (task.permissionMode !== "normal" && task.permissionMode !== "auto_safe") ||
+    !Array.isArray(task.changedFiles) ||
+    !Array.isArray(task.reviewFiles) ||
+    !Array.isArray(task.events)
   ) {
     return null;
   }
-  const { runtimeProfile: _legacyRuntimeProfile, ...storedTask } = task;
-  void _legacyRuntimeProfile;
   return {
-    ...(storedTask as TaskRecord),
-    workspaceKind: task.workspaceKind === "folder" ? "folder" : "git",
-    workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
+    ...(task as TaskRecord),
     modelEndpointMode: isModelEndpointMode(task.modelEndpointMode) ? task.modelEndpointMode : undefined,
-    permissionMode: task.permissionMode === "auto_safe" || task.permissionMode === "bypass" ? "auto_safe" : "normal",
-    reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
-    runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
-    runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
-    policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
-    enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
+    enabledTools: normalizeStoredEnabledTools(task.enabledTools),
     capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
-    reviewFiles: Array.isArray(task.reviewFiles)
-      ? task.reviewFiles
-          .filter((file): file is Record<string, unknown> => isRecord(file) && typeof file.path === "string")
-          .map((file) => normalizeReviewFile(file as { path: string; diff?: string; patch?: string }))
-      : [],
-    reviewScope: task.reviewScope === "worktree" ? "worktree" : "task",
+    reviewFiles: task.reviewFiles
+      .filter((file): file is Record<string, unknown> => isRecord(file) && typeof file.path === "string")
+      .map((file) => normalizeReviewFile(file as { path: string; patch?: string })),
+    reviewScope: task.reviewScope === "worktree" || task.reviewScope === "task" ? task.reviewScope : undefined,
     reviewBaselineLabel: typeof task.reviewBaselineLabel === "string" ? task.reviewBaselineLabel : undefined,
     reviewBaselineOid: typeof task.reviewBaselineOid === "string" ? task.reviewBaselineOid : undefined,
-    events: Array.isArray(task.events) ? (task.events as TaskRecord["events"]) : [],
+    events: task.events as TaskRecord["events"],
   };
 }
 function normalizeTasks(tasks: unknown[]): TaskRecord[] {
@@ -653,7 +629,7 @@ function normalizeTasks(tasks: unknown[]): TaskRecord[] {
 function serializeTask(task: TaskRecord): string {
   return JSON.stringify({
     ...task,
-    reviewFiles: task.reviewFiles.map(({ patch: _patch, hunks: _hunks, ...file }) => file),
+    reviewFiles: task.reviewFiles.map(({ hunks: _hunks, ...file }) => file),
   });
 }
 
@@ -1328,7 +1304,7 @@ export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSet
     ...settings,
     selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
     modelEndpoint: protectedNext,
-    modelEndpoints: endpointModesWithNext(settings, protectedNext, modelEndpointSettingsVersion),
+    modelEndpoints: endpointModesWithNext(settings, protectedNext),
   });
   return next;
 }
@@ -1434,7 +1410,7 @@ export function readStartupSettings(): DesktopStartupSettings {
 }
 
 export function writePermissionModeSetting(value: unknown): PermissionMode {
-  const permissionMode: PermissionMode = value === "auto_safe" || value === "bypass" ? "auto_safe" : "normal";
+  const permissionMode: PermissionMode = value === "auto_safe" ? "auto_safe" : "normal";
   const settings = readRawSettings();
   writeRawSettings({
     ...settings,

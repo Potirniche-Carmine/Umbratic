@@ -175,7 +175,7 @@ The public HTTPS port defaults to `8432`. To select another public port:
 sudo ./install.sh --dnsname console.example.com --port 8400
 ```
 
-`--host` and `--https-port` are aliases for `--port`. The advanced `--console-port` and `--veil-port` options change only the private loopback ports:
+The advanced `--console-port` and `--veil-port` options change only the private loopback ports:
 
 ```sh
 sudo ./install.sh --dnsname console.example.com --port 8400 --console-port 8177 --veil-port 8080

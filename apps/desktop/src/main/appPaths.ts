@@ -59,8 +59,8 @@ export function skillsDirectory(dataRoot: string): string {
   return path.join(dataRoot, "skills");
 }
 
-export function hiddenChatsDirectory(dataRoot: string): string {
-  return path.join(dataRoot, "workspaces", "hidden-chats");
+export function scratchWorkspacesDirectory(dataRoot: string): string {
+  return path.join(dataRoot, "workspaces", "scratch");
 }
 
 export function worktreesDirectory(dataRoot: string): string {

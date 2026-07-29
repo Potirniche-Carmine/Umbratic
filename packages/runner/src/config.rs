@@ -28,7 +28,7 @@ const MAX_RUNNER_CONFIG_BYTES: usize = 2 * 1024 * 1024;
 #[serde(rename_all = "lowercase")]
 pub enum PermissionMode {
     Normal,
-    #[serde(rename = "auto_safe", alias = "bypass")]
+    #[serde(rename = "auto_safe")]
     AutoSafe,
 }
 
@@ -518,7 +518,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         skills: parse_skills(config.get("skills")),
         permission_mode: if matches!(
             config.get("permissionMode").and_then(Value::as_str),
-            Some("auto_safe" | "bypass")
+            Some("auto_safe")
         ) {
             PermissionMode::AutoSafe
         } else {
@@ -719,15 +719,12 @@ mod tests {
     }
 
     #[test]
-    fn permission_mode_uses_auto_safe_and_accepts_the_legacy_value() {
+    fn permission_mode_uses_auto_safe() {
         assert_eq!(
             serde_json::from_str::<PermissionMode>("\"auto_safe\"").unwrap(),
             PermissionMode::AutoSafe
         );
-        assert_eq!(
-            serde_json::from_str::<PermissionMode>("\"bypass\"").unwrap(),
-            PermissionMode::AutoSafe
-        );
+        assert!(serde_json::from_str::<PermissionMode>("\"bypass\"").is_err());
         assert_eq!(
             serde_json::to_string(&PermissionMode::AutoSafe).unwrap(),
             "\"auto_safe\""
@@ -735,12 +732,15 @@ mod tests {
     }
 
     #[test]
-    fn mtls_rejects_legacy_pkcs12_fields() {
+    fn mtls_rejects_unsupported_pkcs12_fields() {
         for field in ["pfxPath", "passphrase"] {
             let value = Value::Object(
-                [(field.to_owned(), Value::String("legacy-value".to_owned()))]
-                    .into_iter()
-                    .collect(),
+                [(
+                    field.to_owned(),
+                    Value::String("unsupported-value".to_owned()),
+                )]
+                .into_iter()
+                .collect(),
             );
             assert!(parse_mtls(&value).unwrap_err().contains("PKCS#12/PFX"));
         }

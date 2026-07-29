@@ -97,8 +97,8 @@ test("MarkdownContent renders real markdown while escaping raw HTML and scripts"
 test("inline references render review buttons only for unambiguous review files", () => {
   const { MarkdownContent, reviewFileForReference, normalizeReviewReference } = loadRenderer();
   const reviewFiles = [
-    { path: "src/app.ts", status: "modified", diff: "" },
-    { path: "docs/README.md", status: "modified", diff: "" },
+    { path: "src/app.ts", status: "modified", patch: "" },
+    { path: "docs/README.md", status: "modified", patch: "" },
   ];
 
   assert.equal(normalizeReviewReference("@src\\app.ts,"), "src/app.ts");

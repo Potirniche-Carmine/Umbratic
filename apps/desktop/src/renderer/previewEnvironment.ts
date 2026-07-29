@@ -210,7 +210,7 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
   {
     path: "apps/desktop/src/features/review/new-panel.ts",
     status: "added",
-    diff: [
+    patch: [
       "diff --git a/apps/desktop/src/features/review/new-panel.ts b/apps/desktop/src/features/review/new-panel.ts",
       "new file mode 100644",
       "index 0000000..f4a17de",
@@ -231,16 +231,16 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
     ].join("\n"),
   },
   {
-    path: "apps/desktop/src/legacy/review-banner.ts",
+    path: "apps/desktop/src/removed/review-banner.ts",
     status: "deleted",
-    diff: [
-      "diff --git a/apps/desktop/src/legacy/review-banner.ts b/apps/desktop/src/legacy/review-banner.ts",
+    patch: [
+      "diff --git a/apps/desktop/src/removed/review-banner.ts b/apps/desktop/src/removed/review-banner.ts",
       "deleted file mode 100644",
       "index 24c118a..0000000",
-      "--- a/apps/desktop/src/legacy/review-banner.ts",
+      "--- a/apps/desktop/src/removed/review-banner.ts",
       "+++ /dev/null",
       "@@ -1,9 +0,0 @@",
-      "-export function legacyReviewBanner() {",
+      "-export function reviewBanner() {",
       "-  return {",
       "-    tone: \"warning\",",
       "-    label: \"Pending patch\",",
@@ -254,7 +254,7 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
   {
     path: "apps/desktop/src/renderer/review-panel.tsx",
     status: "modified",
-    diff: [
+    patch: [
       "diff --git a/apps/desktop/src/renderer/review-panel.tsx b/apps/desktop/src/renderer/review-panel.tsx",
       "index 9ac21d0..b7f53ce 100644",
       "--- a/apps/desktop/src/renderer/review-panel.tsx",
@@ -278,7 +278,7 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
       " }",
     ].join("\n"),
   },
-].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; diff: string }));
+].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; patch: string }));
 
 const composerTestDocumentPath = ".umbratic/artifacts/docx/narrative-proposal.docx";
 const composerTestDocumentPreview: DocumentReviewSnapshot = {
@@ -315,7 +315,7 @@ const composerTestDocumentPreview: DocumentReviewSnapshot = {
 const composerTestDocumentFile = normalizeReviewFile({
   path: composerTestDocumentPath,
   status: "binary",
-  diff: [
+  patch: [
     `diff --git a/${composerTestDocumentPath} b/${composerTestDocumentPath}`,
     "new file mode 100644",
     `Binary files /dev/null and b/${composerTestDocumentPath} differ`,
@@ -330,7 +330,7 @@ const composerTestWholeDiffFiles: ReviewFile[] = [
   normalizeReviewFile({
     path: "apps/desktop/.env.example",
     status: "modified",
-    diff: [
+    patch: [
       "diff --git a/apps/desktop/.env.example b/apps/desktop/.env.example",
       "index 711bd13..fc94e20 100644",
       "--- a/apps/desktop/.env.example",

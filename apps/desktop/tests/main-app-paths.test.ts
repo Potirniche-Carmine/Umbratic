@@ -32,7 +32,7 @@ test("all managed desktop paths stay below one data root", () => {
     pathsModule.taskMetadataDirectory(root),
     pathsModule.chatAttachmentsDirectory(root),
     pathsModule.skillsDirectory(root),
-    pathsModule.hiddenChatsDirectory(root),
+    pathsModule.scratchWorkspacesDirectory(root),
     pathsModule.worktreesDirectory(root),
     pathsModule.runtimesDirectory(root),
     pathsModule.workspaceRuntimeDirectory(root, "C:\\repo"),
