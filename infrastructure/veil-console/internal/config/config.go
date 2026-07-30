@@ -13,12 +13,13 @@ import (
 )
 
 type Startup struct {
-	Listen        string
-	Port          int
-	StateDir      string
-	VeilBinary    string
-	VeilAddress   string
-	TrustedOrigin string
+	Listen          string
+	Port            int
+	StateDir        string
+	VeilBinary      string
+	VeilAddress     string
+	EntitlementPath string
+	TrustedOrigin   string
 }
 
 type Veil struct {
@@ -76,6 +77,20 @@ func ValidateStartup(cfg *Startup) error {
 		return errors.New("Veil binary owner is unsafe")
 	}
 	cfg.VeilBinary = filepath.Clean(binary)
+	if cfg.EntitlementPath != "" {
+		entitlementPath, err := filepath.Abs(cfg.EntitlementPath)
+		if err != nil {
+			return fmt.Errorf("resolve entitlement path: %w", err)
+		}
+		info, err := os.Lstat(entitlementPath)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("entitlement must be a regular file")
+		}
+		if unsafePermissions(info.Mode()) {
+			return errors.New("entitlement must not be group or world writable")
+		}
+		cfg.EntitlementPath = filepath.Clean(entitlementPath)
+	}
 	host, port, err := net.SplitHostPort(cfg.VeilAddress)
 	if err != nil || (host != "127.0.0.1" && host != "::1") {
 		return errors.New("Veil address must be a loopback host and port")
@@ -144,5 +159,16 @@ func (v Veil) Environment(veilAddress, token string) []string {
 	if v.ContextLength > 0 {
 		values = append(values, "VEIL_CONTEXT_LENGTH="+strconv.Itoa(v.ContextLength))
 	}
+	return values
+}
+
+func (v Veil) CompanyEnvironment(veilAddress, internalToken, controlToken, entitlementPath, identityStorePath string) []string {
+	values := v.Environment(veilAddress, internalToken)
+	values = append(values,
+		"VEIL_COMPANY_IDENTITY_MODE=true",
+		"VEIL_CONTROL_TOKEN="+controlToken,
+		"VEIL_ENTITLEMENT_PATH="+entitlementPath,
+		"VEIL_IDENTITY_STORE_PATH="+identityStorePath,
+	)
 	return values
 }

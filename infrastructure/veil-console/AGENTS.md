@@ -26,7 +26,7 @@ Do not merge Console code into Veil. Console can change Veil only through its fi
 - `cmd/bundle-zip` creates deterministic release archives with the Go standard library.
 - `internal/auth` owns password and opaque-token primitives.
 - `internal/config` owns typed Console and Veil configuration validation.
-- `internal/state` owns SQLite migrations, accounts, sessions, configurations, audit events, and the secret file.
+- `internal/state` owns SQLite schema initialization, accounts, sessions, configurations, audit events, and the secret file.
 - `internal/supervisor` owns provider tests, Veil process state, health checks, and rollback.
 - `internal/web` owns routes, middleware, embedded templates, and assets. Keep business rules outside handlers.
 

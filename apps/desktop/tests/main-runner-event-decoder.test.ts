@@ -17,6 +17,19 @@ test("runner event decoder accepts handled events and marks internal events as i
   assert.equal(assistant.ignored, false);
   assert.equal(assistant.event.text, "hello");
 
+  const legacyFinished = decoder.decodeRunnerEvent({
+    type: "tool.finished",
+    taskId: "task-1",
+    toolCallId: "tool-1",
+    exitCode: 0,
+    status: "success",
+    errorCode: null,
+    errorMessage: null,
+    response: null,
+  });
+  assert.equal(legacyFinished.ok, true);
+  assert.equal(legacyFinished.ignored, false);
+
   assert.deepEqual(
     JSON.parse(JSON.stringify(decoder.decodeRunnerEvent({
       type: "tool.policy.stage",

@@ -45,6 +45,34 @@ test("harnessRouteConfig maps every profile to its purpose-built Veil API", () =
   assert.equal(adapter.harnessRouteConfig("sales").chatEndpointPath, "/api/sales/chat");
 });
 
+test("every harness receives the scratch workspace as its runner directory", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-scratch-"));
+  const { adapter, storage } = loadRunnerAdapter(userData);
+  const scratchPath = path.join(userData, "workspaces", "scratch", "chat-1");
+  const model = {
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId: "veil-managed",
+    displayName: "Veil",
+    baseUrl: "http://127.0.0.1:8080",
+  };
+  const task = {
+    id: "task-scratch",
+    repositoryId: "hidden-chat-1",
+    prompt: "Create a document",
+    workspaceKind: "folder",
+    workspaceMode: "local",
+    hiddenWorkspace: true,
+    enabledTools: ["read", "write"],
+    worktreePath: scratchPath,
+  };
+
+  for (const profile of ["engineering", "marketing", "sales"]) {
+    storage.writeHarnessProfileSetting(profile);
+    assert.equal(adapter.buildUmbraticRunnerConfig(task, model).cwd, scratchPath);
+  }
+});
+
 test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled tools, and skill metadata", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-"));
   const { adapter, skills, storage } = loadRunnerAdapter(userData);
@@ -57,7 +85,10 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     software: "vllm",
     baseUrl: "https://veil.example.internal",
     secret: "endpoint-token",
-    headers: [{ name: " X-Team ", value: "engineering" }],
+    headers: [
+      { name: "Authorization", value: "internal-shared-token" },
+      { name: " X-Team ", value: "engineering" },
+    ],
   });
 
   const model = {
@@ -73,7 +104,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
     prompt: "Debug a segfault in the C harness",
     workspaceKind: "git",
     workspaceMode: "worktree",
-    enabledTools: ["read", "legacy-tool", "bad"],
+    enabledTools: ["read", "unknown-tool", "bad"],
     capabilityProbes: [
       {
         id: "uv",
@@ -113,7 +144,7 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.skills.every((skill) => !("content" in skill) && !("fullContent" in skill)), true);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
   assert.equal("system" in config, false);
-  assert.equal(config.provider.apiKey, "endpoint-token");
+  assert.equal(config.provider.apiKey, "");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });
 });
 
@@ -202,7 +233,9 @@ test("runtimeEnv keeps UV dirs but does not prepend workspace runtime onto PATH"
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 
   assert.equal(env[pathKey]?.includes(".umbratic"), false);
-  assert.match(env.UV_INSTALL_DIR, /\.umbratic[\\/]runtime[\\/]uv$/);
+  assert.equal(path.relative(path.join(userData, "runtimes"), env.UV_INSTALL_DIR).startsWith(".."), false);
+  assert.equal(path.basename(env.UV_INSTALL_DIR), "uv");
+  assert.equal(env.UV_CACHE_DIR, path.join(path.dirname(env.UV_INSTALL_DIR), "uv-cache"));
   assert.equal(env.UV_NO_MODIFY_PATH, "1");
   assert.equal(env.SystemDrive, "C:");
   assert.equal("UMBRATIC_RUNNER_CONFIG" in env, false);
@@ -348,11 +381,24 @@ test("runner config passes only verified command executables", () => {
           workflows: ["desktop"],
           checkedAt: "2026-01-01T00:00:00.000Z",
         },
+        {
+          id: "npm",
+          label: "npm",
+          category: "recommended",
+          importance: "recommended",
+          status: "available",
+          executablePath: process.execPath,
+          detectedCommand: "npm",
+          purpose: "Node scripts.",
+          installHint: "Install Node.",
+          workflows: ["verification"],
+          checkedAt: "2026-01-01T00:00:00.000Z",
+        },
       ],
     },
   );
-  assert.deepEqual(plain(config.approvedExecutables), [{
-    id: "uv",
-    command: fs.realpathSync(process.execPath),
-  }]);
+  assert.deepEqual(plain(config.approvedExecutables), [
+    { id: "uv", command: fs.realpathSync(process.execPath) },
+    { id: "npm", command: fs.realpathSync(process.execPath) },
+  ]);
 });

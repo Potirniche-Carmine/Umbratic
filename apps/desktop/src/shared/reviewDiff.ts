@@ -42,8 +42,6 @@ export type ReviewFile = {
   deletions: number;
   binary: boolean;
   patch: string;
-  /** Legacy alias retained while persisted task records migrate. */
-  diff: string;
   contentHash: string;
   hunks: DiffHunk[];
   tooLarge?: boolean;
@@ -241,15 +239,14 @@ export function parseReviewPatch(patchInput: string, fallbackPath = "unknown"): 
     deletions,
     binary,
     patch: originalPatch,
-    diff: originalPatch,
     contentHash: stableReviewHash(originalPatch),
     hunks,
     tooLarge,
   };
 }
 
-export function normalizeReviewFile(value: Partial<ReviewFile> & { path: string; diff?: string; patch?: string }): ReviewFile {
-  const patch = typeof value.patch === "string" ? value.patch : typeof value.diff === "string" ? value.diff : "";
+export function normalizeReviewFile(value: Partial<ReviewFile> & { path: string; patch?: string }): ReviewFile {
+  const patch = typeof value.patch === "string" ? value.patch : "";
   if (
     Array.isArray(value.hunks)
     && typeof value.status === "string"
@@ -266,7 +263,6 @@ export function normalizeReviewFile(value: Partial<ReviewFile> & { path: string;
       deletions: value.deletions,
       binary: value.binary,
       patch,
-      diff: patch,
       contentHash: value.contentHash,
       hunks: value.hunks,
       tooLarge: value.tooLarge,
@@ -281,7 +277,6 @@ export function normalizeReviewFile(value: Partial<ReviewFile> & { path: string;
     status: metadataStatus ? parsed.status : value.status ?? parsed.status,
     binary: value.binary ?? parsed.binary,
     patch,
-    diff: patch,
     contentHash: value.contentHash || parsed.contentHash,
     additions: Number.isFinite(value.additions) ? Number(value.additions) : parsed.additions,
     deletions: Number.isFinite(value.deletions) ? Number(value.deletions) : parsed.deletions,
@@ -650,6 +645,6 @@ export function buildTextDiff(filePath: string, before: string | null, after: st
   return normalizeReviewFile({
     path: filePath,
     status,
-    diff: [...diffHeader(filePath, status), ...unifiedDiffHunks(beforeLines, afterLines)].join("\n"),
+    patch: [...diffHeader(filePath, status), ...unifiedDiffHunks(beforeLines, afterLines)].join("\n"),
   });
 }

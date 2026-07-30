@@ -700,28 +700,46 @@
   background: rgba(255, 111, 122, 0.12);
 }
 
-.chatRowMain span {
+.chatRowContent {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 3px;
+  column-gap: 5px;
   min-width: 0;
 }
 
-.chatRowMain strong,
-.chatRowMain em {
+.chatRowContent.hasConnection {
+  grid-template-columns: 13px minmax(0, 1fr) auto;
+}
+
+.chatConnectionIcon {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  color: var(--faint);
+  line-height: 0;
+}
+
+.chatRow:hover .chatConnectionIcon,
+.chatRow.active .chatConnectionIcon {
+  color: var(--muted);
+}
+
+.chatRowContent > strong,
+.chatRowContent > em {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chatRowMain strong {
+.chatRowContent > strong {
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
 }
 
-.chatRowMain em {
+.chatRowContent > em {
   color: var(--faint);
   font-style: normal;
   font-size: 10px;

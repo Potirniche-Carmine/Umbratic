@@ -1,6 +1,5 @@
-import { app, safeStorage } from "electron";
+import { app } from "electron";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -19,11 +18,15 @@ import {
   localEndpointForced,
   managedModelEndpointDefaults,
 } from "./config";
-import { umbraticPolicyVersion, umbraticRunnerName, umbraticRunnerVersion } from "./policy";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { normalizeReviewFile } from "../shared/reviewDiff";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 import type { DesktopStartupSettings } from "../shared/desktopApi";
+import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
+import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
+import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
+import { activeStoredEndpoint, endpointModesWithNext, storedEndpointForMode, type RawModelEndpointSettings } from "./endpointModeStorage";
+import { appDatabaseFile, chatsDatabaseFile } from "./appPaths";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -45,11 +48,8 @@ import type {
   TaskWorkspace,
   UserNotes,
 } from "./types";
-function dataFile(name: string): string {
-  return path.join(app.getPath("userData"), name);
-}
 function appDatabasePath(): string {
-  return dataFile("umbratic.sqlite");
+  return appDatabaseFile(app.getPath("userData"));
 }
 
 export function localDatabasePath(): string {
@@ -57,7 +57,7 @@ export function localDatabasePath(): string {
 }
 
 function chatsDatabasePath(): string {
-  return path.join(os.homedir(), ".umbratic", "chats", "umbratic.sqlite");
+  return chatsDatabaseFile(app.getPath("userData"));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,14 +131,17 @@ function configureStorageDatabase(db: DatabaseSync): void {
   // WAL keeps the process-lifetime handles usable while tests and recovery
   // readers open the same files briefly.
   db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA journal_size_limit = 16777216;");
+  db.exec("PRAGMA wal_autocheckpoint = 1000;");
+  const pageSize = Number((db.prepare("PRAGMA page_size").get() as { page_size?: number }).page_size) || 4096;
+  const maximumDatabaseBytes = 512 * 1024 * 1024;
+  db.exec(`PRAGMA max_page_count = ${Math.max(1, Math.floor(maximumDatabaseBytes / pageSize))};`);
   ensureStorageSchema(db);
 }
 
 function openRetainedStorageDatabase(filePath: string): DatabaseSync {
   const existing = retainedDatabases.get(filePath);
   if (existing) {
-    // Re-check user_version; current schemas return before any DDL runs.
-    ensureStorageSchema(existing.db);
     return existing.db;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -196,8 +199,6 @@ export function retainedStorageDatabaseCount(): number {
 }
 
 function ensureStorageSchema(db: DatabaseSync) {
-  const schemaVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version?: number }).user_version) || 0;
-  if (schemaVersion >= 5) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY NOT NULL,
@@ -271,6 +272,7 @@ function ensureStorageSchema(db: DatabaseSync) {
       label TEXT,
       commit_oid TEXT NOT NULL,
       tree_oid TEXT NOT NULL,
+      index_tree_oid TEXT,
       created_at TEXT NOT NULL,
       state TEXT NOT NULL,
       pinned INTEGER NOT NULL DEFAULT 0,
@@ -305,19 +307,6 @@ function ensureStorageSchema(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS task_checkpoints_task_state_created_index ON task_checkpoints(task_id, state, created_at DESC);
     CREATE INDEX IF NOT EXISTS task_workspaces_task_state_created_index ON task_workspaces(task_id, state, created_at DESC);
   `);
-  if (schemaVersion < 4) {
-    db.exec(`
-      DELETE FROM diagnostic_logs WHERE level NOT IN ('warn', 'error');
-      PRAGMA user_version = 4;
-    `);
-  }
-  if (schemaVersion < 5) {
-    const checkpointColumns = db.prepare("PRAGMA table_info(task_checkpoints)").all() as Array<{ name: string }>;
-    if (!checkpointColumns.some((column) => column.name === "index_tree_oid")) {
-      db.exec("ALTER TABLE task_checkpoints ADD COLUMN index_tree_oid TEXT;");
-    }
-    db.exec("PRAGMA user_version = 5;");
-  }
 }
 
 function normalizedDiagnosticText(value: string | undefined, limit: number): string | undefined {
@@ -493,15 +482,13 @@ function normalizeProjectRecord(project: unknown): RepositoryInfo | null {
     typeof project.baseCommit !== "string" ||
     typeof project.dirty !== "boolean" ||
     typeof project.statusSummary !== "string" ||
+    (project.kind !== "folder" && project.kind !== "git") ||
     !fs.existsSync(project.rootPath)
   ) {
     return null;
   }
-  const kind = project.kind === "folder" || project.kind === "git" || project.kind === undefined ? (project.kind ?? "git") : null;
-  if (!kind) return null;
   return {
     ...(project as RepositoryInfo),
-    kind,
   };
 }
 
@@ -609,35 +596,30 @@ function normalizeTaskRecord(task: unknown): TaskRecord | null {
     !isRecord(task) ||
     typeof task.id !== "string" ||
     typeof task.originalRepoPath !== "string" ||
-    typeof task.worktreePath !== "string"
+    typeof task.worktreePath !== "string" ||
+    (task.workspaceKind !== "git" && task.workspaceKind !== "folder") ||
+    (task.workspaceMode !== "local" && task.workspaceMode !== "worktree") ||
+    (task.permissionMode !== "normal" && task.permissionMode !== "auto_safe") ||
+    !Array.isArray(task.changedFiles) ||
+    !Array.isArray(task.reviewFiles) ||
+    !Array.isArray(task.events)
   ) {
     return null;
   }
-  const { runtimeProfile: _legacyRuntimeProfile, ...storedTask } = task;
-  void _legacyRuntimeProfile;
   return {
-    ...(storedTask as TaskRecord),
-    workspaceKind: task.workspaceKind === "folder" ? "folder" : "git",
-    workspaceMode: task.workspaceMode === "worktree" || (typeof task.agentBranch === "string" && task.agentBranch) ? "worktree" : "local",
-    permissionMode: task.permissionMode === "auto_safe" || task.permissionMode === "bypass" ? "auto_safe" : "normal",
-    reasoningMode: task.reasoningMode === "fast" ? "fast" : "reasoning",
-    runnerName: typeof task.runnerName === "string" && task.runnerName ? task.runnerName : umbraticRunnerName,
-    runnerVersion: typeof task.runnerVersion === "string" && task.runnerVersion ? task.runnerVersion : umbraticRunnerVersion,
-    policyVersion: typeof task.policyVersion === "string" && task.policyVersion ? task.policyVersion : umbraticPolicyVersion,
-    enabledTools: normalizeStoredEnabledTools(task.enabledTools) ?? enabledToolsFromSettings(defaultToolSettings()),
+    ...(task as TaskRecord),
+    modelEndpointMode: isModelEndpointMode(task.modelEndpointMode) ? task.modelEndpointMode : undefined,
+    enabledTools: normalizeStoredEnabledTools(task.enabledTools),
     capabilityProbes: normalizeStoredCapabilityProbes(task.capabilityProbes),
-    reviewFiles: Array.isArray(task.reviewFiles)
-      ? task.reviewFiles
-          .filter((file): file is Record<string, unknown> => isRecord(file) && typeof file.path === "string")
-          .map((file) => normalizeReviewFile(file as { path: string; diff?: string; patch?: string }))
-      : [],
-    reviewScope: task.reviewScope === "worktree" ? "worktree" : "task",
+    reviewFiles: task.reviewFiles
+      .filter((file): file is Record<string, unknown> => isRecord(file) && typeof file.path === "string")
+      .map((file) => normalizeReviewFile(file as { path: string; patch?: string })),
+    reviewScope: task.reviewScope === "worktree" || task.reviewScope === "task" ? task.reviewScope : undefined,
     reviewBaselineLabel: typeof task.reviewBaselineLabel === "string" ? task.reviewBaselineLabel : undefined,
     reviewBaselineOid: typeof task.reviewBaselineOid === "string" ? task.reviewBaselineOid : undefined,
-    events: Array.isArray(task.events) ? (task.events as TaskRecord["events"]) : [],
+    events: task.events as TaskRecord["events"],
   };
 }
-
 function normalizeTasks(tasks: unknown[]): TaskRecord[] {
   return tasks
     .map((task) => normalizeTaskRecord(task))
@@ -647,7 +629,7 @@ function normalizeTasks(tasks: unknown[]): TaskRecord[] {
 function serializeTask(task: TaskRecord): string {
   return JSON.stringify({
     ...task,
-    reviewFiles: task.reviewFiles.map(({ patch: _patch, hunks: _hunks, ...file }) => file),
+    reviewFiles: task.reviewFiles.map(({ hunks: _hunks, ...file }) => file),
   });
 }
 
@@ -940,6 +922,7 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
       : undefined;
   return {
     ...chat,
+    modelEndpointMode: isModelEndpointMode(chat.modelEndpointMode) ? chat.modelEndpointMode : undefined,
     repositoryName:
       typeof chat.repositoryName === "string" && chat.repositoryName.trim()
         ? chat.repositoryName.trim().slice(0, 120)
@@ -1045,49 +1028,11 @@ function readChatFromDatabase(filePath: string, chatId: string): ChatRecord | nu
   }, retain);
 }
 
-function legacyProjectDatabasePath(rootPath: string): string {
-  return path.join(rootPath, ".umbratic", "umbratic.sqlite");
-}
-
-function readLegacyProjectChats(project: RepositoryInfo): ChatRecord[] {
-  return readChatsFromDatabase(legacyProjectDatabasePath(project.rootPath));
-}
-
 function writeChatsToDatabase(chats: ChatRecord[]) {
   withChatsDatabase((db) => replaceChatsInDatabase(db, chats));
 }
 
-function readLegacyAppChats(): ChatRecord[] {
-  return readChatsFromDatabase(appDatabasePath());
-}
-
-function migrateLegacyChatsToHomeDatabase() {
-  const dbPath = chatsDatabasePath();
-  if (fs.existsSync(dbPath)) return;
-  const chats = new Map<string, ChatRecord>();
-  for (const chat of readLegacyAppChats()) {
-    putNewestChat(chats, chat);
-  }
-  for (const project of readProjects()) {
-    const projectKey = pathKey(project.rootPath);
-    for (const chat of readLegacyProjectChats(project)) {
-      if (chat.repositoryPath && pathKey(chat.repositoryPath) !== projectKey) {
-        continue;
-      }
-      putNewestChat(chats, {
-        ...chat,
-        repositoryName: chat.repositoryName ?? project.name,
-        repositoryPath: project.rootPath,
-      });
-    }
-  }
-  if (chats.size > 0) {
-    writeChatsToDatabase(Array.from(chats.values()).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
-  }
-}
-
 export function readChats(): ChatRecord[] {
-  migrateLegacyChatsToHomeDatabase();
   const chats = new Map<string, ChatRecord>();
   for (const chat of readChatsFromDatabase(chatsDatabasePath())) {
     putNewestChat(chats, chat);
@@ -1096,7 +1041,6 @@ export function readChats(): ChatRecord[] {
 }
 
 export function readChat(chatId: string): ChatRecord | null {
-  migrateLegacyChatsToHomeDatabase();
   return readChatFromDatabase(chatsDatabasePath(), chatId);
 }
 
@@ -1140,16 +1084,14 @@ export function writeChats(chats: ChatRecord[]) {
 
 type RawSettings = {
   selectedModel?: { providerId?: string; modelId?: string };
-  modelEndpoint?: Partial<Omit<ActiveModelEndpointSettings, "headers" | "secret">> & {
-    version?: unknown;
-    secret?: unknown;
-    headers?: unknown;
-  };
+  modelEndpoint?: RawModelEndpointSettings;
+  modelEndpoints?: Partial<Record<ModelEndpointMode, RawModelEndpointSettings>>;
   tools?: Partial<Record<RunnerToolId, boolean>>;
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
   contextLength?: unknown;
   permissionMode?: unknown;
+  companyCredential?: unknown;
 };
 
 type SettingsRow = {
@@ -1179,11 +1121,6 @@ function writeRawSettings(settings: RawSettings) {
   });
 }
 
-type StoredProtectedString = {
-  encoding: "electron-safe-storage-v1";
-  encrypted: string;
-};
-
 type StoredModelEndpointSettings = Omit<ActiveModelEndpointSettings, "headers" | "secret"> & {
   version: typeof modelEndpointSettingsVersion;
   secret: "" | StoredProtectedString;
@@ -1194,27 +1131,6 @@ export type PublicModelEndpointSettings = Omit<ActiveModelEndpointSettings, "hea
   secretConfigured: boolean;
   headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
 };
-
-function readProtectedString(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (!isRecord(value) || value.encoding !== "electron-safe-storage-v1" || typeof value.encrypted !== "string") return undefined;
-  try {
-    return safeStorage.decryptString(Buffer.from(value.encrypted, "base64"));
-  } catch {
-    return undefined;
-  }
-}
-
-function writeProtectedString(value: string): "" | StoredProtectedString {
-  if (!value) return "";
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error("Secure storage is not available, so endpoint tokens were not saved.");
-  }
-  return {
-    encoding: "electron-safe-storage-v1",
-    encrypted: safeStorage.encryptString(value).toString("base64"),
-  };
-}
 
 function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
   const rows = Array.isArray(value) ? value : [];
@@ -1230,32 +1146,27 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
   return headers;
 }
 
-function activeModelEndpointSettings(settings: RawSettings): RawSettings["modelEndpoint"] | undefined {
-  const endpoint = settings.modelEndpoint;
-  if (!endpoint) return undefined;
-  if (endpoint.version === modelEndpointSettingsVersion) return endpoint;
-  if (endpoint.mode !== "local") return endpoint;
-  // Version 2 stored the local Veil URL in baseUrl. Version 3 stores the
-  // underlying Ollama/vLLM URL instead, so preserve the mode while resetting
-  // the fields whose meaning changed.
-  return {
-    mode: "local",
-    software: endpoint.software,
-  };
-}
+const activeModelEndpointSettings = (settings: RawSettings) => activeStoredEndpoint(settings, modelEndpointSettingsVersion);
+const storedModelEndpointSettings = (settings: RawSettings, mode: ModelEndpointMode) =>
+  storedEndpointForMode(settings, mode, modelEndpointSettingsVersion);
 
 export function hasStoredModelEndpointSettings(): boolean {
   const settings = readRawSettings();
   return !!activeModelEndpointSettings(settings);
 }
 
-function modelEndpointSettings(settings: RawSettings): ActiveModelEndpointSettings {
-  const endpoint = activeModelEndpointSettings(settings) ?? {};
+function modelEndpointSettings(
+  settings: RawSettings,
+  requestedMode?: ModelEndpointMode,
+): ActiveModelEndpointSettings {
+  const activeEndpoint = activeModelEndpointSettings(settings) ?? {};
   const managed = managedModelEndpointDefaults();
   const forceLocal = localEndpointForced();
   const mode =
     forceLocal ? "local" : managed?.mode ??
-    (endpoint.mode === "local" || endpoint.mode === "server" ? endpoint.mode : defaultModelEndpointMode());
+    requestedMode ??
+    (activeEndpoint.mode === "local" || activeEndpoint.mode === "server" ? activeEndpoint.mode : defaultModelEndpointMode());
+  const endpoint = storedModelEndpointSettings(settings, mode) ?? {};
   const managedBaseUrl = forceLocal ? undefined : managed?.baseUrl;
   const managedSoftware = forceLocal ? undefined : managed?.software;
   const storedLocalEndpoint = endpoint.mode === "local";
@@ -1288,7 +1199,32 @@ function modelEndpointSettings(settings: RawSettings): ActiveModelEndpointSettin
   };
 }
 
+export function readCompanyDeviceCredential(): CompanyDeviceCredential | null {
+  return decodeCompanyDeviceCredential(readRawSettings().companyCredential);
+}
+
+export function writeCompanyDeviceCredential(input: CompanyDeviceCredential): CompanyDeviceCredential {
+  const settings = readRawSettings();
+  writeRawSettings({ ...settings, companyCredential: encodeCompanyDeviceCredential(input) });
+  return input;
+}
+
+export { assertCompanyCredentialStorageAvailable };
+
+export function clearCompanyDeviceCredential(): void {
+  const settings = readRawSettings();
+  writeRawSettings({ ...settings, companyCredential: undefined });
+}
+
+export function companyConnectionStatus() {
+  return companyConnectionStatusFromValue(readRawSettings().companyCredential);
+}
+
 export function readModelEndpointSettings(): ActiveModelEndpointSettings { return modelEndpointSettings(readRawSettings()); }
+
+export function readModelEndpointSettingsForMode(mode: ModelEndpointMode): ActiveModelEndpointSettings {
+  return modelEndpointSettings(readRawSettings(), mode);
+}
 
 export function publicModelEndpointSettings(settings: ActiveModelEndpointSettings): PublicModelEndpointSettings {
   return {
@@ -1363,10 +1299,12 @@ export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSet
           })),
   };
   const settings = readRawSettings();
+  const protectedNext = protectEndpointSettings(next);
   writeRawSettings({
     ...settings,
     selectedModel: { providerId: "company-endpoint", modelId: next.modelId },
-    modelEndpoint: protectEndpointSettings(next),
+    modelEndpoint: protectedNext,
+    modelEndpoints: endpointModesWithNext(settings, protectedNext),
   });
   return next;
 }
@@ -1465,13 +1403,14 @@ export function readStartupSettings(): DesktopStartupSettings {
   return {
     permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
     modelEndpoint: publicModelEndpointSettings(modelEndpointSettings(settings)),
+    companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
   };
 }
 
 export function writePermissionModeSetting(value: unknown): PermissionMode {
-  const permissionMode: PermissionMode = value === "auto_safe" || value === "bypass" ? "auto_safe" : "normal";
+  const permissionMode: PermissionMode = value === "auto_safe" ? "auto_safe" : "normal";
   const settings = readRawSettings();
   writeRawSettings({
     ...settings,

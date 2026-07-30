@@ -3,7 +3,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import { app } from "electron";
 
+import { runnerLogsDirectory, workspaceRuntimeDirectory } from "./appPaths";
 import { localProviderCatalog } from "./config";
 import { probeLocalCapabilities } from "./capabilities";
 import { currentLocalVeilConnection } from "./localVeil";
@@ -28,7 +30,7 @@ type HarnessRouteConfig = {
 };
 
 export function runnerDiagnosticsDirectory(userDataPath: string): string {
-  return path.join(userDataPath, "runner-diagnostics");
+  return runnerLogsDirectory(userDataPath);
 }
 
 export function harnessRouteConfig(profileId: HarnessProfileId): HarnessRouteConfig {
@@ -83,11 +85,11 @@ export function buildUmbraticRunnerConfig(
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
       chatEndpointPath: route.chatEndpointPath,
-      apiKey: localVeil?.authToken ?? endpointSettings.secret.trim(),
+      apiKey: localVeil?.authToken ?? "",
       modelId: selectedModel.modelId,
       headers: Object.fromEntries(
         (endpointSettings.mode === "local" ? [] : endpointSettings.headers)
-          .filter((header) => header.name.trim() && header.value)
+          .filter((header) => header.name.trim().toLowerCase() !== "authorization" && header.value)
           .map((header) => [header.name.trim(), header.value]),
       ),
       mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
@@ -154,7 +156,7 @@ export function approvedLspServers(report?: CapabilityProbeReport): LspServerLau
 }
 
 export function runtimeEnv(worktreePath: string): NodeJS.ProcessEnv {
-  const runtimeRoot = path.join(worktreePath, ".umbratic", "runtime");
+  const runtimeRoot = workspaceRuntimeDirectory(app.getPath("userData"), worktreePath);
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   // Keep UV_* install dirs for confirmed tooling, but never prepend workspace-controlled
   // .umbratic/runtime onto PATH — that lets a malicious repo win executable lookup.
@@ -227,6 +229,10 @@ async function freeLocalPort(): Promise<number> {
 }
 
 export function stopRunnerProcess(run: RunnerProcess) {
+  if (run.providerSessionRefresh) {
+    clearInterval(run.providerSessionRefresh);
+    run.providerSessionRefresh = undefined;
+  }
   run.abortController.abort();
   if (run.child.killed || run.child.exitCode !== null) return;
   if (process.platform === "win32" && run.child.pid) {
@@ -272,6 +278,13 @@ export async function runnerRequest<T>(
     return undefined as T;
   }
   return response.json() as Promise<T>;
+}
+
+export async function setRunnerProviderSession(run: RunnerProcess, session: string): Promise<void> {
+  await runnerRequest<void>(run, "/provider/session", {
+    method: "POST",
+    body: { session },
+  });
 }
 
 export async function startUmbraticRunnerServer(

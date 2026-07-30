@@ -39,6 +39,26 @@ pub(super) async fn command_tool(
             safety.explanation
         )));
     }
+    let executable = if program_id.is_empty() {
+        None
+    } else {
+        let configured = session
+            .config
+            .approved_executables
+            .get(&program_id)
+            .ok_or_else(|| {
+                ToolError::policy(format!("Executable {program_id} is not available."))
+            })?;
+        let executable = configured.canonicalize().map_err(|_| {
+            ToolError::policy(format!("Executable {program_id} is no longer available."))
+        })?;
+        if &executable != configured || !executable.is_file() {
+            return Err(ToolError::policy(format!(
+                "Executable {program_id} changed after startup."
+            )));
+        }
+        Some(executable)
+    };
     let auto_allow = session.config.permission_mode == PermissionMode::AutoSafe
         && safety.action == SafetyAction::Allow;
     let decision = permissions
@@ -59,22 +79,7 @@ pub(super) async fn command_tool(
         .and_then(Value::as_u64)
         .unwrap_or(10 * 60 * 1000)
         .clamp(100, 30 * 60 * 1000);
-    let mut process = if !program_id.is_empty() {
-        let configured = session
-            .config
-            .approved_executables
-            .get(&program_id)
-            .ok_or_else(|| {
-                ToolError::policy(format!("Executable {program_id} is not approved."))
-            })?;
-        let executable = configured.canonicalize().map_err(|_| {
-            ToolError::policy(format!("Approved executable {program_id} is unavailable."))
-        })?;
-        if &executable != configured || !executable.is_file() {
-            return Err(ToolError::policy(format!(
-                "Approved executable {program_id} changed after startup."
-            )));
-        }
+    let mut process = if let Some(executable) = executable {
         let mut value = Command::new(executable);
         value.args(&program_args);
         value

@@ -1,0 +1,168 @@
+{{define "access.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/favicon.ico?v=10">
+  <link rel="stylesheet" href="/assets/style.css?v=10">
+  <link rel="stylesheet" href="/assets/access.css?v=13">
+  <script defer src="/assets/console.js?v=11"></script>
+</head>
+<body>
+<main class="app-shell">
+  {{template "topbar" .}}
+  <div class="page access-page">
+    <header class="page-header access-page-header">
+      <h1>Management</h1>
+      {{if and .EnterpriseEnabled .Configured .Running}}<a class="button secondary" href="/access?filter={{.Access.Filter}}">Refresh</a>{{end}}
+    </header>
+
+    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+
+    {{if not .EnterpriseEnabled}}
+      <section class="panel unavailable-panel">
+        <div><h2>Deploy Enterprise Veil</h2><p>Management is available after you deploy Veil with a signed entitlement.</p></div>
+      </section>
+    {{else if not .Configured}}
+      <section class="panel unavailable-panel">
+        <div><h2>Configure Veil first</h2><p>Apply a model configuration before you use Management.</p></div>
+        <a class="button secondary" href="/settings">Open Settings</a>
+      </section>
+    {{else if not .Running}}
+      <section class="panel unavailable-panel">
+        <div><h2>Start Veil first</h2><p>Veil must run before you manage users and devices.</p></div>
+        <a class="button secondary" href="/">Open Overview</a>
+      </section>
+    {{else if not .Access.Available}}
+      <section class="panel unavailable-panel" role="alert">
+        <div><h2>Management data unavailable</h2><p>Veil did not return the management data.</p></div>
+        <a class="button secondary" href="/access">Retry</a>
+      </section>
+    {{else}}
+      <section class="panel management-summary">
+        <form class="organization-form" method="post" action="/access/organization">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <label class="field">
+            <span>Organization name</span>
+            <input name="name" maxlength="100" value="{{.Access.OrgName}}" placeholder="My organization" required>
+          </label>
+          <button class="button secondary" type="submit">Update</button>
+        </form>
+        <div class="capacity-summary" aria-label="Capacity">
+          <div><strong>{{.Access.SeatsAssigned}} of {{.Access.MaxAuthorizedUsers}}</strong><span>Seats used</span></div>
+          <div><strong>{{.Access.DevicesEnrolled}}</strong><span>Devices enrolled</span></div>
+          <div><strong>{{.Access.MaxDevicesPerUser}}</strong><span>Devices per user</span></div>
+        </div>
+      </section>
+
+      <form class="panel add-user-form" method="post" action="/access/users">
+        <div class="tool-heading"><h2>Add user</h2><span>{{.Access.SeatsAvailable}} seats available</span></div>
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <div class="add-user-controls">
+          <label class="field">
+            <span>Name</span>
+            <input name="label" maxlength="160" placeholder="Alice" required {{if .Access.AddUserDisabled}}disabled{{end}}>
+          </label>
+          <button type="submit" {{if .Access.AddUserDisabled}}disabled{{end}}>Add user</button>
+        </div>
+      </form>
+
+      <nav class="access-filters" aria-label="Filter users">
+        <a href="/access?filter=all" {{if eq .Access.Filter "all"}}aria-current="page"{{end}}>All</a>
+        <a href="/access?filter=awaiting" {{if eq .Access.Filter "awaiting"}}aria-current="page"{{end}}>Needs setup</a>
+        <a href="/access?filter=deactivated" {{if eq .Access.Filter "deactivated"}}aria-current="page"{{end}}>Deactivated</a>
+      </nav>
+
+      <section class="access-users" aria-label="Users and devices">
+        {{if not .Access.Users}}<div class="panel access-empty"><h2>No users match this filter</h2></div>{{end}}
+        {{range .Access.Users}}
+        <details class="panel access-user">
+          <summary>
+            <span class="user-name">
+              <strong>{{.Label}}</strong>
+              {{if .StatusLabel}}<span class="user-state">{{.StatusLabel}}</span>{{end}}
+            </span>
+            <span class="user-activity" title="{{.LastSeenExact}}">{{.LastSeenRelative}}</span>
+            <span class="device-count">{{.EnrolledDevices}} of {{.MaxDevicesPerUser}} devices</span>
+            <span class="disclosure-chevron" aria-hidden="true"></span>
+          </summary>
+
+          <div class="access-user-body">
+            {{if .CanManageDevices}}
+            <div class="enrollment-action">
+              <div>
+                {{if .EnrollmentCode.Pending}}
+                  <strong>Issued for {{.EnrollmentCode.Target}} device</strong>
+                  <span>Expires {{.EnrollmentCode.ExpiresAt}}</span>
+                {{else if gt .DevicesAvailable 0}}
+                  <strong>{{if eq .DevicesAvailable 1}}1 device slot available{{else}}{{.DevicesAvailable}} device slots available{{end}}</strong>
+                  <span>Create a one-time code for the next device.</span>
+                {{else}}
+                  <strong>All device slots are used</strong>
+                {{end}}
+              </div>
+              {{if gt .DevicesAvailable 0}}
+              <form method="post" action="/access/users/{{.UID}}/enrollment-codes">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                <button class="button secondary" type="submit">{{if .EnrollmentCode.Pending}}Revoke code and generate a new one{{else}}Add device{{end}}</button>
+              </form>
+              {{end}}
+            </div>
+            {{end}}
+
+            <div class="devices">
+              <div class="devices-heading"><h3>Devices</h3></div>
+              {{if not .Devices}}<p class="empty-device">No devices are enrolled.</p>{{end}}
+              {{range .Devices}}
+              <article class="device-row">
+                <div><strong>{{.Label}}</strong><span title="{{.LastSeenExact}}">{{.LastSeenRelative}}</span></div>
+                <button class="text-button danger-text" type="button" data-dialog-open="revoke-{{.UID}}">Revoke</button>
+              </article>
+              <dialog class="confirm-dialog" id="revoke-{{.UID}}">
+                <form method="post" action="/access/devices/{{.UID}}/revoke">
+                  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                  <input type="hidden" name="confirm" value="yes">
+                  <h2>Revoke {{.Label}}?</h2>
+                  <p>This device must enroll again.</p>
+                  <div class="dialog-actions">
+                    <button class="button secondary" type="button" data-dialog-close>Cancel</button>
+                    <button class="button danger" type="submit">Revoke device</button>
+                  </div>
+                </form>
+              </dialog>
+              {{end}}
+            </div>
+
+            <div class="user-actions">
+              {{if .Deactivated}}
+              <form method="post" action="/access/users/{{.UID}}/reactivate">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                <button type="submit">Reactivate user</button>
+              </form>
+              {{else}}
+              <button class="text-button danger-text" type="button" data-dialog-open="deactivate-{{.UID}}">Deactivate user</button>
+              <dialog class="confirm-dialog" id="deactivate-{{.UID}}">
+                <form method="post" action="/access/users/{{.UID}}/deactivate">
+                  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                  <input type="hidden" name="confirm" value="yes">
+                  <h2>Deactivate {{.Label}}?</h2>
+                  <p>This action revokes all devices and releases the seat.</p>
+                  <div class="dialog-actions">
+                    <button class="button secondary" type="button" data-dialog-close>Cancel</button>
+                    <button class="button danger" type="submit">Deactivate user</button>
+                  </div>
+                </form>
+              </dialog>
+              {{end}}
+            </div>
+          </div>
+        </details>
+        {{end}}
+      </section>
+    {{end}}
+  </div>
+</main>
+</body>
+</html>{{end}}

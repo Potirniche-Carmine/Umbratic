@@ -129,6 +129,21 @@ function localVeilCommand(): { command: string; args: string[]; cwd?: string } {
   throw new Error("The bundled local Veil runtime is missing. Reinstall Umbratic or switch to Server mode.");
 }
 
+export function parseLocalModelProbeOutput(output: string): string[] {
+  const value = JSON.parse(output) as unknown;
+  if (!Array.isArray(value)) throw new Error("Model discovery returned invalid data.");
+  const models = value
+    .map((item) => (
+      item && typeof item === "object" && !Array.isArray(item) && typeof (item as { id?: unknown }).id === "string"
+        ? (item as { id: string }).id.trim()
+        : ""
+    ))
+    .filter((modelId) => modelId.length > 0 && modelId.length <= 256);
+  return Array.from(new Set(models)).sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }),
+  ).slice(0, 256);
+}
+
 function stopChild(child: ChildProcess | null) {
   if (!child || child.exitCode !== null || child.killed) return;
   stoppingChildren.add(child);
@@ -141,6 +156,89 @@ function stopChild(child: ChildProcess | null) {
     return;
   }
   child.kill();
+}
+
+function probeLocalModelIds(runtimeBaseUrl: string): Promise<string[]> {
+  const baseUrl = runtimeBaseUrl.trim().replace(/\/+$/, "");
+  if (!baseUrl) return Promise.reject(new Error("Enter the local model runtime URL."));
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return Promise.reject(new Error("Runtime URL is invalid."));
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !isLocalhostUrl(baseUrl)) {
+    return Promise.reject(new Error("Local mode only connects to model runtimes on this computer."));
+  }
+
+  const launch = localVeilCommand();
+  const settings: ActiveModelEndpointSettings = {
+    mode: "local",
+    software: "ollama",
+    baseUrl,
+    modelId: "__umbratic_model_probe__",
+    secret: "",
+    headers: [],
+  };
+  const env = localVeilEnvironment(
+    settings,
+    "127.0.0.1:0",
+    crypto.randomBytes(24).toString("base64url"),
+    DEFAULT_CONTEXT_LENGTH,
+    { includeGoToolchain: launch.command === "go" },
+  );
+  env.VEIL_MODEL_TIMEOUT = "5s";
+  env.VEIL_REQUEST_TIMEOUT = "5s";
+
+  return new Promise<string[]>((resolve, reject) => {
+    const child = spawn(launch.command, [...launch.args, "models"], {
+      cwd: launch.cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else {
+        try {
+          resolve(parseLocalModelProbeOutput(stdout));
+        } catch {
+          reject(new Error("Could not read models from the local runtime."));
+        }
+      }
+    };
+    const timer = setTimeout(() => {
+      stopChild(child);
+      finish(new Error("Timed out while checking the local runtime."));
+    }, 8000);
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout = `${stdout}${chunk.toString()}`.slice(0, 1 << 20);
+    });
+    child.stderr?.resume();
+    child.once("error", () => finish(new Error("Could not start local model discovery.")));
+    child.once("exit", (code) => {
+      if (code !== 0) {
+        finish(new Error("Could not read models from the local runtime."));
+        return;
+      }
+      finish();
+    });
+  });
+}
+
+export async function probeLocalModels(
+  runtimeBaseUrl: string,
+): Promise<{ status: "ready"; models: string[] } | { status: "unavailable"; models: [] }> {
+  try {
+    return { status: "ready", models: await probeLocalModelIds(runtimeBaseUrl) };
+  } catch {
+    return { status: "unavailable", models: [] };
+  }
 }
 
 function probeLocalVeil(baseUrl: string, authToken: string, onReady: () => void): () => void {
@@ -210,9 +308,7 @@ export function localVeilEnvironment(
     VEIL_PROVIDER_API_KEY: "",
     VEIL_PROVIDER_BASE_URL: settings.baseUrl.trim().replace(/\/+$/, ""),
     VEIL_PROVIDER_CHAT_PATH: "",
-    VEIL_PROVIDER_ENDPOINT_PATH: "",
     VEIL_PROVIDER_MODELS_PATH: "",
-    VEIL_PROVIDER_MODELS_ENDPOINT_PATH: "",
     VEIL_PROVIDER_PROTOCOL: "ollama",
     VEIL_CONTEXT_LENGTH: String(normalizeContextLength(contextLength)),
     VEIL_TEMPLATE_REGISTRY_PATH: "",

@@ -26,9 +26,21 @@ export type PublicModelEndpointSettings = {
   }>;
 };
 
+export type CompanyConnectionStatus = {
+  state: "not_enrolled" | "enrolled";
+  baseUrl?: string;
+  orgName?: string;
+  deviceLabel?: string;
+};
+
+export type LocalModelProbeResult =
+  | { status: "ready"; models: string[] }
+  | { status: "unavailable"; models: [] };
+
 export type DesktopStartupSettings = {
   permissionMode: PermissionMode;
   modelEndpoint: PublicModelEndpointSettings;
+  companyConnection: CompanyConnectionStatus;
   harnessProfile: HarnessProfileId;
   contextLength: number;
 };
@@ -276,6 +288,7 @@ export type ChatRecord = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  modelEndpointMode?: ModelEndpointMode;
   repositoryName?: string;
   repositoryPath?: string;
   taskId?: string;
@@ -456,8 +469,28 @@ export type DesktopApi = {
     contextLength: number;
     status: BackendStatus;
   }>;
-  getModelEndpointSettings(): Promise<PublicModelEndpointSettings>;
+  getModelEndpointSettings(input?: {
+    mode?: ModelEndpointMode;
+  }): Promise<PublicModelEndpointSettings>;
+  probeLocalModels(input: {
+    baseUrl: string;
+  }): Promise<LocalModelProbeResult>;
   saveModelEndpointSettings(input: PublicModelEndpointSettings): Promise<{
+    settings: PublicModelEndpointSettings;
+    status: BackendStatus;
+  }>;
+  getCompanyConnectionStatus(): Promise<CompanyConnectionStatus>;
+  enrollCompanyConnection(input: {
+    baseUrl: string;
+    enrollmentCode: string;
+    deviceLabel?: string;
+  }): Promise<{
+    connection: CompanyConnectionStatus;
+    settings: PublicModelEndpointSettings;
+    status: BackendStatus;
+  }>;
+  disconnectCompanyConnection(): Promise<{
+    connection: CompanyConnectionStatus;
     settings: PublicModelEndpointSettings;
     status: BackendStatus;
   }>;
@@ -566,7 +599,7 @@ export type DesktopApi = {
   setResponseFeedback(input: {
     taskId: string;
     messageId: string;
-    rating: "good" | "bad";
+    rating: "good" | "bad" | null;
     comment?: string;
   }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
@@ -610,7 +643,11 @@ export const desktopIpcChannels = {
   getContextLength: "umbratic:get-context-length",
   saveContextLength: "umbratic:save-context-length",
   getModelEndpointSettings: "umbratic:get-model-endpoint-settings",
+  probeLocalModels: "umbratic:probe-local-models",
   saveModelEndpointSettings: "umbratic:save-model-endpoint-settings",
+  getCompanyConnectionStatus: "umbratic:get-company-connection-status",
+  enrollCompanyConnection: "umbratic:enroll-company-connection",
+  disconnectCompanyConnection: "umbratic:disconnect-company-connection",
   exportTelemetry: "umbratic:export-telemetry",
   exportLocalDiagnostics: "umbratic:export-local-diagnostics",
   clearLocalDiagnostics: "umbratic:clear-local-diagnostics",

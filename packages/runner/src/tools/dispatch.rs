@@ -1,5 +1,38 @@
 use super::*;
 
+fn tool_finished_event(
+    session: &Session,
+    call: &ToolCall,
+    started_at: &str,
+    started: Instant,
+    result: &ToolResult,
+) -> Value {
+    let finished_at = now_iso();
+    let mut event = json!({
+        "type":"tool.finished",
+        "taskId":session.task_id,
+        "toolCallId":call.id,
+        "exitCode":result.exit_code,
+        "status":result.status,
+        "startedAt":started_at,
+        "finishedAt":finished_at,
+        "durationMs":started.elapsed().as_secs_f64()*1000.0,
+        "at":finished_at,
+    });
+    let fields = event.as_object_mut().expect("tool event is an object");
+    if let Some(code) = &result.error_code {
+        fields.insert("errorCode".into(), Value::String(code.clone()));
+    }
+    if let Some(message) = &result.error_message {
+        let redacted = redact_text(message, 500);
+        fields.insert("errorMessage".into(), Value::String(redacted.clone()));
+        fields.insert("response".into(), Value::String(redacted));
+    } else if result.status != "success" {
+        fields.insert("response".into(), Value::String(result.output.clone()));
+    }
+    event
+}
+
 pub async fn execute_tool(
     session: Arc<Session>,
     sink: EventSink,
@@ -142,17 +175,13 @@ pub async fn execute_tool(
                 sink.emit(json!({"type":"context.compressed","taskId":session.task_id,"toolCallId":call.id,"toolKind":name,"kind":compressed.kind,"strategy":compressed.strategy,"hash":compressed.marker_hash,"originalBytes":compressed.original_bytes,"outputBytes":compressed.output_bytes,"at":now_iso()}));
                 result.output = compressed.output;
             }
-            let failure_response = if result.status == "success" {
-                Value::Null
-            } else {
-                Value::String(
-                    result
-                        .error_message
-                        .clone()
-                        .unwrap_or_else(|| result.output.clone()),
-                )
-            };
-            sink.emit(json!({ "type":"tool.finished", "taskId":session.task_id, "toolCallId":call.id, "exitCode":result.exit_code, "status":result.status, "errorCode":result.error_code, "errorMessage":result.error_message, "response":failure_response, "startedAt":started_at, "finishedAt":now_iso(), "durationMs":started.elapsed().as_secs_f64()*1000.0, "at":now_iso() }));
+            sink.emit(tool_finished_event(
+                &session,
+                &call,
+                &started_at,
+                started,
+                &result,
+            ));
             result
         }
         Err(error) => finish_failure(
@@ -181,8 +210,10 @@ fn finish_failure(
     code: &str,
     message: String,
 ) -> ToolResult {
-    sink.emit(json!({ "type":"tool.finished", "taskId":session.task_id, "toolCallId":call.id, "exitCode":1, "status":status, "errorCode":code, "errorMessage":redact_text(&message,500), "response":message.clone(), "startedAt":started_at, "finishedAt":now_iso(), "durationMs":started.elapsed().as_secs_f64()*1000.0, "at":now_iso() }));
     let mut result = ToolResult::failure(status, code, message);
     result.title = name.to_owned();
+    sink.emit(tool_finished_event(
+        session, call, started_at, started, &result,
+    ));
     result
 }

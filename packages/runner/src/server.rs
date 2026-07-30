@@ -158,6 +158,45 @@ async fn read_json(request: Request) -> Result<Map<String, Value>, Response> {
     read_json_with_limit(request, MAX_JSON_BODY_BYTES).await
 }
 
+async fn provider_session(State(state): State<AppState>, request: Request) -> Response {
+    let body = match read_json_with_limit(request, 8 * 1024).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if body.len() != 1 || !body.contains_key("session") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_provider_session",
+            "Provider session request is invalid.",
+        );
+    }
+    let Some(session) = body.get("session").and_then(Value::as_str).map(str::trim) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_provider_session",
+            "Provider session request is invalid.",
+        );
+    };
+    if !(session.starts_with("umbs_")
+        && (24..=4096).contains(&session.len())
+        && !session.chars().any(char::is_whitespace))
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_provider_session",
+            "Provider session request is invalid.",
+        );
+    }
+    *state
+        .store
+        .config
+        .provider
+        .api_key
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = session.to_owned();
+    StatusCode::NO_CONTENT.into_response()
+}
+
 async fn read_json_with_limit(
     request: Request,
     max_bytes: usize,
@@ -580,6 +619,7 @@ pub async fn listen(hostname: &str, port: u16, password: String) -> Result<Runne
         .route("/event", get(events))
         .route("/diagnostics", get(diagnostics))
         .route("/diagnostics/export", get(diagnostics_export))
+        .route("/provider/session", post(provider_session))
         .route("/session", post(create_session))
         .route("/session/{id}/context", get(session_context))
         .route("/session/{id}/prompt_async", post(prompt))
@@ -642,6 +682,46 @@ mod tests {
         ] {
             assert!(require_loopback(hostname).is_err(), "{hostname}");
         }
+    }
+
+    #[tokio::test]
+    async fn provider_session_is_replaceable_and_rejects_unknown_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            SessionStore::from_config((*crate::session::test_config(directory.path())).clone());
+        let state = AppState {
+            store: store.clone(),
+            password: Arc::from("password"),
+        };
+        let request = Request::builder()
+            .method("POST")
+            .uri("/provider/session")
+            .body(Body::from(
+                r#"{"session":"umbs_abcdefghijklmnopqrstuvwxyz123456"}"#,
+            ))
+            .unwrap();
+        let response = provider_session(State(state.clone()), request).await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            store
+                .config
+                .provider
+                .api_key
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_str(),
+            "umbs_abcdefghijklmnopqrstuvwxyz123456"
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/provider/session")
+            .body(Body::from(
+                r#"{"session":"umbs_abcdefghijklmnopqrstuvwxyz123456","token":"leak"}"#,
+            ))
+            .unwrap();
+        let response = provider_session(State(state), request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

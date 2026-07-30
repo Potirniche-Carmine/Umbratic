@@ -56,7 +56,10 @@ const umbraticApi = {
   saveHarnessProfile: (input: HarnessProfileId) => ipcRenderer.invoke("umbratic:save-harness-profile", input),
   getContextLength: () => ipcRenderer.invoke("umbratic:get-context-length"),
   saveContextLength: (input: number) => ipcRenderer.invoke("umbratic:save-context-length", input),
-  getModelEndpointSettings: () => ipcRenderer.invoke("umbratic:get-model-endpoint-settings"),
+  getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
+    ipcRenderer.invoke("umbratic:get-model-endpoint-settings", input),
+  probeLocalModels: (input: { baseUrl: string }) =>
+    ipcRenderer.invoke("umbratic:probe-local-models", input),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";
     software: "ollama" | "vllm";
@@ -67,6 +70,10 @@ const umbraticApi = {
     headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
   }) =>
     ipcRenderer.invoke("umbratic:save-model-endpoint-settings", input),
+  getCompanyConnectionStatus: () => ipcRenderer.invoke("umbratic:get-company-connection-status"),
+  enrollCompanyConnection: (input: { baseUrl: string; enrollmentCode: string; deviceLabel?: string }) =>
+    ipcRenderer.invoke("umbratic:enroll-company-connection", input),
+  disconnectCompanyConnection: () => ipcRenderer.invoke("umbratic:disconnect-company-connection"),
   exportTelemetry: () => ipcRenderer.invoke("umbratic:export-telemetry"),
   exportLocalDiagnostics: () => ipcRenderer.invoke("umbratic:export-local-diagnostics"),
   clearLocalDiagnostics: () => ipcRenderer.invoke("umbratic:clear-local-diagnostics"),
@@ -113,7 +120,7 @@ const umbraticApi = {
   rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("umbratic:reject-task", input),
   keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:cancel-task", input),
-  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }) =>
+  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" | null; comment?: string }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {

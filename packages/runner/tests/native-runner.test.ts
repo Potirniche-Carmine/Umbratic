@@ -52,14 +52,28 @@ async function startProvider() {
     const encoded = JSON.stringify(body.messages ?? []);
     response.writeHead(200, {
       "Content-Type": "text/event-stream",
-      "X-Umbratic-Action-Required": encoded.includes("WRITE_FILE")
+      "X-Umbratic-Action-Required": encoded.includes("REQUIRED_INSPECTION_RETRY")
+        ? "inspect"
+        : encoded.includes("WRITE_FILE")
         ? "change"
         : encoded.includes("READ_FILE")
           ? "inspect"
           : "",
       "X-Umbratic-Stream-Version": "2",
     });
-    if (encoded.includes("LSP_DEGRADED") && !encoded.includes("freshness")) {
+    if (body.response_mode === "progress") {
+      response.write(sse({ choices: [{ delta: { content: "Reviewing the request " } }] }));
+      setTimeout(() => response.end(sse({ choices: [{ delta: { content: "and relevant context." } }] }) + "data: [DONE]\n\n"), 40);
+    } else if (encoded.includes("REQUIRED_INSPECTION_RETRY") && !encoded.includes("The requested workspace action is not complete")) {
+      response.end(sse({ choices: [{ delta: { content: "I will inspect the codebase now." } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("REQUIRED_INSPECTION_RETRY") && !encoded.includes("read: . (ok)")) {
+      response.end(sse({ choices: [{ delta: {
+        content: "I am inspecting the codebase now.",
+        tool_calls: [{ index: 0, id: "inspection-retry-read", function: { name: "read", arguments: "{\"filePath\":\".\",\"depth\":3}" } }],
+      } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("REQUIRED_INSPECTION_RETRY")) {
+      response.end(sse({ choices: [{ delta: { content: "Inspection complete." } }] }) + "data: [DONE]\n\n");
+    } else if (encoded.includes("LSP_DEGRADED") && !encoded.includes("freshness")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{
         index: 0,
         id: "lsp-degraded-1",
@@ -362,7 +376,7 @@ process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); i
     const session = await createSession(run);
     assert.equal((await prompt(run, session.id, "LSP_CODE_INTELLIGENCE")).status, 204);
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
-    const firstChat = provider.requests.find((request) => request.path === "/api/engineering/chat");
+    const firstChat = provider.requests.find((request) => request.path === "/api/engineering/chat" && request.body.response_mode !== "progress");
     const toolNames = ((firstChat?.body.tools ?? []) as Array<{ function?: { name?: string } }>)
       .map((tool) => tool.function?.name);
     assert.ok(toolNames.includes("lsp"));
@@ -598,7 +612,6 @@ test("native runner rejects a second prompt while a turn is active and scopes ab
   }
 });
 
-
 test("native runner preserves authenticated API, streaming tools, permissions, policy, and diagnostics", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-runner-"));
   fs.writeFileSync(path.join(cwd, "README.md"), "first\nsecond\n", "utf8");
@@ -615,7 +628,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     const readSession = await createSession(run);
     assert.equal((await prompt(run, readSession.id, "READ_FILE")).status, 204);
     const readFinished = await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "read-1");
-    assert.equal(readFinished.status, "success");
+    assert.deepEqual({ status: readFinished.status, unexpected: ["errorCode", "errorMessage", "response"].filter((key) => key in readFinished) }, { status: "success", unexpected: [] });
     const observedUsage = await events.waitFor((event) => event.type === "context.usage" && event.source === "provider");
     assert.deepEqual(
       {
@@ -638,6 +651,26 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       JSON.stringify(events.events).includes("RAW_REASONING_MARKER"),
       false,
       "provider reasoning fields must never become runner events",
+    );
+
+    const inspectionRetrySession = await createSession(run);
+    assert.equal((await prompt(run, inspectionRetrySession.id, "REQUIRED_INSPECTION_RETRY")).status, 204);
+    await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "inspection-retry-read");
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === inspectionRetrySession.id);
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "I will inspect the codebase now."),
+      false,
+      "a tool-free preamble from a required-action attempt must not escape as an answer",
+    );
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.progress.delta" && event.text === "I am inspecting the codebase now."),
+      true,
+      "preamble text from a pass with a real tool call remains visible progress",
+    );
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "Inspection complete."),
+      true,
+      "the answer streams after required inspection evidence exists",
     );
 
     const writeSession = await createSession(run);
@@ -693,30 +726,27 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === utf8Session.id);
 
     const streamingSession = await createSession(run);
+    const streamingEventStart = events.events.length;
     assert.equal((await prompt(run, streamingSession.id, "STREAM_RESPONSE")).status, 204);
-    const firstStreamedAnswer = await events.waitFor(
-      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "First live ",
-    );
-    assert.equal(firstStreamedAnswer.text, "First live ");
-    assert.equal(
-      events.events.some((event) => event.type === "session.idle" && event.sessionId === streamingSession.id),
-      false,
-      "the first answer delta reaches the client before the model stream completes",
-    );
-    const secondStreamedAnswer = await events.waitFor(
-      (event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "second live.",
-    );
-    assert.equal(secondStreamedAnswer.text, "second live.");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === streamingSession.id);
+    const streamedAnswer = events.events.slice(streamingEventStart)
+      .filter((event) => event.type === "assistant.delta").map((event) => event.text);
+    assert.deepEqual(streamedAnswer, ["First streamed ", "second streamed."]);
     assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "First streamed "),
+      events.events.some((event) => event.type === "assistant.delta" && event.text.includes("First live")),
       false,
-      "a non-empty tool-aware answer must not trigger a second tool-free model request",
+      "the buffered tool-aware draft must not be shown as one completed answer",
     );
+    assert.ok(events.events.some((event) =>
+      event.type === "assistant.progress.delta" && event.text === "Reviewing the request "
+    ), "the public work summary streams before the final answer");
     const streamRequests = provider.requests.filter(({ body }) =>
       JSON.stringify(body.messages).includes("STREAM_RESPONSE")
     );
-    assert.equal(streamRequests.length, 1, "no-tool answers make exactly one model request");
+    assert.equal(streamRequests.length, 3, "progress and tool-aware passes precede the streamed final answer");
+    assert.equal(streamRequests[0].body.response_mode, "progress");
+    assert.ok(Array.isArray(streamRequests[1].body.tools));
+    assert.equal("tools" in streamRequests[2].body, false);
 
     const system = await run.request(`/session/${blockedSession.id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: "x", system: "override" }) });
     assert.equal(system.status, 400);
@@ -729,7 +759,12 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(fs.readFileSync(logPath, "utf8").includes("RAW_REASONING_MARKER"), false);
 
     assert.ok(provider.requests.length >= 4);
-    const firstRequest = provider.requests[0];
+    const progressRequest = provider.requests.find(({ body }) => body.response_mode === "progress");
+    assert.ok(progressRequest);
+    assert.equal(progressRequest.body.max_output_tokens, 192);
+    assert.equal("tools" in progressRequest.body, false);
+    const firstRequest = provider.requests.find(({ body }) => body.response_mode !== "progress");
+    assert.ok(firstRequest);
     assert.equal(firstRequest.authorization, "Bearer local");
     assert.match(firstRequest.contentType ?? "", /^application\/json/);
     assert.equal(firstRequest.body.stream, true);
@@ -809,8 +844,10 @@ test("native runner sends the adaptive response allowance selected during prefli
 
     assert.ok([1_000, 2_000, 3_000].includes(Number(preflight.reserveTokens)));
     assert.equal(preflight.protectedTokens, 2_048);
-    assert.equal(provider.requests.length, 1, "no-tool turns make one model request");
-    assert.equal(provider.requests[0].body.max_output_tokens, preflight.reserveTokens);
+    assert.equal(provider.requests.length, 3, "progress, tool-aware, and streamed final requests are separate");
+    const answerRequest = provider.requests.at(-1);
+    assert.ok(answerRequest);
+    assert.equal(answerRequest.body.max_output_tokens, preflight.reserveTokens);
   } finally {
     await events.close();
     await run.close();
@@ -928,8 +965,8 @@ test("native runner accepts an unterminated final SSE line, stops repeated tools
     );
     assert.equal(
       provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL")).length,
-      3,
-      "two repeated tool turns must be followed by exactly one tool-free final request",
+      4,
+      "public progress, two repeated tool turns, and one tool-free final request are required",
     );
 
     const recoveringSession = await createSession(run);

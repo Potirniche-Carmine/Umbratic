@@ -11,12 +11,14 @@ func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("VEIL_ENV_FILE", "testdata/missing.env")
 	t.Setenv("VEIL_AUTH_TOKEN", "token")
+	t.Setenv("VEIL_CONTROL_TOKEN", "")
+	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "")
+	t.Setenv("VEIL_ENTITLEMENT_PATH", "")
+	t.Setenv("VEIL_IDENTITY_STORE_PATH", "")
 	t.Setenv("VEIL_PROVIDER_PROTOCOL", "")
 	t.Setenv("VEIL_PROVIDER_BASE_URL", "http://provider.test")
 	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
-	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
-	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_MODEL", "default-model")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "")
 	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
@@ -60,11 +62,30 @@ func TestLoadRequiresAuthToken(t *testing.T) {
 	}
 }
 
+func TestLoadCompanyModeRequiresSeparateControlAndIdentityFiles(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "true")
+	t.Setenv("VEIL_CONTROL_TOKEN", "control")
+	t.Setenv("VEIL_ENTITLEMENT_PATH", "entitlement.json")
+	t.Setenv("VEIL_IDENTITY_STORE_PATH", "identity.json")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CompanyIdentityMode || cfg.ControlToken != "control" {
+		t.Fatalf("company identity settings were not loaded: %#v", cfg)
+	}
+	t.Setenv("VEIL_CONTROL_TOKEN", "token")
+	if _, err := Load(); err == nil {
+		t.Fatal("shared product and control token was accepted")
+	}
+}
+
 func TestLoadUsesConfiguredModel(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_PROVIDER_PROTOCOL", "ollama")
-	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "/api/chat")
-	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "/api/tags")
+	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "/api/chat")
+	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "/api/tags")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "12s")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "20")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "64000")
@@ -268,9 +289,7 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
-	t.Setenv("VEIL_PROVIDER_ENDPOINT_PATH", "")
 	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
-	t.Setenv("VEIL_PROVIDER_MODELS_ENDPOINT_PATH", "")
 
 	cfg, err := Load()
 	if err != nil {

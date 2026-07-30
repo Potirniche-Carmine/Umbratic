@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 
+import { telemetrySpoolDirectoryPath } from "./appPaths";
 import type { EndpointMtlsConfig } from "./config";
 import { postProviderJson } from "./providerClient";
 import {
@@ -21,7 +21,7 @@ function safeMessage(cause: unknown): string {
 }
 
 export function telemetrySpoolDirectory(userDataPath: string): string {
-  return path.join(userDataPath, "telemetry-spool");
+  return telemetrySpoolDirectoryPath(userDataPath);
 }
 
 export async function uploadTelemetrySpool(input: {

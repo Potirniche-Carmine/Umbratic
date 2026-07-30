@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,14 +14,41 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"umbratic-veil/internal/config"
+	"umbratic-veil/internal/entitlement"
+	"umbratic-veil/internal/identity"
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
+	"umbratic-veil/internal/prompts"
 )
+
+func signedTestEntitlement(t *testing.T, path string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := entitlement.Payload{
+		Version: 1, OrgUID: "org_httpintegration",
+		MaxAuthorizedUsers: 1, MaxDevicesPerUser: 2,
+	}
+	canonical, _ := json.Marshal(payload)
+	document, _ := json.Marshal(entitlement.Document{
+		Payload:   payload,
+		Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, canonical)),
+	})
+	if err := os.WriteFile(path, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := entitlement.TrustedPublicKey
+	entitlement.TrustedPublicKey = base64.RawURLEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() { entitlement.TrustedPublicKey = previous })
+}
 
 type fakeModelClient struct {
 	req               model.ChatRequest
@@ -107,6 +137,96 @@ func testConfig() config.Config {
 		RequestTimeout:         time.Second,
 		MaxBodyBytes:           1 << 20,
 		MaxOutputTokens:        4096,
+	}
+}
+
+func TestCompanyModeRequiresDeviceSessionAndTracksProductUse(t *testing.T) {
+	dir := t.TempDir()
+	entitlementPath := filepath.Join(dir, "entitlement.json")
+	signedTestEntitlement(t, entitlementPath)
+	cfg := testConfig()
+	cfg.CompanyIdentityMode = true
+	cfg.ControlToken = "control-token"
+	cfg.EntitlementPath = entitlementPath
+	cfg.IdentityStorePath = filepath.Join(dir, "identity.json")
+	server := NewServer(cfg, &fakeModelClient{})
+
+	request := func(method, path, token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	created := request(http.MethodPost, "/api/control/users", cfg.ControlToken, `{"label":"Alice"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create user: %d %s", created.Code, created.Body.String())
+	}
+	organization := request(http.MethodPost, "/api/control/organization", cfg.ControlToken, `{"name":"Northwind"}`)
+	if organization.Code != http.StatusOK {
+		t.Fatalf("update organization: %d %s", organization.Code, organization.Body.String())
+	}
+	var user identity.User
+	if err := json.Unmarshal(created.Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	issued := request(http.MethodPost, "/api/control/users/"+user.UID+"/enrollment-codes", cfg.ControlToken, `{}`)
+	var code identity.CodeResult
+	if issued.Code != http.StatusCreated || json.Unmarshal(issued.Body.Bytes(), &code) != nil {
+		t.Fatalf("issue code: %d %s", issued.Code, issued.Body.String())
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollmentBody, _ := json.Marshal(map[string]string{
+		"enrollment_code": code.EnrollmentCode,
+		"public_key":      base64.RawURLEncoding.EncodeToString(publicKey),
+		"device_label":    "Work laptop",
+	})
+	enrolled := request(http.MethodPost, "/api/enrollment/enroll", "", string(enrollmentBody))
+	var enrollment identity.EnrollmentResult
+	if enrolled.Code != http.StatusCreated || json.Unmarshal(enrolled.Body.Bytes(), &enrollment) != nil {
+		t.Fatalf("enroll: %d %s", enrolled.Code, enrolled.Body.String())
+	}
+	if enrollment.OrgName != "Northwind" || !strings.HasPrefix(code.EnrollmentCode, "umbr_") {
+		t.Fatalf("enrollment metadata is wrong: %#v %q", enrollment, code.EnrollmentCode)
+	}
+	challengeResponse := request(http.MethodPost, "/api/session/challenge", "", `{"device_uid":"`+enrollment.DeviceUID+`"}`)
+	var challenge identity.ChallengeResult
+	if challengeResponse.Code != http.StatusCreated || json.Unmarshal(challengeResponse.Body.Bytes(), &challenge) != nil {
+		t.Fatalf("challenge: %d %s", challengeResponse.Code, challengeResponse.Body.String())
+	}
+	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(challenge.Challenge)))
+	sessionResponse := request(http.MethodPost, "/api/session", "", `{"challenge_uid":"`+challenge.ChallengeUID+`","signature":"`+signature+`"}`)
+	var session identity.SessionResult
+	if sessionResponse.Code != http.StatusCreated || json.Unmarshal(sessionResponse.Body.Bytes(), &session) != nil {
+		t.Fatalf("session: %d %s", sessionResponse.Code, sessionResponse.Body.String())
+	}
+	if session.OrgName != "Northwind" {
+		t.Fatalf("session did not include the organization name: %#v", session)
+	}
+
+	if response := request(http.MethodPost, "/api/engineering/chat", cfg.AuthToken, `{"input":"hello"}`); response.Code != http.StatusUnauthorized {
+		t.Fatalf("internal token bypassed company access: %d %s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/api/health", session.Token, ""); response.Code != http.StatusOK {
+		t.Fatalf("session health failed: %d %s", response.Code, response.Body.String())
+	}
+	snapshotResponse := request(http.MethodGet, "/api/control/access", cfg.ControlToken, "")
+	var snapshot identity.Snapshot
+	if json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil || snapshot.Users[0].LastSeenAt != nil {
+		t.Fatal("health or Console snapshot changed Last seen")
+	}
+	if response := request(http.MethodPost, "/api/engineering/chat", session.Token, `{"input":"hello"}`); response.Code != http.StatusOK {
+		t.Fatalf("session chat failed: %d %s", response.Code, response.Body.String())
+	}
+	snapshotResponse = request(http.MethodGet, "/api/control/access", cfg.ControlToken, "")
+	if json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil || snapshot.Users[0].LastSeenAt == nil {
+		t.Fatal("successful product request did not update Last seen")
 	}
 }
 
@@ -310,6 +430,36 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestChatProgressModeUsesProtectedSummaryPromptAndNoActionHeader(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"Review my codebase for vulnerabilities","response_mode":"progress","max_output_tokens":2048}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get(actionRequiredHeader); got != "" {
+		t.Fatalf("progress request must not require workspace evidence: %q", got)
+	}
+	if modelClient.req.MaxOutputTokens != 192 {
+		t.Fatalf("progress allowance was not bounded: %d", modelClient.req.MaxOutputTokens)
+	}
+	found := false
+	for _, message := range modelClient.req.Messages {
+		if message.Content == prompts.PublicProgressSystemPrompt {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("protected progress prompt was not added: %#v", modelClient.req.Messages)
+	}
+}
+
 func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
 	tests := []struct {
 		path    string
@@ -320,6 +470,7 @@ func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
 		{"/api/engineering/chat", "write me bubble sort algorithm in python and verify that it runs", policy.ActionChangeAndExecute},
 		{"/api/engineering/chat", "can you write me a markdown with suggestions to improve it", policy.ActionChange},
 		{"/api/engineering/chat", "I want you to look at each file and describe exactly what each is", policy.ActionInspect},
+		{"/api/engineering/chat", "Review my codebase for security bugs that attackers could exploit", policy.ActionInspect},
 		{"/api/marketing/chat", "Create a launch brief file", policy.ActionChange},
 		{"/api/sales/chat", "Create a QBR deck", policy.ActionChange},
 	}

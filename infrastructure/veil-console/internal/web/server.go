@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"umbratic-veil-console/internal/access"
 	"umbratic-veil-console/internal/auth"
 	"umbratic-veil-console/internal/config"
 	"umbratic-veil-console/internal/state"
@@ -35,6 +36,7 @@ type Server struct {
 	secretsMu    sync.RWMutex
 	secrets      state.Secrets
 	supervisor   *supervisor.Supervisor
+	access       *access.Client
 	templates    *template.Template
 	throttle     *loginThrottle
 	crossOrigin  *http.CrossOriginProtection
@@ -45,23 +47,30 @@ type Server struct {
 const restartCooldown = 5 * time.Second
 
 type pageData struct {
-	Title         string
-	CSRF          string
-	Error         string
-	Notice        string
-	Username      string
-	Setup         bool
-	Configured    bool
-	Status        string
-	Config        config.Veil
-	Token         string
-	BodySizeIndex int
-	BodySizeLabel string
-	ContextIndex  int
-	ContextLabel  string
-	PasswordError bool
-	Running       bool
-	Healthy       bool
+	Title             string
+	CSRF              string
+	Error             string
+	Notice            string
+	Username          string
+	Setup             bool
+	Configured        bool
+	Status            string
+	Config            config.Veil
+	Token             string
+	BodySizeIndex     int
+	BodySizeLabel     string
+	ContextIndex      int
+	ContextLabel      string
+	PasswordError     bool
+	Running           bool
+	Healthy           bool
+	VeilURL           string
+	EnterpriseEnabled bool
+	Access            accessView
+	Models            []string
+	EnrollmentCode    string
+	EnrollmentExpires string
+	RetryAfterSeconds int
 }
 
 type contextKey int
@@ -98,6 +107,7 @@ func New(startup config.Startup, store *state.Store, secrets state.Secrets, proc
 	}))
 	return &Server{
 		startup: startup, store: store, secrets: secrets, supervisor: process,
+		access:    access.NewClient(startup.VeilAddress, secrets.ControlToken),
 		templates: templates, throttle: newLoginThrottle(), crossOrigin: crossOrigin,
 	}, nil
 }
@@ -106,6 +116,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /assets/style.css", s.style)
+	mux.HandleFunc("GET /assets/access.css", s.accessStyle)
+	mux.HandleFunc("GET /assets/settings.css", s.settingsStyle)
 	mux.HandleFunc("GET /assets/console.js", s.script)
 	mux.HandleFunc("GET /assets/umbratic-icon.png", s.logo)
 	mux.HandleFunc("GET /favicon.ico", s.favicon)
@@ -122,7 +134,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /veil/start", s.requireSession(http.HandlerFunc(s.veilStart)))
 	mux.Handle("POST /veil/stop", s.requireSession(http.HandlerFunc(s.veilStop)))
 	mux.Handle("POST /veil/restart", s.requireSession(http.HandlerFunc(s.veilRestart)))
-	mux.Handle("POST /token/rotate", s.requireSession(http.HandlerFunc(s.tokenRotate)))
+	mux.Handle("GET /access", s.requireSession(http.HandlerFunc(s.accessPage)))
+	mux.Handle("POST /access/organization", s.requireSession(http.HandlerFunc(s.accessOrganization)))
+	mux.Handle("POST /access/users", s.requireSession(http.HandlerFunc(s.accessCreateUser)))
+	mux.Handle("POST /access/users/{user_uid}/deactivate", s.requireSession(http.HandlerFunc(s.accessDeactivateUser)))
+	mux.Handle("POST /access/users/{user_uid}/reactivate", s.requireSession(http.HandlerFunc(s.accessReactivateUser)))
+	mux.Handle("POST /access/users/{user_uid}/enrollment-codes", s.requireSession(http.HandlerFunc(s.accessIssueCode)))
+	mux.Handle("POST /access/enrollment-codes/{code_uid}/revoke", s.requireSession(http.HandlerFunc(s.accessRevokeCode)))
+	mux.Handle("POST /access/devices/{device_uid}/revoke", s.requireSession(http.HandlerFunc(s.accessRevokeDevice)))
 	mux.HandleFunc("/", s.redirectHome)
 	return s.securityHeaders(s.validateHost(s.crossOrigin.Handler(mux)))
 }
@@ -133,7 +152,8 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
-		if r.URL.Path != "/healthz" && r.URL.Path != "/assets/style.css" {
+		if r.URL.Path != "/healthz" && r.URL.Path != "/assets/style.css" &&
+			r.URL.Path != "/assets/access.css" && r.URL.Path != "/assets/settings.css" {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
@@ -292,15 +312,23 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	usernameKey := "username|" + username
 	sourceKey := "source|" + remoteIP(r.RemoteAddr)
 	if wait := max(s.throttle.Wait(usernameKey, time.Now()), s.throttle.Wait(sourceKey, time.Now())); wait > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-		s.renderStatus(w, "login.html", http.StatusTooManyRequests, pageData{Title: "Sign in", CSRF: r.FormValue("csrf"), Error: "Sign in failed. Try again later."})
+		seconds := retryAfterSeconds(wait)
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.renderStatus(w, "login.html", http.StatusTooManyRequests, pageData{
+			Title: "Sign in", CSRF: r.FormValue("csrf"), Error: "Sign in failed. Try again later.", RetryAfterSeconds: seconds,
+		})
 		return
 	}
 	if !s.store.VerifyOwner(r.Context(), username, r.FormValue("password")) {
-		s.throttle.Failed(usernameKey, time.Now())
-		s.throttle.Failed(sourceKey, time.Now())
+		now := time.Now()
+		s.throttle.Failed(usernameKey, now)
+		s.throttle.Failed(sourceKey, now)
+		seconds := retryAfterSeconds(max(s.throttle.Wait(usernameKey, now), s.throttle.Wait(sourceKey, now)))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 		s.store.Audit(r.Context(), "login", "failure", time.Now())
-		s.renderStatus(w, "login.html", http.StatusUnauthorized, pageData{Title: "Sign in", CSRF: r.FormValue("csrf"), Error: "Username or password is incorrect."})
+		s.renderStatus(w, "login.html", http.StatusUnauthorized, pageData{
+			Title: "Sign in", CSRF: r.FormValue("csrf"), Error: "Username or password is incorrect.", RetryAfterSeconds: seconds,
+		})
 		return
 	}
 	s.throttle.Success(usernameKey)
@@ -345,7 +373,8 @@ func (s *Server) dashboardData(r *http.Request, errorMessage, noticeMessage stri
 	return pageData{
 		Title: "Veil Console", CSRF: csrfCookie(r), Username: session.Data.Username,
 		Configured: configured, Status: processStatus.String(), Running: processStatus.Running, Healthy: processStatus.Healthy,
-		Error: errorMessage, Notice: noticeMessage,
+		VeilURL: "http://" + s.startup.VeilAddress,
+		Error:   errorMessage, Notice: noticeMessage,
 	}
 }
 
@@ -367,7 +396,7 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) settingsData(r *http.Request, cfg config.Veil, errorMessage, noticeMessage string) pageData {
 	return pageData{
 		Title: "Settings", CSRF: csrfCookie(r), Config: cfg,
-		Error: errorMessage, Notice: noticeMessage,
+		Error: errorMessage, Notice: noticeMessage, Models: settingsModels(r.Context(), cfg),
 	}
 }
 
@@ -436,7 +465,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	if exists {
 		previousPointer = &previous
 	}
-	if err := s.supervisor.Apply(r.Context(), cfg, previousPointer, secrets.VeilToken); err != nil {
+	if err := s.supervisor.Apply(r.Context(), cfg, previousPointer, secrets.ControlToken); err != nil {
 		_ = s.store.DiscardPending(r.Context())
 		s.store.Audit(r.Context(), "settings.apply", "failure", time.Now())
 		s.renderStatus(w, "settings.html", statusFor(err), s.settingsData(r, cfg, err.Error(), ""))
@@ -445,7 +474,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	err = s.store.PromotePending(r.Context(), time.Now())
 	if err != nil {
 		if exists {
-			_ = s.supervisor.Restart(context.Background(), previous, secrets.VeilToken)
+			_ = s.supervisor.Restart(context.Background(), previous, secrets.ControlToken)
 		} else {
 			_ = s.supervisor.Stop(context.Background())
 		}
@@ -459,11 +488,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
-	if !exists {
-		s.render(w, "token.html", pageData{Title: "Veil client token", Token: secrets.VeilToken})
-		return
-	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/access", http.StatusSeeOther)
 }
 
 func (s *Server) veilStart(w http.ResponseWriter, r *http.Request) {
@@ -480,7 +505,7 @@ func (s *Server) veilStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secrets := s.currentSecrets()
-	err = s.supervisor.Start(r.Context(), cfg, secrets.VeilToken)
+	err = s.supervisor.Start(r.Context(), cfg, secrets.ControlToken)
 	s.actionResult(w, r, err, "veil.start")
 }
 
@@ -512,49 +537,9 @@ func (s *Server) veilRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secrets := s.currentSecrets()
-	err = s.supervisor.Restart(r.Context(), cfg, secrets.VeilToken)
+	err = s.supervisor.Restart(r.Context(), cfg, secrets.ControlToken)
 	s.markRestart(time.Now())
 	s.actionResult(w, r, err, "veil.restart")
-}
-
-func (s *Server) tokenRotate(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmDashboardPassword(w, r) {
-		return
-	}
-	newToken, _, err := auth.NewToken()
-	if err != nil {
-		s.renderStatus(w, "dashboard.html", http.StatusInternalServerError, s.dashboardData(r, "Token rotation failed.", ""))
-		return
-	}
-	secrets := s.currentSecrets()
-	oldToken := secrets.VeilToken
-	cfg, configured, err := s.store.Configuration(r.Context(), "current")
-	if err != nil {
-		s.renderStatus(w, "dashboard.html", http.StatusInternalServerError, s.dashboardData(r, "The active configuration could not be read.", ""))
-		return
-	}
-	wasRunning := configured && s.supervisor.Status().Running
-	err = s.supervisor.RunExclusive(func() error {
-		secrets.VeilToken = newToken
-		if saveErr := s.saveSecrets(secrets); saveErr != nil {
-			return saveErr
-		}
-		if wasRunning {
-			if restartErr := s.supervisor.RestartExclusive(r.Context(), cfg, newToken); restartErr != nil {
-				secrets.VeilToken = oldToken
-				_ = s.saveSecrets(secrets)
-				_ = s.supervisor.RestartExclusive(context.Background(), cfg, oldToken)
-				return restartErr
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		s.renderStatus(w, "dashboard.html", statusFor(err), s.dashboardData(r, "Token rotation failed.", ""))
-		return
-	}
-	s.store.Audit(r.Context(), "token.rotate", "success", time.Now())
-	s.render(w, "token.html", pageData{Title: "New Veil token", Token: newToken})
 }
 
 func (s *Server) actionResult(w http.ResponseWriter, r *http.Request, err error, event string) {
@@ -772,6 +757,28 @@ func (s *Server) style(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(payload)
 }
 
+func (s *Server) accessStyle(w http.ResponseWriter, _ *http.Request) {
+	payload, err := content.ReadFile("assets/access.css")
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(payload)
+}
+
+func (s *Server) settingsStyle(w http.ResponseWriter, _ *http.Request) {
+	payload, err := content.ReadFile("assets/settings.css")
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(payload)
+}
+
 func (s *Server) script(w http.ResponseWriter, _ *http.Request) {
 	payload, err := content.ReadFile("assets/console.js")
 	if err != nil {
@@ -863,7 +870,7 @@ func (t *loginThrottle) Failed(key string, now time.Time) {
 	defer t.mu.Unlock()
 	value := t.attempts[key]
 	value.failures++
-	delay := time.Duration(1<<min(value.failures-1, 6)) * time.Second
+	delay := 2 * time.Second
 	value.next = now.Add(delay)
 	t.attempts[key] = value
 	if len(t.attempts) > 2048 {
@@ -876,6 +883,10 @@ func (t *loginThrottle) Failed(key string, now time.Time) {
 			}
 		}
 	}
+}
+
+func retryAfterSeconds(wait time.Duration) int {
+	return max(1, int((wait+time.Second-1)/time.Second))
 }
 
 func (t *loginThrottle) Success(key string) {
@@ -894,7 +905,7 @@ func (s *Server) StartLastKnownGood(ctx context.Context) {
 		return
 	}
 	secrets := s.currentSecrets()
-	if err := s.supervisor.Start(ctx, cfg, secrets.VeilToken); err != nil {
+	if err := s.supervisor.Start(ctx, cfg, secrets.ControlToken); err != nil {
 		log.Printf("Veil did not start from the last known-good configuration")
 	}
 }

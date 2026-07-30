@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
+import { app } from "electron";
 
+import { skillsDirectory } from "./appPaths";
 import { readSkillSettings, writeSkillSettings } from "./storage";
 import type { HarnessProfileId } from "./types";
 import { pathInside } from "./utils";
@@ -66,18 +68,6 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
   { id: "umbratic-documents" },
   { id: "umbratic-spreadsheets" },
 ];
-
-const retiredSystemSkillIds = [
-  "umbratic-engineering",
-  "umbratic-sales",
-  "umbratic-marketing",
-  "umbratic-cmake",
-  "umbratic-ocr",
-];
-
-const legacyBundledSystemSkillFiles: Partial<Record<string, string[]>> = {
-  "umbratic-pdf": ["umbratic-pdf-v1.md"],
-};
 
 const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
   engineering: new Set([
@@ -234,7 +224,7 @@ export function parseSkillFrontmatter(content: string): { name?: string; descrip
 }
 
 export function skillsDirectoryPath(): string {
-  return path.join(os.homedir(), ".umbratic", "skills");
+  return skillsDirectory(app.getPath("userData"));
 }
 
 export function isValidSkillId(value: string): boolean {
@@ -280,18 +270,6 @@ function bundledSystemSkillContent(id: string): string {
   return content;
 }
 
-function migrateLegacyBundledSystemSkill(skill: SystemSkillDefinition, skillFile: string) {
-  const current = readTextFileIfSafe(skillFile);
-  if (current === null) return;
-  const normalizedCurrent = current.replace(/\r\n/g, "\n");
-  const legacyFiles = legacyBundledSystemSkillFiles[skill.id] ?? [];
-  const matchesLegacyDefault = legacyFiles.some((fileName) => {
-    const legacy = readTextFileIfSafe(path.join(bundledSystemSkillsDirectory(), ".legacy", fileName));
-    return legacy !== null && legacy.replace(/\r\n/g, "\n") === normalizedCurrent;
-  });
-  if (matchesLegacyDefault) fs.writeFileSync(skillFile, bundledSystemSkillContent(skill.id), "utf8");
-}
-
 function systemSkillById(id: string): SystemSkillDefinition | undefined {
   return systemSkillDefinitions.find((skill) => skill.id === id);
 }
@@ -300,31 +278,17 @@ function isReservedSkillId(id: string): boolean {
   return id === "system" || systemSkillDefinitions.some((skill) => skill.id === id);
 }
 
-function cleanupObsoleteSkillPaths(directory: string) {
-  fs.rmSync(path.join(directory, ".defaults"), { recursive: true, force: true });
-  const systemRoot = systemSkillsDirectory(directory);
-  for (const id of retiredSystemSkillIds) {
-    fs.rmSync(path.join(directory, `${id}.md`), { force: true });
-    fs.rmSync(path.join(systemRoot, id), { recursive: true, force: true });
-  }
-}
-
 function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {
   const root = path.resolve(directory);
   fs.mkdirSync(systemSkillsDirectory(root), { recursive: true });
   for (const skill of systemSkillDefinitions) {
     const skillDir = systemSkillDirectory(skill, root);
     const skillFile = systemSkillFilePath(skill, root);
-    const previousRootFile = path.join(root, `${skill.id}.md`);
     fs.mkdirSync(skillDir, { recursive: true });
     if (!fs.existsSync(skillFile)) {
-      const previousContent = readTextFileIfSafe(previousRootFile);
-      fs.writeFileSync(skillFile, previousContent ?? bundledSystemSkillContent(skill.id), "utf8");
+      fs.writeFileSync(skillFile, bundledSystemSkillContent(skill.id), "utf8");
     }
-    migrateLegacyBundledSystemSkill(skill, skillFile);
-    fs.rmSync(previousRootFile, { force: true });
   }
-  cleanupObsoleteSkillPaths(root);
 }
 
 export function installBundledSystemSkills(directory = skillsDirectoryPath()): string {

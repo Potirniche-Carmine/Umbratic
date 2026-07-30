@@ -9,6 +9,7 @@ const titleStopWords = new Set([
   "be",
   "can",
   "could",
+  "do",
   "does",
   "each",
   "every",
@@ -30,6 +31,7 @@ const titleStopWords = new Set([
   "on",
   "please",
   "should",
+  "some",
   "specific",
   "tell",
   "that",
@@ -58,10 +60,14 @@ export function chatTitleFromFirstMessage(prompt: string): string {
     .replace(/\s+/g, " ")
     .trim();
   const words = text.match(/[A-Za-z0-9][A-Za-z0-9'_-]*/g) ?? [];
-  const summaryWords = words
+  const firstMeaningfulWord = words.findIndex(
+    (word) => !titleStopWords.has(word.toLowerCase().replace(/'s$/, "")),
+  );
+  const titleWords = firstMeaningfulWord > 0 ? words.slice(firstMeaningfulWord) : words;
+  const summaryWords = titleWords
     .filter((word) => !titleStopWords.has(word.toLowerCase().replace(/'s$/, "")))
     .slice(0, 3);
-  const selectedWords = summaryWords.length >= 2 ? summaryWords : words.slice(0, 3);
+  const selectedWords = summaryWords.length >= 2 ? summaryWords : titleWords.slice(0, 3);
   const title = selectedWords.map(titleWord).join(" ");
   return title ? title.slice(0, 72) : "New chat";
 }

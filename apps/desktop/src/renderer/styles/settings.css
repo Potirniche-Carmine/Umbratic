@@ -479,7 +479,7 @@
   gap: 6px;
 }
 
-.settingsField span {
+.settingsField > span {
   color: var(--faint);
   font-size: 11px;
   font-weight: 700;
@@ -505,6 +505,166 @@
 .settingsField select:disabled {
   cursor: not-allowed;
   opacity: 0.62;
+}
+
+.modelPicker {
+  position: relative;
+  min-width: 0;
+}
+
+.modelPicker.isOpen {
+  z-index: 12;
+}
+
+.modelPickerTrigger {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px 0 11px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 7px;
+  outline: 0;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-3) 26%, transparent), transparent),
+    color-mix(in srgb, var(--surface-2) 72%, transparent);
+  box-shadow: inset 0 1px color-mix(in srgb, white 4%, transparent);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.modelPickerTrigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelPickerTrigger .isPlaceholder {
+  color: var(--faint);
+}
+
+.modelPickerTrigger svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1), color 120ms ease;
+}
+
+.modelPickerTrigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--line) 58%, var(--text));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-3) 42%, transparent), transparent),
+    color-mix(in srgb, var(--surface-2) 78%, transparent);
+}
+
+.modelPickerTrigger:focus-visible,
+.modelPicker.isOpen .modelPickerTrigger {
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.modelPickerTrigger:active:not(:disabled) {
+  transform: scale(0.995);
+}
+
+.modelPicker.isOpen .modelPickerTrigger svg {
+  color: var(--muted);
+  transform: rotate(180deg);
+}
+
+.modelPickerTrigger:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.modelPickerMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 190px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 90%, transparent);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.26),
+    0 2px 8px rgba(0, 0, 0, 0.14),
+    inset 0 1px color-mix(in srgb, white 7%, transparent);
+  backdrop-filter: blur(18px) saturate(135%);
+  transform-origin: top center;
+  animation: modelPickerMenuIn 150ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+.modelPickerOption {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 6px 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.modelPickerOption > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelPickerOption:hover,
+.modelPickerOption.isFocused {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+.modelPickerOption[aria-selected="true"] {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.modelPickerOption svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+@keyframes modelPickerMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modelPickerMenu {
+    animation: none;
+  }
+
+  .modelPickerTrigger svg {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .modelPickerMenu {
+    background: var(--surface-2);
+    backdrop-filter: none;
+  }
 }
 
 .appearanceOptionGrid {
@@ -587,6 +747,95 @@
   display: flex;
   flex-direction: column;
   gap: 9px;
+}
+
+.companyEnrollmentStatus {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  box-shadow: inset 0 1px color-mix(in srgb, white 5%, transparent);
+}
+
+.companyEnrollmentIdentity {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.companyEnrollmentActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primaryAction.companyServerConnectAction {
+  min-height: 32px;
+  padding-inline: 14px;
+  color: color-mix(in srgb, var(--text) 94%, var(--green));
+  border: 1px solid color-mix(in srgb, var(--green) 24%, var(--line-strong));
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--green) 16%, var(--control-hover)),
+      color-mix(in srgb, var(--green) 10%, var(--control-bg)));
+  box-shadow:
+    inset 0 1px color-mix(in srgb, white 7%, transparent),
+    0 3px 10px color-mix(in srgb, var(--green) 9%, transparent);
+  cursor: pointer;
+  transition: transform 100ms ease-out, border-color 140ms ease, background 140ms ease;
+}
+
+.primaryAction.companyServerConnectAction:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line-strong));
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--green) 20%, var(--control-hover)),
+      color-mix(in srgb, var(--green) 13%, var(--control-bg)));
+}
+
+.primaryAction.companyServerConnectAction:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.companyServerUnregisterAction {
+  color: color-mix(in srgb, var(--red) 66%, var(--text));
+  border-color: color-mix(in srgb, var(--red) 24%, var(--line));
+}
+
+.companyServerUnregisterAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 10%, var(--control-hover));
+}
+
+.unregisterCompanyDialog {
+  grid-template-columns: 22px minmax(0, 1fr);
+  width: min(460px, calc(100vw - 48px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primaryAction.companyServerConnectAction {
+    transition: none;
+  }
+}
+
+.companyEnrollmentStatus strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.companyEnrollmentStatus span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolName {

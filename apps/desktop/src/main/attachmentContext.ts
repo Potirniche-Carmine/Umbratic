@@ -39,31 +39,3 @@ export function priorChatAttachments(
   }
   return files;
 }
-
-function normalizedReviewPath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
-}
-
-/**
- * Returns only the exact paths that older project-less chats copied into their
- * scratch workspace. Real repository tasks always return an empty exclusion so
- * a user file with the same path remains reviewable.
- */
-export function materializedChatAttachmentReviewPaths(
-  events: readonly BackendUiEvent[],
-  hiddenChat: boolean,
-): Set<string> {
-  const paths = new Set<string>();
-  if (!hiddenChat) return paths;
-  for (const event of events) {
-    if (event.type !== "user.message") continue;
-    for (const file of event.attachedFiles ?? []) {
-      if (file.source !== "chat" || !file.storedPath) continue;
-      const relative = normalizedReviewPath(file.path);
-      if (relative.startsWith("attachments/") && relative.length > "attachments/".length) {
-        paths.add(relative);
-      }
-    }
-  }
-  return paths;
-}

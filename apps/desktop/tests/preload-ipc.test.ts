@@ -65,8 +65,12 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],
     ["getContextLength", [], "umbratic:get-context-length", undefined],
     ["saveContextLength", [64000], "umbratic:save-context-length"],
-    ["getModelEndpointSettings", [], "umbratic:get-model-endpoint-settings", undefined],
+    ["getModelEndpointSettings", [{ mode: "local" }], "umbratic:get-model-endpoint-settings"],
+    ["probeLocalModels", [{ baseUrl: "http://127.0.0.1:11434" }], "umbratic:probe-local-models"],
     ["saveModelEndpointSettings", [{ mode: "local", software: "ollama", baseUrl: "http://127.0.0.1:8080", modelId: "veil-managed", secret: "", headers: [] }], "umbratic:save-model-endpoint-settings"],
+    ["getCompanyConnectionStatus", [], "umbratic:get-company-connection-status", undefined],
+    ["enrollCompanyConnection", [{ baseUrl: "https://veil.example.com", enrollmentCode: "umbr_code" }], "umbratic:enroll-company-connection"],
+    ["disconnectCompanyConnection", [], "umbratic:disconnect-company-connection", undefined],
     ["exportTelemetry", [], "umbratic:export-telemetry", undefined],
     ["exportLocalDiagnostics", [], "umbratic:export-local-diagnostics", undefined],
     ["clearLocalDiagnostics", [], "umbratic:clear-local-diagnostics", undefined],
@@ -93,6 +97,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["keepWorktree", [{ taskId: "task-1" }], "umbratic:keep-worktree"],
     ["cancelTask", [{ taskId: "task-1" }], "umbratic:cancel-task"],
     ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good", comment: "Useful." }], "umbratic:set-response-feedback"],
+    ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: null }], "umbratic:set-response-feedback"],
     ["setWindowChromeTheme", ["dark"], "umbratic:set-window-chrome-theme"],
   ];
 

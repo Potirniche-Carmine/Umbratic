@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const configUrl = new URL("../electron-builder.yml", import.meta.url);
 const preparePackageUrl = new URL("../scripts/prepare-package.ts", import.meta.url);
+const installerIncludeUrl = new URL("../scripts/installer.nsh", import.meta.url);
 const packageWorkflowUrl = new URL("../../../.github/workflows/package-desktop.yml", import.meta.url);
 const verifyWorkflowUrl = new URL("../../../.github/workflows/verify.yml", import.meta.url);
 
@@ -65,6 +66,16 @@ test("desktop packaging jobs install Go and Rust before building native services
   assert.ok(packageJob.search(/uses: actions\/setup-go@[0-9a-f]{40}/) < packageJob.indexOf("npm --workspace @umbratic/desktop run package"));
   assert.ok(packageJob.indexOf("rustup toolchain install 1.96.0") < packageJob.indexOf("npm --workspace @umbratic\/desktop run package"));
   assert.ok(packageJob.indexOf("npm --workspace @umbratic/desktop run package") < packageJob.indexOf("npm --workspace @umbratic/desktop run verify:package"));
+});
+
+test("the Windows uninstaller offers an explicit local-data removal option", () => {
+  const config = fs.readFileSync(configUrl, "utf8");
+  const include = fs.readFileSync(installerIncludeUrl, "utf8");
+
+  assert.match(config, /^  include: scripts\/installer\.nsh$/m);
+  assert.match(include, /Remove all local Umbratic data/);
+  assert.match(include, /RMDir \/r "\$LOCALAPPDATA\\Umbratic"/);
+  assert.match(include, /\$\{NSD_Uncheck\}/);
 });
 
 test("desktop packaging runs only for version tags", () => {

@@ -85,12 +85,18 @@ test("diagnostics preserve numeric token counts without exposing authentication 
   assert.deepEqual(plain(diagnostics.sanitizeDiagnosticValue({
     authToken: "secret-value",
     apiToken: "another-secret",
+    enrollmentCode: "umbe-secret",
+    privateKeyPkcs8: "private-key",
+    session: "umbs-secret",
     contextTokens: 8659,
     maxOutputTokens: 1024,
     promptTokens: "untrusted-string",
   })), {
     authToken: "[redacted]",
     apiToken: "[redacted]",
+    enrollmentCode: "[redacted]",
+    privateKeyPkcs8: "[redacted]",
+    session: "[redacted]",
     contextTokens: 8659,
     maxOutputTokens: 1024,
     promptTokens: "[redacted]",

@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, env, io::Read, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    env,
+    io::Read,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -22,7 +28,7 @@ const MAX_RUNNER_CONFIG_BYTES: usize = 2 * 1024 * 1024;
 #[serde(rename_all = "lowercase")]
 pub enum PermissionMode {
     Normal,
-    #[serde(rename = "auto_safe", alias = "bypass")]
+    #[serde(rename = "auto_safe")]
     AutoSafe,
 }
 
@@ -61,7 +67,7 @@ pub struct ProviderConfig {
     pub name: String,
     pub base_url: String,
     pub chat_endpoint_path: Option<String>,
-    pub api_key: String,
+    pub api_key: Arc<RwLock<String>>,
     pub model_id: String,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
@@ -464,11 +470,13 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .trim_end_matches('/')
             .to_owned(),
         chat_endpoint_path: optional_string(provider_object.get("chatEndpointPath")),
-        api_key: provider_object
-            .get("apiKey")
-            .and_then(Value::as_str)
-            .unwrap_or("local")
-            .to_owned(),
+        api_key: Arc::new(RwLock::new(
+            provider_object
+                .get("apiKey")
+                .and_then(Value::as_str)
+                .unwrap_or("local")
+                .to_owned(),
+        )),
         model_id: string_value(provider_object.get("modelId"), "provider.modelId")?,
         headers,
         mtls,
@@ -510,7 +518,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         skills: parse_skills(config.get("skills")),
         permission_mode: if matches!(
             config.get("permissionMode").and_then(Value::as_str),
-            Some("auto_safe" | "bypass")
+            Some("auto_safe")
         ) {
             PermissionMode::AutoSafe
         } else {
@@ -566,7 +574,7 @@ mod tests {
             name: "Veil".into(),
             base_url: "http://127.0.0.1:1234".into(),
             chat_endpoint_path: Some("/api/engineering/chat".into()),
-            api_key: String::new(),
+            api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
             headers: BTreeMap::new(),
             mtls: None,
@@ -583,7 +591,7 @@ mod tests {
             name: "Veil".into(),
             base_url: base_url.into(),
             chat_endpoint_path: Some(endpoint.into()),
-            api_key: String::new(),
+            api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
             headers: BTreeMap::new(),
             mtls: None,
@@ -711,15 +719,12 @@ mod tests {
     }
 
     #[test]
-    fn permission_mode_uses_auto_safe_and_accepts_the_legacy_value() {
+    fn permission_mode_uses_auto_safe() {
         assert_eq!(
             serde_json::from_str::<PermissionMode>("\"auto_safe\"").unwrap(),
             PermissionMode::AutoSafe
         );
-        assert_eq!(
-            serde_json::from_str::<PermissionMode>("\"bypass\"").unwrap(),
-            PermissionMode::AutoSafe
-        );
+        assert!(serde_json::from_str::<PermissionMode>("\"bypass\"").is_err());
         assert_eq!(
             serde_json::to_string(&PermissionMode::AutoSafe).unwrap(),
             "\"auto_safe\""
@@ -727,12 +732,15 @@ mod tests {
     }
 
     #[test]
-    fn mtls_rejects_legacy_pkcs12_fields() {
+    fn mtls_rejects_unsupported_pkcs12_fields() {
         for field in ["pfxPath", "passphrase"] {
             let value = Value::Object(
-                [(field.to_owned(), Value::String("legacy-value".to_owned()))]
-                    .into_iter()
-                    .collect(),
+                [(
+                    field.to_owned(),
+                    Value::String("unsupported-value".to_owned()),
+                )]
+                .into_iter()
+                .collect(),
             );
             assert!(parse_mtls(&value).unwrap_err().contains("PKCS#12/PFX"));
         }

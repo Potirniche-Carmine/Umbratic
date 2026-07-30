@@ -54,14 +54,14 @@ test("the context meter stays hidden until a draft or conversation has context",
   }), true);
 });
 
-test("context estimates use measured attachment text with a fallback for legacy files", () => {
+test("context estimates use measured attachment text with a safe unmeasured fallback", () => {
   assert.equal(contextWindow.estimateTextTokens("12345"), 2);
   assert.equal(contextWindow.estimateTextTokens("你好🙂"), 5);
   assert.equal(contextWindow.estimateTextTokens(""), 0);
 
   const estimate = contextWindow.estimateContextUsage([
     { text: "12345" },
-    { text: "image", attachments: [{ name: "reference.png" }, { name: "plan.md", contextTokens: 7500 }, { name: "legacy.md" }] },
+    { text: "image", attachments: [{ name: "reference.png" }, { name: "plan.md", contextTokens: 7500 }, { name: "unmeasured.md" }] },
   ], 64000);
 
   assert.equal(estimate.contentTokens, 2048 + 2 + 10 + 2 + 10 + 1600 + 7500 + 512);

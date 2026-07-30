@@ -7,9 +7,7 @@ export type ReviewCommentDraft = {
   filePath: string;
   hunkId: string;
   side: DiffSide;
-  startLine: number;
-  endLine: number;
-  lineNumbers?: number[];
+  lineNumbers: number[];
   body: string;
   excerpt: string;
   documentSelection?: {
@@ -49,11 +47,7 @@ export function reconcileReviewComments(comments: ReviewCommentDraft[], files: R
 }
 
 export function reviewCommentLines(comment: ReviewCommentDraft): number[] {
-  const legacyRange = Array.from(
-    { length: Math.max(1, comment.endLine - comment.startLine + 1) },
-    (_, index) => comment.startLine + index,
-  );
-  return [...new Set(comment.lineNumbers?.length ? comment.lineNumbers : legacyRange)]
+  return [...new Set(comment.lineNumbers)]
     .filter(Number.isFinite)
     .sort((left, right) => left - right);
 }
@@ -108,7 +102,7 @@ export function visibleReviewPrompt(value: string): VisibleReviewPrompt {
   for (const row of rows) {
     const firstBreak = row.indexOf("\n\n");
     const heading = firstBreak >= 0 ? row.slice(0, firstBreak) : row;
-    const match = heading.match(/^\*\*(.+?) · ((?:Lines|Paragraphs?).+|Selected text)\*\*$/);
+    const match = heading.match(/^\*\*(.+?) · (Lines .+|Selected text)\*\*$/);
     if (!match || firstBreak < 0) return { text: value, feedback: [] };
     let remainder = row.slice(firstBreak + 2);
     let excerpt = "";

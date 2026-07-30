@@ -13,7 +13,7 @@ console_port="${4:-8177}"
 veil_port="${5:-8080}"
 case "$domain" in
   ""|.*|-*|*..*|*[^A-Za-z0-9.-]*|*.)
-    echo "The Console domain is invalid." >&2
+    echo "The Veil domain is invalid." >&2
     exit 2
     ;;
 esac
@@ -39,7 +39,7 @@ sed \
   >"$output_dir/veil-console.service"
 sed \
   -e "s|@@ORIGIN@@|$origin|g" \
-  -e "s/@@CONSOLE_PORT@@/$console_port/g" \
+  -e "s/@@VEIL_PORT@@/$veil_port/g" \
   "$script_dir/Caddyfile.template" \
   >"$output_dir/veil-console.caddy"
 chmod 600 "$output_dir/veil-console.service" "$output_dir/veil-console.caddy"

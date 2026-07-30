@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"database/sql"
@@ -33,8 +32,9 @@ type Session struct {
 }
 
 type Secrets struct {
-	VeilToken string `json:"veil_token"`
-	CSRFKey   string `json:"csrf_key"`
+	VeilToken    string `json:"veil_token"`
+	ControlToken string `json:"control_token"`
+	CSRFKey      string `json:"csrf_key"`
 }
 
 const (
@@ -46,7 +46,6 @@ const schema = `
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
-CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS owner (
   id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT NOT NULL UNIQUE,
   password_verifier TEXT NOT NULL, created_at INTEGER NOT NULL
@@ -73,7 +72,6 @@ CREATE TABLE IF NOT EXISTS audit_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at INTEGER NOT NULL,
   event TEXT NOT NULL, outcome TEXT NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, unixepoch());
 `
 
 func Open(dir string) (*Store, error) {
@@ -95,7 +93,7 @@ func Open(dir string) (*Store, error) {
 	store := &Store{db: db, dir: dir, lockFile: lockFile}
 	if _, err := db.Exec(schema); err != nil {
 		store.Close()
-		return nil, fmt.Errorf("migrate Console database: %w", err)
+		return nil, fmt.Errorf("initialize Console database: %w", err)
 	}
 	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", filepath.Join(dir, "console.lock")} {
 		if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -337,16 +335,11 @@ func (s *Store) LoadOrCreateSecrets() (Secrets, error) {
 	payload, err := os.ReadFile(path)
 	if err == nil {
 		var secrets Secrets
-		if json.Unmarshal(payload, &secrets) != nil || secrets.VeilToken == "" || secrets.CSRFKey == "" {
+		if json.Unmarshal(payload, &secrets) != nil || secrets.VeilToken == "" || secrets.ControlToken == "" || secrets.CSRFKey == "" {
 			return Secrets{}, errors.New("secret store is invalid")
 		}
 		if info, statErr := os.Stat(path); statErr != nil || unsafeSecretPermissions(info.Mode()) {
 			return Secrets{}, errors.New("secret store permissions are unsafe")
-		}
-		if bytes.Contains(payload, []byte(`"provider_key"`)) {
-			if err := s.SaveSecrets(secrets); err != nil {
-				return Secrets{}, err
-			}
 		}
 		return secrets, nil
 	}
@@ -361,7 +354,11 @@ func (s *Store) LoadOrCreateSecrets() (Secrets, error) {
 	if err != nil {
 		return Secrets{}, err
 	}
-	secrets := Secrets{VeilToken: veilToken, CSRFKey: csrfKey}
+	controlToken, _, err := auth.NewToken()
+	if err != nil {
+		return Secrets{}, err
+	}
+	secrets := Secrets{VeilToken: veilToken, ControlToken: controlToken, CSRFKey: csrfKey}
 	return secrets, s.SaveSecrets(secrets)
 }
 

@@ -15,6 +15,10 @@ import (
 type Config struct {
 	Addr                       string
 	AuthToken                  string
+	ControlToken               string
+	CompanyIdentityMode        bool
+	EntitlementPath            string
+	IdentityStorePath          string
 	ProviderProtocol           model.ProviderProtocol
 	ProviderBaseURL            string
 	ProviderChatEndpointPath   string
@@ -68,6 +72,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	companyIdentityMode, err := envBool("VEIL_COMPANY_IDENTITY_MODE", false)
+	if err != nil {
+		return Config{}, err
+	}
 	telemetryRetentionDays, err := envInt("VEIL_TELEMETRY_RETENTION_DAYS", 30)
 	if err != nil {
 		return Config{}, err
@@ -80,10 +88,14 @@ func Load() (Config, error) {
 	cfg := Config{
 		Addr:                       envString("VEIL_ADDR", "127.0.0.1:8080"),
 		AuthToken:                  strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
+		ControlToken:               strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
+		CompanyIdentityMode:        companyIdentityMode,
+		EntitlementPath:            strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
+		IdentityStorePath:          strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
 		ProviderProtocol:           protocol,
 		ProviderBaseURL:            strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
-		ProviderChatEndpointPath:   envFirst("VEIL_PROVIDER_CHAT_PATH", "VEIL_PROVIDER_ENDPOINT_PATH"),
-		ProviderModelsEndpointPath: envFirst("VEIL_PROVIDER_MODELS_PATH", "VEIL_PROVIDER_MODELS_ENDPOINT_PATH"),
+		ProviderChatEndpointPath:   strings.TrimSpace(os.Getenv("VEIL_PROVIDER_CHAT_PATH")),
+		ProviderModelsEndpointPath: strings.TrimSpace(os.Getenv("VEIL_PROVIDER_MODELS_PATH")),
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:              contextLength,
 		MaxOutputTokens:            maxOutputTokens,
@@ -99,6 +111,20 @@ func Load() (Config, error) {
 
 	if cfg.AuthToken == "" {
 		return Config{}, errors.New("VEIL_AUTH_TOKEN is required")
+	}
+	if cfg.CompanyIdentityMode {
+		if cfg.ControlToken == "" {
+			return Config{}, errors.New("VEIL_CONTROL_TOKEN is required in company identity mode")
+		}
+		if cfg.ControlToken == cfg.AuthToken {
+			return Config{}, errors.New("VEIL_CONTROL_TOKEN must differ from VEIL_AUTH_TOKEN")
+		}
+		if cfg.EntitlementPath == "" {
+			return Config{}, errors.New("VEIL_ENTITLEMENT_PATH is required in company identity mode")
+		}
+		if cfg.IdentityStorePath == "" {
+			return Config{}, errors.New("VEIL_IDENTITY_STORE_PATH is required in company identity mode")
+		}
 	}
 	if cfg.ProviderBaseURL == "" {
 		return Config{}, errors.New("VEIL_PROVIDER_BASE_URL is required")
@@ -137,16 +163,6 @@ func envString(name, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func envFirst(names ...string) string {
-	for _, name := range names {
-		value := strings.TrimSpace(os.Getenv(name))
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func envDuration(name string, fallback time.Duration) (time.Duration, error) {

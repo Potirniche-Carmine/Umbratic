@@ -102,8 +102,8 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     lsp: true,
     command: true,
   });
-  assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "legacy-tool"])), ["read", "command"]);
-  assert.deepEqual(plain(tools.toolSettingsFromEnabledTools(["read", "legacy-tool"])), {
+  assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "unknown-tool"])), ["read", "command"]);
+  assert.deepEqual(plain(tools.toolSettingsFromEnabledTools(["read", "unknown-tool"])), {
     read: true,
     write: false,
     edit: false,

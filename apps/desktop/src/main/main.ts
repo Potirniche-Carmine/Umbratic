@@ -28,7 +28,6 @@ import {
 
 import {
   endpointEditingAllowed,
-  localProviderCatalog,
   managedModelEndpointDefaults,
   taskStatesThatCanOpen,
 } from "./config";
@@ -39,7 +38,7 @@ import {
   type CapabilityPromptNeeds,
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { materializedChatAttachmentReviewPaths, priorChatAttachments } from "./attachmentContext";
+import { priorChatAttachments } from "./attachmentContext";
 import { searchRootFiles } from "./fileSearch";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
@@ -48,6 +47,7 @@ import {
   runnerBinaryPath,
   runnerDiagnosticsDirectory,
   replyRunnerPermission,
+  setRunnerProviderSession,
   startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
@@ -69,7 +69,15 @@ import {
   telemetryPolicyForMode,
 } from "./policy";
 import { getProviderJson } from "./providerClient";
-import { ensureLocalVeil, stopLocalVeil, currentLocalVeilConnection } from "./localVeil";
+import {
+  companyConnectionStatus,
+  disconnectCompanyDevice,
+  enrollCompanyDevice,
+  ensureCompanySession,
+  renewCompanySession,
+} from "./companyIdentity";
+import { companyTransportOptions, configuredEndpointModel, configuredEndpointRoute, endpointHealthRoute, endpointProvider, endpointRequestHeaders, normalizeBaseUrl } from "./endpointConfig";
+import { ensureLocalVeil, probeLocalModels, stopLocalVeil } from "./localVeil";
 import { loadWindowWithModelWarmup } from "./modelWarmup";
 import { probeVeilContextLength, shouldProbeVeilContext } from "./veilContext";
 import {
@@ -81,6 +89,7 @@ import {
   readLocalDiagnostics,
   readHarnessProfileSetting,
   readModelEndpointSettings,
+  readModelEndpointSettingsForMode,
   publicModelEndpointSettings,
   readNotes,
   readPermissionModeSetting,
@@ -167,7 +176,7 @@ import type {
 } from "./types";
 import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, taskEventSignature } from "../shared/taskEvents";
+import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, removeResponseFeedback, taskEventSignature } from "../shared/taskEvents";
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
 import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
 import {
@@ -190,7 +199,8 @@ import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
 import { findAgentInstructionFiles } from "./repositoryInstructions";
-
+import * as appPaths from "./appPaths";
+import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
 const isDev = !app.isPackaged;
 const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
@@ -239,16 +249,10 @@ function clearPendingPermissionsForTask(taskIdValue: string) {
 app.enableSandbox();
 app.setName("Umbratic");
 
-const appDataDirectory = app.getPath("appData");
 const benchmarkUserData = process.env.UMBRATIC_USER_DATA_DIR?.trim();
-const cleanUserData = benchmarkUserData ? path.resolve(benchmarkUserData) : path.join(appDataDirectory, "Umbratic");
-const legacyUserData = path.join(appDataDirectory, "Umbratic AI");
+const cleanUserData = benchmarkUserData ? path.resolve(benchmarkUserData) : appPaths.defaultDesktopDataRoot();
 try {
-  if (!fs.existsSync(cleanUserData) && fs.existsSync(legacyUserData)) {
-    fs.cpSync(legacyUserData, cleanUserData, { recursive: true });
-  }
-  fs.mkdirSync(cleanUserData, { recursive: true });
-  app.setPath("userData", cleanUserData);
+  appPaths.configureDesktopAppPaths(app, cleanUserData);
   if (isDev) {
     app.commandLine.appendSwitch("disable-http-cache");
     app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
@@ -550,12 +554,8 @@ function publicTask(task: TaskRecord): TaskInfo {
   };
 }
 
-function hiddenChatAttachmentReviewPaths(task: TaskRecord): Set<string> {
-  return materializedChatAttachmentReviewPaths(task.events ?? [], isHiddenChatTask(task));
-}
-
 function hiddenRendererReviewPaths(task: TaskRecord): Set<string> {
-  const hidden = new Set(hiddenChatAttachmentReviewPaths(task));
+  const hidden = new Set<string>();
   for (const file of task.reviewFiles ?? []) {
     const relativePath = normalizeRelativePath(file.path);
     if (isDocumentReviewSidecarPath(relativePath)) hidden.add(relativePath);
@@ -575,7 +575,7 @@ function filterReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlyS
 
 function rendererReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
   return filterReviewFiles(files, ignoredPaths).map((file) => file.tooLarge
-    ? { ...file, patch: "", diff: "", hunks: [] }
+    ? { ...file, patch: "", hunks: [] }
     : file);
 }
 
@@ -885,7 +885,7 @@ function stableRepositoryId(rootPath: string): string {
 }
 
 function hiddenChatWorkspacePath(chatIdValue: string): string {
-  return path.join(os.homedir(), ".umbratic", "chats", chatIdValue);
+  return path.join(appPaths.scratchWorkspacesDirectory(app.getPath("userData")), chatIdValue);
 }
 
 function hiddenChatRepository(chatIdValue: string): RepositoryInfo {
@@ -916,7 +916,7 @@ function chatId(): string {
 }
 
 function chatAttachmentRoot(): string {
-  return path.join(app.getPath("userData"), "chat-attachments");
+  return appPaths.chatAttachmentsDirectory(app.getPath("userData"));
 }
 
 function safeChatId(value: string): string {
@@ -1037,6 +1037,7 @@ function createChat(input: unknown): ChatRecord {
     title,
     createdAt: now,
     updatedAt: now,
+    modelEndpointMode: readModelEndpointSettings().mode,
     repositoryName,
     repositoryPath,
     worktreeRootTaskId: reusableWorktree ? worktreeRootTaskId(reusableWorktree) : undefined,
@@ -1049,7 +1050,6 @@ function createChat(input: unknown): ChatRecord {
   saveChat(chat);
   return chat;
 }
-
 function updateChatDraft(input: unknown): ChatRecord {
   if (!isRecord(input)) {
     throw new Error("Invalid chat draft input.");
@@ -1095,7 +1095,6 @@ function updateChatDraft(input: unknown): ChatRecord {
   writeChat(next);
   return next;
 }
-
 function updateChatProject(input: unknown): ChatRecord {
   if (!isRecord(input)) {
     throw new Error("Invalid chat project input.");
@@ -1115,7 +1114,6 @@ function updateChatProject(input: unknown): ChatRecord {
   writeChat(next);
   return next;
 }
-
 function deleteChat(input: unknown): { ok: true } {
   if (!isRecord(input)) {
     throw new Error("Invalid chat delete input.");
@@ -1203,6 +1201,7 @@ function updateChatFromTask(task: TaskRecord) {
     title: stableChatTitle(existing?.title, task.prompt),
     createdAt: existing?.createdAt ?? task.createdAt,
     updatedAt: new Date().toISOString(),
+    modelEndpointMode: task.modelEndpointMode ?? existing?.modelEndpointMode,
     taskId: task.id,
     taskState: task.state,
     repositoryName: repository?.name ?? existing?.repositoryName,
@@ -1512,7 +1511,7 @@ type OcrAttachmentArtifactResult =
   | { status: "missing" | "failed"; message: string };
 
 function ocrArtifactOutputDirectory(rootPath: string): string {
-  return path.join(rootPath, ".umbratic", "artifacts", "ocr");
+  return appPaths.workspaceOcrDirectory(app.getPath("userData"), rootPath);
 }
 
 function ocrArtifactBaseName(label: string, document: OcrDocument, fallback: string): string {
@@ -2043,7 +2042,7 @@ function buildBinaryDiff(filePath: string, before: string | null, after: string 
   return normalizeReviewFile({
     path: filePath,
     status,
-    diff: [...header, `Binary file ${status}: ${filePath}`].join("\n"),
+    patch: [...header, `Binary file ${status}: ${filePath}`].join("\n"),
   });
 }
 
@@ -2056,11 +2055,11 @@ function buildSnapshotDiff(filePath: string, before: string | null, after: strin
 
 function worktreeRootForRepo(repoRoot: string): string {
   const resolved = path.resolve(repoRoot);
-  return path.join(os.homedir(), ".umbratic", "worktrees", `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
+  return path.join(appPaths.worktreesDirectory(app.getPath("userData")), `${slugify(path.basename(resolved))}-${shortHash(resolved.toLowerCase())}`);
 }
 
 function umbraticWorktreesRoot(): string {
-  return path.join(os.homedir(), ".umbratic", "worktrees");
+  return appPaths.worktreesDirectory(app.getPath("userData"));
 }
 
 function directoryIsEmpty(directory: string): boolean {
@@ -2114,7 +2113,7 @@ async function removeGitWorktree(task: TaskRecord) {
 }
 
 function taskMetadataPath(task: TaskRecord): string {
-  return path.join(app.getPath("userData"), "task-metadata", `${task.id}.json`);
+  return path.join(appPaths.taskMetadataDirectory(app.getPath("userData")), `${task.id}.json`);
 }
 
 function recordTaskEvent(event: BackendUiEventV1) {
@@ -2351,80 +2350,6 @@ async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]
   }));
 }
 
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
-}
-
-const veilManagedModelId = "veil-managed";
-
-function endpointHeaders(headers: ReturnType<typeof readModelEndpointSettings>["headers"]): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const header of headers) {
-    if (!header.name.trim() || !header.value) continue;
-    next[header.name.trim()] = header.value;
-  }
-  return next;
-}
-
-function endpointProvider(): (typeof localProviderCatalog)[number] & {
-  baseUrl: string;
-  software: ReturnType<typeof readModelEndpointSettings>["software"];
-  headers: Record<string, string>;
-} {
-  const provider = localProviderCatalog[0];
-  const settings = readModelEndpointSettings();
-  const localConnection = settings.mode === "local" ? currentLocalVeilConnection() : null;
-  return {
-    ...provider,
-    providerName: "Umbratic Veil",
-    software: settings.software,
-    baseUrl: normalizeBaseUrl(localConnection?.baseUrl ?? settings.baseUrl),
-    apiKey: localConnection?.authToken ?? settings.secret.trim(),
-    headers: settings.mode === "local" ? {} : endpointHeaders(settings.headers),
-    mtls: settings.mode === "server" ? provider.mtls : undefined,
-  };
-}
-
-function configuredEndpointModel(): LocalModelInfo {
-  const provider = endpointProvider();
-  const settings = readModelEndpointSettings();
-  return {
-    providerId: provider.providerId,
-    providerName: provider.providerName,
-    modelId: veilManagedModelId,
-    displayName: settings.mode === "local" ? settings.modelId : provider.providerName,
-    baseUrl: provider.baseUrl,
-  };
-}
-
-function configuredEndpointRoute(baseUrl: string, route: string): string {
-  if (/^https?:\/\//i.test(route)) return route;
-  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
-  let normalizedRoute = route.replace(/^\/+/, "");
-  if (/\/v\d+$/i.test(new URL(normalizedBaseUrl).pathname) && /^v\d+\//i.test(normalizedRoute)) {
-    normalizedRoute = normalizedRoute.replace(/^v\d+\//i, "");
-  }
-  const baseSegment = new URL(normalizedBaseUrl).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
-  const routeSegment = normalizedRoute.split("/").filter(Boolean)[0];
-  if (baseSegment && baseSegment === routeSegment) {
-    normalizedRoute = normalizedRoute.split("/").filter(Boolean).slice(1).join("/");
-  }
-  return new URL(normalizedRoute, `${normalizedBaseUrl}/`).toString();
-}
-
-function endpointHealthRoute(provider: ReturnType<typeof endpointProvider>): string {
-  return configuredEndpointRoute(provider.baseUrl, "/api/health");
-}
-
-function endpointRequestHeaders(provider: ReturnType<typeof endpointProvider>): Record<string, string> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (provider.apiKey) {
-    headers.Authorization = `Bearer ${provider.apiKey}`;
-  }
-  Object.assign(headers, provider.headers);
-  return headers;
-}
-
 async function modelWithFreshContextLength(selected: LocalModelInfo): Promise<LocalModelInfo> {
   const provider = endpointProvider();
   const detected = await probeVeilContextLength({
@@ -2500,9 +2425,53 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
   if (candidate.mode === "local" && !candidate.modelId?.trim()) {
     throw new Error("Enter the local model name before connecting.");
   }
+  if (candidate.mode === "server") {
+    const connection = companyConnectionStatus();
+    if (connection.state !== "enrolled" || normalizeBaseUrl(connection.baseUrl ?? "") !== normalizeBaseUrl(baseUrl)) {
+      throw new Error("Use an Enrollment code to connect to a company server.");
+    }
+  }
   const settings = writeModelEndpointSettings(candidate);
   const status = await getBackendStatus();
   return { settings: publicModelEndpointSettings(settings), status };
+}
+
+async function enrollCompanyConnection(input: unknown) {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before changing the company connection.");
+  }
+  if (!isRecord(input)) {
+    throw new Error("Company connection details are invalid.");
+  }
+  const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+  const enrollmentCode = typeof input.enrollmentCode === "string" ? input.enrollmentCode : "";
+  const label = typeof input.deviceLabel === "string" ? input.deviceLabel : undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Veil server URL is invalid.");
+  }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocalhostUrl(baseUrl))) {
+    throw new Error("Remote Veil servers must use HTTPS.");
+  }
+  stopLocalVeil();
+  await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions());
+  const settings = writeModelEndpointSettings({
+    mode: "server", software: "vllm", baseUrl, modelId: "veil-managed", secret: "",
+  });
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
+}
+
+async function disconnectCompanyConnection() {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before disconnecting this device.");
+  }
+  await disconnectCompanyDevice(companyTransportOptions());
+  const settings = readModelEndpointSettings();
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
 }
 
 async function saveHarnessProfileSetting(input: unknown) {
@@ -2534,6 +2503,7 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
       });
     } else {
       stopLocalVeil();
+      await ensureCompanySession(companyTransportOptions());
     }
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -2737,9 +2707,9 @@ async function exportLocalDiagnostics(): Promise<{ ok: true; path: string } | { 
 
 function clearLocalDiagnosticLogs(): LocalDiagnosticInfo {
   const info = clearLocalDiagnostics();
-  const legacyDirectory = path.resolve(runnerDiagnosticsDirectory(app.getPath("userData")));
-  if (pathInside(app.getPath("userData"), legacyDirectory) && fs.existsSync(legacyDirectory)) {
-    fs.rmSync(legacyDirectory, { recursive: true, force: true });
+  const logsDirectory = path.resolve(runnerDiagnosticsDirectory(app.getPath("userData")));
+  if (pathInside(app.getPath("userData"), logsDirectory) && fs.existsSync(logsDirectory)) {
+    fs.rmSync(logsDirectory, { recursive: true, force: true });
   }
   return info;
 }
@@ -3265,7 +3235,7 @@ async function gitWorkspaceReviewFile(repositoryPath: string, baseline: string, 
   const diff = await gitOutput(repositoryPath, ["diff", "--no-ext-diff", "--binary", "--find-renames", "--find-copies", `--unified=${reviewContextLines}`, baseline, "--", file]).catch(
     () => "",
   );
-  if (diff.trim()) return normalizeReviewFile({ path: file, status, diff });
+  if (diff.trim()) return normalizeReviewFile({ path: file, status, patch: diff });
   const text = readTextFileIfSafe(absolute);
   if (text !== null) return buildTextDiff(file, null, text);
   return buildBinaryDiff(
@@ -3338,7 +3308,7 @@ async function refreshReview(
     : scope === "worktree"
       ? await gitReviewFiles(task, "HEAD", workspacePath)
       : await gitReviewFiles(task);
-  const reviewFiles = filterReviewFiles(discoveredReviewFiles, hiddenChatAttachmentReviewPaths(task));
+  const reviewFiles = discoveredReviewFiles;
   task.reviewFiles = reviewFiles;
   task.changedFiles = reviewFiles.map((file) => file.path);
   task.reviewScope = scope;
@@ -3353,7 +3323,7 @@ async function refreshReview(
 
 function reviewPatchHash(reviewFiles: ReviewFile[]): string {
   const normalized = reviewFiles
-    .map((file) => `${file.path}\0${file.status}\0${file.diff}`)
+    .map((file) => `${file.path}\0${file.status}\0${file.patch}`)
     .sort()
     .join("\0");
   return crypto.createHash("sha256").update(normalized).digest("hex");
@@ -3559,6 +3529,18 @@ async function runRunnerTask(
       selectedForRun,
       task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
     );
+    if (readModelEndpointSettings().mode === "server") {
+      const sessionToken = await ensureCompanySession(companyTransportOptions());
+      await setRunnerProviderSession(run, sessionToken);
+      run.providerSessionRefresh = setInterval(() => {
+        void renewCompanySession(companyTransportOptions())
+          .then((token) => setRunnerProviderSession(run as RunnerProcess, token))
+          .catch(() => {
+            if (run) stopRunnerProcess(run);
+          });
+      }, 8 * 60 * 1000);
+      run.providerSessionRefresh.unref();
+    }
     if (!taskStillRunning(task)) {
       return;
     }
@@ -3935,7 +3917,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
   const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
-
+  const modelEndpointMode = readModelEndpointSettings().mode;
   if (existingTask) {
     const closedMessage = closedTaskMessage(existingTask);
     if (closedMessage) {
@@ -3957,6 +3939,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
+    existingTask.modelEndpointMode = modelEndpointMode;
     existingTask.enabledTools = requestedEnabledTools;
     existingTask.capabilityProbes = taskCapabilityProbes;
     existingTask.hiddenWorkspace = existingTask.hiddenWorkspace || hiddenWorkspace;
@@ -3997,7 +3980,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     void runRunnerTask(existingTask.id, undefined, prompt, attachments);
     return publicTask(existingTask);
   }
-
   if (reusableWorktreeTask && requestedWorkspaceMode === "worktree") {
     assertReusableWorktreeForRepository(reusableWorktreeTask, refreshed);
     const id = taskId();
@@ -4009,6 +3991,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
       prompt,
       workspaceKind: "git",
       workspaceMode: "worktree",
+      modelEndpointMode,
       hiddenWorkspace,
       state: "running",
       originalBranch: reusableWorktreeTask.originalBranch,
@@ -4035,7 +4018,6 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     void runRunnerTask(task.id, undefined, prompt, attachments);
     return publicTask(task);
   }
-
   const id = taskId();
   const shouldCreateWorktree = requestedWorkspaceMode === "worktree";
   const branch = shouldCreateWorktree ? `umbratic/${id}-${slugify(prompt)}` : "";
@@ -4047,6 +4029,7 @@ async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> 
     prompt,
     workspaceKind: refreshed.kind,
     workspaceMode: shouldCreateWorktree ? "worktree" : "local",
+    modelEndpointMode,
     hiddenWorkspace,
     state: "running",
     originalBranch: refreshed.originalBranch,
@@ -4184,7 +4167,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       return `${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}`;
     });
     await approvalCheck(task, "secret scan", async () => {
-      const patch = task.reviewFiles.map((file) => file.diff).join("\n");
+      const patch = task.reviewFiles.map((file) => file.patch).join("\n");
       const diffHit = secretScanText(patch);
       if (diffHit) {
         throw new Error(`Potential ${diffHit} in patch.`);
@@ -4202,7 +4185,7 @@ async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
       return "passed";
     });
     await approvalCheck(task, "record metadata", async () => {
-      const patch = task.reviewFiles.map((file) => file.diff).join("\n");
+      const patch = task.reviewFiles.map((file) => file.patch).join("\n");
       patchHash = crypto.createHash("sha256").update(patch).digest("hex");
       task.state = "approved";
       task.approvedAt = new Date().toISOString();
@@ -4362,15 +4345,19 @@ async function setResponseFeedback(input: unknown): Promise<void> {
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
   const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
-  const rating = input.rating === "bad" ? "bad" : "good";
+  const rating = input.rating === null || input.rating === "good" || input.rating === "bad"
+    ? input.rating
+    : undefined;
+  if (rating === undefined) {
+    throw new Error("Invalid response feedback rating.");
+  }
   const comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 1000) : "";
   if (!/^assistant-\d+$/.test(messageId)) {
     throw new Error("Invalid response message id.");
   }
-  task.events = task.events.filter(
-    (event) => !(event.type === "response.feedback" && event.messageId === messageId),
-  );
+  task.events = removeResponseFeedback(task.events, task.id, messageId);
   saveTask(task);
+  if (rating === null) return;
   emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(comment ? { comment } : {}) });
 }
 
@@ -4765,11 +4752,23 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getBackendStatus: () => getBackendStatus(),
     getStartupSettings: () => readStartupSettings(),
     getCapabilityProbes: (input) => getCapabilityProbes(input),
-    getModelEndpointSettings: () => publicModelEndpointSettings(readModelEndpointSettings()),
+    getModelEndpointSettings: (input) => {
+      const mode = input?.mode;
+      return publicModelEndpointSettings(mode ? readModelEndpointSettingsForMode(mode) : readModelEndpointSettings());
+    },
+    probeLocalModels: (input) => probeLocalModels(input?.baseUrl ?? ""),
     saveModelEndpointSettings: (input) =>
       saveModelEndpointSettings(
         input as Partial<ReturnType<typeof readModelEndpointSettings>>,
       ),
+    getCompanyConnectionStatus: async () => {
+      if (companyConnectionStatus().state === "enrolled") {
+        await renewCompanySession(companyTransportOptions()).catch(() => undefined);
+      }
+      return companyConnectionStatus();
+    },
+    enrollCompanyConnection: (input) => enrollCompanyConnection(input),
+    disconnectCompanyConnection: () => disconnectCompanyConnection(),
     getHarnessProfile: () => readHarnessProfileSetting(),
     saveHarnessProfile: (input) => saveHarnessProfileSetting(input),
     getContextLength: () => readContextLengthSetting(),
@@ -4827,7 +4826,6 @@ function registerMainIpc(): void {
     },
   });
 }
-
 app.whenReady().then(async () => {
   try {
     installBundledSystemSkillsService();
@@ -4841,6 +4839,7 @@ app.whenReady().then(async () => {
     });
     console.error("Unable to install bundled skills.", error);
   }
+  await startLocalCacheMaintenance(session.defaultSession, appPaths.runtimesDirectory(app.getPath("userData")), () => activeRunnerProcesses.size === 0, (error) => recordLocalDiagnostic({ level: "warn", source: "desktop", event: "cache.maintenance.failed", message: error instanceof Error ? error.message : String(error) }));
   registerMainIpc();
   Menu.setApplicationMenu(null);
   await loadWindowWithModelWarmup(createWindow);
@@ -4894,6 +4893,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopLocalCacheMaintenance();
   stopLocalVeil();
   flushRendererEvents();
   flushPendingTaskEvents();

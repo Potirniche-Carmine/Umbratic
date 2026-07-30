@@ -37,6 +37,21 @@ func TestProviderChecksSelectedModel(t *testing.T) {
 	}
 }
 
+func TestListModelsReturnsUniqueSortedRuntimeModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"ornith:9b","model":"ornith:9b"},{"name":"alpha:latest"}]}`))
+	}))
+	defer server.Close()
+	models, err := ListModels(t.Context(), "ollama", server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0] != "alpha:latest" || models[1] != "ornith:9b" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
 func TestSafeBufferRedactsSecrets(t *testing.T) {
 	buffer := newSafeBuffer(1024)
 	buffer.SetSecrets("seeded-secret")

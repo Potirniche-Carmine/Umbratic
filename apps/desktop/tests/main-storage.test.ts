@@ -62,15 +62,15 @@ function loadStorage(userData, home = userData) {
 }
 
 function appDbPath(userData) {
-  return path.join(userData, "umbratic.sqlite");
+  return path.join(userData, "state", "umbratic.sqlite");
 }
 
 function projectDbPath(repo) {
   return path.join(repo, ".umbratic", "umbratic.sqlite");
 }
 
-function chatDbPath(home) {
-  return path.join(home, ".umbratic", "chats", "umbratic.sqlite");
+function chatDbPath(userData) {
+  return path.join(userData, "state", "chats.sqlite");
 }
 
 function withDb(filePath, action) {
@@ -109,34 +109,14 @@ function insertTaskPayload(userData, task) {
   });
 }
 
-function insertLegacyChatPayload(filePath, chat, position = 0) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  withDb(filePath, (db) => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY NOT NULL,
-        title TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        repository_path TEXT,
-        payload TEXT NOT NULL,
-        position INTEGER NOT NULL DEFAULT 0
-      );
-    `);
-    db.prepare(
-      "INSERT OR REPLACE INTO chats (id, title, created_at, updated_at, repository_path, payload, position) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(chat.id, chat.title, chat.createdAt, chat.updatedAt, chat.repositoryPath ?? null, JSON.stringify(chat), position);
-  });
-}
-
 test("projects and chats are normalized from SQLite storage", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-"));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
   const storage = loadStorage(userData);
 
   storage.writeProjects([
-    { id: "repo", name: "Repo", rootPath: repo, originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
-    { id: "missing", name: "Missing", rootPath: path.join(userData, "missing"), originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
+    { id: "repo", name: "Repo", rootPath: repo, kind: "git", originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
+    { id: "missing", name: "Missing", rootPath: path.join(userData, "missing"), kind: "git", originalBranch: "main", baseCommit: "abc", dirty: false, statusSummary: "clean" },
   ]);
   assert.deepEqual(plain(storage.readProjects()).map((project) => project.id), ["repo"]);
   assert.equal(storage.readProjects()[0].kind, "git");
@@ -147,13 +127,14 @@ test("projects and chats are normalized from SQLite storage", () => {
       title: "Second",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-03T00:00:00.000Z",
+      modelEndpointMode: "server",
       attachedFiles: [{ path: "a.ts", name: "a.ts" }],
       worktreeRootTaskId: "task-root",
       worktreePath: path.join(userData, "worktree"),
       worktreeBranch: "umbratic/task-root-second",
       worktreeBaseCommit: "abcdef1234567890",
     },
-    { id: "chat-1", title: "First", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", attachedFiles: [{ path: 1, name: "bad" }] },
+    { id: "chat-1", title: "First", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", modelEndpointMode: "invalid", attachedFiles: [{ path: 1, name: "bad" }] },
     { title: "bad" },
   ]);
   const chats = storage.readChats();
@@ -162,6 +143,8 @@ test("projects and chats are normalized from SQLite storage", () => {
   assert.equal(chats[0].worktreePath, path.resolve(userData, "worktree"));
   assert.equal(chats[0].worktreeBranch, "umbratic/task-root-second");
   assert.equal(chats[0].worktreeBaseCommit, "abcdef1234567890");
+  assert.equal(chats[0].modelEndpointMode, "server");
+  assert.equal(chats[1].modelEndpointMode, undefined);
   assert.deepEqual(plain(chats[1].attachedFiles), []);
   assert.equal(fs.existsSync(appDbPath(userData)), true);
   assert.equal(fs.existsSync(chatDbPath(userData)), true);
@@ -169,7 +152,7 @@ test("projects and chats are normalized from SQLite storage", () => {
   assert.equal(fs.existsSync(path.join(userData, "chats.json")), false);
 });
 
-test("project chats are stored under the home chat database", () => {
+test("project chats are stored under the central data root", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-project-chats-"));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-home-project-chats-"));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
@@ -207,7 +190,7 @@ test("project chats are stored under the home chat database", () => {
     },
   ]);
 
-  const homeChats = readPayloads(chatDbPath(home), "chats");
+  const homeChats = readPayloads(chatDbPath(userData), "chats");
   assert.deepEqual(homeChats.map((chat) => chat.id), ["chat-project", "chat-global"]);
   assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), ["chat-project", "chat-global"]);
   assert.equal(fs.existsSync(projectDbPath(repo)), false);
@@ -226,7 +209,7 @@ test("project chats are stored under the home chat database", () => {
     },
   ]);
 
-  assert.deepEqual(readPayloads(chatDbPath(home), "chats").map((chat) => chat.id), [
+  assert.deepEqual(readPayloads(chatDbPath(userData), "chats").map((chat) => chat.id), [
     "chat-new-project",
     "chat-project",
     "chat-global",
@@ -239,48 +222,14 @@ test("project chats are stored under the home chat database", () => {
     updatedAt: "2026-01-05T00:00:00.000Z",
   });
   assert.equal(storage.readChat("chat-global").draftPrompt, "updated global draft");
-  assert.deepEqual(new Set(readPayloads(chatDbPath(home), "chats").map((chat) => chat.id)), new Set([
+  assert.deepEqual(new Set(readPayloads(chatDbPath(userData), "chats").map((chat) => chat.id)), new Set([
     "chat-new-project",
     "chat-project",
     "chat-global",
   ]));
 });
 
-test("legacy project chat databases migrate once into the home chat database", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-legacy-project-chats-"));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-home-legacy-project-chats-"));
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-repo-"));
-  const storage = loadStorage(userData, home);
-  const project = {
-    id: "repo",
-    name: "Repo",
-    rootPath: repo,
-    kind: "git",
-    originalBranch: "main",
-    baseCommit: "abc",
-    dirty: false,
-    statusSummary: "clean",
-  };
-  storage.writeProjects([project]);
-  insertLegacyChatPayload(projectDbPath(repo), {
-    id: "chat-legacy-project",
-    title: "Legacy project chat",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-03T00:00:00.000Z",
-    repositoryPath: repo,
-    draftPrompt: "legacy draft",
-    attachedFiles: [],
-  });
-
-  assert.equal(fs.existsSync(chatDbPath(home)), false);
-  assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), ["chat-legacy-project"]);
-  assert.deepEqual(readPayloads(chatDbPath(home), "chats").map((chat) => chat.id), ["chat-legacy-project"]);
-
-  storage.writeChats([]);
-  assert.deepEqual(plain(storage.readChats()).map((chat) => chat.id), []);
-});
-
-test("tasks drop legacy runtime profiles and normalize tool settings and event defaults", () => {
+test("tasks normalize current tool settings", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-tasks-"));
   const storage = loadStorage(userData);
 
@@ -292,20 +241,21 @@ test("tasks drop legacy runtime profiles and normalize tool settings and event d
     originalRepoPath: userData,
     worktreePath: userData,
     workspaceKind: "git",
+    workspaceMode: "local",
     state: "running",
     originalBranch: "main",
     baseCommit: "abc",
     agentBranch: "",
-    permissionMode: "bypass",
+    permissionMode: "auto_safe",
+    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: [],
     enabledTools: ["read", "bogus", "command", "read"],
-    reviewFiles: "bad",
-    events: "bad",
+    reviewFiles: [],
+    events: [],
   });
 
   const [task] = storage.readTasks();
-  assert.equal("runtimeProfile" in task, false);
   assert.equal(task.workspaceMode, "local");
   assert.equal(task.reasoningMode, "reasoning");
   assert.equal(task.permissionMode, "auto_safe");
@@ -468,28 +418,6 @@ test("local diagnostics report logical size, exportable records, and clear indep
   assert.deepEqual(plain(storage.readProductTelemetryEvents()).map((event) => event.id), ["event-1"]);
 });
 
-test("local diagnostics migration removes previously stored debug and info records", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-diagnostics-migration-"));
-  const storage = loadStorage(userData);
-
-  storage.appendLocalDiagnostic({
-    level: "warn",
-    source: "desktop",
-    event: "command.finished",
-    message: "Command failed.",
-  });
-  withDb(appDbPath(userData), (db) => {
-    db.prepare(`
-      INSERT INTO diagnostic_logs (at, level, source, event, task_id, message, data)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run("2026-01-01T00:00:00.000Z", "info", "desktop", "permission.requested", null, null, "{}");
-    db.exec("PRAGMA user_version = 2;");
-  });
-
-  assert.deepEqual(plain(storage.readLocalDiagnostics()).map((entry) => entry.level), ["warn"]);
-  assert.equal(withDb(appDbPath(userData), (db) => db.prepare("PRAGMA user_version").get().user_version), 5);
-});
-
 test("endpoint settings round-trip secrets through safeStorage without writing plaintext", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-"));
   const storage = loadStorage(userData);
@@ -531,31 +459,13 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   assert.doesNotMatch(rawSettings, /org-secret/);
   assert.equal(fs.existsSync(path.join(userData, "settings.json")), false);
 });
-test("endpoint settings default to local and migrate the old local Veil URL semantics", () => {
+test("endpoint settings default to the local model runtime", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-default-"));
   const storage = loadStorage(userData);
 
   assert.equal(storage.hasStoredModelEndpointSettings(), false);
   assert.equal(storage.readModelEndpointSettings().mode, "local");
   assert.equal(storage.readModelEndpointSettings().software, "ollama");
-  assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
-  assert.equal(storage.readModelEndpointSettings().modelId, "");
-
-  writeSettingsPayload(userData, {
-    modelEndpoint: {
-      mode: "local",
-      software: "ollama",
-      baseUrl: "http://127.0.0.1:8080",
-      modelId: "veil-managed",
-      secret: "",
-      headers: [
-        { name: "", value: "" },
-        { name: "", value: "" },
-      ],
-    },
-  });
-  assert.equal(storage.hasStoredModelEndpointSettings(), true);
-  assert.equal(storage.readModelEndpointSettings().mode, "local");
   assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
   assert.equal(storage.readModelEndpointSettings().modelId, "");
 
@@ -577,6 +487,38 @@ test("endpoint settings default to local and migrate the old local Veil URL sema
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
   assert.equal(rawSettings.modelEndpoint.version, 3);
   assert.doesNotMatch(JSON.stringify(rawSettings), /must-not-be-stored|also-not-stored/);
+});
+
+test("local model settings remain in SQLite after a switch to a company server", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-modes-"));
+  const storage = loadStorage(userData);
+
+  storage.writeModelEndpointSettings({
+    mode: "local",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    modelId: "qwen3:8b",
+  });
+  storage.writeModelEndpointSettings({
+    mode: "server",
+    software: "vllm",
+    baseUrl: "https://veil.example.internal",
+    modelId: "veil-managed",
+  });
+
+  assert.equal(storage.readModelEndpointSettings().mode, "server");
+  assert.deepEqual(plain(storage.readModelEndpointSettingsForMode("local")), {
+    mode: "local",
+    software: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    modelId: "qwen3:8b",
+    secret: "",
+    headers: [{ name: "", value: "" }, { name: "", value: "" }],
+  });
+
+  const rawSettings = JSON.parse(readSettingsPayloadText(userData));
+  assert.equal(rawSettings.modelEndpoints.local.modelId, "qwen3:8b");
+  assert.equal(rawSettings.modelEndpoints.server.baseUrl, "https://veil.example.internal");
 });
 
 test("an explicitly forced local configuration overrides a stored server endpoint for the session", () => {
@@ -639,16 +581,16 @@ test("tool, skill, harness, permission, and notes settings sanitize invalid inpu
   writeSettingsPayload(userData, { harnessProfile: "invalid" });
   assert.equal(storage.readHarnessProfileSetting(), "engineering");
   assert.equal(storage.readPermissionModeSetting(), "normal");
-  assert.equal(storage.writePermissionModeSetting("bypass"), "auto_safe");
+  assert.equal(storage.writePermissionModeSetting("bypass"), "normal");
   assert.equal(storage.writePermissionModeSetting("invalid"), "normal");
 
   writeSettingsPayload(userData, {
-    tools: { read: false, write: "no", legacyTool: true, nope: false },
+    tools: { read: false, write: "no", unknownTool: true, nope: false },
     skills: { "good-skill": false, "../bad": true, also_good: true, bad: "yes" },
   });
   assert.equal(storage.readToolSettings().read, false);
   assert.equal(storage.readToolSettings().write, true);
-  assert.equal(Object.hasOwn(storage.readToolSettings(), "legacyTool"), false);
+  assert.equal(Object.hasOwn(storage.readToolSettings(), "unknownTool"), false);
   assert.deepEqual(plain(storage.readSkillSettings()), { "good-skill": false, also_good: true });
 
   const notes = storage.writeNotes("a".repeat(5));
@@ -677,7 +619,33 @@ test("local diagnostics prune oldest rows after the entry budget", () => {
   assert.equal(events.includes("event-2009"), true);
 });
 
-test("app and chat databases keep one process-lifetime handle and migrate once", () => {
+test("each SQLite database has a 512 MiB page limit", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-database-limit-"));
+  const originalExec = DatabaseSync.prototype.exec;
+  const pageLimits = [];
+  DatabaseSync.prototype.exec = function trackedExec(sql) {
+    const match = String(sql).match(/PRAGMA max_page_count = (\d+)/);
+    if (match) pageLimits.push(Number(match[1]));
+    return originalExec.call(this, sql);
+  };
+  const storage = loadStorage(userData);
+  try {
+    storage.readProjects();
+    storage.writeChat({
+      id: "chat-limit",
+      title: "Limit",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      attachedFiles: [],
+    });
+    assert.deepEqual(pageLimits, [131072, 131072]);
+  } finally {
+    DatabaseSync.prototype.exec = originalExec;
+    storage.closeStorageDatabases();
+  }
+});
+
+test("app and chat databases keep one process-lifetime handle", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-lifetime-"));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-home-lifetime-"));
   const storage = loadStorage(userData, home);
@@ -737,6 +705,34 @@ test("app and chat databases keep one process-lifetime handle and migrate once",
   assert.equal(storage.readTask("task-lifetime")?.prompt, "hello");
   assert.equal(storage.retainedStorageDatabaseCount(), 1, "reads reopen a retained handle after close");
   storage.closeStorageDatabases();
+});
+
+test("company device credentials keep the private key in safeStorage and expose only status", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-company-credential-"));
+  const storage = loadStorage(userData);
+  const credential = {
+    version: 2,
+    baseUrl: "https://veil.example.com",
+    orgUid: "org_enterprise",
+    orgName: "Northwind",
+    userUid: "usr_alice",
+    deviceUid: "dev_laptop",
+    deviceLabel: "Work laptop",
+    publicKey: "public-key",
+    privateKeyPkcs8: "private-key-material",
+  };
+  storage.writeCompanyDeviceCredential(credential);
+  assert.deepEqual(plain(storage.readCompanyDeviceCredential()), credential);
+  assert.deepEqual(plain(storage.companyConnectionStatus()), {
+    state: "enrolled",
+    baseUrl: credential.baseUrl,
+    orgName: credential.orgName,
+    deviceLabel: credential.deviceLabel,
+  });
+  assert.doesNotMatch(readSettingsPayloadText(userData), /private-key-material/);
+  assert.equal(storage.readStartupSettings().companyConnection.state, "enrolled");
+  storage.clearCompanyDeviceCredential();
+  assert.deepEqual(plain(storage.companyConnectionStatus()), { state: "not_enrolled" });
 });
 
 test("current SQLite schemas do not repeat schema DDL on retained handles", () => {

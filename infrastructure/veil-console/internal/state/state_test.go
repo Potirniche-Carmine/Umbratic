@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -10,31 +9,6 @@ import (
 
 	"umbratic-veil-console/internal/auth"
 )
-
-func TestLegacyProviderKeyIsRemovedFromSecretStore(t *testing.T) {
-	dir := t.TempDir()
-	store, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	path := filepath.Join(dir, "secrets.json")
-	legacy := []byte(`{"veil_token":"veil-token","provider_key":"remove-me","csrf_key":"csrf-key"}`)
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.LoadOrCreateSecrets(); err != nil {
-		t.Fatal(err)
-	}
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(payload, []byte("provider_key")) || bytes.Contains(payload, []byte("remove-me")) {
-		t.Fatal("legacy provider key remains in the secret store")
-	}
-}
 
 func TestSetupIsOneUseAndSessionsPersist(t *testing.T) {
 	ctx := context.Background()

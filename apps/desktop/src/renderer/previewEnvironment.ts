@@ -13,6 +13,7 @@ import type {
   CapabilityProbeResult,
   ChatAttachment,
   ChatRecord,
+  CompanyConnectionStatus,
   DesktopApi,
   HarnessProfileId,
   IdeInfo,
@@ -68,6 +69,7 @@ const composerTestDirectAnswer = composerTestParams.has("directAnswer");
 const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
 const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
 const composerTestToolIssue = composerTestParams.has("toolIssue");
+const composerTestLiveWork = composerTestParams.has("liveWork");
 const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
@@ -105,6 +107,7 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
   { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : composerTestDirectAnswer ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
+  { type: "assistant.progress.delta", taskId: "composer-test", text: "I’m using my role and the current conversation to give a concise introduction.", at: new Date(Date.now() - 4_000).toISOString() },
   { type: "assistant.delta", taskId: "composer-test", text: "I’m Umbratic, a private AI assistant that can answer questions and complete practical work.", at: new Date(Date.now() - 1_000).toISOString() },
   { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : [
@@ -118,9 +121,23 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
   {
     type: "assistant.progress.delta",
     taskId: "composer-test",
-    text: "Checking message scale, markdown rhythm, escaped pipes, and attachment chips before composing the answer.",
+    text: [
+      "**Reviewing the composer surface**",
+      "",
+      "- Check the Markdown rhythm and attachment chips.",
+      "- Keep tool calls in chronological order.",
+      "- Verify `main.tsx` before composing the answer.",
+    ].join("\n"),
     at: new Date(Date.now() - 12_000).toISOString(),
     endedAt: new Date(Date.now() - 8_000).toISOString(),
+  },
+  {
+    type: "skill.selected",
+    taskId: "composer-test",
+    skillId: "umbratic-markdown",
+    source: "system",
+    reason: "strong_match",
+    fullContent: true,
   },
   {
     type: "command.started",
@@ -153,6 +170,11 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     exitCode: composerTestToolIssue ? 1 : 0,
   },
   {
+    type: "assistant.progress.delta",
+    taskId: "composer-test",
+    text: "The message layout is clear. I will run the focused composer checks next.",
+  },
+  {
     type: "command.started",
     taskId: "composer-test",
     id: "composer-fixture-test",
@@ -173,6 +195,11 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     taskId: "composer-test",
     id: "composer-fixture-test",
     exitCode: 0,
+  },
+  {
+    type: "assistant.progress.delta",
+    taskId: "composer-test",
+    text: "Work complete",
   },
   {
     type: "assistant.delta",
@@ -204,12 +231,19 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     at: new Date(Date.now() - 5_000).toISOString(),
   },
 ];
+const composerTestVisibleEvents = composerTestLiveWork
+  ? composerTestEvents.filter((event) =>
+      event.type !== "assistant.delta"
+      && event.type !== "assistant.done"
+      && !(event.type === "assistant.progress.delta" && event.text === "Work complete")
+    )
+  : composerTestEvents;
 
 const composerTestCodeReviewFiles: ReviewFile[] = [
   {
     path: "apps/desktop/src/features/review/new-panel.ts",
     status: "added",
-    diff: [
+    patch: [
       "diff --git a/apps/desktop/src/features/review/new-panel.ts b/apps/desktop/src/features/review/new-panel.ts",
       "new file mode 100644",
       "index 0000000..f4a17de",
@@ -230,16 +264,16 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
     ].join("\n"),
   },
   {
-    path: "apps/desktop/src/legacy/review-banner.ts",
+    path: "apps/desktop/src/removed/review-banner.ts",
     status: "deleted",
-    diff: [
-      "diff --git a/apps/desktop/src/legacy/review-banner.ts b/apps/desktop/src/legacy/review-banner.ts",
+    patch: [
+      "diff --git a/apps/desktop/src/removed/review-banner.ts b/apps/desktop/src/removed/review-banner.ts",
       "deleted file mode 100644",
       "index 24c118a..0000000",
-      "--- a/apps/desktop/src/legacy/review-banner.ts",
+      "--- a/apps/desktop/src/removed/review-banner.ts",
       "+++ /dev/null",
       "@@ -1,9 +0,0 @@",
-      "-export function legacyReviewBanner() {",
+      "-export function reviewBanner() {",
       "-  return {",
       "-    tone: \"warning\",",
       "-    label: \"Pending patch\",",
@@ -253,7 +287,7 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
   {
     path: "apps/desktop/src/renderer/review-panel.tsx",
     status: "modified",
-    diff: [
+    patch: [
       "diff --git a/apps/desktop/src/renderer/review-panel.tsx b/apps/desktop/src/renderer/review-panel.tsx",
       "index 9ac21d0..b7f53ce 100644",
       "--- a/apps/desktop/src/renderer/review-panel.tsx",
@@ -277,7 +311,7 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
       " }",
     ].join("\n"),
   },
-].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; diff: string }));
+].map((file) => normalizeReviewFile(file as { path: string; status: ReviewFile["status"]; patch: string }));
 
 const composerTestDocumentPath = ".umbratic/artifacts/docx/narrative-proposal.docx";
 const composerTestDocumentPreview: DocumentReviewSnapshot = {
@@ -314,7 +348,7 @@ const composerTestDocumentPreview: DocumentReviewSnapshot = {
 const composerTestDocumentFile = normalizeReviewFile({
   path: composerTestDocumentPath,
   status: "binary",
-  diff: [
+  patch: [
     `diff --git a/${composerTestDocumentPath} b/${composerTestDocumentPath}`,
     "new file mode 100644",
     `Binary files /dev/null and b/${composerTestDocumentPath} differ`,
@@ -329,7 +363,7 @@ const composerTestWholeDiffFiles: ReviewFile[] = [
   normalizeReviewFile({
     path: "apps/desktop/.env.example",
     status: "modified",
-    diff: [
+    patch: [
       "diff --git a/apps/desktop/.env.example b/apps/desktop/.env.example",
       "index 711bd13..fc94e20 100644",
       "--- a/apps/desktop/.env.example",
@@ -586,6 +620,7 @@ function previewSkillContent(skill: SkillInfo): string {
 }
 
 function createPreviewApi(): DesktopApi {
+  let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   const previewApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -596,6 +631,7 @@ function createPreviewApi(): DesktopApi {
       title: input?.title?.trim() || "New chat",
       createdAt: now,
       updatedAt: now,
+      modelEndpointMode: readPreviewEndpointSettings().mode,
       repositoryName: input?.repositoryName,
       repositoryPath: input?.repositoryPath,
       draftPrompt: "",
@@ -777,7 +813,7 @@ function createPreviewApi(): DesktopApi {
       providerAllowlist: ["company-endpoint"],
       localhostOnlyModels: false,
       commandClassifier: "enabled",
-      runnerDiagnosticsDirectory: "~/.umbratic/runner-diagnostics",
+      runnerDiagnosticsDirectory: "Umbratic/logs/runner",
       localLogs: { bytes: 0, entries: 0 },
       telemetry: {
         mode: readPreviewEndpointSettings().mode === "local" ? "managed_disabled" : "managed_required",
@@ -808,6 +844,7 @@ function createPreviewApi(): DesktopApi {
   getStartupSettings: async () => ({
     permissionMode: getPreviewPermissionMode(),
     modelEndpoint: readPreviewEndpointSettings(),
+    companyConnection: previewCompanyConnection,
     harnessProfile: readPreviewHarnessProfile(),
     contextLength: readPreviewContextLength(),
   }),
@@ -826,10 +863,38 @@ function createPreviewApi(): DesktopApi {
     return { contextLength, status: await previewApi.getBackendStatus() };
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
+  probeLocalModels: async () => ({ status: "ready", models: ["llama3.2", "qwen3:8b"] }),
   saveModelEndpointSettings: async (input) => {
     const settings = publicPreviewEndpointSettings(normalizeEndpointSettings(input));
     writePreviewEndpointSettings(settings);
     return { settings, status: await previewApi.getBackendStatus() };
+  },
+  getCompanyConnectionStatus: async () => previewCompanyConnection,
+  enrollCompanyConnection: async (input) => {
+    const settings = publicPreviewEndpointSettings(normalizeEndpointSettings({
+      ...readPreviewEndpointSettings(),
+      mode: "server",
+      software: "vllm",
+      baseUrl: input.baseUrl,
+      modelId: "veil-managed",
+      secret: "",
+    }));
+    writePreviewEndpointSettings(settings);
+    previewCompanyConnection = {
+      state: "enrolled",
+      baseUrl: input.baseUrl,
+      orgName: "Preview organization",
+      deviceLabel: "Preview device",
+    };
+    return { connection: previewCompanyConnection, settings, status: await previewApi.getBackendStatus() };
+  },
+  disconnectCompanyConnection: async () => {
+    previewCompanyConnection = { state: "not_enrolled" };
+    return {
+      connection: previewCompanyConnection,
+      settings: readPreviewEndpointSettings(),
+      status: await previewApi.getBackendStatus(),
+    };
   },
   exportTelemetry: async () => ({ ok: false, message: "Electron preload is not available." }),
   exportLocalDiagnostics: async () => ({ ok: false, message: "Electron preload is not available." }),
@@ -879,7 +944,7 @@ function createPreviewApi(): DesktopApi {
   return {
     api: createPreviewApi(),
     attachments: composerTestAttachments,
-    events: composerTestEvents,
+    events: composerTestVisibleEvents,
     params: composerTestParams,
     prompt: composerTestPrompt,
     repository: composerTestRepository,

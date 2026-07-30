@@ -144,14 +144,18 @@ pub struct SessionStore {
 
 impl SessionStore {
     pub fn new() -> Result<Arc<Self>, String> {
-        let config = Arc::new(load_runner_config()?);
+        Ok(Self::from_config(load_runner_config()?))
+    }
+
+    pub(crate) fn from_config(config: RunnerConfig) -> Arc<Self> {
+        let config = Arc::new(config);
         let diagnostics = Arc::new(RunnerDiagnostics::new(
             config.diagnostics.clone(),
             &config.cwd,
             config.task_id.as_deref(),
         ));
         let (sender, _) = broadcast::channel(512);
-        Ok(Arc::new(Self {
+        Arc::new(Self {
             config,
             sessions: RwLock::new(HashMap::new()),
             sink: EventSink {
@@ -159,7 +163,7 @@ impl SessionStore {
                 diagnostics,
             },
             permissions: Arc::new(PermissionBroker::default()),
-        }))
+        })
     }
 
     pub async fn create(
@@ -264,7 +268,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             name: "Test Veil".into(),
             base_url: "http://127.0.0.1:1".into(),
             chat_endpoint_path: Some("/api/engineering/chat".into()),
-            api_key: String::new(),
+            api_key: Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
             headers: std::collections::BTreeMap::new(),
             mtls: None,

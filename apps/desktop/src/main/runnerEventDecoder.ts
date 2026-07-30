@@ -31,10 +31,10 @@ export type RunnerEvent =
       toolCallId: string;
       exitCode: number | null;
       status?: string;
-      errorCode?: string;
-      errorMessage?: string;
+      errorCode?: string | null;
+      errorMessage?: string | null;
       durationMs?: number;
-      response?: string;
+      response?: string | null;
     })
   | (RunnerEventBase & {
       type: "context.compressed";
@@ -161,10 +161,10 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         hasString(value, "toolCallId")
         && (value.exitCode === null || isFiniteNumber(value.exitCode))
         && (value.status === undefined || typeof value.status === "string")
-        && (value.errorCode === undefined || typeof value.errorCode === "string")
-        && (value.errorMessage === undefined || typeof value.errorMessage === "string")
+        && (value.errorCode == null || typeof value.errorCode === "string")
+        && (value.errorMessage == null || typeof value.errorMessage === "string")
         && (value.durationMs === undefined || hasNonNegativeNumber(value, "durationMs"))
-        && (value.response === undefined || typeof value.response === "string")
+        && (value.response == null || typeof value.response === "string")
       );
     case "context.compressed":
       return (

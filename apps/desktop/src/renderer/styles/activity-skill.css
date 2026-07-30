@@ -1,0 +1,27 @@
+.activityLogEntry.skillLog {
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding-top: 4px;
+  color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  font-size: 10.5px;
+}
+
+.skillLog svg {
+  color: color-mix(in srgb, var(--accent) 72%, var(--reasoning-text));
+}
+
+.skillLog span {
+  color: var(--faint);
+  font-weight: 620;
+}
+
+.skillLog strong {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

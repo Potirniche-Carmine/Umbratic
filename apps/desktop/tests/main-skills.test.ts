@@ -37,12 +37,12 @@ function seedSkillsDirectory() {
   return directory;
 }
 
-test("installBundledSystemSkills provisions the cross-platform ~/.umbratic/skills layout", () => {
+test("installBundledSystemSkills provisions the central skills layout", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-install-settings-"));
   const skills = loadSkills(userData);
-  const directory = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-install-")), ".umbratic", "skills");
+  const directory = path.join(userData, "skills");
 
-  assert.equal(skills.skillsDirectoryPath(), path.join(os.homedir(), ".umbratic", "skills"));
+  assert.equal(skills.skillsDirectoryPath(), directory);
   assert.equal(skills.installBundledSystemSkills(directory), path.resolve(directory));
   const creatorSkillPath = path.join(directory, "system", "umbratic-skill-creator", "SKILL.md");
   assert.equal(fs.existsSync(creatorSkillPath), true);
@@ -124,11 +124,6 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-settings-"));
   const skills = loadSkills(userData);
   const directory = seedSkillsDirectory();
-  fs.writeFileSync(
-    path.join(directory, "umbratic-pdf.md"),
-    "---\nname: PDF Custom\ndescription: Custom PDF system guidance.\n---\n\n# PDF\n\nCustom PDF guidance.",
-    "utf8",
-  );
 
   const listing = await skills.listSkills(directory, { marketing: false });
   assert.equal(listing.directory, directory);
@@ -151,61 +146,23 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-engineering"), false);
-  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-pdf" && skill.name === "PDF Custom" && skill.description === "Custom PDF system guidance."), true);
-  const migratedPdf = path.join(directory, "system", "umbratic-pdf", "SKILL.md");
-  assert.equal(fs.existsSync(migratedPdf), true);
-  assert.match(fs.readFileSync(migratedPdf, "utf8"), /Custom PDF system guidance/);
-  assert.equal(fs.existsSync(path.join(directory, "umbratic-pdf.md")), false);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-pdf" && skill.name === "PDF & OCR"), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md")), true);
 
   const disabledSystem = await skills.listSkills(directory, { "umbratic-markdown": false });
   assert.equal(disabledSystem.skills.find((skill) => skill.id === "umbratic-markdown").enabled, false);
 });
 
-test("listSkills removes obsolete skill storage and does not list reserved roots", async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-cleanup-settings-"));
+test("listSkills does not list the reserved system root", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-reserved-settings-"));
   const skills = loadSkills(userData);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-cleanup-"));
-  fs.mkdirSync(path.join(directory, ".defaults"), { recursive: true });
-  fs.writeFileSync(path.join(directory, ".defaults", "old.md"), "# Old skill storage", "utf8");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-reserved-"));
   fs.mkdirSync(path.join(directory, "system"), { recursive: true });
   fs.writeFileSync(path.join(directory, "system", "SKILL.md"), "# Reserved root", "utf8");
-  fs.writeFileSync(path.join(directory, "umbratic-marketing.md"), "# Retired Marketing", "utf8");
-  fs.mkdirSync(path.join(directory, "system", "umbratic-engineering"), { recursive: true });
-  fs.writeFileSync(path.join(directory, "system", "umbratic-engineering", "SKILL.md"), "# Retired Engineering", "utf8");
 
   const listing = await skills.listSkills(directory, {});
-  assert.equal(fs.existsSync(path.join(directory, ".defaults")), false);
-  assert.equal(fs.existsSync(path.join(directory, "umbratic-marketing.md")), false);
-  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-engineering")), false);
   assert.equal(listing.skills.some((skill) => skill.id === "system" && skill.source === "local"), false);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md")), true);
-});
-
-test("listSkills upgrades an unchanged legacy PDF default without overwriting edits", async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-default-migration-settings-"));
-  const skills = loadSkills(userData);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-default-migration-"));
-  const pdfDirectory = path.join(directory, "system", "umbratic-pdf");
-  fs.mkdirSync(pdfDirectory, { recursive: true });
-  const legacyPdf = fs.readFileSync(
-    path.join(import.meta.dirname, "../src/main/system-skills/.legacy/umbratic-pdf-v1.md"),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(pdfDirectory, "SKILL.md"), legacyPdf.replace(/\n/g, "\r\n"), "utf8");
-
-  const migrated = await skills.listSkills(directory, {});
-  const pdf = migrated.skills.find((skill) => skill.id === "umbratic-pdf");
-  assert.equal(pdf.name, "PDF & OCR");
-  assert.equal(pdf.modified, false);
-  assert.equal(pdf.checksumStatus, "known_good");
-  assert.match(fs.readFileSync(path.join(pdfDirectory, "SKILL.md"), "utf8"), /OCR Workflow/);
-
-  const customized = `${legacyPdf}\nUser-specific PDF instruction.\n`;
-  fs.writeFileSync(path.join(pdfDirectory, "SKILL.md"), customized, "utf8");
-  const preserved = await skills.listSkills(directory, {});
-  const customizedPdf = preserved.skills.find((skill) => skill.id === "umbratic-pdf");
-  assert.equal(customizedPdf.modified, true);
-  assert.match(fs.readFileSync(path.join(pdfDirectory, "SKILL.md"), "utf8"), /User-specific PDF instruction/);
 });
 
 test("enabledPromptSkills returns every enabled skill as metadata with a readable instruction path", () => {
