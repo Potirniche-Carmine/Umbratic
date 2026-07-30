@@ -14,6 +14,11 @@ test("chat titles prefer two or three meaningful words", () => {
   );
   assert.equal(chatTitleFromFirstMessage("Please implement stable chat titles for the sidebar"), "Implement Stable Chat");
   assert.equal(chatTitleFromFirstMessage("fix it"), "Fix It");
+  assert.equal(chatTitleFromFirstMessage("do some analysis"), "Analysis");
+  assert.equal(
+    chatTitleFromFirstMessage("do some analysis of vulnerabilities in this codebase"),
+    "Analysis Vulnerabilities Codebase",
+  );
 });
 
 test("chat titles ignore attachment metadata and never exceed three words", () => {

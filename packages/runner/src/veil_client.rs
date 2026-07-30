@@ -42,6 +42,7 @@ pub struct VeilRequestOptions {
     pub include_tools: bool,
     pub require_tool_call: bool,
     pub suppress_output: bool,
+    pub public_progress: bool,
 }
 
 pub async fn compact_context(
@@ -284,17 +285,45 @@ fn bounded_progress(value: &str) -> String {
     format!("{}…", value[..end].trim_end())
 }
 
+fn emit_progress_delta(sink: &EventSink, session: &Session, text: &str, emitted_bytes: &mut usize) {
+    const MAX_PROGRESS_BYTES: usize = 2 * 1024;
+    if text.is_empty() || *emitted_bytes >= MAX_PROGRESS_BYTES {
+        return;
+    }
+    let remaining = MAX_PROGRESS_BYTES - *emitted_bytes;
+    let mut end = text.len().min(remaining);
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 {
+        return;
+    }
+    let text = &text[..end];
+    *emitted_bytes += text.len();
+    sink.emit(json!({
+        "type": "assistant.progress.delta",
+        "taskId": session.task_id,
+        "text": text,
+        "at": now_iso()
+    }));
+}
+
 fn emit_completed_output(
     sink: &EventSink,
     session: &Session,
     result: &VeilChatResult,
     suppress_output: bool,
     answer_streamed: bool,
+    tool_aware: bool,
+    public_progress: bool,
 ) {
-    if suppress_output || result.content.is_empty() {
+    if suppress_output || public_progress || result.content.is_empty() {
         return;
     }
     if result.tool_calls.is_empty() && !answer_streamed {
+        if tool_aware || !result.action_requirement.is_empty() {
+            return;
+        }
         sink.emit(json!({ "type": "assistant.answer.started", "taskId": session.task_id, "at": now_iso() }));
         sink.emit(json!({ "type": "assistant.delta", "taskId": session.task_id, "text": result.content, "at": now_iso() }));
     } else if !result.tool_calls.is_empty() && !answer_streamed {
@@ -552,6 +581,7 @@ pub async fn stream_veil_chat(
         include_tools,
         require_tool_call,
         suppress_output,
+        public_progress,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -570,7 +600,9 @@ pub async fn stream_veil_chat(
         "max_output_tokens": max_output_tokens
     });
     let object = body.as_object_mut().unwrap();
-    if !session.config.skills.is_empty() {
+    if public_progress {
+        object.insert("response_mode".into(), Value::String("progress".into()));
+    } else if !session.config.skills.is_empty() {
         object.insert("skills".into(), Value::Array(session.config.skills.iter().map(|skill| json!({ "id":skill.id, "name":skill.name, "description":skill.description, "source":skill.source })).collect()));
     }
     if include_tools && !tools.is_empty() {
@@ -644,7 +676,9 @@ pub async fn stream_veil_chat(
         })
         .unwrap_or("")
         .to_owned();
-    let stream_answer = !suppress_output && (action.is_empty() || !include_tools);
+    let stream_answer =
+        !suppress_output && !public_progress && !include_tools && !require_tool_call;
+    let stream_progress = !suppress_output && public_progress;
     let mut result = VeilChatResult {
         action_requirement: action,
         ..VeilChatResult::default()
@@ -655,8 +689,10 @@ pub async fn stream_veil_chat(
     // Veil classifies workspace actions before it starts the response body. A
     // response with no required workspace action is a direct answer, so its
     // public content can reach the desktop as each validated SSE delta arrives.
-    // Tool-required turns remain buffered until their tool-call shape is known.
+    // Tool-aware turns remain buffered until their tool-call shape is known. A
+    // tool-aware no-call response is replaced by a separate streamed final pass.
     let mut answer_started = false;
+    let mut progress_emitted_bytes = 0usize;
     let mut stream = response.bytes_stream();
     loop {
         if session.is_aborted() {
@@ -676,6 +712,8 @@ pub async fn stream_veil_chat(
             let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)?;
             if stream_answer {
                 emit_answer_delta(sink, session, &content, &mut answer_started);
+            } else if stream_progress {
+                emit_progress_delta(sink, session, &content, &mut progress_emitted_bytes);
             }
             if line_completed {
                 completed = true;
@@ -692,6 +730,8 @@ pub async fn stream_veil_chat(
         let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)?;
         if stream_answer {
             emit_answer_delta(sink, session, &content, &mut answer_started);
+        } else if stream_progress {
+            emit_progress_delta(sink, session, &content, &mut progress_emitted_bytes);
         }
         if line_completed {
             completed = true;
@@ -706,7 +746,15 @@ pub async fn stream_veil_chat(
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
-    emit_completed_output(sink, session, &result, suppress_output, answer_started);
+    emit_completed_output(
+        sink,
+        session,
+        &result,
+        suppress_output,
+        answer_started,
+        include_tools || require_tool_call,
+        public_progress,
+    );
     Ok(result)
 }
 

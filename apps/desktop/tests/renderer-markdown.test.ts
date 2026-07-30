@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,7 +10,7 @@ const iconNames = [
   "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronRight", "CheckCircle2", "CircleDashed",
   "Copy", "ExternalLink", "File", "FileText", "FolderOpen", "GitBranch", "Hand", "Loader2",
   "Monitor", "Moon", "PanelRight", "Paperclip", "Play", "Plus", "RefreshCw", "Send", "Settings",
-  "ShieldCheck", "Sparkles", "SquarePen", "Sun", "ThumbsDown", "ThumbsUp",
+  "ShieldCheck", "Sparkles", "SquarePen", "SquareTerminal", "Sun", "ThumbsDown", "ThumbsUp",
   "Trash2", "TriangleAlert", "Type", "Undo2", "User", "X",
 ];
 
@@ -92,6 +93,75 @@ test("MarkdownContent renders real markdown while escaping raw HTML and scripts"
   assert.match(html, /<table>/);
   assert.match(html, /&lt;b&gt;raw&lt;\/b&gt;/);
   assert.match(html, /<code>&lt;\/code&gt;&lt;script&gt;bad\(\)&lt;\/script&gt;<\/code>/);
+});
+
+test("WorkMarkdownContent renders safe markdown with a distinct streaming marker", () => {
+  const { WorkMarkdownContent } = loadRenderer();
+  const html = renderToStaticMarkup(
+    React.createElement(WorkMarkdownContent, {
+      content: "**Inspecting** the workspace.\n\n- Read `main.tsx`\n- Run tests",
+      streaming: true,
+    }),
+  );
+  assert.match(html, /workMarkdownContent isStreaming/);
+  assert.match(html, /<strong>Inspecting<\/strong>/);
+  assert.match(html, /<ul>/);
+  assert.match(html, /<code>main\.tsx<\/code>/);
+  assert.match(html, /workStreamingCaret/);
+  assert.doesNotMatch(html, /\*\*Inspecting\*\*/);
+});
+
+test("work activity styles keep reasoning and tool calls in one seamless flow", () => {
+  const activityCss = fs.readFileSync(
+    new URL("../src/renderer/styles/work-activity.css", import.meta.url),
+    "utf8",
+  );
+  const reasoningRule = activityCss.match(/\.activityLogEntry\.reasoningLog\s*{[^}]+}/s)?.[0] ?? "";
+  assert.doesNotMatch(reasoningRule, /\b(?:background|border)/);
+  assert.doesNotMatch(activityCss, /activityToolToggle::before/);
+  assert.doesNotMatch(activityCss, /\.commandLog\.(?:running|passed|failed)/);
+});
+
+test("feedback and prompt controls do not change layout or allow horizontal growth", () => {
+  const composerCss = fs.readFileSync(
+    new URL("../src/renderer/styles/composer.css", import.meta.url),
+    "utf8",
+  );
+  const timelineCss = fs.readFileSync(
+    new URL("../src/renderer/styles/timeline.css", import.meta.url),
+    "utf8",
+  );
+  const feedbackRule = timelineCss.match(/\.responseFeedbackNote\s*{[^}]+}/s)?.[0] ?? "";
+  const sendRule = composerCss.match(/\.sendButton\s*{[^}]+}/s)?.[0] ?? "";
+  const actionRailRule = composerCss.match(/\.promptActionRail\s*{[^}]+}/s)?.[0] ?? "";
+  const textareaRule = composerCss.match(/\.composer textarea\s*{[^}]+}/s)?.[0] ?? "";
+  assert.match(feedbackRule, /position:\s*absolute/);
+  assert.doesNotMatch(sendRule, /position:\s*absolute/);
+  assert.match(sendRule, /width:\s*36px/);
+  assert.match(actionRailRule, /justify-content:\s*flex-end/);
+  assert.match(actionRailRule, /min-height:\s*44px/);
+  assert.match(textareaRule, /max-width:\s*100%/);
+  assert.match(textareaRule, /overflow-x:\s*hidden/);
+  assert.match(textareaRule, /overflow-wrap:\s*anywhere/);
+});
+
+test("work and skill disclosures use restrained motion without text geometry changes", () => {
+  const timelineCss = fs.readFileSync(
+    new URL("../src/renderer/styles/timeline.css", import.meta.url),
+    "utf8",
+  );
+  const skillCss = fs.readFileSync(
+    new URL("../src/renderer/styles/skills-settings.css", import.meta.url),
+    "utf8",
+  );
+  const bodyRule = timelineCss.match(/\.activityBody\s*{[^}]+}/s)?.[0] ?? "";
+  const bodyContentRule = timelineCss.match(/\.activityBodyContent\s*{[^}]+}/s)?.[0] ?? "";
+  const skillPreviewRule = skillCss.match(/\.skillPreviewPanel\s*{[^}]+}/s)?.[0] ?? "";
+  assert.match(bodyRule, /grid-template-rows\s+210ms/);
+  assert.match(bodyRule, /70ms/);
+  assert.match(bodyContentRule, /opacity\s+90ms/);
+  assert.doesNotMatch(bodyContentRule, /transform/);
+  assert.match(skillPreviewRule, /skillPreviewReveal\s+170ms/);
 });
 
 test("inline references render review buttons only for unambiguous review files", () => {
@@ -222,7 +292,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     events[1],
     events[5],
   ])));
-  assert.deepEqual(delayedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  assert.deepEqual(delayedReasoningTimeline[1].segments.map((segment) => segment.type), ["command", "reasoning"]);
   const repeatedReasoningTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "First step.", at: "2026-01-01T00:00:01.000Z" },
@@ -232,8 +302,24 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.progress.delta", taskId: "task-1", text: "Second step.", at: "2026-01-01T00:00:05.500Z" },
     events[5],
   ])));
-  assert.deepEqual(repeatedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
-  assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First step.\n\nSecond step.");
+  assert.deepEqual(repeatedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command", "reasoning"]);
+  assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First step.");
+  assert.equal(repeatedReasoningTimeline[1].segments[2].text, "Second step.");
+  const skillTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "I will inspect the project.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "skill.selected", taskId: "task-1", skillId: "project-review", source: "local", reason: "strong_match", fullContent: true, at: "2026-01-01T00:00:02.000Z" },
+    events[2],
+    events[3],
+    events[4],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "The tests pass.", at: "2026-01-01T00:00:05.500Z" },
+    events[5],
+  ])));
+  assert.deepEqual(
+    skillTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "skill", "command", "reasoning"],
+  );
+  assert.equal(skillTimeline[1].segments[1].skillId, "project-review");
   const interleavedTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "First step.", at: "2026-01-01T00:00:01.000Z" },
@@ -249,7 +335,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(interleavedTimeline.filter((item) => item.type === "activity").length, 2);
   assert.equal(interleavedTimeline.filter((item) => item.type === "assistant").length, 1);
   assert.equal(interleavedTimeline[1].segments[0].text, "First step.");
-  assert.equal(interleavedTimeline[2].segments[0].text, "I’ll inspect the project.\n\nSecond step.");
+  assert.deepEqual(interleavedTimeline[2].segments.map((segment) => segment.type), ["reasoning", "command", "reasoning"]);
+  assert.equal(interleavedTimeline[2].segments[0].text, "I’ll inspect the project.");
+  assert.equal(interleavedTimeline[2].segments[2].text, "Second step.");
   assert.equal(interleavedTimeline[3].text, "Here is the complete answer.");
   assert.equal(assistantTextFromEvents([
     events[0],
@@ -259,6 +347,29 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     events[4],
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
   ]), "Here is the complete answer.");
+
+  const progressOnlyAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "Tell me about this project", at: "2026-01-01T00:00:00.000Z" },
+    { type: "command.started", taskId: "task-1", id: "search-1", command: "search workspace", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.output", taskId: "task-1", id: "search-1", stream: "stdout", text: "No matches.", at: "2026-01-01T00:00:02.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "search-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "# Umbratic Project Overview\n\nA private AI workbench.", at: "2026-01-01T00:00:04.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:05.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(progressOnlyAnswerTimeline.map((item) => item.type), ["user", "activity"]);
+  assert.deepEqual(progressOnlyAnswerTimeline[1].segments.map((segment) => segment.type), ["command", "reasoning"]);
+  assert.equal(progressOnlyAnswerTimeline[1].segments[1].text, "# Umbratic Project Overview\n\nA private AI workbench.");
+
+  const preToolOnlyAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "Tell me about this project", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "# Umbratic Project Overview\n\nA private AI workbench.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.started", taskId: "task-1", id: "search-1", command: "search workspace", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:02.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "search-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "activity"]);
+  assert.deepEqual(preToolOnlyAnswerTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  assert.equal(preToolOnlyAnswerTimeline[1].segments[0].text, "# Umbratic Project Overview\n\nA private AI workbench.");
 
   const escapedPlanTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "write me bubble sort algorithm in python and verify that it runs", at: "2026-01-01T00:00:00.000Z" },
@@ -338,8 +449,8 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "task-1",
     openedDisclosure.autoOpenedKeys,
   );
-  assert.deepEqual([...streamingDisclosure.expandedIds], ["activity-1"]);
-  assert.deepEqual([...streamingDisclosure.autoOpenedKeys], ["task-1:activity-1"]);
+  assert.deepEqual([...streamingDisclosure.expandedIds], []);
+  assert.deepEqual([...streamingDisclosure.autoOpenedKeys], []);
   const completedAnswerTimeline = composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
@@ -356,6 +467,14 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.deepEqual([...completedDisclosure.autoOpenedKeys], []);
   const loadedCompletedDisclosure = reconcileActivityDisclosureState(new Set(), completedAnswerTimeline, "task-1", new Set());
   assert.deepEqual([...loadedCompletedDisclosure.expandedIds], []);
+  const redundantCompletionTimeline = composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Work complete", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Here is the answer", at: "2026-01-01T00:00:02.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:03.000Z" },
+  ], undefined, "completed");
+  assert.deepEqual(JSON.parse(JSON.stringify(redundantCompletionTimeline.map((item) => item.type))), ["user", "assistant"]);
+  assert.equal(redundantCompletionTimeline[1].text, "Here is the answer");
   const modelFacingPrompt = "Umbratic workspace context:\n- opened folder: C:/repo\n\nUser request:\nRun tests";
   const displayTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([events[0]], modelFacingPrompt)));
   assert.equal(displayTimeline.length, 1);

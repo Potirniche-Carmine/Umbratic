@@ -35,9 +35,7 @@ type User struct {
 	UID             string     `json:"uid"`
 	Label           string     `json:"label"`
 	Access          string     `json:"access"`
-	ActiveForDays   int        `json:"active_for_days"`
 	CreatedAt       time.Time  `json:"created_at"`
-	ExpiresAt       time.Time  `json:"expires_at"`
 	LastSeenAt      *time.Time `json:"last_seen_at"`
 	EnrollmentCodes []Code     `json:"enrollment_codes"`
 	Devices         []Device   `json:"devices"`
@@ -95,10 +93,10 @@ func (c *Client) Snapshot(ctx context.Context) (Snapshot, error) {
 	return result, err
 }
 
-func (c *Client) CreateUser(ctx context.Context, label string, activeForDays int) (CreatedUser, error) {
+func (c *Client) CreateUser(ctx context.Context, label string) (CreatedUser, error) {
 	var result CreatedUser
 	err := c.do(ctx, http.MethodPost, "/api/control/users", map[string]any{
-		"label": label, "active_for_days": activeForDays,
+		"label": label,
 	}, &result)
 	return result, err
 }

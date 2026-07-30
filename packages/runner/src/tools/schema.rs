@@ -33,7 +33,7 @@ pub async fn enabled_tool_specs(session: &Session, include_tools: bool) -> Vec<V
     if enabled.iter().any(|name| name == "search") {
         specs.push(tool_definition(
             "search",
-            "Fuzzy-search workspace file paths and small text-file contents. Use query for text or fuzzy path terms. Use path and glob to narrow or list files. Results include line snippets that can be copied into read or edit.",
+            "Fuzzy-search workspace file paths and small text-file contents. Multiple query terms can match across one file. Use path and glob to narrow or list files. Copy exact result paths into read or edit. If there are no matches, broaden the query or list a directory with read; never guess a path.",
             json!({ "query":{"type":"string"}, "path":{"type":"string"}, "glob":{"type":"string"}, "exclude":{"type":"string"}, "caseSensitive":{"type":"boolean"}, "limit":{"type":"number"} }),
             &[],
         ));

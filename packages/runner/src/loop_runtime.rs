@@ -9,8 +9,9 @@ use crate::{
         ContextCalibration, ContextUsageEstimate, adaptive_output_reserve, context_hash,
         estimate_context_usage, request_profile_fingerprint,
     },
-    events::now_iso,
+    events::{empty_summary, increment, now_iso},
     permission::PermissionBroker,
+    public_progress::stream_public_progress,
     session::{EventSink, InputPart, Session},
     tools::{ToolCall, ToolResult, canonical_tool_name, enabled_tool_specs, execute_tool},
     veil_client::{VeilChatResult, VeilRequestOptions, compact_context, stream_veil_chat},
@@ -382,14 +383,17 @@ fn observed_context_event(
 }
 
 #[derive(Debug)]
-struct PreparedRequest {
-    messages: Vec<Value>,
-    max_output_tokens: u64,
+pub(crate) struct PreparedRequest {
+    pub(crate) messages: Vec<Value>,
+    pub(crate) max_output_tokens: u64,
     usage: ContextUsageEstimate,
     profile_fingerprint: String,
 }
 
-async fn prepared_messages(session: &Session, tools: &[Value]) -> Result<PreparedRequest, String> {
+pub(crate) async fn prepared_messages(
+    session: &Session,
+    tools: &[Value],
+) -> Result<PreparedRequest, String> {
     let mut messages = session.messages.lock().await;
     compact_tool_history(&mut messages);
     loop {
@@ -702,15 +706,6 @@ async fn update_context_calibration(
     };
     *session.context_calibration.lock().await = Some(calibration);
 }
-fn empty_summary() -> Value {
-    json!({ "status":"completed", "turns":0, "assistantTextChars":0, "progressTextChars":0, "toolCalls":0, "failedToolCalls":0, "attempts":[] })
-}
-
-fn increment(summary: &mut Value, key: &str, amount: u64) {
-    let current = summary.get(key).and_then(Value::as_u64).unwrap_or(0);
-    summary[key] = Value::from(current + amount);
-}
-
 fn context_overflow(error: &str) -> bool {
     error.contains("context_overflow_preflight") || error.contains("context_overflow_upstream")
 }
@@ -750,6 +745,7 @@ async fn final_without_tools(
             include_tools: false,
             require_tool_call: false,
             suppress_output: false,
+            public_progress: false,
         },
     )
     .await;
@@ -772,6 +768,7 @@ async fn final_without_tools(
                         include_tools: false,
                         require_tool_call: false,
                         suppress_output: false,
+                        public_progress: false,
                     },
                 )
                 .await;
@@ -831,6 +828,7 @@ pub async fn run_turn(
     let mut changed = false;
     let mut executed = false;
     let mut inspected = false;
+    stream_public_progress(&session, &sink, &mut summary).await;
     for _ in 0..MAX_TOOL_TURNS {
         if session.is_aborted() {
             return Err("Runner turn aborted".into());
@@ -864,6 +862,7 @@ pub async fn run_turn(
                 // Stream the tool-aware answer. A second model request is only used
                 // for empty answers and safety-limit fallbacks.
                 suppress_output: false,
+                public_progress: false,
             },
         )
         .await;
@@ -888,6 +887,7 @@ pub async fn run_turn(
                             && action_retries > 0
                             && !ready_for_answer,
                         suppress_output: false,
+                        public_progress: false,
                     },
                 )
                 .await;
@@ -896,11 +896,6 @@ pub async fn run_turn(
         let result = response?;
         update_context_calibration(&session, &prepared, &result).await;
         increment(&mut summary, "turns", 1);
-        increment(
-            &mut summary,
-            "assistantTextChars",
-            result.content.len() as u64,
-        );
         if !result.tool_calls.is_empty() {
             increment(
                 &mut summary,
@@ -937,13 +932,16 @@ pub async fn run_turn(
                 return Ok(summary);
             }
             if !result.content.trim().is_empty() {
-                // The tool-aware pass already streamed this answer. Skip the
-                // duplicate tool-free model request.
-                session
-                    .messages
-                    .lock()
-                    .await
-                    .push(json!({"role":"assistant","content":result.content}));
+                // Tool-aware output is buffered until its call shape is known.
+                // Use a tool-free pass so the final answer reaches the UI as
+                // validated deltas instead of one completed block.
+                final_without_tools(
+                    &session,
+                    &sink,
+                    &mut summary,
+                    "The model did not provide a final answer.",
+                )
+                .await;
                 return Ok(summary);
             }
             final_without_tools(

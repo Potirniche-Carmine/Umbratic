@@ -65,17 +65,6 @@
             <span>Name</span>
             <input name="label" maxlength="160" placeholder="Alice" required {{if .Access.AddUserDisabled}}disabled{{end}}>
           </label>
-          <fieldset class="active-period">
-            <legend>Active for</legend>
-            <div class="choice-segments">
-              {{range $days := .ActiveForOptions}}
-              <label class="segment-option">
-                <input type="radio" name="active_for_days" value="{{$days}}" {{if eq $days 30}}checked{{end}} required {{if $.Access.AddUserDisabled}}disabled{{end}}>
-                <span>{{$days}} days</span>
-              </label>
-              {{end}}
-            </div>
-          </fieldset>
           <button type="submit" {{if .Access.AddUserDisabled}}disabled{{end}}>Add user</button>
         </div>
       </form>
@@ -83,7 +72,6 @@
       <nav class="access-filters" aria-label="Filter users">
         <a href="/access?filter=all" {{if eq .Access.Filter "all"}}aria-current="page"{{end}}>All</a>
         <a href="/access?filter=awaiting" {{if eq .Access.Filter "awaiting"}}aria-current="page"{{end}}>Needs setup</a>
-        <a href="/access?filter=expired" {{if eq .Access.Filter "expired"}}aria-current="page"{{end}}>Expired</a>
         <a href="/access?filter=deactivated" {{if eq .Access.Filter "deactivated"}}aria-current="page"{{end}}>Deactivated</a>
       </nav>
 
@@ -148,7 +136,7 @@
             </div>
 
             <div class="user-actions">
-              {{if or .Deactivated .Expired}}
+              {{if .Deactivated}}
               <form method="post" action="/access/users/{{.UID}}/reactivate">
                 <input type="hidden" name="csrf" value="{{$.CSRF}}">
                 <button type="submit">Reactivate user</button>

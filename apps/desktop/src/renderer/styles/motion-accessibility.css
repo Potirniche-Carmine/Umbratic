@@ -245,6 +245,17 @@
 
   .reviewSidebar { transform: none !important; }
 
+  .activityBody,
+  .activityBodyContent,
+  .activityChevron {
+    transition-delay: 0ms !important;
+    transition-duration: 80ms !important;
+  }
+
+  .skillPreviewPanel {
+    animation: none !important;
+  }
+
   .streamingTextCaret {
     animation: none !important;
     opacity: 0.35;

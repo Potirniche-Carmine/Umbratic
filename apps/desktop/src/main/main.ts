@@ -176,7 +176,7 @@ import type {
 } from "./types";
 import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, taskEventSignature } from "../shared/taskEvents";
+import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, removeResponseFeedback, taskEventSignature } from "../shared/taskEvents";
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
 import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
 import {
@@ -4345,15 +4345,19 @@ async function setResponseFeedback(input: unknown): Promise<void> {
   }
   const task = getTask(requiredString(input.taskId, "taskId"));
   const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
-  const rating = input.rating === "bad" ? "bad" : "good";
+  const rating = input.rating === null || input.rating === "good" || input.rating === "bad"
+    ? input.rating
+    : undefined;
+  if (rating === undefined) {
+    throw new Error("Invalid response feedback rating.");
+  }
   const comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 1000) : "";
   if (!/^assistant-\d+$/.test(messageId)) {
     throw new Error("Invalid response message id.");
   }
-  task.events = task.events.filter(
-    (event) => !(event.type === "response.feedback" && event.messageId === messageId),
-  );
+  task.events = removeResponseFeedback(task.events, task.id, messageId);
   saveTask(task);
+  if (rating === null) return;
   emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(comment ? { comment } : {}) });
 }
 

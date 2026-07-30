@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$dns_name" ]]; then
-  echo "Usage: sudo ./install.sh --dnsname console.example.com [--port 8432] [--console-port 8177] [--veil-port 8080]" >&2
+  echo "Usage: sudo ./install.sh --dnsname veil.example.com [--port 8432] [--console-port 8177] [--veil-port 8080]" >&2
   exit 2
 fi
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
@@ -70,9 +70,13 @@ if [[ "$https_port" == 443 ]]; then
 else
   origin="https://$dns_name:$https_port"
 fi
-printf '\nVeil Console is installed.\nOpen: %s/setup\n' "$origin"
+printf '\nVeil and Veil Console are installed.\n'
+printf 'Desktop Veil URL: %s\n' "$origin"
+printf 'Console stays on 127.0.0.1:%s. Use an SSH tunnel for administrator access.\n' "$console_port"
+printf '  ssh -N -L %s:127.0.0.1:%s USER@SERVER\n' "$console_port" "$console_port"
+printf 'Then open: http://127.0.0.1:%s/setup\n' "$console_port"
 printf 'Read the one-time setup code with:\n  sudo cat /run/veil-console/setup-code\n'
 printf '\nOllama or vLLM must run locally before you configure Veil.\n'
 printf '\nSECURITY: This installer does not change your firewall or cloud security group.\n'
-printf 'Restrict the HTTPS administration port to your VPN or exact administrator IP addresses.\n'
+printf 'Restrict the Veil HTTPS port to your VPN or approved desktop IP addresses.\n'
 printf 'Never publish the private Console, Veil, Ollama, or vLLM ports.\n'

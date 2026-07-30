@@ -9,14 +9,12 @@ import type {
   CapabilityProbeStatus,
   ChatAttachment,
   ChatRecord,
-  CompanyConnectionStatus,
   DesktopStartupSettings,
   DesktopApi,
   FileSearchResult,
   HarnessProfileId,
   IdeInfo,
   LocalModelInfo,
-  ModelEndpointMode,
   PastedAttachmentInput,
   PermissionMode,
   ReasoningMode,
@@ -77,6 +75,7 @@ import {
   Sparkles,
   Square,
   SquarePen,
+  SquareTerminal,
   Sun,
   ThumbsDown,
   ThumbsUp,
@@ -90,24 +89,18 @@ import {
 import {
   attachmentLabel,
   attachmentMention,
+  composerPromptForSend,
   continueNumberedList,
+  insertPastedComposerText,
   markdownPreview,
   parseMarkdown,
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
-import { appendTaskEvent, compactTaskEvents } from "../shared/taskEvents";
+import { appendTaskEvent, compactTaskEvents, removeResponseFeedback, toggleResponseRating } from "../shared/taskEvents";
 import { ReviewPanel } from "./review/ReviewPanel";
-import { LocalModelPicker, type LocalModelDiscoveryStatus } from "./LocalModelPicker";
-import { CompanyServerActions } from "./CompanyServerActions";
-import {
-  defaultEndpointBaseUrlForMode,
-  defaultModelEndpointSettings,
-  endpointDefaultsForMode,
-  endpointValidationMessage,
-  normalizeEndpointSettings,
-  type ModelEndpointSettings,
-} from "./endpointSettings";
+import { defaultModelEndpointSettings } from "./endpointSettings";
+import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
   reduceApprovalChecks,
@@ -215,6 +208,14 @@ type CommandRun = {
 
 type ComposerActivitySegment =
   | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
+  | {
+      type: "skill";
+      id: string;
+      skillId: string;
+      source: "system" | "local";
+      reason: "explicit_request" | "strong_match" | "metadata";
+      fullContent: boolean;
+    }
   | { type: "command"; id: string; run: CommandRun };
 
 type ComposerTimelineItem =
@@ -1354,6 +1355,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   let reasoningStartedAt: string | undefined;
   let reasoningEndedAt: string | undefined;
   let reasoningIndex = 0;
+  let skillIndex = 0;
   const prompt = taskPrompt?.trim();
   const hasUserMessages = events.some((event) => event.type === "user.message");
 
@@ -1414,25 +1416,11 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       activityEndedAt = undefined;
       return;
     }
-    const reasoningSegments = activitySegments.filter((segment) => segment.type === "reasoning");
-    const commandSegments = activitySegments.filter((segment) => segment.type === "command");
-    const combinedReasoning = reasoningSegments.length
-      ? [{
-          ...reasoningSegments[0],
-          text: reasoningSegments.map((segment) => segment.text.trim()).filter(Boolean).join("\n\n"),
-          durationMs: reasoningSegments.reduce<number | null>((total, segment) => (
-            segment.durationMs === null ? total : (total ?? 0) + segment.durationMs
-          ), null),
-          finished: reasoningSegments.every((segment) => segment.finished),
-        }]
-      : [];
     activityIndex += 1;
     items.push({
       type: "activity",
       id: `activity-${activityIndex}`,
-      // Some providers deliver their reasoning summary after tool events. Keep the
-      // explanation at the top of the activity so the UI reads as intent, then action.
-      segments: [...combinedReasoning, ...commandSegments],
+      segments: activitySegments,
       startedAt: activityStartedAt,
       endedAt: activityEndedAt,
       finished,
@@ -1443,7 +1431,9 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   };
 
   const flushReasoning = (finished = true) => {
-    if (!reasoningBuffer.trim()) {
+    const text = reasoningBuffer.trim();
+    const redundantCompletion = /^(?:#{1,6}\s*)?work(?:\s+is)?\s+complete(?:d)?[.!:]*$/i.test(text);
+    if (!text || redundantCompletion) {
       reasoningBuffer = "";
       reasoningStartedAt = undefined;
       reasoningEndedAt = undefined;
@@ -1454,7 +1444,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     activitySegments.push({
       type: "reasoning",
       id: `reasoning-${reasoningIndex}`,
-      text: reasoningBuffer,
+      text,
       durationMs: thoughtDurationMs(reasoningStartedAt, reasoningEndedAt, finished),
       finished,
     });
@@ -1517,6 +1507,20 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       markActivityTime(undefined, event.at);
       flushActivity();
       flushAssistant();
+      continue;
+    }
+    if (event.type === "skill.selected") {
+      flushAssistantAsReasoning();
+      skillIndex += 1;
+      activitySegments.push({
+        type: "skill",
+        id: `skill-${skillIndex}`,
+        skillId: event.skillId,
+        source: event.source,
+        reason: event.reason,
+        fullContent: event.fullContent,
+      });
+      markActivityTime(event.at, event.endedAt ?? event.at);
       continue;
     }
     if (event.type === "command.started") {
@@ -1645,7 +1649,6 @@ export function reconcileActivityDisclosureState(
   const nextExpandedIds = new Set(currentExpandedIds);
   const nextAutoOpenedKeys = new Set(currentAutoOpenedKeys);
   const newlyOpenedIds: string[] = [];
-  const responseIsStreaming = items.some((item) => item.type === "assistant" && item.streaming);
 
   for (const activity of activities) {
     const key = activityKey(activity.id);
@@ -1655,7 +1658,7 @@ export function reconcileActivityDisclosureState(
       newlyOpenedIds.push(activity.id);
       continue;
     }
-    if ((activity.segments.length === 0 || (activity.finished && !responseIsStreaming)) && nextAutoOpenedKeys.delete(key)) {
+    if ((activity.segments.length === 0 || activity.finished) && nextAutoOpenedKeys.delete(key)) {
       nextExpandedIds.delete(activity.id);
     }
   }
@@ -1848,6 +1851,17 @@ function StreamingTextContent({ content }: { content: string }) {
   );
 }
 
+export function WorkMarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  return (
+    <div className={`workMarkdownContent ${streaming ? "isStreaming" : ""}`}>
+      <MarkdownContent
+        content={content}
+        trailingInline={streaming ? <span className="workStreamingCaret" aria-hidden="true" /> : null}
+      />
+    </div>
+  );
+}
+
 function normalizeSkillPreviewHeading(value: string): string {
   return value.replace(/^#+\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -2006,7 +2020,6 @@ function placeElementAtBottom(node: HTMLElement) {
 }
 
 function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
-  const initialEndpointSettings = normalizeEndpointSettings(startupSettings.modelEndpoint);
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
   const initialContextLength = normalizeContextLength(startupSettings.contextLength);
   const [backend, setBackend] = useState<BackendStatus | null>(null);
@@ -2058,15 +2071,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "skills" | "telemetry">("account");
-  const [accountMessage, setAccountMessage] = useState<string | null>(null);
-  const [endpointSettings, setEndpointSettings] = useState<ModelEndpointSettings>(initialEndpointSettings);
-  const [endpointDraftSettings, setEndpointDraftSettings] = useState<ModelEndpointSettings>(initialEndpointSettings);
-  const [companyConnection, setCompanyConnection] = useState<CompanyConnectionStatus>(startupSettings.companyConnection);
-  const [endpointSaving, setEndpointSaving] = useState(false);
-  const [endpointRefreshing, setEndpointRefreshing] = useState(false);
-  const [localModelDiscovery, setLocalModelDiscovery] = useState<{
-    baseUrl: string; models: string[]; status: LocalModelDiscoveryStatus;
-  }>({ baseUrl: "", models: [], status: "idle" });
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
@@ -2110,6 +2114,20 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [busy, setBusy] = useState(false);
   const [stopPending, setStopPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const connectionSettings = useConnectionSettings({
+    api,
+    backend,
+    initialSettings: startupSettings.modelEndpoint,
+    initialConnection: startupSettings.companyConnection,
+    settingsOpen,
+    active: settingsTab === "account",
+    onBackendStatus: (status) => {
+      setBackend(status);
+      setPermissionModeState(status.permissionMode);
+    },
+  });
+  const endpointSettings = connectionSettings.settings;
+  const endpointDraftSettings = connectionSettings.draft;
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2123,9 +2141,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const modalRef = useRef<HTMLElement | null>(null);
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
-  const endpointSaveSequenceRef = useRef(0);
-  const endpointModeLoadSequenceRef = useRef(0);
-  const endpointModeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({ [initialEndpointSettings.mode]: initialEndpointSettings });
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
@@ -2178,33 +2193,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
-  const connectionState = backend?.endpoint ?? "checking";
-  const connectionDisplayState = connectionState === "degraded" ? "ready" : connectionState;
-  const connectionStatusLabel =
-    backend?.endpoint === "ready" || backend?.endpoint === "degraded" ? "Connected" : backend ? "Unavailable" : "Checking";
-  const endpointDirty = JSON.stringify(endpointDraftSettings) !== JSON.stringify(endpointSettings);
-  const companyEnrollmentRequired =
-    endpointDraftSettings.mode === "server"
-    && (companyConnection.state !== "enrolled" || endpointDraftSettings.baseUrl.trim() !== companyConnection.baseUrl);
-  const companyServerConnected =
-    endpointDraftSettings.mode === "server"
-    && companyConnection.state === "enrolled"
-    && !companyEnrollmentRequired;
-  const companyServerActive = companyServerConnected && endpointSettings.mode === "server" && !endpointDirty;
-  const endpointValidation =
-    endpointValidationMessage(endpointDraftSettings)
-    ?? (companyEnrollmentRequired && !endpointDraftSettings.secret.trim() ? "Enter the Enrollment code." : null);
-  const endpointEditingEnabled = backend?.endpointConfig.endpointEditingAllowed ?? true;
-  const endpointFormDisabled = endpointSaving || !endpointEditingEnabled;
-  const localRuntimeUrlValid = endpointValidationMessage({ ...endpointDraftSettings, modelId: "__probe__" }) === null;
-  const localModelDiscoveryCurrent =
-    localModelDiscovery.baseUrl === endpointDraftSettings.baseUrl.trim().replace(/\/+$/, "");
-  const localModelStatus = endpointRefreshing && endpointDraftSettings.mode === "local"
-    ? "loading"
-    : localModelDiscoveryCurrent ? localModelDiscovery.status : "idle";
-  const localModels = localModelDiscoveryCurrent ? localModelDiscovery.models : [];
-  const connectionRefreshDisabled = endpointRefreshing || endpointSaving
-    || (endpointDraftSettings.mode === "server" ? endpointDirty : !localRuntimeUrlValid);
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -2303,7 +2291,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           .map((segment) =>
             segment.type === "reasoning"
               ? segment.text
-              : [segment.run.command, segment.run.stdout, segment.run.stderr].filter(Boolean).join("\n"),
+              : segment.type === "skill"
+                ? segment.skillId
+                : [segment.run.command, segment.run.stdout, segment.run.stderr].filter(Boolean).join("\n"),
           )
           .filter(Boolean)
           .join("\n"),
@@ -2526,8 +2516,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const activeActivityToolIds = new Set<string>();
     for (const item of composerItems) {
       if (item.type !== "activity") continue;
-      for (const group of activityToolGroups(item.segments)) {
-        activeActivityToolIds.add(`${item.id}:${group.id}`);
+      for (const segment of item.segments) {
+        if (segment.type === "command") {
+          activeActivityToolIds.add(`${item.id}:${segment.id}`);
+        }
       }
     }
     setExpandedActivityIds((current) => {
@@ -3111,158 +3103,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
-  function updateEndpointDraft(patch: Partial<ModelEndpointSettings>) {
-    endpointSaveSequenceRef.current += 1;
-    setEndpointSaving(false);
-    setEndpointRefreshing(false);
-    setEndpointDraftSettings((current) => {
-      if ("mode" in patch) {
-        const mode = patch.mode === "server" ? "server" : "local";
-        endpointModeDraftsRef.current[current.mode] = current;
-        const defaults = endpointDefaultsForMode(mode);
-        const next = endpointModeDraftsRef.current[mode]
-          ?? (mode === "server" && companyConnection.baseUrl
-            ? { ...defaults, baseUrl: companyConnection.baseUrl }
-            : defaults);
-        endpointModeDraftsRef.current[mode] = next;
-        return next;
-      }
-      let next = normalizeEndpointSettings({ ...current, ...patch });
-      if ("software" in patch && current.mode === "local") {
-        const wasDefault = current.baseUrl === defaultEndpointBaseUrlForMode("local", current.software);
-        if (wasDefault) next = { ...next, baseUrl: defaultEndpointBaseUrlForMode("local", next.software) };
-      }
-      endpointModeDraftsRef.current[next.mode] = next;
-      return next;
-    });
-    setAccountMessage(null);
-  }
-
-  async function selectEndpointMode(mode: ModelEndpointMode) {
-    const cached = endpointModeDraftsRef.current[mode];
-    updateEndpointDraft({ mode });
-    if (cached) return;
-    const requestId = endpointModeLoadSequenceRef.current + 1;
-    endpointModeLoadSequenceRef.current = requestId;
-    try {
-      const saved = normalizeEndpointSettings(await api.getModelEndpointSettings({ mode }));
-      if (requestId !== endpointModeLoadSequenceRef.current || saved.mode !== mode) return;
-      endpointModeDraftsRef.current[mode] = saved;
-      setEndpointDraftSettings((current) => current.mode === mode ? saved : current);
-    } catch {
-      // The mode defaults remain usable when stored settings cannot be read.
-    }
-  }
-
   function closeSettingsDialog() {
-    setEndpointDraftSettings(endpointSettings);
-    endpointModeDraftsRef.current = { [endpointSettings.mode]: endpointSettings };
+    connectionSettings.resetDraft();
     setHarnessDraftProfile(harnessProfile);
     setHarnessDraftContextLength(contextLength);
     setHarnessMessage(null);
-    setAccountMessage(null);
     setSettingsOpen(false);
-  }
-
-  useEffect(() => {
-    if (!settingsOpen || settingsTab !== "account") return;
-    let active = true;
-    void api.getCompanyConnectionStatus().then((connection) => {
-      if (active) setCompanyConnection(connection);
-    });
-    return () => {
-      active = false;
-    };
-  }, [api, settingsOpen, settingsTab]);
-
-  async function refreshConnectionStatus() {
-    if (connectionRefreshDisabled) return;
-    const requestId = endpointSaveSequenceRef.current + 1;
-    endpointSaveSequenceRef.current = requestId;
-    const startedAt = Date.now();
-    const localMode = endpointDraftSettings.mode === "local";
-    const probeBaseUrl = endpointDraftSettings.baseUrl.trim().replace(/\/+$/, "");
-    setEndpointRefreshing(true);
-    if (localMode) setLocalModelDiscovery({ baseUrl: probeBaseUrl, models: [], status: "loading" });
-    setAccountMessage(null);
-    try {
-      const [, modelProbe] = await Promise.all([
-        endpointDirty ? Promise.resolve(null) : refreshStatus(),
-        localMode
-          ? api.probeLocalModels({ baseUrl: probeBaseUrl }).catch(() => ({ status: "unavailable" as const, models: [] as [] }))
-          : Promise.resolve(null),
-      ]);
-      const remainingAnimationMs = Math.max(0, 300 - (Date.now() - startedAt));
-      if (remainingAnimationMs > 0) {
-        await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationMs));
-      }
-      if (requestId !== endpointSaveSequenceRef.current) return;
-      if (modelProbe) setLocalModelDiscovery({ baseUrl: probeBaseUrl, ...modelProbe });
-    } finally {
-      if (requestId === endpointSaveSequenceRef.current) setEndpointRefreshing(false);
-    }
-  }
-
-  async function saveEndpointSettings() {
-    if (endpointSaving || endpointRefreshing || !endpointDirty || !endpointEditingEnabled) return;
-    const validationMessage = endpointValidation;
-    if (validationMessage) {
-      setAccountMessage(validationMessage);
-      return;
-    }
-    const requestId = endpointSaveSequenceRef.current + 1;
-    endpointSaveSequenceRef.current = requestId;
-    const nextDraft = normalizeEndpointSettings({
-      ...endpointDraftSettings,
-      headers: endpointDraftSettings.mode === "local" ? defaultModelEndpointSettings.headers : endpointDraftSettings.headers,
-    });
-    setEndpointSaving(true);
-    setAccountMessage(null);
-    if (nextDraft.mode === "server" && nextDraft.secret) {
-      setEndpointDraftSettings({ ...nextDraft, secret: "" });
-    }
-    try {
-      const result =
-        nextDraft.mode === "server" && companyEnrollmentRequired
-          ? await api.enrollCompanyConnection({
-              baseUrl: nextDraft.baseUrl,
-              enrollmentCode: nextDraft.secret,
-            })
-          : await api.saveModelEndpointSettings(nextDraft);
-      if (requestId !== endpointSaveSequenceRef.current) return;
-      const normalized = normalizeEndpointSettings(result.settings);
-      if ("connection" in result) setCompanyConnection(result.connection as CompanyConnectionStatus);
-      setEndpointSettings(normalized);
-      setEndpointDraftSettings(normalized);
-      setBackend(result.status);
-      setPermissionModeState(result.status.permissionMode);
-      endpointModeDraftsRef.current[normalized.mode] = normalized;
-    } catch (cause) {
-      if (requestId !== endpointSaveSequenceRef.current) return;
-      setAccountMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      if (requestId === endpointSaveSequenceRef.current) setEndpointSaving(false);
-    }
-  }
-
-  async function disconnectCompanyConnection() {
-    if (endpointSaving || endpointRefreshing) return;
-    setEndpointSaving(true);
-    setAccountMessage(null);
-    try {
-      const result = await api.disconnectCompanyConnection();
-      const normalized = normalizeEndpointSettings(result.settings);
-      setCompanyConnection(result.connection);
-      setEndpointSettings(normalized);
-      setEndpointDraftSettings(normalized);
-      setBackend(result.status);
-      setPermissionModeState(result.status.permissionMode);
-      endpointModeDraftsRef.current = { [normalized.mode]: normalized };
-    } catch (cause) {
-      setAccountMessage(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setEndpointSaving(false);
-    }
   }
 
   async function loadHarnessProfile() {
@@ -3804,7 +3650,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setError(closedChatNotice);
       return;
     }
-    const trimmedPrompt = appendReviewFeedback(prompt, reviewPromptFeedback).trim();
+    const trimmedPrompt = appendReviewFeedback(composerPromptForSend(prompt), reviewPromptFeedback).trim();
     if (!trimmedPrompt) return;
     if (startTaskInFlightRef.current) return;
     startTaskInFlightRef.current = true;
@@ -3922,35 +3768,47 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     await copyPlainText(value);
   }
 
-  async function rateResponse(messageId: string, rating: "good" | "bad", comment?: string) {
+  async function rateResponse(messageId: string, rating: "good" | "bad" | null, comment?: string) {
     if (!latestTaskId) return;
     setError(null);
     const taskId = latestTaskId;
+    const previousDraft = feedbackDrafts.get(messageId);
     const previousFeedback = [...visibleEvents].reverse().find(
       (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
         event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId,
     );
-    const nextComment = (comment ?? previousFeedback?.comment ?? "").trim().slice(0, 1000);
-    const feedbackEvent: BackendUiEvent = {
-      type: "response.feedback",
-      taskId,
-      messageId,
-      rating,
-      ...(nextComment ? { comment: nextComment } : {}),
-      at: new Date().toISOString(),
-    };
-    setEvents((current) => appendBackendEvent(current, feedbackEvent, 500));
+    const nextComment = rating
+      ? (comment ?? previousFeedback?.comment ?? "").trim().slice(0, 1000)
+      : "";
+    setEvents((current) => rating
+      ? appendBackendEvent(current, {
+        type: "response.feedback",
+        taskId,
+        messageId,
+        rating,
+        ...(nextComment ? { comment: nextComment } : {}),
+        at: new Date().toISOString(),
+      }, 500)
+      : removeResponseFeedback(current, taskId, messageId) as BackendUiEvent[]);
+    if (rating === null) {
+      setFeedbackDrafts((current) => {
+        const next = new Map(current);
+        next.delete(messageId);
+        return next;
+      });
+    }
     try {
       await api.setResponseFeedback({ taskId, messageId, rating, ...(nextComment ? { comment: nextComment } : {}) });
     } catch (cause) {
       setEvents((current) => {
-        const withoutFailedRating = current.filter(
-          (event) => !(event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId),
-        );
+        const withoutFailedRating = removeResponseFeedback(current, taskId, messageId) as BackendUiEvent[];
         return previousFeedback
           ? appendBackendEvent(withoutFailedRating, { ...previousFeedback, at: new Date().toISOString() }, 500)
           : withoutFailedRating;
       });
+      if (previousDraft !== undefined) {
+        setFeedbackDrafts((current) => new Map(current).set(messageId, previousDraft));
+      }
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -4475,9 +4333,22 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files).filter((file) => file.size > 0);
-    if (!files.length) return;
+    if (files.length) {
+      event.preventDefault();
+      void attachPastedFiles(files);
+      return;
+    }
+    const pastedText = event.clipboardData.getData("text/plain");
+    const insertion = insertPastedComposerText(
+      prompt,
+      pastedText,
+      event.currentTarget.selectionStart,
+      event.currentTarget.selectionEnd,
+    );
     event.preventDefault();
-    void attachPastedFiles(files);
+    setPrompt(insertion.value);
+    updateMention(insertion.value, insertion.caret);
+    window.requestAnimationFrame(() => textareaRef.current?.setSelectionRange(insertion.caret, insertion.caret));
   }
 
   function handleComposerDrop(event: React.DragEvent<HTMLDivElement>) {
@@ -5067,7 +4938,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             type="button"
             onClick={() => {
               setSettingsOpen(true);
-              setAccountMessage(null);
+              connectionSettings.clearMessage();
               setFontScanMessage(null);
               void refreshStatus();
               void loadSkills();
@@ -5164,58 +5035,60 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                 ))}
                               </div>
                             ) : null}
-                            <div className="messageActions">
-                              <button
-                                className="messageAction"
-                                type="button"
-                                onClick={() => void copyText(assistantCopyText || item.text)}
-                                title="Copy response"
-                              >
-                                <Copy size={14} />
-                              </button>
-                              <button
-                                className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
-                                type="button"
-                                onClick={() => void rateResponse(item.id, "good")}
-                                aria-pressed={rating === "good"}
-                                title="Good response"
-                              >
-                                <ThumbsUp size={14} />
-                              </button>
-                              <button
-                                className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
-                                type="button"
-                                onClick={() => void rateResponse(item.id, "bad")}
-                                aria-pressed={rating === "bad"}
-                                title="Bad response"
-                              >
-                                <ThumbsDown size={14} />
-                              </button>
-                            </div>
-                            {rating ? (
-                              <form
-                                className="responseFeedbackNote"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  void rateResponse(item.id, rating, feedbackNote);
-                                }}
-                              >
-                                <input
-                                  type="text"
-                                  value={feedbackNote}
-                                  maxLength={1000}
-                                  placeholder="Add a note (optional)"
-                                  aria-label="Response feedback note"
-                                  onChange={(event) => {
-                                    const value = event.target.value;
-                                    setFeedbackDrafts((current) => new Map(current).set(item.id, value));
-                                  }}
-                                />
-                                <button type="submit" disabled={!feedbackNote.trim()}>
-                                  Send
+                            <div className="responseFeedbackControls">
+                              <div className="messageActions">
+                                <button
+                                  className="messageAction"
+                                  type="button"
+                                  onClick={() => void copyText(assistantCopyText || item.text)}
+                                  title="Copy response"
+                                >
+                                  <Copy size={14} />
                                 </button>
-                              </form>
-                            ) : null}
+                                <button
+                                  className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => void rateResponse(item.id, toggleResponseRating(rating, "good"))}
+                                  aria-pressed={rating === "good"}
+                                  title={rating === "good" ? "Remove good response rating" : "Good response"}
+                                >
+                                  <ThumbsUp size={14} />
+                                </button>
+                                <button
+                                  className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => void rateResponse(item.id, toggleResponseRating(rating, "bad"))}
+                                  aria-pressed={rating === "bad"}
+                                  title={rating === "bad" ? "Remove bad response rating" : "Bad response"}
+                                >
+                                  <ThumbsDown size={14} />
+                                </button>
+                              </div>
+                              {rating ? (
+                                <form
+                                  className="responseFeedbackNote"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void rateResponse(item.id, rating, feedbackNote);
+                                  }}
+                                >
+                                  <input
+                                    type="text"
+                                    value={feedbackNote}
+                                    maxLength={1000}
+                                    placeholder="Add a note (optional)"
+                                    aria-label="Response feedback note"
+                                    onChange={(event) => {
+                                      const value = event.target.value;
+                                      setFeedbackDrafts((current) => new Map(current).set(item.id, value));
+                                    }}
+                                  />
+                                  <button type="submit" disabled={!feedbackNote.trim()}>
+                                    Send
+                                  </button>
+                                </form>
+                              ) : null}
+                            </div>
                           </article>
                         );
                       })()
@@ -5274,11 +5147,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                   ) : null}
                                 </strong>
                               </span>
-                              {expanded ? (
-                                <ChevronDown className="activityChevron" size={13} />
-                              ) : (
-                                <ChevronRight className="activityChevron" size={13} />
-                              )}
+                              <ChevronRight className="activityChevron" size={13} />
                             </button>
                             <div className={`activityBody ${expanded ? "open" : ""}`} aria-hidden={!expanded}>
                               <div
@@ -5289,57 +5158,69 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                 onTouchMove={(event) => handleActivityTouchMove(item.id, event)}
                                 onWheel={(event) => handleActivityWheel(item.id, event)}
                               >
-                                {item.segments
-                                  .filter((segment): segment is Extract<ComposerActivitySegment, { type: "reasoning" }> => segment.type === "reasoning")
-                                  .map((segment) => (
-                                    <section className="activityLogEntry reasoningLog" key={segment.id}>
-                                      <div className="activityLogHeader">
-                                        <span>Planning</span>
-                                      </div>
-                                      <pre>{segment.text.trim()}</pre>
-                                    </section>
-                                  ))}
-                                {activityToolGroups(item.segments).map((group) => {
-                                  const toolDisclosureId = `${item.id}:${group.id}`;
-                                  const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
-                                  return (
-                                    <section
-                                      className={`activityLogEntry commandLog ${group.status} ${
-                                        toolExpanded ? "isExpanded" : ""
-                                      }`}
-                                      key={group.id}
-                                    >
-                                      <button
-                                        className="activityToolToggle"
-                                        type="button"
-                                        onClick={() => {
-                                          setExpandedActivityToolIds((current) => {
-                                            const next = new Set(current);
-                                            if (toolExpanded) {
-                                              next.delete(toolDisclosureId);
-                                            } else {
-                                              next.add(toolDisclosureId);
-                                            }
-                                            return next;
-                                          });
-                                        }}
-                                        aria-expanded={toolExpanded}
+                                <div className="activityBodyContent">
+                                  {item.segments.map((segment) => {
+                                    if (segment.type === "reasoning") {
+                                      return (
+                                        <section
+                                          className={`activityLogEntry reasoningLog ${segment.finished ? "" : "isStreaming"}`}
+                                          key={segment.id}
+                                        >
+                                          <WorkMarkdownContent content={segment.text.trim()} streaming={!segment.finished} />
+                                        </section>
+                                      );
+                                    }
+                                    if (segment.type === "skill") {
+                                      const skillName = skills.find((skill) => skill.id === segment.skillId)?.name ?? segment.skillId;
+                                      return (
+                                        <section className="activityLogEntry skillLog" key={segment.id}>
+                                          <Sparkles size={12} aria-hidden="true" />
+                                          <span>Skill</span>
+                                          <strong>{skillName}</strong>
+                                        </section>
+                                      );
+                                    }
+                                    const { label } = activityToolLabel(segment.run.command);
+                                    const toolDisclosureId = `${item.id}:${segment.id}`;
+                                    const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
+                                    return (
+                                      <section
+                                        className={`activityLogEntry commandLog ${segment.run.status} ${
+                                          toolExpanded ? "isExpanded" : ""
+                                        }`}
+                                        key={segment.id}
                                       >
-                                        <span title={group.runs.map((run) => run.command).join("\n")}>{group.label}</span>
-                                        {toolExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                      </button>
-                                      {toolExpanded ? (
-                                        <div className="activityToolGroupDetails">
-                                          {group.runs.map((run) => (
-                                            <div key={run.id}>
-                                              <pre>{commandShellText(run)}</pre>
+                                        <button
+                                          className="activityToolToggle"
+                                          type="button"
+                                          onClick={() => {
+                                            setExpandedActivityToolIds((current) => {
+                                              const next = new Set(current);
+                                              if (toolExpanded) {
+                                                next.delete(toolDisclosureId);
+                                              } else {
+                                                next.add(toolDisclosureId);
+                                              }
+                                              return next;
+                                            });
+                                          }}
+                                          aria-expanded={toolExpanded}
+                                        >
+                                          <SquareTerminal className="activityToolKindIcon" size={12} aria-hidden="true" />
+                                          <span title={segment.run.command}>{label}</span>
+                                          {toolExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                        </button>
+                                        {toolExpanded ? (
+                                          <div className="activityToolGroupDetails">
+                                            <div>
+                                              <pre>{commandShellText(segment.run)}</pre>
                                             </div>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </section>
-                                  );
-                                })}
+                                          </div>
+                                        ) : null}
+                                      </section>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </div>
                           </article>
@@ -5643,43 +5524,47 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               </div>
             ) : null}
             <div className="promptInputShell">
-              <div className="promptHighlight" aria-hidden="true">
-                <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
-                  {renderPromptHighlights(prompt, attachedFiles, skills)}
+              <div className="promptEditor">
+                <div className="promptHighlight" aria-hidden="true">
+                  <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
+                    {renderPromptHighlights(prompt, attachedFiles, skills)}
+                  </div>
                 </div>
+                <textarea
+                  ref={textareaRef}
+                  value={prompt}
+                  onChange={handlePromptChange}
+                  onKeyDown={handlePromptKeyDown}
+                  onPaste={handleComposerPaste}
+                  onKeyUp={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                  onClick={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                  onSelect={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
+                  onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
+                  disabled={busy || !!closedChatNotice}
+                  placeholder={
+                    closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
+                  }
+                />
               </div>
-              <textarea
-                ref={textareaRef}
-                value={prompt}
-                onChange={handlePromptChange}
-                onKeyDown={handlePromptKeyDown}
-                onPaste={handleComposerPaste}
-                onKeyUp={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
-                onClick={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
-                onSelect={(event) => updateMention(event.currentTarget.value, event.currentTarget.selectionStart)}
-                onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
-                disabled={busy || !!closedChatNotice}
-                placeholder={
-                  closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
-                }
-              />
+              <div className="promptActionRail">
+                {isGenerating ? (
+                  <button
+                    className="sendButton stopButton"
+                    type="button"
+                    onClick={() => void stopTask()}
+                    disabled={stopPending}
+                    aria-label={stopPending ? "Stopping generation" : "Stop generation"}
+                    title={stopPending ? "Stopping generation" : "Stop generation"}
+                  >
+                    {stopPending ? <Loader2 className="spin" size={17} /> : <Square aria-hidden="true" fill="currentColor" size={12} />}
+                  </button>
+                ) : (
+                  <button className="sendButton" type="button" onClick={startTask} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
+                    {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
+                  </button>
+                )}
+              </div>
             </div>
-            {isGenerating ? (
-              <button
-                className="sendButton stopButton"
-                type="button"
-                onClick={() => void stopTask()}
-                disabled={stopPending}
-                aria-label={stopPending ? "Stopping generation" : "Stop generation"}
-                title={stopPending ? "Stopping generation" : "Stop generation"}
-              >
-                {stopPending ? <Loader2 className="spin" size={18} /> : <Square aria-hidden="true" fill="currentColor" size={14} />}
-              </button>
-            ) : (
-              <button className="sendButton" type="button" onClick={startTask} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
-                {busy ? <Loader2 className="spin" size={18} /> : <Send aria-hidden="true" size={18} />}
-              </button>
-            )}
           </div>
         </section>
       </main>
@@ -5789,151 +5674,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               </nav>
 
               <div className="settingsContent">
-                {settingsTab === "account" ? (
-                  <div className="settingsPanel">
-                    <div className="settingsPanelHead connectionPanelHead">
-                      <div>
-                        <h3>Connection</h3>
-                        <p>Use Local or connect this device to a company server.</p>
-                      </div>
-                      <div className="connectionCompactStatus">
-                        <span
-                          className={`serverHealthText ${connectionDisplayState}`}
-                          role="status"
-                          aria-label={connectionStatusLabel}
-                          title={connectionStatusLabel}
-                        >
-                          <span className="serverStatusDot" aria-hidden="true" />
-                        </span>
-                        <button
-                          className="settingsIconButton connectionRefreshButton"
-                          type="button"
-                          onClick={() => void refreshConnectionStatus()}
-                          disabled={connectionRefreshDisabled}
-                          title={endpointDraftSettings.mode === "local"
-                            ? localRuntimeUrlValid ? "Check runtime and models" : "Enter a valid local runtime URL"
-                            : endpointDirty ? "Save changes before checking" : "Check connection"}
-                          aria-label={endpointDraftSettings.mode === "local" ? "Check runtime and models" : "Check connection"}
-                        >
-                          <RefreshCw className={endpointRefreshing ? "spin" : ""} size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="settingsGroup">
-                          <h4>Run mode</h4>
-                          <div className="connectionModeGrid" aria-label="Model connection type">
-                            <button
-                              className={endpointDraftSettings.mode === "local" ? "isActive" : ""}
-                              type="button"
-                              disabled={endpointFormDisabled}
-                              aria-pressed={endpointDraftSettings.mode === "local"}
-                              onClick={() => void selectEndpointMode("local")}
-                            >
-                              <span className="connectionModeIcon"><Monitor size={16} /></span>
-                              <strong>Local</strong>
-                              {endpointDraftSettings.mode === "local" ? <Check size={14} /> : null}
-                            </button>
-                            <button
-                              className={endpointDraftSettings.mode === "server" ? "isActive" : ""}
-                              type="button"
-                              disabled={endpointFormDisabled}
-                              aria-pressed={endpointDraftSettings.mode === "server"}
-                              onClick={() => void selectEndpointMode("server")}
-                            >
-                              <span className="connectionModeIcon"><Cloud size={16} /></span>
-                              <strong>Company server</strong>
-                              {endpointDraftSettings.mode === "server" ? <Check size={14} /> : null}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="settingsGroup">
-                          <h4>{endpointDraftSettings.mode === "local" ? "Local model" : "Company server"}</h4>
-                          {endpointDraftSettings.mode === "local" ? (
-                            <>
-                              <label className="settingsField">
-                                <span>Ollama URL</span>
-                                <input
-                                  value={endpointDraftSettings.baseUrl}
-                                  disabled={endpointFormDisabled}
-                                  onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                                  placeholder="http://127.0.0.1:11434"
-                                  spellCheck={false}
-                                />
-                              </label>
-                              <LocalModelPicker
-                                disabled={endpointFormDisabled}
-                                models={localModels}
-                                selectedModel={endpointDraftSettings.modelId}
-                                status={localModelStatus}
-                                onModelChange={(modelId) => updateEndpointDraft({ modelId })}
-                              />
-                            </>
-                          ) : (
-                            <>
-                              {companyServerConnected && companyConnection.state === "enrolled" ? (
-                                <div className="companyEnrollmentStatus">
-                                  <div className="companyEnrollmentIdentity">
-                                    <strong>{companyConnection.orgName}</strong>
-                                    <span>{companyConnection.deviceLabel}</span>
-                                  </div>
-                                  <CompanyServerActions
-                                    active={companyServerActive}
-                                    busy={endpointFormDisabled}
-                                    connectDisabled={endpointSaving || endpointRefreshing || !endpointDirty || !!endpointValidation || !endpointEditingEnabled}
-                                    onConnect={() => void saveEndpointSettings()}
-                                    onUnregister={() => void disconnectCompanyConnection()}
-                                  />
-                                </div>
-                              ) : (
-                                <>
-                                  <label className="settingsField">
-                                    <span>Veil server URL</span>
-                                    <input
-                                      value={endpointDraftSettings.baseUrl}
-                                      disabled={endpointFormDisabled}
-                                      onChange={(event) => updateEndpointDraft({ baseUrl: event.currentTarget.value })}
-                                      placeholder="https://veil.example.com"
-                                      spellCheck={false}
-                                    />
-                                  </label>
-                                  <label className="settingsField">
-                                    <span>Enrollment code</span>
-                                    <input
-                                      value={endpointDraftSettings.secret}
-                                      disabled={endpointFormDisabled}
-                                      onChange={(event) => updateEndpointDraft({ secret: event.currentTarget.value })}
-                                      placeholder="Enrollment code"
-                                      type="password"
-                                      autoComplete="off"
-                                      spellCheck={false}
-                                      aria-label="Enrollment code"
-                                    />
-                                  </label>
-                                </>
-                              )}
-                            </>
-                          )}
-                          {!companyServerConnected ? <div className="connectionActions">
-                            <button
-                              className="settingsInlineButton connectionSaveButton"
-                              type="button"
-                              onClick={() => void saveEndpointSettings()}
-                              disabled={endpointSaving || endpointRefreshing || !endpointDirty || !!endpointValidation || !endpointEditingEnabled}
-                            >
-                              {endpointSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                              <span>{endpointSaving ? "Connecting" : "Save & connect"}</span>
-                            </button>
-                            {endpointDirty ? <span className="connectionUnsaved">Unsaved changes</span> : null}
-                          </div> : null}
-                          <div className="connectionFeedback" aria-live="polite">
-                            {!endpointEditingEnabled ? <p className="settingsMessage">This connection is managed by your organization.</p> : null}
-                            {accountMessage ? <p className="settingsMessage">{accountMessage}</p> : null}
-                          </div>
-                    </div>
-                  </div>
-                ) : null}
+                {settingsTab === "account" ? <ConnectionSettingsPanel controller={connectionSettings} /> : null}
 
                 {settingsTab === "harness" ? (
                   <div className="settingsPanel">

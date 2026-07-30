@@ -22,3 +22,19 @@ test("appendTaskEvent coalesces adjacent streaming deltas in memory", async () =
   assert.equal(second.length, 1);
   assert.equal(second[0].text, "Hello world");
 });
+
+test("response feedback can be toggled off without removing other ratings", async () => {
+  const shared = await loadTypeScriptModule(sharedTaskEventsPath, { cache: new Map() });
+  const events = [
+    { type: "response.feedback", taskId: "task-1", messageId: "assistant-1", rating: "good" },
+    { type: "response.feedback", taskId: "task-1", messageId: "assistant-2", rating: "bad" },
+  ];
+
+  assert.equal(shared.toggleResponseRating("good", "good"), null);
+  assert.equal(shared.toggleResponseRating("good", "bad"), "bad");
+  assert.equal(shared.toggleResponseRating(undefined, "good"), "good");
+  assert.deepEqual(
+    shared.removeResponseFeedback(events, "task-1", "assistant-1"),
+    [events[1]],
+  );
+});

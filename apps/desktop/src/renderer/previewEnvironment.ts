@@ -69,6 +69,7 @@ const composerTestDirectAnswer = composerTestParams.has("directAnswer");
 const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
 const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
 const composerTestToolIssue = composerTestParams.has("toolIssue");
+const composerTestLiveWork = composerTestParams.has("liveWork");
 const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
@@ -106,6 +107,7 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
   { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : composerTestDirectAnswer ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
+  { type: "assistant.progress.delta", taskId: "composer-test", text: "I’m using my role and the current conversation to give a concise introduction.", at: new Date(Date.now() - 4_000).toISOString() },
   { type: "assistant.delta", taskId: "composer-test", text: "I’m Umbratic, a private AI assistant that can answer questions and complete practical work.", at: new Date(Date.now() - 1_000).toISOString() },
   { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
 ] : [
@@ -119,9 +121,23 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
   {
     type: "assistant.progress.delta",
     taskId: "composer-test",
-    text: "Checking message scale, markdown rhythm, escaped pipes, and attachment chips before composing the answer.",
+    text: [
+      "**Reviewing the composer surface**",
+      "",
+      "- Check the Markdown rhythm and attachment chips.",
+      "- Keep tool calls in chronological order.",
+      "- Verify `main.tsx` before composing the answer.",
+    ].join("\n"),
     at: new Date(Date.now() - 12_000).toISOString(),
     endedAt: new Date(Date.now() - 8_000).toISOString(),
+  },
+  {
+    type: "skill.selected",
+    taskId: "composer-test",
+    skillId: "umbratic-markdown",
+    source: "system",
+    reason: "strong_match",
+    fullContent: true,
   },
   {
     type: "command.started",
@@ -154,6 +170,11 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     exitCode: composerTestToolIssue ? 1 : 0,
   },
   {
+    type: "assistant.progress.delta",
+    taskId: "composer-test",
+    text: "The message layout is clear. I will run the focused composer checks next.",
+  },
+  {
     type: "command.started",
     taskId: "composer-test",
     id: "composer-fixture-test",
@@ -174,6 +195,11 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     taskId: "composer-test",
     id: "composer-fixture-test",
     exitCode: 0,
+  },
+  {
+    type: "assistant.progress.delta",
+    taskId: "composer-test",
+    text: "Work complete",
   },
   {
     type: "assistant.delta",
@@ -205,6 +231,13 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     at: new Date(Date.now() - 5_000).toISOString(),
   },
 ];
+const composerTestVisibleEvents = composerTestLiveWork
+  ? composerTestEvents.filter((event) =>
+      event.type !== "assistant.delta"
+      && event.type !== "assistant.done"
+      && !(event.type === "assistant.progress.delta" && event.text === "Work complete")
+    )
+  : composerTestEvents;
 
 const composerTestCodeReviewFiles: ReviewFile[] = [
   {
@@ -911,7 +944,7 @@ function createPreviewApi(): DesktopApi {
   return {
     api: createPreviewApi(),
     attachments: composerTestAttachments,
-    events: composerTestEvents,
+    events: composerTestVisibleEvents,
     params: composerTestParams,
     prompt: composerTestPrompt,
     repository: composerTestRepository,

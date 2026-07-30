@@ -2,6 +2,8 @@
 @import "./styles/shell.css";
 @import "./styles/shell-controls.css";
 @import "./styles/timeline.css";
+@import "./styles/work-activity.css";
+@import "./styles/activity-skill.css";
 @import "./styles/markdown-command.css";
 @import "./styles/composer-controls.css";
 @import "./styles/composer.css";

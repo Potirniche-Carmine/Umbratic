@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 )
 
 // TrustedPublicKey is set in customer release binaries with -ldflags.
@@ -21,8 +20,6 @@ type Payload struct {
 	OrgUID             string `json:"org_uid"`
 	MaxAuthorizedUsers int    `json:"max_authorized_users"`
 	MaxDevicesPerUser  int    `json:"max_devices_per_user"`
-	TermStartsAt       string `json:"term_starts_at,omitempty"`
-	TermEndsAt         string `json:"term_ends_at,omitempty"`
 }
 
 type Document struct {
@@ -30,7 +27,7 @@ type Document struct {
 	Signature string  `json:"signature"`
 }
 
-func Load(path string, now time.Time) (Payload, error) {
+func Load(path string) (Payload, error) {
 	if strings.TrimSpace(path) == "" {
 		return Payload{}, errors.New("entitlement path is required")
 	}
@@ -38,10 +35,10 @@ func Load(path string, now time.Time) (Payload, error) {
 	if err != nil {
 		return Payload{}, fmt.Errorf("read entitlement: %w", err)
 	}
-	return Verify(data, TrustedPublicKey, now)
+	return Verify(data, TrustedPublicKey)
 }
 
-func Verify(data []byte, publicKeyText string, now time.Time) (Payload, error) {
+func Verify(data []byte, publicKeyText string) (Payload, error) {
 	var document Document
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
@@ -51,7 +48,7 @@ func Verify(data []byte, publicKeyText string, now time.Time) (Payload, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Payload{}, errors.New("entitlement document is invalid")
 	}
-	if err := validatePayload(document.Payload, now); err != nil {
+	if err := validatePayload(document.Payload); err != nil {
 		return Payload{}, err
 	}
 	publicKey, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(publicKeyText))
@@ -69,7 +66,7 @@ func Verify(data []byte, publicKeyText string, now time.Time) (Payload, error) {
 	return document.Payload, nil
 }
 
-func validatePayload(payload Payload, now time.Time) error {
+func validatePayload(payload Payload) error {
 	if payload.Version != 1 {
 		return errors.New("entitlement version is not supported")
 	}
@@ -81,18 +78,6 @@ func validatePayload(payload Payload, now time.Time) error {
 	}
 	if payload.MaxDevicesPerUser < 1 || payload.MaxDevicesPerUser > 32 {
 		return errors.New("entitlement device limit is invalid")
-	}
-	if payload.TermStartsAt != "" {
-		start, err := time.Parse(time.RFC3339, payload.TermStartsAt)
-		if err != nil || now.Before(start) {
-			return errors.New("entitlement term has not started")
-		}
-	}
-	if payload.TermEndsAt != "" {
-		end, err := time.Parse(time.RFC3339, payload.TermEndsAt)
-		if err != nil || !now.Before(end) {
-			return errors.New("entitlement term has ended")
-		}
 	}
 	return nil
 }

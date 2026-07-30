@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
 
 func signedDocument(t *testing.T, payload Payload) ([]byte, string) {
@@ -30,7 +29,7 @@ func TestVerifyRejectsChangedSeatAndDeviceLimits(t *testing.T) {
 		MaxAuthorizedUsers: 2, MaxDevicesPerUser: 2,
 	}
 	document, publicKey := signedDocument(t, payload)
-	verified, err := Verify(document, publicKey, time.Now())
+	verified, err := Verify(document, publicKey)
 	if err != nil || verified.MaxAuthorizedUsers != 2 || verified.MaxDevicesPerUser != 2 {
 		t.Fatalf("valid entitlement failed: %#v %v", verified, err)
 	}
@@ -39,7 +38,7 @@ func TestVerifyRejectsChangedSeatAndDeviceLimits(t *testing.T) {
 		strings.Replace(string(document), `"max_devices_per_user":2`, `"max_devices_per_user":3`, 1),
 		string(document) + `{}`,
 	} {
-		if _, err := Verify([]byte(changed), publicKey, time.Now()); err == nil {
+		if _, err := Verify([]byte(changed), publicKey); err == nil {
 			t.Fatal("changed entitlement passed signature verification")
 		}
 	}

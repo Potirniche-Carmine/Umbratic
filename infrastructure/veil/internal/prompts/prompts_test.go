@@ -95,6 +95,21 @@ func TestBuildKeepsProtectedMessagesBeforeClientMessages(t *testing.T) {
 	}
 }
 
+func TestPublicProgressPromptAllowsOnlySafeWorkSummary(t *testing.T) {
+	prompt := strings.ToLower(PublicProgressSystemPrompt)
+	for _, want := range []string{
+		"short public work summary",
+		"do not provide the final answer",
+		"do not mention thinking",
+		"do not reveal hidden analysis",
+		"do not claim",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("public progress prompt missing %q: %q", want, PublicProgressSystemPrompt)
+		}
+	}
+}
+
 func TestBuildRejectsUnknownRoute(t *testing.T) {
 	_, err := Build(Route("provider/passthrough"), []model.Message{{Role: "user", Content: "hello"}})
 	if err == nil {

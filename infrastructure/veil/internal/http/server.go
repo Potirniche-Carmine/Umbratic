@@ -51,7 +51,7 @@ func NewServer(cfg config.Config, modelClient ModelClient) http.Handler {
 		identityRate: &identityRateLimiter{entries: map[string]rateEntry{}},
 	}
 	if cfg.CompanyIdentityMode {
-		license, licenseErr := entitlement.Load(cfg.EntitlementPath, time.Now())
+		license, licenseErr := entitlement.Load(cfg.EntitlementPath)
 		if licenseErr != nil {
 			server.identityErr = licenseErr
 		} else {
@@ -158,12 +158,10 @@ func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Reque
 			DeviceLabel    string `json:"device_label"`
 		}
 		if !decodeStrictJSON(w, r, 64<<10, &input) {
-			s.recordIdentityFailure(r, "enroll")
 			return true
 		}
 		result, err := s.identity.Enroll(input.EnrollmentCode, input.PublicKey, input.DeviceLabel)
 		if err != nil {
-			s.recordIdentityFailure(r, "enroll")
 			writeIdentityError(w, err)
 			return true
 		}
@@ -181,12 +179,10 @@ func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Reque
 			DeviceUID string `json:"device_uid"`
 		}
 		if !decodeStrictJSON(w, r, 16<<10, &input) {
-			s.recordIdentityFailure(r, "challenge")
 			return true
 		}
 		result, err := s.identity.NewChallenge(strings.TrimSpace(input.DeviceUID))
 		if err != nil {
-			s.recordIdentityFailure(r, "challenge")
 			writeIdentityError(w, err)
 			return true
 		}
@@ -248,10 +244,26 @@ func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, ac
 	s.identityRate.mu.Lock()
 	entry := s.identityRate.entries[key]
 	if !entry.window.IsZero() && now.Sub(entry.window) >= time.Minute {
-		delete(s.identityRate.entries, key)
 		entry = rateEntry{}
 	}
+	if len(s.identityRate.entries) >= 4096 {
+		for candidate, value := range s.identityRate.entries {
+			if now.Sub(value.window) >= time.Minute {
+				delete(s.identityRate.entries, candidate)
+			}
+		}
+	}
 	allowed := entry.count < limit
+	if _, exists := s.identityRate.entries[key]; !exists && len(s.identityRate.entries) >= 4096 {
+		allowed = false
+	}
+	if allowed {
+		if entry.window.IsZero() {
+			entry.window = now
+		}
+		entry.count++
+		s.identityRate.entries[key] = entry
+	}
 	s.identityRate.mu.Unlock()
 	if allowed {
 		return true
@@ -260,27 +272,6 @@ func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, ac
 	writeCodedError(w, http.StatusTooManyRequests, "rate_limited", "Try again later.")
 	return false
 }
-
-func (s *Server) recordIdentityFailure(r *http.Request, action string) {
-	key := identityRateKey(r, action)
-	now := time.Now()
-	s.identityRate.mu.Lock()
-	defer s.identityRate.mu.Unlock()
-	entry := s.identityRate.entries[key]
-	if entry.window.IsZero() || now.Sub(entry.window) >= time.Minute {
-		entry = rateEntry{window: now}
-	}
-	entry.count++
-	s.identityRate.entries[key] = entry
-	if len(s.identityRate.entries) > 4096 {
-		for candidate, value := range s.identityRate.entries {
-			if now.Sub(value.window) >= time.Minute {
-				delete(s.identityRate.entries, candidate)
-			}
-		}
-	}
-}
-
 func identityRateKey(r *http.Request, action string) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -318,13 +309,12 @@ func (s *Server) handleControlRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var input struct {
-			Label         string `json:"label"`
-			ActiveForDays int    `json:"active_for_days"`
+			Label string `json:"label"`
 		}
 		if !decodeStrictJSON(w, r, 16<<10, &input) {
 			return
 		}
-		user, err := s.identity.CreateUser(input.Label, input.ActiveForDays)
+		user, err := s.identity.CreateUser(input.Label)
 		if err != nil {
 			writeIdentityError(w, err)
 			return
@@ -409,8 +399,12 @@ func writeIdentityError(w http.ResponseWriter, err error) {
 	switch identityError.Code {
 	case "session_invalid", "session_expired", "device_not_authorized", "challenge_proof_invalid", "challenge_invalid", "enrollment_code_invalid", "enrollment_code_expired":
 		status = http.StatusUnauthorized
-	case "seat_limit_reached", "device_limit_reached", "device_already_enrolled", "enrollment_code_not_pending", "user_deactivated", "user_expired":
+	case "entitlement_over_limit":
+		status = http.StatusForbidden
+	case "seat_limit_reached", "device_limit_reached", "device_already_enrolled", "enrollment_code_not_pending", "user_deactivated":
 		status = http.StatusConflict
+	case "challenge_capacity", "session_capacity":
+		status = http.StatusServiceUnavailable
 	case "user_not_found", "device_not_found", "enrollment_code_not_found":
 		status = http.StatusNotFound
 	}
@@ -496,8 +490,10 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if requirement := policy.WorkspaceActionRequirement(input.Messages); requirement != policy.ActionNone {
-			w.Header().Set(actionRequiredHeader, requirement)
+		if input.ResponseMode != "progress" {
+			if requirement := policy.WorkspaceActionRequirement(input.Messages); requirement != policy.ActionNone {
+				w.Header().Set(actionRequiredHeader, requirement)
+			}
 		}
 		if s.templateErr != nil {
 			writeJSONError(w, http.StatusInternalServerError, "template registry unavailable")
@@ -505,6 +501,9 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		}
 
 		templateMessages := s.templateData.ProtectedContext(string(route), input.Messages)
+		if input.ResponseMode == "progress" {
+			templateMessages = append(templateMessages, prompts.PublicProgressMessage())
+		}
 		messages, err := prompts.BuildWithProtectedMessages(route, input.Messages, templateMessages, input.Skills)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
@@ -514,13 +513,17 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 		defer cancel()
 
+		maxOutputTokens := effectiveMaxOutputTokens(input.MaxOutputTokens, s.cfg.MaxOutputTokens)
+		if input.ResponseMode == "progress" && maxOutputTokens > 192 {
+			maxOutputTokens = 192
+		}
 		req := model.ChatRequest{
 			Model:           s.cfg.DefaultModel,
 			Messages:        messages,
 			Stream:          input.Stream,
 			Tools:           input.Tools,
 			ToolChoice:      input.ToolChoice,
-			MaxOutputTokens: effectiveMaxOutputTokens(input.MaxOutputTokens, s.cfg.MaxOutputTokens),
+			MaxOutputTokens: maxOutputTokens,
 		}
 		if estimated, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{

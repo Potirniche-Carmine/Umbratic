@@ -373,9 +373,12 @@ mod tests {
             "<span>Auto-run low risk</span>\n",
         )
         .unwrap();
+        let session = crate::session::test_session(directory.path());
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
         let result = execute_tool(
-            crate::session::test_session(directory.path()),
-            crate::session::test_sink(directory.path()),
+            session,
+            sink,
             Arc::new(crate::permission::PermissionBroker::default()),
             ToolCall {
                 id: "search-alias".into(),
@@ -397,6 +400,75 @@ mod tests {
                 .contains("src/renderer/main.tsx:1: <span>Auto-run low risk</span>")
         );
         assert!(!result.output.contains("other/main.tsx"));
+        let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+        let finished = observed
+            .iter()
+            .find(|event| event["type"] == "tool.finished")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        assert!(!finished.contains_key("errorCode"));
+        assert!(!finished.contains_key("errorMessage"));
+        assert!(!finished.contains_key("response"));
+    }
+
+    #[tokio::test]
+    async fn search_matches_terms_across_a_file_and_missing_reads_suggest_exact_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("internal/auth")).unwrap();
+        std::fs::write(
+            directory.path().join("internal/auth/auth.go"),
+            "package auth\n\nfunc loginHandler() {}\nfunc verifyPassword() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("internal/auth/auth_test.go"),
+            "package auth\n",
+        )
+        .unwrap();
+        let session = crate::session::test_session(directory.path());
+        let search = search_tool(
+            &session,
+            json!({"query":"login password","path":"internal/auth"})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(search.output.contains("internal/auth/auth.go:3:"));
+        assert!(search.output.contains("internal/auth/auth.go:4:"));
+
+        let missing = read_tool(
+            &session,
+            json!({"filePath":"internal/auth/password.go"})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            missing
+                .message
+                .contains("Path not found: internal/auth/password.go")
+        );
+        assert!(missing.message.contains("internal/auth/auth.go"));
+        assert!(
+            !missing
+                .message
+                .contains(directory.path().to_string_lossy().as_ref())
+        );
+        #[cfg(windows)]
+        assert!(!missing.message.contains(":/"));
+
+        let empty = search_tool(
+            &session,
+            json!({"query":"missing impossible symbol"})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(empty.output.contains("Use only exact result paths"));
     }
 
     #[tokio::test]
@@ -642,6 +714,36 @@ mod tests {
             }
         }
         task.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn unavailable_program_ids_fail_before_requesting_user_permission() {
+        let directory = tempfile::tempdir().unwrap();
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+        let result = execute_tool(
+            crate::session::test_session(directory.path()),
+            sink,
+            Arc::new(crate::permission::PermissionBroker::default()),
+            ToolCall {
+                id: "missing-program".into(),
+                name: "command".into(),
+                arguments: json!({"programId":"npm","args":["run","test:all"]}),
+                index: 0,
+            },
+        )
+        .await;
+        assert_eq!(result.status, "policy_blocked");
+        assert_eq!(
+            result.error_message.as_deref(),
+            Some("Executable npm is not available.")
+        );
+        let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            observed
+                .iter()
+                .all(|event| event["type"] != "permission.requested")
+        );
     }
 
     #[tokio::test]

@@ -381,11 +381,24 @@ test("runner config passes only verified command executables", () => {
           workflows: ["desktop"],
           checkedAt: "2026-01-01T00:00:00.000Z",
         },
+        {
+          id: "npm",
+          label: "npm",
+          category: "recommended",
+          importance: "recommended",
+          status: "available",
+          executablePath: process.execPath,
+          detectedCommand: "npm",
+          purpose: "Node scripts.",
+          installHint: "Install Node.",
+          workflows: ["verification"],
+          checkedAt: "2026-01-01T00:00:00.000Z",
+        },
       ],
     },
   );
-  assert.deepEqual(plain(config.approvedExecutables), [{
-    id: "uv",
-    command: fs.realpathSync(process.execPath),
-  }]);
+  assert.deepEqual(plain(config.approvedExecutables), [
+    { id: "uv", command: fs.realpathSync(process.execPath) },
+    { id: "npm", command: fs.realpathSync(process.execPath) },
+  ]);
 });

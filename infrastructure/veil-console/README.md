@@ -103,7 +103,7 @@ Console stores only session-token hashes. Login cookies are HTTP-only, strict sa
 
 ## Expected process model
 
-The browser communicates only with Veil Console on loopback. Console reads and writes its SQLite state and restricted secret file. When settings are valid, Console starts the fixed Veil binary with an allowlisted environment. Veil then communicates with Ollama or vLLM.
+The administrator browser communicates with Veil Console through loopback, either on the server or through an SSH tunnel. Console reads and writes its SQLite state and restricted secret file. When settings are valid, Console starts the fixed Veil binary with an allowlisted environment. Veil then communicates with Ollama or vLLM.
 
 ```text
 Browser -> native Veil Console :8177 -> supervised Veil :8080 -> Ollama or vLLM
@@ -121,26 +121,27 @@ ssh -N -L 8177:127.0.0.1:8177 ubuntu@example-server
 
 See `deploy/veil-console.service` for the reviewed service shape. Replace paths and the service account for the selected Ubuntu host before installation.
 
-> **Do not expose development mode or any internal service port to the public internet.** Veil Console is designed to use loopback for its internal listener. A firewall or NAT rule that publishes Console, Veil, Ollama, or vLLM bypasses the intended deployment boundary and creates avoidable risk.
+> **Do not expose development mode or Veil Console to the public internet.** Veil Console uses loopback. Use an SSH tunnel for remote administration. Do not publish Console or the model runtime through a firewall, NAT rule, cloud security group, or container port map.
 
-## Production HTTPS
+## Production network
 
-Veil Console always listens on loopback. Caddy terminates HTTPS and forwards requests to Console. Veil and the model runtime also stay private.
+Veil Console always listens on loopback. It has no public endpoint. Caddy terminates HTTPS for Veil. The desktop application uses this Veil HTTPS address. Caddy blocks the Veil control API, so administrators must use Console through an SSH tunnel. The model runtime also stays private.
 
 ```text
-Administrator browser
-  -> HTTPS Caddy :8432
-  -> Veil Console 127.0.0.1:8177
+Administrator browser -> SSH tunnel -> Veil Console 127.0.0.1:8177
+
+Desktop application
+  -> restricted HTTPS Caddy :8432
   -> Veil 127.0.0.1:8080
   -> Ollama 127.0.0.1:11434 or vLLM 127.0.0.1:8000
 ```
 
-Use an administration domain that is available only through a VPN or an IP allowlist when possible. Do not expose ports `8177`, `8080`, `11434`, or `8000`.
+Allow the Veil HTTPS port only from the company VPN or an exact list of approved desktop IP addresses. Do not expose ports `8177`, `8080`, `11434`, or `8000`.
 
 ### Requirements
 
 - Ubuntu 24.04 LTS on `amd64`.
-- A DNS record for the Console domain.
+- A DNS record for the Veil domain.
 - Caddy installed from its supported Ubuntu package.
 - Ollama or vLLM on a private address.
 
@@ -153,7 +154,7 @@ npm run veil-console:release -- --version 0.1.0 --seats 30 --devices-per-user 2 
 
 The zip contains a new organization UID and a signed `entitlement.json`. The same
 trusted public key is in the Veil and Console binaries. A local change to the seat,
-device, organization, or term fields makes startup fail.
+device, or organization fields makes startup fail.
 
 The zip appears in `artifacts/releases/`. Copy it to `/tmp` on the server,
 extract it there, and run:
@@ -162,7 +163,7 @@ extract it there, and run:
 cd /tmp
 unzip umbratic-veil-console-0.1.0-linux-amd64.zip
 cd umbratic-veil-console-0.1.0-linux-amd64
-sudo ./install.sh --dnsname console.example.com
+sudo ./install.sh --dnsname veil.example.com
 ```
 
 The installer puts read-only program files in `/opt/umbratic/veil-console` and
@@ -172,18 +173,18 @@ directory from `/tmp` after the installation succeeds.
 The public HTTPS port defaults to `8432`. To select another public port:
 
 ```sh
-sudo ./install.sh --dnsname console.example.com --port 8400
+sudo ./install.sh --dnsname veil.example.com --port 8400
 ```
 
 The advanced `--console-port` and `--veil-port` options change only the private loopback ports:
 
 ```sh
-sudo ./install.sh --dnsname console.example.com --port 8400 --console-port 8177 --veil-port 8080
+sudo ./install.sh --dnsname veil.example.com --port 8400 --console-port 8177 --veil-port 8080
 ```
 
 The installer adds the system account, installs the two compiled binaries, writes the systemd and Caddy configuration, validates Caddy, and starts the services. It does not install Ollama, vLLM, or a model because model and hardware requirements differ by server.
 
-Caddy can get a public certificate when the domain has valid DNS and the server can complete certificate validation. A private hostname needs an internal certificate authority. Each administrator device must trust that authority. No safe installer can remove this trust requirement.
+Caddy can get a public certificate when the domain has valid DNS and the server can complete certificate validation. A private hostname needs an internal certificate authority. Each desktop device must trust that authority. No safe installer can remove this trust requirement.
 
 Systemd writes the first one-time setup code to a root-protected runtime file:
 
@@ -191,24 +192,28 @@ Systemd writes the first one-time setup code to a root-protected runtime file:
 sudo cat /run/veil-console/setup-code
 ```
 
-Open:
+Start an SSH tunnel from the administrator computer:
+
+```sh
+ssh -N -L 8177:127.0.0.1:8177 ubuntu@example-server
+```
+
+Then open:
 
 ```text
-https://console.example.com:8432/setup
+http://127.0.0.1:8177/setup
 ```
 
 The setup code expires after 15 minutes and is removed after successful setup. Console stores only its hash. The code proves that the first owner can access the server. Console must not show it on the unauthenticated setup page because a remote visitor could then claim the owner account.
 
 Network rules:
 
-- Permit the selected public HTTPS port only from the administration network when possible.
+- Permit the selected Veil HTTPS port only from the company VPN or approved desktop IP addresses.
 - Permit TCP `80` and `443` when Caddy needs them for public certificate issuance.
-- Do not permit remote access to the private Console, Veil, or model-runtime ports.
+- Do not permit remote access to the private Console, raw Veil, or model-runtime ports.
 - Keep the model runtime on loopback or another private address.
 
-Treat direct public access as an unsupported high-risk deployment. Put the HTTPS administration endpoint behind a VPN or an exact IP allowlist. Do not publish ports `8177`, `8080`, `11434`, or `8000` through a cloud security group, router, container port map, or host firewall.
-
-Console accepts only the exact HTTPS origin supplied to it. HTTPS mode also marks session and CSRF cookies as `Secure`.
+Do not publish ports `8177`, `8080`, `11434`, or `8000` through a cloud security group, router, container port map, or host firewall. The Caddy route is for desktop product traffic. It returns `404` for `/api/control` and all paths below it.
 
 ## Access scope
 

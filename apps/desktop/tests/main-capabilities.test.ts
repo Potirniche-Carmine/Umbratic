@@ -36,6 +36,7 @@ function fakeExecFile(file, args, _options, callback) {
     const versions = new Map([
       ["fdfind", "fdfind 9.0.0\n"],
       ["git", "git version 2.45.0\n"],
+      ["npm", "10.8.0\n"],
       ["python3", "Python 3.12.1\n"],
       ["cl", "Microsoft (R) C/C++ Optimizing Compiler Version 19.40\n"],
       ["cc", "Apple clang version 15.0.0\n"],
@@ -79,6 +80,7 @@ test("probeLocalCapabilities records command, package, and Python package capabi
   assert.equal(byId.get("rg").status, "missing");
   assert.equal(byId.get("fd").status, "available");
   assert.equal(byId.get("fd").detectedCommand, "fdfind");
+  assert.equal(byId.get("npm").status, "available");
   assert.equal(byId.get("uv").status, "missing");
   assert.equal(byId.get("python").status, "available");
   assert.equal(byId.get("py-reportlab").status, "available");

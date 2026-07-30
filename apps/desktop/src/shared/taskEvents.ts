@@ -1,6 +1,7 @@
 import { BACKEND_EVENT_VERSION, type BackendUiEventInput } from "./backendEvents";
 
 export type TaskUiEvent = BackendUiEventInput;
+export type ResponseRating = "good" | "bad";
 
 const REASONING_TEXT_LIMIT = 24_000;
 const COMMAND_OUTPUT_TEXT_LIMIT = 16_384;
@@ -43,17 +44,31 @@ function boundedEvents(events: TaskUiEvent[], limit: number): TaskUiEvent[] {
   return [...retained, ...recent];
 }
 
+export function toggleResponseRating(
+  current: ResponseRating | undefined,
+  selected: ResponseRating,
+): ResponseRating | null {
+  return current === selected ? null : selected;
+}
+
+export function removeResponseFeedback(
+  events: TaskUiEvent[],
+  taskId: string,
+  messageId: string,
+): TaskUiEvent[] {
+  return events.filter(
+    (event) => !(event.type === "response.feedback"
+      && event.taskId === taskId
+      && event.messageId === messageId),
+  );
+}
+
 export function appendTaskEvent(events: TaskUiEvent[], event: TaskUiEvent, limit = 500): TaskUiEvent[] {
   const nextEvent = withVersion(event);
   const existing = events;
   if (nextEvent.type === "response.feedback") {
     return boundedEvents([
-      ...existing.filter(
-        (storedEvent) =>
-          !(storedEvent.type === "response.feedback"
-            && storedEvent.taskId === nextEvent.taskId
-            && storedEvent.messageId === nextEvent.messageId),
-      ),
+      ...removeResponseFeedback(existing, nextEvent.taskId, nextEvent.messageId),
       nextEvent,
     ], limit);
   }

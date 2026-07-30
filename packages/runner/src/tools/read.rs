@@ -1,6 +1,7 @@
 use super::*;
 
 fn list_directory(cwd: &Path, directory: &Path, depth: usize) -> Vec<String> {
+    let workspace_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let mut rows = BTreeSet::new();
     for entry in WalkDir::new(directory)
         .min_depth(1)
@@ -11,7 +12,7 @@ fn list_directory(cwd: &Path, directory: &Path, depth: usize) -> Vec<String> {
     {
         let relative_workspace = entry
             .path()
-            .strip_prefix(cwd)
+            .strip_prefix(&workspace_root)
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
@@ -30,6 +31,39 @@ fn list_directory(cwd: &Path, directory: &Path, depth: usize) -> Vec<String> {
         ));
     }
     rows.into_iter().collect()
+}
+
+fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
+    let workspace_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut directory = absolute.parent().unwrap_or(&workspace_root);
+    while !directory.is_dir() && directory.starts_with(&workspace_root) {
+        directory = directory.parent().unwrap_or(&workspace_root);
+    }
+    let base = directory
+        .strip_prefix(&workspace_root)
+        .unwrap_or(directory)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let nearby = list_directory(&workspace_root, directory, 1)
+        .into_iter()
+        .take(12)
+        .map(|entry| {
+            if base.is_empty() {
+                entry
+            } else {
+                format!("{base}/{entry}")
+            }
+        })
+        .collect::<Vec<_>>();
+    let guidance = if nearby.is_empty() {
+        "Use search to find an existing workspace path.".to_owned()
+    } else {
+        format!(
+            "Nearby workspace entries:\n- {}\nUse an exact listed path, or use search with a broader query.",
+            nearby.join("\n- ")
+        )
+    };
+    format!("Path not found: {relative}.\n{guidance}")
 }
 
 pub(super) async fn read_tool(
@@ -60,7 +94,17 @@ pub(super) async fn read_tool(
     let depth = number_arg(input, "depth", 1, 6) as usize;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &file_path).map_err(ToolError::policy)?;
-    let metadata = fs::metadata(&absolute).map_err(|error| error.to_string())?;
+    let metadata = match fs::metadata(&absolute) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ToolError::validation(missing_path_message(
+                &session.config.cwd,
+                &absolute,
+                &relative,
+            )));
+        }
+        Err(error) => return Err(ToolError::runtime(error.to_string())),
+    };
     if metadata.is_dir() {
         let entries = list_directory(&session.config.cwd, &absolute, depth);
         let start = offset.saturating_sub(1).min(entries.len());

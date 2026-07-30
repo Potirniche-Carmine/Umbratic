@@ -13,6 +13,11 @@ export type NumberedListContinuation = {
   caret: number;
 };
 
+export type ComposerTextInsertion = {
+  value: string;
+  caret: number;
+};
+
 export type MarkdownBlock =
   | { type: "code"; language: string; content: string }
   | { type: "heading"; level: number; text: string }
@@ -30,6 +35,29 @@ export function attachmentLabel(file: ComposerAttachmentReference): string {
 
 export function attachmentMention(file: ComposerAttachmentReference): string {
   return `@${attachmentLabel(file)}`;
+}
+
+export function withoutTrailingEmptyLines(value: string): string {
+  return value.replace(/\r\n?/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
+}
+
+export function insertPastedComposerText(
+  value: string,
+  pastedText: string,
+  selectionStart: number,
+  selectionEnd = selectionStart,
+): ComposerTextInsertion {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  const insertion = withoutTrailingEmptyLines(pastedText);
+  return {
+    value: `${value.slice(0, start)}${insertion}${value.slice(end)}`,
+    caret: start + insertion.length,
+  };
+}
+
+export function composerPromptForSend(value: string): string {
+  return withoutTrailingEmptyLines(value).trim();
 }
 
 export function continueNumberedList(

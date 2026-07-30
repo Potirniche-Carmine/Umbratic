@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +37,6 @@ type accessUserView struct {
 	EnrollmentCode     accessCodeView
 	Devices            []accessDeviceView
 	Deactivated        bool
-	Expired            bool
 	AwaitingEnrollment bool
 	CanManageDevices   bool
 }
@@ -75,7 +73,6 @@ func (s *Server) accessData(r *http.Request, filter string) (pageData, error) {
 		Title: "Management", CSRF: csrfCookie(r), Configured: configured, Running: processStatus.Running,
 		EnterpriseEnabled: s.startup.EntitlementPath != "",
 		Access:            accessView{Filter: filter},
-		ActiveForOptions:  []int{30, 90, 180, 365},
 	}
 	if !data.EnterpriseEnabled || !data.Configured || !data.Running {
 		return data, nil
@@ -101,12 +98,7 @@ func (s *Server) accessOrganization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) accessCreateUser(w http.ResponseWriter, r *http.Request) {
-	activeForDays, err := strconv.Atoi(strings.TrimSpace(r.FormValue("active_for_days")))
-	if err != nil || !validActiveForDays(activeForDays) {
-		s.renderAccessMutationError(w, r, http.StatusBadRequest, "Select 30, 90, 180, or 365 days.")
-		return
-	}
-	user, err := s.access.CreateUser(r.Context(), strings.TrimSpace(r.FormValue("label")), activeForDays)
+	user, err := s.access.CreateUser(r.Context(), strings.TrimSpace(r.FormValue("label")))
 	if err != nil {
 		s.store.Audit(r.Context(), "access.user.create", "failure", time.Now())
 		s.renderAccessMutationError(w, r, accessStatus(err), err.Error())
@@ -198,7 +190,7 @@ func accessStatus(err error) int {
 
 func normalizeAccessFilter(value string) string {
 	switch value {
-	case "awaiting", "expired", "deactivated":
+	case "awaiting", "deactivated":
 		return value
 	default:
 		return "all"
@@ -218,7 +210,7 @@ func makeAccessView(snapshot access.Snapshot, filter string, now time.Time) acce
 			UID: user.UID, Label: user.Label,
 			LastSeenRelative: relativeTime(user.LastSeenAt, now), LastSeenExact: exactOptionalTime(user.LastSeenAt),
 			EnrolledDevices: user.EnrolledDevices, MaxDevicesPerUser: snapshot.MaxDevicesPerUser,
-			Deactivated: user.Access == "deactivated", Expired: user.Access == "expired",
+			Deactivated:        user.Access == "deactivated",
 			AwaitingEnrollment: user.Access == "assigned" && user.EnrolledDevices == 0,
 			CanManageDevices:   user.Access == "assigned",
 		}
@@ -229,8 +221,6 @@ func makeAccessView(snapshot access.Snapshot, filter string, now time.Time) acce
 		switch {
 		case item.Deactivated:
 			item.StatusLabel = "Deactivated"
-		case item.Expired:
-			item.StatusLabel = "Expired"
 		case item.AwaitingEnrollment:
 			item.StatusLabel = "Needs setup"
 		}
@@ -264,8 +254,6 @@ func accessFilterMatches(user accessUserView, filter string) bool {
 	switch filter {
 	case "awaiting":
 		return user.AwaitingEnrollment
-	case "expired":
-		return user.Expired
 	case "deactivated":
 		return user.Deactivated
 	default:
@@ -288,10 +276,6 @@ func relativeTime(value *time.Time, now time.Time) string {
 		return fmt.Sprintf("Last seen %dh ago", int(elapsed/time.Hour))
 	}
 	return fmt.Sprintf("Last seen %dd ago", int(elapsed/(24*time.Hour)))
-}
-
-func validActiveForDays(days int) bool {
-	return days == 30 || days == 90 || days == 180 || days == 365
 }
 
 func ordinal(value int) string {

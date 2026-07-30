@@ -97,6 +97,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["keepWorktree", [{ taskId: "task-1" }], "umbratic:keep-worktree"],
     ["cancelTask", [{ taskId: "task-1" }], "umbratic:cancel-task"],
     ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good", comment: "Useful." }], "umbratic:set-response-feedback"],
+    ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: null }], "umbratic:set-response-feedback"],
     ["setWindowChromeTheme", ["dark"], "umbratic:set-window-chrome-theme"],
   ];
 

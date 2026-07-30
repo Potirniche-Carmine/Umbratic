@@ -38,7 +38,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if startup.EntitlementPath != "" {
-		if _, err := entitlement.Load(startup.EntitlementPath, time.Now()); err != nil {
+		if _, err := entitlement.Load(startup.EntitlementPath); err != nil {
 			log.Fatal(err)
 		}
 	}

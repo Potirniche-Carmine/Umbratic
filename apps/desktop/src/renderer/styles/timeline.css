@@ -264,26 +264,12 @@
 }
 
 .timelineActivity::before {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 31px;
-  height: 1px;
-  pointer-events: none;
-  content: "";
-  background: linear-gradient(90deg, rgba(178, 186, 197, 0.3), rgba(178, 186, 197, 0.06), transparent);
-  opacity: 0.66;
-  transform: none;
+  display: none;
 }
 
 .timelineActivity.isFinished {
   background: transparent;
   opacity: 0.74;
-}
-
-.timelineActivity.isGenerating::before {
-  opacity: 0.74;
-  animation: none;
 }
 
 .timelineActivity.isStatusOnly::before { display: none; }
@@ -364,32 +350,34 @@
   display: block;
   justify-self: end;
   color: var(--faint);
+  transform: rotate(0deg);
+  transition:
+    color 150ms ease,
+    transform 190ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .timelineActivity.isExpanded .activityChevron {
   color: color-mix(in srgb, var(--reasoning-text) 82%, var(--muted));
+  transform: rotate(90deg);
 }
 
 .activityBody {
   display: grid;
   grid-template-rows: 0fr;
   overflow: hidden;
-  opacity: 0;
-  transition:
-    grid-template-rows 180ms ease-out,
-    opacity 140ms ease-out;
-  will-change: grid-template-rows, opacity;
+  transition: grid-template-rows 210ms cubic-bezier(0.32, 0, 0.18, 1) 70ms;
+  will-change: grid-template-rows;
 }
 
 .activityBody.open {
   grid-template-rows: 1fr;
-  opacity: 1;
+  transition-delay: 0ms;
 }
 
 .activityBodyInner {
   max-height: min(48vh, 420px);
   min-height: 0;
-  padding: 0 10px 0 0;
+  padding: 0;
   overflow: hidden;
   overscroll-behavior: auto;
   scroll-behavior: auto;
@@ -401,8 +389,19 @@
 }
 
 .activityBody.open .activityBodyInner {
-  padding: 14px 10px 18px 0;
   overflow: auto;
+}
+
+.activityBodyContent {
+  min-width: 0;
+  padding: 12px 10px 18px 0;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+.activityBody.open .activityBodyContent {
+  opacity: 1;
+  transition: opacity 130ms ease-out 45ms;
 }
 
 .activityBodyInner::-webkit-scrollbar {
@@ -427,20 +426,15 @@
 
 .activityLogEntry {
   min-width: 0;
-  padding: 8px 0 0;
-  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  padding: 0;
 }
 
 .activityLogEntry.commandLog {
-  padding-top: 3px;
-}
-
-.activityLogEntry:first-child {
-  border-top: 0;
+  padding: 6px 2px;
 }
 
 .activityLogEntry:last-child {
-  padding-bottom: 6px;
+  padding-bottom: 4px;
 }
 
 .activityLogHeader {
@@ -462,39 +456,7 @@
   white-space: nowrap;
 }
 
-.activityToolToggle {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 12px;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 22px;
-  padding: 0;
-  color: color-mix(in srgb, var(--text) 62%, var(--muted));
-  font-size: 10.5px;
-  line-height: 1.35;
-  text-align: left;
-}
-
-.activityToolToggle:hover {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
-}
-
-.activityToolToggle span {
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 660;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activityToolToggle svg {
-  display: block;
-  justify-self: end;
-  color: var(--faint);
-}
-
-.activityLogEntry pre {
+.commandLog pre {
   margin: 0;
   color: color-mix(in srgb, var(--muted) 86%, var(--text));
   font-family: var(--mono-font);
@@ -580,6 +542,13 @@
   margin-top: 9px;
   opacity: 0;
   pointer-events: none;
+}
+
+.responseFeedbackControls {
+  position: relative;
+  z-index: 12;
+  width: max-content;
+  max-width: 100%;
 }
 
 .assistantMessage .messageActions {
@@ -736,11 +705,20 @@
 }
 
 .responseFeedbackNote {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: min(100%, 420px);
-  margin-top: 7px;
+  width: min(420px, calc(100vw - 48px));
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
+  box-shadow: 0 12px 30px var(--shadow-color);
 }
 
 .responseFeedbackNote input {

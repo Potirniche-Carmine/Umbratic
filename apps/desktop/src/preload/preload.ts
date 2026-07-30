@@ -120,7 +120,7 @@ const umbraticApi = {
   rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("umbratic:reject-task", input),
   keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:cancel-task", input),
-  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }) =>
+  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" | null; comment?: string }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {

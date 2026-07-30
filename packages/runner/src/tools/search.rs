@@ -266,13 +266,24 @@ pub(super) async fn search_tool(
         .unwrap()
         .clone();
     let mut path_hits: Vec<(String, f64)> = Vec::new();
-    let mut content_hits: Vec<(String, usize, u8, f64, String)> = Vec::new();
+    let mut content_hits: Vec<(String, usize, u8, usize, f64, String)> = Vec::new();
     let definition_pattern = Regex::new(
         r"^(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|fn|def|impl|trait)\b",
     )
     .expect("definition ranking regex is valid");
     let import_pattern = Regex::new(r"^(?:import\b|from\b|require\s*\(|use\b|#include\b)")
         .expect("import ranking regex is valid");
+    let normalized_terms = parsed
+        .terms
+        .iter()
+        .map(|term| {
+            if parsed.smart_case {
+                term.clone()
+            } else {
+                term.to_lowercase()
+            }
+        })
+        .collect::<Vec<_>>();
     for entry in WalkDir::new(&session.config.cwd)
         .follow_links(false)
         .into_iter()
@@ -333,31 +344,45 @@ pub(super) async fn search_tool(
             .is_ok_and(|metadata| metadata.len() <= MAX_TEXT_FILE_BYTES)
             && let Ok(content) = ensure_text_file(entry.path())
         {
-            for (index, line) in content.lines().enumerate() {
-                let candidate = if parsed.smart_case {
-                    line.to_owned()
-                } else {
-                    line.to_lowercase()
-                };
-                if !parsed.terms.is_empty()
-                    && parsed.terms.iter().all(|term| {
-                        candidate.contains(&if parsed.smart_case {
-                            term.clone()
-                        } else {
-                            term.to_lowercase()
-                        })
-                    })
-                {
-                    let trimmed = line.trim_start();
-                    let rank = if definition_pattern.is_match(trimmed) {
-                        0
-                    } else if import_pattern.is_match(trimmed) {
-                        2
+            let normalized_content = if parsed.smart_case {
+                content.clone()
+            } else {
+                content.to_lowercase()
+            };
+            if !normalized_terms.is_empty()
+                && normalized_terms
+                    .iter()
+                    .all(|term| normalized_content.contains(term))
+            {
+                for (index, line) in content.lines().enumerate() {
+                    let candidate = if parsed.smart_case {
+                        line.to_owned()
                     } else {
-                        1
+                        line.to_lowercase()
                     };
-                    let snippet = line.chars().take(240).collect::<String>();
-                    content_hits.push((relative.clone(), index + 1, rank, boost, snippet));
+                    let matched_terms = normalized_terms
+                        .iter()
+                        .filter(|term| candidate.contains(term.as_str()))
+                        .count();
+                    if matched_terms > 0 {
+                        let trimmed = line.trim_start();
+                        let rank = if definition_pattern.is_match(trimmed) {
+                            0
+                        } else if import_pattern.is_match(trimmed) {
+                            2
+                        } else {
+                            1
+                        };
+                        let snippet = line.chars().take(240).collect::<String>();
+                        content_hits.push((
+                            relative.clone(),
+                            index + 1,
+                            rank,
+                            matched_terms,
+                            boost,
+                            snippet,
+                        ));
+                    }
                 }
             }
         }
@@ -370,9 +395,11 @@ pub(super) async fn search_tool(
             .then(left.0.cmp(&right.0))
     });
     content_hits.sort_by(|left, right| {
-        left.2
-            .cmp(&right.2)
-            .then(right.3.total_cmp(&left.3))
+        right
+            .3
+            .cmp(&left.3)
+            .then(left.2.cmp(&right.2))
+            .then(right.4.total_cmp(&left.4))
             .then(left.0.cmp(&right.0))
             .then(left.1.cmp(&right.1))
     });
@@ -383,7 +410,7 @@ pub(super) async fn search_tool(
     results.extend(
         content_hits
             .into_iter()
-            .map(|(path, line, _, _, snippet)| format!("{path}:{line}: {snippet}")),
+            .map(|(path, line, _, _, _, snippet)| format!("{path}:{line}: {snippet}")),
     );
     results.truncate(limit);
     Ok(ToolResult::success(
@@ -396,7 +423,7 @@ pub(super) async fn search_tool(
             }
         ),
         if results.is_empty() {
-            "No matches.".into()
+            "No matches for all search terms. Try fewer terms or a broader path. Use only exact result paths; list a directory with read before choosing a file.".into()
         } else {
             results.join("\n")
         },

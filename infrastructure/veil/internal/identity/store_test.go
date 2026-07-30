@@ -40,9 +40,23 @@ func identityCode(t *testing.T, err error) string {
 	return identityError.Code
 }
 
+func enrollDevice(t *testing.T, store *Store, userUID, label string) (EnrollmentResult, ed25519.PrivateKey) {
+	t.Helper()
+	code, err := store.IssueEnrollmentCode(userUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey := deviceKey(t)
+	device, err := store.Enroll(code.EnrollmentCode, publicKey, label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return device, privateKey
+}
+
 func TestOpenRejectsPreviousIdentityState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.json")
-	previous, err := json.Marshal(persisted{Version: 2, OrgUID: testLicense().OrgUID, OrgName: "Northwind"})
+	previous, err := json.Marshal(persisted{Version: 3, OrgUID: testLicense().OrgUID, OrgName: "Northwind"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,14 +78,14 @@ func TestSeatsDevicesSessionsRevocationAndActivity(t *testing.T) {
 	if err := store.SetOrganizationName("Northwind"); err != nil {
 		t.Fatal(err)
 	}
-	userA, err := store.CreateUser("Alice", 30)
+	userA, err := store.CreateUser("Alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateUser("Bob", 90); err != nil {
+	if _, err := store.CreateUser("Bob"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateUser("Charlie", 30); identityCode(t, err) != "seat_limit_reached" {
+	if _, err := store.CreateUser("Charlie"); identityCode(t, err) != "seat_limit_reached" {
 		t.Fatal("third assigned user did not hit the seat limit")
 	}
 
@@ -105,18 +119,22 @@ func TestSeatsDevicesSessionsRevocationAndActivity(t *testing.T) {
 		t.Fatal("plaintext Enrollment code was stored")
 	}
 
-	codeTwo, _ := store.IssueEnrollmentCode(userA.UID)
-	publicTwo, _ := deviceKey(t)
-	if _, err := store.Enroll(codeTwo.EnrollmentCode, publicTwo, "Home laptop"); err != nil {
-		t.Fatal(err)
-	}
+	enrollDevice(t, store, userA.UID, "Home laptop")
 	if _, err := store.IssueEnrollmentCode(userA.UID); identityCode(t, err) != "device_limit_reached" {
 		t.Fatal("third device code did not hit the device limit")
 	}
 
+	oldChallenge, err := store.NewChallenge(deviceOne.DeviceUID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	challenge, err := store.NewChallenge(deviceOne.DeviceUID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	oldSignature := ed25519.Sign(privateOne, []byte(oldChallenge.Challenge))
+	if _, err := store.NewSession(oldChallenge.ChallengeUID, base64.RawURLEncoding.EncodeToString(oldSignature)); identityCode(t, err) != "challenge_invalid" {
+		t.Fatal("a replaced challenge remained active")
 	}
 	signature := ed25519.Sign(privateOne, []byte(challenge.Challenge))
 	session, err := store.NewSession(challenge.ChallengeUID, base64.RawURLEncoding.EncodeToString(signature))
@@ -132,16 +150,38 @@ func TestSeatsDevicesSessionsRevocationAndActivity(t *testing.T) {
 	if authenticatedDevice, err := store.Authenticate(session.Token); err != nil || authenticatedDevice != deviceOne.DeviceUID {
 		t.Fatalf("session authentication failed: %s %v", authenticatedDevice, err)
 	}
+	stored, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(stored), challenge.Challenge) || strings.Contains(string(stored), session.Token) ||
+		strings.Contains(string(stored), `"challenges"`) || strings.Contains(string(stored), `"sessions"`) {
+		t.Fatal("ephemeral authentication state was persisted")
+	}
+
 	before := store.Snapshot()
 	if before.Users[0].LastSeenAt != nil {
 		t.Fatal("session issue changed Last seen")
 	}
-	now = now.Add(5 * time.Minute)
+	if err := store.Touch(deviceOne.DeviceUID); err != nil {
+		t.Fatal(err)
+	}
+	firstTouch := store.Snapshot()
+	firstSeen := *firstTouch.Users[0].Devices[0].LastSeenAt
+	now = now.Add(time.Minute)
+	if err := store.Touch(deviceOne.DeviceUID); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Snapshot().Users[0].Devices[0].LastSeenAt; got == nil || !got.Equal(firstSeen) {
+		t.Fatal("Last seen was written before the coalescing interval")
+	}
+	now = now.Add(4 * time.Minute)
 	if err := store.Touch(deviceOne.DeviceUID); err != nil {
 		t.Fatal(err)
 	}
 	after := store.Snapshot()
-	if after.Users[0].LastSeenAt == nil || after.Users[0].Devices[0].LastSeenAt == nil || after.Users[0].Devices[1].LastSeenAt != nil {
+	if after.Users[0].LastSeenAt == nil || after.Users[0].Devices[0].LastSeenAt == nil ||
+		after.Users[0].Devices[0].LastSeenAt.Equal(firstSeen) || after.Users[0].Devices[1].LastSeenAt != nil {
 		t.Fatal("Last seen did not update only the authenticated device and its user")
 	}
 	lastSeen := *after.Users[0].LastSeenAt
@@ -159,67 +199,114 @@ func TestSeatsDevicesSessionsRevocationAndActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := store.Snapshot()
-	if snapshot.SeatsAssigned != 1 || snapshot.Users[0].Access != "deactivated" || snapshot.Users[0].Devices[0].Access != "revoked" {
+	if snapshot.SeatsAssigned != 1 || snapshot.Users[0].Access != "deactivated" || snapshot.Users[0].Devices[1].Access != "revoked" {
 		t.Fatalf("deactivation was not atomic: %#v", snapshot)
 	}
-	if _, err := store.CreateUser("Charlie", 180); err != nil {
+	if _, err := store.CreateUser("Charlie"); err != nil {
 		t.Fatal("deactivation did not release a seat:", err)
-	}
-	persistedData, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var saved persisted
-	if err := json.Unmarshal(persistedData, &saved); err != nil {
-		t.Fatal(err)
-	}
-	if len(saved.SeatEvents) != 4 ||
-		saved.SeatEvents[0].Action != "assigned" ||
-		saved.SeatEvents[2].Action != "released" ||
-		saved.SeatEvents[3].Action != "assigned" {
-		t.Fatalf("seat events were not persisted: %#v", saved.SeatEvents)
 	}
 }
 
-func TestUserAccessPeriodExpiresAndCanBeRenewed(t *testing.T) {
+func TestUsersRemainAssignedUntilAnAdministratorDeactivatesThem(t *testing.T) {
 	now := time.Date(2026, 7, 27, 18, 0, 0, 0, time.UTC)
 	store, err := openWithClock(filepath.Join(t.TempDir(), "identity.json"), testLicense(), func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateUser("Invalid", 31); identityCode(t, err) != "invalid_active_period" {
-		t.Fatal("unsupported active period was accepted")
-	}
-	user, err := store.CreateUser("Alice", 30)
+	user, err := store.CreateUser("Alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.IssueEnrollmentCode(user.UID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicKey, _ := deviceKey(t)
-	if _, err := store.Enroll(code.EnrollmentCode, publicKey, "Work laptop"); err != nil {
-		t.Fatal(err)
-	}
+	device, _ := enrollDevice(t, store, user.UID, "Work laptop")
 
-	now = now.Add(31 * 24 * time.Hour)
+	now = now.Add(400 * 24 * time.Hour)
 	snapshot := store.Snapshot()
-	if snapshot.SeatsAssigned != 0 || snapshot.SeatsAvailable != 2 || snapshot.Users[0].Access != "expired" {
-		t.Fatalf("expired access did not release the seat: %#v", snapshot)
+	if snapshot.SeatsAssigned != 1 || snapshot.Users[0].Access != "assigned" {
+		t.Fatalf("time changed the user assignment: %#v", snapshot)
 	}
-	if _, err := store.IssueEnrollmentCode(user.UID); identityCode(t, err) != "user_expired" {
-		t.Fatal("expired user received an Enrollment code")
+	if _, err := store.NewChallenge(device.DeviceUID); err != nil {
+		t.Fatal("time disabled an assigned user:", err)
 	}
-	if _, err := store.NewChallenge(snapshot.Users[0].Devices[0].UID); identityCode(t, err) != "device_not_authorized" {
-		t.Fatal("expired user device was authorized")
+	if err := store.DeactivateUser(user.UID); err != nil {
+		t.Fatal(err)
 	}
 	if err := store.ReactivateUser(user.UID); err != nil {
 		t.Fatal(err)
 	}
-	renewed := store.Snapshot()
-	if renewed.SeatsAssigned != 1 || renewed.Users[0].Access != "assigned" ||
-		!renewed.Users[0].ExpiresAt.Equal(now.Add(30*24*time.Hour)) {
-		t.Fatalf("reactivation did not renew the access period: %#v", renewed.Users[0])
+	reactivated := store.Snapshot()
+	if reactivated.SeatsAssigned != 1 || reactivated.Users[0].Access != "assigned" {
+		t.Fatalf("reactivation did not restore the user assignment: %#v", reactivated.Users[0])
+	}
+}
+
+func TestEphemeralSessionsDoNotSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.json")
+	store, err := Open(path, testLicense())
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.CreateUser("Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, privateKey := enrollDevice(t, store, user.UID, "Work laptop")
+	challenge, err := store.NewChallenge(device.DeviceUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := ed25519.Sign(privateKey, []byte(challenge.Challenge))
+	session, err := store.NewSession(challenge.ChallengeUID, base64.RawURLEncoding.EncodeToString(signature))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, testLicense())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Authenticate(session.Token); identityCode(t, err) != "session_invalid" {
+		t.Fatal("session survived a store restart")
+	}
+}
+
+func TestFailedPersistenceDoesNotChangeMemory(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "identity.json"), testLicense())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.path = filepath.Join(t.TempDir(), "missing", "identity.json")
+	if _, err := store.CreateUser("Alice"); err == nil {
+		t.Fatal("write to a missing directory succeeded")
+	}
+	if got := store.Snapshot(); len(got.Users) != 0 || got.SeatsAssigned != 0 {
+		t.Fatalf("failed persistence changed memory: %#v", got)
+	}
+}
+
+func TestLowerReplacementEntitlementBlocksProductAccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.json")
+	store, err := Open(path, testLicense())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := store.CreateUser("Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateUser("Bob"); err != nil {
+		t.Fatal(err)
+	}
+	device, _ := enrollDevice(t, store, alice.UID, "Work laptop")
+
+	lower := testLicense()
+	lower.MaxAuthorizedUsers = 1
+	reopened, err := Open(path, lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.NewChallenge(device.DeviceUID); identityCode(t, err) != "entitlement_over_limit" {
+		t.Fatal("over-limit product access was not blocked")
+	}
+	if got := reopened.Snapshot(); len(got.Users) != 2 {
+		t.Fatal("the over-limit state was not available for administration")
 	}
 }

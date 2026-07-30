@@ -71,7 +71,6 @@ type pageData struct {
 	EnrollmentCode    string
 	EnrollmentExpires string
 	RetryAfterSeconds int
-	ActiveForOptions  []int
 }
 
 type contextKey int

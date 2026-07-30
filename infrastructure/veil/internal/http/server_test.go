@@ -24,6 +24,7 @@ import (
 	"umbratic-veil/internal/identity"
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
+	"umbratic-veil/internal/prompts"
 )
 
 func signedTestEntitlement(t *testing.T, path string) {
@@ -160,7 +161,7 @@ func TestCompanyModeRequiresDeviceSessionAndTracksProductUse(t *testing.T) {
 		return recorder
 	}
 
-	created := request(http.MethodPost, "/api/control/users", cfg.ControlToken, `{"label":"Alice","active_for_days":30}`)
+	created := request(http.MethodPost, "/api/control/users", cfg.ControlToken, `{"label":"Alice"}`)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create user: %d %s", created.Code, created.Body.String())
 	}
@@ -226,36 +227,6 @@ func TestCompanyModeRequiresDeviceSessionAndTracksProductUse(t *testing.T) {
 	snapshotResponse = request(http.MethodGet, "/api/control/access", cfg.ControlToken, "")
 	if json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshot) != nil || snapshot.Users[0].LastSeenAt == nil {
 		t.Fatal("successful product request did not update Last seen")
-	}
-}
-
-func TestIdentityRateLimitCountsFailuresOnly(t *testing.T) {
-	server := &Server{identityRate: &identityRateLimiter{entries: map[string]rateEntry{}}}
-	request := httptest.NewRequest(http.MethodPost, "/api/session/challenge", strings.NewReader(`{}`))
-	for range 35 {
-		recorder := httptest.NewRecorder()
-		if !server.allowIdentityRequest(recorder, request, "challenge", 30) {
-			t.Fatalf("successful request consumed the rate limit: %d %s", recorder.Code, recorder.Body.String())
-		}
-	}
-
-	for attempt := range 11 {
-		request = httptest.NewRequest(http.MethodPost, "/api/enrollment/enroll", strings.NewReader(`{`))
-		recorder := httptest.NewRecorder()
-		if !server.handleCompanyIdentityRoute(recorder, request) {
-			t.Fatal("enrollment route was not handled")
-		}
-		if attempt < 10 && recorder.Code != http.StatusBadRequest {
-			t.Fatalf("attempt %d: got %d %s", attempt+1, recorder.Code, recorder.Body.String())
-		}
-		if attempt == 10 {
-			if recorder.Code != http.StatusTooManyRequests {
-				t.Fatalf("rate limit: got %d %s", recorder.Code, recorder.Body.String())
-			}
-			if recorder.Header().Get("Retry-After") != "60" {
-				t.Fatal("rate limit response did not include Retry-After")
-			}
-		}
 	}
 }
 
@@ -459,6 +430,36 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestChatProgressModeUsesProtectedSummaryPromptAndNoActionHeader(t *testing.T) {
+	modelClient := &fakeModelClient{}
+	server := NewServer(testConfig(), modelClient)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"Review my codebase for vulnerabilities","response_mode":"progress","max_output_tokens":2048}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get(actionRequiredHeader); got != "" {
+		t.Fatalf("progress request must not require workspace evidence: %q", got)
+	}
+	if modelClient.req.MaxOutputTokens != 192 {
+		t.Fatalf("progress allowance was not bounded: %d", modelClient.req.MaxOutputTokens)
+	}
+	found := false
+	for _, message := range modelClient.req.Messages {
+		if message.Content == prompts.PublicProgressSystemPrompt {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("protected progress prompt was not added: %#v", modelClient.req.Messages)
+	}
+}
+
 func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
 	tests := []struct {
 		path    string
@@ -469,6 +470,7 @@ func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
 		{"/api/engineering/chat", "write me bubble sort algorithm in python and verify that it runs", policy.ActionChangeAndExecute},
 		{"/api/engineering/chat", "can you write me a markdown with suggestions to improve it", policy.ActionChange},
 		{"/api/engineering/chat", "I want you to look at each file and describe exactly what each is", policy.ActionInspect},
+		{"/api/engineering/chat", "Review my codebase for security bugs that attackers could exploit", policy.ActionInspect},
 		{"/api/marketing/chat", "Create a launch brief file", policy.ActionChange},
 		{"/api/sales/chat", "Create a QBR deck", policy.ActionChange},
 	}

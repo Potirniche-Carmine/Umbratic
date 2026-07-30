@@ -36,7 +36,9 @@ function loadTypeScriptModule(filePath) {
 }
 
 const {
+  composerPromptForSend,
   continueNumberedList,
+  insertPastedComposerText,
   markdownPreview,
   parseMarkdown,
   promptHighlightSegments,
@@ -136,6 +138,22 @@ test("numbered list continuation replaces a selection and ignores non-list lines
     { value: "1. Keep\n2. ", caret: 11 },
   );
   assert.equal(continueNumberedList("Write a normal line", 19), null);
+});
+
+test("pasted composer text removes only trailing empty lines and preserves the caret", () => {
+  assert.deepEqual(
+    plain(insertPastedComposerText("Before after", "one\r\n\r\n \r\n", 7, 7)),
+    { value: "Before oneafter", caret: 10 },
+  );
+  assert.deepEqual(
+    plain(insertPastedComposerText("Replace this text", "first\n\nsecond\n\n\n", 8, 12)),
+    { value: "Replace first\n\nsecond text", caret: 21 },
+  );
+});
+
+test("sent composer text ignores trailing empty lines", () => {
+  assert.equal(composerPromptForSend("  Keep internal\n\nblank lines.\n \n\t\n"), "Keep internal\n\nblank lines.");
+  assert.equal(composerPromptForSend("\n\n   \n"), "");
 });
 
 test("markdown preview truncates on a complete paragraph boundary", () => {

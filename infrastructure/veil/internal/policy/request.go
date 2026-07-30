@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/prompts"
@@ -106,6 +107,7 @@ type ChatInput struct {
 	ToolChoice      any
 	Skills          []prompts.SkillMetadata
 	MaxOutputTokens int
+	ResponseMode    string
 }
 
 const (
@@ -135,6 +137,34 @@ func requiresCompleteWorkspaceInspection(request string) bool {
 	}
 	for _, phrase := range exhaustivePhrases {
 		if strings.Contains(request, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresWorkspaceSecurityInspection(request string) bool {
+	normalized := " " + strings.Join(strings.FieldsFunc(request, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}), " ") + " "
+	workspaceTargets := []string{
+		"code base", "codebase", "project", "projects", "repo", "repos", "repository", "repositories", "source code", "workspace",
+	}
+	securityTopics := []string{
+		"attack", "cybersecurity", "exploit", "security", "threat", "vulnerab",
+	}
+	hasWorkspaceTarget := false
+	for _, target := range workspaceTargets {
+		if strings.Contains(normalized, " "+target+" ") {
+			hasWorkspaceTarget = true
+			break
+		}
+	}
+	if !hasWorkspaceTarget {
+		return false
+	}
+	for _, topic := range securityTopics {
+		if strings.Contains(normalized, " "+topic) {
 			return true
 		}
 	}
@@ -175,7 +205,7 @@ func WorkspaceActionRequirement(messages []model.Message) string {
 			}
 		}
 	}
-	if requiresCompleteWorkspaceInspection(latest) {
+	if requiresCompleteWorkspaceInspection(latest) || requiresWorkspaceSecurityInspection(latest) {
 		return ActionInspect
 	}
 
@@ -218,6 +248,7 @@ type chatRequest struct {
 	ToolChoice      any                     `json:"tool_choice"`
 	Skills          []prompts.SkillMetadata `json:"skills"`
 	MaxOutputTokens int                     `json:"max_output_tokens"`
+	ResponseMode    string                  `json:"response_mode"`
 }
 
 func DecodeChatInput(r io.Reader) (ChatInput, error) {
@@ -235,7 +266,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "input", "messages", "stream", "tools", "tool_choice", "skills", "max_output_tokens":
+		case "input", "messages", "stream", "tools", "tool_choice", "skills", "max_output_tokens", "response_mode":
 		case "model", "system":
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		default:
@@ -262,6 +293,12 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	if req.MaxOutputTokens < 0 || req.MaxOutputTokens > MaxOutputTokens {
 		return ChatInput{}, fmt.Errorf("max_output_tokens must be between 1 and %d when set", MaxOutputTokens)
 	}
+	if req.ResponseMode != "" && req.ResponseMode != "progress" {
+		return ChatInput{}, errors.New("response_mode is not supported")
+	}
+	if req.ResponseMode == "progress" && (req.Tools != nil || req.ToolChoice != nil) {
+		return ChatInput{}, errors.New("progress responses cannot use tools")
+	}
 	for i, message := range req.Messages {
 		if message.Role != "user" && message.Role != "assistant" && message.Role != "tool" {
 			return ChatInput{}, fmt.Errorf("message %d has unsupported role", i)
@@ -287,6 +324,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 		ToolChoice:      req.ToolChoice,
 		Skills:          skills,
 		MaxOutputTokens: req.MaxOutputTokens,
+		ResponseMode:    req.ResponseMode,
 	}, nil
 }
 

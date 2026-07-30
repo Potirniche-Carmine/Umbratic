@@ -599,7 +599,7 @@ export type DesktopApi = {
   setResponseFeedback(input: {
     taskId: string;
     messageId: string;
-    rating: "good" | "bad";
+    rating: "good" | "bad" | null;
     comment?: string;
   }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;

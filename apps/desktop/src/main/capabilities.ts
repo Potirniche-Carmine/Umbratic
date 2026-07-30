@@ -433,6 +433,17 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     workflows: ["Git", "worktree review", "engineering"],
   },
   {
+    id: "npm",
+    label: "npm",
+    category: "recommended",
+    importance: "recommended",
+    commands: ["npm"],
+    purpose: "Runs the repository's declared Node scripts and verification gates.",
+    installHint: "Install the supported Node.js release, which includes npm.",
+    workflows: ["JavaScript", "TypeScript", "verification"],
+    acceptNonZeroAsAvailable: true,
+  },
+  {
     id: "typescript-language-server",
     label: "TypeScript language server",
     category: "optional-engineering",
