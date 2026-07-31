@@ -86,13 +86,37 @@
 .toast button {
   display: grid;
   place-items: center;
+  align-self: center;
+  justify-self: center;
   width: 24px;
   height: 24px;
+  padding: 0;
   border-radius: 6px;
+  line-height: 0;
+}
+
+.toast button svg {
+  display: block;
 }
 
 .toast button:hover {
   background: var(--control-hover);
+}
+
+.turnOutcomeToast {
+  bottom: 104px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  border-color: color-mix(in srgb, var(--amber) 48%, transparent);
+  background: color-mix(in srgb, var(--panel-bg) 90%, var(--amber));
+  color: var(--text-primary);
+}
+
+.toast .turnOutcomeAction {
+  width: auto;
+  min-width: 76px;
+  padding: 0 10px;
+  color: inherit;
+  line-height: 24px;
 }
 
 .warnText {
@@ -312,6 +336,12 @@ select:focus-visible {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+
+  .queuedPrompt {
+    background: var(--surface) !important;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 @media (prefers-contrast: more) {
@@ -321,6 +351,10 @@ select:focus-visible {
   .chatProjectMenu,
   .ideMenu,
   .contextMeterTooltip {
+    border-color: var(--text) !important;
+  }
+
+  .queuedPrompt {
     border-color: var(--text) !important;
   }
 }

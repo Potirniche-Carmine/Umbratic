@@ -9,7 +9,7 @@ const { RunnerEventAdapter } = loadTypeScriptModule(
 );
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 
-function adapterHarness() {
+function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
   const emitted: BackendUiEvent[] = [];
   const invalid: Array<{ message: string; code: string; type?: string }> = [];
   const failures: string[] = [];
@@ -18,7 +18,7 @@ function adapterHarness() {
     task: {
       id: "task-1",
       worktreePath: "C:/workspace",
-      reasoningMode: "reasoning",
+      reasoningMode,
     },
     emit: (event) => emitted.push(event),
     onPermission: async () => "resolved",
@@ -94,6 +94,174 @@ test("runner event adapter rejects the removed raw reasoning event", () => {
   });
   assert.equal(harness.invalid.length, 1);
   assert.equal(harness.invalid[0].code, "unknown_type");
+  assert.deepEqual(plain(harness.emitted), []);
+});
+
+test("runner event adapter shows safe public progress in fast mode", () => {
+  const harness = adapterHarness("fast");
+  harness.adapter.handle({
+    type: "assistant.progress.delta",
+    taskId: "task-1",
+    text: "I am checking the request path.",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "assistant.progress.delta",
+    taskId: "task-1",
+    text: "I am checking the request path.",
+  }]);
+});
+
+test("runner event adapter keeps run_program distinct and treats it as an executable action", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "tool.requested",
+    taskId: "task-1",
+    toolCallId: "program-1",
+    toolKind: "run_program",
+    summary: "uv run python bubble_sort.py",
+    commandClass: "python-runtime",
+    arguments: { programId: "uv", args: ["run", "python", "bubble_sort.py"] },
+  });
+  const started = harness.emitted.find((event) => event.type === "command.started");
+  assert.ok(started && started.type === "command.started");
+  assert.equal(started.kind, "bash");
+  assert.equal(started.toolKind, "run_program");
+  assert.equal(started.command, "uv run python bubble_sort.py");
+});
+
+test("assistant text reaches the renderer as it streams instead of at the turn boundary", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.delta",
+    taskId: "task-1",
+    text: "Umbratic is ",
+    at: "2026-01-01T00:00:00.000Z",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "assistant.delta",
+    taskId: "task-1",
+    text: "Umbratic is ",
+    at: "2026-01-01T00:00:00.000Z",
+  }]);
+
+  harness.adapter.handle({
+    type: "assistant.delta",
+    taskId: "task-1",
+    text: "a layered product.",
+    at: "2026-01-01T00:00:01.000Z",
+  });
+  harness.adapter.handle({
+    type: "session.idle",
+    taskId: "task-1",
+    at: "2026-01-01T00:00:02.000Z",
+  });
+
+  assert.deepEqual(
+    plain(harness.emitted.map((event) => event.type)),
+    ["assistant.delta", "assistant.delta"],
+  );
+  assert.equal(harness.finished(), 1);
+});
+
+test("streamed text before a tool call is forwarded once and is not replayed as progress", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.delta",
+    taskId: "task-1",
+    text: "I'll read the runner first.",
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  harness.adapter.handle({
+    type: "tool.requested",
+    taskId: "task-1",
+    toolCallId: "tool-1",
+    toolKind: "read",
+    summary: "read src/app.ts",
+    commandClass: "read",
+    at: "2026-01-01T00:00:01.000Z",
+  });
+
+  assert.deepEqual(
+    plain(harness.emitted.map((event) => event.type)),
+    ["assistant.delta", "command.started"],
+  );
+  const deltas = harness.emitted.filter((event) => event.type === "assistant.delta");
+  assert.equal(deltas.length, 1);
+});
+
+test("recovering compacted context never becomes a visible workspace action", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "tool.requested",
+    taskId: "task-1",
+    toolCallId: "internal-1",
+    toolKind: "retrieve_context",
+    summary: "retrieve_context 90dd8e8bc426f10604232f55",
+    commandClass: "read",
+    arguments: { hash: "90dd8e8bc426f10604232f55" },
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  harness.adapter.handle({
+    type: "tool.output",
+    taskId: "task-1",
+    toolCallId: "internal-1",
+    stream: "stdout",
+    text: "258: **Stated risk.** ...",
+    at: "2026-01-01T00:00:01.000Z",
+  });
+  harness.adapter.handle({
+    type: "context.retrieved",
+    taskId: "task-1",
+    toolCallId: "internal-1",
+    hash: "90dd8e8bc426f10604232f55",
+    offset: 0,
+    bytesShown: 24,
+    totalBytes: 4096,
+    at: "2026-01-01T00:00:01.000Z",
+  });
+  harness.adapter.handle({
+    type: "tool.finished",
+    taskId: "task-1",
+    toolCallId: "internal-1",
+    exitCode: 0,
+    status: "success",
+    at: "2026-01-01T00:00:02.000Z",
+  });
+  harness.adapter.handle({
+    type: "session.idle",
+    taskId: "task-1",
+    at: "2026-01-01T00:00:03.000Z",
+  });
+
+  // The retrieval stays observable for telemetry, but the user sees no command
+  // row, no hash, and none of the recovered bytes.
+  assert.deepEqual(plain(harness.emitted.map((event) => event.type)), ["context.retrieved"]);
+  assert.deepEqual(plain(harness.failures), []);
+  assert.equal(harness.invalid.length, 0);
+});
+
+test("a failing internal tool still produces no timeline row", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "tool.requested",
+    taskId: "task-1",
+    toolCallId: "internal-2",
+    toolKind: "retrieve_context",
+    summary: "retrieve_context deadbeef",
+    commandClass: "read",
+  });
+  harness.adapter.handle({
+    type: "tool.finished",
+    taskId: "task-1",
+    toolCallId: "internal-2",
+    exitCode: 1,
+    status: "invalid_request",
+    errorCode: "validation_failed",
+    errorMessage: "No stored context found for hash deadbeef.",
+  });
+
   assert.deepEqual(plain(harness.emitted), []);
 });
 

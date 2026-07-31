@@ -10,7 +10,7 @@ import {
   shell,
   session,
 } from "electron";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -22,7 +22,6 @@ import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle"
 import {
   attachmentPromptTokenBudget,
   attachmentTextExcerpt,
-  estimateAttachmentTextTokens,
   estimateTextTokens,
 } from "../shared/contextWindow";
 
@@ -38,8 +37,7 @@ import {
   type CapabilityPromptNeeds,
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { priorChatAttachments } from "./attachmentContext";
-import { searchRootFiles } from "./fileSearch";
+import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
@@ -68,23 +66,25 @@ import {
   runtimeDiagnostics,
   telemetryPolicyForMode,
 } from "./policy";
-import { getProviderJson } from "./providerClient";
 import {
+  connectCompanySession,
   companyConnectionStatus,
   disconnectCompanyDevice,
+  disconnectCompanySession,
   enrollCompanyDevice,
   ensureCompanySession,
   renewCompanySession,
 } from "./companyIdentity";
-import { companyTransportOptions, configuredEndpointModel, configuredEndpointRoute, endpointHealthRoute, endpointProvider, endpointRequestHeaders, normalizeBaseUrl } from "./endpointConfig";
-import { ensureLocalVeil, probeLocalModels, stopLocalVeil } from "./localVeil";
+import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
+import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
 import { loadWindowWithModelWarmup } from "./modelWarmup";
-import { probeVeilContextLength, shouldProbeVeilContext } from "./veilContext";
+import { shouldProbeVeilContext } from "./veilContext";
 import {
   readChat,
   readChats,
   hasStoredModelEndpointSettings,
   readContextLengthSetting,
+  readCachedLocalModels,
   readLocalDiagnosticInfo,
   readLocalDiagnostics,
   readHarnessProfileSetting,
@@ -100,6 +100,7 @@ import {
   readTasks,
   clearLocalDiagnostics,
   writeHarnessProfileSetting,
+  writeCachedLocalModels,
   writeContextLengthSetting,
   writeModelEndpointSettings,
   writeChat,
@@ -119,8 +120,10 @@ import {
   syncTelemetryBundle,
   telemetrySpoolDirectory,
   uploadTelemetrySpool,
-  type TelemetryUploadEndpoint,
 } from "./telemetrySync";
+import { checkEndpointHealth, modelWithFreshContextLength as refreshModelContextLength, telemetryUploadEndpoint } from "./modelEndpointRuntime";
+import { commandAvailable, execFileOutput, execFileResult, gitOutput, gitResult } from "./processCommands";
+import { searchRepositoryFiles } from "./repositorySearch";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import { RunnerEventAdapter } from "./runnerEventAdapter";
 import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
@@ -147,7 +150,6 @@ import type {
   CommandOutput,
   CommandResult,
   ContextStateV1,
-  FileSearchResult,
   HarnessProfileId,
   IdeInfo,
   IdeOpenResult,
@@ -176,7 +178,7 @@ import type {
 } from "./types";
 import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, removeResponseFeedback, taskEventSignature } from "../shared/taskEvents";
+import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, isResponseFeedbackReason, removeResponseFeedback, taskEventSignature } from "../shared/taskEvents";
 import { isDocumentReviewSidecarPath } from "../shared/documentReview";
 import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
 import {
@@ -206,6 +208,12 @@ const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = ContextPromptPart;
 type RunnerPrompt = string | RunnerPromptPart[];
+type PendingTaskSteer = {
+  prompt: string;
+  attachments: ChatAttachment[];
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
 type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
   | { ok: false; error: string };
@@ -213,6 +221,7 @@ const activeRunnerProcesses = new Map<string, RunnerProcess>();
 const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
+const pendingTaskSteers = new Map<string, PendingTaskSteer>();
 const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
 const textAttachmentByteLimit = 512 * 1024;
 const chatAttachmentByteLimit = 25 * 1024 * 1024;
@@ -1000,8 +1009,7 @@ function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdValue: st
 }
 
 function parseReasoningMode(value: unknown): ReasoningMode {
-  void value;
-  return "reasoning";
+  return value === "fast" ? "fast" : "reasoning";
 }
 
 function createChat(input: unknown): ChatRecord {
@@ -1247,23 +1255,6 @@ function readTextFileIfSafe(filePath: string): string | null {
   } catch {
     return null;
   }
-}
-
-function readAttachmentTextIfSafe(filePath: string): string | null {
-  try {
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > chatAttachmentByteLimit) return null;
-    const buffer = fs.readFileSync(filePath);
-    if (buffer.includes(0)) return null;
-    return buffer.toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-function attachmentContextTokens(filePath: string): number | undefined {
-  const text = readAttachmentTextIfSafe(filePath);
-  return text === null ? undefined : estimateAttachmentTextTokens(text);
 }
 
 function binarySnapshotValue(stat: fs.Stats): string {
@@ -1802,6 +1793,8 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
     case "assistant.progress.delta":
     case "response.feedback":
     case "tool.failed":
+    case "tool.policy.stage":
+    case "turn.outcome":
     case "worktree.requested":
     case "worktree.created":
       return null;
@@ -1950,14 +1943,20 @@ async function runnerPromptForTask(
   contextLength: number,
   options: { useDurableContext?: boolean } = {},
 ): Promise<RunnerPromptPart[]> {
-  if (!shouldIncludeWorkspaceContext(userPrompt, attachments.length)) return [{ type: "text", text: userPrompt }];
   const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  const hiddenChat = isHiddenChatTask(task), historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
+  if (!shouldIncludeWorkspaceContext({
+    hasProject: !hiddenChat,
+    workspaceHasFiles: !directoryIsEmpty(rootPath),
+    attachmentCount: attachments.length,
+    historicalAttachmentCount: historicalAttachments.length,
+  })) return [{ type: "text", text: userPrompt }];
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const capabilityNeeds = capabilityNeedsForPrompt(userPrompt, attachments);
-  const hiddenChat = isHiddenChatTask(task);
-  const tree = repositoryTreePreview(rootPath);
-  const keyFiles = hiddenChat ? [] : keyWorkspaceFiles(rootPath);
+  const firstUserTurn = (task.events ?? []).filter((event) => event.type === "user.message").length <= 1;
+  const tree = firstUserTurn ? repositoryTreePreview(rootPath) : [];
+  const keyFiles = firstUserTurn && !hiddenChat ? keyWorkspaceFiles(rootPath) : [];
   const lines = hiddenChat
     ? [
         "Umbratic chat context:",
@@ -1973,11 +1972,13 @@ async function runnerPromptForTask(
         `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
       ];
   pushAgentInstructionContext(lines, rootPath);
-  lines.push(
-    "",
-    hiddenChat ? "Scratch workspace file preview (bounded, not exhaustive):" : "Visible workspace file preview (bounded, not exhaustive):",
-    tree.length ? tree.join("\n") : hiddenChat ? "- (empty)" : "- (no readable files found)",
-  );
+  if (firstUserTurn) {
+    lines.push(
+      "",
+      hiddenChat ? "Scratch workspace file preview (bounded, not exhaustive):" : "Visible workspace file preview (bounded, not exhaustive):",
+      tree.length ? tree.join("\n") : hiddenChat ? "- (empty)" : "- (no readable files found)",
+    );
+  }
   if (keyFiles.length) {
     lines.push("", "Key workspace files:");
     for (const file of keyFiles) {
@@ -1997,7 +1998,6 @@ async function runnerPromptForTask(
   lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
   const textBudget = { remainingTokens: attachmentPromptTokenBudget(contextLength) };
-  const historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
   parts.push(
     ...(await attachmentPromptParts(rootPath, historicalAttachments, {
       userPrompt,
@@ -2252,156 +2252,6 @@ function failTask(
 function taskStillRunning(task: TaskRecord): boolean {
   return task.state === "running";
 }
-
-function execFileOutput(
-  command: string,
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {},
-): Promise<CommandOutput> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      {
-        cwd: options.cwd,
-        env: options.env,
-        windowsHide: true,
-        timeout: options.timeout ?? 180000,
-        maxBuffer: 8 * 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(`${error.message}${stderr ? `\n${stderr}` : ""}`));
-          return;
-        }
-        resolve({ stdout: String(stdout), stderr: String(stderr) });
-      },
-    );
-  });
-}
-
-function execFileResult(
-  command: string,
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {},
-): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      {
-        cwd: options.cwd,
-        env: options.env,
-        windowsHide: true,
-        timeout: options.timeout ?? 180000,
-        maxBuffer: 8 * 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        const exitCode =
-          error && typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === "number"
-            ? ((error as NodeJS.ErrnoException & { code: number }).code)
-            : error
-              ? 1
-              : 0;
-        resolve({
-          stdout: String(stdout),
-          stderr: String(stderr) || (error ? String(error.message) : ""),
-          exitCode,
-          success: !error,
-        });
-      },
-    );
-  });
-}
-
-async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  const output = await execFileOutput("git", args, { cwd });
-  return output.stdout.trim();
-}
-
-async function gitResult(cwd: string, args: string[]): Promise<CommandResult> {
-  return execFileResult("git", args, { cwd });
-}
-
-async function commandAvailable(command: string): Promise<boolean> {
-  try {
-    await execFileOutput(process.platform === "win32" ? "where.exe" : "which", [command], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function searchRepositoryFiles(input: unknown): Promise<FileSearchResult[]> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid file search input.");
-  }
-  const repositoryId = requiredString(input.repositoryId, "repositoryId");
-  const query = typeof input.query === "string" ? input.query.trim().slice(0, 120) : "";
-  const limit = Math.min(30, Math.max(4, typeof input.limit === "number" ? input.limit : 10));
-  const repository = readProjects().find((project) => project.id === repositoryId);
-  if (!repository) {
-    throw new Error("Repository has not been selected.");
-  }
-  const results = await searchRootFiles(repository.rootPath, query, limit);
-  return results.map((result) => ({
-    ...result,
-    contextTokens: attachmentContextTokens(path.resolve(repository.rootPath, result.path)),
-  }));
-}
-
-async function modelWithFreshContextLength(selected: LocalModelInfo): Promise<LocalModelInfo> {
-  const provider = endpointProvider();
-  const detected = await probeVeilContextLength({
-    baseUrl: provider.baseUrl,
-    headers: endpointRequestHeaders(provider),
-    mtls: provider.mtls,
-  });
-  return {
-    ...selected,
-    contextLength: detected ?? readContextLengthSetting(),
-  };
-}
-
-function telemetryUploadEndpoint(provider: ReturnType<typeof endpointProvider>): TelemetryUploadEndpoint {
-  return {
-    url: configuredEndpointRoute(provider.baseUrl, "/api/telemetry"),
-    headers: endpointRequestHeaders(provider),
-    mtls: provider.mtls,
-  };
-}
-
-async function checkEndpointHealth(provider: ReturnType<typeof endpointProvider>): Promise<{ status: ServiceStatus; message?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-  try {
-    const healthRoute = endpointHealthRoute(provider);
-    const response = await getProviderJson(healthRoute, {
-      headers: endpointRequestHeaders(provider),
-      mtls: provider.mtls,
-      signal: controller.signal,
-    });
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      const body = response.text;
-      return {
-        status: "unavailable",
-        message: `Health check failed at ${new URL(healthRoute).pathname} with ${response.statusCode} ${response.statusMessage}${
-          body.trim() ? `: ${body.trim().slice(0, 160)}` : ""
-        }`,
-      };
-    }
-    return { status: "ready", message: `Health check passed at ${new URL(healthRoute).pathname}.` };
-  } catch (error) {
-    const message =
-      error instanceof Error && error.name === "AbortError"
-        ? "Health check timed out."
-        : `Health check failed: ${error instanceof Error ? error.message : String(error)}`;
-    return { status: "unavailable", message };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
   if (activeRunnerProcesses.size > 0) {
     throw new Error("Wait for the active run to finish before changing the model connection.");
@@ -2436,6 +2286,38 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
   return { settings: publicModelEndpointSettings(settings), status };
 }
 
+async function submitSteeredRunnerTurn(
+  run: RunnerProcess,
+  sessionId: string,
+  parts: RunnerPromptPart[],
+  model: LocalModelInfo,
+): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      await runnerRequest<void>(run, `/session/${encodeURIComponent(sessionId)}/prompt_async`, {
+        method: "POST",
+        body: {
+          model: { providerID: model.providerId, modelID: model.modelId },
+          agent: "build",
+          parts,
+        },
+      });
+      return;
+    } catch (cause) {
+      const message = String(cause instanceof Error ? cause.message : cause);
+      if (attempt === 39 || !message.includes("409 Conflict")) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
+async function refreshLocalModels(baseUrl: string) {
+  const result = await probeLocalRuntimeModels(baseUrl);
+  return result.status === "ready"
+    ? { ...result, models: writeCachedLocalModels(baseUrl, result.models) }
+    : result;
+}
+
 async function enrollCompanyConnection(input: unknown) {
   if (activeRunnerProcesses.size > 0) {
     throw new Error("Wait for the active run to finish before changing the company connection.");
@@ -2460,6 +2342,61 @@ async function enrollCompanyConnection(input: unknown) {
   const settings = writeModelEndpointSettings({
     mode: "server", software: "vllm", baseUrl, modelId: "veil-managed", secret: "",
   });
+  const status = await getBackendStatus();
+  return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
+}
+
+async function connectCompanyConnection() {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before connecting to the company server.");
+  }
+  const connection = companyConnectionStatus();
+  if (connection.state !== "enrolled" || !connection.baseUrl) {
+    throw new Error("Enroll this device before connecting to the company server.");
+  }
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new Error("The company server did not connect within 5 seconds. Try again."));
+    }, 5000);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        await connectCompanySession({ ...companyTransportOptions(), signal: controller.signal });
+        const settings = writeModelEndpointSettings({
+          mode: "server",
+          software: "vllm",
+          baseUrl: connection.baseUrl,
+          modelId: "veil-managed",
+          secret: "",
+        });
+        const status = await getBackendStatus();
+        if (status.endpoint !== "ready") {
+          throw new Error(status.providers[0]?.message ?? "The company server is unavailable.");
+        }
+        return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
+      })(),
+      timedOut,
+    ]);
+  } catch (cause) {
+    if (controller.signal.aborted) {
+      await disconnectCompanySession(companyTransportOptions());
+    }
+    throw cause;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function disconnectCompanyServerSession() {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before disconnecting from the company server.");
+  }
+  await disconnectCompanySession(companyTransportOptions());
+  const settings = readModelEndpointSettings();
   const status = await getBackendStatus();
   return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
 }
@@ -2523,8 +2460,9 @@ async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]
   const configured = configuredEndpointModel();
   const providerConfig = endpointProvider();
   const health = await checkEndpointHealth(providerConfig);
-  const models: LocalModelInfo[] = health.status === "ready" ? [configured] : [];
-  const selected = health.status === "ready" ? configured : null;
+  const availableModel = { ...configured, capabilities: health.capabilities };
+  const models: LocalModelInfo[] = health.status === "ready" ? [availableModel] : [];
+  const selected = health.status === "ready" ? availableModel : null;
   const provider: LocalModelProvider = {
     providerId: configured.providerId,
     providerName: configured.providerName,
@@ -3499,7 +3437,7 @@ async function runRunnerTask(
   const task = getTask(taskIdValue);
   let run: RunnerProcess | null = null;
   let runnerFailureDetails: { category?: string; code?: string; detail?: string } = {};
-  const intent = intentPrompt ?? task.prompt;
+  let intent = intentPrompt ?? task.prompt;
   try {
     const { providers, selected } = await resolveSelectedModel();
     if (!taskStillRunning(task)) {
@@ -3510,7 +3448,7 @@ async function runRunnerTask(
       return;
     }
     const selectedForRun = shouldProbeVeilContext(task.model, selected)
-      ? await modelWithFreshContextLength(selected)
+      ? await refreshModelContextLength(selected, endpointProvider())
       : { ...selected, contextLength: task.model?.contextLength ?? readContextLengthSetting() };
     task.model = selectedForRun;
     applyTaskPolicyMetadata(task);
@@ -3606,7 +3544,36 @@ async function runRunnerTask(
       },
     });
 
-    const stream = beginRunnerEventStream(run, runnerEvents.handle);
+    const launchPendingSteer = (pending: PendingTaskSteer) => {
+      appendUserMessage(task, pending.prompt, pending.attachments);
+      void runnerPromptForTask(task, pending.prompt, pending.attachments,
+        selectedForRun.contextLength ?? readContextLengthSetting(), { useDurableContext: true })
+        .then((parts) => {
+          intent = pending.prompt;
+          prompt = parts;
+          promptParts = parts;
+          return submitSteeredRunnerTurn(run as RunnerProcess, session.id, parts, selectedForRun);
+        })
+        .then(() => {
+          pending.resolve();
+        })
+        .catch((cause) => {
+          const message = String(cause instanceof Error ? cause.message : cause);
+          pending.reject(new Error(message));
+          fail(message);
+        });
+    };
+    const handleRunnerEvent = (event: Record<string, unknown>) => {
+      const pending = pendingTaskSteers.get(task.id);
+      const terminalTurnEvent = event.type === "session.idle" || event.type === "runner.error";
+      if (pending && terminalTurnEvent) {
+        pendingTaskSteers.delete(task.id);
+        launchPendingSteer(pending);
+        return;
+      }
+      runnerEvents.handle(event);
+    };
+    const stream = beginRunnerEventStream(run, handleRunnerEvent);
     void stream.done.catch((error) => {
       if (!run?.abortController.signal.aborted) {
         runnerEvents.failStream(
@@ -3730,6 +3697,11 @@ async function runRunnerTask(
   } finally {
     clearPendingPermissionsForTask(task.id);
     activeRunnerProcesses.delete(task.id);
+    const pendingSteer = pendingTaskSteers.get(task.id);
+    if (pendingSteer) {
+      pendingTaskSteers.delete(task.id);
+      pendingSteer.reject(new Error("The task stopped before Umbratic could steer it."));
+    }
     if (run) {
       stopRunnerProcess(run);
     }
@@ -4339,26 +4311,47 @@ async function cancelTask(input: unknown): Promise<void> {
   emit({ type: "task.error", taskId: task.id, message: task.error });
 }
 
-async function setResponseFeedback(input: unknown): Promise<void> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid response feedback input.");
+async function steerTask(input: unknown): Promise<void> {
+  if (!isRecord(input)) throw new Error("Invalid steer input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const prompt = requiredString(input.prompt, "prompt");
+  const run = activeRunnerProcesses.get(task.id);
+  if (task.state !== "running" || !run?.sessionId || !task.model) {
+    throw new Error("This task is not ready for steering.");
   }
+  if (pendingTaskSteers.has(task.id)) {
+    throw new Error("A steer message is already pending.");
+  }
+  const attachments = sanitizeAttachments(input.attachedFiles, task.originalRepoPath, task.chatId ?? task.id);
+  await new Promise<void>((resolve, reject) => {
+    pendingTaskSteers.set(task.id, { prompt, attachments, resolve, reject });
+    void runnerRequest<void>(run, `/session/${encodeURIComponent(run.sessionId as string)}/abort`, {
+      method: "POST",
+    }).catch((cause) => {
+      const pending = pendingTaskSteers.get(task.id);
+      if (!pending) return;
+      pendingTaskSteers.delete(task.id);
+      pending.reject(new Error(String(cause instanceof Error ? cause.message : cause)));
+    });
+  });
+}
+
+async function setResponseFeedback(input: unknown): Promise<void> {
+  if (!isRecord(input)) throw new Error("Invalid response feedback input.");
   const task = getTask(requiredString(input.taskId, "taskId"));
   const messageId = requiredString(input.messageId, "messageId").slice(0, 80);
   const rating = input.rating === null || input.rating === "good" || input.rating === "bad"
     ? input.rating
     : undefined;
-  if (rating === undefined) {
-    throw new Error("Invalid response feedback rating.");
-  }
+  if (rating === undefined) throw new Error("Invalid response feedback rating.");
+  const reason = rating && isResponseFeedbackReason(rating, input.reason) ? input.reason : undefined;
+  if (input.reason !== undefined && !reason) throw new Error("Invalid response feedback reason.");
   const comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 1000) : "";
-  if (!/^assistant-\d+$/.test(messageId)) {
-    throw new Error("Invalid response message id.");
-  }
+  if (!/^assistant-\d+$/.test(messageId)) throw new Error("Invalid response message id.");
   task.events = removeResponseFeedback(task.events, task.id, messageId);
   saveTask(task);
   if (rating === null) return;
-  emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(comment ? { comment } : {}) });
+  emit({ type: "response.feedback", taskId: task.id, messageId, rating, ...(reason ? { reason } : {}), ...(comment ? { comment } : {}) });
 }
 
 async function launchCommand(command: string, args: string[]): Promise<IdeOpenResult> {
@@ -4756,7 +4749,10 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       const mode = input?.mode;
       return publicModelEndpointSettings(mode ? readModelEndpointSettingsForMode(mode) : readModelEndpointSettings());
     },
-    probeLocalModels: (input) => probeLocalModels(input?.baseUrl ?? ""),
+    getCachedLocalModels: (input) =>
+      readCachedLocalModels(typeof input?.baseUrl === "string" ? input.baseUrl : ""),
+    probeLocalModels: (input) =>
+      refreshLocalModels(typeof input?.baseUrl === "string" ? input.baseUrl : ""),
     saveModelEndpointSettings: (input) =>
       saveModelEndpointSettings(
         input as Partial<ReturnType<typeof readModelEndpointSettings>>,
@@ -4768,6 +4764,8 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       return companyConnectionStatus();
     },
     enrollCompanyConnection: (input) => enrollCompanyConnection(input),
+    connectCompanyConnection: () => connectCompanyConnection(),
+    disconnectCompanySession: () => disconnectCompanyServerSession(),
     disconnectCompanyConnection: () => disconnectCompanyConnection(),
     getHarnessProfile: () => readHarnessProfileSetting(),
     saveHarnessProfile: (input) => saveHarnessProfileSetting(input),
@@ -4791,6 +4789,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     listAvailableIdes: () => listAvailableIdes(),
     openRepositoryInIde: (input) => openRepositoryInIde(input),
     startTask: (input) => startTask(input),
+    steerTask: (input) => steerTask(input),
     approveWorktreeCreation: (input) => approveWorktreeCreation(input),
     respondToToolPermission: (input) => respondToToolPermission(input),
     openTaskInIde: (input) => openTaskInIde(input),

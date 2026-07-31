@@ -1,6 +1,11 @@
 export const BACKEND_EVENT_VERSION = 1 as const;
 
 import type { ReviewFile as NormalizedReviewFile } from "./reviewDiff";
+import {
+  isResponseFeedbackReason,
+  type ResponseFeedbackReason,
+  type ResponseRating,
+} from "./responseFeedback";
 
 export type BackendChatAttachment = {
   path: string;
@@ -62,9 +67,11 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "approval.completed"; taskId: string; target: string; patchHash: string }
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
-  | { type: "response.feedback"; taskId: string; messageId: string; rating: "good" | "bad"; comment?: string }
+  | { type: "response.feedback"; taskId: string; messageId: string; rating: ResponseRating; reason?: ResponseFeedbackReason; comment?: string }
   | { type: "tool.failed"; taskId: string; id: string; toolKind: string; input: unknown; response: { stdout: string; stderr: string; toolResponse?: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string } }
+  | { type: "tool.policy.stage"; taskId: string; toolCallId: string; stage: string; outcome: string; reason?: string }
   | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
+  | { type: "turn.outcome"; taskId: string; outcome: "completed" | "model_gave_up" | "safety_limit" }
   | { type: "required_tool.failed"; taskId: string; requirement: "file_change"; reason: string; requiredTools: string[]; attemptedTools?: string[]; attempt?: number; detail?: string }
   | { type: "task.error"; taskId: string; message: string; category?: string; code?: string; detail?: string }
 );
@@ -111,7 +118,9 @@ const eventTypes = new Set([
   "ide.opened",
   "response.feedback",
   "tool.failed",
+  "tool.policy.stage",
   "skill.selected",
+  "turn.outcome",
   "required_tool.failed",
   "task.error",
 ]);
@@ -206,13 +215,19 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
         && ["success", "failed"].includes(String(value.result));
     case "response.feedback":
       return hasString(value, "messageId") && (value.rating === "good" || value.rating === "bad")
+        && (value.reason === undefined || isResponseFeedbackReason(value.rating, value.reason))
         && (value.comment === undefined || hasString(value, "comment"));
     case "tool.failed":
       return hasString(value, "id") && hasString(value, "toolKind") && isRecord(value.response)
         && hasString(value.response, "stdout") && hasString(value.response, "stderr")
         && (value.response.exitCode === null || hasNumber(value.response, "exitCode"));
+    case "tool.policy.stage":
+      return hasString(value, "toolCallId") && hasString(value, "stage") && hasString(value, "outcome")
+        && (value.reason === undefined || hasString(value, "reason"));
     case "skill.selected":
       return hasString(value, "skillId") && hasString(value, "source") && hasString(value, "reason") && typeof value.fullContent === "boolean";
+    case "turn.outcome":
+      return value.outcome === "completed" || value.outcome === "model_gave_up" || value.outcome === "safety_limit";
     case "required_tool.failed":
       return hasString(value, "requirement") && hasString(value, "reason") && hasStringArray(value, "requiredTools");
     default:

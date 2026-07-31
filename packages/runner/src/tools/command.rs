@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(not(test))]
+const COMMAND_SILENCE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const COMMAND_SILENCE_TIMEOUT: Duration = Duration::from_millis(250);
+
 pub(super) async fn command_tool(
     session: &Session,
     sink: &EventSink,
@@ -47,7 +52,9 @@ pub(super) async fn command_tool(
             .approved_executables
             .get(&program_id)
             .ok_or_else(|| {
-                ToolError::policy(format!("Executable {program_id} is not available."))
+                ToolError::policy(format!(
+                    "Executable {program_id} is not available. Use only a programId declared by run_program."
+                ))
             })?;
         let executable = configured.canonicalize().map_err(|_| {
             ToolError::policy(format!("Executable {program_id} is no longer available."))
@@ -71,7 +78,9 @@ pub(super) async fn command_tool(
         )
         .await;
     if decision != "allow" {
-        return Err(ToolError::permission("Command denied."));
+        return Err(ToolError::permission(
+            "The user rejected this command. It was not run. Do not repeat it unless the user makes a new request that authorizes it.",
+        ));
     }
     let permit = CommandPermit::new(safety);
     let requested = input
@@ -131,6 +140,7 @@ pub(super) async fn command_tool(
         task_id: String,
         call_id: String,
         stream: &'static str,
+        last_output_at: Arc<Mutex<TokioInstant>>,
     ) -> String {
         const MAX_UI_OUTPUT_BYTES: usize = 16 * 1024;
         const MAX_CAPTURED_OUTPUT_BYTES: usize = 512 * 1024;
@@ -141,6 +151,9 @@ pub(super) async fn command_tool(
         while let Ok(count) = reader.read(&mut buffer).await {
             if count == 0 {
                 break;
+            }
+            if let Ok(mut last_output_at) = last_output_at.lock() {
+                *last_output_at = TokioInstant::now();
             }
             let text = redact_stream_text(&String::from_utf8_lossy(&buffer[..count]), 64 * 1024);
             total_bytes = total_bytes.saturating_add(text.len());
@@ -177,12 +190,14 @@ pub(super) async fn command_tool(
         }
         collected
     }
+    let last_output_at = Arc::new(Mutex::new(TokioInstant::now()));
     let stdout_task = tokio::spawn(collect_stream(
         stdout,
         sink.clone(),
         session.task_id.clone(),
         call_id.to_owned(),
         "stdout",
+        last_output_at.clone(),
     ));
     let stderr_task = tokio::spawn(collect_stream(
         stderr,
@@ -190,22 +205,41 @@ pub(super) async fn command_tool(
         session.task_id.clone(),
         call_id.to_owned(),
         "stderr",
+        last_output_at.clone(),
     ));
     let deadline = TokioInstant::now() + Duration::from_millis(requested);
     let mut abort_poll = interval(Duration::from_millis(25));
     let mut timed_out = false;
+    let mut silent_timed_out = false;
     let mut aborted = false;
     let status = loop {
         tokio::select! {
             result = child.wait() => break result.map_err(|error| error.to_string())?,
             _ = sleep_until(deadline) => { timed_out = true; terminate_command_tree(&mut child, pid).await; break child.wait().await.map_err(|error| error.to_string())?; },
-            _ = abort_poll.tick() => if session.is_aborted() { aborted = true; terminate_command_tree(&mut child, pid).await; break child.wait().await.map_err(|error| error.to_string())?; }
+            _ = abort_poll.tick() => {
+                if session.is_aborted() {
+                    aborted = true;
+                    terminate_command_tree(&mut child, pid).await;
+                    break child.wait().await.map_err(|error| error.to_string())?;
+                }
+                let output_was_silent = last_output_at
+                    .lock()
+                    .map(|last_output_at| last_output_at.elapsed() >= COMMAND_SILENCE_TIMEOUT)
+                    .unwrap_or(true);
+                // A silent child can block steering even though the runner is still alive.
+                // Stop it after 30 seconds and return its captured log to the model as a tool failure.
+                if output_was_silent {
+                    silent_timed_out = true;
+                    terminate_command_tree(&mut child, pid).await;
+                    break child.wait().await.map_err(|error| error.to_string())?;
+                }
+            }
         }
     };
     let stdout = stdout_task.await.unwrap_or_default();
     let stderr = stderr_task.await.unwrap_or_default();
     let exit = status.code();
-    let success = status.success() && !timed_out && !aborted;
+    let success = status.success() && !timed_out && !silent_timed_out && !aborted;
     let body = [
         format!(
             "exitCode={}",
@@ -223,7 +257,7 @@ pub(super) async fn command_tool(
         output: body,
         status: if aborted {
             "aborted"
-        } else if timed_out {
+        } else if silent_timed_out || timed_out {
             "timeout"
         } else if success {
             "success"
@@ -233,6 +267,8 @@ pub(super) async fn command_tool(
         .into(),
         error_code: if aborted {
             Some("aborted".into())
+        } else if silent_timed_out {
+            Some("process_silent_timeout".into())
         } else if timed_out {
             Some("process_timeout".into())
         } else if success {
@@ -242,6 +278,8 @@ pub(super) async fn command_tool(
         },
         error_message: if aborted {
             Some("Command was aborted.".into())
+        } else if silent_timed_out {
+            Some("Command stopped after 30 seconds without stdout or stderr output.".into())
         } else if timed_out {
             Some(format!("Command timed out after {requested} ms."))
         } else if success {

@@ -109,19 +109,12 @@ test("checkpoint uses its seed tree when a file is reverted to the visible base 
   }
 });
 
-test("checkpoint refuses symbolic links instead of following them", async () => {
+test("checkpoint refuses symbolic links and junctions instead of following them", async () => {
   const root = fixtureRepository();
+  const linkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-checkpoint-link-target-"));
   try {
-    fs.writeFileSync(path.join(root, "secret.env"), "TOKEN=secret\n");
-    try {
-      fs.symlinkSync(path.join(root, "secret.env"), path.join(root, "notes.txt"));
-    } catch (error) {
-      if (process.platform === "win32") {
-        // Creating symlinks can require elevated privileges on Windows.
-        return;
-      }
-      throw error;
-    }
+    fs.writeFileSync(path.join(linkTarget, "notes.txt"), "linked fixture\n");
+    fs.symlinkSync(linkTarget, path.join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
     await assert.rejects(
       createGitCheckpoint({
         workspacePath: root,
@@ -129,10 +122,11 @@ test("checkpoint refuses symbolic links instead of following them", async () => 
         checkpointId: "blocked-link",
         seedCommit: "HEAD",
       }),
-      /symbolic links/,
+      /symbolic links or junctions/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(linkTarget, { recursive: true, force: true });
   }
 });
 

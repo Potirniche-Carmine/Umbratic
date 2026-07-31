@@ -462,34 +462,47 @@ pub fn compress_tool_result(
     }
 }
 
-fn estimate_string_tokens(value: &str) -> u64 {
-    if value.starts_with("data:image/") {
-        return 0;
-    }
-    let (ascii, non_ascii_bytes) = value.chars().fold((0usize, 0usize), |total, character| {
-        if character.is_ascii() {
-            (total.0 + 1, total.1)
-        } else {
-            (total.0, total.1 + character.len_utf8())
-        }
-    });
-    ascii.div_ceil(4) as u64 + non_ascii_bytes.div_ceil(2) as u64
+fn encoded_json_string_len(value: &str) -> usize {
+    2 + value
+        .chars()
+        .map(|character| match character {
+            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
+            '\u{0000}'..='\u{001f}' => 6,
+            _ => character.len_utf8(),
+        })
+        .sum::<usize>()
 }
 
-fn estimate_value_tokens(value: &serde_json::Value) -> u64 {
+fn encoded_json_len(value: &Value) -> usize {
     match value {
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => 1,
-        serde_json::Value::String(value) => estimate_string_tokens(value),
-        serde_json::Value::Array(values) => {
-            2 + values.iter().map(estimate_value_tokens).sum::<u64>()
+        Value::Null => 4,
+        Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(number) => number.to_string().len(),
+        Value::String(text) => encoded_json_string_len(text),
+        Value::Array(values) => {
+            2 + values.len().saturating_sub(1) + values.iter().map(encoded_json_len).sum::<usize>()
         }
-        serde_json::Value::Object(values) => {
-            2 + values
-                .iter()
-                .map(|(key, value)| estimate_string_tokens(key) + estimate_value_tokens(value))
-                .sum::<u64>()
+        Value::Object(values) => {
+            2 + values.len().saturating_sub(1)
+                + values
+                    .iter()
+                    .map(|(key, value)| {
+                        encoded_json_string_len(key)
+                            .saturating_add(1)
+                            .saturating_add(encoded_json_len(value))
+                    })
+                    .sum::<usize>()
         }
     }
+}
+
+fn encoded_json_array_len(values: &[Value]) -> usize {
+    2 + values.len().saturating_sub(1) + values.iter().map(encoded_json_len).sum::<usize>()
+}
+
+fn estimate_json_array_tokens(values: &[Value]) -> u64 {
+    encoded_json_array_len(values).div_ceil(3) as u64
 }
 
 fn count_images(value: &serde_json::Value) -> u64 {
@@ -609,18 +622,29 @@ pub fn request_profile_fingerprint(
     tools: &[Value],
     skills: &[Value],
 ) -> String {
-    let canonical = json!({
-        "modelId": model_id,
-        "route": route,
-        "contextLength": context_length,
-        "protectedPromptReserveTokens": protected_prompt_reserve_tokens,
-        "tools": tools,
-        "skills": skills,
-    });
-    format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&canonical).unwrap_or_default())
-    )
+    struct DigestWriter<'a>(&'a mut Sha256);
+    impl std::io::Write for DigestWriter<'_> {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.update(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut digest = Sha256::new();
+    for value in [model_id, route] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    digest.update(context_length.to_le_bytes());
+    digest.update(protected_prompt_reserve_tokens.to_le_bytes());
+    let _ = serde_json::to_writer(DigestWriter(&mut digest), tools);
+    digest.update([0]);
+    let _ = serde_json::to_writer(DigestWriter(&mut digest), skills);
+    format!("{:x}", digest.finalize())
 }
 
 pub fn estimate_context_usage(
@@ -631,12 +655,12 @@ pub fn estimate_context_usage(
     protected_prompt_reserve_tokens: u64,
     additional: &[Value],
 ) -> ContextUsageEstimate {
-    let value_tokens: u64 = messages
-        .iter()
-        .chain(tools)
-        .chain(additional)
-        .map(estimate_value_tokens)
-        .sum();
+    let value_tokens = estimate_json_array_tokens(messages)
+        + estimate_json_array_tokens(tools)
+        + additional
+            .iter()
+            .map(|value| encoded_json_len(value).div_ceil(3) as u64)
+            .sum::<u64>();
     let message_overhead = messages.len() as u64 * 10;
     let image_tokens = messages.iter().map(count_images).sum::<u64>() * 1600;
     let protected_tokens = protected_prompt_reserve_tokens.min(context_length / 4);
@@ -655,6 +679,28 @@ pub fn estimate_context_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn allocation_free_json_length_matches_serde_json_encoding() {
+        let values = vec![
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!(123.5),
+            serde_json::json!("quote \" slash \\ controls \n \u{0001} unicode 中🙂"),
+            serde_json::json!({"key":"value","nested":[1,false,null]}),
+        ];
+        for value in &values {
+            assert_eq!(
+                encoded_json_len(value),
+                serde_json::to_vec(value).unwrap().len(),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            encoded_json_array_len(&values),
+            serde_json::to_vec(&values).unwrap().len()
+        );
+    }
+
     #[test]
     fn large_output_is_stored_and_retrievable() {
         let mut store = SessionContextStore::default();
@@ -728,13 +774,21 @@ mod tests {
     }
 
     #[test]
-    fn context_estimate_does_not_count_base64_as_text_and_handles_unicode_conservatively() {
+    fn context_estimate_matches_veil_json_accounting_and_handles_images_conservatively() {
         let messages = vec![serde_json::json!({"role":"user","content":[
             {"type":"text","text":"你好🙂"},
             {"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}", "A".repeat(100_000))}}
         ]})];
         let usage = estimate_context_usage(&messages, &[], 64_000, 4_096, 4_096, &[]);
-        assert!(usage.calibrated_prompt_tokens < 6_000);
+        let veil_value_tokens = serde_json::to_vec(&messages).unwrap().len().div_ceil(3) as u64
+            + serde_json::to_vec(&Vec::<serde_json::Value>::new())
+                .unwrap()
+                .len()
+                .div_ceil(3) as u64;
+        assert_eq!(
+            usage.calibrated_prompt_tokens,
+            veil_value_tokens + 10 + 1_600 + 4_096
+        );
         assert_eq!(usage.reserve_tokens, 4_096);
         assert_eq!(usage.event()["phase"], "preflight");
         assert_eq!(usage.event()["source"], "heuristic");
@@ -751,7 +805,7 @@ mod tests {
 
     #[test]
     fn context_estimate_uses_the_adaptive_response_allowance() {
-        let messages = vec![serde_json::json!({"role":"user","content":"x".repeat(49_000)})];
+        let messages = vec![serde_json::json!({"role":"user","content":"x".repeat(37_000)})];
         let usage = estimate_context_usage(&messages, &[], 16_000, 4_096, 0, &[]);
         assert_eq!(usage.reserve_tokens, 3_000);
         assert!(usage.estimated_tokens() <= 16_000);

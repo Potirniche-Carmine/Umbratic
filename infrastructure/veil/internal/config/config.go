@@ -26,6 +26,9 @@ type Config struct {
 	DefaultModel               string
 	ContextLength              int
 	MaxOutputTokens            int
+	ModelParallelToolCalls     bool
+	ModelVision                bool
+	ModelReasoning             bool
 	TemplateRegistryPath       string
 	TelemetryEnabled           bool
 	TelemetryStorePath         string
@@ -44,11 +47,11 @@ func Load() (Config, error) {
 		}
 	}
 
-	modelTimeout, err := envDuration("VEIL_MODEL_TIMEOUT", 60*time.Second)
+	modelTimeout, err := envDuration("VEIL_MODEL_TIMEOUT", 180*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
-	requestTimeout, err := envDuration("VEIL_REQUEST_TIMEOUT", 75*time.Second)
+	requestTimeout, err := envDuration("VEIL_REQUEST_TIMEOUT", 195*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -76,6 +79,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	modelParallelToolCalls, err := envBool("VEIL_MODEL_PARALLEL_TOOL_CALLS", true)
+	if err != nil {
+		return Config{}, err
+	}
+	modelVision, err := envBool("VEIL_MODEL_VISION", false)
+	if err != nil {
+		return Config{}, err
+	}
+	modelReasoning, err := envBool("VEIL_MODEL_REASONING", false)
+	if err != nil {
+		return Config{}, err
+	}
 	telemetryRetentionDays, err := envInt("VEIL_TELEMETRY_RETENTION_DAYS", 30)
 	if err != nil {
 		return Config{}, err
@@ -99,6 +114,9 @@ func Load() (Config, error) {
 		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:              contextLength,
 		MaxOutputTokens:            maxOutputTokens,
+		ModelParallelToolCalls:     modelParallelToolCalls,
+		ModelVision:                modelVision,
+		ModelReasoning:             modelReasoning,
 		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
 		TelemetryEnabled:           telemetryEnabled,
 		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),

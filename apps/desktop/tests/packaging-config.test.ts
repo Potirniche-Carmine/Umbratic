@@ -115,6 +115,8 @@ test("desktop release workflow pins actions and limits write permission to publi
   const verifyJob = workflow.slice(workflow.indexOf("\n  verify:"), workflow.indexOf("\n  package:"));
   const packageJob = workflow.slice(workflow.indexOf("\n  package:"), workflow.indexOf("\n  publish-release:"));
   const publishJob = workflow.slice(workflow.indexOf("\n  publish-release:"));
+  assert.match(verifyJob, /^\n  verify:/);
+  assert.match(packageJob, /^\n  package:/);
   assert.doesNotMatch(verifyJob, /contents: write/);
   assert.doesNotMatch(packageJob, /contents: write/);
   assert.match(publishJob, /permissions:\r?\n      contents: write/);

@@ -1,9 +1,5 @@
 import { classifyCommandText } from "./policy";
 import {
-  RunnerAssistantOutputBuffer,
-  type BufferedRunnerAssistantOutput,
-} from "./runnerAssistantOutput";
-import {
   decodeRunnerEvent,
   type RunnerEvent,
 } from "./runnerEventDecoder";
@@ -13,11 +9,14 @@ import type {
   ContextCompressionStrategy,
   ContextContentKind,
   PermissionRequest,
-  RunnerToolId,
   TaskRecord,
   ToolErrorCode,
   ToolResultStatus,
 } from "./types";
+
+// Recovering compacted context is runner bookkeeping, not workspace activity
+// the user asked for, so it never becomes a timeline row.
+const internalToolKinds = new Set(["retrieve_context"]);
 
 type ToolRun = {
   commandId: string;
@@ -80,27 +79,35 @@ export class RunnerEventAdapter {
 
     switch (event.type) {
       case "assistant.delta":
-        this.emitBuffered(
-          this.assistantOutput.append(
-            event.text,
-            eventAt(event),
-            eventEndedAt(event),
-          ),
-        );
-        return;
-      case "assistant.answer.started":
-        this.emitBuffered(this.assistantOutput.startAnswer());
+        this.emitAssistant(event.text, eventAt(event), eventEndedAt(event));
         return;
       case "assistant.progress.delta":
-        this.emitBuffered(this.assistantOutput.continueWorking());
-        this.emitProgress(
-          event.text,
-          eventAt(event),
-          eventEndedAt(event),
-        );
+        this.emitProgress(event.text, eventAt(event), eventEndedAt(event));
         return;
       case "tool.requested":
         this.handleToolRequested(event);
+        return;
+      case "tool.policy.stage":
+        this.options.emit({
+          type: "tool.policy.stage",
+          taskId: this.options.task.id,
+          toolCallId: event.toolCallId,
+          stage: event.stage,
+          outcome: event.outcome,
+          ...(event.reason ? { reason: event.reason } : {}),
+          at: eventAt(event),
+        });
+        return;
+      case "skill.selected":
+        this.options.emit({
+          type: "skill.selected",
+          taskId: this.options.task.id,
+          skillId: event.skillId,
+          source: event.source,
+          reason: event.reason,
+          fullContent: event.fullContent,
+          at: eventAt(event),
+        });
         return;
       case "command.safety.decision":
         this.latestCommandSafety = event;
@@ -133,7 +140,6 @@ export class RunnerEventAdapter {
         this.handlePermission(event);
         return;
       case "runner.error":
-        this.emitBuffered(this.assistantOutput.fail());
         this.options.onFailure(
           event.message.trim() || "Umbratic runner failed.",
           {
@@ -147,13 +153,23 @@ export class RunnerEventAdapter {
         return;
       case "session.idle":
         this.finishOpenToolRuns();
-        this.emitBuffered(this.assistantOutput.complete());
+        if (event.summary && typeof event.summary === "object" && !Array.isArray(event.summary)) {
+          const outcome = (event.summary as Record<string, unknown>).outcome;
+          if (outcome === "completed" || outcome === "model_gave_up" || outcome === "safety_limit") {
+            this.options.emit({
+              type: "turn.outcome",
+              taskId: this.options.task.id,
+              outcome,
+              at: eventAt(event),
+            });
+          }
+        }
         this.options.onFinish();
     }
   };
 
   private readonly toolRuns = new Map<string, ToolRun>();
-  private readonly assistantOutput = new RunnerAssistantOutputBuffer();
+  private readonly internalToolCallIds = new Set<string>();
   private readonly options: RunnerEventAdapterOptions;
   private latestCommandSafety: Record<string, unknown> | undefined;
 
@@ -162,7 +178,6 @@ export class RunnerEventAdapter {
   }
 
   failStream(message: string): void {
-    this.emitBuffered(this.assistantOutput.fail());
     this.options.onFailure(message);
   }
 
@@ -178,7 +193,7 @@ export class RunnerEventAdapter {
   }
 
   private emitProgress(text: string, at?: string, endedAt?: string): void {
-    if (!text || this.options.task.reasoningMode !== "reasoning") return;
+    if (!text) return;
     this.options.emit({
       type: "assistant.progress.delta",
       taskId: this.options.task.id,
@@ -186,15 +201,6 @@ export class RunnerEventAdapter {
       at,
       endedAt,
     });
-  }
-
-  private emitBuffered(output: BufferedRunnerAssistantOutput | null): void {
-    if (!output) return;
-    if (output.kind === "assistant") {
-      this.emitAssistant(output.text, output.at, output.endedAt);
-    } else {
-      this.emitProgress(output.text, output.at, output.endedAt);
-    }
   }
 
   private ensureToolRun(
@@ -239,20 +245,14 @@ export class RunnerEventAdapter {
   private handleToolRequested(
     event: Extract<RunnerEvent, { type: "tool.requested" }>,
   ): void {
-    this.emitBuffered(this.assistantOutput.continueWorking());
+    if (internalToolKinds.has(event.toolKind)) {
+      this.internalToolCallIds.add(event.toolCallId);
+      return;
+    }
     const toolKind = event.toolKind;
-    const runnerToolKind = (
-      toolKind === "read"
-      || toolKind === "write"
-      || toolKind === "edit"
-      || toolKind === "search"
-      || toolKind === "command"
-    )
-      ? (toolKind as RunnerToolId)
-      : undefined;
     const command = event.summary?.trim() || toolKind;
     const kind: PermissionRequest["kind"] =
-      toolKind === "command"
+      toolKind === "command" || toolKind === "run_program"
         ? "bash"
         : toolKind === "read"
             || toolKind === "search"
@@ -272,7 +272,7 @@ export class RunnerEventAdapter {
       command,
       kind,
       commandClass,
-      runnerToolKind ?? toolKind,
+      toolKind,
       event.arguments,
     );
   }
@@ -280,6 +280,7 @@ export class RunnerEventAdapter {
   private handleToolOutput(
     event: Extract<RunnerEvent, { type: "tool.output" }>,
   ): void {
+    if (this.internalToolCallIds.has(event.toolCallId)) return;
     const current = this.ensureToolRun(
       event.toolCallId,
       event.toolCallId,
@@ -304,6 +305,7 @@ export class RunnerEventAdapter {
   private handleToolFinished(
     event: Extract<RunnerEvent, { type: "tool.finished" }>,
   ): void {
+    if (this.internalToolCallIds.delete(event.toolCallId)) return;
     const current = this.ensureToolRun(
       event.toolCallId,
       event.toolCallId,

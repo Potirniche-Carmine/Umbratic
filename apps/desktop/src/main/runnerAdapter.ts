@@ -71,6 +71,7 @@ export function buildUmbraticRunnerConfig(
       description: skill.description,
       source: skill.source,
       instructionPath: skill.instructionPath,
+      paths: skill.paths,
     })),
     capabilities: task.capabilityProbes ?? [],
     permissionMode: "normal",
@@ -87,6 +88,11 @@ export function buildUmbraticRunnerConfig(
       chatEndpointPath: route.chatEndpointPath,
       apiKey: localVeil?.authToken ?? "",
       modelId: selectedModel.modelId,
+      capabilities: selectedModel.capabilities ?? {
+        parallelToolCalls: false,
+        vision: false,
+        reasoning: false,
+      },
       headers: Object.fromEntries(
         (endpointSettings.mode === "local" ? [] : endpointSettings.headers)
           .filter((header) => header.name.trim().toLowerCase() !== "authorization" && header.value)

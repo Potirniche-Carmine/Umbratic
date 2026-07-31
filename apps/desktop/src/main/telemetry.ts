@@ -261,6 +261,7 @@ function feedbackTelemetry(task: TaskRecord, conversation: TelemetryConversation
     .map((event) => ({
       messageId: event.messageId,
       rating: event.rating,
+      ...(event.reason ? { reason: event.reason } : {}),
       ...(event.comment ? { comment: event.comment } : {}),
       at: event.at,
       conversation,

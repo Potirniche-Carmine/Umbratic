@@ -64,6 +64,21 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   assert.match(pythonSkill, /Prose, code fences, and proposed commands do not create or run anything/i);
 });
 
+test("skill frontmatter accepts inline and list path globs", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-frontmatter-"));
+  const skills = loadSkills(userData);
+  assert.deepEqual(plain(skills.parseSkillFrontmatter(`---
+name: Rust
+paths: [packages/runner/**, "**/*.rs"]
+---`)).paths, ["packages/runner/**", "**/*.rs"]);
+  assert.deepEqual(plain(skills.parseSkillFrontmatter(`---
+name: Desktop
+paths:
+  - apps/desktop/**
+  - '**/*.tsx'
+---`)).paths, ["apps/desktop/**", "**/*.tsx"]);
+});
+
 function storedZip(entries, options = {}) {
   const locals = [];
   const centrals = [];

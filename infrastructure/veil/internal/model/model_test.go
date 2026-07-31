@@ -245,6 +245,20 @@ func TestListModelsNormalizesVLLMAndOllamaPayloads(t *testing.T) {
 	}
 }
 
+func TestParseRuntimeMetricsSupportsPrometheusNameVariants(t *testing.T) {
+	metrics, err := parseRuntimeMetrics(strings.NewReader(`
+vllm:prefix_cache_hits_total{model_name="a"} 75
+vllm_prefix_cache_queries_total{model_name="a"} 100
+vllm:num_requests_waiting{model_name="a"} 4
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metrics.Available || metrics.PrefixCacheHitRate != 0.75 || metrics.QueueDepth != 4 {
+		t.Fatalf("unexpected metrics: %#v", metrics)
+	}
+}
+
 func TestOllamaClientContextLengthUsesModelMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/show" {
@@ -332,6 +346,20 @@ func TestNewClientRejectsInvalidRuntimeConfig(t *testing.T) {
 	}
 	if _, err := providerEndpointURL("http://base.test", "https://", "v1/chat/completions"); err == nil {
 		t.Fatal("expected malformed endpoint URL rejection")
+	}
+}
+
+func TestHardenedHTTPClientHasDeliberateSharedRuntimePoolLimits(t *testing.T) {
+	client := hardenedHTTPClient(time.Minute)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport type %T", client.Transport)
+	}
+	if transport.MaxIdleConns != 256 || transport.MaxIdleConnsPerHost != 128 || transport.MaxConnsPerHost != 256 {
+		t.Fatalf("unexpected pool limits: %#v", transport)
+	}
+	if transport.IdleConnTimeout != 90*time.Second {
+		t.Fatalf("unexpected idle timeout: %s", transport.IdleConnTimeout)
 	}
 }
 

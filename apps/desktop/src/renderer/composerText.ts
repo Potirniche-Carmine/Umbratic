@@ -75,6 +75,17 @@ export function continueNumberedList(
   const currentNumber = Number(match[2]);
   if (!Number.isSafeInteger(currentNumber) || currentNumber >= Number.MAX_SAFE_INTEGER) return null;
 
+  const lineEndIndex = value.indexOf("\n", end);
+  const lineEnd = lineEndIndex < 0 ? value.length : lineEndIndex;
+  const itemBeforeCaret = lineBeforeCaret.slice(match[0].length);
+  const itemAfterSelection = value.slice(end, lineEnd);
+  if (currentNumber > 1 && !itemBeforeCaret.trim() && !itemAfterSelection.trim()) {
+    return {
+      value: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+      caret: lineStart,
+    };
+  }
+
   const nextNumber = String(currentNumber + 1).padStart(match[2].length, "0");
   const insertion = `\n${match[1]}${nextNumber}${match[3]} `;
   return {

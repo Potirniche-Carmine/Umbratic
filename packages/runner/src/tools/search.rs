@@ -1,3 +1,5 @@
+use std::{collections::HashSet, thread};
+
 use super::*;
 
 #[derive(Default)]
@@ -201,80 +203,127 @@ pub(super) fn term_score(relative: &str, filename: &str, term: &str, case_sensit
         .max(fuzzy_score(&path, &query, false))
 }
 
-pub(super) async fn search_tool(
-    session: &Session,
-    input: &Map<String, Value>,
-) -> ToolExecutionResult {
-    let query = string_arg(input, &["query", "pattern", "term", "text"]);
-    let limit = input
-        .get("limit")
-        .or_else(|| input.get("maxResults"))
-        .and_then(Value::as_u64)
-        .unwrap_or(50)
-        .clamp(1, 100) as usize;
-    let mut parsed = parse_search_query(&query);
-    if let Some(case_sensitive) = input.get("caseSensitive").and_then(Value::as_bool) {
-        parsed.smart_case = case_sensitive;
-    }
-    for scope in string_list_arg(input, &["path", "directory", "filePath"])
-        .into_iter()
-        .filter(|value| !value.trim().is_empty())
-    {
-        let (absolute, relative) =
-            resolve_workspace_path(&session.config.cwd, scope.trim()).map_err(ToolError::policy)?;
-        let relative = relative.replace('\\', "/");
-        if absolute.is_file() {
-            parsed.include_globs.push(relative);
-        } else if !relative.is_empty() {
-            parsed
-                .include_dirs
-                .push(format!("{}/", relative.trim_end_matches('/')));
+#[derive(Default)]
+struct SearchStats {
+    scanned_files: usize,
+    scanned_bytes: u64,
+    skipped_files: usize,
+}
+
+struct SearchCandidate {
+    path: PathBuf,
+    relative: String,
+    size: u64,
+    boost: f64,
+}
+
+type ContentHit = (String, usize, u8, usize, f64, String, String);
+
+fn scan_candidates(
+    candidates: &[SearchCandidate],
+    normalized_terms: &[String],
+    display_terms: &[String],
+    smart_case: bool,
+    broad_scan: bool,
+    definition_pattern: &Regex,
+    import_pattern: &Regex,
+) -> (Vec<ContentHit>, SearchStats) {
+    let mut hits = Vec::new();
+    let mut stats = SearchStats::default();
+    for candidate in candidates {
+        let Ok(bytes) = fs::read(&candidate.path) else {
+            stats.skipped_files += 1;
+            continue;
+        };
+        if bytes.contains(&0) {
+            stats.skipped_files += 1;
+            continue;
         }
-    }
-    parsed.include_globs.extend(
-        string_list_arg(input, &["glob", "filePattern"])
-            .into_iter()
-            .map(|value| value.trim().trim_start_matches("./").replace('\\', "/"))
-            .filter(|value| !value.is_empty()),
-    );
-    for value in string_list_arg(input, &["exclude"])
-        .into_iter()
-        .map(|value| value.trim().trim_start_matches('!').replace('\\', "/"))
-        .filter(|value| !value.is_empty())
-    {
-        if value.ends_with('/') {
-            parsed.exclude_dirs.push(value);
+        let Ok(content) = String::from_utf8(bytes) else {
+            stats.skipped_files += 1;
+            continue;
+        };
+        stats.scanned_files += 1;
+        stats.scanned_bytes = stats.scanned_bytes.saturating_add(candidate.size);
+        let normalized_content = if smart_case {
+            content.clone()
         } else {
-            parsed.exclude_globs.push(value);
+            content.to_lowercase()
+        };
+        let file_matches = if broad_scan {
+            normalized_terms
+                .iter()
+                .any(|term| normalized_content.contains(term))
+        } else {
+            normalized_terms
+                .iter()
+                .all(|term| normalized_content.contains(term))
+        };
+        if !file_matches {
+            continue;
+        }
+        for (index, line) in content.lines().enumerate() {
+            let normalized_line = if smart_case {
+                line.to_owned()
+            } else {
+                line.to_lowercase()
+            };
+            let matched_indexes = normalized_terms
+                .iter()
+                .enumerate()
+                .filter_map(|(term_index, term)| {
+                    normalized_line.contains(term).then_some(term_index)
+                })
+                .collect::<Vec<_>>();
+            if matched_indexes.is_empty() {
+                continue;
+            }
+            let trimmed = line.trim_start();
+            let rank = if definition_pattern.is_match(trimmed) {
+                0
+            } else if import_pattern.is_match(trimmed) {
+                2
+            } else {
+                1
+            };
+            let labels = if broad_scan {
+                matched_indexes
+                    .iter()
+                    .map(|term_index| display_terms[*term_index].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                String::new()
+            };
+            hits.push((
+                candidate.relative.clone(),
+                index + 1,
+                rank,
+                matched_indexes.len(),
+                candidate.boost,
+                line.chars().take(240).collect(),
+                labels,
+            ));
         }
     }
-    if parsed.terms.is_empty()
-        && parsed.include_dirs.is_empty()
-        && parsed.include_globs.is_empty()
-        && parsed.location.is_none()
-    {
-        return Err("search requires query, path, or glob".into());
-    }
-    let path_terms = if parsed.terms.is_empty() {
-        parsed.location.iter().cloned().collect::<Vec<_>>()
+    (hits, stats)
+}
+
+fn run_search(
+    cwd: PathBuf,
+    parsed: SearchQuery,
+    broad_terms: Vec<String>,
+    limit: usize,
+    recent: HashMap<PathBuf, u64>,
+    title: String,
+) -> ToolResult {
+    let broad_scan = !broad_terms.is_empty();
+    let display_terms = if broad_scan {
+        broad_terms
     } else {
         parsed.terms.clone()
     };
-    let recent = RECENT_READS
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .clone();
-    let mut path_hits: Vec<(String, f64)> = Vec::new();
-    let mut content_hits: Vec<(String, usize, u8, usize, f64, String)> = Vec::new();
-    let definition_pattern = Regex::new(
-        r"^(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|fn|def|impl|trait)\b",
-    )
-    .expect("definition ranking regex is valid");
-    let import_pattern = Regex::new(r"^(?:import\b|from\b|require\s*\(|use\b|#include\b)")
-        .expect("import ranking regex is valid");
-    let normalized_terms = parsed
-        .terms
+    let normalized_terms = display_terms
         .iter()
         .map(|term| {
             if parsed.smart_case {
@@ -284,13 +333,27 @@ pub(super) async fn search_tool(
             }
         })
         .collect::<Vec<_>>();
-    for entry in WalkDir::new(&session.config.cwd)
+    let path_terms = if parsed.terms.is_empty() {
+        parsed.location.iter().cloned().collect::<Vec<_>>()
+    } else {
+        parsed.terms.clone()
+    };
+    let mut path_hits: Vec<(String, f64)> = Vec::new();
+    let mut candidates = Vec::new();
+    let mut stats = SearchStats::default();
+    let definition_pattern = Regex::new(
+        r"^(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|fn|def|impl|trait)\b",
+    )
+    .expect("definition ranking regex is valid");
+    let import_pattern = Regex::new(r"^(?:import\b|from\b|require\s*\(|use\b|#include\b)")
+        .expect("import ranking regex is valid");
+    for entry in WalkDir::new(&cwd)
         .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
             let relative = entry
                 .path()
-                .strip_prefix(&session.config.cwd)
+                .strip_prefix(&cwd)
                 .unwrap_or(entry.path())
                 .to_string_lossy()
                 .replace('\\', "/");
@@ -308,7 +371,7 @@ pub(super) async fn search_tool(
         }
         let relative = entry
             .path()
-            .strip_prefix(&session.config.cwd)
+            .strip_prefix(&cwd)
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
@@ -331,61 +394,60 @@ pub(super) async fn search_tool(
                 })
                 .unwrap_or(0.0)
         };
-        let canonical = entry
-            .path()
-            .canonicalize()
-            .unwrap_or_else(|_| entry.path().to_owned());
-        let boost = recent.get(&canonical).copied().unwrap_or(0) as f64 * 35.0;
-        if has_path_intent && base > 0.0 {
+        let boost = recent.get(entry.path()).copied().unwrap_or(0) as f64 * 35.0;
+        if !broad_scan && has_path_intent && base > 0.0 {
             path_hits.push((relative.clone(), base + boost));
         }
-        if entry
-            .metadata()
-            .is_ok_and(|metadata| metadata.len() <= MAX_TEXT_FILE_BYTES)
-            && let Ok(content) = ensure_text_file(entry.path())
-        {
-            let normalized_content = if parsed.smart_case {
-                content.clone()
-            } else {
-                content.to_lowercase()
-            };
-            if !normalized_terms.is_empty()
-                && normalized_terms
-                    .iter()
-                    .all(|term| normalized_content.contains(term))
-            {
-                for (index, line) in content.lines().enumerate() {
-                    let candidate = if parsed.smart_case {
-                        line.to_owned()
-                    } else {
-                        line.to_lowercase()
-                    };
-                    let matched_terms = normalized_terms
-                        .iter()
-                        .filter(|term| candidate.contains(term.as_str()))
-                        .count();
-                    if matched_terms > 0 {
-                        let trimmed = line.trim_start();
-                        let rank = if definition_pattern.is_match(trimmed) {
-                            0
-                        } else if import_pattern.is_match(trimmed) {
-                            2
-                        } else {
-                            1
-                        };
-                        let snippet = line.chars().take(240).collect::<String>();
-                        content_hits.push((
-                            relative.clone(),
-                            index + 1,
-                            rank,
-                            matched_terms,
-                            boost,
-                            snippet,
-                        ));
-                    }
-                }
-            }
+        if normalized_terms.is_empty() {
+            continue;
         }
+        match entry.metadata() {
+            Ok(metadata) if metadata.len() <= MAX_TEXT_FILE_BYTES => {
+                candidates.push(SearchCandidate {
+                    path: entry.path().to_owned(),
+                    relative,
+                    size: metadata.len(),
+                    boost,
+                });
+            }
+            _ => stats.skipped_files += 1,
+        }
+    }
+    let worker_count = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(8)
+        .min(candidates.len().max(1));
+    let chunk_size = candidates.len().div_ceil(worker_count);
+    let mut content_hits = Vec::new();
+    if chunk_size > 0 {
+        thread::scope(|scope| {
+            let handles = candidates
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    scope.spawn(|| {
+                        scan_candidates(
+                            chunk,
+                            &normalized_terms,
+                            &display_terms,
+                            parsed.smart_case,
+                            broad_scan,
+                            &definition_pattern,
+                            &import_pattern,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                let (mut hits, batch_stats) = handle.join().expect("search worker must not panic");
+                content_hits.append(&mut hits);
+                stats.scanned_files += batch_stats.scanned_files;
+                stats.scanned_bytes = stats
+                    .scanned_bytes
+                    .saturating_add(batch_stats.scanned_bytes);
+                stats.skipped_files += batch_stats.skipped_files;
+            }
+        });
     }
     path_hits.sort_by(|left, right| {
         right
@@ -403,6 +465,11 @@ pub(super) async fn search_tool(
             .then(left.0.cmp(&right.0))
             .then(left.1.cmp(&right.1))
     });
+    let matched_files = content_hits
+        .iter()
+        .map(|hit| hit.0.as_str())
+        .collect::<HashSet<_>>()
+        .len();
     let mut results = path_hits
         .into_iter()
         .map(|(path, _)| format!("{path}: path"))
@@ -410,22 +477,205 @@ pub(super) async fn search_tool(
     results.extend(
         content_hits
             .into_iter()
-            .map(|(path, line, _, _, _, snippet)| format!("{path}:{line}: {snippet}")),
+            .map(|(path, line, _, _, _, snippet, labels)| {
+                if labels.is_empty() {
+                    format!("{path}:{line}: {snippet}")
+                } else {
+                    format!("{path}:{line}: [{labels}] {snippet}")
+                }
+            }),
     );
     results.truncate(limit);
-    Ok(ToolResult::success(
+    let coverage = if normalized_terms.is_empty() {
+        "Search coverage: path index only; file contents were not read.".to_owned()
+    } else {
         format!(
-            "search {}",
-            if query.trim().is_empty() {
-                string_arg(input, &["path", "directory", "filePath"])
-            } else {
-                query
-            }
-        ),
-        if results.is_empty() {
-            "No matches for all search terms. Try fewer terms or a broader path. Use only exact result paths; list a directory with read before choosing a file.".into()
+            "Search coverage: scanned {} text files ({} bytes), matched {matched_files} files, and skipped {} oversized, binary, unreadable, or non-UTF-8 files.",
+            stats.scanned_files, stats.scanned_bytes, stats.skipped_files
+        )
+    };
+    let output = if results.is_empty() {
+        format!(
+            "{coverage}\nNo matches for the search terms. Try fewer terms or a broader path. Use only exact result paths; list a directory with read before choosing a file."
+        )
+    } else {
+        format!("{coverage}\n{}", results.join("\n"))
+    };
+    ToolResult::success(format!("search {title}"), output)
+}
+
+pub(super) async fn search_tool(
+    session: &Session,
+    input: &Map<String, Value>,
+) -> ToolExecutionResult {
+    let query = string_arg(input, &["query"]);
+    let broad_terms = match input.get("queries") {
+        None => Vec::new(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| value.as_str().unwrap_or("").trim().to_owned())
+            .collect::<Vec<_>>(),
+        Some(_) => return Err("search argument queries must be an array of strings".into()),
+    };
+    if !query.trim().is_empty() && !broad_terms.is_empty() {
+        return Err("search accepts query or queries, not both".into());
+    }
+    if broad_terms.len() > 32
+        || broad_terms
+            .iter()
+            .any(|term| term.is_empty() || term.chars().count() > 256 || term.contains('\0'))
+    {
+        return Err(
+            "search queries must contain 1 to 32 non-empty terms of at most 256 characters".into(),
+        );
+    }
+    let limit = input
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .clamp(1, 200) as usize;
+    let mut parsed = parse_search_query(&query);
+    if let Some(case_sensitive) = input.get("caseSensitive").and_then(Value::as_bool) {
+        parsed.smart_case = case_sensitive;
+    } else if broad_terms
+        .iter()
+        .any(|term| term.chars().any(char::is_uppercase))
+    {
+        parsed.smart_case = true;
+    }
+    for scope in string_list_arg(input, &["path"])
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let (absolute, relative) =
+            resolve_workspace_path(&session.config.cwd, scope.trim()).map_err(ToolError::policy)?;
+        let relative = relative.replace('\\', "/");
+        if absolute.is_file() {
+            parsed.include_globs.push(relative);
+        } else if !relative.is_empty() {
+            parsed
+                .include_dirs
+                .push(format!("{}/", relative.trim_end_matches('/')));
+        }
+    }
+    parsed.include_globs.extend(
+        string_list_arg(input, &["glob"])
+            .into_iter()
+            .map(|value| value.trim().trim_start_matches("./").replace('\\', "/"))
+            .filter(|value| !value.is_empty()),
+    );
+    for value in string_list_arg(input, &["exclude"])
+        .into_iter()
+        .map(|value| value.trim().trim_start_matches('!').replace('\\', "/"))
+        .filter(|value| !value.is_empty())
+    {
+        if value.ends_with('/') {
+            parsed.exclude_dirs.push(value);
         } else {
-            results.join("\n")
-        },
-    ))
+            parsed.exclude_globs.push(value);
+        }
+    }
+    if parsed.terms.is_empty()
+        && broad_terms.is_empty()
+        && parsed.include_dirs.is_empty()
+        && parsed.include_globs.is_empty()
+        && parsed.location.is_none()
+    {
+        return Err("search requires query, queries, path, or glob".into());
+    }
+    let recent = RECENT_READS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .clone();
+    let title = if broad_terms.is_empty() {
+        if query.trim().is_empty() {
+            string_arg(input, &["path"])
+        } else {
+            query
+        }
+    } else {
+        format!("{} broad terms", broad_terms.len())
+    };
+    let cwd = session.config.cwd.clone();
+    tokio::task::spawn_blocking(move || run_search(cwd, parsed, broad_terms, limit, recent, title))
+        .await
+        .map_err(|_| ToolError::runtime("Workspace search worker failed."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn broad_search_scans_independent_terms_in_one_bounded_pass() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("src")).unwrap();
+        std::fs::write(
+            directory.path().join("src/server.ts"),
+            "export function execute(value: string) {\n  return eval(value);\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("src/native.rs"),
+            "fn decode() {\n    unsafe { run(); }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("src/large.txt"),
+            "password ".repeat(70_000),
+        )
+        .unwrap();
+        let session = crate::session::test_session(directory.path());
+
+        let result = search_tool(
+            &session,
+            json!({
+                "queries":["eval(", "unsafe", "password"],
+                "path":"src",
+                "limit":20
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result
+                .output
+                .contains("Search coverage: scanned 2 text files")
+        );
+        assert!(result.output.contains("matched 2 files"));
+        assert!(result.output.contains("skipped 1"));
+        assert!(result.output.contains("src/server.ts:2: [eval(]"));
+        assert!(result.output.contains("src/native.rs:2: [unsafe]"));
+        assert!(!result.output.contains("large.txt:"));
+    }
+
+    #[tokio::test]
+    async fn path_only_search_does_not_read_file_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("src")).unwrap();
+        std::fs::write(
+            directory.path().join("src/large.txt"),
+            "content ".repeat(70_000),
+        )
+        .unwrap();
+        let session = crate::session::test_session(directory.path());
+
+        let result = search_tool(
+            &session,
+            json!({"path":"src","limit":20}).as_object().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result
+                .output
+                .contains("Search coverage: path index only; file contents were not read.")
+        );
+        assert!(result.output.contains("src/large.txt: path"));
+    }
 }

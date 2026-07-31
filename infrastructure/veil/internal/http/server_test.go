@@ -23,7 +23,6 @@ import (
 	"umbratic-veil/internal/entitlement"
 	"umbratic-veil/internal/identity"
 	"umbratic-veil/internal/model"
-	"umbratic-veil/internal/policy"
 	"umbratic-veil/internal/prompts"
 )
 
@@ -64,6 +63,12 @@ type fakeModelClient struct {
 	activatedModel    string
 	contextLength     int
 	contextErr        error
+	runtimeMetrics    model.RuntimeMetrics
+	runtimeMetricsErr error
+}
+
+func (f *fakeModelClient) RuntimeMetrics(context.Context) (model.RuntimeMetrics, error) {
+	return f.runtimeMetrics, f.runtimeMetricsErr
 }
 
 func (f *fakeModelClient) ActivateModel(ctx context.Context, modelID string) error {
@@ -137,6 +142,7 @@ func testConfig() config.Config {
 		RequestTimeout:         time.Second,
 		MaxBodyBytes:           1 << 20,
 		MaxOutputTokens:        4096,
+		ModelParallelToolCalls: true,
 	}
 }
 
@@ -430,71 +436,6 @@ func TestChatRouteBuildsServerPromptsAndUsesConfiguredModel(t *testing.T) {
 	}
 }
 
-func TestChatProgressModeUsesProtectedSummaryPromptAndNoActionHeader(t *testing.T) {
-	modelClient := &fakeModelClient{}
-	server := NewServer(testConfig(), modelClient)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"Review my codebase for vulnerabilities","response_mode":"progress","max_output_tokens":2048}`))
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	if got := rr.Header().Get(actionRequiredHeader); got != "" {
-		t.Fatalf("progress request must not require workspace evidence: %q", got)
-	}
-	if modelClient.req.MaxOutputTokens != 192 {
-		t.Fatalf("progress allowance was not bounded: %d", modelClient.req.MaxOutputTokens)
-	}
-	found := false
-	for _, message := range modelClient.req.Messages {
-		if message.Content == prompts.PublicProgressSystemPrompt {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("protected progress prompt was not added: %#v", modelClient.req.Messages)
-	}
-}
-
-func TestChatRoutesSignalRequiredWorkspaceEvidence(t *testing.T) {
-	tests := []struct {
-		path    string
-		message string
-		want    string
-	}{
-		{"/api/engineering/chat", "Can you create a hello world script and verify it works?", policy.ActionChangeAndExecute},
-		{"/api/engineering/chat", "write me bubble sort algorithm in python and verify that it runs", policy.ActionChangeAndExecute},
-		{"/api/engineering/chat", "can you write me a markdown with suggestions to improve it", policy.ActionChange},
-		{"/api/engineering/chat", "I want you to look at each file and describe exactly what each is", policy.ActionInspect},
-		{"/api/engineering/chat", "Review my codebase for security bugs that attackers could exploit", policy.ActionInspect},
-		{"/api/marketing/chat", "Create a launch brief file", policy.ActionChange},
-		{"/api/sales/chat", "Create a QBR deck", policy.ActionChange},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path+"/"+tt.want, func(t *testing.T) {
-			modelClient := &fakeModelClient{}
-			server := NewServer(testConfig(), modelClient)
-			body := fmt.Sprintf(`{"messages":[{"role":"user","content":%q}],"tools":[{"type":"function","function":{"name":"edit"}},{"type":"function","function":{"name":"command"}}]}`, tt.message)
-			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(body))
-			req.Header.Set("Authorization", "Bearer test-token")
-			rr := httptest.NewRecorder()
-			server.ServeHTTP(rr, req)
-
-			if rr.Code != http.StatusOK {
-				t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-			}
-			if got := rr.Header().Get(actionRequiredHeader); got != tt.want {
-				t.Fatalf("got action requirement %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestChatRouteAddsServerOwnedSkillCatalogPrompt(t *testing.T) {
 	modelClient := &fakeModelClient{}
 	server := NewServer(testConfig(), modelClient)
@@ -518,6 +459,9 @@ func TestChatRouteAddsServerOwnedSkillCatalogPrompt(t *testing.T) {
 	}
 	if modelClient.req.Messages[3].Role != "user" {
 		t.Fatalf("client message should follow skill prompt: %#v", modelClient.req.Messages)
+	}
+	if modelClient.req.Messages[2].Role != "system" {
+		t.Fatalf("skill catalog must be in the stable system tier: %#v", modelClient.req.Messages)
 	}
 }
 
@@ -552,7 +496,7 @@ func TestChatRouteAddsSelectedTemplateMetadata(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
 	}
-	if len(modelClient.req.Messages) != 4 {
+	if len(modelClient.req.Messages) != 3 {
 		t.Fatalf("got %d messages: %#v", len(modelClient.req.Messages), modelClient.req.Messages)
 	}
 	templatePrompt, ok := modelClient.req.Messages[2].Content.(string)
@@ -562,8 +506,30 @@ func TestChatRouteAddsSelectedTemplateMetadata(t *testing.T) {
 	if !strings.Contains(templatePrompt, "sales-quarterly-review") || !strings.Contains(templatePrompt, "serverKey: templates/powerpoint/sales-quarterly-review") {
 		t.Fatalf("template metadata was not injected: %s", templatePrompt)
 	}
-	if modelClient.req.Messages[3].Role != "user" {
-		t.Fatalf("client message should follow template prompt: %#v", modelClient.req.Messages)
+	if modelClient.req.Messages[2].Role != "user" || !strings.HasPrefix(templatePrompt, "Create a QBR deck.") {
+		t.Fatalf("template metadata must be an overlay on the latest user message: %#v", modelClient.req.Messages)
+	}
+}
+
+func TestRequestOverlayLeavesTheProtectedPrefixStable(t *testing.T) {
+	first := withRequestOverlay(
+		[]model.Message{{Role: "user", Content: "Create a QBR deck."}},
+		"template one",
+	)
+	second := withRequestOverlay(
+		[]model.Message{{Role: "user", Content: "Explain authentication."}},
+		"template two",
+	)
+	firstBuilt, err := prompts.Build(prompts.SalesChat, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBuilt, err := prompts.Build(prompts.SalesChat, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstBuilt[0].Content != secondBuilt[0].Content || firstBuilt[1].Content != secondBuilt[1].Content {
+		t.Fatal("request-specific template selection changed the protected prefix")
 	}
 }
 
@@ -762,6 +728,10 @@ func TestHealthRouteChecksConfiguredModelWithoutReturningModelNames(t *testing.T
 	if body["status"] != "ok" {
 		t.Fatalf("unexpected health body: %#v", body)
 	}
+	capabilities, ok := body["capabilities"].(map[string]any)
+	if !ok || capabilities["parallel_tool_calls"] != true || capabilities["vision"] != false || capabilities["reasoning"] != false {
+		t.Fatalf("unexpected model capabilities: %#v", body)
+	}
 	if _, ok := body["data"]; ok {
 		t.Fatalf("health response returned model data: %#v", body)
 	}
@@ -784,6 +754,29 @@ func TestHealthRouteRejectsMissingConfiguredModel(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "default-model") || strings.Contains(rr.Body.String(), "other-model") {
 		t.Fatalf("health response leaked model name: %s", rr.Body.String())
+	}
+}
+
+func TestRuntimeMetricsRouteReturnsOnlySafeServingCounters(t *testing.T) {
+	modelClient := &fakeModelClient{runtimeMetrics: model.RuntimeMetrics{
+		PrefixCacheHitRate: 0.75,
+		QueueDepth:         4,
+		Available:          true,
+	}}
+	server := NewServer(testConfig(), modelClient)
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rr := httptest.NewRecorder()
+	server.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["prefix_cache_hit_rate"] != 0.75 || body["queue_depth"] != float64(4) || body["available"] != true {
+		t.Fatalf("unexpected metrics body: %#v", body)
 	}
 }
 

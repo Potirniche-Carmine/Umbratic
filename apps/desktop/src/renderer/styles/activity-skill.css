@@ -1,12 +1,12 @@
 .activityLogEntry.skillLog {
   display: grid;
-  grid-template-columns: 14px auto minmax(0, 1fr);
+  grid-template-columns: 12px auto minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding-top: 4px;
+  gap: 4px;
+  min-height: 22px;
+  padding-top: 2px;
   color: color-mix(in srgb, var(--text) 62%, var(--muted));
-  font-size: 10.5px;
+  font-size: 10px;
 }
 
 .skillLog svg {

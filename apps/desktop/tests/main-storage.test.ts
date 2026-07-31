@@ -521,6 +521,28 @@ test("local model settings remain in SQLite after a switch to a company server",
   assert.equal(rawSettings.modelEndpoints.server.baseUrl, "https://veil.example.internal");
 });
 
+test("local model discovery is cached in SQLite by normalized runtime URL", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-model-cache-"));
+  const storage = loadStorage(userData);
+
+  assert.deepEqual(plain(storage.readCachedLocalModels("http://127.0.0.1:11434")), []);
+  assert.deepEqual(plain(storage.writeCachedLocalModels(
+    "http://127.0.0.1:11434///",
+    ["qwen3", " qwen3 ", "gemma3"],
+  )), ["qwen3", "gemma3"]);
+  assert.deepEqual(
+    plain(storage.readCachedLocalModels("http://127.0.0.1:11434")),
+    ["qwen3", "gemma3"],
+  );
+
+  const reloaded = loadStorage(userData);
+  assert.deepEqual(
+    plain(reloaded.readCachedLocalModels("http://127.0.0.1:11434/")),
+    ["qwen3", "gemma3"],
+  );
+  assert.match(readSettingsPayloadText(userData), /"localModelCache"/);
+});
+
 test("an explicitly forced local configuration overrides a stored server endpoint for the session", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-endpoint-forced-local-"));
   loadStorage(userData).readModelEndpointSettings();

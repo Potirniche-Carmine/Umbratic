@@ -70,6 +70,9 @@ const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
 const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
 const composerTestToolIssue = composerTestParams.has("toolIssue");
 const composerTestLiveWork = composerTestParams.has("liveWork");
+const composerTestTurnOutcome = ["model_gave_up", "safety_limit"].includes(composerTestParams.get("turnOutcome") ?? "")
+  ? composerTestParams.get("turnOutcome") as "model_gave_up" | "safety_limit"
+  : null;
 const composerTestAttachments: ChatAttachment[] = composerTestDirectAnswer || composerTestWaitingOnly || composerTestEscapedPlan ? [] : [
   { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", source: "workspace" },
   { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", source: "workspace" },
@@ -143,9 +146,12 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     type: "command.started",
     taskId: "composer-test",
     id: "composer-fixture-search",
-    command: "read apps/desktop/src/renderer/styles.css",
+    command: composerTestToolIssue
+      ? "read infrastructure/veil/internal/prompt_skills.go"
+      : "read apps/desktop/src/renderer/styles.css",
     cwd: "/workspace/Umbratic",
     kind: "read",
+    toolKind: "read",
     commandClass: "read",
   },
   {
@@ -153,21 +159,28 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     taskId: "composer-test",
     id: "composer-fixture-search",
     stream: "stdout",
-    text: [
-      "Read composer styles",
-      "1: .timelineActivity {",
-      "2:   display: grid;",
-      "3:   gap: 0.5rem;",
-      "4:   min-width: 0;",
-      "5:   color: var(--text);",
-      "6: }",
-    ].join("\n"),
+    text: composerTestToolIssue
+      ? "Path not found: infrastructure/veil/internal/prompt_skills.go.\nNearby workspace entries:\n- infrastructure/veil/internal/prompts/"
+      : [
+          "Read composer styles",
+          "1: .timelineActivity {",
+          "2:   display: grid;",
+          "3:   gap: 0.5rem;",
+          "4:   min-width: 0;",
+          "5:   color: var(--text);",
+          "6: }",
+        ].join("\n"),
   },
   {
     type: "command.finished",
     taskId: "composer-test",
     id: "composer-fixture-search",
     exitCode: composerTestToolIssue ? 1 : 0,
+    ...(composerTestToolIssue ? {
+      status: "validation_error" as const,
+      errorCode: "invalid_arguments" as const,
+      errorMessage: "Path not found: infrastructure/veil/internal/prompt_skills.go.",
+    } : {}),
   },
   {
     type: "assistant.progress.delta",
@@ -231,13 +244,22 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     at: new Date(Date.now() - 5_000).toISOString(),
   },
 ];
-const composerTestVisibleEvents = composerTestLiveWork
+const composerTestBaseVisibleEvents = composerTestLiveWork
   ? composerTestEvents.filter((event) =>
       event.type !== "assistant.delta"
       && event.type !== "assistant.done"
       && !(event.type === "assistant.progress.delta" && event.text === "Work complete")
     )
   : composerTestEvents;
+const composerTestVisibleEvents: BackendUiEvent[] = [
+  ...composerTestBaseVisibleEvents,
+  ...(composerTestTurnOutcome ? [{
+    type: "turn.outcome" as const,
+    taskId: "composer-test",
+    outcome: composerTestTurnOutcome,
+    at: new Date().toISOString(),
+  }] : []),
+];
 
 const composerTestCodeReviewFiles: ReviewFile[] = [
   {
@@ -383,7 +405,7 @@ const composerTestTask: TaskInfo = {
   prompt: composerTestVisiblePrompt,
   workspaceKind: "git",
   workspaceMode: "local",
-  state: composerTestRunning ? "running" : "review_ready",
+  state: composerTestTurnOutcome ? "failed" : composerTestRunning ? "running" : "review_ready",
   originalBranch: "main",
   baseCommit: "preview",
   agentBranch: "preview",
@@ -621,6 +643,7 @@ function previewSkillContent(skill: SkillInfo): string {
 
 function createPreviewApi(): DesktopApi {
   let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
+  let previewCompanySessionConnected = false;
   const previewApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -789,7 +812,7 @@ function createPreviewApi(): DesktopApi {
   checkoutRepositoryBranch: async () => ({ ok: false, message: "Open the Electron app to switch branches." }),
   getBackendStatus: async () => ({
     runner: "unavailable",
-    endpoint: "unavailable",
+    endpoint: previewCompanySessionConnected ? "ready" : "unavailable",
     model: null,
     models: [],
     providers: [],
@@ -844,6 +867,7 @@ function createPreviewApi(): DesktopApi {
   getStartupSettings: async () => ({
     permissionMode: getPreviewPermissionMode(),
     modelEndpoint: readPreviewEndpointSettings(),
+    localModels: ["llama3.2", "qwen3:8b"],
     companyConnection: previewCompanyConnection,
     harnessProfile: readPreviewHarnessProfile(),
     contextLength: readPreviewContextLength(),
@@ -863,6 +887,7 @@ function createPreviewApi(): DesktopApi {
     return { contextLength, status: await previewApi.getBackendStatus() };
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
+  getCachedLocalModels: async () => ["llama3.2", "qwen3:8b"],
   probeLocalModels: async () => ({ status: "ready", models: ["llama3.2", "qwen3:8b"] }),
   saveModelEndpointSettings: async (input) => {
     const settings = publicPreviewEndpointSettings(normalizeEndpointSettings(input));
@@ -886,9 +911,27 @@ function createPreviewApi(): DesktopApi {
       orgName: "Preview organization",
       deviceLabel: "Preview device",
     };
+    previewCompanySessionConnected = true;
     return { connection: previewCompanyConnection, settings, status: await previewApi.getBackendStatus() };
   },
+  connectCompanyConnection: async () => {
+    previewCompanySessionConnected = true;
+    return {
+      connection: previewCompanyConnection,
+      settings: readPreviewEndpointSettings(),
+      status: await previewApi.getBackendStatus(),
+    };
+  },
+  disconnectCompanySession: async () => {
+    previewCompanySessionConnected = false;
+    return {
+      connection: previewCompanyConnection,
+      settings: readPreviewEndpointSettings(),
+      status: await previewApi.getBackendStatus(),
+    };
+  },
   disconnectCompanyConnection: async () => {
+    previewCompanySessionConnected = false;
     previewCompanyConnection = { state: "not_enrolled" };
     return {
       connection: previewCompanyConnection,
@@ -926,6 +969,7 @@ function createPreviewApi(): DesktopApi {
   startTask: async () => {
     throw new Error("Open the Electron app to run a task.");
   },
+  steerTask: async () => undefined,
   approveWorktreeCreation: async () => undefined,
   respondToToolPermission: async () => undefined,
   openRepositoryInIde: async () => ({ ok: false, message: "Electron preload is not available." }),

@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    fs,
-    net::ToSocketAddrs,
-    sync::OnceLock,
-};
+use std::{collections::BTreeMap, fs, net::ToSocketAddrs, sync::OnceLock};
 
 use futures_util::StreamExt;
 use reqwest::{Certificate, Client, Identity, tls::Version};
@@ -12,6 +7,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     config::{ProviderConfig, provider_endpoint_url},
     events::now_iso,
+    response_output::{SafeAssistantText, looks_like_unstructured_tool_call},
     session::{EventSink, Session},
     tools::ToolCall,
 };
@@ -31,7 +27,6 @@ static SHARED_HTTP_CLIENT_ERROR: OnceLock<String> = OnceLock::new();
 pub struct VeilChatResult {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
-    pub action_requirement: String,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub truncated_tool_arguments: bool,
@@ -40,9 +35,6 @@ pub struct VeilChatResult {
 pub struct VeilRequestOptions {
     pub max_output_tokens: u64,
     pub include_tools: bool,
-    pub require_tool_call: bool,
-    pub suppress_output: bool,
-    pub public_progress: bool,
 }
 
 pub async fn compact_context(
@@ -273,67 +265,22 @@ fn append_content(result: &mut VeilChatResult, text: String) {
     result.content.push_str(&text);
 }
 
-fn bounded_progress(value: &str) -> String {
-    const MAX_PROGRESS_BYTES: usize = 2 * 1024;
-    if value.len() <= MAX_PROGRESS_BYTES {
-        return value.to_owned();
-    }
-    let mut end = MAX_PROGRESS_BYTES;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", value[..end].trim_end())
-}
-
-fn emit_progress_delta(sink: &EventSink, session: &Session, text: &str, emitted_bytes: &mut usize) {
-    const MAX_PROGRESS_BYTES: usize = 2 * 1024;
-    if text.is_empty() || *emitted_bytes >= MAX_PROGRESS_BYTES {
-        return;
-    }
-    let remaining = MAX_PROGRESS_BYTES - *emitted_bytes;
-    let mut end = text.len().min(remaining);
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    if end == 0 {
-        return;
-    }
-    let text = &text[..end];
-    *emitted_bytes += text.len();
-    sink.emit(json!({
-        "type": "assistant.progress.delta",
-        "taskId": session.task_id,
-        "text": text,
-        "at": now_iso()
-    }));
-}
-
+// A provider may deliver the whole message outside the delta stream. Emit it
+// once here so the desktop still receives the text, without duplicating what
+// already streamed.
 fn emit_completed_output(
     sink: &EventSink,
     session: &Session,
     result: &VeilChatResult,
-    suppress_output: bool,
-    answer_streamed: bool,
-    tool_aware: bool,
-    public_progress: bool,
+    text_streamed: bool,
 ) {
-    if suppress_output || public_progress || result.content.is_empty() {
+    if text_streamed || result.content.is_empty() {
         return;
     }
-    if result.tool_calls.is_empty() && !answer_streamed {
-        if tool_aware || !result.action_requirement.is_empty() {
-            return;
-        }
-        sink.emit(json!({ "type": "assistant.answer.started", "taskId": session.task_id, "at": now_iso() }));
-        sink.emit(json!({ "type": "assistant.delta", "taskId": session.task_id, "text": result.content, "at": now_iso() }));
-    } else if !result.tool_calls.is_empty() && !answer_streamed {
-        sink.emit(json!({
-            "type": "assistant.progress.delta",
-            "taskId": session.task_id,
-            "text": bounded_progress(&result.content),
-            "at": now_iso()
-        }));
+    if looks_like_unstructured_tool_call(&result.content) {
+        return;
     }
+    emit_delta(sink, session, &result.content);
 }
 
 fn append_veil_delta(
@@ -523,17 +470,9 @@ fn process_veil_line(
     Ok((false, content))
 }
 
-fn emit_answer_delta(sink: &EventSink, session: &Session, text: &str, answer_started: &mut bool) {
+fn emit_delta(sink: &EventSink, session: &Session, text: &str) -> bool {
     if text.is_empty() {
-        return;
-    }
-    if !*answer_started {
-        sink.emit(json!({
-            "type": "assistant.answer.started",
-            "taskId": session.task_id,
-            "at": now_iso()
-        }));
-        *answer_started = true;
+        return false;
     }
     sink.emit(json!({
         "type": "assistant.delta",
@@ -541,23 +480,17 @@ fn emit_answer_delta(sink: &EventSink, session: &Session, text: &str, answer_sta
         "text": text,
         "at": now_iso()
     }));
+    true
 }
 
-fn normalize_tool_call_ids(calls: &mut [ToolCall]) {
-    let mut used = HashSet::new();
-    for (position, call) in calls.iter_mut().enumerate() {
-        let base = if call.id.trim().is_empty() {
+fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {
+    for call in calls {
+        let id = if call.id.trim().is_empty() {
             format!("tool-call-{}", call.index)
         } else {
             call.id.trim().to_owned()
         };
-        let mut candidate = base.clone();
-        let mut suffix = position;
-        while !used.insert(candidate.clone()) {
-            suffix += 1;
-            candidate = format!("{base}-{suffix}");
-        }
-        call.id = candidate;
+        call.id = id;
     }
 }
 
@@ -579,9 +512,6 @@ pub async fn stream_veil_chat(
     let VeilRequestOptions {
         max_output_tokens,
         include_tools,
-        require_tool_call,
-        suppress_output,
-        public_progress,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -600,23 +530,15 @@ pub async fn stream_veil_chat(
         "max_output_tokens": max_output_tokens
     });
     let object = body.as_object_mut().unwrap();
-    if public_progress {
-        object.insert("response_mode".into(), Value::String("progress".into()));
-    } else if !session.config.skills.is_empty() {
-        object.insert("skills".into(), Value::Array(session.config.skills.iter().map(|skill| json!({ "id":skill.id, "name":skill.name, "description":skill.description, "source":skill.source })).collect()));
+    if !session.config.skills.is_empty() {
+        object.insert("skills".into(), Value::Array(session.config.skills.iter().map(|skill| json!({ "id":skill.id, "name":skill.name, "description":skill.description, "source":skill.source, "paths":skill.paths })).collect()));
     }
     if include_tools && !tools.is_empty() {
         object.insert("tools".into(), Value::Array(tools.to_vec()));
+        object.insert("tool_choice".into(), Value::String("auto".into()));
         object.insert(
-            "tool_choice".into(),
-            Value::String(
-                if require_tool_call {
-                    "required"
-                } else {
-                    "auto"
-                }
-                .into(),
-            ),
+            "parallel_tool_calls".into(),
+            Value::Bool(session.config.provider.parallel_tool_calls),
         );
     }
     let client = shared_client(&session.config.provider)?;
@@ -664,35 +586,12 @@ pub async fn stream_veil_chat(
     {
         return Err("Veil stream contract version 2 is required".into());
     }
-    let action = response
-        .headers()
-        .get("x-umbratic-action-required")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| {
-            matches!(
-                *value,
-                "change" | "execute" | "inspect" | "change-and-execute"
-            )
-        })
-        .unwrap_or("")
-        .to_owned();
-    let stream_answer =
-        !suppress_output && !public_progress && !include_tools && !require_tool_call;
-    let stream_progress = !suppress_output && public_progress;
-    let mut result = VeilChatResult {
-        action_requirement: action,
-        ..VeilChatResult::default()
-    };
+    let mut result = VeilChatResult::default();
     let mut partial = BTreeMap::new();
     let mut buffer = Vec::new();
     let mut completed = false;
-    // Veil classifies workspace actions before it starts the response body. A
-    // response with no required workspace action is a direct answer, so its
-    // public content can reach the desktop as each validated SSE delta arrives.
-    // Tool-aware turns remain buffered until their tool-call shape is known. A
-    // tool-aware no-call response is replaced by a separate streamed final pass.
-    let mut answer_started = false;
-    let mut progress_emitted_bytes = 0usize;
+    let mut text_streamed = false;
+    let mut safe_output = SafeAssistantText::default();
     let mut stream = response.bytes_stream();
     loop {
         if session.is_aborted() {
@@ -710,11 +609,7 @@ pub async fn stream_veil_chat(
                 return Err(error);
             }
             let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)?;
-            if stream_answer {
-                emit_answer_delta(sink, session, &content, &mut answer_started);
-            } else if stream_progress {
-                emit_progress_delta(sink, session, &content, &mut progress_emitted_bytes);
-            }
+            text_streamed |= emit_delta(sink, session, &safe_output.push(&content));
             if line_completed {
                 completed = true;
             }
@@ -728,11 +623,7 @@ pub async fn stream_veil_chat(
             return Err(error);
         }
         let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)?;
-        if stream_answer {
-            emit_answer_delta(sink, session, &content, &mut answer_started);
-        } else if stream_progress {
-            emit_progress_delta(sink, session, &content, &mut progress_emitted_bytes);
-        }
+        text_streamed |= emit_delta(sink, session, &safe_output.push(&content));
         if line_completed {
             completed = true;
         }
@@ -740,21 +631,14 @@ pub async fn stream_veil_chat(
     if !completed {
         return Err("model stream ended before the completion marker".into());
     }
-    normalize_tool_call_ids(&mut result.tool_calls);
+    text_streamed |= emit_delta(sink, session, &safe_output.finish());
+    fill_missing_tool_call_ids(&mut result.tool_calls);
     if result.truncated_tool_arguments {
         for call in &mut result.tool_calls {
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
-    emit_completed_output(
-        sink,
-        session,
-        &result,
-        suppress_output,
-        answer_started,
-        include_tools || require_tool_call,
-        public_progress,
-    );
+    emit_completed_output(sink, session, &result, text_streamed);
     Ok(result)
 }
 
@@ -899,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_missing_tool_call_ids_are_made_unique() {
+    fn missing_tool_call_ids_are_created_without_hiding_duplicates() {
         let mut calls = vec![
             ToolCall {
                 id: "same".into(),
@@ -920,14 +804,9 @@ mod tests {
                 index: 2,
             },
         ];
-        normalize_tool_call_ids(&mut calls);
-        assert_eq!(
-            calls
-                .iter()
-                .map(|call| call.id.as_str())
-                .collect::<Vec<_>>(),
-            ["same", "same-2", "tool-call-2"]
-        );
+        fill_missing_tool_call_ids(&mut calls);
+        assert_eq!(calls[0].id, calls[1].id);
+        assert_eq!(calls[2].id, "tool-call-2");
     }
 
     fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
@@ -938,6 +817,9 @@ mod tests {
             chat_endpoint_path: Some("/v1/chat/completions".into()),
             api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
+            parallel_tool_calls: false,
+            vision: false,
+            reasoning: false,
             headers: BTreeMap::new(),
             mtls: Some(mtls),
         }

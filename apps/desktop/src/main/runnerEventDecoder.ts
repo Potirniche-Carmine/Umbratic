@@ -6,7 +6,6 @@ type RunnerEventBase = {
 
 export type RunnerEvent =
   | (RunnerEventBase & { type: "assistant.delta"; text: string })
-  | (RunnerEventBase & { type: "assistant.answer.started" })
   | (RunnerEventBase & { type: "assistant.progress.delta"; text: string })
   | (RunnerEventBase & {
       type: "tool.requested";
@@ -78,6 +77,20 @@ export type RunnerEvent =
       code?: string;
       detail?: string;
     })
+  | (RunnerEventBase & {
+      type: "tool.policy.stage";
+      toolCallId: string;
+      stage: string;
+      outcome: string;
+      reason?: string;
+    })
+  | (RunnerEventBase & {
+      type: "skill.selected";
+      skillId: string;
+      source: "system" | "local";
+      reason: "explicit_request" | "strong_match" | "metadata";
+      fullContent: boolean;
+    })
   | (RunnerEventBase & { type: "session.idle"; summary?: unknown });
 
 export type RunnerEventDecodeResult =
@@ -92,7 +105,6 @@ export type RunnerEventDecodeResult =
 
 const handledTypes = new Set<RunnerEvent["type"]>([
   "assistant.delta",
-  "assistant.answer.started",
   "assistant.progress.delta",
   "tool.requested",
   "command.safety.decision",
@@ -103,12 +115,13 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "context.retrieved",
   "permission.requested",
   "runner.error",
+  "tool.policy.stage",
+  "skill.selected",
   "session.idle",
 ]);
 
 const ignoredTypes = new Set([
   "permission.resolved",
-  "tool.policy.stage",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -139,10 +152,17 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
     case "assistant.delta":
     case "assistant.progress.delta":
       return hasString(value, "text");
-    case "assistant.answer.started":
     case "command.safety.decision":
     case "session.idle":
       return true;
+    case "tool.policy.stage":
+      return hasString(value, "toolCallId") && hasString(value, "stage") && hasString(value, "outcome")
+        && (value.reason === undefined || hasString(value, "reason"));
+    case "skill.selected":
+      return hasString(value, "skillId")
+        && (value.source === "system" || value.source === "local")
+        && ["explicit_request", "strong_match", "metadata"].includes(String(value.reason))
+        && typeof value.fullContent === "boolean";
     case "tool.requested":
       return (
         hasString(value, "toolCallId")
@@ -174,7 +194,7 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && hasString(value, "strategy")
         && hasNonNegativeNumber(value, "originalBytes")
         && hasNonNegativeNumber(value, "outputBytes")
-        && (value.hash === undefined || typeof value.hash === "string")
+        && (value.hash == null || typeof value.hash === "string")
       );
     case "context.usage":
       return (

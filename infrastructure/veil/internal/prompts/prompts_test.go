@@ -29,7 +29,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "workspace preview", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "omit it for greetings and direct answers", "do not use acknowledgements"} {
+	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "one short plain sentence", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact path, not a glob"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
@@ -61,6 +61,9 @@ func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testin
 	if !ok {
 		t.Fatalf("skill prompt should be text: %#v", messages[2])
 	}
+	if messages[2].Role != "system" {
+		t.Fatal("skill catalog should use the system tier")
+	}
 	for _, want := range []string{
 		"optional task-specific playbooks",
 		"not an exhaustive capability list",
@@ -68,6 +71,8 @@ func TestBuildAddsOptionalSkillCatalogAndRequiresCompleteReadBeforeUse(t *testin
 		"Do not describe your general capabilities by enumerating enabled skills",
 		"Consider relevant skills when they are likely to improve the result",
 		"do not read or use a skill merely because its broad topic overlaps",
+		"never sweep through multiple skills speculatively",
+		"select at most one materially relevant skill",
 		"you MUST first call read_skill",
 		"read its SKILL.md completely",
 		"Next offset",
@@ -95,24 +100,29 @@ func TestBuildKeepsProtectedMessagesBeforeClientMessages(t *testing.T) {
 	}
 }
 
-func TestPublicProgressPromptAllowsOnlySafeWorkSummary(t *testing.T) {
-	prompt := strings.ToLower(PublicProgressSystemPrompt)
-	for _, want := range []string{
-		"short public work summary",
-		"do not provide the final answer",
-		"do not mention thinking",
-		"do not reveal hidden analysis",
-		"do not claim",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("public progress prompt missing %q: %q", want, PublicProgressSystemPrompt)
-		}
-	}
-}
-
 func TestBuildRejectsUnknownRoute(t *testing.T) {
 	_, err := Build(Route("provider/passthrough"), []model.Message{{Role: "user", Content: "hello"}})
 	if err == nil {
 		t.Fatal("expected unknown route error")
+	}
+}
+
+func TestRelevantSkillsHidesPathScopedEntriesUntilToolTouch(t *testing.T) {
+	skills := []SkillMetadata{
+		{ID: "always", Name: "Always", Source: "system"},
+		{ID: "rust", Name: "Rust", Source: "local", Paths: []string{"packages/runner/**"}},
+		{ID: "typescript", Name: "TypeScript", Source: "local", Paths: []string{"**/*.ts"}},
+	}
+	visible := RelevantSkills(skills, []model.Message{{Role: "user", Content: "packages/runner/src/lib.rs"}})
+	if len(visible) != 1 || visible[0].ID != "always" {
+		t.Fatalf("path-scoped skills were visible before a tool touch: %#v", visible)
+	}
+	visible = RelevantSkills(skills, []model.Message{{Role: "tool", Content: "read: packages/runner/src/lib.rs (ok)"}})
+	if len(visible) != 2 || visible[1].ID != "rust" {
+		t.Fatalf("matching skill was not revealed: %#v", visible)
+	}
+	visible = RelevantSkills(skills, []model.Message{{Role: "tool", Content: "edit: apps/desktop/src/main/main.ts (ok)"}})
+	if len(visible) != 2 || visible[1].ID != "typescript" {
+		t.Fatalf("suffix glob skill was not revealed: %#v", visible)
 	}
 }

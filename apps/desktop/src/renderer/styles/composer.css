@@ -289,13 +289,112 @@ button.attachmentPreview:focus-visible {
   padding: 10px 8px;
 }
 
+.queuedPromptList {
+  display: grid;
+  gap: 6px;
+  max-height: 132px;
+  overflow: auto;
+  padding: 2px;
+  scrollbar-gutter: stable;
+}
+
+.queuedPrompt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 7px;
+  align-items: center;
+  min-height: 36px;
+  padding: 5px 6px 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-color) 30%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  backdrop-filter: blur(18px) saturate(145%);
+  font-family: var(--app-font);
+  animation: queuedPromptIn 240ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.queuedPromptEdit {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.queuedPromptEditIcon {
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.queuedPromptEdit:hover:not(:disabled) .queuedPromptEditIcon,
+.queuedPromptEdit:focus-visible .queuedPromptEditIcon {
+  opacity: 1;
+}
+
+.queuedPromptOrder {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--control-bg) 88%, transparent);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.queuedPromptText {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queuedPromptSteer,
+.queuedPromptDelete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.queuedPromptSteer {
+  gap: 5px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.queuedPromptDelete {
+  width: 26px;
+}
+
+.queuedPromptSteer:hover:not(:disabled),
+.queuedPromptDelete:hover:not(:disabled) {
+  color: var(--text);
+  background: transparent;
+}
+
 .promptInputShell {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(44px, auto) 44px;
+  grid-template-rows: minmax(38px, auto) 38px;
   width: 100%;
   max-width: 100%;
-  min-height: 88px;
+  min-height: 76px;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -312,7 +411,7 @@ button.attachmentPreview:focus-visible {
 .promptEditor {
   position: relative;
   min-width: 0;
-  min-height: 44px;
+  min-height: 38px;
   overflow: hidden;
 }
 
@@ -325,9 +424,9 @@ button.attachmentPreview:focus-visible {
   position: absolute;
   inset: 0;
   z-index: 0;
-  min-height: 44px;
-  max-height: 220px;
-  padding: 12px 16px;
+  min-height: 38px;
+  max-height: 160px;
+  padding: 9px 14px;
   border: 0;
   border-radius: var(--radius);
   overflow: hidden;
@@ -357,12 +456,12 @@ button.attachmentPreview:focus-visible {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  min-height: 44px;
-  max-height: 220px;
+  min-height: 38px;
+  max-height: 160px;
   field-sizing: content;
   resize: none;
   scrollbar-gutter: stable;
-  padding: 12px 16px;
+  padding: 9px 14px;
   border: 0;
   border-radius: var(--radius);
   outline: 0;
@@ -383,9 +482,10 @@ button.attachmentPreview:focus-visible {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 7px;
   min-width: 0;
-  min-height: 44px;
-  padding: 4px 8px;
+  min-height: 38px;
+  padding: 3px 8px;
   background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--surface) 92%, transparent) 42%);
   box-sizing: border-box;
 }
@@ -505,8 +605,8 @@ button.attachmentPreview:focus-visible {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: 0;
   border-radius: 50%;
   background: var(--text);
@@ -539,6 +639,27 @@ button.attachmentPreview:focus-visible {
 .sendButton.stopButton:hover:not(:disabled) {
   color: var(--surface);
   background: color-mix(in srgb, var(--red) 86%, var(--text));
+}
+
+.sendButton.queueButton {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.sendButton.queueButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+}
+
+@keyframes queuedPromptIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .actionBand {

@@ -555,6 +555,14 @@
   background: color-mix(in srgb, var(--surface-3) 56%, transparent);
 }
 
+.settingsInlineButton.isSuccess,
+.settingsInlineButton.isSuccess:disabled {
+  color: color-mix(in srgb, var(--green) 74%, var(--text));
+  border-color: color-mix(in srgb, var(--green) 32%, var(--line-strong));
+  background: color-mix(in srgb, var(--green) 12%, var(--control-bg));
+  opacity: 1;
+}
+
 .settingsInlineButton:disabled {
   opacity: 0.6;
   cursor: not-allowed;

@@ -1,7 +1,9 @@
 import { BACKEND_EVENT_VERSION, type BackendUiEventInput } from "./backendEvents";
+import type { ResponseRating } from "./responseFeedback";
 
 export type TaskUiEvent = BackendUiEventInput;
-export type ResponseRating = "good" | "bad";
+export { isResponseFeedbackReason } from "./responseFeedback";
+export type { ResponseRating } from "./responseFeedback";
 
 const REASONING_TEXT_LIMIT = 24_000;
 const COMMAND_OUTPUT_TEXT_LIMIT = 16_384;

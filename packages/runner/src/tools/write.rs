@@ -24,7 +24,9 @@ pub(super) async fn write_tool(
         )
         .await;
     if decision != "allow" {
-        return Err(ToolError::permission(format!("Write denied: {relative}")));
+        return Err(ToolError::permission(format!(
+            "The user rejected the write to {relative}. The file was not changed. Do not repeat it unless the user makes a new request that authorizes it."
+        )));
     }
     if let Some(parent) = absolute.parent() {
         fs::create_dir_all(parent).map_err(|error| ToolError::runtime(error.to_string()))?;
@@ -76,7 +78,9 @@ pub(super) async fn edit_tool(
             )
             .await;
         if decision != "allow" {
-            return Err(ToolError::permission("Patch edit denied"));
+            return Err(ToolError::permission(
+                "The user rejected the patch. No file was changed. Do not repeat it unless the user makes a new request that authorizes it.",
+            ));
         }
         patch::commit_patch(&session.config.cwd, transaction).map_err(ToolError::runtime)?;
         return Ok(ToolResult::success(
@@ -116,7 +120,9 @@ pub(super) async fn edit_tool(
         )
         .await;
     if decision != "allow" {
-        return Err(ToolError::permission(format!("Edit denied: {relative}")));
+        return Err(ToolError::permission(format!(
+            "The user rejected the edit to {relative}. The file was not changed. Do not repeat it unless the user makes a new request that authorizes it."
+        )));
     }
     let target =
         confirm_workspace_write_path(&session.config.cwd, &absolute).map_err(ToolError::policy)?;

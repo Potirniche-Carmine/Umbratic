@@ -30,7 +30,11 @@ use crate::{
     session::{EventSink, Session},
 };
 
+mod coercion;
 mod command;
+#[cfg(test)]
+mod command_tests;
+mod contract;
 mod dispatch;
 mod error;
 mod patch;
@@ -39,27 +43,33 @@ mod request;
 mod schema;
 mod search;
 mod skill;
+mod skill_mention;
 mod write;
 
+pub(crate) use coercion::coerce_tool_call_arguments;
 use command::command_tool;
 #[cfg(test)]
 use command::{
     filtered_command_environment, resolve_trusted_shell, safe_command_environment,
     trusted_command_path,
 };
+pub(crate) use contract::validate_tool_call_batch;
 pub use dispatch::execute_tool;
 pub use error::ToolResult;
 use error::{ToolError, ToolExecutionResult};
 use read::{read_attachment_tool, read_tool};
-pub use request::canonical_tool_name;
 #[cfg(test)]
 use request::parse_arguments;
+pub use request::tool_capability_name;
 use request::{ToolRequest, command_display};
 pub use schema::enabled_tool_specs;
 use search::search_tool;
 #[cfg(test)]
 use search::{parse_search_query, term_score};
 use skill::read_skill_tool;
+pub(crate) use skill_mention::explicit_skill_context;
+#[cfg(test)]
+use skill_mention::explicit_skill_mention;
 use write::{edit_tool, write_tool};
 
 const MAX_READ_OUTPUT_BYTES: usize = 60 * 1024;
@@ -211,19 +221,13 @@ mod tests {
         );
     }
     #[test]
-    fn markdown_fenced_arguments_parse() {
+    fn markdown_fenced_arguments_are_rejected() {
         let value = Value::String("```json\n{\"filePath\":\"README.md\"}\n```".into());
-        assert_eq!(
-            parse_arguments(&value)
-                .unwrap()
-                .get("filePath")
-                .and_then(Value::as_str),
-            Some("README.md")
-        );
+        assert!(parse_arguments(&value).is_err());
     }
 
     #[test]
-    fn command_arguments_cannot_become_an_implicit_shell_command() {
+    fn command_and_run_program_have_distinct_exact_shapes() {
         let directory = tempfile::tempdir().unwrap();
         assert!(
             ToolRequest::parse(
@@ -232,12 +236,21 @@ mod tests {
                 directory.path(),
             )
             .unwrap_err()
-            .contains("requires command or programId")
+            .contains("unknown argument args")
         );
         assert!(
             ToolRequest::parse("command", &json!({}), directory.path())
                 .unwrap_err()
-                .contains("requires command or programId")
+                .contains("missing a required string argument")
+        );
+        assert!(
+            ToolRequest::parse(
+                "run_program",
+                &json!({"programId":"python","command":"python file.py"}),
+                directory.path(),
+            )
+            .unwrap_err()
+            .contains("unknown argument command")
         );
     }
 
@@ -269,11 +282,21 @@ mod tests {
     }
 
     #[test]
-    fn common_model_tool_names_map_to_the_bounded_tools() {
-        assert_eq!(canonical_tool_name("search_files"), "search");
-        assert_eq!(canonical_tool_name("apply-patch"), "edit");
-        assert_eq!(canonical_tool_name("ls"), "read");
-        assert_eq!(canonical_tool_name("PowerShell"), "command");
+    fn only_declared_tool_names_map_to_runner_capabilities() {
+        assert_eq!(tool_capability_name("search"), Some("search"));
+        assert_eq!(tool_capability_name("apply_patch"), Some("edit"));
+        assert_eq!(tool_capability_name("run_program"), Some("command"));
+        for undeclared in ["search_files", "apply-patch", "ls", "PowerShell", "bash"] {
+            assert_eq!(tool_capability_name(undeclared), None, "{undeclared}");
+        }
+    }
+
+    #[test]
+    fn explicit_skill_mentions_require_exact_token_boundaries() {
+        assert!(explicit_skill_mention("Use $python for this.", "python"));
+        assert!(explicit_skill_mention("$python", "python"));
+        assert!(!explicit_skill_mention("Use $python-extra.", "python"));
+        assert!(!explicit_skill_mention("email$python", "python"));
     }
 
     #[tokio::test]
@@ -295,9 +318,18 @@ mod tests {
             json!(["patch"])
         );
         assert!(named("search")["function"]["parameters"]["properties"]["path"].is_object());
+        assert_eq!(
+            named("search")["function"]["parameters"]["properties"]["queries"]["maxItems"],
+            json!(32)
+        );
         assert!(
             specs.iter().all(|spec| spec["function"]["name"] != "lsp"),
             "lsp must be omitted when no approved server is configured"
+        );
+        assert!(
+            specs
+                .iter()
+                .all(|spec| spec["function"]["parameters"]["additionalProperties"] == json!(false))
         );
         assert_eq!(
             named("command")["function"]["parameters"]["required"],
@@ -306,7 +338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_schema_requires_one_explicit_execution_mode() {
+    async fn command_schemas_have_one_execution_mode_each() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("runtime");
         std::fs::write(&executable, "fixture").unwrap();
@@ -314,20 +346,151 @@ mod tests {
         Arc::get_mut(&mut Arc::get_mut(&mut session).unwrap().config)
             .unwrap()
             .approved_executables
-            .insert("runtime".into(), executable);
+            .extend([
+                ("runtime".into(), executable.clone()),
+                ("uv".into(), executable),
+            ]);
         let specs = enabled_tool_specs(&session, true).await;
         let command = specs
             .iter()
             .find(|spec| spec["function"]["name"] == "command")
             .unwrap();
         assert_eq!(
-            command["function"]["parameters"]["anyOf"],
-            json!([{"required":["command"]}, {"required":["programId"]}])
+            command["function"]["parameters"]["required"],
+            json!(["command"])
+        );
+        assert!(command["function"]["parameters"]["properties"]["programId"].is_null());
+        let program = specs
+            .iter()
+            .find(|spec| spec["function"]["name"] == "run_program")
+            .unwrap();
+        assert_eq!(
+            program["function"]["parameters"]["required"],
+            json!(["programId"])
+        );
+        assert!(program["function"]["parameters"]["properties"]["command"].is_null());
+        assert!(
+            program["function"]["description"]
+                .as_str()
+                .unwrap()
+                .contains(r#"["run","python","path/to/script.py"]"#)
         );
     }
 
     #[tokio::test]
-    async fn edit_aliases_replace_lf_text_in_a_crlf_file() {
+    async fn tool_batches_reject_undeclared_aliases_duplicates_and_wrong_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = crate::session::test_session(directory.path());
+        let specs = enabled_tool_specs(&session, true).await;
+        let call = |id: &str, name: &str, arguments: Value| ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+            index: 0,
+        };
+        assert!(
+            validate_tool_call_batch(
+                &session,
+                &[call("alias", "bash", json!({"command":"echo test"}))],
+                &specs,
+            )
+            .unwrap_err()
+            .contains("not declared")
+        );
+        assert!(
+            validate_tool_call_batch(
+                &session,
+                &[
+                    call("one", "read", json!({"filePath":"README.md"})),
+                    call("two", "read", json!({"filePath":"README.md"})),
+                ],
+                &specs,
+            )
+            .unwrap_err()
+            .contains("more than once")
+        );
+        assert!(
+            validate_tool_call_batch(
+                &session,
+                &[call(
+                    "mixed",
+                    "command",
+                    json!({"command":"echo test","programId":"python"}),
+                )],
+                &specs,
+            )
+            .unwrap_err()
+            .contains("undeclared argument programId")
+        );
+        assert!(
+            validate_tool_call_batch(
+                &session,
+                &[call(
+                    "range",
+                    "command",
+                    json!({"command":"echo test","timeoutMs":99}),
+                )],
+                &specs,
+            )
+            .unwrap_err()
+            .contains("below the declared minimum")
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_argument_coercion_is_narrow_and_schema_driven() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = crate::session::test_session(directory.path());
+        let specs = enabled_tool_specs(&session, true).await;
+        let call = |id: &str, name: &str, arguments: Value| ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+            index: 0,
+        };
+        let mut calls = vec![
+            call(
+                "read",
+                "read",
+                json!({"filePath":["README.md"],"offset":"7"}),
+            ),
+            call(
+                "search",
+                "search",
+                json!({"query":"needle","caseSensitive":"true"}),
+            ),
+            call(
+                "double",
+                "read",
+                Value::String(
+                    serde_json::to_string(
+                        &serde_json::to_string(&json!({"filePath":"README.md"})).unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            ),
+        ];
+        let changes = coerce_tool_call_arguments(&mut calls, &specs);
+        assert_eq!(
+            calls[0].arguments,
+            json!({"filePath":"README.md","offset":7})
+        );
+        assert_eq!(calls[1].arguments["caseSensitive"], json!(true));
+        assert_eq!(calls[2].arguments, json!({"filePath":"README.md"}));
+        assert_eq!(changes.len(), 3);
+        validate_tool_call_batch(&session, &calls, &specs).unwrap();
+
+        let mut rejected = vec![call(
+            "many",
+            "read",
+            json!({"filePath":["README.md","Cargo.toml"]}),
+        )];
+        assert!(coerce_tool_call_arguments(&mut rejected, &specs).is_empty());
+        assert!(validate_tool_call_batch(&session, &rejected, &specs).is_err());
+    }
+
+    #[tokio::test]
+    async fn exact_edit_contract_replaces_lf_text_in_a_crlf_file() {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("main.tsx");
         std::fs::write(
@@ -340,12 +503,12 @@ mod tests {
             crate::session::test_sink(directory.path()),
             Arc::new(crate::permission::PermissionBroker::default()),
             ToolCall {
-                id: "edit-alias".into(),
-                name: "edit_file".into(),
+                id: "edit-exact".into(),
+                name: "edit".into(),
                 arguments: json!({
-                    "path":"main.tsx",
-                    "find":"  <span>Auto-run low risk</span>\nafter",
-                    "replace":"  <span className=\"safe\">Auto-run low risk</span>\nafter"
+                    "filePath":"main.tsx",
+                    "oldText":"  <span>Auto-run low risk</span>\nafter",
+                    "newText":"  <span className=\"safe\">Auto-run low risk</span>\nafter"
                 }),
                 index: 0,
             },
@@ -359,7 +522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn structured_search_aliases_scope_results_and_return_editable_snippets() {
+    async fn exact_search_contract_scopes_results_and_returns_editable_snippets() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(directory.path().join("src/renderer")).unwrap();
         std::fs::create_dir_all(directory.path().join("other")).unwrap();
@@ -381,13 +544,13 @@ mod tests {
             sink,
             Arc::new(crate::permission::PermissionBroker::default()),
             ToolCall {
-                id: "search-alias".into(),
-                name: "rg".into(),
+                id: "search-exact".into(),
+                name: "search".into(),
                 arguments: json!({
-                    "pattern":"Auto-run low risk",
-                    "directory":"src/renderer",
-                    "filePattern":["*.tsx", "*.jsx"],
-                    "maxResults":10
+                    "query":"Auto-run low risk",
+                    "path":"src/renderer",
+                    "glob":"*.tsx",
+                    "limit":10
                 }),
                 index: 0,
             },
@@ -589,8 +752,8 @@ mod tests {
             Arc::new(crate::permission::PermissionBroker::default()),
             ToolCall {
                 id: "patch".into(),
-                name: "edit".into(),
-                arguments: json!({"mode":"patch","patch":"*** Begin Patch\n*** Update File: source.txt\n*** Move to: moved.txt\n@@\n-before\n+after\n*** Delete File: delete.txt\n*** Add File: added.txt\n+new file\n*** End Patch"}),
+                name: "apply_patch".into(),
+                arguments: json!({"patch":"*** Begin Patch\n*** Update File: source.txt\n*** Move to: moved.txt\n@@\n-before\n+after\n*** Delete File: delete.txt\n*** Add File: added.txt\n+new file\n*** End Patch"}),
                 index: 0,
             },
         )
@@ -690,32 +853,6 @@ mod tests {
         }
     }
 
-    async fn execute_command_for_test(command: &str, timeout_ms: u64) -> ToolResult {
-        let directory = tempfile::tempdir().unwrap();
-        let sink = crate::session::test_sink(directory.path());
-        let mut events = sink.subscribe();
-        let permissions = Arc::new(crate::permission::PermissionBroker::default());
-        let task = tokio::spawn(execute_tool(
-            crate::session::test_session(directory.path()),
-            sink.clone(),
-            permissions.clone(),
-            ToolCall {
-                id: "command".into(),
-                name: "command".into(),
-                arguments: json!({"command":command,"timeoutMs":timeout_ms}),
-                index: 0,
-            },
-        ));
-        loop {
-            let event = events.recv().await.unwrap();
-            if event["type"] == "permission.requested" {
-                permissions.reply(&sink, event["permissionId"].as_str().unwrap(), "allow");
-                break;
-            }
-        }
-        task.await.unwrap()
-    }
-
     #[tokio::test]
     async fn unavailable_program_ids_fail_before_requesting_user_permission() {
         let directory = tempfile::tempdir().unwrap();
@@ -727,7 +864,7 @@ mod tests {
             Arc::new(crate::permission::PermissionBroker::default()),
             ToolCall {
                 id: "missing-program".into(),
-                name: "command".into(),
+                name: "run_program".into(),
                 arguments: json!({"programId":"npm","args":["run","test:all"]}),
                 index: 0,
             },
@@ -736,7 +873,7 @@ mod tests {
         assert_eq!(result.status, "policy_blocked");
         assert_eq!(
             result.error_message.as_deref(),
-            Some("Executable npm is not available.")
+            Some("Executable npm is not available. Use only a programId declared by run_program.")
         );
         let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
         assert!(
@@ -744,27 +881,6 @@ mod tests {
                 .iter()
                 .all(|event| event["type"] != "permission.requested")
         );
-    }
-
-    #[tokio::test]
-    async fn commands_report_success_nonzero_exit_and_timeout_distinctly() {
-        let success = execute_command_for_test("echo runner-command-ok", 5_000).await;
-        assert_eq!(success.status, "success");
-        assert!(success.output.contains("runner-command-ok"));
-
-        let failure = execute_command_for_test("exit 7", 5_000).await;
-        assert_eq!(failure.status, "runtime_error");
-        assert_eq!(failure.error_code.as_deref(), Some("command_exit_nonzero"));
-        assert_eq!(failure.exit_code, Some(7));
-
-        let command = if cfg!(windows) {
-            "Start-Sleep -Milliseconds 1000"
-        } else {
-            "sleep 1"
-        };
-        let timeout = execute_command_for_test(command, 100).await;
-        assert_eq!(timeout.status, "timeout");
-        assert_eq!(timeout.error_code.as_deref(), Some("process_timeout"));
     }
 
     #[tokio::test]
@@ -783,6 +899,7 @@ mod tests {
             description: String::new(),
             source: "local".into(),
             instruction_path: skill_path,
+            paths: Vec::new(),
         });
         let session = Arc::new(Session {
             id: "session".into(),

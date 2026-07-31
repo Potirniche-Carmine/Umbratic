@@ -39,6 +39,7 @@ import {
 } from "../shared/contextWindow";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { eventDetail, eventTitle } from "./eventDisplay";
 import {
   AtSign,
   BarChart3,
@@ -50,6 +51,7 @@ import {
   CircleDashed,
   Cloud,
   Copy,
+  CornerUpRight,
   Ellipsis,
   ExternalLink,
   File,
@@ -66,6 +68,7 @@ import {
   Moon,
   PanelRight,
   Paperclip,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -97,7 +100,12 @@ import {
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
-import { appendTaskEvent, compactTaskEvents, removeResponseFeedback, toggleResponseRating } from "../shared/taskEvents";
+import { appendTaskEvent, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
+import {
+  responseFeedbackReasons,
+  type ResponseFeedbackReason,
+  type ResponseRating,
+} from "../shared/responseFeedback";
 import { ReviewPanel } from "./review/ReviewPanel";
 import { defaultModelEndpointSettings } from "./endpointSettings";
 import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
@@ -111,7 +119,19 @@ import {
   type TaskPermissionRequest,
 } from "./taskEventReducer";
 import { activitySummary, thoughtDurationMs } from "./activityTiming";
+import {
+  activityToolLabel,
+  commandDetailLabel,
+  commandHasVisibleDetails,
+  commandLabel,
+  commandShellText,
+  commandSummary,
+  commandVisibleOutput,
+  type CommandClass,
+  type CommandRun,
+} from "./commandDisplay";
 export { activitySummary } from "./activityTiming";
+export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
 type AppearanceTheme = "system" | "light" | "dark";
 type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
@@ -122,21 +142,6 @@ type RequiredToolContractReason =
   | "agent_reported_blocker"
   | "attempted_tool_failed"
   | "no_review_changes";
-type CommandClass =
-  | "read"
-  | "edit"
-  | "shell"
-  | "python-runtime"
-  | "markdown"
-  | "cmake-build"
-  | "compiler"
-  | "package-manager"
-  | "git-read"
-  | "git-write"
-  | "destructive-file"
-  | "network"
-  | "external-directory"
-  | "unknown";
 type ToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
 type ToolErrorCode =
   | "tool_disabled"
@@ -182,6 +187,21 @@ type DeleteCandidate =
   | { kind: "chat"; chat: ChatRecord }
   | { kind: "projectChats"; project: ProjectDeleteTarget }
   | { kind: "project"; project: ProjectDeleteTarget };
+type ResponseFeedbackDialogState = {
+  messageId: string;
+  rating: ResponseRating;
+  reason?: ResponseFeedbackReason;
+  comment: string;
+};
+type ComposerSubmission = {
+  prompt: string;
+  attachedFiles: ChatAttachment[];
+  reviewFeedback: ReviewCommentDraft[];
+};
+type QueuedComposerPrompt = ComposerSubmission & {
+  id: string;
+  taskId: string;
+};
 
 type AppearanceSettings = {
   theme: AppearanceTheme;
@@ -190,21 +210,6 @@ type AppearanceSettings = {
 };
 
 type PermissionRequest = TaskPermissionRequest;
-
-type CommandRun = {
-  id: string;
-  command: string;
-  kind?: PermissionRequest["kind"];
-  commandClass?: CommandClass;
-  cwd: string;
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  status: "running" | "passed" | "failed";
-  startedAt?: string;
-  endedAt?: string;
-  durationMs?: number;
-};
 
 type ComposerActivitySegment =
   | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
@@ -272,6 +277,7 @@ const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultStartupSettings: DesktopStartupSettings = {
   permissionMode: "normal",
   modelEndpoint: defaultModelEndpointSettings,
+  localModels: [],
   companyConnection: { state: "not_enrolled" },
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
@@ -745,108 +751,6 @@ function findClosingBacktickRun(text: string, startIndex: number, runLength: num
   return -1;
 }
 
-function eventTitle(event: BackendUiEvent): string {
-  switch (event.type) {
-    case "user.message":
-      return "user";
-    case "assistant.delta":
-      return "assistant";
-    case "assistant.progress.delta":
-      return "thinking";
-    case "assistant.done":
-      return "assistant done";
-    case "worktree.requested":
-      return "worktree requested";
-    case "worktree.created":
-      return "worktree created";
-    case "command.started":
-      return "command started";
-    case "command.output":
-      return event.stream;
-    case "command.finished":
-      return "command finished";
-    case "permission.requested":
-      return "permission requested";
-    case "permission.resolved":
-      return `permission ${event.decision}`;
-    case "review.ready":
-      return "review ready";
-    case "review.changed_since_ready":
-      return "review changed";
-    case "approval.check":
-      return `check ${event.status}`;
-    case "merge.approval":
-      return event.decision === "approved" ? "accepted" : "rejected";
-    case "approval.completed":
-      return "approved";
-    case "merge.completed":
-      return "merged";
-    case "ide.opened":
-      return event.result === "success" ? "opened editor" : "editor open failed";
-    case "response.feedback":
-      return event.rating === "good" ? "liked response" : "disliked response";
-    case "skill.selected":
-      return "skill selected";
-    case "required_tool.failed":
-      return "required tool failed";
-    case "task.error":
-      return "task event";
-    default:
-      return "context";
-  }
-}
-
-function eventDetail(event: BackendUiEvent): string {
-  switch (event.type) {
-    case "user.message":
-      return event.text.trim();
-    case "assistant.delta":
-      return event.text.trim();
-    case "assistant.progress.delta":
-      return event.text.trim();
-    case "assistant.done":
-      return "stream complete";
-    case "worktree.requested":
-      return `${event.branch} at ${event.path}`;
-    case "worktree.created":
-      return `${event.branch} at ${event.path}`;
-    case "command.started":
-      return `${event.command}${event.commandClass ? ` - ${event.commandClass}` : ""} - ${event.cwd}`;
-    case "command.output":
-      return event.text.trim();
-    case "command.finished":
-      return `exit ${event.exitCode ?? "unknown"}`;
-    case "permission.requested":
-      return event.request.summary;
-    case "permission.resolved":
-      return event.id;
-    case "review.ready":
-      return `${event.changedFiles.length} changed file${event.changedFiles.length === 1 ? "" : "s"}`;
-    case "review.changed_since_ready":
-      return `${event.changedFileCount} file${event.changedFileCount === 1 ? "" : "s"} changed after review became ready`;
-    case "approval.check":
-      return event.detail ?? event.name;
-    case "merge.approval":
-      return event.reason ?? (event.cleanup === undefined ? event.decision : `${event.decision}, cleanup ${event.cleanup ? "on" : "off"}`);
-    case "approval.completed":
-      return `${event.target} ${shortHash(event.patchHash)}`;
-    case "merge.completed":
-      return `${event.targetBranch} ${shortHash(event.commit)}`;
-    case "ide.opened":
-      return [event.ideId, event.target, event.filePath, event.message].filter(Boolean).join(" - ");
-    case "response.feedback":
-      return event.messageId;
-    case "skill.selected":
-      return `${event.skillId} - ${event.reason}${event.fullContent ? " - full instructions" : " - metadata only"}`;
-    case "required_tool.failed":
-      return [event.requirement, event.reason, event.detail].filter(Boolean).join(" - ");
-    case "task.error":
-      return event.message;
-    default:
-      return "Workspace context updated.";
-  }
-}
-
 type DiffRow =
   { kind: "add" | "remove" | "context"; content: string; oldLine: number | null; newLine: number | null; marker: "+" | "-" | "" };
 
@@ -985,12 +889,12 @@ function AttachmentPreviewList({
 function ContextMeter({ estimate }: { estimate: ContextUsageEstimate }) {
   const displayedPercentage = Math.min(100, Math.max(0, estimate.percentage));
   const roundedPercentage = Math.round(estimate.percentage);
-  const valueText = `Context input: ${formatTokenCount(estimate.contentTokens)} / ${formatTokenCount(estimate.contextLength)}, ${roundedPercentage}%`;
+  const valueText = `Estimated context use: ${formatTokenCount(estimate.estimatedTokens)} / ${formatTokenCount(estimate.contextLength)}, ${roundedPercentage}%.`;
   return (
     <div
       className={`contextMeter is-${estimate.level}`}
       role="meter"
-      aria-label="Model context input usage"
+      aria-label="Estimated model context use"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.min(100, roundedPercentage)}
@@ -1011,7 +915,7 @@ function ContextMeter({ estimate }: { estimate: ContextUsageEstimate }) {
       </svg>
       <div className="contextMeterTooltip" id="context-meter-detail" role="tooltip">
         <span>
-          Context input: <b>{formatTokenCount(estimate.contentTokens)} / {formatTokenCount(estimate.contextLength)}</b> · {roundedPercentage}%
+          Estimated use: <b>{formatTokenCount(estimate.estimatedTokens)} / {formatTokenCount(estimate.contextLength)}</b> · {roundedPercentage}%
         </span>
       </div>
     </div>
@@ -1087,78 +991,6 @@ function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
   return <Loader2 className="spin" size={15} />;
 }
 
-export function commandLabel(command: string): string {
-  const trimmed = command.trim();
-  if (!trimmed) return "Workspace action";
-  if (/^search(?:\s|$)/i.test(trimmed)) return "Search workspace";
-  if (/^read(?:\s|$)/i.test(trimmed)) return "Read workspace";
-  if (/^write(?:\s|$)/i.test(trimmed)) return "Write file";
-  if (/^edit(?:\s|$)/i.test(trimmed)) return "Edit files";
-  if (/^(rg|grep|find|fd)\b/i.test(trimmed)) return "Search";
-  if (/^npm\b.+\brun\b/i.test(trimmed)) return "Run script";
-  if (/^git\b/i.test(trimmed)) return "Git";
-  if (/^(node|python|python3)\b/i.test(trimmed)) return "Runtime";
-  return trimmed.split(/\s+/).slice(0, 2).join(" ");
-}
-
-function stripAnsi(value: string): string {
-  return value.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
-function previewTail(value: string, limit: number): { text: string; truncated: boolean } {
-  if (value.length <= limit) return { text: value, truncated: false };
-  return { text: value.slice(-limit), truncated: true };
-}
-
-function isShellLikeCommand(command: string): boolean {
-  return !/^(read|search|write|edit|glob|grep|task|question|todowrite|skill)(?:\s|$)/i.test(command.trim());
-}
-
-function workspaceActivityLabel(command: string): string {
-  const label = commandLabel(command);
-  return label;
-}
-
-export function commandSummary(run: CommandRun): string {
-  if (run.status === "running") return "running";
-  const outputPreview = previewTail(run.stdout || run.stderr, commandOutputPreviewCharacterLimit);
-  const output = stripAnsi(outputPreview.text).trim();
-  const lastLine = output.split(/\r?\n/).filter(Boolean).slice(-1)[0];
-  if (run.status === "failed") {
-    const exit = `exit ${run.exitCode ?? "unknown"}`;
-    return lastLine ? `${exit}: ${lastLine}` : exit;
-  }
-  return output ? output.split(/\r?\n/).filter(Boolean).slice(-1)[0] : `exit ${run.exitCode ?? 0}`;
-}
-
-export function commandShellText(run: CommandRun): string {
-  const isTool = !!run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command);
-  const parts = isTool ? [] : [`$ ${run.command}`];
-  const outputPreview = previewTail([run.stdout, run.stderr].filter(Boolean).join("\n"), commandOutputPreviewCharacterLimit);
-  const output = stripAnsi(outputPreview.text).trimEnd();
-  if (output) {
-    const outputLines = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-    const lineTruncated = outputLines.length > commandOutputPreviewLineLimit;
-    if (outputPreview.truncated || lineTruncated) {
-      const visibleLines = outputLines.slice(-(commandOutputPreviewLineLimit - 1));
-      const marker = outputPreview.truncated
-        ? "[Earlier output omitted.]"
-        : `[${outputLines.length - visibleLines.length} earlier output line${outputLines.length - visibleLines.length === 1 ? "" : "s"} omitted.]`;
-      parts.push([marker, ...visibleLines].join("\n"));
-    } else {
-      parts.push(output);
-    }
-  }
-  if (isTool && !parts.length) parts.push(commandSummary(run));
-  return parts.join("\n\n");
-}
-
-export function commandDetailLabel(run: CommandRun): string {
-  const isTool = !!run.kind && run.kind !== "bash" && !isShellLikeCommand(run.command);
-  const label = isTool ? `${workspaceActivityLabel(run.command)} results` : "Shell";
-  return run.commandClass ? `${label} - ${run.commandClass}` : label;
-}
-
 function taskStatusTitle(task: TaskInfo): string {
   if (task.state === "completed") return "Answered";
   if (task.state === "review_ready") return "Ready to review";
@@ -1199,6 +1031,7 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       if (existing) {
         existing.command = event.command;
         existing.kind = event.kind;
+        existing.toolKind = event.toolKind;
         existing.commandClass = event.commandClass;
         existing.cwd = event.cwd;
         continue;
@@ -1207,6 +1040,7 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
         id: event.id,
         command: event.command,
         kind: event.kind,
+        toolKind: event.toolKind,
         commandClass: event.commandClass,
         cwd: event.cwd,
         stdout: "",
@@ -1264,6 +1098,8 @@ export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
       }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
+      run.resultStatus = event.status;
+      run.errorCode = event.errorCode;
       if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
       run.endedAt = event.at ?? run.endedAt;
       run.durationMs = event.durationMs;
@@ -1292,19 +1128,6 @@ function formatFileSize(bytes: number): string {
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function activityToolLabel(command: string): { key: string; label: string } {
-  const trimmed = command.trim();
-  const fileTool = trimmed.match(/^(read|write|edit)\s+([^\s]+)/i);
-  if (fileTool) {
-    const target = fileTool[2].replaceAll("\\", "/");
-    const name = target.split("/").filter(Boolean).at(-1) ?? target;
-    const action = `${fileTool[1][0].toUpperCase()}${fileTool[1].slice(1).toLowerCase()}`;
-    return { key: `${action.toLowerCase()}:${target.toLowerCase()}`, label: `${action} ${name}` };
-  }
-  const label = commandLabel(command);
-  return { key: label.toLowerCase(), label };
-}
-
 export function activityToolGroups(segments: ComposerActivitySegment[]): Array<{
   id: string;
   label: string;
@@ -1314,7 +1137,7 @@ export function activityToolGroups(segments: ComposerActivitySegment[]): Array<{
   const groups = new Map<string, { id: string; label: string; runs: CommandRun[]; status: CommandRun["status"] }>();
   for (const segment of segments) {
     if (segment.type !== "command") continue;
-    const { key, label } = activityToolLabel(segment.run.command);
+    const { key, label } = activityToolLabel(segment.run);
     const group = groups.get(key) ?? { id: `tool-group-${groups.size + 1}`, label, runs: [], status: "passed" as const };
     group.runs.push(segment.run);
     group.status = group.runs.some((run) => run.status === "running")
@@ -1335,7 +1158,7 @@ export function assistantTextFromEvents(events: BackendUiEvent[]): string {
   const text = composerTimelineFromEvents(events)
     .filter((item): item is Extract<ComposerTimelineItem, { type: "assistant" }> => item.type === "assistant")
     .map((item) => item.text)
-    .join("")
+    .join("\n\n")
     .trim();
   return stripAssistantSpeakerPrefix(text).trim();
 }
@@ -1453,12 +1276,11 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     reasoningEndedAt = undefined;
   };
 
-  const flushAssistantAsReasoning = () => {
-    const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
-    if (text) {
-      reasoningBuffer = `${reasoningBuffer}${reasoningBuffer.trim() ? "\n\n" : ""}${text}`;
-      assistantBuffer = ""; assistantNeedsSeparator = false;
-    }
+  // Assistant text that precedes workspace activity is ordinary prose, so it
+  // settles into the transcript above the activity block rather than being
+  // demoted into it.
+  const closeAssistantForActivity = () => {
+    flushAssistant();
     flushReasoning();
   };
 
@@ -1499,7 +1321,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       if (assistantBuffer.trim()) assistantNeedsSeparator = true;
       reasoningStartedAt = reasoningStartedAt ?? event.at;
       reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
-      reasoningBuffer = `${reasoningBuffer}${event.text}`;
+      reasoningBuffer = `${reasoningBuffer}${reasoningBuffer ? "\n\n" : ""}${event.text}`;
       continue;
     }
     if (event.type === "assistant.done") {
@@ -1510,7 +1332,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "skill.selected") {
-      flushAssistantAsReasoning();
+      closeAssistantForActivity();
       skillIndex += 1;
       activitySegments.push({
         type: "skill",
@@ -1524,12 +1346,12 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.started") {
-      flushAssistantAsReasoning();
-      if (assistantBuffer.trim()) assistantNeedsSeparator = true;
+      closeAssistantForActivity();
       const existingRun = runs.get(event.id);
       if (existingRun) {
         existingRun.command = event.command;
         existingRun.kind = event.kind;
+        existingRun.toolKind = event.toolKind;
         existingRun.commandClass = event.commandClass;
         existingRun.cwd = event.cwd;
         existingRun.startedAt = existingRun.startedAt ?? event.at;
@@ -1543,6 +1365,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
         id: event.id,
         command: event.command,
         kind: event.kind,
+        toolKind: event.toolKind,
         commandClass: event.commandClass,
         cwd: event.cwd,
         stdout: "",
@@ -1559,7 +1382,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.output") {
-      flushAssistantAsReasoning();
+      closeAssistantForActivity();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -1588,7 +1411,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.finished") {
-      flushAssistantAsReasoning();
+      closeAssistantForActivity();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -1607,6 +1430,8 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       }
       run.exitCode = event.exitCode;
       run.status = event.exitCode === 0 ? "passed" : "failed";
+      run.resultStatus = event.status;
+      run.errorCode = event.errorCode;
       if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
       run.endedAt = event.at ?? run.endedAt;
       run.durationMs = event.durationMs;
@@ -1841,27 +1666,41 @@ export function LongMarkdownContent({
 }
 
 function StreamingTextContent({ content }: { content: string }) {
+  const boundary = content.lastIndexOf("\n\n");
+  const completed = boundary >= 0 ? content.slice(0, boundary + 2) : "";
+  const tail = boundary >= 0 ? content.slice(boundary + 2) : content;
   return (
     <div className="streamingTextContent">
-      <MarkdownContent
-        content={content || "\u200b"}
-        trailingInline={<span className="streamingTextCaret" aria-hidden="true" />}
-      />
+      {completed ? <MemoizedMarkdownContent content={completed} /> : null}
+      <span className="streamingPlainTail">
+        {tail || "\u200b"}
+        <span className="streamingTextCaret" aria-hidden="true" />
+      </span>
     </div>
   );
 }
-
+const MemoizedMarkdownContent = React.memo(MarkdownContent);
 export function WorkMarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  if (streaming) {
+    const boundary = content.lastIndexOf("\n\n");
+    const completed = boundary >= 0 ? content.slice(0, boundary + 2) : "";
+    const tail = boundary >= 0 ? content.slice(boundary + 2) : content;
+    return (
+      <div className="workMarkdownContent isStreaming">
+        {completed ? <MemoizedMarkdownContent content={completed} /> : null}
+        <span className="streamingPlainTail">
+          {tail}
+          <span className="workStreamingCaret" aria-hidden="true" />
+        </span>
+      </div>
+    );
+  }
   return (
-    <div className={`workMarkdownContent ${streaming ? "isStreaming" : ""}`}>
-      <MarkdownContent
-        content={content}
-        trailingInline={streaming ? <span className="workStreamingCaret" aria-hidden="true" /> : null}
-      />
+    <div className="workMarkdownContent">
+      <MarkdownContent content={content} />
     </div>
   );
 }
-
 function normalizeSkillPreviewHeading(value: string): string {
   return value.replace(/^#+\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -2032,6 +1871,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [task, setTask] = useState<TaskInfo | null>(previewEnvironment?.task ?? null);
   const [prompt, setPrompt] = useState(previewEnvironment?.prompt ?? initialPrompt);
+  const [queuedPrompts, setQueuedPrompts] = useState<QueuedComposerPrompt[]>([]);
+  const [steerPending, setSteerPending] = useState(false);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
   const [reviewFeedbackPreview, setReviewFeedbackPreview] = useState<ReviewFeedbackReference[] | null>(null);
@@ -2047,7 +1888,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
-  const [feedbackDrafts, setFeedbackDrafts] = useState<Map<string, string>>(() => new Map());
+  const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
+  const [responseFeedbackSubmitting, setResponseFeedbackSubmitting] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
@@ -2077,6 +1919,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
+  const [harnessSaveFeedback, setHarnessSaveFeedback] = useState<"idle" | "saved">("idle");
   const [appearanceSettings, setAppearanceSettings] = useState<AppearanceSettings>(() => {
     const saved = readAppearanceSettings();
     const fixtureTheme = previewEnvironment?.params.get("theme");
@@ -2118,6 +1961,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     api,
     backend,
     initialSettings: startupSettings.modelEndpoint,
+    initialLocalModels: startupSettings.localModels,
     initialConnection: startupSettings.companyConnection,
     settingsOpen,
     active: settingsTab === "account",
@@ -2139,12 +1983,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const reviewScopeRequestRef = useRef(0);
   const modalTriggerRef = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
+  const responseFeedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const suppressDraftSaveRef = useRef(false);
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
   const startTaskInFlightRef = useRef(false);
+  const queueLaunchInFlightRef = useRef(false);
   const chatSelectionSequenceRef = useRef(0);
   const focusRefreshTimerRef = useRef<number | null>(null);
   const followComposerScrollRef = useRef(true);
@@ -2203,7 +2049,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
   const closedChatNotice = closedChatMessage(task?.state ?? activeChat?.taskState);
   const isGenerating = task?.state === "running";
+  const hasComposerMessage = prompt.trim().length > 0 || reviewPromptFeedback.length > 0;
+  const activeQueuedPrompts = task ? queuedPrompts.filter((item) => item.taskId === task.id) : [];
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
+  const latestTurnOutcome = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event.taskId === task?.id && event.type === "turn.outcome") return event.outcome;
+    }
+    return undefined;
+  }, [events, task?.id]);
+  const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo =
     !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
@@ -2254,13 +2110,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
     }
     return ratings;
-  }, [visibleEvents]);
-  const responseFeedbackComments = useMemo(() => {
-    const comments = new Map<string, string>();
-    for (const event of visibleEvents) {
-      if (event.type === "response.feedback" && event.comment) comments.set(event.messageId, event.comment);
-    }
-    return comments;
   }, [visibleEvents]);
   const composerItems = useMemo(() => {
     const items = composerTimelineFromEvents(visibleEvents, task?.prompt, task?.state);
@@ -2462,14 +2311,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function setVisibleTask(nextTask: TaskInfo | null) {
     visibleTaskIdRef.current = nextTask?.id ?? null;
-    setFeedbackDrafts(new Map());
+    setResponseFeedbackDialog(null);
     if (nextTask) setWorkspaceReview(null);
     setTask(nextTask);
   }
 
   function prepareVisibleTaskLoad(taskId: string | null) {
     visibleTaskIdRef.current = taskId;
-    setFeedbackDrafts(new Map());
+    setResponseFeedbackDialog(null);
     setWorkspaceReview(null);
     setTask(null);
   }
@@ -2688,7 +2537,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }, []);
 
   useEffect(() => {
-    const isOpen = settingsOpen || !!previewAttachment?.previewDataUrl || !!deleteCandidate || showElevatedPermissionsDialog || approvalPending;
+    const isOpen = settingsOpen || !!previewAttachment?.previewDataUrl || !!deleteCandidate || showElevatedPermissionsDialog || approvalPending || !!responseFeedbackDialog;
     if (!isOpen) {
       modalTriggerRef.current?.focus();
       modalTriggerRef.current = null;
@@ -2698,7 +2547,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const focusModal = () => {
       const modal = modalRef.current;
       if (!modal) return;
-      const target = modal.querySelector<HTMLElement>("[autofocus], button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
+      const target = modal.querySelector<HTMLElement>("[data-modal-autofocus], [autofocus], button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
       (target ?? modal).focus();
     };
     const frame = window.requestAnimationFrame(focusModal);
@@ -2713,7 +2562,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
     document.addEventListener("keydown", trapFocus);
     return () => { window.cancelAnimationFrame(frame); document.removeEventListener("keydown", trapFocus); };
-  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending]);
+  }, [settingsOpen, previewAttachment, deleteCandidate, showElevatedPermissionsDialog, approvalPending, responseFeedbackDialog]);
+
+  useEffect(() => {
+    if (!responseFeedbackDialog) return undefined;
+    const frame = window.requestAnimationFrame(() => responseFeedbackInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [responseFeedbackDialog?.messageId, responseFeedbackDialog?.rating]);
 
   useEffect(() => {
     if (!reviewOpen) return undefined;
@@ -2737,7 +2592,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       return;
     }
     if (followComposerScrollRef.current) scrollElementToBottom(node);
-  }, [activeChat?.taskId, composerItems, task, reviewFiles.length, expandedReviewPaths, reviewOpen]);
+  }, [activeChat?.taskId, composerItems, task, prompt, reviewFiles.length, expandedReviewPaths, reviewOpen]);
+
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!node || node.selectionEnd !== prompt.length) return;
+    node.scrollTop = node.scrollHeight;
+    setPromptScrollTop(node.scrollTop);
+  }, [prompt]);
 
   useLayoutEffect(() => {
     const activeActivityIds = new Set<string>();
@@ -3138,11 +3000,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (!harnessDirty || harnessSaving) return;
     const profileChanged = harnessDraftProfile !== harnessProfile;
     const contextLengthChanged = harnessDraftContextLength !== contextLength;
+    const optimisticProfile = harnessDraftProfile;
+    const optimisticContextLength = harnessDraftContextLength;
+    const feedbackStartedAt = Date.now();
     setHarnessMessage(null);
     setHarnessSaving(true);
+    setHarnessSaveFeedback("saved");
+    if (profileChanged) setHarnessProfile(optimisticProfile);
+    if (contextLengthChanged) setContextLength(optimisticContextLength);
     try {
-      let nextProfile = harnessProfile;
-      let nextContextLength = contextLength;
+      let nextProfile = optimisticProfile;
+      let nextContextLength = optimisticContextLength;
       let status: BackendStatus | null = null;
       if (profileChanged) {
         const result = await api.saveHarnessProfile(harnessDraftProfile);
@@ -3164,10 +3032,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         setPermissionModeState(status.permissionMode);
       }
     } catch (cause) {
+      setHarnessSaveFeedback("idle");
       await loadHarnessProfile();
       setHarnessMessage(String(cause instanceof Error ? cause.message : cause));
     } finally {
+      const remainingFeedbackMs = Math.max(0, 500 - (Date.now() - feedbackStartedAt));
+      if (remainingFeedbackMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, remainingFeedbackMs));
+      }
       setHarnessSaving(false);
+      setHarnessSaveFeedback("idle");
     }
   }
 
@@ -3645,14 +3519,38 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     noteActivityScrollInput(id, event.currentTarget, true);
   }
 
-  async function startTask() {
+  useEffect(() => {
+    if (
+      !task
+      || task.state === "running"
+      || task.state === "awaiting_worktree_approval"
+      || task.state === "approving"
+      || busy
+      || queueLaunchInFlightRef.current
+    ) return;
+    const next = queuedPrompts.find((item) => item.taskId === task.id);
+    if (!next) return;
+    queueLaunchInFlightRef.current = true;
+    void startTask(next).then((started) => {
+      if (started) {
+        setQueuedPrompts((current) => current.filter((item) => item.id !== next.id));
+      }
+    }).finally(() => {
+      queueLaunchInFlightRef.current = false;
+    });
+  }, [busy, queuedPrompts, task?.id, task?.state]);
+
+  async function startTask(submission?: ComposerSubmission): Promise<boolean> {
     if (closedChatNotice) {
       setError(closedChatNotice);
-      return;
+      return false;
     }
-    const trimmedPrompt = appendReviewFeedback(composerPromptForSend(prompt), reviewPromptFeedback).trim();
-    if (!trimmedPrompt) return;
-    if (startTaskInFlightRef.current) return;
+    const sourcePrompt = submission?.prompt ?? prompt;
+    const sourceFeedback = submission?.reviewFeedback ?? reviewPromptFeedback;
+    const sourceAttachments = submission?.attachedFiles ?? attachedFiles;
+    const trimmedPrompt = appendReviewFeedback(composerPromptForSend(sourcePrompt), sourceFeedback).trim();
+    if (!trimmedPrompt) return false;
+    if (startTaskInFlightRef.current) return false;
     startTaskInFlightRef.current = true;
     let status: BackendStatus | null = null;
     try {
@@ -3660,7 +3558,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
       startTaskInFlightRef.current = false;
-      return;
+      return false;
     }
     if (!status?.model || status.endpoint !== "ready") {
       try {
@@ -3670,7 +3568,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       } finally {
         startTaskInFlightRef.current = false;
       }
-      return;
+      return false;
     }
     const isContinuingChat = !!task && task.chatId === activeChatId;
     setError(null);
@@ -3699,7 +3597,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         repositoryId: repository?.id,
         prompt: trimmedPrompt,
         chatId,
-        attachedFiles: attachedFiles.map(normalizeAttachment),
+        attachedFiles: sourceAttachments.map(normalizeAttachment),
         reasoningMode,
         useWorktree: useWorktreeForNextRun,
         worktreeTaskId: activeChatWorktreeTaskId,
@@ -3711,22 +3609,102 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setPendingPermission(pendingPermissionFromEvents(nextVisibleEvents));
       if (nextTask.chatId) setActiveChatId(nextTask.chatId);
       upsertChatFromTask(nextTask);
-      suppressDraftSaveBriefly();
-      setPrompt("");
-      setReviewPromptFeedback([]);
-      setAttachedFiles([]);
-      setMention(null);
-      setFileMatches([]);
-      await persistDraft(nextTask.chatId ?? chatId, "", []);
+      if (!submission) {
+        suppressDraftSaveBriefly();
+        setPrompt("");
+        setReviewPromptFeedback([]);
+        setAttachedFiles([]);
+        setMention(null);
+        setFileMatches([]);
+        await persistDraft(nextTask.chatId ?? chatId, "", []);
+      }
       if (!isContinuingChat) {
         setExpandedReviewPaths(new Set());
       }
+      return true;
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
+      return false;
     } finally {
       startTaskInFlightRef.current = false;
       setBusy(false);
     }
+  }
+
+  function currentComposerSubmission(): ComposerSubmission | null {
+    const text = composerPromptForSend(prompt);
+    if (!text && reviewPromptFeedback.length === 0) return null;
+    return {
+      prompt: text,
+      attachedFiles: attachedFiles.map(normalizeAttachment),
+      reviewFeedback: reviewPromptFeedback,
+    };
+  }
+
+  function clearComposerInput() {
+    suppressDraftSaveBriefly();
+    setPrompt("");
+    setReviewPromptFeedback([]);
+    setAttachedFiles([]);
+    setMention(null);
+    setFileMatches([]);
+    if (activeChatId) void persistDraft(activeChatId, "", []);
+  }
+
+  function queueCurrentPrompt() {
+    if (!task || !canQueue) return;
+    const submission = currentComposerSubmission();
+    if (!submission) return;
+    setQueuedPrompts((current) => [
+      ...current,
+      { ...submission, id: `queued-${Date.now().toString(36)}-${current.length}`, taskId: task.id },
+    ]);
+    clearComposerInput();
+  }
+
+  async function steerSubmission(submission: ComposerSubmission, queuedId?: string) {
+    if (!task || task.state !== "running" || steerPending) return;
+    const steeredPrompt = appendReviewFeedback(submission.prompt, submission.reviewFeedback).trim();
+    if (!steeredPrompt) return;
+    setSteerPending(true);
+    setError(null);
+    try {
+      await api.steerTask({
+        taskId: task.id,
+        prompt: steeredPrompt,
+        attachedFiles: submission.attachedFiles,
+      });
+      if (queuedId) {
+        setQueuedPrompts((current) => current.filter((item) => item.id !== queuedId));
+      } else {
+        clearComposerInput();
+      }
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setSteerPending(false);
+    }
+  }
+
+  function removeQueuedPrompt(id: string) {
+    setQueuedPrompts((current) => current.filter((item) => item.id !== id));
+  }
+
+  function editQueuedPrompt(item: QueuedComposerPrompt) {
+    setPrompt(item.prompt);
+    setAttachedFiles(item.attachedFiles);
+    setReviewPromptFeedback(item.reviewFeedback);
+    setMention(null);
+    setFileMatches([]);
+    setSelectedFileIndex(0);
+    setSelectedSkillIndex(0);
+    removeQueuedPrompt(item.id);
+    window.requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) return;
+      node.focus();
+      node.setSelectionRange(item.prompt.length, item.prompt.length);
+    });
   }
 
   async function stopTask() {
@@ -3768,37 +3746,58 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     await copyPlainText(value);
   }
 
-  async function rateResponse(messageId: string, rating: "good" | "bad" | null, comment?: string) {
-    if (!latestTaskId) return;
+  function openResponseFeedbackDialog(
+    messageId: string,
+    rating: ResponseRating,
+    trigger: HTMLButtonElement,
+  ) {
+    modalTriggerRef.current = trigger;
+    const previousFeedback = [...visibleEvents].reverse().find(
+      (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
+        event.type === "response.feedback" && event.messageId === messageId,
+    );
+    setResponseFeedbackDialog({
+      messageId,
+      rating,
+      ...(previousFeedback?.rating === rating && previousFeedback.reason
+        ? { reason: previousFeedback.reason }
+        : {}),
+      comment: previousFeedback?.rating === rating ? previousFeedback.comment ?? "" : "",
+    });
+  }
+
+  async function rateResponse(
+    messageId: string,
+    rating: ResponseRating,
+    reason?: ResponseFeedbackReason,
+    comment?: string,
+  ): Promise<boolean> {
+    if (!latestTaskId) return false;
     setError(null);
     const taskId = latestTaskId;
-    const previousDraft = feedbackDrafts.get(messageId);
     const previousFeedback = [...visibleEvents].reverse().find(
       (event): event is Extract<BackendUiEvent, { type: "response.feedback" }> =>
         event.type === "response.feedback" && event.taskId === taskId && event.messageId === messageId,
     );
-    const nextComment = rating
-      ? (comment ?? previousFeedback?.comment ?? "").trim().slice(0, 1000)
-      : "";
-    setEvents((current) => rating
-      ? appendBackendEvent(current, {
-        type: "response.feedback",
+    const nextComment = (comment ?? "").trim().slice(0, 1000);
+    setEvents((current) => appendBackendEvent(current, {
+      type: "response.feedback",
+      taskId,
+      messageId,
+      rating,
+      ...(reason ? { reason } : {}),
+      ...(nextComment ? { comment: nextComment } : {}),
+      at: new Date().toISOString(),
+    }, 500));
+    try {
+      await api.setResponseFeedback({
         taskId,
         messageId,
         rating,
+        ...(reason ? { reason } : {}),
         ...(nextComment ? { comment: nextComment } : {}),
-        at: new Date().toISOString(),
-      }, 500)
-      : removeResponseFeedback(current, taskId, messageId) as BackendUiEvent[]);
-    if (rating === null) {
-      setFeedbackDrafts((current) => {
-        const next = new Map(current);
-        next.delete(messageId);
-        return next;
       });
-    }
-    try {
-      await api.setResponseFeedback({ taskId, messageId, rating, ...(nextComment ? { comment: nextComment } : {}) });
+      return true;
     } catch (cause) {
       setEvents((current) => {
         const withoutFailedRating = removeResponseFeedback(current, taskId, messageId) as BackendUiEvent[];
@@ -3806,10 +3805,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           ? appendBackendEvent(withoutFailedRating, { ...previousFeedback, at: new Date().toISOString() }, 500)
           : withoutFailedRating;
       });
-      if (previousDraft !== undefined) {
-        setFeedbackDrafts((current) => new Map(current).set(messageId, previousDraft));
-      }
       setError(String(cause instanceof Error ? cause.message : cause));
+      return false;
+    }
+  }
+
+  async function submitResponseFeedback() {
+    if (!responseFeedbackDialog || responseFeedbackSubmitting) return;
+    setResponseFeedbackSubmitting(true);
+    try {
+      const submitted = await rateResponse(
+        responseFeedbackDialog.messageId,
+        responseFeedbackDialog.rating,
+        responseFeedbackDialog.reason,
+        responseFeedbackDialog.comment,
+      );
+      if (submitted) setResponseFeedbackDialog(null);
+    } finally {
+      setResponseFeedbackSubmitting(false);
     }
   }
 
@@ -4170,6 +4183,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function handlePromptChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
     const nextPrompt = event.target.value;
+    followComposerScrollRef.current = true;
     setPrompt(nextPrompt);
     updateMention(nextPrompt, event.target.selectionStart);
   }
@@ -4409,6 +4423,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const continuation = continueNumberedList(target.value, target.selectionStart, target.selectionEnd);
       if (!continuation) return;
       event.preventDefault();
+      followComposerScrollRef.current = true;
       setPrompt(continuation.value);
       setMention(null);
       setFileMatches([]);
@@ -4420,7 +4435,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       return;
     }
     event.preventDefault();
-    void startTask();
+    if (isGenerating) {
+      queueCurrentPrompt();
+    } else {
+      void startTask();
+    }
   }
 
   async function newChat() {
@@ -5012,7 +5031,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     ) : item.type === "assistant" ? (
                       (() => {
                         const rating = responseFeedback.get(item.id);
-                        const feedbackNote = feedbackDrafts.get(item.id) ?? responseFeedbackComments.get(item.id) ?? "";
                         return (
                           <article className="timelineMessage assistantMessage" key={item.id}>
                             {item.streaming ? (
@@ -5048,46 +5066,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                 <button
                                   className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
                                   type="button"
-                                  onClick={() => void rateResponse(item.id, toggleResponseRating(rating, "good"))}
+                                  onClick={(event) => openResponseFeedbackDialog(item.id, "good", event.currentTarget)}
                                   aria-pressed={rating === "good"}
-                                  title={rating === "good" ? "Remove good response rating" : "Good response"}
+                                  title={rating === "good" ? "Edit good response feedback" : "Good response"}
+                                  aria-haspopup="dialog"
                                 >
                                   <ThumbsUp size={14} />
                                 </button>
                                 <button
                                   className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
                                   type="button"
-                                  onClick={() => void rateResponse(item.id, toggleResponseRating(rating, "bad"))}
+                                  onClick={(event) => openResponseFeedbackDialog(item.id, "bad", event.currentTarget)}
                                   aria-pressed={rating === "bad"}
-                                  title={rating === "bad" ? "Remove bad response rating" : "Bad response"}
+                                  title={rating === "bad" ? "Edit bad response feedback" : "Bad response"}
+                                  aria-haspopup="dialog"
                                 >
                                   <ThumbsDown size={14} />
                                 </button>
                               </div>
-                              {rating ? (
-                                <form
-                                  className="responseFeedbackNote"
-                                  onSubmit={(event) => {
-                                    event.preventDefault();
-                                    void rateResponse(item.id, rating, feedbackNote);
-                                  }}
-                                >
-                                  <input
-                                    type="text"
-                                    value={feedbackNote}
-                                    maxLength={1000}
-                                    placeholder="Add a note (optional)"
-                                    aria-label="Response feedback note"
-                                    onChange={(event) => {
-                                      const value = event.target.value;
-                                      setFeedbackDrafts((current) => new Map(current).set(item.id, value));
-                                    }}
-                                  />
-                                  <button type="submit" disabled={!feedbackNote.trim()}>
-                                    Send
-                                  </button>
-                                </form>
-                              ) : null}
                             </div>
                           </article>
                         );
@@ -5180,9 +5176,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                         </section>
                                       );
                                     }
-                                    const { label } = activityToolLabel(segment.run.command);
+                                    const { label } = activityToolLabel(segment.run);
                                     const toolDisclosureId = `${item.id}:${segment.id}`;
                                     const toolExpanded = expandedActivityToolIds.has(toolDisclosureId);
+                                    const hasVisibleDetails = commandHasVisibleDetails(segment.run);
+                                    const toolLabelContent = (
+                                      <>
+                                        <SquareTerminal className="activityToolKindIcon" size={11} aria-hidden="true" />
+                                        <span title={segment.run.command}>{label}</span>
+                                      </>
+                                    );
                                     return (
                                       <section
                                         className={`activityLogEntry commandLog ${segment.run.status} ${
@@ -5190,27 +5193,37 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                         }`}
                                         key={segment.id}
                                       >
-                                        <button
-                                          className="activityToolToggle"
-                                          type="button"
-                                          onClick={() => {
-                                            setExpandedActivityToolIds((current) => {
-                                              const next = new Set(current);
-                                              if (toolExpanded) {
-                                                next.delete(toolDisclosureId);
-                                              } else {
-                                                next.add(toolDisclosureId);
-                                              }
-                                              return next;
-                                            });
-                                          }}
-                                          aria-expanded={toolExpanded}
-                                        >
-                                          <SquareTerminal className="activityToolKindIcon" size={12} aria-hidden="true" />
-                                          <span title={segment.run.command}>{label}</span>
-                                          {toolExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                        </button>
-                                        {toolExpanded ? (
+                                        {hasVisibleDetails ? (
+                                          <button
+                                            className="activityToolToggle"
+                                            type="button"
+                                            onClick={() => {
+                                              setExpandedActivityToolIds((current) => {
+                                                const next = new Set(current);
+                                                if (toolExpanded) {
+                                                  next.delete(toolDisclosureId);
+                                                } else {
+                                                  next.add(toolDisclosureId);
+                                                }
+                                                return next;
+                                              });
+                                            }}
+                                            aria-expanded={toolExpanded}
+                                          >
+                                            {toolLabelContent}
+                                            {toolExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                                          </button>
+                                        ) : (
+                                          <div className="activityToolToggle activityToolStatic">
+                                            {toolLabelContent}
+                                          </div>
+                                        )}
+                                        {!toolExpanded && segment.run.status === "running" ? (
+                                          <pre className="activityLiveOutput" aria-live="polite">
+                                            {commandVisibleOutput(segment.run).slice(-1200)}
+                                          </pre>
+                                        ) : null}
+                                        {hasVisibleDetails && toolExpanded ? (
                                           <div className="activityToolGroupDetails">
                                             <div>
                                               <pre>{commandShellText(segment.run)}</pre>
@@ -5523,6 +5536,48 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 ) : null}
               </div>
             ) : null}
+            {activeQueuedPrompts.length ? (
+              <div className="queuedPromptList" aria-label="Queued prompts">
+                {activeQueuedPrompts.map((item, index) => (
+                  <div className="queuedPrompt" key={item.id}>
+                    <button
+                      className="queuedPromptEdit"
+                      type="button"
+                      onClick={() => editQueuedPrompt(item)}
+                      disabled={steerPending}
+                      aria-label={`Edit queued prompt ${index + 1}`}
+                      title="Edit queued prompt"
+                    >
+                      <span className="queuedPromptOrder">{index + 1}</span>
+                      <span className="queuedPromptText">{item.prompt}</span>
+                      <Pencil className="queuedPromptEditIcon" aria-hidden="true" size={13} />
+                    </button>
+                    {isGenerating ? (
+                      <button
+                        className="queuedPromptSteer"
+                        type="button"
+                        onClick={() => void steerSubmission(item, item.id)}
+                        disabled={steerPending}
+                        aria-label={`Steer with queued prompt ${index + 1}`}
+                      >
+                        <CornerUpRight size={13} />
+                        <span>Steer</span>
+                      </button>
+                    ) : null}
+                    <button
+                      className="queuedPromptDelete"
+                      type="button"
+                      onClick={() => removeQueuedPrompt(item.id)}
+                      disabled={steerPending}
+                      aria-label={`Delete queued prompt ${index + 1}`}
+                      title="Delete queued prompt"
+                    >
+                      <Trash2 aria-hidden="true" size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="promptInputShell">
               <div className="promptEditor">
                 <div className="promptHighlight" aria-hidden="true">
@@ -5547,7 +5602,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 />
               </div>
               <div className="promptActionRail">
-                {isGenerating ? (
+                {isGenerating && !hasComposerMessage ? (
                   <button
                     className="sendButton stopButton"
                     type="button"
@@ -5558,8 +5613,19 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   >
                     {stopPending ? <Loader2 className="spin" size={17} /> : <Square aria-hidden="true" fill="currentColor" size={12} />}
                   </button>
+                ) : isGenerating ? (
+                  <button
+                    className="sendButton queueButton"
+                    type="button"
+                    onClick={queueCurrentPrompt}
+                    disabled={!canQueue}
+                    aria-label="Queue prompt"
+                    title="Queue prompt"
+                  >
+                    <Send aria-hidden="true" size={16} />
+                  </button>
                 ) : (
-                  <button className="sendButton" type="button" onClick={startTask} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
+                  <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
                     {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
                   </button>
                 )}
@@ -5596,6 +5662,101 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         />
       </aside>
 
+      {responseFeedbackDialog ? (
+        <div
+          className="modalScrim responseFeedbackScrim"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !responseFeedbackSubmitting) {
+              setResponseFeedbackDialog(null);
+            }
+          }}
+        >
+          <form
+            ref={modalRef as React.RefObject<HTMLFormElement>}
+            tabIndex={-1}
+            className="responseFeedbackDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="response-feedback-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitResponseFeedback();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !responseFeedbackSubmitting) {
+                setResponseFeedbackDialog(null);
+              }
+            }}
+          >
+            <header>
+              <span className={`responseFeedbackDialogIcon is${responseFeedbackDialog.rating === "good" ? "Good" : "Bad"}`}>
+                {responseFeedbackDialog.rating === "good" ? <ThumbsUp size={16} /> : <ThumbsDown size={16} />}
+              </span>
+              <h3 id="response-feedback-title">
+                {responseFeedbackDialog.rating === "good"
+                  ? "What made this a good answer?"
+                  : "What could be better?"}
+              </h3>
+              <button
+                className="responseFeedbackClose"
+                type="button"
+                aria-label="Close response feedback"
+                disabled={responseFeedbackSubmitting}
+                onClick={() => setResponseFeedbackDialog(null)}
+              >
+                <X size={15} />
+              </button>
+            </header>
+            <fieldset>
+              <legend>Choose one (optional)</legend>
+              <div className="responseFeedbackOptions">
+                {responseFeedbackReasons[responseFeedbackDialog.rating].map((reason) => (
+                  <button
+                    type="button"
+                    key={reason}
+                    aria-pressed={responseFeedbackDialog.reason === reason}
+                    onClick={() => setResponseFeedbackDialog((current) => current ? {
+                      ...current,
+                      reason: current.reason === reason ? undefined : reason,
+                    } : current)}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <label>
+              <span>Additional details (optional)</span>
+              <textarea
+                ref={responseFeedbackInputRef}
+                autoFocus
+                data-modal-autofocus
+                value={responseFeedbackDialog.comment}
+                maxLength={1000}
+                placeholder="Add a note"
+                onChange={(event) => {
+                  const comment = event.target.value;
+                  setResponseFeedbackDialog((current) => current ? { ...current, comment } : current);
+                }}
+              />
+            </label>
+            <footer>
+              <button
+                className="secondaryAction"
+                type="button"
+                disabled={responseFeedbackSubmitting}
+                onClick={() => setResponseFeedbackDialog(null)}
+              >
+                Cancel
+              </button>
+              <button className="primaryAction" type="submit" disabled={responseFeedbackSubmitting}>
+                {responseFeedbackSubmitting ? "Submitting…" : "Submit"}
+              </button>
+            </footer>
+          </form>
+        </div>
+      ) : null}
       {reviewFeedbackDialogOpen ? (() => {
         const readOnly = reviewFeedbackPreview !== null;
         const dialogFeedback = readOnly
@@ -5753,13 +5914,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
                     <div className="settingsActions harnessSettingsActions">
                       <button
-                        className="settingsInlineButton"
+                        className={`settingsInlineButton ${harnessSaveFeedback === "saved" ? "isSuccess" : ""}`}
                         type="button"
                         onClick={() => void saveHarnessProfile()}
                         disabled={harnessSaving || !harnessDirty}
                       >
-                        {harnessSaving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                        <span>{harnessSaving ? "Saving" : "Save harness"}</span>
+                        <Check size={13} />
+                        <span>{harnessSaveFeedback === "saved" ? "Saved" : "Save harness"}</span>
                       </button>
                       {harnessDirty ? <p className="settingsMessage">Unsaved harness changes.</p> : null}
                       {harnessMessage ? <p className="settingsMessage settingsMessageError">{harnessMessage}</p> : null}
@@ -6238,8 +6399,33 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         <div className="toast" role="alert">
           <TriangleAlert size={16} />
           <span>{error}</span>
-          <button type="button" onClick={() => setError(null)}>
+          <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
             <X size={14} />
+          </button>
+        </div>
+      ) : null}
+
+      {task && task.state !== "running" && latestTurnOutcome && latestTurnOutcome !== "completed" ? (
+        <div className="toast turnOutcomeToast" role="status">
+          <TriangleAlert size={16} />
+          <span>
+            {latestTurnOutcome === "safety_limit"
+              ? "The turn stopped at a safety limit."
+              : "The model stopped before it completed the request."}
+          </span>
+          <button
+            className="turnOutcomeAction"
+            type="button"
+            disabled={busy}
+            onClick={() => void startTask({
+              prompt: latestTurnOutcome === "safety_limit"
+                ? "Continue from the current workspace state. Review the latest tool result and finish the request."
+                : task.prompt,
+              attachedFiles: [],
+              reviewFeedback: [],
+            })}
+          >
+            {latestTurnOutcome === "safety_limit" ? "Continue" : "Try again"}
           </button>
         </div>
       ) : null}

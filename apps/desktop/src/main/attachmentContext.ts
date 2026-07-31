@@ -1,4 +1,26 @@
+import * as fs from "node:fs";
+
+import { estimateAttachmentTextTokens } from "../shared/contextWindow";
 import type { BackendUiEvent, ChatAttachment } from "./types";
+
+const chatAttachmentByteLimit = 25 * 1024 * 1024;
+
+export function readAttachmentTextIfSafe(filePath: string): string | null {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > chatAttachmentByteLimit) return null;
+    const buffer = fs.readFileSync(filePath);
+    if (buffer.includes(0)) return null;
+    return buffer.toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+export function attachmentContextTokens(filePath: string): number | undefined {
+  const text = readAttachmentTextIfSafe(filePath);
+  return text === null ? undefined : estimateAttachmentTextTokens(text);
+}
 
 function attachmentKey(file: ChatAttachment): string {
   return file.storedPath || `${file.source ?? "unknown"}:${file.path}`;

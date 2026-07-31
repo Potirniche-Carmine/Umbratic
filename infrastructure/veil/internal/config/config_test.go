@@ -22,6 +22,9 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_MODEL", "default-model")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "")
 	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
+	t.Setenv("VEIL_MODEL_PARALLEL_TOOL_CALLS", "")
+	t.Setenv("VEIL_MODEL_VISION", "")
+	t.Setenv("VEIL_MODEL_REASONING", "")
 	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
 	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
 	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
@@ -112,6 +115,9 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	if cfg.MaxOutputTokens != 8192 || cfg.MaxBodyBytes != 64<<20 {
 		t.Fatalf("unexpected context enforcement defaults: %#v", cfg)
 	}
+	if !cfg.ModelParallelToolCalls || cfg.ModelVision || cfg.ModelReasoning {
+		t.Fatalf("unexpected model capability defaults: %#v", cfg)
+	}
 	if cfg.TemplateRegistryPath != "" {
 		t.Fatalf("unexpected template registry path %q", cfg.TemplateRegistryPath)
 	}
@@ -120,6 +126,21 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	}
 	if cfg.ModelTimeout != 12*time.Second || cfg.RequestTimeout != 20*time.Second {
 		t.Fatalf("unexpected timeouts: %s %s", cfg.ModelTimeout, cfg.RequestTimeout)
+	}
+}
+
+func TestLoadUsesConfiguredModelCapabilities(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_MODEL_PARALLEL_TOOL_CALLS", "false")
+	t.Setenv("VEIL_MODEL_VISION", "true")
+	t.Setenv("VEIL_MODEL_REASONING", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ModelParallelToolCalls || !cfg.ModelVision || !cfg.ModelReasoning {
+		t.Fatalf("unexpected model capabilities: %#v", cfg)
 	}
 }
 

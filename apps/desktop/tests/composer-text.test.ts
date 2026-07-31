@@ -140,6 +140,17 @@ test("numbered list continuation replaces a selection and ignores non-list lines
   assert.equal(continueNumberedList("Write a normal line", 19), null);
 });
 
+test("an empty generated numbered item exits the list", () => {
+  assert.deepEqual(
+    plain(continueNumberedList("1. First item\n2. ", 17)),
+    { value: "1. First item\n", caret: 14 },
+  );
+  assert.deepEqual(
+    plain(continueNumberedList("1. First\n2. Second", 18)),
+    { value: "1. First\n2. Second\n3. ", caret: 22 },
+  );
+});
+
 test("pasted composer text removes only trailing empty lines and preserves the caret", () => {
   assert.deepEqual(
     plain(insertPastedComposerText("Before after", "one\r\n\r\n \r\n", 7, 7)),

@@ -143,6 +143,11 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.skills.every((skill) => typeof skill.name === "string" && typeof skill.description === "string"), true);
   assert.equal(config.skills.every((skill) => !("content" in skill) && !("fullContent" in skill)), true);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
+  assert.deepEqual(plain(config.provider.capabilities), {
+    parallelToolCalls: false,
+    vision: false,
+    reasoning: false,
+  });
   assert.equal("system" in config, false);
   assert.equal(config.provider.apiKey, "");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });

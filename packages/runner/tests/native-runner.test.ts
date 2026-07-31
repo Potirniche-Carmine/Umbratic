@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { startProvider } from "./native-runner-provider.ts";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const binary = path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
@@ -18,172 +19,6 @@ async function requestBody(request: http.IncomingMessage) {
   let body = "";
   for await (const chunk of request) body += chunk.toString("utf8");
   return body ? JSON.parse(body) : {};
-}
-
-async function startProvider() {
-  const requests: Array<{ path?: string; body: Record<string, unknown>; authorization?: string; contentType?: string }> = [];
-  const server = http.createServer(async (request, response) => {
-    const body = await requestBody(request) as Record<string, unknown>;
-    requests.push({
-      path: request.url,
-      body,
-      authorization: request.headers.authorization,
-      contentType: request.headers["content-type"],
-    });
-    if (request.url === "/api/internal/context/compact") {
-      const source = JSON.stringify(body.messages ?? []);
-      const recalledFacts = Array.from(source.matchAll(/(?:PRIOR_FAILURE|CHANGED_FILE|LAST_VERIFICATION)_\d+/g), (match) => match[0]);
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({
-        version: 1,
-        summary: [
-          "## Goal and current request", recalledFacts.join(" "),
-          "## Constraints and decisions", "Keep context bounded and factual.",
-          "## Work completed", "Prior work is compacted.",
-          "## Files and verification", recalledFacts.join(" "),
-          "## Errors or blockers", "Preserve recorded failures.",
-          "## Next work", "Continue from the latest request.",
-          "bounded factual summary ".repeat(20),
-        ].join("\n"),
-        sourceDigest: body.sourceDigest,
-      }));
-      return;
-    }
-    const encoded = JSON.stringify(body.messages ?? []);
-    response.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "X-Umbratic-Action-Required": encoded.includes("REQUIRED_INSPECTION_RETRY")
-        ? "inspect"
-        : encoded.includes("WRITE_FILE")
-        ? "change"
-        : encoded.includes("READ_FILE")
-          ? "inspect"
-          : "",
-      "X-Umbratic-Stream-Version": "2",
-    });
-    if (body.response_mode === "progress") {
-      response.write(sse({ choices: [{ delta: { content: "Reviewing the request " } }] }));
-      setTimeout(() => response.end(sse({ choices: [{ delta: { content: "and relevant context." } }] }) + "data: [DONE]\n\n"), 40);
-    } else if (encoded.includes("REQUIRED_INSPECTION_RETRY") && !encoded.includes("The requested workspace action is not complete")) {
-      response.end(sse({ choices: [{ delta: { content: "I will inspect the codebase now." } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("REQUIRED_INSPECTION_RETRY") && !encoded.includes("read: . (ok)")) {
-      response.end(sse({ choices: [{ delta: {
-        content: "I am inspecting the codebase now.",
-        tool_calls: [{ index: 0, id: "inspection-retry-read", function: { name: "read", arguments: "{\"filePath\":\".\",\"depth\":3}" } }],
-      } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("REQUIRED_INSPECTION_RETRY")) {
-      response.end(sse({ choices: [{ delta: { content: "Inspection complete." } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("LSP_DEGRADED") && !encoded.includes("freshness")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{
-        index: 0,
-        id: "lsp-degraded-1",
-        function: { name: "lsp", arguments: "{\"action\":\"hover\",\"filePath\":\"main.ts\",\"line\":1,\"character\":1}" },
-      }] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("LSP_CODE_INTELLIGENCE") && !encoded.includes("freshness")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [
-        {
-          index: 0,
-          id: "lsp-definition-1",
-          function: { name: "lsp", arguments: "{\"action\":\"definition\",\"filePath\":\"main.ts\",\"line\":2,\"character\":16}" },
-        },
-        {
-          index: 1,
-          id: "lsp-references-1",
-          function: { name: "lsp", arguments: "{\"action\":\"references\",\"filePath\":\"main.ts\",\"line\":2,\"character\":16}" },
-        },
-        {
-          index: 2,
-          id: "lsp-hover-1",
-          function: { name: "lsp", arguments: "{\"action\":\"hover\",\"filePath\":\"main.ts\",\"line\":2,\"character\":16}" },
-        },
-        {
-          index: 3,
-          id: "lsp-symbols-1",
-          function: { name: "lsp", arguments: "{\"action\":\"symbols\",\"filePath\":\"main.ts\"}" },
-        },
-      ] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("READ_FILE") && !encoded.includes("read: README.md (ok)")) {
-      response.end(sse({ choices: [{ delta: {
-        content: "I will read the requested file.",
-        reasoning_content: "RAW_REASONING_MARKER",
-        tool_calls: [{ index: 0, id: "read-1", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":2}" } }],
-      } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("WRITE_FILE") && !encoded.includes("write: note.txt (ok)")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "write-1", function: { name: "write", arguments: "{\"filePath\":\"note.txt\",\"content\":\"native write\\n\"}" } }] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("BLOCK_NETWORK") && !encoded.includes("policy_blocked")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "command-1", function: { name: "command", arguments: "{\"command\":\"curl https://example.com; printf spawned > blocked-command-spawned.txt\"}" } }] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("APPROVED_EXECUTABLE") && !encoded.includes("approved-runtime-ok")) {
-      response.end(sse({ choices: [{ delta: { content: "I will run the verified runtime.", tool_calls: [{
-        index: 0,
-        id: "approved-command-1",
-        function: {
-          name: "command",
-          arguments: JSON.stringify({
-            programId: "node",
-            args: ["-e", "console.log('approved-runtime-ok')"],
-          }),
-        },
-      }] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("DUPLICATE_IDS") && !encoded.includes("read: README.md (ok)")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [
-        { index: 0, id: "duplicate", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } },
-        { index: 1, id: "duplicate", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"offset\":2,\"limit\":1}" } },
-      ] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("ATTACHMENT_FILE") && !encoded.includes("Read status: complete")) {
-      const offsets = Array.from(encoded.matchAll(/continue with offset (\d+)/g), (match) => Number(match[1]));
-      const offset = offsets.at(-1) ?? 0;
-      response.end(sse({ choices: [{ delta: { tool_calls: [{
-        index: 0,
-        id: `attachment-${offset}`,
-        function: { name: "read_attachment", arguments: JSON.stringify({ attachmentId: "complete-plan.md", offset, limit: 1024 }) },
-      }] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("RECOVER_AFTER_FAILURES") && Array.isArray(body.tools)) {
-      const failedAttempts = new Set(
-        Array.from(encoded.matchAll(/missing-(\d+)\.txt/g), (match) => match[1]),
-      ).size;
-      if (failedAttempts < 2) {
-        response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: `recover-${failedAttempts}`, function: { name: "read", arguments: JSON.stringify({ filePath: `missing-${failedAttempts}.txt` }) } }] } }] }) + "data: [DONE]\n\n");
-      } else if (!encoded.includes("read: README.md (ok)")) {
-        response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "recover-success", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
-      } else {
-        response.end(sse({ choices: [{ delta: { content: "Recovered after distinct failures." } }] }) + "data: [DONE]\n\n");
-      }
-    } else if (encoded.includes("RECOVER_AFTER_FAILURES")) {
-      response.end(sse({ choices: [{ delta: { content: "Recovered after distinct failures." } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("REPEAT_TOOL") && Array.isArray(body.tools)) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "repeat", function: { name: "read", arguments: "{\"filePath\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
-    } else if (encoded.includes("MISSING_DONE")) {
-      response.end(sse({ choices: [{ delta: { content: "incomplete" } }] }));
-    } else if (encoded.includes("DONE_WITHOUT_NEWLINE")) {
-      response.end(sse({ choices: [{ delta: { content: "complete without newline" } }] }) + "data:[DONE]");
-    } else if (encoded.includes("STREAM_RESPONSE") && Array.isArray(body.tools)) {
-      response.write(sse({ choices: [{ delta: { content: "First live " } }] }));
-      setTimeout(() => {
-        response.end(sse({ choices: [{ delta: { content: "second live." } }] }) + "data: [DONE]\n\n");
-      }, 80);
-    } else if (encoded.includes("STREAM_RESPONSE")) {
-      response.write(sse({ choices: [{ delta: { content: "First streamed " } }] }));
-      setTimeout(() => {
-        response.end(sse({ choices: [{ delta: { content: "second streamed." } }] }) + "data: [DONE]\n\n");
-      }, 40);
-    } else if (encoded.includes("SPLIT_UTF8")) {
-      const payload = Buffer.from(sse({ choices: [{ delta: { content: "café" } }] }) + "data: [DONE]\n\n", "utf8");
-      const marker = Buffer.from("é", "utf8");
-      const markerIndex = payload.indexOf(marker);
-      response.write(payload.subarray(0, markerIndex + 1));
-      setImmediate(() => response.end(payload.subarray(markerIndex + 1)));
-    } else {
-      response.end(sse({ choices: [{ delta: { content: "Native runner complete." } }] }) + sse({ choices: [], usage: { prompt_tokens: 16, completion_tokens: 4 } }) + "data: [DONE]\n\n");
-    }
-  });
-  await new Promise<void>((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    requests,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
-  };
 }
 
 function config(
@@ -199,7 +34,15 @@ function config(
     permissionMode: "normal",
     enabledTools: ["read", "write", "edit", "search", "command"],
     diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
-    provider: { id: "company-endpoint", name: "Test Veil", baseURL: providerUrl, chatEndpointPath: "/api/engineering/chat", apiKey: "local", modelId: "test" },
+    provider: {
+      id: "company-endpoint",
+      name: "Test Veil",
+      baseURL: providerUrl,
+      chatEndpointPath: "/api/engineering/chat",
+      apiKey: "local",
+      modelId: "test",
+      capabilities: { parallelToolCalls: true, vision: false, reasoning: false },
+    },
     ...overrides,
   };
 }
@@ -626,6 +469,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     events = await eventCollector(run);
 
     const readSession = await createSession(run);
+    const readEventStart = events.events.length;
     assert.equal((await prompt(run, readSession.id, "READ_FILE")).status, 204);
     const readFinished = await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "read-1");
     assert.deepEqual({ status: readFinished.status, unexpected: ["errorCode", "errorMessage", "response"].filter((key) => key in readFinished) }, { status: "success", unexpected: [] });
@@ -642,10 +486,24 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       { contentTokens: 16, promptTokens: 16, completionTokens: 4, reserveTokens: 8192, estimatedTokens: 8208, phase: "observed" },
     );
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === readSession.id);
+    assert.deepEqual(
+      events.events
+        .slice(readEventStart)
+        .filter((event) => [
+          "assistant.delta", "assistant.progress.delta", "tool.requested",
+          "tool.policy.stage", "tool.output", "tool.finished", "session.idle",
+        ].includes(String(event.type)))
+        .map((event) => event.type),
+      [
+        "assistant.delta", "assistant.progress.delta", "tool.requested", "tool.policy.stage",
+        "tool.output", "tool.finished", "assistant.delta", "session.idle",
+      ],
+      "the read scenario keeps one stable public lifecycle trajectory",
+    );
     assert.equal(
-      events.events.some((event) => event.type === "assistant.progress.delta" && event.text === "I will read the requested file."),
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "I will read the requested file before I answer."),
       true,
-      "tool-aware prose becomes a bounded progress update",
+      "plain model preamble text streams on the assistant channel",
     );
     assert.equal(
       JSON.stringify(events.events).includes("RAW_REASONING_MARKER"),
@@ -653,24 +511,18 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       "provider reasoning fields must never become runner events",
     );
 
-    const inspectionRetrySession = await createSession(run);
+    const inspectionRetrySession = await createSession(run), inspectionEventStart = events.events.length;
     assert.equal((await prompt(run, inspectionRetrySession.id, "REQUIRED_INSPECTION_RETRY")).status, 204);
-    await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "inspection-retry-read");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === inspectionRetrySession.id);
     assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "I will inspect the codebase now."),
+      events.events.slice(inspectionEventStart).some((event) => event.type === "assistant.delta" && event.text === "I can explain this directly without changing or inspecting the workspace."),
+      true,
+      "a verb-prefixed question may end directly without an intent retry",
+    );
+    assert.equal(
+      events.events.slice(inspectionEventStart).some((event) => event.type === "tool.requested"),
       false,
-      "a tool-free preamble from a required-action attempt must not escape as an answer",
-    );
-    assert.equal(
-      events.events.some((event) => event.type === "assistant.progress.delta" && event.text === "I am inspecting the codebase now."),
-      true,
-      "preamble text from a pass with a real tool call remains visible progress",
-    );
-    assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "Inspection complete."),
-      true,
-      "the answer streams after required inspection evidence exists",
+      "the runner does not force a workspace action",
     );
 
     const writeSession = await createSession(run);
@@ -699,6 +551,15 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(approvedFinished.status, "success");
     assert.equal(
       events.events.some((event) =>
+        event.type === "tool.requested"
+        && event.toolCallId === "approved-command-1"
+        && event.toolKind === "run_program"
+      ),
+      true,
+      "run_program remains the exact public tool kind",
+    );
+    assert.equal(
+      events.events.some((event) =>
         event.type === "tool.output"
         && event.toolCallId === "approved-command-1"
         && String(event.text).includes("approved-runtime-ok")
@@ -713,11 +574,36 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(blocked.status, "policy_blocked");
     assert.equal(fs.existsSync(path.join(cwd, "blocked-command-spawned.txt")), false, "policy-denied commands must never spawn");
 
-    const duplicateSession = await createSession(run);
+    const rejectedSession = await createSession(run);
+    assert.equal((await prompt(run, rejectedSession.id, "REJECTED_COMMAND")).status, 204);
+    const rejectedPermission = await events.waitFor((event) =>
+      event.type === "permission.requested"
+      && String(event.summary).includes("rejected-command.txt")
+    );
+    const rejectedReply = await run.request(`/permission/${rejectedPermission.permissionId}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reply: "reject" }),
+    });
+    assert.equal(rejectedReply.status, 200);
+    const rejectedFinished = await events.waitFor((event) =>
+      event.type === "tool.finished" && event.toolCallId === "rejected-command-1"
+    );
+    assert.equal(rejectedFinished.status, "permission_denied");
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === rejectedSession.id);
+    assert.equal(fs.existsSync(path.join(cwd, "rejected-command.txt")), false);
+    assert.equal(events.events.some((event) => event.type === "assistant.delta" && event.text === "The command was rejected and was not run."), true);
+
+    const duplicateSession = await createSession(run), duplicateEventStart = events.events.length;
     assert.equal((await prompt(run, duplicateSession.id, "DUPLICATE_IDS")).status, 204);
-    await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "duplicate");
-    await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "duplicate-2");
+    await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "duplicate-fixed-1");
+    await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "duplicate-fixed-2");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === duplicateSession.id);
+    assert.equal(
+      events.events.slice(duplicateEventStart).some((event) => event.type === "tool.requested" && event.toolCallId === "duplicate"),
+      false,
+      "an ambiguous duplicate-id batch is rejected before any tool starts",
+    );
 
     const utf8Session = await createSession(run);
     assert.equal((await prompt(run, utf8Session.id, "SPLIT_UTF8")).status, 204);
@@ -727,26 +613,14 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
 
     const streamingSession = await createSession(run);
     const streamingEventStart = events.events.length;
-    assert.equal((await prompt(run, streamingSession.id, "STREAM_RESPONSE")).status, 204);
+    assert.equal((await prompt(run, streamingSession.id, "what can you do and who are you")).status, 204);
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === streamingSession.id);
-    const streamedAnswer = events.events.slice(streamingEventStart)
-      .filter((event) => event.type === "assistant.delta").map((event) => event.text);
-    assert.deepEqual(streamedAnswer, ["First streamed ", "second streamed."]);
-    assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text.includes("First live")),
-      false,
-      "the buffered tool-aware draft must not be shown as one completed answer",
-    );
-    assert.ok(events.events.some((event) =>
-      event.type === "assistant.progress.delta" && event.text === "Reviewing the request "
-    ), "the public work summary streams before the final answer");
-    const streamRequests = provider.requests.filter(({ body }) =>
-      JSON.stringify(body.messages).includes("STREAM_RESPONSE")
-    );
-    assert.equal(streamRequests.length, 3, "progress and tool-aware passes precede the streamed final answer");
-    assert.equal(streamRequests[0].body.response_mode, "progress");
-    assert.ok(Array.isArray(streamRequests[1].body.tools));
-    assert.equal("tools" in streamRequests[2].body, false);
+    const directAnswer = events.events.slice(streamingEventStart).filter((event) => event.type === "assistant.delta").map((event) => event.text);
+    assert.deepEqual(directAnswer, ["Hello ", "there."]);
+    assert.equal(events.events.slice(streamingEventStart).some((event) => event.type === "assistant.progress.delta"), false, "a direct answer must not create a public work-summary block");
+    const streamRequests = provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("what can you do and who are you"));
+    assert.equal(streamRequests.length, 1, "a direct answer uses one model request");
+    assert.ok(Array.isArray(streamRequests[0].body.tools), "the model keeps automatic tool choice");
 
     const system = await run.request(`/session/${blockedSession.id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: "x", system: "override" }) });
     assert.equal(system.status, 400);
@@ -759,11 +633,9 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(fs.readFileSync(logPath, "utf8").includes("RAW_REASONING_MARKER"), false);
 
     assert.ok(provider.requests.length >= 4);
-    const progressRequest = provider.requests.find(({ body }) => body.response_mode === "progress");
-    assert.ok(progressRequest);
-    assert.equal(progressRequest.body.max_output_tokens, 192);
-    assert.equal("tools" in progressRequest.body, false);
-    const firstRequest = provider.requests.find(({ body }) => body.response_mode !== "progress");
+    const progressRequests = provider.requests.filter(({ body }) => body.response_mode === "progress");
+    assert.equal(progressRequests.length, 0, "progress must not create extra full-context model requests");
+    const firstRequest = provider.requests[0];
     assert.ok(firstRequest);
     assert.equal(firstRequest.authorization, "Bearer local");
     assert.match(firstRequest.contentType ?? "", /^application\/json/);
@@ -772,9 +644,10 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal("model" in firstRequest.body, false, "Veil routes must not receive a client-selected model");
     assert.ok(Array.isArray(firstRequest.body.messages));
     assert.ok(Array.isArray(firstRequest.body.tools));
+    assert.equal(firstRequest.body.parallel_tool_calls, true);
     assert.deepEqual(
       (firstRequest.body.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name).filter(Boolean).sort(),
-      ["apply_patch", "command", "edit", "read", "search", "write"],
+      ["apply_patch", "command", "edit", "read", "run_program", "search", "write"],
     );
     assert.ok(
       provider.requests.some(({ body }) => {
@@ -792,10 +665,114 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
   }
 });
 
+test("decision behavior suite answers verb-prefixed questions without forced tools or canned failures", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-decision-suite-"));
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  const events = await eventCollector(run);
+  const prompts = [
+    "Update me on the repo", "Run me through the auth flow", "Test my understanding of X",
+    "Address the reviewer's question", "Fix the grammar in this paragraph: hello world",
+    "Create an explanation of closures", "Build my understanding of ownership", "Write about safe deployment",
+    "Implement a mental model for caching", "Make this sentence clearer", "Change how I think about queues",
+    "Edit this idea for clarity", "Delete ambiguity from this sentence", "Move me through the architecture",
+    "Remove confusion about async code", "Rename this concept in plain language", "Verify my reasoning about TLS",
+    "Execute a walkthrough of the parser", "Inspect the idea of immutability", "Read me a summary of the pattern",
+    "Look at this hypothetical example", "Explain this project type in general", "Tell me how event loops work",
+    "Summarize common test strategies", "List the tradeoffs of retries", "Give me a conceptual code review",
+    "Review this paragraph for tone", "Check my understanding of schemas", "Audit this argument for logic",
+    "Test whether this explanation is clear", "Run through a sample incident", "Update this prose mentally",
+    "Address a question about concurrency", "Fix my interpretation of context windows", "Build a concise analogy",
+    "Create a short definition", "Write a one-sentence summary", "Make an abstract example",
+    "Change the wording in your answer", "Implement the explanation in prose",
+  ];
+  try {
+    let totalToolCalls = 0;
+    let cannedFailures = 0;
+    for (const userPrompt of prompts) {
+      const session = await createSession(run);
+      const eventStart = events.events.length;
+      const requestStart = provider.requests.length;
+      assert.equal((await prompt(run, session.id, userPrompt)).status, 204);
+      await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+      const trajectory = events.events.slice(eventStart);
+      totalToolCalls += trajectory.filter((event) => event.type === "tool.requested").length;
+      cannedFailures += trajectory.filter((event) => event.type === "assistant.delta" && String(event.text).includes("I couldn't")).length;
+      assert.equal(provider.requests.length - requestStart, 1, userPrompt);
+    }
+    assert.deepEqual(
+      { prompts: prompts.length, toolCalls: totalToolCalls, cannedFailures },
+      { prompts: 40, toolCalls: 0, cannedFailures: 0 },
+    );
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("long continuity keeps more than thirty tool rounds append-only", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-continuity-"));
+  for (let index = 0; index < 35; index += 1) {
+    fs.writeFileSync(path.join(cwd, `file-${index}.txt`), `fact ${index}\n`, "utf8");
+  }
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), { contextLength: 256_000 });
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "LONG_CONTINUITY")).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id, 15_000);
+    const requests = provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("LONG_CONTINUITY"));
+    assert.equal(requests.length, 36);
+    for (let index = 1; index < requests.length; index += 1) {
+      const previous = requests[index - 1].body.messages as unknown[];
+      const current = requests[index].body.messages as unknown[];
+      assert.deepEqual(current.slice(0, previous.length), previous, `request ${index} rewrote prior history`);
+    }
+    assert.equal(events.events.some((event) => event.type === "context.compressed"), false);
+    assert.equal(
+      events.events.some((event) => event.type === "assistant.delta" && event.text === "Continuity retained file-0.txt and file-34.txt."),
+      true,
+    );
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("one shared provider accepts 1, 4, and 16 concurrent direct turns", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-concurrency-"));
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  const events = await eventCollector(run);
+  try {
+    for (const concurrency of [1, 4, 16]) {
+      const sessions = await Promise.all(Array.from({ length: concurrency }, () => createSession(run)));
+      const started = performance.now();
+      await Promise.all(sessions.map((session, index) => prompt(run, session.id, `CONCURRENCY_${concurrency}_${index}`)));
+      await Promise.all(sessions.map((session) => events.waitFor(
+        (event) => event.type === "session.idle" && event.sessionId === session.id,
+        10_000,
+      )));
+      const elapsedMs = performance.now() - started;
+      assert.ok(elapsedMs < 10_000);
+    }
+  } finally {
+    await events.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("native runner rejects oversized JSON bodies and missing sessions", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-limits-"));
   const provider = await startProvider();
-  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), { contextLength: 256_000 });
   let events: Awaited<ReturnType<typeof eventCollector>> | undefined;
   try {
     const oversized = await run.request("/permission/missing/reply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pad: "x".repeat(513 * 1024) }) });
@@ -838,13 +815,13 @@ test("native runner sends the adaptive response allowance selected during prefli
   const events = await eventCollector(run);
   try {
     const session = await createSession(run);
-    assert.equal((await prompt(run, session.id, `Summarize briefly\n${"x".repeat(45_000)}`)).status, 204);
+    assert.equal((await prompt(run, session.id, `Summarize briefly\n${"x".repeat(35_000)}`)).status, 204);
     const preflight = await events.waitFor((event) => event.type === "context.usage" && event.phase === "preflight");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
 
     assert.ok([1_000, 2_000, 3_000].includes(Number(preflight.reserveTokens)));
     assert.equal(preflight.protectedTokens, 2_048);
-    assert.equal(provider.requests.length, 3, "progress, tool-aware, and streamed final requests are separate");
+    assert.equal(provider.requests.length, 1, "a direct answer uses one model request");
     const answerRequest = provider.requests.at(-1);
     assert.ok(answerRequest);
     assert.equal(answerRequest.body.max_output_tokens, preflight.reserveTokens);
@@ -943,7 +920,7 @@ test("native runner refuses non-loopback listener addresses", async () => {
   }
 });
 
-test("native runner accepts an unterminated final SSE line, stops repeated tools, and rejects missing markers", async () => {
+test("native runner accepts an unterminated final SSE line, stops stalled repeated tools, and rejects missing markers", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-guards-"));
   fs.writeFileSync(path.join(cwd, "README.md"), "first\nsecond\n", "utf8");
   const provider = await startProvider();
@@ -955,26 +932,31 @@ test("native runner accepts an unterminated final SSE line, stops repeated tools
     const trailing = await events.waitFor((event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "complete without newline");
     assert.equal(trailing.text, "complete without newline");
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === trailingSession.id);
-
-    const repeatedSession = await createSession(run);
+    const repeatedSession = await createSession(run), repeatedEventStart = events.events.length;
     assert.equal((await prompt(run, repeatedSession.id, "REPEAT_TOOL")).status, 204);
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === repeatedSession.id);
-    assert.equal(
-      events.events.filter((event) => event.type === "tool.finished" && event.toolCallId === "repeat").length,
-      2,
-    );
-    assert.equal(
-      provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL")).length,
-      4,
-      "public progress, two repeated tool turns, and one tool-free final request are required",
-    );
-
+    const repeatedEvents = events.events.slice(repeatedEventStart);
+    assert.equal(JSON.stringify(repeatedEvents).includes("<|toolcall>"), false);
+    assert.equal(repeatedEvents.some((event) => event.type === "assistant.delta" && String(event.text).includes("same workspace tool call returned the same result")), true);
+    assert.equal(repeatedEvents.filter((event) => event.type === "assistant.progress.delta").length, 1);
+    assert.deepEqual(repeatedEvents.filter((event) => event.type === "assistant.progress.delta").map((event) => event.text), ["Reading files"], "tool-aware local progress replaces a second model request");
+    assert.equal(events.events.filter((event) => event.type === "tool.finished" && event.toolCallId === "repeat").length, 10);
+    const repeatedRequests = provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL"));
+    assert.equal(repeatedRequests.length, 11, "ten identical tool turns and one final request are required");
+    assert.equal(repeatedRequests.filter(({ body }) => body.response_mode === "progress").length, 0, "tool count must not schedule progress requests");
+    const malformedSession = await createSession(run), malformedEventStart = events.events.length;
+    assert.equal((await prompt(run, malformedSession.id, "MALFORMED_TOOL_SYNTAX")).status, 204);
+    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === malformedSession.id);
+    const malformedEvents = events.events.slice(malformedEventStart);
+    assert.equal(JSON.stringify(malformedEvents).includes("<|tool*call>"), false);
+    assert.equal(malformedEvents.some((event) => event.type === "tool.finished" && event.toolCallId === "malformed-recovery-read"), true);
+    assert.equal(malformedEvents.some((event) => event.type === "assistant.delta" && event.text === "Recovered from the malformed tool call."), true);
     const recoveringSession = await createSession(run);
     assert.equal((await prompt(run, recoveringSession.id, "RECOVER_AFTER_FAILURES")).status, 204);
     await events.waitFor((event) => event.type === "session.idle" && event.sessionId === recoveringSession.id);
     assert.equal(
       events.events.filter((event) => event.type === "tool.finished" && /^recover-\d+$/.test(String(event.toolCallId)) && event.status !== "success").length,
-      2,
+      9,
     );
     assert.equal(
       events.events.some((event) => event.type === "tool.finished" && event.toolCallId === "recover-success" && event.status === "success"),

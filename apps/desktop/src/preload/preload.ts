@@ -8,6 +8,7 @@ import type {
   PermissionMode,
   ReasoningMode,
 } from "../shared/desktopApi";
+import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
 
 type ChatInput = { id?: string; title?: string; repositoryName?: string; repositoryPath?: string; worktreeTaskId?: string };
 const umbraticApi = {
@@ -58,6 +59,8 @@ const umbraticApi = {
   saveContextLength: (input: number) => ipcRenderer.invoke("umbratic:save-context-length", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     ipcRenderer.invoke("umbratic:get-model-endpoint-settings", input),
+  getCachedLocalModels: (input: { baseUrl: string }) =>
+    ipcRenderer.invoke("umbratic:get-cached-local-models", input),
   probeLocalModels: (input: { baseUrl: string }) =>
     ipcRenderer.invoke("umbratic:probe-local-models", input),
   saveModelEndpointSettings: (input: {
@@ -73,6 +76,8 @@ const umbraticApi = {
   getCompanyConnectionStatus: () => ipcRenderer.invoke("umbratic:get-company-connection-status"),
   enrollCompanyConnection: (input: { baseUrl: string; enrollmentCode: string; deviceLabel?: string }) =>
     ipcRenderer.invoke("umbratic:enroll-company-connection", input),
+  connectCompanyConnection: () => ipcRenderer.invoke("umbratic:connect-company-connection"),
+  disconnectCompanySession: () => ipcRenderer.invoke("umbratic:disconnect-company-session"),
   disconnectCompanyConnection: () => ipcRenderer.invoke("umbratic:disconnect-company-connection"),
   exportTelemetry: () => ipcRenderer.invoke("umbratic:export-telemetry"),
   exportLocalDiagnostics: () => ipcRenderer.invoke("umbratic:export-local-diagnostics"),
@@ -108,6 +113,8 @@ const umbraticApi = {
     worktreeTaskId?: string;
   }) =>
     ipcRenderer.invoke("umbratic:start-task", input),
+  steerTask: (input: { taskId: string; prompt: string; attachedFiles?: ChatAttachment[] }) =>
+    ipcRenderer.invoke("umbratic:steer-task", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>
     ipcRenderer.invoke("umbratic:approve-worktree-creation", input),
   respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>
@@ -120,7 +127,7 @@ const umbraticApi = {
   rejectTask: (input: { taskId: string; cleanup: boolean }) => ipcRenderer.invoke("umbratic:reject-task", input),
   keepWorktree: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => ipcRenderer.invoke("umbratic:cancel-task", input),
-  setResponseFeedback: (input: { taskId: string; messageId: string; rating: "good" | "bad" | null; comment?: string }) =>
+  setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {

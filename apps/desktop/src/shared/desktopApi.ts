@@ -40,6 +40,7 @@ export type LocalModelProbeResult =
 export type DesktopStartupSettings = {
   permissionMode: PermissionMode;
   modelEndpoint: PublicModelEndpointSettings;
+  localModels: string[];
   companyConnection: CompanyConnectionStatus;
   harnessProfile: HarnessProfileId;
   contextLength: number;
@@ -90,6 +91,13 @@ export type LocalModelInfo = {
   displayName: string;
   baseUrl: string;
   contextLength?: number;
+  capabilities?: ModelCapabilities;
+};
+
+export type ModelCapabilities = {
+  parallelToolCalls: boolean;
+  vision: boolean;
+  reasoning: boolean;
 };
 
 export type LocalModelProvider = {
@@ -472,6 +480,9 @@ export type DesktopApi = {
   getModelEndpointSettings(input?: {
     mode?: ModelEndpointMode;
   }): Promise<PublicModelEndpointSettings>;
+  getCachedLocalModels(input: {
+    baseUrl: string;
+  }): Promise<string[]>;
   probeLocalModels(input: {
     baseUrl: string;
   }): Promise<LocalModelProbeResult>;
@@ -485,6 +496,16 @@ export type DesktopApi = {
     enrollmentCode: string;
     deviceLabel?: string;
   }): Promise<{
+    connection: CompanyConnectionStatus;
+    settings: PublicModelEndpointSettings;
+    status: BackendStatus;
+  }>;
+  connectCompanyConnection(): Promise<{
+    connection: CompanyConnectionStatus;
+    settings: PublicModelEndpointSettings;
+    status: BackendStatus;
+  }>;
+  disconnectCompanySession(): Promise<{
     connection: CompanyConnectionStatus;
     settings: PublicModelEndpointSettings;
     status: BackendStatus;
@@ -565,6 +586,11 @@ export type DesktopApi = {
     useWorktree?: boolean;
     worktreeTaskId?: string;
   }): Promise<TaskInfo>;
+  steerTask(input: {
+    taskId: string;
+    prompt: string;
+    attachedFiles?: ChatAttachment[];
+  }): Promise<void>;
   approveWorktreeCreation(input: {
     taskId: string;
     approved: boolean;
@@ -599,7 +625,8 @@ export type DesktopApi = {
   setResponseFeedback(input: {
     taskId: string;
     messageId: string;
-    rating: "good" | "bad" | null;
+    rating: ResponseRating | null;
+    reason?: ResponseFeedbackReason;
     comment?: string;
   }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
@@ -643,10 +670,13 @@ export const desktopIpcChannels = {
   getContextLength: "umbratic:get-context-length",
   saveContextLength: "umbratic:save-context-length",
   getModelEndpointSettings: "umbratic:get-model-endpoint-settings",
+  getCachedLocalModels: "umbratic:get-cached-local-models",
   probeLocalModels: "umbratic:probe-local-models",
   saveModelEndpointSettings: "umbratic:save-model-endpoint-settings",
   getCompanyConnectionStatus: "umbratic:get-company-connection-status",
   enrollCompanyConnection: "umbratic:enroll-company-connection",
+  connectCompanyConnection: "umbratic:connect-company-connection",
+  disconnectCompanySession: "umbratic:disconnect-company-session",
   disconnectCompanyConnection: "umbratic:disconnect-company-connection",
   exportTelemetry: "umbratic:export-telemetry",
   exportLocalDiagnostics: "umbratic:export-local-diagnostics",
@@ -665,6 +695,7 @@ export const desktopIpcChannels = {
   setPermissionMode: "umbratic:set-permission-mode",
   listAvailableIdes: "umbratic:list-available-ides",
   startTask: "umbratic:start-task",
+  steerTask: "umbratic:steer-task",
   approveWorktreeCreation: "umbratic:approve-worktree-creation",
   respondToToolPermission: "umbratic:respond-tool-permission",
   openRepositoryInIde: "umbratic:open-repository-in-ide",
@@ -696,3 +727,4 @@ export type DesktopIpcInput<Channel extends DesktopIpcChannel> =
 export type DesktopIpcResult<Channel extends DesktopIpcChannel> = Awaited<
   ReturnType<DesktopApi[DesktopIpcMethodForChannel<Channel>]>
 >;
+import type { ResponseFeedbackReason, ResponseRating } from "./responseFeedback";

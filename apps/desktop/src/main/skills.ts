@@ -23,6 +23,7 @@ export type SkillInfo = {
   checksumStatus: SkillChecksumStatus;
   modified: boolean;
   provenance?: "bundled" | "created" | "imported";
+  paths?: string[];
 };
 export type SkillDocument = SkillInfo & { path: string; content: string };
 export type PromptSkillInfo = {
@@ -31,6 +32,7 @@ export type PromptSkillInfo = {
   description: string;
   instructionPath: string;
   source: SkillSource;
+  paths?: string[];
 };
 
 type SystemSkillDefinition = {
@@ -209,16 +211,33 @@ export function skillDescriptionFromMarkdown(content: string): string {
   return paragraph?.slice(0, 240) ?? "";
 }
 
-export function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
+export function parseSkillFrontmatter(content: string): { name?: string; description?: string; paths?: string[] } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return {};
-  const out: { name?: string; description?: string } = {};
-  for (const line of match[1].split(/\r?\n/)) {
+  const out: { name?: string; description?: string; paths?: string[] } = {};
+  const lines = match[1].split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^paths:\s*$/.test(line)) {
+      const paths: string[] = [];
+      while (index + 1 < lines.length) {
+        const item = lines[index + 1].match(/^\s+-\s+(.+)$/);
+        if (!item) break;
+        paths.push(item[1].trim().replace(/^['"]|['"]$/g, ""));
+        index += 1;
+      }
+      if (paths.length > 0) out.paths = paths;
+      continue;
+    }
     const kv = line.match(/^(\w+):\s*(.+)$/);
     if (!kv) continue;
     const value = kv[2].trim().replace(/^['"]|['"]$/g, "");
     if (kv[1] === "name") out.name = value;
     if (kv[1] === "description") out.description = value;
+    if (kv[1] === "paths") {
+      const paths = value.replace(/^\[|\]$/g, "").split(",").map((item) => item.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean);
+      if (paths.length > 0) out.paths = paths;
+    }
   }
   return out;
 }
@@ -342,6 +361,7 @@ export function skillInfoFromContent(
     description: meta.description || skillDescriptionFromMarkdown(content),
     enabled: settings[id] !== false,
     source: "local",
+    paths: meta.paths,
     readOnly: false,
     checksum,
     checksumStatus: expected ? modified ? "modified" : "known_good" : "untracked",
@@ -386,6 +406,7 @@ export function readPromptSkillInfo(id: string, nameFallback: string, skillFile:
     description: meta.description || skillDescriptionFromMarkdown(content),
     instructionPath: skillFile,
     source: "local",
+    paths: meta.paths,
   };
 }
 
@@ -432,6 +453,7 @@ export function enabledPromptSkills(
         description: info.description,
         instructionPath: systemSkillFilePath(skill, directory),
         source: "system" as const,
+        paths: parseSkillFrontmatter(readTextFileIfSafe(systemSkillFilePath(skill, directory)) ?? "").paths,
       };
     });
   const localSkills = collectPromptSkillsFromDirectory(directory)

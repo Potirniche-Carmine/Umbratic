@@ -41,6 +41,8 @@ pub struct RunnerSkillConfig {
     pub description: String,
     pub source: String,
     pub instruction_path: PathBuf,
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,9 @@ pub struct ProviderConfig {
     pub chat_endpoint_path: Option<String>,
     pub api_key: Arc<RwLock<String>>,
     pub model_id: String,
+    pub parallel_tool_calls: bool,
+    pub vision: bool,
+    pub reasoning: bool,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
 }
@@ -245,6 +250,17 @@ fn parse_skills(value: Option<&Value>) -> Vec<RunnerSkillConfig> {
                     .collect(),
                 source: source.to_owned(),
                 instruction_path: PathBuf::from(instruction_path),
+                paths: skill
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .take(32)
+                    .map(|value| value.chars().take(240).collect())
+                    .collect(),
             },
         );
     }
@@ -478,6 +494,24 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
                 .to_owned(),
         )),
         model_id: string_value(provider_object.get("modelId"), "provider.modelId")?,
+        parallel_tool_calls: provider_object
+            .get("capabilities")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("parallelToolCalls"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        vision: provider_object
+            .get("capabilities")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("vision"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reasoning: provider_object
+            .get("capabilities")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("reasoning"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         headers,
         mtls,
     };
@@ -576,6 +610,9 @@ mod tests {
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
+            parallel_tool_calls: false,
+            vision: false,
+            reasoning: false,
             headers: BTreeMap::new(),
             mtls: None,
         };
@@ -593,6 +630,9 @@ mod tests {
             chat_endpoint_path: Some(endpoint.into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
+            parallel_tool_calls: false,
+            vision: false,
+            reasoning: false,
             headers: BTreeMap::new(),
             mtls: None,
         }

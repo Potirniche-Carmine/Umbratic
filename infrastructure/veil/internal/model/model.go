@@ -28,6 +28,7 @@ type ChatRequest struct {
 	Stream          bool
 	Tools           any
 	ToolChoice      any
+	ParallelTools   bool
 	MaxOutputTokens int
 }
 
@@ -60,6 +61,7 @@ type Client struct {
 	protocol         ProviderProtocol
 	chatEndpoint     string
 	modelsEndpoint   string
+	metricsEndpoint  string
 	generateEndpoint string
 	showEndpoint     string
 	contextLength    int
@@ -122,6 +124,10 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	metricsEndpoint, err := providerEndpointURL(cfg.BaseURL, "", "metrics")
+	if err != nil {
+		return nil, err
+	}
 	generateEndpoint := ""
 	showEndpoint := ""
 	if protocol == ProtocolOllama {
@@ -137,12 +143,13 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 60 * time.Second
+		timeout = 180 * time.Second
 	}
 	return &Client{
 		protocol:         protocol,
 		chatEndpoint:     chatEndpoint,
 		modelsEndpoint:   modelsEndpoint,
+		metricsEndpoint:  metricsEndpoint,
 		generateEndpoint: generateEndpoint,
 		showEndpoint:     showEndpoint,
 		contextLength:    cfg.ContextLength,
@@ -159,6 +166,10 @@ func hardenedHTTPClient(timeout time.Duration) *http.Client {
 		Transport: &http.Transport{
 			Proxy:                 nil,
 			DialContext:           dialPrivateProvider,
+			MaxIdleConns:          256,
+			MaxIdleConnsPerHost:   128,
+			MaxConnsPerHost:       256,
+			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ResponseHeaderTimeout: timeout,
 			ExpectContinueTimeout: 1 * time.Second,
@@ -374,6 +385,9 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 	}
 	if req.ToolChoice != nil {
 		body["tool_choice"] = req.ToolChoice
+	}
+	if req.Tools != nil {
+		body["parallel_tool_calls"] = req.ParallelTools
 	}
 	return c.postJSON(ctx, c.chatEndpoint, body)
 }

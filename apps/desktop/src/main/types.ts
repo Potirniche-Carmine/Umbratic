@@ -244,6 +244,13 @@ export type LocalModelInfo = {
   displayName: string;
   baseUrl: string;
   contextLength?: number;
+  capabilities?: ModelCapabilities;
+};
+
+export type ModelCapabilities = {
+  parallelToolCalls: boolean;
+  vision: boolean;
+  reasoning: boolean;
 };
 
 export type LocalDiagnosticInfo = {

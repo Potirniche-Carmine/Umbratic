@@ -41,11 +41,12 @@ pub async fn execute_tool(
 ) -> ToolResult {
     let started_at = now_iso();
     let started = Instant::now();
-    let name = canonical_tool_name(&call.name);
-    let parsed_request = ToolRequest::parse(&name, &call.arguments, &session.config.cwd);
-    let summary = parsed_request
-        .as_ref()
-        .map_or_else(|_| name.clone(), ToolRequest::summary);
+    let name = redact_text(&call.name, 80);
+    let parsed_request = ToolRequest::parse(&call.name, &call.arguments, &session.config.cwd);
+    let summary = parsed_request.as_ref().map_or_else(
+        |_| format!("Invalid {name} tool request"),
+        ToolRequest::summary,
+    );
     let command_class = parsed_request
         .as_ref()
         .map_or("unknown", ToolRequest::command_class);
@@ -81,12 +82,12 @@ pub async fn execute_tool(
             "Tool call was aborted.".into(),
         );
     }
-    if !request.is_internal()
+    if let Some(capability) = request.capability_name()
         && !session
             .config
             .enabled_tools
             .iter()
-            .any(|enabled| enabled == &name)
+            .any(|enabled| enabled == capability)
     {
         sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"blocked", "reason":"tool_disabled", "at":now_iso() }));
         return finish_failure(
@@ -98,10 +99,11 @@ pub async fn execute_tool(
             started,
             "validation_error",
             "tool_disabled",
-            format!("Tool {name} is disabled."),
+            format!("Tool {name} is not available in this session."),
         );
     }
     sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"passed", "at":now_iso() }));
+    let emits_own_output = request.emits_own_output();
     let result: ToolExecutionResult = match request {
         ToolRequest::Read(request) => read_tool(&session, &request.arguments).await,
         ToolRequest::ReadAttachment(request) => read_attachment_tool(&session, &request.arguments),
@@ -159,7 +161,31 @@ pub async fn execute_tool(
     };
     match result {
         Ok(mut result) => {
-            if name != "command" && !result.output.is_empty() {
+            if call.name == "read_skill" {
+                let skill_id = call
+                    .arguments
+                    .as_object()
+                    .and_then(|arguments| arguments.get("skillId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if let Some(skill) = session
+                    .config
+                    .skills
+                    .iter()
+                    .find(|skill| skill.id == skill_id)
+                {
+                    sink.emit(json!({
+                        "type":"skill.selected",
+                        "taskId":session.task_id,
+                        "skillId":skill.id,
+                        "source":skill.source,
+                        "reason":"metadata",
+                        "fullContent":result.output.contains("Read status: complete"),
+                        "at":now_iso()
+                    }));
+                }
+            }
+            if !emits_own_output && !result.output.is_empty() {
                 sink.emit(json!({ "type":"tool.output", "taskId":session.task_id, "toolCallId":call.id, "stream":"stdout", "text":result.output, "redacted":true, "at":now_iso() }));
             }
             let mut store = session.context_store.lock().await;

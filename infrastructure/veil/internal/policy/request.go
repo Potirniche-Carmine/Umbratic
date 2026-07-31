@@ -8,19 +8,19 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode"
 
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/prompts"
 )
 
 const (
-	MaxMessages         = 64
+	MaxMessages         = 512
 	MaxMessageBytes     = 256 * 1024
 	MaxImageBytes       = 10 * 1024 * 1024
 	MaxImagesPerMessage = 12
 	MaxOutputTokens     = 32 * 1024
 	MaxSkills           = 128
+	MaxTools            = 32
 )
 
 var ErrRequestTooLarge = errors.New("request body too large")
@@ -105,139 +105,9 @@ type ChatInput struct {
 	Stream          bool
 	Tools           any
 	ToolChoice      any
+	ParallelTools   bool
 	Skills          []prompts.SkillMetadata
 	MaxOutputTokens int
-	ResponseMode    string
-}
-
-const (
-	ActionNone             = ""
-	ActionChange           = "change"
-	ActionExecute          = "execute"
-	ActionInspect          = "inspect"
-	ActionChangeAndExecute = "change-and-execute"
-)
-
-func requiresCompleteWorkspaceInspection(request string) bool {
-	inspectionPrefixes := []string{
-		"describe ", "explain ", "give me ", "give us ", "inspect ", "list ", "look at ", "read ", "summarize ", "tell me ", "tell us ",
-	}
-	exhaustivePhrases := []string{
-		"all files", "all the files", "all the specific files", "each file", "entire folder", "every file", "everything in the folder", "everything in this folder", "whole folder",
-	}
-	hasInspectionIntent := false
-	for _, prefix := range inspectionPrefixes {
-		if strings.HasPrefix(request, prefix) {
-			hasInspectionIntent = true
-			break
-		}
-	}
-	if !hasInspectionIntent {
-		return false
-	}
-	for _, phrase := range exhaustivePhrases {
-		if strings.Contains(request, phrase) {
-			return true
-		}
-	}
-	return false
-}
-
-func requiresWorkspaceSecurityInspection(request string) bool {
-	normalized := " " + strings.Join(strings.FieldsFunc(request, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	}), " ") + " "
-	workspaceTargets := []string{
-		"code base", "codebase", "project", "projects", "repo", "repos", "repository", "repositories", "source code", "workspace",
-	}
-	securityTopics := []string{
-		"attack", "cybersecurity", "exploit", "security", "threat", "vulnerab",
-	}
-	hasWorkspaceTarget := false
-	for _, target := range workspaceTargets {
-		if strings.Contains(normalized, " "+target+" ") {
-			hasWorkspaceTarget = true
-			break
-		}
-	}
-	if !hasWorkspaceTarget {
-		return false
-	}
-	for _, topic := range securityTopics {
-		if strings.Contains(normalized, " "+topic) {
-			return true
-		}
-	}
-	return false
-}
-
-// WorkspaceActionRequirement identifies evidence required by an explicit
-// workspace request. Veil owns this classification so clients cannot weaken
-// the action policy by changing their prompts.
-func WorkspaceActionRequirement(messages []model.Message) string {
-	var latest string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != "user" {
-			continue
-		}
-		value, ok := messages[i].Content.(string)
-		if !ok {
-			return ActionNone
-		}
-		latest = strings.ToLower(strings.Join(strings.Fields(value), " "))
-		if marker := strings.LastIndex(latest, "user request:"); marker >= 0 {
-			latest = strings.TrimSpace(latest[marker+len("user request:"):])
-		}
-		break
-	}
-	if latest == "" || strings.HasPrefix(latest, "workspace tool results:") {
-		return ActionNone
-	}
-
-	prefixes := []string{"please ", "can you ", "could you ", "would you ", "i need you to ", "i want you to "}
-	for changed := true; changed; {
-		changed = false
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(latest, prefix) {
-				latest = strings.TrimSpace(strings.TrimPrefix(latest, prefix))
-				changed = true
-				break
-			}
-		}
-	}
-	if requiresCompleteWorkspaceInspection(latest) || requiresWorkspaceSecurityInspection(latest) {
-		return ActionInspect
-	}
-
-	changeVerbs := []string{
-		"add", "address", "build", "change", "create", "delete", "edit", "fix", "implement",
-		"make", "modify", "move", "remove", "rename", "update", "write",
-	}
-	executeVerbs := []string{"execute", "run", "test", "verify"}
-	change := false
-	execute := false
-	for _, verb := range changeVerbs {
-		if latest == verb || strings.HasPrefix(latest, verb+" ") {
-			change = true
-			break
-		}
-	}
-	for _, verb := range executeVerbs {
-		if latest == verb || strings.HasPrefix(latest, verb+" ") || strings.Contains(latest, " and "+verb+" ") || strings.HasSuffix(latest, " and "+verb) {
-			execute = true
-			break
-		}
-	}
-	if change && execute {
-		return ActionChangeAndExecute
-	}
-	if change {
-		return ActionChange
-	}
-	if execute {
-		return ActionExecute
-	}
-	return ActionNone
 }
 
 type chatRequest struct {
@@ -246,9 +116,9 @@ type chatRequest struct {
 	Stream          bool                    `json:"stream"`
 	Tools           any                     `json:"tools"`
 	ToolChoice      any                     `json:"tool_choice"`
+	ParallelTools   bool                    `json:"parallel_tool_calls"`
 	Skills          []prompts.SkillMetadata `json:"skills"`
 	MaxOutputTokens int                     `json:"max_output_tokens"`
-	ResponseMode    string                  `json:"response_mode"`
 }
 
 func DecodeChatInput(r io.Reader) (ChatInput, error) {
@@ -266,7 +136,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "input", "messages", "stream", "tools", "tool_choice", "skills", "max_output_tokens", "response_mode":
+		case "input", "messages", "stream", "tools", "tool_choice", "parallel_tool_calls", "skills", "max_output_tokens":
 		case "model", "system":
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		default:
@@ -293,11 +163,8 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	if req.MaxOutputTokens < 0 || req.MaxOutputTokens > MaxOutputTokens {
 		return ChatInput{}, fmt.Errorf("max_output_tokens must be between 1 and %d when set", MaxOutputTokens)
 	}
-	if req.ResponseMode != "" && req.ResponseMode != "progress" {
-		return ChatInput{}, errors.New("response_mode is not supported")
-	}
-	if req.ResponseMode == "progress" && (req.Tools != nil || req.ToolChoice != nil) {
-		return ChatInput{}, errors.New("progress responses cannot use tools")
+	if err := validateToolContract(req.Tools, req.ToolChoice); err != nil {
+		return ChatInput{}, err
 	}
 	for i, message := range req.Messages {
 		if message.Role != "user" && message.Role != "assistant" && message.Role != "tool" {
@@ -322,10 +189,199 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 		Stream:          req.Stream,
 		Tools:           req.Tools,
 		ToolChoice:      req.ToolChoice,
+		ParallelTools:   req.ParallelTools,
 		Skills:          skills,
 		MaxOutputTokens: req.MaxOutputTokens,
-		ResponseMode:    req.ResponseMode,
 	}, nil
+}
+
+func validateToolContract(tools any, toolChoice any) error {
+	if tools == nil {
+		if toolChoice != nil {
+			return errors.New("tool_choice requires tools")
+		}
+		return nil
+	}
+	rows, ok := tools.([]any)
+	if !ok || len(rows) == 0 || len(rows) > MaxTools {
+		return fmt.Errorf("tools must contain between 1 and %d function definitions", MaxTools)
+	}
+	choice, ok := toolChoice.(string)
+	if !ok || (choice != "auto" && choice != "required") {
+		return errors.New(`tool_choice must be "auto" or "required" when tools are present`)
+	}
+	seen := make(map[string]bool, len(rows))
+	for index, raw := range rows {
+		tool, ok := raw.(map[string]any)
+		if !ok || len(tool) != 2 || tool["type"] != "function" {
+			return fmt.Errorf("tool %d must be one exact function definition", index)
+		}
+		function, ok := tool["function"].(map[string]any)
+		if !ok || len(function) != 3 {
+			return fmt.Errorf("tool %d function must contain name, description, and parameters", index)
+		}
+		name, _ := function["name"].(string)
+		description, _ := function["description"].(string)
+		if !validToolName(name) || strings.TrimSpace(description) == "" || len(description) > 2000 {
+			return fmt.Errorf("tool %d has an invalid name or description", index)
+		}
+		if seen[name] {
+			return fmt.Errorf("tool %d duplicates function name %q", index, name)
+		}
+		seen[name] = true
+		parameters, ok := function["parameters"].(map[string]any)
+		if !ok || len(parameters) != 4 || parameters["type"] != "object" || parameters["additionalProperties"] != false {
+			return fmt.Errorf("tool %q parameters must be one closed object schema", name)
+		}
+		properties, ok := parameters["properties"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("tool %q properties must be an object", name)
+		}
+		for field, definition := range properties {
+			if !validToolPropertyName(field) {
+				return fmt.Errorf("tool %q has an invalid property name", name)
+			}
+			schema, ok := definition.(map[string]any)
+			if !ok {
+				return fmt.Errorf("tool %q property %q must be a schema object", name, field)
+			}
+			if err := validateToolPropertySchema(name, field, schema); err != nil {
+				return err
+			}
+		}
+		required, ok := parameters["required"].([]any)
+		if !ok {
+			return fmt.Errorf("tool %q required must be an array", name)
+		}
+		requiredSeen := make(map[string]bool, len(required))
+		for _, rawField := range required {
+			field, ok := rawField.(string)
+			if !ok || requiredSeen[field] {
+				return fmt.Errorf("tool %q required fields must be unique strings", name)
+			}
+			if _, exists := properties[field]; !exists {
+				return fmt.Errorf("tool %q requires undeclared property %q", name, field)
+			}
+			requiredSeen[field] = true
+		}
+	}
+	return nil
+}
+
+func validateToolPropertySchema(toolName, field string, schema map[string]any) error {
+	allowed := map[string]bool{
+		"type": true, "description": true, "enum": true, "items": true,
+		"minLength": true, "maxLength": true, "minimum": true, "maximum": true,
+		"minItems": true, "maxItems": true,
+	}
+	for keyword := range schema {
+		if !allowed[keyword] {
+			return fmt.Errorf("tool %q property %q has unsupported schema keyword %q", toolName, field, keyword)
+		}
+	}
+	typeName, ok := schema["type"].(string)
+	if !ok || (typeName != "string" && typeName != "integer" && typeName != "number" && typeName != "boolean" && typeName != "array") {
+		return fmt.Errorf("tool %q property %q has an unsupported type", toolName, field)
+	}
+	if description, exists := schema["description"]; exists {
+		text, ok := description.(string)
+		if !ok || len(text) > 2000 {
+			return fmt.Errorf("tool %q property %q has an invalid description", toolName, field)
+		}
+	}
+	for _, keyword := range []string{"minLength", "maxLength", "minItems", "maxItems"} {
+		if value, exists := schema[keyword]; exists {
+			number, ok := value.(float64)
+			if !ok || number < 0 || number != float64(int64(number)) {
+				return fmt.Errorf("tool %q property %q has an invalid %s", toolName, field, keyword)
+			}
+		}
+	}
+	for _, keyword := range []string{"minimum", "maximum"} {
+		if value, exists := schema[keyword]; exists {
+			if _, ok := value.(float64); !ok {
+				return fmt.Errorf("tool %q property %q has an invalid %s", toolName, field, keyword)
+			}
+		}
+	}
+	if enum, exists := schema["enum"]; exists {
+		values, ok := enum.([]any)
+		if !ok || len(values) == 0 || len(values) > 128 {
+			return fmt.Errorf("tool %q property %q has an invalid enum", toolName, field)
+		}
+		seen := make(map[string]bool, len(values))
+		for _, value := range values {
+			if !schemaValueHasType(value, typeName) {
+				return fmt.Errorf("tool %q property %q enum does not match its type", toolName, field)
+			}
+			encoded, _ := json.Marshal(value)
+			if seen[string(encoded)] {
+				return fmt.Errorf("tool %q property %q enum values must be unique", toolName, field)
+			}
+			seen[string(encoded)] = true
+		}
+	}
+	items, hasItems := schema["items"]
+	if typeName == "array" {
+		itemSchema, ok := items.(map[string]any)
+		if !hasItems || !ok {
+			return fmt.Errorf("tool %q property %q array items must be a schema object", toolName, field)
+		}
+		if err := validateToolPropertySchema(toolName, field+"[]", itemSchema); err != nil {
+			return err
+		}
+	} else if hasItems {
+		return fmt.Errorf("tool %q property %q uses items with a non-array type", toolName, field)
+	}
+	return nil
+}
+
+func schemaValueHasType(value any, typeName string) bool {
+	switch typeName {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "integer":
+		number, ok := value.(float64)
+		return ok && number == float64(int64(number))
+	case "number":
+		_, ok := value.(float64)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	default:
+		return false
+	}
+}
+
+func validToolName(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validToolPropertyName(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for index, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_' || (index > 0 && char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func skillCatalog(values []prompts.SkillMetadata) ([]prompts.SkillMetadata, error) {
@@ -342,6 +398,16 @@ func skillCatalog(values []prompts.SkillMetadata) ([]prompts.SkillMetadata, erro
 		value.Name = strings.Join(strings.Fields(value.Name), " ")
 		value.Description = strings.Join(strings.Fields(value.Description), " ")
 		value.Source = strings.TrimSpace(value.Source)
+		if len(value.Paths) > 32 {
+			return nil, fmt.Errorf("skill %q has too many path globs", value.ID)
+		}
+		for pathIndex, skillPath := range value.Paths {
+			skillPath = strings.TrimSpace(skillPath)
+			if skillPath == "" || len(skillPath) > 240 || strings.Contains(skillPath, "\x00") {
+				return nil, fmt.Errorf("skill %q has invalid path glob", value.ID)
+			}
+			value.Paths[pathIndex] = skillPath
+		}
 		if !validSkillID(value.ID) {
 			return nil, fmt.Errorf("skill %d has invalid id", index)
 		}

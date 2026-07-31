@@ -24,8 +24,37 @@ test("the top connection refresh owns local model discovery", () => {
   const picker = fs.readFileSync(new URL("../src/renderer/LocalModelPicker.tsx", import.meta.url), "utf8");
   const start = connection.indexOf("async function refresh()");
   const end = connection.indexOf("\n  async function save()", start);
-  assert.match(connection.slice(start, end), /api\.probeLocalModels/);
+  const refresh = connection.slice(start, end);
+  assert.match(refresh, /api\.probeLocalModels/);
+  assert.match(refresh, /modelsBeforeRefresh/);
+  assert.doesNotMatch(refresh, /setTimeout/);
   assert.doesNotMatch(picker, /probeLocalModels|RefreshCw|setTimeout/);
+  assert.match(picker, /const interactionDisabled = disabled \|\| options\.length === 0/);
+});
+
+test("local model and context choices commit before backend reload completes", () => {
+  const connection = fs.readFileSync(new URL("../src/renderer/ConnectionSettings.tsx", import.meta.url), "utf8");
+  const connectionSave = connection.slice(
+    connection.indexOf("async function save()"),
+    connection.indexOf("\n  async function disconnect()", connection.indexOf("async function save()")),
+  );
+  assert.ok(connectionSave.indexOf("setSettings(optimisticLocalSettings)") < connectionSave.indexOf("await api.saveModelEndpointSettings"));
+
+  const main = fs.readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
+  const harnessSave = main.slice(
+    main.indexOf("async function saveHarnessProfile()"),
+    main.indexOf("\n  async function loadSkills()", main.indexOf("async function saveHarnessProfile()")),
+  );
+  assert.ok(harnessSave.indexOf("setContextLength(optimisticContextLength)") < harnessSave.indexOf("await api.saveContextLength"));
+});
+
+test("the default composer uses the compact 76 pixel shell", () => {
+  const source = fs.readFileSync(new URL("../src/renderer/styles/composer.css", import.meta.url), "utf8");
+  const start = source.indexOf(".promptInputShell");
+  const end = source.indexOf("\n}", start);
+  const shell = source.slice(start, end);
+  assert.match(shell, /grid-template-rows: minmax\(38px, auto\) 38px/);
+  assert.match(shell, /min-height: 76px/);
 });
 
 test("active task updates preserve the chat connection marker", () => {
@@ -45,7 +74,12 @@ test("an enrolled company server can reconnect or unregister with confirmation",
   assert.match(source, /const companyServerActive =/);
   assert.match(source, /companyServerConnected && companyConnection\.state === "enrolled" \? \(/);
   assert.match(source, /<CompanyServerActions/);
-  assert.match(actions, /\{busy \? "Connecting" : "Connect"\}/);
+  assert.match(actions, /active \? "Disconnect" : "Connect"/);
+  assert.match(actions, /onClick=\{active \? onDisconnect : onConnect\}/);
+  assert.doesNotMatch(actions, /!active \? \(/);
+  assert.match(source, /backend\?\.endpoint === "ready"/);
+  assert.match(source, /api\.connectCompanyConnection\(\)/);
+  assert.match(source, /api\.disconnectCompanySession\(\)/);
   assert.match(actions, /Unregister this device\?/);
   assert.match(actions, /ask your administrator for a new enrollment key/);
   assert.match(source, /\{!companyServerConnected \? \(/);

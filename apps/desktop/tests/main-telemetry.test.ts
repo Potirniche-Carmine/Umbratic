@@ -353,7 +353,7 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
         { type: "user.message", taskId: "task-1", text: "First user message", at: "2026-01-01T00:00:00.000Z" },
         { type: "assistant.delta", taskId: "task-1", text: "First response", at: "2026-01-01T00:00:01.000Z" },
         { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:02.000Z" },
-        { type: "response.feedback", taskId: "task-1", messageId: "assistant-1", rating: "bad", comment: "Missed the edge case.", at: "2026-01-01T00:00:03.000Z" },
+        { type: "response.feedback", taskId: "task-1", messageId: "assistant-1", rating: "bad", reason: "Missing details", comment: "Missed the edge case.", at: "2026-01-01T00:00:03.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 700, reserveTokens: 100, estimatedTokens: 800, at: "2026-01-01T00:00:04.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 850, reserveTokens: 100, estimatedTokens: 950, phase: "preflight", source: "heuristic", confidence: "low", at: "2026-01-01T00:00:05.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 400, reserveTokens: 100, estimatedTokens: 500, at: "2026-01-01T00:00:06.000Z" },
@@ -383,6 +383,7 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
   assert.deepEqual(plain(bundle.tasks[0].feedback[0]), {
     messageId: "assistant-1",
     rating: "bad",
+    reason: "Missing details",
     comment: "Missed the edge case.",
     at: "2026-01-01T00:00:03.000Z",
     conversation: [

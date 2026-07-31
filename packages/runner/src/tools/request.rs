@@ -50,12 +50,11 @@ pub(super) enum ToolRequest {
 
 impl ToolRequest {
     pub(super) fn parse(name: &str, value: &Value, cwd: &Path) -> Result<Self, String> {
-        let name = canonical_tool_name(name);
         let arguments = parse_arguments(value)?;
-        validate_arguments(&name, &arguments)?;
-        let request = match name.as_str() {
+        validate_arguments(name, &arguments)?;
+        let request = match name {
             "read" => Self::Read(ReadRequest {
-                primary: string_arg(&arguments, &["filePath", "file_path", "path", "directory"]),
+                primary: string_arg(&arguments, &["filePath"]),
                 arguments,
             }),
             "read_attachment" => Self::ReadAttachment(ReadAttachmentRequest {
@@ -63,33 +62,33 @@ impl ToolRequest {
                 arguments,
             }),
             "write" => Self::Write(WriteRequest {
-                primary: string_arg(&arguments, &["filePath", "file_path", "path"]),
+                primary: string_arg(&arguments, &["filePath"]),
                 arguments,
             }),
-            "edit" => {
-                let patch_mode = arguments.get("mode").and_then(Value::as_str) == Some("patch")
-                    || (arguments.contains_key("patch")
-                        && !["filePath", "file_path", "path"]
-                            .iter()
-                            .any(|key| arguments.contains_key(*key)));
+            "edit" | "apply_patch" => {
+                let patch_mode = name == "apply_patch";
+                let mut arguments = arguments;
+                if patch_mode {
+                    arguments.insert("mode".into(), Value::String("patch".into()));
+                }
                 Self::Edit(EditRequest {
                     primary: if patch_mode {
                         "patch".into()
                     } else {
-                        string_arg(&arguments, &["filePath", "file_path", "path"])
+                        string_arg(&arguments, &["filePath"])
                     },
                     arguments,
                 })
             }
             "search" => Self::Search(SearchRequest {
-                primary: string_arg(&arguments, &["query", "pattern", "term", "text"]),
+                primary: string_arg(&arguments, &["query"]),
                 arguments,
             }),
             "lsp" => Self::Lsp(LspRequest {
                 primary: format!(
                     "{} {}",
                     string_arg(&arguments, &["action"]),
-                    string_arg(&arguments, &["filePath", "path"])
+                    string_arg(&arguments, &["filePath"])
                 )
                 .trim()
                 .to_owned(),
@@ -99,7 +98,7 @@ impl ToolRequest {
                 primary: string_arg(&arguments, &["action"]),
                 arguments,
             }),
-            "command" => {
+            "command" | "run_program" => {
                 let command = command_display(&arguments);
                 let safety = evaluate_command(&command, cwd);
                 Self::Command(CommandRequest {
@@ -148,11 +147,21 @@ impl ToolRequest {
         }
     }
 
-    pub(super) fn is_internal(&self) -> bool {
-        matches!(
-            self,
-            Self::ReadSkill(_) | Self::ReadAttachment(_) | Self::RetrieveContext(_)
-        )
+    pub(super) fn capability_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Read(_) => Some("read"),
+            Self::Write(_) => Some("write"),
+            Self::Edit(_) => Some("edit"),
+            Self::Search(_) => Some("search"),
+            Self::Lsp(_) => Some("lsp"),
+            Self::WorkspaceGraph(_) => Some("workspace_graph"),
+            Self::Command(_) => Some("command"),
+            Self::ReadSkill(_) | Self::ReadAttachment(_) | Self::RetrieveContext(_) => None,
+        }
+    }
+
+    pub(super) fn emits_own_output(&self) -> bool {
+        matches!(self, Self::Command(_))
     }
 }
 
@@ -166,15 +175,17 @@ impl CommandRequest {
     }
 }
 
-pub fn canonical_tool_name(name: &str) -> String {
-    let normalized = name.trim().to_ascii_lowercase().replace(['-', '.'], "_");
-    match normalized.as_str() {
-        "read_file" | "list_files" | "list_directory" | "ls" => "read".into(),
-        "write_file" | "create_file" => "write".into(),
-        "edit_file" | "replace_text" | "apply_patch" => "edit".into(),
-        "search_files" | "find_files" | "grep" | "rg" => "search".into(),
-        "run_command" | "shell" | "bash" | "powershell" => "command".into(),
-        _ => normalized,
+pub fn tool_capability_name(name: &str) -> Option<&'static str> {
+    match name {
+        "read" => Some("read"),
+        "write" => Some("write"),
+        "edit" | "apply_patch" => Some("edit"),
+        "search" => Some("search"),
+        "lsp" => Some("lsp"),
+        "workspace_graph" => Some("workspace_graph"),
+        "command" | "run_program" => Some("command"),
+        "read_skill" | "read_attachment" | "retrieve_context" => None,
+        _ => None,
     }
 }
 
@@ -182,16 +193,9 @@ pub(super) fn parse_arguments(value: &Value) -> Result<Map<String, Value>, Strin
     if let Some(object) = value.as_object() {
         return Ok(object.clone());
     }
-    let Some(mut text) = value.as_str().map(str::trim) else {
+    let Some(text) = value.as_str().map(str::trim) else {
         return Err("Tool arguments must be a JSON object.".into());
     };
-    if text.starts_with("```") && text.ends_with("```") {
-        text = text
-            .trim_start_matches("```json")
-            .trim_start_matches("```")
-            .trim_end_matches("```")
-            .trim();
-    }
     serde_json::from_str::<Value>(text)
         .ok()
         .and_then(|value| value.as_object().cloned())
@@ -224,55 +228,20 @@ fn string_list_arg(input: &Map<String, Value>, names: &[&str]) -> Vec<String> {
 
 fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), String> {
     let allowed: &[&str] = match name {
-        "read" => &[
-            "filePath",
-            "file_path",
-            "path",
-            "directory",
-            "offset",
-            "limit",
-            "depth",
-        ],
-        "write" => &["filePath", "file_path", "path", "content", "text"],
-        "edit" => &[
-            "mode",
-            "filePath",
-            "file_path",
-            "path",
-            "oldText",
-            "old_string",
-            "old",
-            "find",
-            "newText",
-            "new_string",
-            "new",
-            "replace",
-            "patch",
-        ],
+        "read" => &["filePath", "offset", "limit", "depth"],
+        "write" => &["filePath", "content"],
+        "edit" => &["filePath", "oldText", "newText"],
+        "apply_patch" => &["patch"],
         "search" => &[
             "query",
-            "pattern",
-            "term",
-            "text",
+            "queries",
             "path",
-            "directory",
-            "filePath",
             "glob",
-            "filePattern",
             "exclude",
             "caseSensitive",
             "limit",
-            "maxResults",
         ],
-        "lsp" => &[
-            "action",
-            "filePath",
-            "path",
-            "line",
-            "character",
-            "query",
-            "limit",
-        ],
+        "lsp" => &["action", "filePath", "line", "character", "query", "limit"],
         "workspace_graph" => &[
             "action",
             "query",
@@ -286,7 +255,8 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
             "maxDepth",
             "direction",
         ],
-        "command" => &["command", "cmd", "script", "programId", "args", "timeoutMs"],
+        "command" => &["command", "timeoutMs"],
+        "run_program" => &["programId", "args", "timeoutMs"],
         "read_skill" => &["skillId", "resource", "offset", "limit"],
         "read_attachment" => &["attachmentId", "offset", "limit"],
         "retrieve_context" => &["hash", "offset", "limit"],
@@ -298,72 +268,74 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
     for key in [
         "offset",
         "limit",
-        "maxResults",
         "depth",
         "maxDepth",
         "timeoutMs",
         "line",
         "character",
     ] {
-        if input.contains_key(key) && !input.get(key).is_some_and(Value::is_number) {
-            return Err(format!("{name} argument {key} must be a number"));
+        if input.contains_key(key) && input.get(key).and_then(Value::as_u64).is_none() {
+            return Err(format!(
+                "{name} argument {key} must be a non-negative integer"
+            ));
         }
     }
     let required = match name {
-        "read" => vec![string_arg(
-            input,
-            &["filePath", "file_path", "path", "directory"],
-        )],
-        "write" => vec![string_arg(input, &["filePath", "file_path", "path"])],
-        "search" => vec![
-            string_arg(input, &["query", "pattern", "term", "text"]),
-            string_arg(input, &["path", "directory", "filePath"]),
-            string_list_arg(input, &["glob", "filePattern"]).join(""),
+        "read" | "write" => vec![string_arg(input, &["filePath"])],
+        "edit" => vec![
+            string_arg(input, &["filePath"]),
+            string_arg(input, &["oldText"]),
         ],
-        "command" => vec![],
+        "apply_patch" => vec![string_arg(input, &["patch"])],
+        "command" => vec![string_arg(input, &["command"])],
+        "run_program" => vec![string_arg(input, &["programId"])],
         "read_skill" => vec![string_arg(input, &["skillId"])],
         "read_attachment" => vec![string_arg(input, &["attachmentId"])],
         "retrieve_context" => vec![string_arg(input, &["hash"])],
         "workspace_graph" | "lsp" => vec![string_arg(input, &["action"])],
-        "edit"
-            if input.get("mode").and_then(Value::as_str) == Some("patch")
-                || (input.contains_key("patch")
-                    && !["filePath", "file_path", "path"]
-                        .iter()
-                        .any(|key| input.contains_key(*key))) =>
-        {
-            vec![string_arg(input, &["patch"])]
-        }
-        "edit" => vec![
-            string_arg(input, &["filePath", "file_path", "path"]),
-            string_arg(input, &["oldText", "old_string", "old", "find"]),
-        ],
         _ => vec![],
     };
-    let missing_required = if name == "search" {
-        required.iter().all(String::is_empty)
-    } else {
-        required.iter().any(String::is_empty)
-    };
-    if missing_required {
+    if required.iter().any(String::is_empty) {
         return Err(format!("{name} is missing a required string argument"));
     }
-    for key in ["glob", "filePattern", "exclude"] {
+    for key in ["glob", "exclude"] {
         if let Some(value) = input.get(key)
             && !value.is_string()
-            && !value
-                .as_array()
-                .is_some_and(|values| values.iter().all(Value::is_string))
         {
-            return Err(format!(
-                "{name} argument {key} must be a string or an array of strings"
-            ));
+            return Err(format!("{name} argument {key} must be a string"));
         }
     }
     if input.contains_key("caseSensitive")
         && !input.get("caseSensitive").is_some_and(Value::is_boolean)
     {
         return Err("search argument caseSensitive must be a boolean".into());
+    }
+    if name == "search" {
+        if input
+            .get("query")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+            && input.get("queries").is_some()
+        {
+            return Err("search accepts query or queries, not both".into());
+        }
+        if let Some(queries) = input.get("queries") {
+            let Some(queries) = queries.as_array() else {
+                return Err("search argument queries must be an array of strings".into());
+            };
+            if queries.is_empty()
+                || queries.len() > 32
+                || queries.iter().any(|query| {
+                    !query.as_str().is_some_and(|value| {
+                        !value.trim().is_empty()
+                            && value.chars().count() <= 256
+                            && !value.contains('\0')
+                    })
+                })
+            {
+                return Err("search queries exceed the bounded string term limits".into());
+            }
+        }
     }
     if name == "read_attachment"
         && ["offset", "limit"].iter().any(|key| {
@@ -372,65 +344,33 @@ fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), Stri
     {
         return Err("read_attachment offset and limit must be non-negative integers".into());
     }
-    if name == "write"
-        && !input
-            .get("content")
-            .or_else(|| input.get("text"))
-            .is_some_and(Value::is_string)
-    {
+    if name == "write" && !input.get("content").is_some_and(Value::is_string) {
         return Err("write argument content must be a string".into());
     }
-    if name == "command" {
-        let command = string_arg(input, &["command", "cmd", "script"]);
-        let program_id = string_arg(input, &["programId"]);
-        if command.is_empty() && program_id.is_empty() {
-            return Err("command requires command or programId".into());
-        }
-        if !command.is_empty() && !program_id.is_empty() {
-            return Err("command must use either command or programId, not both".into());
-        }
-        if let Some(args) = input.get("args") {
-            if program_id.is_empty() {
-                return Err("command args require programId".into());
-            }
-            let Some(args) = args.as_array() else {
-                return Err("command argument args must be an array of strings".into());
-            };
-            if args.len() > 128
-                || args.iter().any(|argument| {
-                    !argument
-                        .as_str()
-                        .is_some_and(|value| value.len() <= 4096 && !value.contains('\0'))
-                })
-            {
-                return Err("command args exceed the bounded string argument limits".into());
-            }
+    if name == "run_program"
+        && let Some(args) = input.get("args")
+    {
+        let Some(args) = args.as_array() else {
+            return Err("run_program argument args must be an array of strings".into());
+        };
+        if args.len() > 128
+            || args.iter().any(|argument| {
+                !argument
+                    .as_str()
+                    .is_some_and(|value| value.len() <= 4096 && !value.contains('\0'))
+            })
+        {
+            return Err("run_program args exceed the bounded string argument limits".into());
         }
     }
-    if name == "edit" {
-        let mode = input
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("replace");
-        if !matches!(mode, "replace" | "patch") {
-            return Err("edit mode must be replace or patch".into());
-        }
-        if mode == "replace"
-            && !(input
-                .get("newText")
-                .or_else(|| input.get("new_string"))
-                .or_else(|| input.get("new"))
-                .or_else(|| input.get("replace"))
-                .is_some_and(Value::is_string))
-        {
-            return Err("edit newText must be a string".into());
-        }
+    if name == "edit" && !input.get("newText").is_some_and(Value::is_string) {
+        return Err("edit newText must be a string".into());
     }
     Ok(())
 }
 
 pub(super) fn command_display(input: &Map<String, Value>) -> String {
-    let command = string_arg(input, &["command", "cmd", "script"]);
+    let command = string_arg(input, &["command"]);
     if !command.is_empty() {
         return command;
     }

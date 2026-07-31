@@ -103,9 +103,17 @@ func supportedKind(kind string) bool {
 }
 
 func (r Registry) ProtectedContext(route string, messages []model.Message) []model.Message {
+	overlay := r.RequestOverlay(route, messages)
+	if overlay == "" {
+		return nil
+	}
+	return []model.Message{{Role: "system", Content: overlay}}
+}
+
+func (r Registry) RequestOverlay(route string, messages []model.Message) string {
 	selected := r.Select(route, messages)
 	if len(selected) == 0 {
-		return nil
+		return ""
 	}
 	lines := []string{
 		"Server-managed artifact templates available for this request:",
@@ -124,7 +132,7 @@ func (r Registry) ProtectedContext(route string, messages []model.Message) []mod
 		))
 	}
 	lines = append(lines, "When the desktop pulls a selected template, it caches it locally under `.umbratic/templates/<kind>/<id>/` before local artifact generation and render/export verification.")
-	return []model.Message{{Role: "system", Content: strings.Join(lines, "\n")}}
+	return strings.Join(lines, "\n")
 }
 
 func (r Registry) Select(route string, messages []model.Message) []Template {

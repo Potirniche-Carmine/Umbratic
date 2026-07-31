@@ -269,7 +269,7 @@
 
 .timelineActivity.isFinished {
   background: transparent;
-  opacity: 0.74;
+  opacity: 0.9;
 }
 
 .timelineActivity.isStatusOnly::before { display: none; }
@@ -430,7 +430,7 @@
 }
 
 .activityLogEntry.commandLog {
-  padding: 6px 2px;
+  padding: 4px 2px;
 }
 
 .activityLogEntry:last-child {
@@ -704,64 +704,6 @@
   background: color-mix(in srgb, var(--red) 13%, transparent);
 }
 
-.responseFeedbackNote {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: min(420px, calc(100vw - 48px));
-  margin: 0;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--modal-bg) 96%, transparent);
-  box-shadow: 0 12px 30px var(--shadow-color);
-}
-
-.responseFeedbackNote input {
-  min-width: 0;
-  min-height: 30px;
-  flex: 1 1 auto;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--control-bg) 86%, transparent);
-  font: inherit;
-  font-size: 12px;
-}
-
-.responseFeedbackNote input::placeholder {
-  color: var(--faint);
-}
-
-.responseFeedbackNote input:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
-.responseFeedbackNote button {
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--text);
-  background: var(--control-bg);
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.responseFeedbackNote button:hover:not(:disabled) {
-  background: var(--control-hover);
-}
-
-.responseFeedbackNote button:disabled {
-  opacity: 0.45;
-}
-
 .timelineCommand {
   position: relative;
   width: min(calc(100% - 18px), 980px);
@@ -972,3 +914,18 @@
   justify-self: center;
 }
 
+.activityLiveOutput {
+  min-height: 2.7em;
+  max-height: 5.4em;
+  margin: 3px 0 0 16px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.streamingPlainTail {
+  white-space: pre-wrap;
+}

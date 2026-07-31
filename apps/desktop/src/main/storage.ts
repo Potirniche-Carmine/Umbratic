@@ -1092,20 +1092,77 @@ type RawSettings = {
   contextLength?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
+  localModelCache?: unknown;
 };
 
 type SettingsRow = {
   payload: string;
 };
-
 type NoteRow = {
   content: string;
   updated_at: string;
 };
-
 const appSettingsKey = "app";
 const userNotesId = "user";
 const modelEndpointSettingsVersion = 3;
+const localModelCacheLimit = 8;
+const localModelLimit = 200;
+type StoredLocalModelCacheEntry = {
+  baseUrl: string;
+  models: string[];
+  updatedAt: string;
+};
+
+function localModelCacheKey(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function normalizedLocalModelCache(value: unknown): StoredLocalModelCacheEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.baseUrl !== "string" || !Array.isArray(entry.models)) return [];
+    const baseUrl = localModelCacheKey(entry.baseUrl);
+    if (!baseUrl) return [];
+    const models = Array.from(new Set(
+      entry.models
+        .filter((model): model is string => typeof model === "string")
+        .map((model) => model.trim())
+        .filter((model) => model.length > 0 && model.length <= 256),
+    )).slice(0, localModelLimit);
+    return [{
+      baseUrl,
+      models,
+      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+    }];
+  }).slice(0, localModelCacheLimit);
+}
+
+function cachedLocalModels(settings: RawSettings, baseUrl: string): string[] {
+  const key = localModelCacheKey(baseUrl);
+  return normalizedLocalModelCache(settings.localModelCache)
+    .find((entry) => entry.baseUrl === key)?.models ?? [];
+}
+
+export function readCachedLocalModels(baseUrl: string): string[] {
+  return cachedLocalModels(readRawSettings(), baseUrl);
+}
+
+export function writeCachedLocalModels(baseUrl: string, models: readonly string[]): string[] {
+  const key = localModelCacheKey(baseUrl);
+  if (!key) return [];
+  const normalized = Array.from(new Set(
+    models.map((model) => model.trim()).filter((model) => model.length > 0 && model.length <= 256),
+  )).slice(0, localModelLimit);
+  const settings = readRawSettings();
+  const entries = normalizedLocalModelCache(settings.localModelCache)
+    .filter((entry) => entry.baseUrl !== key);
+  writeRawSettings({
+    ...settings,
+    localModelCache: [{ baseUrl: key, models: normalized, updatedAt: new Date().toISOString() }, ...entries]
+      .slice(0, localModelCacheLimit),
+  });
+  return normalized;
+}
 
 function readRawSettings(): RawSettings {
   return withAppDatabase((db) => {
@@ -1400,9 +1457,13 @@ export function readPermissionModeSetting(): PermissionMode {
 
 export function readStartupSettings(): DesktopStartupSettings {
   const settings = readRawSettings();
+  const endpoint = modelEndpointSettings(settings);
   return {
     permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
-    modelEndpoint: publicModelEndpointSettings(modelEndpointSettings(settings)),
+    modelEndpoint: publicModelEndpointSettings(endpoint),
+    localModels: endpoint.mode === "local"
+      ? Array.from(new Set([endpoint.modelId, ...cachedLocalModels(settings, endpoint.baseUrl)].filter(Boolean)))
+      : [],
     companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),

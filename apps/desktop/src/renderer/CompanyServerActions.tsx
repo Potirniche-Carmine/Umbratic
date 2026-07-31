@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, LogIn, Trash2 } from "lucide-react";
+import { Loader2, LogIn, LogOut, Trash2 } from "lucide-react";
 
 type CompanyServerActionsProps = {
   active: boolean;
   busy: boolean;
+  busyAction: "connect" | "disconnect" | null;
   connectDisabled: boolean;
   onConnect(): void;
+  onDisconnect(): void;
   onUnregister(): void;
 };
 
 export function CompanyServerActions({
   active,
   busy,
+  busyAction,
   connectDisabled,
   onConnect,
+  onDisconnect,
   onUnregister,
 }: CompanyServerActionsProps) {
   const [confirmationOpen, setConfirmationOpen] = useState(false);
@@ -85,12 +89,21 @@ export function CompanyServerActions({
   return (
     <>
       <div className="companyEnrollmentActions">
-        {!active ? (
-          <button className="primaryAction companyServerConnectAction" type="button" onClick={onConnect} disabled={connectDisabled}>
-            {busy ? <Loader2 className="spin" size={14} /> : <LogIn size={14} />}
-            <span>{busy ? "Connecting" : "Connect"}</span>
-          </button>
-        ) : null}
+        <button
+          className={`primaryAction companyServerConnectAction ${active ? "isConnected" : ""}`}
+          type="button"
+          onClick={active ? onDisconnect : onConnect}
+          disabled={connectDisabled}
+        >
+          {busy
+            ? <Loader2 className="spin" size={14} />
+            : active ? <LogOut size={14} /> : <LogIn size={14} />}
+          <span>
+            {busy
+              ? busyAction === "disconnect" ? "Disconnecting" : "Connecting"
+              : active ? "Disconnect" : "Connect"}
+          </span>
+        </button>
         <button
           ref={unregisterTriggerRef}
           className="settingsInlineButton companyServerUnregisterAction"

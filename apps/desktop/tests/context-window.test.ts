@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const contextWindow = loadTypeScriptModule(new URL("../src/shared/contextWindow.ts", import.meta.url));
+
+test("desktop reserve constants stay aligned with the runner", () => {
+  const runnerContext = readFileSync(new URL("../../../packages/runner/src/context.rs", import.meta.url), "utf8");
+  assert.match(runnerContext, /const MINIMUM_OUTPUT_TOKENS: u64 = 1_000;/);
+  assert.match(runnerContext, /const OUTPUT_STEP_TOKENS: u64 = 1_000;/);
+  assert.equal(contextWindow.CONTEXT_MINIMUM_OUTPUT_TOKENS, 1_000);
+  assert.equal(contextWindow.CONTEXT_OUTPUT_STEP_TOKENS, 1_000);
+  assert.equal(contextWindow.CONTEXT_OUTPUT_RESERVE_TOKENS, 8_192);
+  assert.equal(contextWindow.CONTEXT_PROTECTED_RESERVE_TOKENS, 2_048);
+});
 
 test("context length settings use the 64K default and snap to every supported local choice", () => {
   assert.equal(contextWindow.normalizeContextLength(undefined), 64000);
@@ -21,7 +32,7 @@ test("runner-measured content can be used as the base for an unsent draft", () =
   assert.equal(estimate.contentTokens, 12012);
   assert.equal(estimate.reserveTokens, 8192);
   assert.equal(estimate.estimatedTokens, 20204);
-  assert.equal(Math.round(estimate.percentage), 19);
+  assert.equal(Math.round(estimate.percentage), 32);
   assert.equal(estimate.protectedTokens, 0);
 });
 
@@ -67,7 +78,7 @@ test("context estimates use measured attachment text with a safe unmeasured fall
   assert.equal(estimate.contentTokens, 2048 + 2 + 10 + 2 + 10 + 1600 + 7500 + 512);
   assert.equal(estimate.reserveTokens, 8192);
   assert.equal(estimate.protectedTokens, 2048);
-  assert.equal(estimate.percentage, (estimate.contentTokens / 64000) * 100);
+  assert.equal(estimate.percentage, (estimate.estimatedTokens / 64000) * 100);
   assert.equal(estimate.level, "normal");
   assert.equal(estimate.overLimit, false);
 });
@@ -108,12 +119,23 @@ test("response allowance grows to 8K when space permits and steps down to a 1K m
 });
 
 test("context usage warns at 75 percent and becomes critical at 90 percent", () => {
-  const warning = contextWindow.estimateContextUsage([{ text: "x".repeat(192000) }], 64000);
-  const critical = contextWindow.estimateContextUsage([{ text: "x".repeat(230000) }], 64000);
+  const warning = contextWindow.estimateContextUsage([{ text: "x".repeat(160000) }], 64000);
+  const critical = contextWindow.estimateContextUsage([{ text: "x".repeat(205000) }], 64000);
 
   assert.equal(warning.level, "warning");
-  assert.equal(Math.round(warning.percentage), 78);
+  assert.equal(Math.round(warning.percentage), 79);
   assert.equal(critical.level, "critical");
-  assert.equal(Math.round(critical.percentage), 93);
+  assert.equal(Math.round(critical.percentage), 96);
   assert.equal(contextWindow.formatTokenCount(64000), "64K");
+});
+
+test("context percentage includes the response reserve shown in preflight", () => {
+  const estimate = contextWindow.estimateContextUsage([], 32000, {
+    contentTokens: 18000,
+    reserveTokens: 8000,
+  });
+
+  assert.equal(estimate.estimatedTokens, 26000);
+  assert.equal(estimate.percentage, 81.25);
+  assert.equal(estimate.level, "warning");
 });

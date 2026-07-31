@@ -7,9 +7,7 @@ const history = loadTypeScriptModule(new URL("../src/main/historyContext.ts", im
 
 test("boundedRecentLines preserves newest conversation context when the budget is exhausted", () => {
   const value = history.boundedRecentLines(["oldest-0000", "middle-1111", "newest-2222"], 60, 20);
-  assert.doesNotMatch(value, /oldest/);
-  assert.match(value, /newest-2222/);
-  assert.ok(value.indexOf("middle") < value.indexOf("newest"));
+  assert.equal(value, "middle-1\nnewest-2222");
 });
 
 test("boundedRecentLines applies the event-count limit before the character budget", () => {

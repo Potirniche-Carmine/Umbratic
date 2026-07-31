@@ -29,6 +29,7 @@ These are required behavior, not optional hardening:
 - Treat all workspace paths and tool arguments as untrusted. Enforce canonical-root, traversal, symlink, secret, generated-file, and command-policy checks before execution.
 - Policy denial happens before a permission request. Permission approval never overrides policy.
 - Each requested tool call receives one `tool.requested` event and one terminal outcome. Preserve stable ordering, ids, error codes, cancellation, and process cleanup on every failure path.
+- Tool batches use path-scoped scheduling. Reads share a canonical path lock. Writes and edits take an exclusive lock on their canonical path. Commands, programs, and multi-file patches are global barriers because their filesystem effects are not bounded to one path.
 - Reject duplicate call and message ids where ambiguity could corrupt history or lifecycle state.
 - Keep context and history bounded, including complete tool lifecycles during compaction.
 - Redact secrets, credentials, prompt content, raw command output, and absolute paths from diagnostics. Do not panic on untrusted network, model, or workspace input.

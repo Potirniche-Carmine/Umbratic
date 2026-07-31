@@ -103,7 +103,15 @@ test("company enrollment stores only the encrypted-device input and renews opaqu
   assert.equal(sessionNumber, 2);
   assert.equal(stored.orgName, "Contoso");
 
+  await identity.disconnectCompanySession();
+  await assert.rejects(
+    identity.ensureCompanySession(),
+    /company server is disconnected/i,
+  );
+  const reconnected = await identity.connectCompanySession();
+  assert.equal(reconnected, `umbs_${"a".repeat(30)}3`);
+
   await identity.disconnectCompanyDevice();
   assert.equal(cleared, true);
-  assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${renewed}`);
+  assert.equal(calls.at(-1).options.headers.Authorization, `Bearer ${reconnected}`);
 });

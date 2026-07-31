@@ -15,6 +15,7 @@ import type { CompanyDeviceCredential } from "./companyCredentialStorage";
 type TransportOptions = {
   headers?: Record<string, string>;
   mtls?: EndpointMtlsConfig;
+  signal?: AbortSignal;
 };
 
 type SessionCache = {
@@ -23,6 +24,7 @@ type SessionCache = {
 };
 
 let sessionCache: SessionCache | null = null;
+let sessionDisconnected = false;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -80,6 +82,7 @@ export async function enrollCompanyDevice(
   input: { baseUrl: string; enrollmentCode: string; deviceLabel?: string },
   transport: TransportOptions = {},
 ): Promise<CompanyDeviceCredential> {
+  sessionDisconnected = false;
   const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
   const enrollmentCode = input.enrollmentCode.trim();
   if (!enrollmentCode.startsWith("umbr_") || enrollmentCode.length > 512) {
@@ -122,6 +125,9 @@ export async function enrollCompanyDevice(
 }
 
 export async function ensureCompanySession(transport: TransportOptions = {}): Promise<string> {
+  if (sessionDisconnected) {
+    throw new Error("The company server is disconnected.");
+  }
   if (sessionCache && sessionCache.expiresAt > Date.now() + 90_000) {
     return sessionCache.token;
   }
@@ -165,12 +171,17 @@ export async function renewCompanySession(transport: TransportOptions = {}): Pro
   return ensureCompanySession(transport);
 }
 
+export async function connectCompanySession(transport: TransportOptions = {}): Promise<string> {
+  sessionDisconnected = false;
+  return renewCompanySession(transport);
+}
+
 export function currentCompanySessionToken(): string {
   if (!sessionCache || sessionCache.expiresAt <= Date.now()) return "";
   return sessionCache.token;
 }
 
-export async function disconnectCompanyDevice(transport: TransportOptions = {}): Promise<void> {
+export async function disconnectCompanySession(transport: TransportOptions = {}): Promise<void> {
   const credential = readCompanyDeviceCredential();
   const token = currentCompanySessionToken();
   if (credential && token) {
@@ -180,7 +191,13 @@ export async function disconnectCompanyDevice(transport: TransportOptions = {}):
     }).catch(() => undefined);
   }
   sessionCache = null;
+  sessionDisconnected = true;
+}
+
+export async function disconnectCompanyDevice(transport: TransportOptions = {}): Promise<void> {
+  await disconnectCompanySession(transport);
   clearCompanyDeviceCredential();
+  sessionDisconnected = false;
 }
 
 export { companyConnectionStatus };

@@ -17,6 +17,14 @@ pub struct PermissionBroker {
 }
 
 impl PermissionBroker {
+    pub fn has_pending(&self, task_id: &str) -> bool {
+        self.pending
+            .lock()
+            .unwrap()
+            .values()
+            .any(|pending| pending.task_id == task_id)
+    }
+
     pub async fn request(
         &self,
         sink: &EventSink,
@@ -112,7 +120,10 @@ mod tests {
         };
         let event = events.recv().await.unwrap();
         let permission_id = event["permissionId"].as_str().unwrap();
+        assert!(broker.has_pending("task-a"));
+        assert!(!broker.has_pending("task-b"));
         assert!(broker.reply(&sink, permission_id, "allow"));
+        assert!(!broker.has_pending("task-a"));
         assert!(!broker.reply(&sink, permission_id, "allow"));
         assert_eq!(request.await.unwrap(), "allow");
         let resolved = events.recv().await.unwrap();

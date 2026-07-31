@@ -30,12 +30,41 @@ test("runner event decoder accepts handled events and marks internal events as i
   assert.equal(legacyFinished.ok, true);
   assert.equal(legacyFinished.ignored, false);
 
+  const compressedWithoutHash = decoder.decodeRunnerEvent({
+    type: "context.compressed",
+    taskId: "task-1",
+    toolCallId: "tool-1",
+    toolKind: "read",
+    kind: "file",
+    strategy: "text_head_tail",
+    hash: null,
+    originalBytes: 2048,
+    outputBytes: 1024,
+  });
+  assert.equal(compressedWithoutHash.ok, true);
+  assert.equal(compressedWithoutHash.ignored, false);
+
   assert.deepEqual(
     JSON.parse(JSON.stringify(decoder.decodeRunnerEvent({
       type: "tool.policy.stage",
       taskId: "task-1",
+      toolCallId: "tool-1",
+      stage: "coerce_arguments",
+      outcome: "changed",
+      reason: "numeric string converted to integer",
     }))),
-    { ok: true, ignored: true },
+    {
+      ok: true,
+      ignored: false,
+      event: {
+        type: "tool.policy.stage",
+        taskId: "task-1",
+        toolCallId: "tool-1",
+        stage: "coerce_arguments",
+        outcome: "changed",
+        reason: "numeric string converted to integer",
+      },
+    },
   );
 });
 

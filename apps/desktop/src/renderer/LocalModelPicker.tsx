@@ -25,7 +25,7 @@ export function LocalModelPicker({
     () => Array.from(new Set([selectedModel, ...models].map((modelId) => modelId.trim()).filter(Boolean))),
     [models, selectedModel],
   );
-  const interactionDisabled = disabled || status === "loading" || options.length === 0;
+  const interactionDisabled = disabled || options.length === 0;
   const displayValue = selectedModel
     || (status === "loading"
       ? "Checking installed models..."

@@ -195,7 +195,7 @@ export function estimateContextUsage(
     ? Math.max(0, Math.round(base?.reserveTokens ?? 0))
     : adaptiveOutputReserve(contextLength, contentTokens);
   const estimatedTokens = contentTokens + reserveTokens;
-  const percentage = (contentTokens / contextLength) * 100;
+  const percentage = (estimatedTokens / contextLength) * 100;
   const level: ContextUsageLevel = percentage >= 90 ? "critical" : percentage >= 75 ? "warning" : "normal";
   return {
     contextLength,

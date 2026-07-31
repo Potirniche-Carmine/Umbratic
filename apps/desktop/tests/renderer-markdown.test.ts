@@ -9,7 +9,7 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 const iconNames = [
   "AtSign", "BarChart3", "Brain", "Check", "ChevronDown", "ChevronRight", "CheckCircle2", "CircleDashed",
   "Copy", "ExternalLink", "File", "FileText", "FolderOpen", "GitBranch", "Hand", "Loader2",
-  "Monitor", "Moon", "PanelRight", "Paperclip", "Play", "Plus", "RefreshCw", "Send", "Settings",
+  "Monitor", "Moon", "PanelRight", "Paperclip", "Pencil", "Play", "Plus", "RefreshCw", "Send", "Settings",
   "ShieldCheck", "Sparkles", "SquarePen", "SquareTerminal", "Sun", "ThumbsDown", "ThumbsUp",
   "Trash2", "TriangleAlert", "Type", "Undo2", "User", "X",
 ];
@@ -105,8 +105,9 @@ test("WorkMarkdownContent renders safe markdown with a distinct streaming marker
   );
   assert.match(html, /workMarkdownContent isStreaming/);
   assert.match(html, /<strong>Inspecting<\/strong>/);
-  assert.match(html, /<ul>/);
-  assert.match(html, /<code>main\.tsx<\/code>/);
+  assert.doesNotMatch(html, /<ul>/);
+  assert.match(html, /streamingPlainTail/);
+  assert.match(html, /- Read `main\.tsx`/);
   assert.match(html, /workStreamingCaret/);
   assert.doesNotMatch(html, /\*\*Inspecting\*\*/);
 });
@@ -117,29 +118,46 @@ test("work activity styles keep reasoning and tool calls in one seamless flow", 
     "utf8",
   );
   const reasoningRule = activityCss.match(/\.activityLogEntry\.reasoningLog\s*{[^}]+}/s)?.[0] ?? "";
+  assert.match(reasoningRule, /\.activityLogEntry\.reasoningLog/);
   assert.doesNotMatch(reasoningRule, /\b(?:background|border)/);
   assert.doesNotMatch(activityCss, /activityToolToggle::before/);
   assert.doesNotMatch(activityCss, /\.commandLog\.(?:running|passed|failed)/);
 });
 
-test("feedback and prompt controls do not change layout or allow horizontal growth", () => {
+test("toast close control centers its icon without a text line box", () => {
+  const css = fs.readFileSync(
+    new URL("../src/renderer/styles/motion-accessibility.css", import.meta.url),
+    "utf8",
+  );
+  const buttonRule = css.match(/\.toast button\s*{[^}]+}/s)?.[0] ?? "";
+  const iconRule = css.match(/\.toast button svg\s*{[^}]+}/s)?.[0] ?? "";
+  assert.match(buttonRule, /place-items:\s*center/);
+  assert.match(buttonRule, /padding:\s*0/);
+  assert.match(buttonRule, /line-height:\s*0/);
+  assert.match(iconRule, /display:\s*block/);
+});
+
+test("feedback dialog and prompt controls do not allow horizontal growth", () => {
   const composerCss = fs.readFileSync(
     new URL("../src/renderer/styles/composer.css", import.meta.url),
     "utf8",
   );
-  const timelineCss = fs.readFileSync(
-    new URL("../src/renderer/styles/timeline.css", import.meta.url),
+  const feedbackCss = fs.readFileSync(
+    new URL("../src/renderer/styles/response-feedback.css", import.meta.url),
     "utf8",
   );
-  const feedbackRule = timelineCss.match(/\.responseFeedbackNote\s*{[^}]+}/s)?.[0] ?? "";
+  const feedbackDialogRule = feedbackCss.match(/\.responseFeedbackDialog\s*{[^}]+}/s)?.[0] ?? "";
+  const feedbackTextRule = feedbackCss.match(/\.responseFeedbackDialog textarea\s*{[^}]+}/s)?.[0] ?? "";
   const sendRule = composerCss.match(/\.sendButton\s*{[^}]+}/s)?.[0] ?? "";
   const actionRailRule = composerCss.match(/\.promptActionRail\s*{[^}]+}/s)?.[0] ?? "";
   const textareaRule = composerCss.match(/\.composer textarea\s*{[^}]+}/s)?.[0] ?? "";
-  assert.match(feedbackRule, /position:\s*absolute/);
+  assert.match(feedbackDialogRule, /width:\s*min\(500px,\s*calc\(100vw - 32px\)\)/);
+  assert.match(feedbackTextRule, /box-sizing:\s*border-box/);
+  assert.match(feedbackTextRule, /width:\s*100%/);
   assert.doesNotMatch(sendRule, /position:\s*absolute/);
-  assert.match(sendRule, /width:\s*36px/);
+  assert.match(sendRule, /width:\s*32px/);
   assert.match(actionRailRule, /justify-content:\s*flex-end/);
-  assert.match(actionRailRule, /min-height:\s*44px/);
+  assert.match(actionRailRule, /min-height:\s*38px/);
   assert.match(textareaRule, /max-width:\s*100%/);
   assert.match(textareaRule, /overflow-x:\s*hidden/);
   assert.match(textareaRule, /overflow-wrap:\s*anywhere/);
@@ -234,6 +252,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     commandDetailLabel,
     commandLabel,
     commandRunsFromEvents,
+    commandHasVisibleDetails,
     commandShellText,
     commandSummary,
     compactBackendEvents,
@@ -269,6 +288,12 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   ]);
   assert.equal(commandSummary(failedWrite), "exit 1: Refusing path outside workspace: bubble_sort.py");
   assert.equal(commandShellText(failedWrite), "Refusing path outside workspace: bubble_sort.py");
+  const [missingRead] = commandRunsFromEvents([
+    { type: "command.started", taskId: "task-1", id: "read-2", command: "read missing.ts", cwd: "C:/repo", kind: "read", toolKind: "read", commandClass: "read" },
+    { type: "command.finished", taskId: "task-1", id: "read-2", exitCode: 1, status: "validation_error", errorCode: "invalid_arguments", errorMessage: "Path not found: missing.ts.\nNearby workspace entries:\n- src/" },
+  ]);
+  assert.equal(commandHasVisibleDetails(missingRead), false);
+  assert.equal(commandShellText(missingRead), "exit 1");
   assert.equal(pendingPermissionFromEvents(events).id, "perm-1");
   const timeline = JSON.parse(JSON.stringify(composerTimelineFromEvents(events)));
   assert.deepEqual(timeline.map((item) => item.type), [
@@ -305,6 +330,14 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.deepEqual(repeatedReasoningTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command", "reasoning"]);
   assert.equal(repeatedReasoningTimeline[1].segments[0].text, "First step.");
   assert.equal(repeatedReasoningTimeline[1].segments[2].text, "Second step.");
+  // Consecutive status labels stay separate lines instead of running together.
+  const groupedProgressTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Reading files", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Editing files", at: "2026-01-01T00:00:02.000Z" },
+    events[5],
+  ])));
+  assert.equal(groupedProgressTimeline[1].segments[0].text, "Reading files\n\nEditing files");
   const skillTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "I will inspect the project.", at: "2026-01-01T00:00:01.000Z" },
@@ -331,14 +364,23 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
-  assert.deepEqual(interleavedTimeline.map((item) => item.type), ["user", "activity", "activity", "assistant"]);
-  assert.equal(interleavedTimeline.filter((item) => item.type === "activity").length, 2);
-  assert.equal(interleavedTimeline.filter((item) => item.type === "assistant").length, 1);
+  // Assistant text stays assistant prose even when workspace activity follows
+  // it, so a streamed preamble is never demoted into the activity log.
+  assert.deepEqual(interleavedTimeline.map((item) => item.type), [
+    "user",
+    "activity",
+    "assistant",
+    "activity",
+    "assistant",
+  ]);
+  assert.deepEqual(interleavedTimeline[1].segments.map((segment) => segment.type), ["reasoning"]);
   assert.equal(interleavedTimeline[1].segments[0].text, "First step.");
-  assert.deepEqual(interleavedTimeline[2].segments.map((segment) => segment.type), ["reasoning", "command", "reasoning"]);
-  assert.equal(interleavedTimeline[2].segments[0].text, "I’ll inspect the project.");
-  assert.equal(interleavedTimeline[2].segments[2].text, "Second step.");
-  assert.equal(interleavedTimeline[3].text, "Here is the complete answer.");
+  assert.equal(interleavedTimeline[2].text, "I’ll inspect the project.");
+  assert.deepEqual(interleavedTimeline[3].segments.map((segment) => segment.type), ["command", "reasoning"]);
+  assert.equal(interleavedTimeline[3].segments[1].text, "Second step.");
+  assert.equal(interleavedTimeline[4].text, "Here is the complete answer.");
+  // Copying the response takes every assistant paragraph, separated the way the
+  // transcript shows them.
   assert.equal(assistantTextFromEvents([
     events[0],
     { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
@@ -346,7 +388,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     events[3],
     events[4],
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
-  ]), "Here is the complete answer.");
+  ]), "I’ll inspect the project.\n\nHere is the complete answer.");
 
   const progressOnlyAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Tell me about this project", at: "2026-01-01T00:00:00.000Z" },
@@ -367,9 +409,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "command.finished", taskId: "task-1", id: "search-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "activity"]);
-  assert.deepEqual(preToolOnlyAnswerTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
-  assert.equal(preToolOnlyAnswerTimeline[1].segments[0].text, "# Umbratic Project Overview\n\nA private AI workbench.");
+  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "assistant", "activity"]);
+  assert.equal(preToolOnlyAnswerTimeline[1].text, "# Umbratic Project Overview\n\nA private AI workbench.");
+  assert.deepEqual(preToolOnlyAnswerTimeline[2].segments.map((segment) => segment.type), ["command"]);
 
   const escapedPlanTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "write me bubble sort algorithm in python and verify that it runs", at: "2026-01-01T00:00:00.000Z" },
@@ -381,10 +423,10 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Done — the script passed five test cases.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
-  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
-  assert.equal(escapedPlanTimeline[1].segments[0].type, "reasoning");
-  assert.equal(escapedPlanTimeline[1].segments[0].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
-  assert.equal(escapedPlanTimeline[2].text, "Done — the script passed five test cases.");
+  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
+  assert.equal(escapedPlanTimeline[1].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
+  assert.deepEqual(escapedPlanTimeline[2].segments.map((segment) => segment.type), ["command", "command"]);
+  assert.equal(escapedPlanTimeline[3].text, "Done — the script passed five test cases.");
 
   const failedToolTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
@@ -512,6 +554,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     id: "tool-1",
     command: 'search "composer"',
     kind: "read",
+    toolKind: "search",
     commandClass: "read",
     cwd: "C:/repo",
     stdout: "apps/desktop/src/renderer/main.tsx: content\n",
@@ -522,6 +565,33 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(commandLabel(searchRun.command), "Search workspace");
   assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
   assert.equal(commandShellText(searchRun), "apps/desktop/src/renderer/main.tsx: content");
+
+  // Every runner tool is rendered from its reported tool kind, so a tool whose
+  // summary does not look like a known command is still not shown as a shell.
+  for (const toolKind of [
+    "read",
+    "read_attachment",
+    "read_skill",
+    "search",
+    "write",
+    "edit",
+    "apply_patch",
+    "lsp",
+    "workspace_graph",
+  ]) {
+    const toolRun = { ...searchRun, toolKind, command: `${toolKind} target`, stdout: "result\n" };
+    assert.equal(commandShellText(toolRun), "result", `${toolKind} must not render as a shell`);
+    assert.ok(
+      !commandDetailLabel(toolRun).startsWith("Shell"),
+      `${toolKind} must not be labelled as a shell`,
+    );
+  }
+
+  for (const toolKind of ["command", "run_program"]) {
+    const shellRun = { ...searchRun, toolKind, kind: "bash", command: "npm run test", stdout: "ok\n" };
+    assert.equal(commandShellText(shellRun), "$ npm run test\n\nok");
+    assert.equal(commandDetailLabel(shellRun), "Shell - read");
+  }
 
   const verboseRun = {
     ...searchRun,

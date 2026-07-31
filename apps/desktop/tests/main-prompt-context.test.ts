@@ -25,17 +25,12 @@ test("limitPromptImages retains the newest bounded images and all text context",
   assert.deepEqual(Array.from(byteBounded.filter((part) => part.type === "image"), (part) => part.data_url), ["b".repeat(8)]);
 });
 
-test("casual introductions do not receive workspace context", () => {
-  for (const prompt of [
-    "hello",
-    "Hey there, tell me about yourself!",
-    "Good morning. What can you do?",
-  ]) {
-    assert.equal(promptContext.shouldIncludeWorkspaceContext(prompt, 0), false, prompt);
+test("workspace context follows project, file, and attachment state without matching prompt text", () => {
+  const emptyChat = { hasProject: false, workspaceHasFiles: false, attachmentCount: 0, historicalAttachmentCount: 0 };
+  assert.equal(promptContext.shouldIncludeWorkspaceContext(emptyChat), false);
+  for (const key of ["hasProject", "workspaceHasFiles"] as const) {
+    assert.equal(promptContext.shouldIncludeWorkspaceContext({ ...emptyChat, [key]: true }), true);
   }
-});
-
-test("workspace requests and attachments keep factual workspace context", () => {
-  assert.equal(promptContext.shouldIncludeWorkspaceContext("Hey, inspect the repository", 0), true);
-  assert.equal(promptContext.shouldIncludeWorkspaceContext("hello", 1), true);
+  assert.equal(promptContext.shouldIncludeWorkspaceContext({ ...emptyChat, attachmentCount: 1 }), true);
+  assert.equal(promptContext.shouldIncludeWorkspaceContext({ ...emptyChat, historicalAttachmentCount: 1 }), true);
 });
