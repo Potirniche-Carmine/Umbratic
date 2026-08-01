@@ -22,7 +22,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {
-    "lucide-react": "1.20.0",
+    "lucide-react": "1.25.0",
     "pdf-to-img": "6.2.0",
     "react": "19.2.7",
     "react-dom": "19.2.7"
