@@ -61,7 +61,7 @@ test("desktop packaging jobs install Go and Rust before building native services
   const workflow = fs.readFileSync(packageWorkflowUrl, "utf8");
   const packageJob = workflow.slice(workflow.indexOf("\n  package:"), workflow.indexOf("\n  publish-release:"));
 
-  assert.match(packageJob, /uses: actions\/setup-go@[0-9a-f]{40} # v6/);
+  assert.match(packageJob, /uses: actions\/setup-go@[0-9a-f]{40} # v7(?:\.\d+)?/);
   assert.match(packageJob, /rustup toolchain install 1\.96\.0/);
   assert.ok(packageJob.search(/uses: actions\/setup-go@[0-9a-f]{40}/) < packageJob.indexOf("npm --workspace @umbratic/desktop run package"));
   assert.ok(packageJob.indexOf("rustup toolchain install 1.96.0") < packageJob.indexOf("npm --workspace @umbratic\/desktop run package"));
