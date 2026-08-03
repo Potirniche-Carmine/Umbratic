@@ -557,9 +557,9 @@
 
 .settingsInlineButton.isSuccess,
 .settingsInlineButton.isSuccess:disabled {
-  color: color-mix(in srgb, var(--green) 74%, var(--text));
-  border-color: color-mix(in srgb, var(--green) 32%, var(--line-strong));
-  background: color-mix(in srgb, var(--green) 12%, var(--control-bg));
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--line) 84%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
   opacity: 1;
 }
 

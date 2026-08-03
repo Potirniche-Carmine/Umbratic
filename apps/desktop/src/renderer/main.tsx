@@ -118,7 +118,7 @@ import {
   type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activitySummary, thoughtDurationMs } from "./activityTiming";
+import { activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
 import {
   activityToolLabel,
   commandDetailLabel,
@@ -130,7 +130,7 @@ import {
   type CommandClass,
   type CommandRun,
 } from "./commandDisplay";
-export { activitySummary } from "./activityTiming";
+export { activityHasTools, activitySummary } from "./activityTiming";
 export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
 type AppearanceTheme = "system" | "light" | "dark";
@@ -1239,6 +1239,13 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       activityEndedAt = undefined;
       return;
     }
+    // Thinking-only turns (no tools/skills) never settle into a timed Working block.
+    if (finished && !activityHasTools(activitySegments)) {
+      activitySegments = [];
+      activityStartedAt = undefined;
+      activityEndedAt = undefined;
+      return;
+    }
     activityIndex += 1;
     items.push({
       type: "activity",
@@ -1477,13 +1484,14 @@ export function reconcileActivityDisclosureState(
 
   for (const activity of activities) {
     const key = activityKey(activity.id);
-    if (!activity.finished && activity.segments.length > 0 && !nextAutoOpenedKeys.has(key)) {
+    const hasTools = activityHasTools(activity.segments);
+    if (!activity.finished && hasTools && !nextAutoOpenedKeys.has(key)) {
       nextAutoOpenedKeys.add(key);
       nextExpandedIds.add(activity.id);
       newlyOpenedIds.push(activity.id);
       continue;
     }
-    if ((activity.segments.length === 0 || activity.finished) && nextAutoOpenedKeys.delete(key)) {
+    if ((!hasTools || activity.finished) && nextAutoOpenedKeys.delete(key)) {
       nextExpandedIds.delete(activity.id);
     }
   }
@@ -5090,7 +5098,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       })()
                     ) : (
                       (() => {
-                        if (item.segments.length === 0) {
+                        const hasTools = activityHasTools(item.segments);
+                        if (!item.finished && !hasTools) {
                           return (
                             <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>
                               <div className="activityHeader" role="status">

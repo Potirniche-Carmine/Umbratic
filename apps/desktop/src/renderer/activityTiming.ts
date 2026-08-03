@@ -2,6 +2,7 @@ type TimedActivity = {
   startedAt?: string;
   endedAt?: string;
   finished: boolean;
+  segments?: ReadonlyArray<{ type: string }>;
 };
 
 function eventTimeMs(value?: string): number | undefined {
@@ -27,10 +28,17 @@ export function thoughtDurationMs(startedAt?: string, endedAt?: string, finished
   return Math.max(0, end - start);
 }
 
+export function activityHasTools(segments: ReadonlyArray<{ type: string }> | undefined): boolean {
+  return (segments ?? []).some((segment) => segment.type === "command" || segment.type === "skill");
+}
+
 export function activitySummary(item: TimedActivity, now = Date.now()): string {
   const start = eventTimeMs(item.startedAt);
   const end = item.finished ? eventTimeMs(item.endedAt) ?? start : now;
   const duration = formatDuration(start === undefined || end === undefined ? null : Math.max(0, end - start));
-  if (!item.finished) return ["Working", duration].filter(Boolean).join(" · ");
+  if (!item.finished) {
+    if (!activityHasTools(item.segments)) return "Thinking";
+    return ["Working", duration].filter(Boolean).join(" · ");
+  }
   return duration ? `Worked for ${duration}` : "Work complete";
 }

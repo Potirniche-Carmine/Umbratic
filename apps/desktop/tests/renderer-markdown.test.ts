@@ -337,7 +337,17 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.progress.delta", taskId: "task-1", text: "Editing files", at: "2026-01-01T00:00:02.000Z" },
     events[5],
   ])));
-  assert.equal(groupedProgressTimeline[1].segments[0].text, "Reading files\n\nEditing files");
+  assert.deepEqual(groupedProgressTimeline.map((item) => item.type), ["user", "assistant"]);
+  assert.equal(groupedProgressTimeline[1].text, "Done");
+  const runningGroupedProgressTimeline = composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Reading files", at: "2026-01-01T00:00:01.000Z" },
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Editing files", at: "2026-01-01T00:00:02.000Z" },
+  ], undefined, "running");
+  assert.equal(runningGroupedProgressTimeline[1].type, "activity");
+  assert.equal(runningGroupedProgressTimeline[1].finished, false);
+  assert.equal(activitySummary(runningGroupedProgressTimeline[1]), "Thinking");
+  assert.equal(runningGroupedProgressTimeline[1].segments[0].text, "Reading files\n\nEditing files");
   const skillTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "I will inspect the project.", at: "2026-01-01T00:00:01.000Z" },
@@ -366,19 +376,17 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   ], undefined, "completed")));
   // Assistant text stays assistant prose even when workspace activity follows
   // it, so a streamed preamble is never demoted into the activity log.
+  // Thinking-only progress before tools does not leave a timed Working block.
   assert.deepEqual(interleavedTimeline.map((item) => item.type), [
     "user",
-    "activity",
     "assistant",
     "activity",
     "assistant",
   ]);
-  assert.deepEqual(interleavedTimeline[1].segments.map((segment) => segment.type), ["reasoning"]);
-  assert.equal(interleavedTimeline[1].segments[0].text, "First step.");
-  assert.equal(interleavedTimeline[2].text, "I’ll inspect the project.");
-  assert.deepEqual(interleavedTimeline[3].segments.map((segment) => segment.type), ["command", "reasoning"]);
-  assert.equal(interleavedTimeline[3].segments[1].text, "Second step.");
-  assert.equal(interleavedTimeline[4].text, "Here is the complete answer.");
+  assert.equal(interleavedTimeline[1].text, "I’ll inspect the project.");
+  assert.deepEqual(interleavedTimeline[2].segments.map((segment) => segment.type), ["command", "reasoning"]);
+  assert.equal(interleavedTimeline[2].segments[1].text, "Second step.");
+  assert.equal(interleavedTimeline[3].text, "Here is the complete answer.");
   // Copying the response takes every assistant paragraph, separated the way the
   // transcript shows them.
   assert.equal(assistantTextFromEvents([
@@ -443,11 +451,12 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Summary", at: "2026-01-01T00:01:08.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:01:10.000Z" },
   ], undefined, "completed")));
-  assert.equal(
-    activitySummary(delayedFirstTokenTimeline[1]),
-    "Worked for 1 minute 8 seconds",
-    "prompt evaluation before visible reasoning must count toward the response time",
+  assert.deepEqual(
+    delayedFirstTokenTimeline.map((item) => item.type),
+    ["user", "assistant"],
+    "tool-less answers leave Thinking without a timed Working summary",
   );
+  assert.equal(delayedFirstTokenTimeline[1].text, "Summary");
 
   const waitingTimeline = composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
@@ -455,7 +464,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(waitingTimeline[1].type, "activity");
   assert.equal(
     activitySummary(waitingTimeline[1], Date.parse("2026-01-01T00:00:42.000Z")),
-    "Working · 42 seconds",
+    "Thinking",
   );
   assert.equal(waitingTimeline[1].segments.length, 0);
   const waitingDisclosure = reconcileActivityDisclosureState(new Set(), waitingTimeline, "task-1", new Set());
@@ -473,23 +482,34 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
   ], undefined, "running");
+  assert.equal(activitySummary(preAnswerTimeline[1]), "Thinking");
   const openedDisclosure = reconcileActivityDisclosureState(new Set(), preAnswerTimeline, "task-1", new Set());
-  assert.deepEqual([...openedDisclosure.expandedIds], ["activity-1"]);
-  assert.deepEqual([...openedDisclosure.autoOpenedKeys], ["task-1:activity-1"]);
+  assert.deepEqual([...openedDisclosure.expandedIds], []);
+  assert.deepEqual([...openedDisclosure.autoOpenedKeys], []);
+  const streamingToolsTimeline = composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.started", taskId: "task-1", id: "cmd-1", command: "npm run test", cwd: "C:/repo", kind: "bash", commandClass: "package-manager", at: "2026-01-01T00:00:02.000Z" },
+  ], undefined, "running");
+  assert.match(activitySummary(streamingToolsTimeline[1], Date.parse("2026-01-01T00:00:05.000Z")), /^Working/);
+  const toolsDisclosure = reconcileActivityDisclosureState(new Set(), streamingToolsTimeline, "task-1", new Set());
+  assert.deepEqual([...toolsDisclosure.expandedIds], ["activity-1"]);
+  assert.deepEqual([...toolsDisclosure.autoOpenedKeys], ["task-1:activity-1"]);
   const streamingAnswerTimeline = composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "Here is the answer", at: "2026-01-01T00:00:02.000Z" },
   ], undefined, "running");
-  assert.equal(streamingAnswerTimeline[1].type, "activity");
-  assert.equal(streamingAnswerTimeline[1].finished, true);
-  assert.equal(streamingAnswerTimeline[2].type, "assistant");
-  assert.equal(streamingAnswerTimeline[2].streaming, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(streamingAnswerTimeline.map((item) => item.type))),
+    ["user", "assistant"],
+  );
+  assert.equal(streamingAnswerTimeline[1].streaming, true);
   const streamingDisclosure = reconcileActivityDisclosureState(
-    openedDisclosure.expandedIds,
+    toolsDisclosure.expandedIds,
     streamingAnswerTimeline,
     "task-1",
-    openedDisclosure.autoOpenedKeys,
+    toolsDisclosure.autoOpenedKeys,
   );
   assert.deepEqual([...streamingDisclosure.expandedIds], []);
   assert.deepEqual([...streamingDisclosure.autoOpenedKeys], []);
