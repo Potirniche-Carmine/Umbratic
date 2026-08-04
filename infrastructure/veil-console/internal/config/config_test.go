@@ -17,16 +17,21 @@ func TestStartupRejectsPublicListen(t *testing.T) {
 func TestVeilEnvironmentIsAllowlisted(t *testing.T) {
 	t.Setenv("SHOULD_NOT_LEAK", "secret")
 	cfg := DefaultVeil()
-	cfg.Protocol, cfg.ProviderBaseURL, cfg.Model = "ollama", "http://127.0.0.1:11434", "model"
+	cfg.ProviderBaseURL, cfg.Model = "http://127.0.0.1:8000/v1", "model"
 	env := strings.Join(cfg.Environment("127.0.0.1:8080", "token"), "\n")
 	if strings.Contains(env, "SHOULD_NOT_LEAK") || !strings.Contains(env, "VEIL_ENV_FILE=-") || !strings.Contains(env, "VEIL_TELEMETRY_ENABLED=false") {
 		t.Fatalf("unsafe environment: %s", env)
+	}
+	if !strings.Contains(env, "VEIL_MODE=server") {
+		t.Fatalf("server mode missing from environment: %s", env)
+	}
+	if strings.Contains(env, "VEIL_PROVIDER_PROTOCOL") {
+		t.Fatalf("legacy protocol env still present: %s", env)
 	}
 }
 
 func TestVLLMContextLengthIsSupported(t *testing.T) {
 	cfg := DefaultVeil()
-	cfg.Protocol = "vllm"
 	cfg.ProviderBaseURL = "http://127.0.0.1:8000/v1"
 	cfg.Model = "local-model"
 	cfg.ContextLength = 65_536
@@ -36,6 +41,28 @@ func TestVLLMContextLengthIsSupported(t *testing.T) {
 	env := strings.Join(cfg.Environment("127.0.0.1:8080", "token"), "\n")
 	if !strings.Contains(env, "VEIL_CONTEXT_LENGTH=65536") {
 		t.Fatalf("context length is missing from environment: %s", env)
+	}
+	if !strings.Contains(env, "VEIL_TEMPERATURE=0.2") || !strings.Contains(env, "VEIL_TOP_P=0.95") {
+		t.Fatalf("generation profile missing from environment: %s", env)
+	}
+}
+
+func TestVeilValidateRejectsInvalidGenerationProfile(t *testing.T) {
+	cfg := DefaultVeil()
+	cfg.ProviderBaseURL = "http://127.0.0.1:8000/v1"
+	cfg.Model = "local-model"
+	cfg.TopP = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected top p of 0 to be rejected")
+	}
+	cfg = DefaultVeil()
+	cfg.ProviderBaseURL = "http://127.0.0.1:8000/v1"
+	cfg.Model = "local-model"
+	budget := 9000
+	cfg.MaxOutputTokens = 1024
+	cfg.ThinkingTokenBudget = &budget
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected thinking budget above max output to be rejected")
 	}
 }
 

@@ -54,7 +54,12 @@ impl PermissionBroker {
         let Some(pending) = self.pending.lock().unwrap().remove(permission_id) else {
             return false;
         };
-        let decision = if decision == "allow" { "allow" } else { "deny" }.to_owned();
+        let decision = match decision {
+            "allow" => "allow",
+            "abort" => "abort",
+            _ => "deny",
+        }
+        .to_owned();
         let task_id = pending.task_id.clone();
         let _ = pending.sender.send(decision.clone());
         sink.emit(json!({ "type": "permission.resolved", "taskId": task_id, "permissionId": permission_id, "decision": decision, "at": now_iso() }));
@@ -72,6 +77,20 @@ impl PermissionBroker {
             .collect();
         for id in ids {
             self.reply(sink, &id, "deny");
+        }
+    }
+
+    pub fn abort_all(&self, sink: &EventSink, task_id: &str) {
+        let ids: Vec<_> = self
+            .pending
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, pending)| pending.task_id == task_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            self.reply(sink, &id, "abort");
         }
     }
 }
@@ -159,5 +178,28 @@ mod tests {
         let mut decisions = vec![first.await.unwrap(), second.await.unwrap()];
         decisions.sort();
         assert_eq!(decisions, ["allow", "deny"]);
+    }
+
+    #[tokio::test]
+    async fn abort_all_resolves_pending_with_abort() {
+        let directory = tempfile::tempdir().unwrap();
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+        let broker = Arc::new(PermissionBroker::default());
+        let request = {
+            let broker = broker.clone();
+            let sink = sink.clone();
+            tokio::spawn(async move {
+                broker
+                    .request(&sink, "task-a", "edit", "write", false)
+                    .await
+            })
+        };
+        let _ = events.recv().await.unwrap();
+        broker.abort_all(&sink, "task-a");
+        assert_eq!(request.await.unwrap(), "abort");
+        let resolved = events.recv().await.unwrap();
+        assert_eq!(resolved["decision"], "abort");
+        assert!(!broker.has_pending("task-a"));
     }
 }

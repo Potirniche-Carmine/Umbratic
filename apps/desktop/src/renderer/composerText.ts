@@ -162,6 +162,64 @@ function normalizeMarkdownTableRow(cells: string[], columnCount: number): string
   return Array.from({ length: columnCount }, (_, index) => cells[index] ?? "");
 }
 
+const markdownListItem = /^\s*(?:([-*])|(\d+)[.)])\s+(.+)$/;
+
+/// Reports whether the next non-blank line continues a list of the same kind.
+function continuesList(lines: string[], from: number, ordered: boolean): boolean {
+  for (let index = from; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    const item = line.match(markdownListItem);
+    return !!item && !!item[2] === ordered;
+  }
+  return false;
+}
+
+/// Common inline LaTeX, rendered as the symbol a reader expects.
+///
+/// Models reach for `$\rightarrow$` in architecture descriptions. Without this
+/// the delimiters and command leak into the message as literal text.
+const mathSymbols: Record<string, string> = {
+  rightarrow: "→", to: "→", leftarrow: "←", leftrightarrow: "↔",
+  Rightarrow: "⇒", Leftarrow: "⇐", Leftrightarrow: "⇔",
+  times: "×", cdot: "·", div: "÷", pm: "±", neq: "≠",
+  leq: "≤", geq: "≥", approx: "≈", ldots: "…", dots: "…",
+};
+
+function renderInlineMath(text: string): string {
+  return text.replace(/\$\$?([^$\n]+?)\$\$?/g, (whole, expression: string) => {
+    const rendered = expression
+      .replace(/\\([A-Za-z]+)/g, (command, name: string) => mathSymbols[name] ?? command)
+      // Escaped literals carry no meaning outside LaTeX.
+      .replace(/\\([%$&_#{}])/g, "$1")
+      .replace(/[{}]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    // Anything still carrying a backslash is real LaTeX this renderer cannot
+    // display; leaving it verbatim beats showing a mangled half-translation.
+    return rendered.includes("\\") ? whole : rendered;
+  });
+}
+
+function withRenderedMath(block: MarkdownBlock): MarkdownBlock {
+  switch (block.type) {
+    case "code":
+      return block;
+    case "heading":
+      return { ...block, text: renderInlineMath(block.text) };
+    case "paragraph":
+      return { ...block, text: renderInlineMath(block.text) };
+    case "list":
+      return { ...block, items: block.items.map(renderInlineMath) };
+    case "table":
+      return {
+        ...block,
+        headers: block.headers.map(renderInlineMath),
+        rows: block.rows.map((row) => row.map(renderInlineMath)),
+      };
+  }
+}
+
 export function parseMarkdown(content: string): MarkdownBlock[] {
   const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
@@ -235,7 +293,10 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
     }
     if (!line.trim()) {
       flushParagraph();
-      flushList();
+      // A blank line between items is a loose list, not two lists. Flushing here
+      // started a second <ol>, which restarts numbering at 1, so a model that
+      // spaces out its steps rendered "1. 1. 1." instead of "1. 2. 3.".
+      if (!list.length || !continuesList(lines, lineIndex + 1, listOrdered)) flushList();
       continue;
     }
     flushList();
@@ -245,7 +306,7 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
   if (code) blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
   flushParagraph();
   flushList();
-  return blocks;
+  return blocks.map(withRenderedMath);
 }
 
 export function markdownPreview(content: string, limit = 60000): { text: string; truncated: boolean } {

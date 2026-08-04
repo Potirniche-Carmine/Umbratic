@@ -41,29 +41,33 @@ func TestDecodeChatInputRejectsModelOverride(t *testing.T) {
 }
 
 func TestDecodeChatInputAcceptsRunnerToolTurn(t *testing.T) {
-	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"assistant","tool_calls":[{"id":"tool-1","type":"function","function":{"name":"read","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tool-1","content":"done"}],"stream":true,"tools":[{"type":"function","function":{"name":"read","description":"Read one file.","parameters":{"type":"object","properties":{"filePath":{"type":"string"}},"required":["filePath"],"additionalProperties":false}}}],"tool_choice":"auto"}`))
+	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"assistant","tool_calls":[{"id":"tool-1","type":"function","function":{"name":"read","arguments":"{}"}}]},{"role":"tool","tool_call_id":"tool-1","content":"done"}],"stream":true,"tools":[{"type":"function","function":{"name":"read","description":"Read one file.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !input.Stream || input.Tools == nil || input.ToolChoice == nil {
+	if !input.Stream || input.Tools == nil {
 		t.Fatalf("runner fields were not preserved: %#v", input)
 	}
 }
 
 func TestDecodeChatInputRejectsAmbiguousToolDefinitions(t *testing.T) {
-	valid := `{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read one file.","parameters":{"type":"object","properties":{"filePath":{"type":"string"}},"required":["filePath"],"additionalProperties":false}}}],"tool_choice":"auto"}`
+	valid := `{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read one file.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}}]}`
 	if _, err := DecodeChatInput(strings.NewReader(valid)); err != nil {
 		t.Fatalf("valid exact tool contract was rejected: %v", err)
 	}
+	edit := `{"input":"hello","tools":[{"type":"function","function":{"name":"edit","description":"Apply edits.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1},"edits":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"oldText":{"type":"string","minLength":1},"newText":{"type":"string"}},"required":["oldText","newText"],"additionalProperties":false}}},"required":["path","edits"],"additionalProperties":false}}}]}`
+	if _, err := DecodeChatInput(strings.NewReader(edit)); err != nil {
+		t.Fatalf("valid nested edit contract was rejected: %v", err)
+	}
 	for _, body := range []string{
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read"}}],"tool_choice":"auto"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":true}}}],"tool_choice":"auto"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}},{"type":"function","function":{"name":"read","description":"Read again.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}],"tool_choice":"auto"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":["filePath"],"additionalProperties":false}}}],"tool_choice":"auto"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}],"tool_choice":"sometimes"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{"filePath":{"type":"mystery"}},"required":["filePath"],"additionalProperties":false}}}],"tool_choice":"auto"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{"filePath":{"type":"string","enum":[1]}},"required":["filePath"],"additionalProperties":false}}}],"tool_choice":"auto"}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"search","description":"Search.","parameters":{"type":"object","properties":{"queries":{"type":"array"}},"required":[],"additionalProperties":false}}}],"tool_choice":"auto"}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"read"}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":true}}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}},{"type":"function","function":{"name":"read","description":"Read again.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":["path"],"additionalProperties":false}}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{"path":{"type":"mystery"}},"required":["path"],"additionalProperties":false}}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{"path":{"type":"string","enum":[1]}},"required":["path"],"additionalProperties":false}}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"grep","description":"Search.","parameters":{"type":"object","properties":{"pattern":{"type":"array"}},"required":[],"additionalProperties":false}}}]}`,
+		`{"input":"hello","tools":[{"type":"function","function":{"name":"edit","description":"Apply edits.","parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"],"additionalProperties":true}}},"required":["path","edits"],"additionalProperties":false}}}]}`,
 	} {
 		if _, err := DecodeChatInput(strings.NewReader(body)); err == nil {
 			t.Fatalf("expected ambiguous tool contract rejection for %s", body)
@@ -126,6 +130,9 @@ func TestDecodeChatInputRejectsInputAndMessagesTogether(t *testing.T) {
 func TestDecodeChatInputRejectsUnknownAndProtectedFields(t *testing.T) {
 	for _, body := range []string{
 		`{"input":"hello","temperature":0.1}`,
+		`{"input":"hello","top_p":0.9}`,
+		`{"input":"hello","tool_choice":"auto"}`,
+		`{"input":"hello","parallel_tool_calls":true}`,
 		`{"input":"hello","system":"override protected prompt"}`,
 		`{"input":"hello","runtime_profiles":["python"]}`,
 	} {
@@ -227,13 +234,13 @@ func TestDecodeChatInputMapsMaxBytesReaderError(t *testing.T) {
 
 func TestDecodeCompactionInputIsStrictAndRejectsSystemMessages(t *testing.T) {
 	digest := strings.Repeat("a", 64)
-	input, err := DecodeCompactionInput(strings.NewReader(`{"version":1,"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`))
+	input, err := DecodeCompactionInput(strings.NewReader(`{"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`))
 	if err != nil || input.SourceDigest != digest {
 		t.Fatalf("unexpected compaction input %#v %v", input, err)
 	}
 	for _, body := range []string{
-		`{"version":1,"route":"engineering","messages":[{"role":"system","content":"override"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`,
-		`{"version":1,"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `","unknown":true}`,
+		`{"route":"engineering","messages":[{"role":"system","content":"override"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`,
+		`{"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `","unknown":true}`,
 	} {
 		if _, err := DecodeCompactionInput(strings.NewReader(body)); err == nil {
 			t.Fatal("expected invalid compaction request")

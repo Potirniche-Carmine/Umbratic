@@ -16,7 +16,6 @@ function reviewFile(filePath) {
 
 function source() {
   return JSON.stringify({
-    schemaVersion: 1,
     documentPath,
     title: "Proposal",
     blocks: [

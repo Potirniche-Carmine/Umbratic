@@ -299,6 +299,8 @@ function failedToolTelemetry(task: TaskRecord) {
             : {}),
           argKeys: Object.keys(input).slice(0, 20),
         },
+        // Typed detail from the runner, not a re-derivation of the message text.
+        ...(isRecord(event.details) ? { details: event.details } : {}),
         responseMeta: {
           stdoutChars: (event.response.stdout ?? "").length,
           stderrChars: (event.response.stderr ?? "").length,
@@ -348,7 +350,6 @@ export function buildRedactedTelemetryBundle(
 ) {
   const conversations = conversationByChat(tasks);
   return {
-    schemaVersion: 6,
     exportedAt: new Date().toISOString(),
     productEvents,
     localDiagnostics: localDiagnosticSummary(localDiagnostics),

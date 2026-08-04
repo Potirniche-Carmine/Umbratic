@@ -1,7 +1,6 @@
 import type { ActiveModelEndpointSettings, ModelEndpointMode } from "./types";
 
 export type RawModelEndpointSettings = Partial<Omit<ActiveModelEndpointSettings, "headers" | "secret">> & {
-  version?: unknown;
   secret?: unknown;
   headers?: unknown;
 };
@@ -11,26 +10,32 @@ type EndpointModeSettings = {
   modelEndpoints?: Partial<Record<ModelEndpointMode, RawModelEndpointSettings>>;
 };
 
+// A stored endpoint is defined by its exact shape. Anything else — including a
+// row left behind by an older field set — is discarded, never interpreted.
+const storedEndpointFields = ["mode", "baseUrl", "modelId", "secret", "headers"];
+
 function normalizeStoredEndpoint(
   endpoint: RawModelEndpointSettings | undefined,
-  currentVersion: number,
 ): RawModelEndpointSettings | undefined {
-  return endpoint?.version === currentVersion ? endpoint : undefined;
+  if (!endpoint || typeof endpoint !== "object" || Array.isArray(endpoint)) return undefined;
+  const keys = Object.keys(endpoint);
+  if (keys.length !== storedEndpointFields.length) return undefined;
+  if (!storedEndpointFields.every((field) => keys.includes(field))) return undefined;
+  if (endpoint.mode !== "local" && endpoint.mode !== "server") return undefined;
+  if (typeof endpoint.baseUrl !== "string" || typeof endpoint.modelId !== "string") return undefined;
+  if (!Array.isArray(endpoint.headers)) return undefined;
+  return endpoint;
 }
 
-export function activeStoredEndpoint(
-  settings: EndpointModeSettings,
-  currentVersion: number,
-): RawModelEndpointSettings | undefined {
-  return normalizeStoredEndpoint(settings.modelEndpoint, currentVersion);
+export function activeStoredEndpoint(settings: EndpointModeSettings): RawModelEndpointSettings | undefined {
+  return normalizeStoredEndpoint(settings.modelEndpoint);
 }
 
 export function storedEndpointForMode(
   settings: EndpointModeSettings,
   mode: ModelEndpointMode,
-  currentVersion: number,
 ): RawModelEndpointSettings | undefined {
-  const stored = normalizeStoredEndpoint(settings.modelEndpoints?.[mode], currentVersion);
+  const stored = normalizeStoredEndpoint(settings.modelEndpoints?.[mode]);
   return stored?.mode === mode ? stored : undefined;
 }
 

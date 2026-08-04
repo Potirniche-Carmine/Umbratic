@@ -372,7 +372,7 @@ function runnerBinaryProbe(options: CapabilityProbeOptions): CapabilityProbeResu
       label: "Umbratic runner",
       category: "required",
       importance: "required",
-      purpose: "Starts local workspace tools for read, search, write, edit, and command execution.",
+      purpose: "Starts local workspace tools for read, find, grep, write, edit, and command execution.",
       installHint: "Build the runner workspace before starting tasks.",
       workflows: ["runner", "workspace tools"],
     },
@@ -391,13 +391,13 @@ function workspaceToolsProbe(options: CapabilityProbeOptions): CapabilityProbeRe
       label: "Workspace tool surface",
       category: "required",
       importance: "required",
-      purpose: "Provides the model-visible read, search, write, edit, and command tools.",
+      purpose: "Provides the model-visible read, ls, find, grep, write, edit, and command tools.",
       installHint: "Build and start the runner if workspace tools are unavailable.",
-      workflows: ["read", "search", "write", "edit", "command"],
+      workflows: ["read", "ls", "find", "grep", "write", "edit", "command"],
     },
     "available",
     options,
-    { version: "read/search/write/edit/command" },
+    { version: "read/ls/find/grep/write/edit/command" },
   );
 }
 

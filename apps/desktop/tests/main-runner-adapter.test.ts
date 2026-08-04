@@ -25,7 +25,6 @@ function loadRunnerAdapter(userData) {
   delete process.env.UMBRATIC_MANAGED_ENDPOINT_MODE;
   delete process.env.UMBRATIC_MANAGED_MODEL_API_KEY;
   delete process.env.UMBRATIC_MANAGED_MODEL_BASE_URL;
-  delete process.env.UMBRATIC_MANAGED_MODEL_SOFTWARE;
   const cache = new Map();
   const electron = electronMock(userData);
   const mocks = { electron, "node:os": { ...os, homedir: () => path.join(userData, "home") } };
@@ -82,7 +81,6 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   storage.writeContextLengthSetting(128000);
   storage.writeModelEndpointSettings({
     mode: "server",
-    software: "vllm",
     baseUrl: "https://veil.example.internal",
     secret: "endpoint-token",
     headers: [
@@ -151,6 +149,44 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal("system" in config, false);
   assert.equal(config.provider.apiKey, "");
   assert.deepEqual(plain(config.provider.headers), { "X-Team": "engineering" });
+});
+
+test("local mode defaults runner parallel tool capability on", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-local-parallel-"));
+  const { adapter, skills, storage } = loadRunnerAdapter(userData);
+  storage.writeHarnessProfileSetting("engineering");
+  storage.writeSkillSettings(skills.harnessSystemSkillSettings("engineering"));
+  storage.writeModelEndpointSettings({
+    mode: "local",
+    baseUrl: "http://127.0.0.1:11434",
+    secret: "",
+    headers: [],
+  });
+
+  const config = adapter.buildUmbraticRunnerConfig(
+    {
+      id: "task-local",
+      repositoryId: "repo-1",
+      prompt: "Inspect README",
+      workspaceKind: "git",
+      workspaceMode: "worktree",
+      enabledTools: ["read"],
+      worktreePath: "C:/repo/.umbratic/worktree",
+    },
+    {
+      providerId: "local-veil",
+      providerName: "Local Veil",
+      modelId: "veil-managed",
+      displayName: "Local",
+      baseUrl: "http://127.0.0.1:4317",
+    },
+  );
+
+  assert.deepEqual(plain(config.provider.capabilities), {
+    parallelToolCalls: true,
+    vision: false,
+    reasoning: false,
+  });
 });
 
 test("engineering harness mode uses its Veil route without runtime prompt profiles", () => {
@@ -287,7 +323,7 @@ test("runner config enables LSP only for a successful approved probe", () => {
     prompt: "Find a definition",
     workspaceKind: "folder",
     workspaceMode: "local",
-    enabledTools: ["read", "search", "lsp"],
+    enabledTools: ["read", "grep", "lsp"],
     worktreePath: userData,
   };
   const baseReport = {
@@ -310,7 +346,7 @@ test("runner config enables LSP only for a successful approved probe", () => {
     }],
   };
   const enabled = adapter.buildUmbraticRunnerConfig(task, model, undefined, available);
-  assert.deepEqual(plain(enabled.enabledTools), ["read", "search", "lsp"]);
+  assert.deepEqual(plain(enabled.enabledTools), ["read", "grep", "lsp"]);
   assert.deepEqual(plain(enabled.lspServers), [{
     id: "typescript-language-server",
     command: fs.realpathSync(serverPath),
@@ -324,7 +360,7 @@ test("runner config enables LSP only for a successful approved probe", () => {
     summary: { ...baseReport.summary, available: 0, missing: 1, optionalMissing: 1 },
     probes: [{ ...available.probes[0], status: "missing", executablePath: undefined }],
   });
-  assert.deepEqual(plain(missing.enabledTools), ["read", "search"]);
+  assert.deepEqual(plain(missing.enabledTools), ["read", "grep"]);
   assert.deepEqual(plain(missing.lspServers), []);
 });
 

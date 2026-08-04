@@ -1,4 +1,4 @@
-import type { BackendUiEventInput, BackendUiEventV1 } from "./backendEvents";
+import type { BackendUiEvent } from "./backendEvents";
 import type { DocumentReviewSnapshot } from "./documentReview";
 import type { ReviewFile } from "./reviewDiff";
 
@@ -10,11 +10,9 @@ export type WorkspaceMode = "local" | "worktree";
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
-export type ModelEndpointSoftware = "ollama" | "vllm";
 
 export type PublicModelEndpointSettings = {
   mode: ModelEndpointMode;
-  software: ModelEndpointSoftware;
   baseUrl: string;
   modelId: string;
   secret: string;
@@ -237,7 +235,7 @@ export type TaskState =
   | "rejected"
   | "failed";
 
-export type BackendUiEvent = BackendUiEventInput;
+export type { BackendUiEvent };
 
 export type TaskInfo = {
   id: string;
@@ -270,23 +268,22 @@ export type TaskInfo = {
   error?: string;
 };
 
-export type ContextMessageV1 = {
+export type ConversationMessage = {
   role: "user" | "assistant" | "tool";
   content: unknown;
   tool_call_id?: string;
   tool_calls?: unknown[];
 };
 
-export type ContextStateV1 = {
-  version: 1;
+export type ConversationState = {
   sourceTaskId: string;
   updatedAt: string;
-  summary?: string;
-  tail: ContextMessageV1[];
+  summary: string | null;
+  tail: ConversationMessage[];
   sourceDigest: string;
   usage: {
     estimatedPromptTokens: number;
-    observedPromptTokens?: number;
+    observedPromptTokens: number | null;
     compactionCount: number;
   };
 };
@@ -308,7 +305,7 @@ export type ChatRecord = {
   worktreeBaseCommit?: string;
   draftPrompt?: string;
   attachedFiles?: ChatAttachment[];
-  contextState?: ContextStateV1;
+  conversationState?: ConversationState;
 };
 
 export type TaskCheckpointView = {
@@ -630,7 +627,7 @@ export type DesktopApi = {
     comment?: string;
   }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
-  onBackendEvent(callback: (event: BackendUiEventV1) => void): () => void;
+  onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
 };
 
 export const desktopIpcChannels = {

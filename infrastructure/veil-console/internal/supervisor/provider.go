@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,21 +20,28 @@ func TestProvider(ctx context.Context, cfg config.Veil) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	models, err := ListModels(ctx, cfg.Protocol, cfg.ProviderBaseURL)
+	models, err := ListModels(ctx, cfg.ProviderBaseURL)
 	if err != nil {
 		return err
 	}
+	found := false
 	for _, model := range models {
 		if model == cfg.Model {
-			return nil
+			found = true
+			break
 		}
 	}
-	return errors.New("selected model is not available")
+	if !found {
+		return errors.New("selected model is not available")
+	}
+	// Listing the model is not proof it can generate. Probe the paths the runner
+	// actually depends on before a configuration is accepted.
+	return probeGeneration(ctx, cfg)
 }
 
-func ListModels(ctx context.Context, protocol, providerBaseURL string) ([]string, error) {
+func ListModels(ctx context.Context, providerBaseURL string) ([]string, error) {
 	cfg := config.DefaultVeil()
-	cfg.Protocol, cfg.ProviderBaseURL, cfg.Model = protocol, strings.TrimSpace(providerBaseURL), "model"
+	cfg.ProviderBaseURL, cfg.Model = strings.TrimSpace(providerBaseURL), "model"
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -49,6 +57,13 @@ func ListModels(ctx context.Context, protocol, providerBaseURL string) ([]string
 }
 
 func providerPayload(ctx context.Context, cfg config.Veil) ([]byte, error) {
+	return providerRequest(ctx, cfg, "/v1/models", nil)
+}
+
+// providerRequest performs one guarded call to the runtime. The host must
+// resolve only to loopback or private addresses, redirects are refused, and both
+// the body and the response are bounded.
+func providerRequest(ctx context.Context, cfg config.Veil, endpoint string, body []byte) ([]byte, error) {
 	testCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	base, _ := url.Parse(cfg.ProviderBaseURL)
@@ -83,15 +98,22 @@ func providerPayload(ctx context.Context, cfg config.Veil) ([]byte, error) {
 	client := &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider redirects are not allowed")
 	}}
-	path := "/v1/models"
-	if cfg.Protocol == "ollama" {
-		path = "/api/tags"
+	base.Path = providerPath(base.Path, endpoint)
+	method := http.MethodGet
+	var reader io.Reader
+	if body != nil {
+		method, reader = http.MethodPost, bytes.NewReader(body)
 	}
-	base.Path = providerPath(base.Path, path)
-	request, _ := http.NewRequestWithContext(testCtx, http.MethodGet, base.String(), nil)
+	request, _ := http.NewRequestWithContext(testCtx, method, base.String(), reader)
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, errors.New("provider health test failed")
+	}
+	if body != nil {
+		return drainProbeResponse(response)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

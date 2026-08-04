@@ -519,6 +519,17 @@ func (s *Store) Authenticate(token string) (string, error) {
 	return session.DeviceUID, nil
 }
 
+// UserUIDForDevice returns the owning user for an enrolled device.
+func (s *Store) UserUIDForDevice(deviceUID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.authorizeDeviceLocked(deviceUID); err != nil {
+		return "", err
+	}
+	device := deviceIn(&s.data, deviceUID)
+	return device.UserUID, nil
+}
+
 func (s *Store) Touch(deviceUID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -23,7 +23,9 @@ export function eventTitle(event: BackendUiEvent): string {
     case "merge.completed": return "merged";
     case "ide.opened": return event.result === "success" ? "opened editor" : "editor open failed";
     case "response.feedback": return event.rating === "good" ? "liked response" : "disliked response";
-    case "skill.selected": return "skill selected";
+    case "skill.requested": return "skill requested";
+    case "skill.loaded": return "skill loaded";
+    case "skill.failed": return "skill failed";
     case "tool.failed": return "tool failed";
     case "tool.policy.stage": return "tool policy";
     case "turn.outcome": return "turn outcome";
@@ -56,7 +58,9 @@ export function eventDetail(event: BackendUiEvent): string {
     case "merge.completed": return `${event.targetBranch} ${shortHash(event.commit)}`;
     case "ide.opened": return [event.ideId, event.target, event.filePath, event.message].filter(Boolean).join(" - ");
     case "response.feedback": return event.messageId;
-    case "skill.selected": return `${event.skillId} - ${event.reason}${event.fullContent ? " - full instructions" : " - metadata only"}`;
+    case "skill.requested": return `${event.skillId} - ${event.origin}`;
+    case "skill.loaded": return `${event.skillId} - ${event.bytes} bytes`;
+    case "skill.failed": return `${event.skillId} - ${event.code}`;
     case "tool.failed": return `${event.toolKind} - ${event.response.errorCode ?? event.response.status ?? "failed"}`;
     case "tool.policy.stage": return [event.stage, event.outcome, event.reason].filter(Boolean).join(" - ");
     case "turn.outcome": return event.outcome;

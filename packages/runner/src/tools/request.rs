@@ -2,9 +2,10 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use super::{ToolSurface, catalog::ContractViolation};
 use crate::{
     policy::redact_text,
-    safety::{SafetyDecisionV1, evaluate_command},
+    safety::{SafetyDecision, evaluate_command},
 };
 
 macro_rules! request_type {
@@ -21,7 +22,10 @@ request_type!(ReadRequest);
 request_type!(ReadAttachmentRequest);
 request_type!(WriteRequest);
 request_type!(EditRequest);
-request_type!(SearchRequest);
+request_type!(ApplyPatchRequest);
+request_type!(LsRequest);
+request_type!(FindRequest);
+request_type!(GrepRequest);
 request_type!(LspRequest);
 request_type!(WorkspaceGraphRequest);
 request_type!(ReadSkillRequest);
@@ -31,7 +35,7 @@ request_type!(RetrieveContextRequest);
 pub(super) struct CommandRequest {
     arguments: Map<String, Value>,
     command: String,
-    safety: SafetyDecisionV1,
+    safety: SafetyDecision,
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +44,10 @@ pub(super) enum ToolRequest {
     ReadAttachment(ReadAttachmentRequest),
     Write(WriteRequest),
     Edit(EditRequest),
-    Search(SearchRequest),
+    ApplyPatch(ApplyPatchRequest),
+    Ls(LsRequest),
+    Find(FindRequest),
+    Grep(GrepRequest),
     Lsp(LspRequest),
     WorkspaceGraph(WorkspaceGraphRequest),
     Command(CommandRequest),
@@ -49,12 +56,24 @@ pub(super) enum ToolRequest {
 }
 
 impl ToolRequest {
-    pub(super) fn parse(name: &str, value: &Value, cwd: &Path) -> Result<Self, String> {
-        let arguments = parse_arguments(value)?;
-        validate_arguments(name, &arguments)?;
+    pub(super) fn parse(
+        name: &str,
+        value: &Value,
+        cwd: &Path,
+        surface: &ToolSurface,
+    ) -> Result<Self, ContractViolation> {
+        let arguments = parse_arguments(value).map_err(|expected| ContractViolation {
+            code: "invalid_arguments",
+            tool: name.to_owned(),
+            field: None,
+            expected,
+            allowed_fields: Vec::new(),
+        })?;
+        // The generated validator, on every execution path.
+        surface.validate(name, &arguments)?;
         let request = match name {
             "read" => Self::Read(ReadRequest {
-                primary: string_arg(&arguments, &["filePath"]),
+                primary: string_arg(&arguments, &["path"]),
                 arguments,
             }),
             "read_attachment" => Self::ReadAttachment(ReadAttachmentRequest {
@@ -62,33 +81,34 @@ impl ToolRequest {
                 arguments,
             }),
             "write" => Self::Write(WriteRequest {
-                primary: string_arg(&arguments, &["filePath"]),
+                primary: string_arg(&arguments, &["path"]),
                 arguments,
             }),
-            "edit" | "apply_patch" => {
-                let patch_mode = name == "apply_patch";
-                let mut arguments = arguments;
-                if patch_mode {
-                    arguments.insert("mode".into(), Value::String("patch".into()));
-                }
-                Self::Edit(EditRequest {
-                    primary: if patch_mode {
-                        "patch".into()
-                    } else {
-                        string_arg(&arguments, &["filePath"])
-                    },
-                    arguments,
-                })
-            }
-            "search" => Self::Search(SearchRequest {
-                primary: string_arg(&arguments, &["query"]),
+            "edit" => Self::Edit(EditRequest {
+                primary: string_arg(&arguments, &["path"]),
+                arguments,
+            }),
+            "apply_patch" => Self::ApplyPatch(ApplyPatchRequest {
+                primary: "patch".into(),
+                arguments,
+            }),
+            "ls" => Self::Ls(LsRequest {
+                primary: string_arg(&arguments, &["path"]),
+                arguments,
+            }),
+            "find" => Self::Find(FindRequest {
+                primary: string_arg(&arguments, &["glob"]),
+                arguments,
+            }),
+            "grep" => Self::Grep(GrepRequest {
+                primary: string_arg(&arguments, &["pattern"]),
                 arguments,
             }),
             "lsp" => Self::Lsp(LspRequest {
                 primary: format!(
                     "{} {}",
                     string_arg(&arguments, &["action"]),
-                    string_arg(&arguments, &["filePath"])
+                    string_arg(&arguments, &["path"])
                 )
                 .trim()
                 .to_owned(),
@@ -115,7 +135,15 @@ impl ToolRequest {
                 primary: string_arg(&arguments, &["hash"]),
                 arguments,
             }),
-            _ => return Err(format!("Unknown tool: {name}")),
+            _ => {
+                return Err(ContractViolation {
+                    code: "unknown_tool",
+                    tool: name.to_owned(),
+                    field: None,
+                    expected: "a declared tool".to_owned(),
+                    allowed_fields: Vec::new(),
+                });
+            }
         };
         Ok(request)
     }
@@ -126,7 +154,10 @@ impl ToolRequest {
             Self::ReadAttachment(request) => format!("read attachment {}", request.primary),
             Self::Write(request) => format!("write {}", request.primary),
             Self::Edit(request) => format!("edit {}", request.primary),
-            Self::Search(request) => format!("search {}", request.primary),
+            Self::ApplyPatch(request) => format!("edit {}", request.primary),
+            Self::Ls(request) => format!("ls {}", request.primary),
+            Self::Find(request) => format!("find {}", request.primary),
+            Self::Grep(request) => format!("grep {}", request.primary),
             Self::Lsp(request) => format!("lsp {}", request.primary),
             Self::Command(request) => redact_text(&request.command, 320),
             Self::WorkspaceGraph(request) => {
@@ -142,21 +173,27 @@ impl ToolRequest {
     pub(super) fn command_class(&self) -> &'static str {
         match self {
             Self::Command(request) => request.safety.command_class,
-            Self::Write(_) | Self::Edit(_) => "edit",
+            Self::Write(_) | Self::Edit(_) | Self::ApplyPatch(_) => "edit",
             _ => "read",
         }
     }
 
-    pub(super) fn capability_name(&self) -> Option<&'static str> {
+    /// The validated arguments, used for batch duplicate-signature detection.
+    pub(super) fn arguments(&self) -> &Map<String, Value> {
         match self {
-            Self::Read(_) => Some("read"),
-            Self::Write(_) => Some("write"),
-            Self::Edit(_) => Some("edit"),
-            Self::Search(_) => Some("search"),
-            Self::Lsp(_) => Some("lsp"),
-            Self::WorkspaceGraph(_) => Some("workspace_graph"),
-            Self::Command(_) => Some("command"),
-            Self::ReadSkill(_) | Self::ReadAttachment(_) | Self::RetrieveContext(_) => None,
+            Self::Read(request) => &request.arguments,
+            Self::ReadAttachment(request) => &request.arguments,
+            Self::Write(request) => &request.arguments,
+            Self::Edit(request) => &request.arguments,
+            Self::ApplyPatch(request) => &request.arguments,
+            Self::Ls(request) => &request.arguments,
+            Self::Find(request) => &request.arguments,
+            Self::Grep(request) => &request.arguments,
+            Self::Lsp(request) => &request.arguments,
+            Self::WorkspaceGraph(request) => &request.arguments,
+            Self::Command(request) => &request.arguments,
+            Self::ReadSkill(request) => &request.arguments,
+            Self::RetrieveContext(request) => &request.arguments,
         }
     }
 
@@ -170,7 +207,7 @@ impl CommandRequest {
         &self.arguments
     }
 
-    pub(super) fn safety(&self) -> &SafetyDecisionV1 {
+    pub(super) fn safety(&self) -> &SafetyDecision {
         &self.safety
     }
 }
@@ -180,7 +217,9 @@ pub fn tool_capability_name(name: &str) -> Option<&'static str> {
         "read" => Some("read"),
         "write" => Some("write"),
         "edit" | "apply_patch" => Some("edit"),
-        "search" => Some("search"),
+        "ls" => Some("ls"),
+        "find" => Some("find"),
+        "grep" => Some("grep"),
         "lsp" => Some("lsp"),
         "workspace_graph" => Some("workspace_graph"),
         "command" | "run_program" => Some("command"),
@@ -190,16 +229,19 @@ pub fn tool_capability_name(name: &str) -> Option<&'static str> {
 }
 
 pub(super) fn parse_arguments(value: &Value) -> Result<Map<String, Value>, String> {
-    if let Some(object) = value.as_object() {
-        return Ok(object.clone());
+    match value {
+        Value::Object(object) => Ok(object.clone()),
+        Value::String(text) => {
+            let trimmed = text.trim();
+            let parsed: Value = serde_json::from_str(trimmed)
+                .map_err(|_| "Tool arguments must be valid JSON object.".to_owned())?;
+            parsed
+                .as_object()
+                .cloned()
+                .ok_or_else(|| "Tool arguments must be one JSON object.".into())
+        }
+        _ => Err("Tool arguments must be a JSON object.".into()),
     }
-    let Some(text) = value.as_str().map(str::trim) else {
-        return Err("Tool arguments must be a JSON object.".into());
-    };
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(|| "Tool arguments must be valid JSON object.".into())
 }
 
 fn string_arg(input: &Map<String, Value>, names: &[&str]) -> String {
@@ -224,149 +266,6 @@ fn string_list_arg(input: &Map<String, Value>, names: &[&str]) -> Vec<String> {
             _ => Vec::new(),
         })
         .unwrap_or_default()
-}
-
-fn validate_arguments(name: &str, input: &Map<String, Value>) -> Result<(), String> {
-    let allowed: &[&str] = match name {
-        "read" => &["filePath", "offset", "limit", "depth"],
-        "write" => &["filePath", "content"],
-        "edit" => &["filePath", "oldText", "newText"],
-        "apply_patch" => &["patch"],
-        "search" => &[
-            "query",
-            "queries",
-            "path",
-            "glob",
-            "exclude",
-            "caseSensitive",
-            "limit",
-        ],
-        "lsp" => &["action", "filePath", "line", "character", "query", "limit"],
-        "workspace_graph" => &[
-            "action",
-            "query",
-            "symbol",
-            "from",
-            "to",
-            "files",
-            "symbols",
-            "depth",
-            "limit",
-            "maxDepth",
-            "direction",
-        ],
-        "command" => &["command", "timeoutMs"],
-        "run_program" => &["programId", "args", "timeoutMs"],
-        "read_skill" => &["skillId", "resource", "offset", "limit"],
-        "read_attachment" => &["attachmentId", "offset", "limit"],
-        "retrieve_context" => &["hash", "offset", "limit"],
-        _ => return Err(format!("Unknown tool: {name}")),
-    };
-    if let Some(key) = input.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(format!("{name} received unknown argument {key}"));
-    }
-    for key in [
-        "offset",
-        "limit",
-        "depth",
-        "maxDepth",
-        "timeoutMs",
-        "line",
-        "character",
-    ] {
-        if input.contains_key(key) && input.get(key).and_then(Value::as_u64).is_none() {
-            return Err(format!(
-                "{name} argument {key} must be a non-negative integer"
-            ));
-        }
-    }
-    let required = match name {
-        "read" | "write" => vec![string_arg(input, &["filePath"])],
-        "edit" => vec![
-            string_arg(input, &["filePath"]),
-            string_arg(input, &["oldText"]),
-        ],
-        "apply_patch" => vec![string_arg(input, &["patch"])],
-        "command" => vec![string_arg(input, &["command"])],
-        "run_program" => vec![string_arg(input, &["programId"])],
-        "read_skill" => vec![string_arg(input, &["skillId"])],
-        "read_attachment" => vec![string_arg(input, &["attachmentId"])],
-        "retrieve_context" => vec![string_arg(input, &["hash"])],
-        "workspace_graph" | "lsp" => vec![string_arg(input, &["action"])],
-        _ => vec![],
-    };
-    if required.iter().any(String::is_empty) {
-        return Err(format!("{name} is missing a required string argument"));
-    }
-    for key in ["glob", "exclude"] {
-        if let Some(value) = input.get(key)
-            && !value.is_string()
-        {
-            return Err(format!("{name} argument {key} must be a string"));
-        }
-    }
-    if input.contains_key("caseSensitive")
-        && !input.get("caseSensitive").is_some_and(Value::is_boolean)
-    {
-        return Err("search argument caseSensitive must be a boolean".into());
-    }
-    if name == "search" {
-        if input
-            .get("query")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
-            && input.get("queries").is_some()
-        {
-            return Err("search accepts query or queries, not both".into());
-        }
-        if let Some(queries) = input.get("queries") {
-            let Some(queries) = queries.as_array() else {
-                return Err("search argument queries must be an array of strings".into());
-            };
-            if queries.is_empty()
-                || queries.len() > 32
-                || queries.iter().any(|query| {
-                    !query.as_str().is_some_and(|value| {
-                        !value.trim().is_empty()
-                            && value.chars().count() <= 256
-                            && !value.contains('\0')
-                    })
-                })
-            {
-                return Err("search queries exceed the bounded string term limits".into());
-            }
-        }
-    }
-    if name == "read_attachment"
-        && ["offset", "limit"].iter().any(|key| {
-            input.contains_key(*key) && input.get(*key).and_then(Value::as_u64).is_none()
-        })
-    {
-        return Err("read_attachment offset and limit must be non-negative integers".into());
-    }
-    if name == "write" && !input.get("content").is_some_and(Value::is_string) {
-        return Err("write argument content must be a string".into());
-    }
-    if name == "run_program"
-        && let Some(args) = input.get("args")
-    {
-        let Some(args) = args.as_array() else {
-            return Err("run_program argument args must be an array of strings".into());
-        };
-        if args.len() > 128
-            || args.iter().any(|argument| {
-                !argument
-                    .as_str()
-                    .is_some_and(|value| value.len() <= 4096 && !value.contains('\0'))
-            })
-        {
-            return Err("run_program args exceed the bounded string argument limits".into());
-        }
-    }
-    if name == "edit" && !input.get("newText").is_some_and(Value::is_string) {
-        return Err("edit newText must be a string".into());
-    }
-    Ok(())
 }
 
 pub(super) fn command_display(input: &Map<String, Value>) -> String {

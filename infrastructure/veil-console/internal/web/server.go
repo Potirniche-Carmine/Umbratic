@@ -65,6 +65,7 @@ type pageData struct {
 	Running           bool
 	Healthy           bool
 	VeilURL           string
+	Ops               supervisor.OpsMetrics
 	EnterpriseEnabled bool
 	Access            accessView
 	Models            []string
@@ -370,11 +371,17 @@ func (s *Server) dashboardData(r *http.Request, errorMessage, noticeMessage stri
 	session := r.Context().Value(sessionKey).(requestSession)
 	_, configured, _ := s.store.Configuration(r.Context(), "current")
 	processStatus := s.supervisor.Status()
+	s.secretsMu.RLock()
+	token := s.secrets.ControlToken
+	s.secretsMu.RUnlock()
+	metricsCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	ops := s.supervisor.FetchOpsMetrics(metricsCtx, token)
 	return pageData{
 		Title: "Veil Console", CSRF: csrfCookie(r), Username: session.Data.Username,
 		Configured: configured, Status: processStatus.String(), Running: processStatus.Running, Healthy: processStatus.Healthy,
-		VeilURL: "http://" + s.startup.VeilAddress,
-		Error:   errorMessage, Notice: noticeMessage,
+		VeilURL: "http://" + s.startup.VeilAddress, Ops: ops,
+		Error: errorMessage, Notice: noticeMessage,
 	}
 }
 
@@ -386,8 +393,6 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		cfg = config.DefaultVeil()
-		cfg.Protocol = "ollama"
-		cfg.ProviderBaseURL = "http://127.0.0.1:11434"
 		cfg.ContextLength = 65536
 	}
 	s.render(w, "settings.html", s.settingsData(r, cfg, "", ""))
@@ -606,7 +611,6 @@ func (s *Server) freshPassword(w http.ResponseWriter, r *http.Request) error {
 
 func parseSettings(r *http.Request) (config.Veil, error) {
 	cfg := config.DefaultVeil()
-	cfg.Protocol = r.FormValue("protocol")
 	cfg.ProviderBaseURL = strings.TrimSpace(r.FormValue("provider_base_url"))
 	cfg.Model = strings.TrimSpace(r.FormValue("model"))
 	if value := strings.TrimSpace(r.FormValue("context_length")); value != "" {
@@ -622,6 +626,63 @@ func parseSettings(r *http.Request) (config.Veil, error) {
 			return cfg, errors.New("maximum output tokens is invalid")
 		}
 		cfg.MaxOutputTokens = parsed
+	}
+	if value := strings.TrimSpace(r.FormValue("temperature")); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return cfg, errors.New("temperature is invalid")
+		}
+		cfg.Temperature = parsed
+	}
+	if value := strings.TrimSpace(r.FormValue("top_p")); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return cfg, errors.New("top p is invalid")
+		}
+		cfg.TopP = parsed
+	}
+	effort, err := config.ParseReasoningEffort(r.FormValue("reasoning_effort"))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.ReasoningEffort = effort
+	if value := strings.TrimSpace(r.FormValue("thinking_token_budget")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return cfg, errors.New("thinking token budget is invalid")
+		}
+		cfg.ThinkingTokenBudget = &parsed
+	} else {
+		cfg.ThinkingTokenBudget = nil
+	}
+	switch strings.ToLower(strings.TrimSpace(r.FormValue("parallel_tool_calls"))) {
+	case "", "true", "on", "1":
+		cfg.ParallelToolCalls = true
+	case "false", "off", "0":
+		cfg.ParallelToolCalls = false
+	default:
+		return cfg, errors.New("parallel tool calls must be on or off")
+	}
+	if value := strings.TrimSpace(r.FormValue("max_concurrent_requests")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return cfg, errors.New("maximum concurrent requests is invalid")
+		}
+		cfg.MaxConcurrentRequests = parsed
+	}
+	if value := strings.TrimSpace(r.FormValue("max_concurrent_requests_per_user")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return cfg, errors.New("maximum concurrent requests per user is invalid")
+		}
+		cfg.MaxConcurrentRequestsPerUser = parsed
+	}
+	if value := strings.TrimSpace(r.FormValue("queue_timeout")); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return cfg, errors.New("queue timeout is invalid")
+		}
+		cfg.QueueTimeout = parsed
 	}
 	if value := strings.TrimSpace(r.FormValue("model_timeout")); value != "" {
 		parsed, err := time.ParseDuration(value)

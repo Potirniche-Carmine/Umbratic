@@ -166,7 +166,7 @@ impl RunnerDiagnostics {
             *self.failed.lock().unwrap() = true;
             return;
         }
-        let record = json!({ "schemaVersion": 1, "source": "umbratic-runner", "level": level, "eventType": event_type(event), "taskId": task_id(event), "at": event.get("at").cloned().unwrap_or_else(|| Value::String(now_iso())), "data": data });
+        let record = json!({ "source": "umbratic-runner", "level": level, "eventType": event_type(event), "taskId": task_id(event), "at": event.get("at").cloned().unwrap_or_else(|| Value::String(now_iso())), "data": data });
         let result = OpenOptions::new()
             .create(true)
             .append(true)

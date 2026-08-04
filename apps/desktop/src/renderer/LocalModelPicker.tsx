@@ -26,14 +26,16 @@ export function LocalModelPicker({
     [models, selectedModel],
   );
   const interactionDisabled = disabled || options.length === 0;
+  // The picker is the only place local runtime state is reported, so each
+  // placeholder says what happened and, where there is one, what to do.
   const displayValue = selectedModel
     || (status === "loading"
-      ? "Checking installed models..."
+      ? "Checking installed models…"
       : status === "unavailable"
-        ? "Models unavailable"
-        : status === "ready"
-          ? options.length > 0 ? "Choose a model" : "No models installed"
-          : "Refresh to find models");
+        ? "Ollama is not running"
+        : options.length > 0
+          ? "Choose a model"
+          : "No models installed");
 
   useEffect(() => {
     if (!open) return;

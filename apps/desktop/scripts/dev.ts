@@ -30,11 +30,9 @@ function usage() {
   return [
     "Usage:",
     "  npm run desktop:dev",
-    "  npm run desktop:dev -- --server https://veil.example --software vllm",
     "",
     "Options:",
     "  --server <url>       Run dev against a managed server endpoint for this process.",
-    "  --software <name>    Server runtime: ollama or vllm. Defaults to vllm.",
     "  --api-key <secret>   API key for the endpoint.",
     "  --help              Show this message.",
   ].join("\n");
@@ -47,7 +45,6 @@ function devEndpointEnv(args) {
   }
 
   const server = readFlag(args, "--server");
-  const software = readFlag(args, "--software");
   const apiKey = readFlag(args, "--api-key");
   const env = {
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
@@ -59,15 +56,8 @@ function devEndpointEnv(args) {
     }
     env.UMBRATIC_MANAGED_ENDPOINT_MODE = "server";
     env.UMBRATIC_MANAGED_MODEL_BASE_URL = server;
-    env.UMBRATIC_MANAGED_MODEL_SOFTWARE = software || "vllm";
   }
 
-  if (software && !["ollama", "vllm"].includes(software)) {
-    throw new Error("--software must be one of: ollama, vllm.");
-  }
-  if (software && server === undefined) {
-    throw new Error("--software is only available with --server; local mode uses Ollama.");
-  }
   if (apiKey && server !== undefined) {
     env.UMBRATIC_MANAGED_MODEL_API_KEY = apiKey;
   } else if (apiKey) {

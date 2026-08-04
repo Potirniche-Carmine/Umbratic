@@ -89,7 +89,7 @@ export function buildUmbraticRunnerConfig(
       apiKey: localVeil?.authToken ?? "",
       modelId: selectedModel.modelId,
       capabilities: selectedModel.capabilities ?? {
-        parallelToolCalls: false,
+        parallelToolCalls: endpointSettings.mode === "local",
         vision: false,
         reasoning: false,
       },

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
-import { parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
+import { parseBackendUiEvent, type BackendUiEvent } from "../shared/backendEvents";
 import type {
   ChatAttachment,
   DesktopApi,
@@ -65,7 +65,6 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:probe-local-models", input),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";
-    software: "ollama" | "vllm";
     baseUrl: string;
     modelId: string;
     secret: string;
@@ -130,7 +129,7 @@ const umbraticApi = {
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
-  onBackendEvent: (callback: (event: BackendUiEventV1) => void) => {
+  onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
     const listener = (_event: IpcRendererEvent, value: unknown) => {
       const parsed = parseBackendUiEvent(value);
       if (parsed.ok) callback(parsed.event);

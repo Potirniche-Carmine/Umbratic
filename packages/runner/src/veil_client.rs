@@ -55,7 +55,6 @@ pub async fn compact_context(
         .and_then(|path| path.split('/').nth(2))
         .unwrap_or("engineering");
     let body = json!({
-        "version": 1,
         "route": route,
         "previousSummary": previous_summary.unwrap_or(""),
         "messages": messages,
@@ -99,7 +98,7 @@ pub async fn compact_context(
             .unwrap_or("context_compaction_failed");
         return Err(code.to_owned());
     }
-    if payload.get("version").and_then(Value::as_u64) != Some(1)
+    if payload.get("version").is_some()
         || payload.get("sourceDigest").and_then(Value::as_str) != Some(source_digest)
     {
         return Err("context compaction response did not match its source".into());
@@ -535,11 +534,6 @@ pub async fn stream_veil_chat(
     }
     if include_tools && !tools.is_empty() {
         object.insert("tools".into(), Value::Array(tools.to_vec()));
-        object.insert("tool_choice".into(), Value::String("auto".into()));
-        object.insert(
-            "parallel_tool_calls".into(),
-            Value::Bool(session.config.provider.parallel_tool_calls),
-        );
     }
     let client = shared_client(&session.config.provider)?;
     let mut request = client
@@ -577,14 +571,6 @@ pub async fn stream_veil_chat(
             "model request failed: {}",
             veil_failure_message(Some(status.as_u16()), payload.as_ref())
         ));
-    }
-    if response
-        .headers()
-        .get("x-umbratic-stream-version")
-        .and_then(|value| value.to_str().ok())
-        != Some("2")
-    {
-        return Err("Veil stream contract version 2 is required".into());
     }
     let mut result = VeilChatResult::default();
     let mut partial = BTreeMap::new();
@@ -650,17 +636,17 @@ mod tests {
     fn tool_deltas_accumulate_by_index() {
         let mut result = VeilChatResult::default();
         let mut calls = BTreeMap::new();
-        append_veil_delta(&mut result, json!({"tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{\"file"}}]}).as_object().unwrap(), &mut calls);
+        append_veil_delta(&mut result, json!({"tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{\"pa"}}]}).as_object().unwrap(), &mut calls);
         append_veil_delta(
             &mut result,
-            json!({"tool_calls":[{"index":0,"function":{"arguments":"Path\":\"README.md\"}"}}]})
+            json!({"tool_calls":[{"index":0,"function":{"arguments":"th\":\"README.md\"}"}}]})
                 .as_object()
                 .unwrap(),
             &mut calls,
         );
         assert_eq!(
             result.tool_calls[0].arguments.as_str(),
-            Some("{\"filePath\":\"README.md\"}")
+            Some("{\"path\":\"README.md\"}")
         );
     }
     #[test]

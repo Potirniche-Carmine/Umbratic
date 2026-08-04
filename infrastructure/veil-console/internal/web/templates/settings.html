@@ -30,21 +30,6 @@
         </div>
 
         <div class="field-grid">
-          <div class="field">
-            <span id="runtime-label">Runtime</span>
-            <div class="choice" data-choice>
-              <input type="hidden" name="protocol" value="{{.Config.Protocol}}" data-provider data-choice-input>
-              <button class="choice-trigger" type="button" aria-labelledby="runtime-label runtime-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
-                <span id="runtime-value" data-choice-label>{{if eq .Config.Protocol "vllm"}}vLLM{{else}}Ollama{{end}}</span>
-                <span class="choice-chevron" aria-hidden="true"></span>
-              </button>
-              <div class="choice-menu" role="listbox" aria-labelledby="runtime-label" data-choice-menu hidden>
-                <button type="button" role="option" data-choice-value="ollama" aria-selected="{{eq .Config.Protocol "ollama"}}">Ollama</button>
-                <button type="button" role="option" data-choice-value="vllm" aria-selected="{{eq .Config.Protocol "vllm"}}">vLLM</button>
-              </div>
-            </div>
-          </div>
-
           <label class="field">
             <span>Runtime URL</span>
             <input type="url" name="provider_base_url" value="{{.Config.ProviderBaseURL}}" data-provider-url required>
@@ -64,7 +49,7 @@
               </div>
             </div>
             {{else}}
-            <input name="model" value="{{.Config.Model}}" maxlength="256" placeholder="llama3.2" required>
+            <input name="model" value="{{.Config.Model}}" maxlength="256" placeholder="your-model" required>
             {{end}}
           </div>
         </div>
@@ -108,11 +93,65 @@
         <div class="advanced-content">
           <div class="field-grid advanced-grid">
             <label class="field">
+              <span>Temperature</span>
+              <input type="number" name="temperature" value="{{.Config.Temperature}}" min="0" max="2" step="any" required>
+            </label>
+            <label class="field">
+              <span>Top P</span>
+              <input type="number" name="top_p" value="{{.Config.TopP}}" min="0.000001" max="1" step="any" required>
+            </label>
+            <label class="field">
               <span>Maximum output</span>
               <div class="input-suffix">
                 <input type="number" name="max_output_tokens" value="{{.Config.MaxOutputTokens}}" min="1" max="32768" required>
                 <span>tokens</span>
               </div>
+            </label>
+            <div class="field">
+              <span id="reasoning-label">Reasoning effort</span>
+              <div class="choice" data-choice>
+                <input type="hidden" name="reasoning_effort" value="{{.Config.ReasoningEffort}}" data-choice-input>
+                <button class="choice-trigger" type="button" aria-labelledby="reasoning-label reasoning-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
+                  <span id="reasoning-value" data-choice-label>{{.Config.ReasoningEffort}}</span>
+                  <span class="choice-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="choice-menu" role="listbox" aria-labelledby="reasoning-label" data-choice-menu hidden>
+                  <button type="button" role="option" data-choice-value="none" aria-selected="{{eq .Config.ReasoningEffort "none"}}">none</button>
+                  <button type="button" role="option" data-choice-value="low" aria-selected="{{eq .Config.ReasoningEffort "low"}}">low</button>
+                  <button type="button" role="option" data-choice-value="medium" aria-selected="{{eq .Config.ReasoningEffort "medium"}}">medium</button>
+                  <button type="button" role="option" data-choice-value="high" aria-selected="{{eq .Config.ReasoningEffort "high"}}">high</button>
+                </div>
+              </div>
+            </div>
+            <label class="field">
+              <span>Thinking token budget</span>
+              <input type="number" name="thinking_token_budget" value="{{if .Config.ThinkingTokenBudget}}{{.Config.ThinkingTokenBudget}}{{end}}" min="0" max="32768" placeholder="optional">
+            </label>
+            <div class="field">
+              <span id="parallel-label">Parallel tool calls</span>
+              <div class="choice" data-choice>
+                <input type="hidden" name="parallel_tool_calls" value="{{if .Config.ParallelToolCalls}}true{{else}}false{{end}}" data-choice-input>
+                <button class="choice-trigger" type="button" aria-labelledby="parallel-label parallel-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
+                  <span id="parallel-value" data-choice-label>{{if .Config.ParallelToolCalls}}on{{else}}off{{end}}</span>
+                  <span class="choice-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="choice-menu" role="listbox" aria-labelledby="parallel-label" data-choice-menu hidden>
+                  <button type="button" role="option" data-choice-value="true" aria-selected="{{.Config.ParallelToolCalls}}">on</button>
+                  <button type="button" role="option" data-choice-value="false" aria-selected="{{not .Config.ParallelToolCalls}}">off</button>
+                </div>
+              </div>
+            </div>
+            <label class="field">
+              <span>Max concurrent requests</span>
+              <input type="number" name="max_concurrent_requests" value="{{.Config.MaxConcurrentRequests}}" min="1" required>
+            </label>
+            <label class="field">
+              <span>Max concurrent per user</span>
+              <input type="number" name="max_concurrent_requests_per_user" value="{{.Config.MaxConcurrentRequestsPerUser}}" min="1" required>
+            </label>
+            <label class="field">
+              <span>Queue timeout</span>
+              <input name="queue_timeout" value="{{.Config.QueueTimeout}}" required>
             </label>
             <label class="field">
               <span>Model timeout</span>

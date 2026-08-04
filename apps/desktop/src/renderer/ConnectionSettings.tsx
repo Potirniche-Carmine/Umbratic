@@ -14,13 +14,17 @@ import {
   writeCachedLocalModels,
 } from "./localModelCache";
 import {
-  defaultEndpointBaseUrlForMode,
   defaultModelEndpointSettings,
   endpointDefaultsForMode,
   endpointValidationMessage,
   normalizeEndpointSettings,
   type ModelEndpointSettings,
 } from "./endpointSettings";
+
+// Applying a local model restarts the local Veil and loads the weights into
+// memory, so skimming through the picker waits for the selection to settle
+// and only loads the model the user lands on.
+const LOCAL_MODEL_COMMIT_DELAY_MS = 600;
 
 type ConnectionSettingsOptions = {
   api: DesktopApi;
@@ -75,6 +79,33 @@ export function useConnectionSettings({
   const modeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({
     [normalizedInitialSettings.mode]: normalizedInitialSettings,
   });
+  const localModelCommitTimerRef = useRef<number | null>(null);
+  const pendingLocalModelIdRef = useRef<string | null>(null);
+  const commitLocalModelRef = useRef<(modelId: string) => Promise<void>>(() => Promise.resolve());
+
+  function cancelPendingLocalModelCommit() {
+    pendingLocalModelIdRef.current = null;
+    if (localModelCommitTimerRef.current !== null) {
+      window.clearTimeout(localModelCommitTimerRef.current);
+      localModelCommitTimerRef.current = null;
+    }
+  }
+
+  // Choosing a local model reads as applied the moment it is clicked, so a
+  // selection still waiting out its debounce is saved, not discarded, when the
+  // settings dialog closes.
+  function flushPendingLocalModelCommit() {
+    const modelId = pendingLocalModelIdRef.current;
+    if (modelId === null) return;
+    cancelPendingLocalModelCommit();
+    void commitLocalModelRef.current(modelId);
+  }
+
+  useEffect(() => () => {
+    if (localModelCommitTimerRef.current !== null) {
+      window.clearTimeout(localModelCommitTimerRef.current);
+    }
+  }, []);
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
   const companyEnrollmentRequired =
@@ -122,19 +153,31 @@ export function useConnectionSettings({
     };
   }, [active, api, settingsOpen]);
 
+  // Local mode discovers models itself. Showing a cached list and waiting for
+  // the user to press refresh is what made choosing a model feel like a chore,
+  // and it is why a first run could start with no model selected at all.
   useEffect(() => {
     if (!settingsOpen || !active || draft.mode !== "local" || !localRuntimeUrlValid) return;
     let current = true;
     const baseUrl = draftLocalBaseUrl;
-    void api.getCachedLocalModels({ baseUrl }).then((models) => {
+    void (async () => {
+      const cached = await api.getCachedLocalModels({ baseUrl }).catch(() => [] as string[]);
       if (!current) return;
-      const cached = writeCachedLocalModels(baseUrl, [draft.modelId, ...models]);
+      const seeded = writeCachedLocalModels(baseUrl, [draft.modelId, ...cached]);
       setLocalModelDiscovery((discovery) => (
         discovery.baseUrl === baseUrl && discovery.status === "loading"
           ? discovery
-          : { baseUrl, models: cached, status: cached.length > 0 ? "ready" : "idle" }
+          : { baseUrl, models: seeded, status: "loading" }
       ));
-    }).catch(() => undefined);
+      const probe = await api
+        .probeLocalModels({ baseUrl })
+        .catch(() => ({ status: "unavailable" as const, models: [] as string[] }));
+      if (!current) return;
+      const models = probe.status === "ready"
+        ? writeCachedLocalModels(baseUrl, probe.models)
+        : seeded;
+      setLocalModelDiscovery({ baseUrl, models, status: probe.status });
+    })();
     return () => {
       current = false;
     };
@@ -149,6 +192,7 @@ export function useConnectionSettings({
   ]);
 
   function updateDraft(patch: Partial<ModelEndpointSettings>) {
+    cancelPendingLocalModelCommit();
     saveSequenceRef.current += 1;
     setSaving(false);
     setSaveFeedback("idle");
@@ -166,11 +210,7 @@ export function useConnectionSettings({
         modeDraftsRef.current[mode] = next;
         return next;
       }
-      let next = normalizeEndpointSettings({ ...current, ...patch });
-      if ("software" in patch && current.mode === "local") {
-        const wasDefault = current.baseUrl === defaultEndpointBaseUrlForMode("local", current.software);
-        if (wasDefault) next = { ...next, baseUrl: defaultEndpointBaseUrlForMode("local", next.software) };
-      }
+      const next = normalizeEndpointSettings({ ...current, ...patch });
       modeDraftsRef.current[next.mode] = next;
       return next;
     });
@@ -202,7 +242,61 @@ export function useConnectionSettings({
     setDraft(settings);
     setMessage(null);
     modeDraftsRef.current = { [settings.mode]: settings };
+    flushPendingLocalModelCommit();
   }
+
+  // In local mode there is nothing to confirm: no secret, no headers, and the
+  // runtime URL is validated as it is typed. Choosing a model is the whole
+  // decision, so choosing it saves it. The picker updates instantly; the save
+  // waits LOCAL_MODEL_COMMIT_DELAY_MS so browsing between installed models
+  // does not load each one along the way.
+  async function selectLocalModel(modelId: string) {
+    updateDraft({ modelId });
+    if (!editingEnabled) return;
+    pendingLocalModelIdRef.current = modelId;
+    localModelCommitTimerRef.current = window.setTimeout(() => {
+      pendingLocalModelIdRef.current = null;
+      localModelCommitTimerRef.current = null;
+      void commitLocalModelRef.current(modelId);
+    }, LOCAL_MODEL_COMMIT_DELAY_MS);
+  }
+
+  async function commitLocalModelSelection(modelId: string) {
+    const next = normalizeEndpointSettings({
+      ...(modeDraftsRef.current.local ?? draft),
+      modelId,
+      headers: defaultModelEndpointSettings.headers,
+      secret: "",
+    });
+    if (endpointValidationMessage(next)) return;
+    const requestId = saveSequenceRef.current + 1;
+    saveSequenceRef.current = requestId;
+    const previous = settings;
+    setSettings(next);
+    setDraft(next);
+    modeDraftsRef.current.local = next;
+    setSaveFeedback("saved");
+    setMessage(null);
+    try {
+      const result = await api.saveModelEndpointSettings(next);
+      if (requestId !== saveSequenceRef.current) return;
+      const normalized = normalizeEndpointSettings(result.settings);
+      setSettings(normalized);
+      setDraft(normalized);
+      modeDraftsRef.current.local = normalized;
+      onBackendStatus(result.status);
+    } catch (cause) {
+      if (requestId !== saveSequenceRef.current) return;
+      setSettings(previous);
+      setDraft(previous);
+      modeDraftsRef.current.local = previous;
+      setSaveFeedback("idle");
+      setMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+  // The debounced timer must call the commit from the latest render so it
+  // saves against current state rather than the state at click time.
+  commitLocalModelRef.current = commitLocalModelSelection;
 
   async function refresh() {
     if (refreshDisabled) return;
@@ -250,6 +344,7 @@ export function useConnectionSettings({
       setMessage(validation);
       return;
     }
+    cancelPendingLocalModelCommit();
     const requestId = saveSequenceRef.current + 1;
     saveSequenceRef.current = requestId;
     const nextDraft = normalizeEndpointSettings({
@@ -396,6 +491,7 @@ export function useConnectionSettings({
     displayState,
     statusLabel,
     updateDraft,
+    selectLocalModel,
     selectMode,
     clearMessage: () => setMessage(null),
     resetDraft,
@@ -495,23 +591,26 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
         <h4>{draft.mode === "local" ? "Local model" : "Company server"}</h4>
         {draft.mode === "local" ? (
           <>
-            <label className="settingsField">
-              <span>Ollama URL</span>
-              <input
-                value={draft.baseUrl}
-                disabled={formDisabled}
-                onChange={(event) => controller.updateDraft({ baseUrl: event.currentTarget.value })}
-                placeholder="http://127.0.0.1:11434"
-                spellCheck={false}
-              />
-            </label>
             <LocalModelPicker
               disabled={formDisabled}
               models={localModels}
               selectedModel={draft.modelId}
               status={localModelStatus}
-              onModelChange={(modelId) => controller.updateDraft({ modelId })}
+              onModelChange={(modelId) => void controller.selectLocalModel(modelId)}
             />
+            <details className="settingsAdvanced">
+              <summary>Advanced</summary>
+              <label className="settingsField">
+                <span>Ollama URL</span>
+                <input
+                  value={draft.baseUrl}
+                  disabled={formDisabled}
+                  onChange={(event) => controller.updateDraft({ baseUrl: event.currentTarget.value })}
+                  placeholder="http://127.0.0.1:11434"
+                  spellCheck={false}
+                />
+              </label>
+            </details>
           </>
         ) : companyServerConnected && companyConnection.state === "enrolled" ? (
           <div className="companyEnrollmentStatus">
@@ -556,7 +655,7 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
             </label>
           </>
         )}
-        {!companyServerConnected ? (
+        {!companyServerConnected && draft.mode === "server" ? (
           <div className="connectionActions">
             <button
               className={`settingsInlineButton connectionSaveButton ${saving || saveFeedback === "saved" ? "isSuccess" : ""}`}
@@ -564,16 +663,9 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
               onClick={() => void controller.save()}
               disabled={saving || refreshing || !dirty || !!validation || !editingEnabled}
             >
-              {saving && draft.mode === "server"
-                ? <Loader2 className="spin" size={13} />
-                : <Check size={13} />}
-              <span>
-                {draft.mode === "local" && (saving || saveFeedback === "saved")
-                  ? "Saved"
-                  : saving ? "Connecting" : "Save & connect"}
-              </span>
+              {saving ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+              <span>{saving ? "Connecting" : "Save & connect"}</span>
             </button>
-            {dirty ? <span className="connectionUnsaved">Unsaved changes</span> : null}
           </div>
         ) : null}
         <div className="connectionFeedback" aria-live="polite">

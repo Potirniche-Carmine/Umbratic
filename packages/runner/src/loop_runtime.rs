@@ -14,21 +14,30 @@ use crate::{
         ContextCalibration, ContextUsageEstimate, adaptive_output_reserve, context_hash,
         estimate_context_usage, request_profile_fingerprint,
     },
-    events::{empty_summary, increment, now_iso},
+    conversation_state::{ConversationStateSnapshotInput, snapshot_conversation_state},
+    events::{empty_summary, increment, now_iso, step_settled_event},
     permission::PermissionBroker,
     public_progress::PublicProgressSchedule,
     repeat_guard::RepeatGuard,
     response_output::{emit_fallback_answer, looks_like_unstructured_tool_call, record_answer},
     session::{EventSink, InputPart, Session},
-    tools::{
-        ToolCall, ToolResult, coerce_tool_call_arguments, enabled_tool_specs, execute_tool,
-        explicit_skill_context, validate_tool_call_batch,
+    skill_preflight::{
+        collect_selected_skill_ids, harness_skill_context_message, run_harness_skill_preflight,
     },
+    tools::{ToolCall, ToolResult, execute_tool, tool_surface, validate_tool_call_batch},
+    turn_snapshot::TurnSnapshot,
     veil_client::{VeilChatResult, VeilRequestOptions, compact_context, stream_veil_chat},
 };
 
 const MAX_TOOL_TURNS: usize = 64;
+/// A tool that executed and failed is a normal working signal, so the model gets
+/// room to try something else.
 const MAX_FAILED_TOOL_TURNS: usize = 10;
+
+/// A call that never reached an executor because it violated the generated
+/// contract is different: it gets one concise typed error and at most two
+/// consecutive repair attempts.
+const MAX_INVALID_CALL_REPAIRS: usize = 2;
 const MAX_PROVIDER_MESSAGES: usize = 512;
 const MAX_TOOL_HISTORY_SUMMARY_CHARS: usize = 8_000;
 const TOOL_HISTORY_SUMMARY_PREFIX: &str =
@@ -40,13 +49,14 @@ const SEMANTIC_ANCHORS_PREFIX: &str = "Exact factual excerpts retained during co
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum TurnOutcome {
+enum RunOutcome {
     Completed,
+    Aborted,
     ModelGaveUp,
     SafetyLimit,
 }
 
-fn set_turn_outcome(summary: &mut Value, outcome: TurnOutcome) {
+fn set_run_outcome(summary: &mut Value, outcome: RunOutcome) {
     summary["outcome"] = serde_json::to_value(outcome).unwrap_or_else(|_| json!("completed"));
 }
 
@@ -82,26 +92,97 @@ fn assistant_tool_message(result: &VeilChatResult, calls: &[ToolCall]) -> Value 
 }
 
 fn result_content(call: &ToolCall, result: &ToolResult) -> String {
-    let mut lines = vec![format!(
-        "{}: {} ({})",
-        call.name,
-        result.title,
-        if result.status == "success" {
-            "ok"
-        } else {
-            &result.status
+    result.model_text(&call.name)
+}
+
+fn aborted_tool_result_content(tool_name: &str) -> String {
+    result_content(
+        &ToolCall {
+            id: String::new(),
+            name: tool_name.to_owned(),
+            arguments: json!({}),
+            index: 0,
+        },
+        &ToolResult {
+            summary: "aborted".into(),
+            content: String::new(),
+            status: "aborted".into(),
+            code: Some("aborted".into()),
+            error_message: Some("Tool call was aborted.".into()),
+            exit_code: Some(1),
+            details: None,
+            continuation: None,
+        },
+    )
+}
+
+fn tool_call_ids_from_message(message: &Value) -> Vec<(String, String)> {
+    message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|call| {
+            let id = call.get("id").and_then(Value::as_str)?.to_owned();
+            if id.is_empty() {
+                return None;
+            }
+            let name = call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("tool")
+                .to_owned();
+            Some((id, name))
+        })
+        .collect()
+}
+
+fn missing_tool_results(messages: &[Value]) -> Vec<(String, String)> {
+    let mut pending = Vec::<(String, String)>::new();
+    for message in messages {
+        match message.get("role").and_then(Value::as_str) {
+            Some("assistant") => {
+                pending = tool_call_ids_from_message(message);
+            }
+            Some("tool") => {
+                if let Some(id) = message.get("tool_call_id").and_then(Value::as_str) {
+                    pending.retain(|(pending_id, _)| pending_id != id);
+                }
+            }
+            Some("user") if !pending.is_empty() => break,
+            _ => {}
         }
-    )];
-    if let Some(code) = &result.error_code {
-        lines.push(format!("Error code: {code}"));
     }
-    if let Some(message) = &result.error_message {
-        lines.push(format!("Error: {message}"));
+    pending
+}
+
+async fn reconcile_aborted_run(
+    session: &Session,
+    sink: &EventSink,
+    run_id: &str,
+    step_index: &mut u32,
+    summary: &mut Value,
+) -> Value {
+    set_run_outcome(summary, RunOutcome::Aborted);
+    let mut messages = session.messages.lock().await;
+    let missing = missing_tool_results(&messages);
+    let mut reconciled_step = false;
+    if !missing.is_empty() {
+        for (id, name) in &missing {
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": aborted_tool_result_content(name),
+            }));
+        }
+        reconciled_step = true;
     }
-    if !result.output.trim().is_empty() {
-        lines.push(result.output.clone());
+    drop(messages);
+    if reconciled_step {
+        publish_step_settled(session, sink, run_id, step_index, "interrupted").await;
     }
-    lines.join("\n")
+    summary.clone()
 }
 
 fn append_compacted_summary(messages: &mut Vec<Value>, index: usize, summary: &str) {
@@ -172,11 +253,26 @@ fn structured_tool_exchanges(messages: &[Value]) -> Vec<usize> {
 
 fn compact_oldest_tool_exchange(messages: &mut Vec<Value>) -> bool {
     if let Some(start) = structured_tool_exchanges(messages).first().copied() {
+        let ids = tool_call_ids_from_message(&messages[start]);
+        if ids.is_empty() {
+            return false;
+        }
         let mut end = start + 1;
+        let mut remaining = ids;
         while end < messages.len()
             && messages[end].get("role").and_then(Value::as_str) == Some("tool")
         {
+            let Some(id) = messages[end].get("tool_call_id").and_then(Value::as_str) else {
+                break;
+            };
+            let Some(position) = remaining.iter().position(|(pending, _)| pending == id) else {
+                break;
+            };
+            remaining.remove(position);
             end += 1;
+        }
+        if !remaining.is_empty() {
+            return false;
         }
         let summary = messages[start + 1..end]
             .iter()
@@ -239,14 +335,14 @@ fn tool_access(session: &Session, call: &ToolCall) -> ToolAccess {
             .and_then(|text| serde_json::from_str::<Value>(text).ok())
             .and_then(|value| value.as_object().cloned())
     });
-    let Some(file_path) = arguments
+    let Some(path) = arguments
         .as_ref()
-        .and_then(|value| value.get("filePath"))
+        .and_then(|value| value.get("path"))
         .and_then(Value::as_str)
     else {
         return ToolAccess::Global;
     };
-    crate::policy::resolve_workspace_path(&session.config.cwd, file_path)
+    crate::policy::resolve_workspace_path(&session.config.cwd, path)
         .map(|(path, _)| ToolAccess::Path { path, write })
         .unwrap_or(ToolAccess::Global)
 }
@@ -404,6 +500,32 @@ pub(crate) struct PreparedRequest {
     profile_fingerprint: String,
 }
 
+/// Captures the immutable inputs to one provider request.
+fn turn_snapshot(
+    session: &Session,
+    surface: std::sync::Arc<crate::tools::ToolSurface>,
+    prepared: &PreparedRequest,
+) -> TurnSnapshot {
+    let route = provider_endpoint_url(&session.config.provider)
+        .map(|url| url.path().to_owned())
+        .unwrap_or_else(|_| {
+            session
+                .config
+                .provider
+                .chat_endpoint_path
+                .clone()
+                .unwrap_or_default()
+        });
+    TurnSnapshot::new(
+        session,
+        surface,
+        prepared.messages.clone(),
+        prepared.max_output_tokens,
+        &skill_profile(session),
+        route,
+    )
+}
+
 pub(crate) async fn prepared_messages(
     session: &Session,
     tools: &[Value],
@@ -437,6 +559,29 @@ pub(crate) async fn prepared_messages(
             ));
         }
     }
+}
+
+/// Walks a proposed cut back to the nearest structurally safe boundary.
+///
+/// A cut is safe only between complete turns. Cutting immediately after an
+/// assistant tool-call message would summarize the call away while its results
+/// stayed in the tail, leaving orphan tool messages — invariant 3. Cutting onto
+/// a tool message would split a batch the same way.
+fn safe_cut_point(messages: &[Value], proposed: usize) -> Option<usize> {
+    let mut end = proposed.min(messages.len());
+    while end > 0 {
+        let splits_batch = messages
+            .get(end)
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+            == Some("tool");
+        let orphans_results = !tool_call_ids_from_message(&messages[end - 1]).is_empty();
+        if !splits_batch && !orphans_results {
+            return Some(end);
+        }
+        end -= 1;
+    }
+    None
 }
 
 fn semantic_prefix_end(messages: &[Value], context_length: u64) -> Option<usize> {
@@ -473,15 +618,26 @@ fn fitted_compaction_end(messages: &[Value], prefix_end: usize) -> Option<usize>
     let mut end = 0usize;
     while index < prefix_end {
         let mut group_end = index + 1;
-        if messages[index]
-            .get("tool_calls")
-            .and_then(Value::as_array)
-            .is_some()
-        {
+        let ids = tool_call_ids_from_message(&messages[index]);
+        if !ids.is_empty() {
+            let mut remaining = ids;
             while group_end < prefix_end
                 && messages[group_end].get("role").and_then(Value::as_str) == Some("tool")
             {
+                let Some(id) = messages[group_end]
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                else {
+                    break;
+                };
+                let Some(position) = remaining.iter().position(|(pending, _)| pending == id) else {
+                    break;
+                };
+                remaining.remove(position);
                 group_end += 1;
+            }
+            if !remaining.is_empty() {
+                break;
             }
         }
         let bytes = serde_json::to_vec(&messages[index..group_end]).ok()?.len();
@@ -615,7 +771,9 @@ async fn attempt_semantic_compaction(
     {
         Ok(summary) => summary,
         Err(error) if error == "compaction_input_overflow" => {
-            let Some(retry_end) = fitted_compaction_end(messages, prefix_end) else {
+            let Some(retry_end) = fitted_compaction_end(messages, prefix_end)
+                .and_then(|end| safe_cut_point(messages, end))
+            else {
                 *session.failed_compaction_digest.lock().await = Some(digest);
                 return false;
             };
@@ -788,14 +946,82 @@ async fn final_without_tools(
     }
 }
 
+async fn publish_step_settled(
+    session: &Session,
+    sink: &EventSink,
+    run_id: &str,
+    step_index: &mut u32,
+    outcome: &str,
+) {
+    *step_index = step_index.saturating_add(1);
+    let step_id = format!("step-{step_index}");
+    let messages = session.messages.lock().await.clone();
+    let summary = session.durable_summary.lock().await.clone();
+    let calibration = session.context_calibration.lock().await.clone();
+    let skills = session
+        .config
+        .skills
+        .iter()
+        .map(|skill| {
+            json!({
+                "id": skill.id,
+                "name": skill.name,
+                "description": skill.description,
+                "source": skill.source,
+            })
+        })
+        .collect::<Vec<_>>();
+    let additional = if skills.is_empty() {
+        vec![]
+    } else {
+        vec![Value::Array(skills)]
+    };
+    let mut state = snapshot_conversation_state(ConversationStateSnapshotInput {
+        task_id: &session.task_id,
+        updated_at: now_iso(),
+        summary,
+        messages: &messages,
+        context_length: session.config.context_length,
+        estimated_prompt_tokens: 0,
+        calibration: calibration.as_ref(),
+        compaction_count: session.compaction_count.load(Ordering::SeqCst),
+    });
+    let rebuilt = state.seeded_messages();
+    let estimate = estimate_context_usage(
+        &rebuilt,
+        &[],
+        session.config.context_length,
+        session.config.max_response_tokens,
+        session.config.protected_prompt_reserve_tokens,
+        &additional,
+    );
+    state.usage.estimated_prompt_tokens = estimate.heuristic_prompt_tokens;
+    let Ok(state) = state.validate() else {
+        return;
+    };
+    let Ok(conversation_state) = serde_json::to_value(&state) else {
+        return;
+    };
+    sink.emit(step_settled_event(
+        &session.task_id,
+        &session.id,
+        run_id,
+        &step_id,
+        outcome,
+        conversation_state,
+    ));
+}
+
 pub async fn run_turn(
     session: Arc<Session>,
+    run_id: String,
     parts: Vec<InputPart>,
+    selected_skill_ids: Vec<String>,
     sink: EventSink,
     permissions: Arc<PermissionBroker>,
 ) -> Result<Value, String> {
-    // Abort is owned by the active TurnGuard created by /prompt_async. Starting a turn
-    // must not clear another turn's abort flag.
+    // Abort is owned by the active RunGuard created by /prompt_async. Starting a run
+    // must not clear another run's abort flag.
     let explicit_text = parts
         .iter()
         .filter_map(|part| match part {
@@ -804,46 +1030,50 @@ pub async fn run_turn(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let explicit_skills = explicit_skill_context(&session, &explicit_text);
+
+    // Work 3: guaranteed skill loading — harness preflight before any model request.
+    let selected_ids = collect_selected_skill_ids(&session, &explicit_text, &selected_skill_ids);
+    let loaded_skills = run_harness_skill_preflight(&session, &run_id, &selected_ids, &sink)?;
+
     let mut messages = session.messages.lock().await;
-    for (skill_id, source, content) in explicit_skills {
-        messages.push(json!({
-            "role":"user",
-            "content":format!(
-                "Explicitly selected skill {skill_id}. Follow these complete task-specific instructions when they apply to the request:\n\n{content}"
-            )
-        }));
-        sink.emit(json!({
-            "type":"skill.selected",
-            "taskId":session.task_id,
-            "skillId":skill_id,
-            "source":source,
-            "reason":"explicit_request",
-            "fullContent":true,
-            "at":now_iso()
-        }));
+    for skill in &loaded_skills {
+        messages.push(harness_skill_context_message(skill));
     }
     messages.push(json!({ "role": "user", "content": message_content(parts) }));
     drop(messages);
     let mut summary = empty_summary();
-    set_turn_outcome(&mut summary, TurnOutcome::Completed);
+    set_run_outcome(&mut summary, RunOutcome::Completed);
     let mut consecutive_failed = 0usize;
+    let mut consecutive_invalid = 0usize;
     let mut repeat_guard = RepeatGuard::default();
     let mut public_progress = PublicProgressSchedule::default();
+    let mut step_index = 0_u32;
     for _ in 0..MAX_TOOL_TURNS {
         if session.is_aborted() {
-            return Err("Runner turn aborted".into());
+            return Ok(reconcile_aborted_run(
+                &session,
+                &sink,
+                &run_id,
+                &mut step_index,
+                &mut summary,
+            )
+            .await);
         }
-        let tools = enabled_tool_specs(&session, true).await;
+        // Everything this request depends on is captured once, before it goes
+        // out. A deferred change landing mid-request cannot reach the in-flight
+        // turn, because the turn no longer reads session state.
+        let surface = tool_surface(&session);
+        let tools = surface.specs().to_vec();
         let mut prepared = prepared_messages(&session, &tools).await?;
+        let mut snapshot = Arc::new(turn_snapshot(&session, surface.clone(), &prepared));
         sink.emit(context_event(&session, prepared.usage));
         let mut response = stream_veil_chat(
             &session,
             &sink,
-            &prepared.messages,
-            &tools,
+            snapshot.messages(),
+            snapshot.tools(),
             VeilRequestOptions {
-                max_output_tokens: prepared.max_output_tokens,
+                max_output_tokens: snapshot.max_output_tokens(),
                 include_tools: true,
             },
         )
@@ -857,41 +1087,47 @@ pub async fn run_turn(
             if attempt_semantic_compaction(&session, &mut messages, &tools).await {
                 drop(messages);
                 prepared = prepared_messages(&session, &tools).await?;
+                // Compaction replaced the conversation state, so the turn is
+                // re-snapshotted rather than reusing stale prompt assembly.
+                snapshot = Arc::new(turn_snapshot(&session, surface.clone(), &prepared));
                 sink.emit(context_event(&session, prepared.usage));
                 response = stream_veil_chat(
                     &session,
                     &sink,
-                    &prepared.messages,
-                    &tools,
+                    snapshot.messages(),
+                    snapshot.tools(),
                     VeilRequestOptions {
-                        max_output_tokens: prepared.max_output_tokens,
+                        max_output_tokens: snapshot.max_output_tokens(),
                         include_tools: true,
                     },
                 )
                 .await;
             }
         }
-        let result = response?;
+        let result = match response {
+            Ok(result) => result,
+            Err(error) if error.to_ascii_lowercase().contains("aborted") => {
+                return Ok(reconcile_aborted_run(
+                    &session,
+                    &sink,
+                    &run_id,
+                    &mut step_index,
+                    &mut summary,
+                )
+                .await);
+            }
+            Err(error) => return Err(error),
+        };
         update_context_calibration(&session, &prepared, &result).await;
         increment(&mut summary, "turns", 1);
         if !result.tool_calls.is_empty() {
             public_progress.before_tools(&session, &sink, &mut summary, &result.tool_calls);
         }
-        if let Some(event) = observed_context_event(&session, &result, prepared.max_output_tokens) {
+        if let Some(event) = observed_context_event(&session, &result, snapshot.max_output_tokens())
+        {
             sink.emit(event);
         }
-        let mut calls = result.tool_calls.clone();
-        for (call_id, kinds) in coerce_tool_call_arguments(&mut calls, &tools) {
-            sink.emit(json!({
-                "type":"tool.policy.stage",
-                "taskId":session.task_id,
-                "toolCallId":call_id,
-                "stage":"coerce_arguments",
-                "outcome":"passed",
-                "reason":kinds.join(","),
-                "at":now_iso()
-            }));
-        }
+        let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
         if calls.is_empty() {
             if looks_like_unstructured_tool_call(&result.content) {
@@ -910,6 +1146,8 @@ pub async fn run_turn(
                 let mut messages = session.messages.lock().await;
                 messages.push(assistant_tool_message(&result, std::slice::from_ref(&call)));
                 messages.push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
+                drop(messages);
+                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 continue;
             }
             if !result.content.trim().is_empty() {
@@ -923,6 +1161,7 @@ pub async fn run_turn(
                     .lock()
                     .await
                     .push(json!({"role":"assistant","content":result.content}));
+                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 return Ok(summary);
             }
             final_without_tools(
@@ -932,19 +1171,24 @@ pub async fn run_turn(
                 "The model did not provide a final answer.",
             )
             .await;
-            set_turn_outcome(&mut summary, TurnOutcome::ModelGaveUp);
+            set_run_outcome(&mut summary, RunOutcome::ModelGaveUp);
+            publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             return Ok(summary);
         }
-        if let Err(error) = validate_tool_call_batch(&session, &calls, &tools) {
+        if let Err(violation) = validate_tool_call_batch(&session, &calls) {
+            let error = violation.message();
+            consecutive_invalid += 1;
             let mut messages = session.messages.lock().await;
             messages.push(assistant_tool_message(&result, &calls));
             for call in &calls {
                 messages.push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
             }
-            consecutive_failed += 1;
-            if consecutive_failed >= MAX_FAILED_TOOL_TURNS {
+            drop(messages);
+            publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
+            if consecutive_invalid >= MAX_INVALID_CALL_REPAIRS {
                 final_without_tools(&session, &sink, &mut summary, "I stopped after repeated invalid workspace tool calls. Review the latest tool error before trying a different approach.").await;
-                set_turn_outcome(&mut summary, TurnOutcome::ModelGaveUp);
+                set_run_outcome(&mut summary, RunOutcome::ModelGaveUp);
+                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 return Ok(summary);
             }
             continue;
@@ -967,7 +1211,7 @@ pub async fn run_turn(
                 any_success = true;
             } else {
                 increment(&mut summary, "failedToolCalls", 1);
-                summary["lastToolFailure"] = json!({"toolKind":call.name,"status":result.status,"errorCode":result.error_code,"message":result.error_message.clone().unwrap_or_else(|| result.output.clone())});
+                summary["lastToolFailure"] = json!({"toolKind":call.name,"status":result.status,"errorCode":result.code,"message":result.error_message.clone().unwrap_or_else(|| result.content.clone())});
             }
         }
         let mut messages = session.messages.lock().await;
@@ -977,6 +1221,17 @@ pub async fn run_turn(
             );
         }
         drop(messages);
+        let step_outcome = if session.is_aborted() {
+            "interrupted"
+        } else {
+            "completed"
+        };
+        publish_step_settled(&session, &sink, &run_id, &mut step_index, step_outcome).await;
+        if session.is_aborted() {
+            set_run_outcome(&mut summary, RunOutcome::Aborted);
+            return Ok(summary);
+        }
+        consecutive_invalid = 0;
         if any_success {
             consecutive_failed = 0
         } else {
@@ -984,7 +1239,8 @@ pub async fn run_turn(
         }
         if consecutive_failed >= MAX_FAILED_TOOL_TURNS {
             final_without_tools(&session, &sink, &mut summary, "I stopped after repeated workspace tool failures. Review the latest tool output before trying a different approach.").await;
-            set_turn_outcome(&mut summary, TurnOutcome::SafetyLimit);
+            set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
+            publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             return Ok(summary);
         }
         if repeat_guard.should_stop(&calls, &results) {
@@ -995,7 +1251,8 @@ pub async fn run_turn(
                 "I stopped because the same workspace tool call returned the same result repeatedly.",
             )
             .await;
-            set_turn_outcome(&mut summary, TurnOutcome::SafetyLimit);
+            set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
+            publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             return Ok(summary);
         }
     }
@@ -1006,7 +1263,8 @@ pub async fn run_turn(
         "I reached the workspace tool safety limit before finishing.",
     )
     .await;
-    set_turn_outcome(&mut summary, TurnOutcome::SafetyLimit);
+    set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
+    publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
     Ok(summary)
 }
 

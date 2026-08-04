@@ -18,7 +18,6 @@ import type {
   HarnessProfileId,
   IdeInfo,
   ModelEndpointMode,
-  ModelEndpointSoftware,
   PermissionMode,
   PublicModelEndpointSettings,
   RepositoryInfo,
@@ -135,12 +134,16 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
     endedAt: new Date(Date.now() - 8_000).toISOString(),
   },
   {
-    type: "skill.selected",
+    type: "skill.loaded",
     taskId: "composer-test",
+    sessionId: "session-composer-test",
+    runId: "run-composer-test",
+    requestId: "skill-req-composer-test",
     skillId: "umbratic-markdown",
     source: "system",
-    reason: "strong_match",
-    fullContent: true,
+    origin: "harness",
+    contentHash: "abcdef0123456789",
+    bytes: 128,
   },
   {
     type: "command.started",
@@ -337,7 +340,6 @@ const composerTestCodeReviewFiles: ReviewFile[] = [
 
 const composerTestDocumentPath = ".umbratic/artifacts/docx/narrative-proposal.docx";
 const composerTestDocumentPreview: DocumentReviewSnapshot = {
-  schemaVersion: 1,
   documentPath: composerTestDocumentPath,
   title: "Narrative Proposal",
   blocks: [
@@ -442,7 +444,7 @@ function previewCapabilityReport(): CapabilityProbeReport {
       category: "required",
       importance: "required",
       status: "missing",
-      purpose: "Starts local workspace tools for read, search, write, edit, and command execution.",
+      purpose: "Starts local workspace tools for read, find, grep, write, edit, and command execution.",
       installHint: "Open the Electron app to check the runner bundle.",
       workflows: ["runner", "workspace tools"],
       checkedAt,
@@ -899,7 +901,6 @@ function createPreviewApi(): DesktopApi {
     const settings = publicPreviewEndpointSettings(normalizeEndpointSettings({
       ...readPreviewEndpointSettings(),
       mode: "server",
-      software: "vllm",
       baseUrl: input.baseUrl,
       modelId: "veil-managed",
       secret: "",
@@ -966,9 +967,7 @@ function createPreviewApi(): DesktopApi {
     return getPreviewPermissionMode();
   },
   listAvailableIdes: async () => defaultIdeChoices,
-  startTask: async () => {
-    throw new Error("Open the Electron app to run a task.");
-  },
+  startTask: async () => { throw new Error("Open the Electron app to run a task."); },
   steerTask: async () => undefined,
   approveWorktreeCreation: async () => undefined,
   respondToToolPermission: async () => undefined,
@@ -985,14 +984,14 @@ function createPreviewApi(): DesktopApi {
   return previewApi;
 }
 
-  return {
-    api: createPreviewApi(),
-    attachments: composerTestAttachments,
-    events: composerTestVisibleEvents,
-    params: composerTestParams,
-    prompt: composerTestPrompt,
-    repository: composerTestRepository,
-    reviewFiles: composerTestReviewFiles,
-    task: composerTestTask,
-  };
+return {
+  api: createPreviewApi(),
+  attachments: composerTestAttachments,
+  events: composerTestVisibleEvents,
+  params: composerTestParams,
+  prompt: composerTestPrompt,
+  repository: composerTestRepository,
+  reviewFiles: composerTestReviewFiles,
+  task: composerTestTask,
+};
 }

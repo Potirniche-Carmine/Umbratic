@@ -31,7 +31,7 @@ export function sanitizeDiagnosticValue(value: unknown, key = "", depth = 0): un
 }
 
 function eventLevel(event: BackendUiEvent): LocalDiagnosticInput["level"] | null {
-  if (event.type === "task.error" || event.type === "tool.failed") return "error";
+  if (event.type === "task.error" || event.type === "tool.failed" || event.type === "skill.failed") return "error";
   if (
     (event.type === "command.finished" && (event.exitCode !== 0 || (event.status && event.status !== "success"))) ||
     (event.type === "permission.resolved" && event.decision === "deny") ||
@@ -46,6 +46,7 @@ function eventMessage(event: BackendUiEvent): string | undefined {
   if (event.type === "task.error") return event.message;
   if (event.type === "command.finished") return event.errorMessage;
   if (event.type === "tool.failed") return event.response.errorMessage;
+  if (event.type === "skill.failed") return event.message;
   if (event.type === "approval.check") return event.detail;
   return undefined;
 }
@@ -53,7 +54,7 @@ function eventMessage(event: BackendUiEvent): string | undefined {
 export function localDiagnosticForBackendEvent(event: BackendUiEvent): LocalDiagnosticInput | null {
   const level = eventLevel(event);
   if (!level) return null;
-  const { type, taskId, at, version: _version, ...data } = event;
+  const { type, taskId, at, ...data } = event;
   return {
     at,
     level,

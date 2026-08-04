@@ -31,7 +31,6 @@ function loadWarmup(settings, ensureError) {
 test("startup warm-up loads the configured local model and forwards safe diagnostics", async () => {
   const settings = {
     mode: "local",
-    software: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     modelId: "llama3.2",
     secret: "",
@@ -55,7 +54,6 @@ test("startup warm-up loads the configured local model and forwards safe diagnos
 test("startup warm-up leaves server-mode model lifecycle to the server", async () => {
   const state = loadWarmup({
     mode: "server",
-    software: "vllm",
     baseUrl: "https://veil.example",
     modelId: "",
     secret: "",
@@ -70,7 +68,6 @@ test("startup warm-up leaves server-mode model lifecycle to the server", async (
 test("startup warm-up records a safe warning when the local model cannot load", async () => {
   const state = loadWarmup({
     mode: "local",
-    software: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     modelId: "missing",
     secret: "",

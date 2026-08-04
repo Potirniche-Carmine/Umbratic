@@ -34,6 +34,9 @@ export type RunnerEvent =
       errorMessage?: string | null;
       durationMs?: number;
       response?: string | null;
+      /// Typed result payload. Consumers read this, never the model-facing text.
+      details?: unknown;
+      continuation?: unknown;
     })
   | (RunnerEventBase & {
       type: "context.compressed";
@@ -85,13 +88,64 @@ export type RunnerEvent =
       reason?: string;
     })
   | (RunnerEventBase & {
-      type: "skill.selected";
+      type: "skill.requested";
+      sessionId: string;
+      runId: string;
+      requestId: string;
       skillId: string;
-      source: "system" | "local";
-      reason: "explicit_request" | "strong_match" | "metadata";
-      fullContent: boolean;
+      source: string;
+      origin: "harness" | "model";
     })
-  | (RunnerEventBase & { type: "session.idle"; summary?: unknown });
+  | (RunnerEventBase & {
+      type: "skill.loaded";
+      sessionId: string;
+      runId: string;
+      requestId: string;
+      skillId: string;
+      source: string;
+      origin: "harness" | "model";
+      contentHash: string;
+      bytes: number;
+    })
+  | (RunnerEventBase & {
+      type: "skill.failed";
+      sessionId: string;
+      runId: string;
+      requestId: string;
+      skillId: string;
+      source: string;
+      origin: "harness" | "model";
+      code: string;
+      message: string;
+    })
+  | (RunnerEventBase & {
+      type: "step.settled";
+      sessionId: string;
+      runId: string;
+      stepId: string;
+      outcome: "completed" | "interrupted";
+      conversationState: unknown;
+    })
+  | (RunnerEventBase & {
+      type: "run.settled";
+      sessionId: string;
+      runId: string;
+      outcome: "completed" | "failed" | "aborted" | "model_gave_up" | "safety_limit";
+      summary: unknown;
+      errorCode: string | null;
+    })
+  | (RunnerEventBase & {
+      type: "run.queue.updated";
+      sessionId: string;
+      runId: string | null;
+      actionId: string;
+      action: "steer" | "follow_up" | "cancel";
+      disposition: "accepted" | "rejected" | "dequeued" | "cleared";
+      pendingSteer: boolean;
+      followUpCount: number;
+      followUpCapacity: number;
+      reasonCode: string | null;
+    });
 
 export type RunnerEventDecodeResult =
   | { ok: true; ignored: false; event: RunnerEvent }
@@ -116,8 +170,12 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "permission.requested",
   "runner.error",
   "tool.policy.stage",
-  "skill.selected",
-  "session.idle",
+  "skill.requested",
+  "skill.loaded",
+  "skill.failed",
+  "step.settled",
+  "run.settled",
+  "run.queue.updated",
 ]);
 
 const ignoredTypes = new Set([
@@ -153,16 +211,62 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
     case "assistant.progress.delta":
       return hasString(value, "text");
     case "command.safety.decision":
-    case "session.idle":
       return true;
+    case "step.settled":
+      return hasString(value, "sessionId")
+        && hasString(value, "runId")
+        && hasString(value, "stepId")
+        && (value.outcome === "completed" || value.outcome === "interrupted")
+        && isRecord(value.conversationState);
+    case "run.settled":
+      return hasString(value, "sessionId")
+        && hasString(value, "runId")
+        && ["completed", "failed", "aborted", "model_gave_up", "safety_limit"].includes(String(value.outcome))
+        && (value.summary === null || typeof value.summary === "object")
+        && (value.errorCode === null || typeof value.errorCode === "string");
+    case "run.queue.updated":
+      return hasString(value, "sessionId")
+        && (value.runId === null || typeof value.runId === "string")
+        && hasString(value, "actionId")
+        && (value.action === "steer" || value.action === "follow_up" || value.action === "cancel")
+        && (value.disposition === "accepted"
+          || value.disposition === "rejected"
+          || value.disposition === "dequeued"
+          || value.disposition === "cleared")
+        && typeof value.pendingSteer === "boolean"
+        && isFiniteNumber(value.followUpCount)
+        && value.followUpCount >= 0
+        && isFiniteNumber(value.followUpCapacity)
+        && value.followUpCapacity >= 0
+        && (value.reasonCode === null || typeof value.reasonCode === "string");
     case "tool.policy.stage":
       return hasString(value, "toolCallId") && hasString(value, "stage") && hasString(value, "outcome")
         && (value.reason === undefined || hasString(value, "reason"));
-    case "skill.selected":
-      return hasString(value, "skillId")
-        && (value.source === "system" || value.source === "local")
-        && ["explicit_request", "strong_match", "metadata"].includes(String(value.reason))
-        && typeof value.fullContent === "boolean";
+    case "skill.requested":
+      return hasString(value, "sessionId")
+        && hasString(value, "runId")
+        && hasString(value, "requestId")
+        && hasString(value, "skillId")
+        && hasString(value, "source")
+        && (value.origin === "harness" || value.origin === "model");
+    case "skill.loaded":
+      return hasString(value, "sessionId")
+        && hasString(value, "runId")
+        && hasString(value, "requestId")
+        && hasString(value, "skillId")
+        && hasString(value, "source")
+        && (value.origin === "harness" || value.origin === "model")
+        && hasString(value, "contentHash")
+        && hasNonNegativeNumber(value, "bytes");
+    case "skill.failed":
+      return hasString(value, "sessionId")
+        && hasString(value, "runId")
+        && hasString(value, "requestId")
+        && hasString(value, "skillId")
+        && hasString(value, "source")
+        && (value.origin === "harness" || value.origin === "model")
+        && hasString(value, "code")
+        && hasString(value, "message");
     case "tool.requested":
       return (
         hasString(value, "toolCallId")
@@ -185,6 +289,8 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.errorMessage == null || typeof value.errorMessage === "string")
         && (value.durationMs === undefined || hasNonNegativeNumber(value, "durationMs"))
         && (value.response == null || typeof value.response === "string")
+        && (value.details === undefined || isRecord(value.details))
+        && (value.continuation === undefined || isRecord(value.continuation))
       );
     case "context.compressed":
       return (
@@ -226,6 +332,10 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.code === undefined || typeof value.code === "string")
         && (value.detail === undefined || typeof value.detail === "string")
       );
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
   }
 }
 

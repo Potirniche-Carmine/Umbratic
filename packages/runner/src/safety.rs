@@ -47,8 +47,7 @@ pub struct MatchedSpan {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SafetyDecisionV1 {
-    pub schema_version: u8,
+pub struct SafetyDecision {
     pub policy_version: &'static str,
     pub action: SafetyAction,
     pub severity: SafetySeverity,
@@ -119,9 +118,8 @@ struct DecisionSpec {
     suggestion: Option<&'static str>,
 }
 
-fn decision(command: &str, cwd: &Path, spec: DecisionSpec, started: Instant) -> SafetyDecisionV1 {
-    SafetyDecisionV1 {
-        schema_version: 1,
+fn decision(command: &str, cwd: &Path, spec: DecisionSpec, started: Instant) -> SafetyDecision {
+    SafetyDecision {
         policy_version: COMMAND_POLICY_VERSION,
         action: spec.action,
         severity: spec.severity,
@@ -141,7 +139,7 @@ fn decision(command: &str, cwd: &Path, spec: DecisionSpec, started: Instant) -> 
     }
 }
 
-pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecisionV1 {
+pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
     let started = Instant::now();
     let trimmed = command.trim();
     if trimmed.is_empty() || command.len() > MAX_COMMAND_BYTES {
@@ -344,7 +342,7 @@ pub struct CommandPermit {
 }
 
 impl CommandPermit {
-    pub fn new(decision: &SafetyDecisionV1) -> Self {
+    pub fn new(decision: &SafetyDecision) -> Self {
         Self {
             command_fingerprint: decision.command_fingerprint.clone(),
             cwd_fingerprint: decision.cwd_fingerprint.clone(),

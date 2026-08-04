@@ -231,16 +231,22 @@ func TestSetupLoginAndAuthenticatedPage(t *testing.T) {
 		}
 	}
 	settingsForm := url.Values{
-		"csrf":              {sessionCSRF},
-		"protocol":          {"vllm"},
-		"provider_base_url": {"http://127.0.0.1:8000/v1"},
-		"model":             {"local-model"},
-		"context_length":    {"65536"},
-		"max_output_tokens": {"8192"},
-		"model_timeout":     {"1m"},
-		"request_timeout":   {"1m15s"},
-		"max_body_bytes":    {"67108864"},
-		"password":          {"wrong password"},
+		"csrf":                             {sessionCSRF},
+		"provider_base_url":                {"http://127.0.0.1:8000/v1"},
+		"model":                            {"local-model"},
+		"context_length":                   {"65536"},
+		"max_output_tokens":                {"8192"},
+		"temperature":                      {"0.2"},
+		"top_p":                            {"0.95"},
+		"reasoning_effort":                 {"none"},
+		"parallel_tool_calls":              {"true"},
+		"max_concurrent_requests":          {"32"},
+		"max_concurrent_requests_per_user": {"4"},
+		"queue_timeout":                    {"30s"},
+		"model_timeout":                    {"1m"},
+		"request_timeout":                  {"1m15s"},
+		"max_body_bytes":                   {"67108864"},
+		"password":                         {"wrong password"},
 	}
 	for _, path := range []string{"/settings/test", "/settings/apply"} {
 		settingsRequest := formRequest(http.MethodPost, path, settingsForm, cookies...)

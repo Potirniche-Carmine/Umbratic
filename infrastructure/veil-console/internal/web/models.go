@@ -9,7 +9,7 @@ import (
 )
 
 func settingsModels(ctx context.Context, cfg config.Veil) []string {
-	models, err := supervisor.ListModels(ctx, cfg.Protocol, cfg.ProviderBaseURL)
+	models, err := supervisor.ListModels(ctx, cfg.ProviderBaseURL)
 	if err != nil {
 		return nil
 	}

@@ -43,12 +43,15 @@ const workspaceToolLabels: Record<string, string> = {
   read: "Read workspace",
   read_attachment: "Read attachment",
   read_skill: "Read skill",
-  search: "Search workspace",
+  ls: "List directory",
+  find: "Find paths",
+  grep: "Search text",
   write: "Write file",
   edit: "Edit files",
   apply_patch: "Edit files",
   lsp: "Inspect code",
   workspace_graph: "Inspect code",
+  retrieve_context: "Retrieve context",
 };
 
 function isShellRun(run: CommandRun): boolean {
@@ -59,7 +62,9 @@ function isShellRun(run: CommandRun): boolean {
 export function commandLabel(command: string): string {
   const trimmed = command.trim();
   if (!trimmed) return "Workspace action";
-  if (/^search(?:\s|$)/i.test(trimmed)) return "Search workspace";
+  if (/^grep(?:\s|$)/i.test(trimmed)) return "Search text";
+  if (/^find(?:\s|$)/i.test(trimmed)) return "Find paths";
+  if (/^ls(?:\s|$)/i.test(trimmed)) return "List directory";
   if (/^read(?:\s|$)/i.test(trimmed)) return "Read workspace";
   if (/^write(?:\s|$)/i.test(trimmed)) return "Write file";
   if (/^edit(?:\s|$)/i.test(trimmed)) return "Edit files";

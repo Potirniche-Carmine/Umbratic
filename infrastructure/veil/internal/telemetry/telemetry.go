@@ -10,16 +10,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
 
 type Bundle struct {
-	SchemaVersion int              `json:"schemaVersion"`
-	ExportedAt    string           `json:"exportedAt"`
-	ProductEvents []map[string]any `json:"productEvents"`
-	Tasks         []map[string]any `json:"tasks"`
+	ExportedAt       string           `json:"exportedAt"`
+	ProductEvents    []map[string]any `json:"productEvents"`
+	LocalDiagnostics map[string]any   `json:"localDiagnostics"`
+	Tasks            []map[string]any `json:"tasks"`
 }
+
+// bundleFields is the exact top-level shape of a telemetry bundle. A bundle
+// with any other key set is rejected: there is no version negotiation.
+var bundleFields = []string{"exportedAt", "productEvents", "localDiagnostics", "tasks"}
 
 var ErrInvalidBundle = errors.New("invalid telemetry bundle")
 
@@ -30,13 +35,22 @@ func DecodeBundle(reader io.Reader) (Bundle, []byte, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	var bundle Bundle
-	if err := decoder.Decode(&bundle); err != nil {
+	var fields map[string]json.RawMessage
+	if err := decoder.Decode(&fields); err != nil {
 		return Bundle{}, nil, fmt.Errorf("%w: malformed json", ErrInvalidBundle)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return Bundle{}, nil, fmt.Errorf("%w: trailing json", ErrInvalidBundle)
+	}
+	if err := checkBundleFields(fields); err != nil {
+		return Bundle{}, nil, err
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.UseNumber()
+	var bundle Bundle
+	if err := strict.Decode(&bundle); err != nil {
+		return Bundle{}, nil, fmt.Errorf("%w: malformed json", ErrInvalidBundle)
 	}
 	if err := validateBundle(bundle); err != nil {
 		return Bundle{}, nil, err
@@ -48,10 +62,23 @@ func DecodeBundle(reader io.Reader) (Bundle, []byte, error) {
 	return bundle, sanitized, nil
 }
 
-func validateBundle(bundle Bundle) error {
-	if bundle.SchemaVersion != 4 {
-		return fmt.Errorf("%w: unsupported schema version", ErrInvalidBundle)
+func checkBundleFields(fields map[string]json.RawMessage) error {
+	for _, name := range bundleFields {
+		if _, exists := fields[name]; !exists {
+			return fmt.Errorf("%w: %s is required", ErrInvalidBundle, name)
+		}
 	}
+	if len(fields) != len(bundleFields) {
+		for name := range fields {
+			if !slices.Contains(bundleFields, name) {
+				return fmt.Errorf("%w: unknown field %q", ErrInvalidBundle, name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateBundle(bundle Bundle) error {
 	if _, err := time.Parse(time.RFC3339Nano, bundle.ExportedAt); err != nil {
 		return fmt.Errorf("%w: exportedAt must be RFC3339", ErrInvalidBundle)
 	}
@@ -70,6 +97,52 @@ func validateBundle(bundle Bundle) error {
 		if err := validateProductEvent(event); err != nil {
 			return err
 		}
+	}
+	return validateLocalDiagnostics(bundle.LocalDiagnostics)
+}
+
+func validateLocalDiagnostics(summary map[string]any) error {
+	if summary == nil {
+		return fmt.Errorf("%w: localDiagnostics must be an object", ErrInvalidBundle)
+	}
+	counts := []string{"total", "warnings", "errors"}
+	buckets := []string{"bySource", "byEvent"}
+	if len(summary) != len(counts)+len(buckets) {
+		return fmt.Errorf("%w: localDiagnostics has an unexpected shape", ErrInvalidBundle)
+	}
+	for _, key := range counts {
+		if err := nonNegativeCount(summary, key); err != nil {
+			return err
+		}
+	}
+	for _, key := range buckets {
+		bucket, ok := summary[key].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: localDiagnostics %s must be an object", ErrInvalidBundle, key)
+		}
+		if len(bucket) > 200 {
+			return fmt.Errorf("%w: localDiagnostics %s has too many entries", ErrInvalidBundle, key)
+		}
+		for name := range bucket {
+			if strings.TrimSpace(name) == "" || len(name) > 128 {
+				return fmt.Errorf("%w: localDiagnostics %s key is invalid", ErrInvalidBundle, key)
+			}
+			if err := nonNegativeCount(bucket, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func nonNegativeCount(value map[string]any, key string) error {
+	number, ok := value[key].(json.Number)
+	if !ok {
+		return fmt.Errorf("%w: %s must be a number", ErrInvalidBundle, key)
+	}
+	parsed, err := number.Int64()
+	if err != nil || parsed < 0 {
+		return fmt.Errorf("%w: %s must be a number", ErrInvalidBundle, key)
 	}
 	return nil
 }

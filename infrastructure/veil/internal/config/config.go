@@ -13,30 +13,30 @@ import (
 )
 
 type Config struct {
-	Addr                       string
-	AuthToken                  string
-	ControlToken               string
-	CompanyIdentityMode        bool
-	EntitlementPath            string
-	IdentityStorePath          string
-	ProviderProtocol           model.ProviderProtocol
-	ProviderBaseURL            string
-	ProviderChatEndpointPath   string
-	ProviderModelsEndpointPath string
-	DefaultModel               string
-	ContextLength              int
-	MaxOutputTokens            int
-	ModelParallelToolCalls     bool
-	ModelVision                bool
-	ModelReasoning             bool
-	TemplateRegistryPath       string
-	TelemetryEnabled           bool
-	TelemetryStorePath         string
-	TelemetryRetentionDays     int
-	TelemetryMaxBodyBytes      int64
-	ModelTimeout               time.Duration
-	RequestTimeout             time.Duration
-	MaxBodyBytes               int64
+	Addr                   string
+	AuthToken              string
+	ControlToken           string
+	CompanyIdentityMode    bool
+	EntitlementPath        string
+	IdentityStorePath      string
+	Mode                   model.Mode
+	ProviderBaseURL        string
+	DefaultModel           string
+	ContextLength          int
+	MaxOutputTokens        int
+	ModelParallelToolCalls bool
+	Generation             model.GenerationProfile
+	ModelVision            bool
+	ModelReasoning         bool
+	TemplateRegistryPath   string
+	TelemetryEnabled       bool
+	TelemetryStorePath     string
+	TelemetryRetentionDays int
+	TelemetryMaxBodyBytes  int64
+	ModelTimeout           time.Duration
+	RequestTimeout         time.Duration
+	StreamIdleTimeout      time.Duration
+	MaxBodyBytes           int64
 }
 
 func Load() (Config, error) {
@@ -47,11 +47,20 @@ func Load() (Config, error) {
 		}
 	}
 
+	mode, err := model.ParseMode(os.Getenv("VEIL_MODE"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	modelTimeout, err := envDuration("VEIL_MODEL_TIMEOUT", 180*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
 	requestTimeout, err := envDuration("VEIL_REQUEST_TIMEOUT", 195*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	streamIdleTimeout, err := envDuration("VEIL_STREAM_IDLE_TIMEOUT", 60*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -79,10 +88,6 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	modelParallelToolCalls, err := envBool("VEIL_MODEL_PARALLEL_TOOL_CALLS", true)
-	if err != nil {
-		return Config{}, err
-	}
 	modelVision, err := envBool("VEIL_MODEL_VISION", false)
 	if err != nil {
 		return Config{}, err
@@ -95,36 +100,42 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	protocol, err := model.ParseProviderProtocol(os.Getenv("VEIL_PROVIDER_PROTOCOL"))
-	if err != nil {
-		return Config{}, err
+
+	var generation model.GenerationProfile
+	if mode == model.ModeLocal {
+		generation = model.LocalGenerationProfile(maxOutputTokens)
+	} else {
+		generation, err = loadServerGenerationProfile(maxOutputTokens)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 
 	cfg := Config{
-		Addr:                       envString("VEIL_ADDR", "127.0.0.1:8080"),
-		AuthToken:                  strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
-		ControlToken:               strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
-		CompanyIdentityMode:        companyIdentityMode,
-		EntitlementPath:            strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
-		IdentityStorePath:          strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
-		ProviderProtocol:           protocol,
-		ProviderBaseURL:            strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
-		ProviderChatEndpointPath:   strings.TrimSpace(os.Getenv("VEIL_PROVIDER_CHAT_PATH")),
-		ProviderModelsEndpointPath: strings.TrimSpace(os.Getenv("VEIL_PROVIDER_MODELS_PATH")),
-		DefaultModel:               strings.TrimSpace(os.Getenv("VEIL_MODEL")),
-		ContextLength:              contextLength,
-		MaxOutputTokens:            maxOutputTokens,
-		ModelParallelToolCalls:     modelParallelToolCalls,
-		ModelVision:                modelVision,
-		ModelReasoning:             modelReasoning,
-		TemplateRegistryPath:       strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
-		TelemetryEnabled:           telemetryEnabled,
-		TelemetryStorePath:         strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
-		TelemetryRetentionDays:     telemetryRetentionDays,
-		TelemetryMaxBodyBytes:      telemetryMaxBodyBytes,
-		ModelTimeout:               modelTimeout,
-		RequestTimeout:             requestTimeout,
-		MaxBodyBytes:               maxBodyBytes,
+		Addr:                   envString("VEIL_ADDR", "127.0.0.1:8080"),
+		AuthToken:              strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
+		ControlToken:           strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
+		CompanyIdentityMode:    companyIdentityMode,
+		EntitlementPath:        strings.TrimSpace(os.Getenv("VEIL_ENTITLEMENT_PATH")),
+		IdentityStorePath:      strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
+		Mode:                   mode,
+		ProviderBaseURL:        strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
+		DefaultModel:           strings.TrimSpace(os.Getenv("VEIL_MODEL")),
+		ContextLength:          contextLength,
+		MaxOutputTokens:        generation.MaxOutputTokens,
+		ModelParallelToolCalls: generation.ParallelToolCalls,
+		Generation:             generation,
+		ModelVision:            modelVision,
+		ModelReasoning:         modelReasoning,
+		TemplateRegistryPath:   strings.TrimSpace(os.Getenv("VEIL_TEMPLATE_REGISTRY_PATH")),
+		TelemetryEnabled:       telemetryEnabled,
+		TelemetryStorePath:     strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
+		TelemetryRetentionDays: telemetryRetentionDays,
+		TelemetryMaxBodyBytes:  telemetryMaxBodyBytes,
+		ModelTimeout:           modelTimeout,
+		RequestTimeout:         requestTimeout,
+		StreamIdleTimeout:      streamIdleTimeout,
+		MaxBodyBytes:           maxBodyBytes,
 	}
 
 	if cfg.AuthToken == "" {
@@ -156,14 +167,14 @@ func Load() (Config, error) {
 	if cfg.RequestTimeout <= 0 {
 		return Config{}, errors.New("VEIL_REQUEST_TIMEOUT must be positive")
 	}
+	if cfg.StreamIdleTimeout <= 0 {
+		return Config{}, errors.New("VEIL_STREAM_IDLE_TIMEOUT must be positive")
+	}
 	if cfg.MaxBodyBytes <= 0 {
 		return Config{}, errors.New("VEIL_MAX_BODY_BYTES must be positive")
 	}
 	if cfg.ContextLength < 0 {
 		return Config{}, errors.New("VEIL_CONTEXT_LENGTH must be positive when set")
-	}
-	if cfg.MaxOutputTokens <= 0 || cfg.MaxOutputTokens > 32*1024 {
-		return Config{}, errors.New("VEIL_MAX_OUTPUT_TOKENS must be between 1 and 32768")
 	}
 	if cfg.TelemetryRetentionDays <= 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_RETENTION_DAYS must be positive")
@@ -171,8 +182,57 @@ func Load() (Config, error) {
 	if cfg.TelemetryMaxBodyBytes <= 0 {
 		return Config{}, errors.New("VEIL_TELEMETRY_MAX_BODY_BYTES must be positive")
 	}
+	if err := cfg.Generation.Validate(); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+func loadServerGenerationProfile(maxOutputTokens int) (model.GenerationProfile, error) {
+	temperature, err := envFloat("VEIL_TEMPERATURE", 0.2)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	topP, err := envFloat("VEIL_TOP_P", 0.95)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	parallelToolCalls, err := envBool("VEIL_MODEL_PARALLEL_TOOL_CALLS", true)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	reasoningEffort, err := model.ParseReasoningEffort(os.Getenv("VEIL_REASONING_EFFORT"))
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	thinkingBudget, err := envOptionalNonNegInt("VEIL_THINKING_TOKEN_BUDGET")
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	maxConcurrent, err := envInt("VEIL_MAX_CONCURRENT_REQUESTS", 32)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	maxConcurrentUser, err := envInt("VEIL_MAX_CONCURRENT_REQUESTS_PER_USER", 4)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	queueTimeout, err := envDuration("VEIL_QUEUE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	return model.GenerationProfile{
+		Temperature:               temperature,
+		TopP:                      topP,
+		MaxOutputTokens:           maxOutputTokens,
+		ReasoningEffort:           reasoningEffort,
+		ThinkingTokenBudget:       thinkingBudget,
+		ParallelToolCalls:         parallelToolCalls,
+		MaxConcurrentRequests:     maxConcurrent,
+		MaxConcurrentRequestsUser: maxConcurrentUser,
+		QueueTimeout:              queueTimeout,
+	}, nil
 }
 
 func envString(name, fallback string) string {
@@ -214,6 +274,33 @@ func envInt64(name string, fallback int64) (int64, error) {
 func envInt(name string, fallback int) (int, error) {
 	value, err := envInt64(name, int64(fallback))
 	return int(value), err
+}
+
+func envOptionalNonNegInt(name string) (*int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an integer", name)
+	}
+	if parsed < 0 {
+		return nil, fmt.Errorf("%s must be non-negative", name)
+	}
+	return &parsed, nil
+}
+
+func envFloat(name string, fallback float64) (float64, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number", name)
+	}
+	return parsed, nil
 }
 
 func envBool(name string, fallback bool) (bool, error) {

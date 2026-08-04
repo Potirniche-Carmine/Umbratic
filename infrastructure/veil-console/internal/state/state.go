@@ -60,8 +60,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE TABLE IF NOT EXISTS configurations (
   id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL,
-  protocol TEXT NOT NULL, provider_base_url TEXT NOT NULL, model TEXT NOT NULL,
+  provider_base_url TEXT NOT NULL, model TEXT NOT NULL,
   context_length INTEGER NOT NULL, max_output_tokens INTEGER NOT NULL,
+  temperature REAL NOT NULL, top_p REAL NOT NULL,
+  reasoning_effort TEXT NOT NULL, thinking_token_budget INTEGER,
+  parallel_tool_calls INTEGER NOT NULL,
+  max_concurrent_requests INTEGER NOT NULL,
+  max_concurrent_requests_per_user INTEGER NOT NULL,
+  queue_timeout_ns INTEGER NOT NULL,
   model_timeout_ns INTEGER NOT NULL, request_timeout_ns INTEGER NOT NULL,
   max_body_bytes INTEGER NOT NULL, created_at INTEGER NOT NULL,
   CHECK (status IN ('pending','current','previous'))
@@ -91,6 +97,10 @@ func Open(dir string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	store := &Store{db: db, dir: dir, lockFile: lockFile}
+	if err := migrateConfigurations(db); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("migrate Console configuration schema: %w", err)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		store.Close()
 		return nil, fmt.Errorf("initialize Console database: %w", err)
@@ -102,6 +112,32 @@ func Open(dir string) (*Store, error) {
 		}
 	}
 	return store, nil
+}
+
+func migrateConfigurations(db *sql.DB) error {
+	var tableName string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='configurations'`).Scan(&tableName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var protocolCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('configurations') WHERE name='protocol'`).Scan(&protocolCount); err != nil {
+		return err
+	}
+	var temperatureCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('configurations') WHERE name='temperature'`).Scan(&temperatureCount); err != nil {
+		return err
+	}
+	if protocolCount == 0 && temperatureCount > 0 {
+		return nil
+	}
+	if _, err := db.Exec(`DROP TABLE IF EXISTS configurations`); err != nil {
+		return err
+	}
+	return nil
 }
 
 func secureDirectory(dir string) error {
@@ -275,8 +311,21 @@ func (s *Store) SavePending(ctx context.Context, cfg config.Veil, now time.Time)
 	if _, err := tx.ExecContext(ctx, "DELETE FROM configurations WHERE status='pending'"); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO configurations(status,protocol,provider_base_url,model,context_length,max_output_tokens,model_timeout_ns,request_timeout_ns,max_body_bytes,created_at)
-VALUES('pending',?,?,?,?,?,?,?,?,?)`, cfg.Protocol, cfg.ProviderBaseURL, cfg.Model, cfg.ContextLength, cfg.MaxOutputTokens, int64(cfg.ModelTimeout), int64(cfg.RequestTimeout), cfg.MaxBodyBytes, now.Unix())
+	var thinking any
+	if cfg.ThinkingTokenBudget != nil {
+		thinking = *cfg.ThinkingTokenBudget
+	}
+	parallel := 0
+	if cfg.ParallelToolCalls {
+		parallel = 1
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO configurations(
+status,provider_base_url,model,context_length,max_output_tokens,temperature,top_p,reasoning_effort,thinking_token_budget,
+parallel_tool_calls,max_concurrent_requests,max_concurrent_requests_per_user,queue_timeout_ns,model_timeout_ns,request_timeout_ns,max_body_bytes,created_at)
+VALUES('pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		cfg.ProviderBaseURL, cfg.Model, cfg.ContextLength, cfg.MaxOutputTokens, cfg.Temperature, cfg.TopP, string(cfg.ReasoningEffort), thinking,
+		parallel, cfg.MaxConcurrentRequests, cfg.MaxConcurrentRequestsPerUser, int64(cfg.QueueTimeout),
+		int64(cfg.ModelTimeout), int64(cfg.RequestTimeout), cfg.MaxBodyBytes, now.Unix())
 	if err != nil {
 		return err
 	}
@@ -316,14 +365,33 @@ func (s *Store) DiscardPending(ctx context.Context) error {
 
 func (s *Store) Configuration(ctx context.Context, status string) (config.Veil, bool, error) {
 	var cfg config.Veil
-	var modelNS, requestNS int64
-	err := s.db.QueryRowContext(ctx, `SELECT protocol,provider_base_url,model,context_length,max_output_tokens,model_timeout_ns,request_timeout_ns,max_body_bytes
-FROM configurations WHERE status=?`, status).Scan(&cfg.Protocol, &cfg.ProviderBaseURL, &cfg.Model, &cfg.ContextLength, &cfg.MaxOutputTokens, &modelNS, &requestNS, &cfg.MaxBodyBytes)
+	var modelNS, requestNS, queueNS int64
+	var reasoning string
+	var thinking sql.NullInt64
+	var parallel int
+	err := s.db.QueryRowContext(ctx, `SELECT provider_base_url,model,context_length,max_output_tokens,temperature,top_p,reasoning_effort,thinking_token_budget,
+parallel_tool_calls,max_concurrent_requests,max_concurrent_requests_per_user,queue_timeout_ns,model_timeout_ns,request_timeout_ns,max_body_bytes
+FROM configurations WHERE status=?`, status).Scan(
+		&cfg.ProviderBaseURL, &cfg.Model, &cfg.ContextLength, &cfg.MaxOutputTokens, &cfg.Temperature, &cfg.TopP, &reasoning, &thinking,
+		&parallel, &cfg.MaxConcurrentRequests, &cfg.MaxConcurrentRequestsPerUser, &queueNS, &modelNS, &requestNS, &cfg.MaxBodyBytes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return config.Veil{}, false, nil
 	}
-	cfg.ModelTimeout, cfg.RequestTimeout = time.Duration(modelNS), time.Duration(requestNS)
-	return cfg, err == nil, err
+	if err != nil {
+		return config.Veil{}, false, err
+	}
+	effort, err := config.ParseReasoningEffort(reasoning)
+	if err != nil {
+		return config.Veil{}, false, err
+	}
+	cfg.ReasoningEffort = effort
+	if thinking.Valid {
+		value := int(thinking.Int64)
+		cfg.ThinkingTokenBudget = &value
+	}
+	cfg.ParallelToolCalls = parallel != 0
+	cfg.QueueTimeout, cfg.ModelTimeout, cfg.RequestTimeout = time.Duration(queueNS), time.Duration(modelNS), time.Duration(requestNS)
+	return cfg, true, nil
 }
 
 func (s *Store) Audit(ctx context.Context, event, outcome string, now time.Time) {

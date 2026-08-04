@@ -14,6 +14,10 @@ import type {
   ToolResultStatus,
 } from "./types";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 // Recovering compacted context is runner bookkeeping, not workspace activity
 // the user asked for, so it never becomes a timeline row.
 const internalToolKinds = new Set(["retrieve_context"]);
@@ -49,9 +53,11 @@ export type RunnerEventAdapterOptions = {
     safety?: Record<string, unknown>,
   ): Promise<"pending" | "resolved" | "worktree_requested">;
   onDelegated(): void;
+  onStepSettled(conversationState: unknown): void;
   onFinish(): void;
   onFailure(message: string, details?: RunnerFailureDetails): void;
   onInvalid(input: { message: string; code: string; type?: string }): void;
+  onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
 };
 
 function eventAt(event: RunnerEvent): string | undefined {
@@ -98,14 +104,46 @@ export class RunnerEventAdapter {
           at: eventAt(event),
         });
         return;
-      case "skill.selected":
+      case "skill.requested":
         this.options.emit({
-          type: "skill.selected",
+          type: "skill.requested",
           taskId: this.options.task.id,
+          sessionId: event.sessionId,
+          runId: event.runId,
+          requestId: event.requestId,
           skillId: event.skillId,
           source: event.source,
-          reason: event.reason,
-          fullContent: event.fullContent,
+          origin: event.origin,
+          at: eventAt(event),
+        });
+        return;
+      case "skill.loaded":
+        this.options.emit({
+          type: "skill.loaded",
+          taskId: this.options.task.id,
+          sessionId: event.sessionId,
+          runId: event.runId,
+          requestId: event.requestId,
+          skillId: event.skillId,
+          source: event.source,
+          origin: event.origin,
+          contentHash: event.contentHash,
+          bytes: event.bytes,
+          at: eventAt(event),
+        });
+        return;
+      case "skill.failed":
+        this.options.emit({
+          type: "skill.failed",
+          taskId: this.options.task.id,
+          sessionId: event.sessionId,
+          runId: event.runId,
+          requestId: event.requestId,
+          skillId: event.skillId,
+          source: event.source,
+          origin: event.origin,
+          code: event.code,
+          message: event.message,
           at: eventAt(event),
         });
         return;
@@ -140,31 +178,51 @@ export class RunnerEventAdapter {
         this.handlePermission(event);
         return;
       case "runner.error":
-        this.options.onFailure(
-          event.message.trim() || "Umbratic runner failed.",
-          {
+        this.pendingFailure = {
+          message: event.message.trim() || "Umbratic runner failed.",
+          details: {
             ...(event.category
               ? { category: event.category.slice(0, 80) }
               : {}),
             ...(event.code ? { code: event.code.slice(0, 120) } : {}),
             ...(event.detail ? { detail: event.detail.slice(0, 1000) } : {}),
           },
-        );
+        };
         return;
-      case "session.idle":
+      case "step.settled":
+        this.options.onStepSettled(event.conversationState);
+        return;
+      case "run.settled":
         this.finishOpenToolRuns();
-        if (event.summary && typeof event.summary === "object" && !Array.isArray(event.summary)) {
-          const outcome = (event.summary as Record<string, unknown>).outcome;
-          if (outcome === "completed" || outcome === "model_gave_up" || outcome === "safety_limit") {
-            this.options.emit({
-              type: "turn.outcome",
-              taskId: this.options.task.id,
-              outcome,
-              at: eventAt(event),
-            });
-          }
+        if (
+          event.outcome === "completed"
+          || event.outcome === "model_gave_up"
+          || event.outcome === "safety_limit"
+        ) {
+          this.options.emit({
+            type: "turn.outcome",
+            taskId: this.options.task.id,
+            outcome: event.outcome,
+            at: eventAt(event),
+          });
+          this.options.onFinish();
+          return;
         }
-        this.options.onFinish();
+        {
+          const pending = this.pendingFailure;
+          this.pendingFailure = undefined;
+          this.options.onFailure(
+            pending?.message
+              ?? (event.errorCode
+                ? `Runner run settled with ${event.outcome} (${event.errorCode}).`
+                : `Runner run settled with ${event.outcome}.`),
+            pending?.details ?? (event.errorCode ? { code: event.errorCode } : undefined),
+          );
+        }
+        return;
+      case "run.queue.updated":
+        this.options.onQueueUpdated?.(event);
+        return;
     }
   };
 
@@ -172,6 +230,9 @@ export class RunnerEventAdapter {
   private readonly internalToolCallIds = new Set<string>();
   private readonly options: RunnerEventAdapterOptions;
   private latestCommandSafety: Record<string, unknown> | undefined;
+  private pendingFailure:
+    | { message: string; details?: RunnerFailureDetails }
+    | undefined;
 
   constructor(options: RunnerEventAdapterOptions) {
     this.options = options;
@@ -255,7 +316,7 @@ export class RunnerEventAdapter {
       toolKind === "command" || toolKind === "run_program"
         ? "bash"
         : toolKind === "read"
-            || toolKind === "search"
+            || toolKind === "ls" || toolKind === "find" || toolKind === "grep"
             || toolKind === "read_skill"
           ? "read"
           : "edit";
@@ -329,6 +390,8 @@ export class RunnerEventAdapter {
       ...(event.durationMs !== undefined
         ? { durationMs: event.durationMs }
         : {}),
+      ...(isRecord(event.details) ? { details: event.details } : {}),
+      ...(isRecord(event.continuation) ? { continuation: event.continuation } : {}),
       at: eventAt(event),
     });
     if (event.exitCode === 0 && (!status || status === "success")) return;
@@ -347,6 +410,7 @@ export class RunnerEventAdapter {
         ...(errorCode ? { errorCode } : {}),
         ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
       },
+      ...(isRecord(event.details) ? { details: event.details } : {}),
       at: eventAt(event),
     });
   }

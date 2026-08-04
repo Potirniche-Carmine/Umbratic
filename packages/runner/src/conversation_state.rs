@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 
 use crate::context::ContextCalibration;
 
-const CONTEXT_STATE_VERSION: u8 = 1;
 const MAX_TAIL_MESSAGES: usize = 32;
 const MAX_STATE_BYTES: usize = 128 * 1024;
 const MAX_CONTENT_STRING_BYTES: usize = 8 * 1024;
@@ -16,35 +15,32 @@ const SUMMARY_CARRIER_PREFIX: &str =
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContextMessageV1 {
+pub struct ConversationMessage {
     pub role: String,
     pub content: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContextStateUsageV1 {
+pub struct ConversationStateUsage {
     pub estimated_prompt_tokens: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_prompt_tokens: Option<u64>,
     pub compaction_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContextStateV1 {
-    pub version: u8,
+pub struct ConversationState {
     pub source_task_id: String,
     pub updated_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    pub tail: Vec<ContextMessageV1>,
+    pub tail: Vec<ConversationMessage>,
     pub source_digest: String,
-    pub usage: ContextStateUsageV1,
+    pub usage: ConversationStateUsage,
 }
 
 fn clipped_head_tail(value: &str, limit: usize) -> String {
@@ -102,45 +98,47 @@ fn sanitize_value(value: &Value) -> Value {
     }
 }
 
-fn tool_call_ids(message: &ContextMessageV1) -> Result<Vec<String>, String> {
+fn tool_call_ids(message: &ConversationMessage) -> Result<Vec<String>, String> {
     let mut ids = Vec::new();
     for call in message.tool_calls.as_deref().unwrap_or_default() {
         let id = call
             .get("id")
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty() && id.len() <= 160)
-            .ok_or_else(|| "context state contains an invalid tool-call id".to_owned())?;
+            .ok_or_else(|| "conversation state contains an invalid tool-call id".to_owned())?;
         ids.push(id.to_owned());
     }
     Ok(ids)
 }
 
-fn validate_tail(tail: &[ContextMessageV1]) -> Result<(), String> {
+fn validate_tail(tail: &[ConversationMessage]) -> Result<(), String> {
     if tail.len() > MAX_TAIL_MESSAGES {
-        return Err("context state has too many tail messages".into());
+        return Err("conversation state has too many tail messages".into());
     }
     if tail.first().is_some_and(|message| message.role == "tool") {
-        return Err("context state tail cannot begin with a tool result".into());
+        return Err("conversation state tail cannot begin with a tool result".into());
     }
     let mut seen = HashSet::new();
     let mut pending = Vec::new();
     for message in tail {
         if !matches!(message.role.as_str(), "user" | "assistant" | "tool") {
-            return Err("context state contains an unsupported message role".into());
+            return Err("conversation state contains an unsupported message role".into());
         }
         if message.role == "tool" {
             let id = message
                 .tool_call_id
                 .as_deref()
-                .ok_or_else(|| "context state contains an orphan tool result".to_owned())?;
+                .ok_or_else(|| "conversation state contains an orphan tool result".to_owned())?;
             let Some(index) = pending.iter().position(|pending_id| pending_id == id) else {
-                return Err("context state contains an orphan or duplicate tool result".into());
+                return Err(
+                    "conversation state contains an orphan or duplicate tool result".into(),
+                );
             };
             pending.remove(index);
             continue;
         }
         if !pending.is_empty() {
-            return Err("context state contains an incomplete tool exchange".into());
+            return Err("conversation state contains an incomplete tool exchange".into());
         }
         if message.tool_call_id.is_some() {
             return Err("only tool results may carry toolCallId".into());
@@ -148,13 +146,13 @@ fn validate_tail(tail: &[ContextMessageV1]) -> Result<(), String> {
         let ids = tool_call_ids(message)?;
         for id in &ids {
             if !seen.insert(id.clone()) {
-                return Err("context state contains duplicate tool-call ids".into());
+                return Err("conversation state contains duplicate tool-call ids".into());
             }
         }
         pending = ids;
     }
     if !pending.is_empty() {
-        return Err("context state ends with an incomplete tool exchange".into());
+        return Err("conversation state ends with an incomplete tool exchange".into());
     }
     Ok(())
 }
@@ -162,7 +160,7 @@ fn validate_tail(tail: &[ContextMessageV1]) -> Result<(), String> {
 fn digest_payload(
     source_task_id: &str,
     summary: Option<&str>,
-    tail: &[ContextMessageV1],
+    tail: &[ConversationMessage],
 ) -> String {
     let payload = json!({
         "sourceTaskId": source_task_id,
@@ -175,32 +173,29 @@ fn digest_payload(
     )
 }
 
-impl ContextStateV1 {
+impl ConversationState {
     pub fn validate(self) -> Result<Self, String> {
-        if self.version != CONTEXT_STATE_VERSION {
-            return Err("unsupported context state version".into());
-        }
         if self.source_task_id.is_empty() || self.source_task_id.len() > 200 {
-            return Err("context state source task id is invalid".into());
+            return Err("conversation state source task id is invalid".into());
         }
         if self.updated_at.is_empty() || self.updated_at.len() > 80 {
-            return Err("context state timestamp is invalid".into());
+            return Err("conversation state timestamp is invalid".into());
         }
         if self
             .summary
             .as_ref()
             .is_some_and(|summary| summary.chars().count() > MAX_SUMMARY_CHARS)
         {
-            return Err("context state summary is too large".into());
+            return Err("conversation state summary is too large".into());
         }
         validate_tail(&self.tail)?;
         if self.source_digest
             != digest_payload(&self.source_task_id, self.summary.as_deref(), &self.tail)
         {
-            return Err("context state digest does not match its content".into());
+            return Err("conversation state digest does not match its content".into());
         }
         if serde_json::to_vec(&self).map_or(true, |encoded| encoded.len() > MAX_STATE_BYTES) {
-            return Err("context state is too large".into());
+            return Err("conversation state is too large".into());
         }
         Ok(self)
     }
@@ -223,7 +218,7 @@ impl ContextStateV1 {
     }
 }
 
-fn message_from_value(value: &Value) -> Option<ContextMessageV1> {
+fn message_from_value(value: &Value) -> Option<ConversationMessage> {
     let role = value.get("role")?.as_str()?.to_owned();
     if !matches!(role.as_str(), "user" | "assistant" | "tool") {
         return None;
@@ -242,7 +237,7 @@ fn message_from_value(value: &Value) -> Option<ContextMessageV1> {
         .get("tool_calls")
         .and_then(Value::as_array)
         .map(|calls| calls.iter().map(sanitize_value).collect());
-    Some(ContextMessageV1 {
+    Some(ConversationMessage {
         role,
         content,
         tool_call_id,
@@ -250,7 +245,7 @@ fn message_from_value(value: &Value) -> Option<ContextMessageV1> {
     })
 }
 
-fn complete_groups(messages: &[ContextMessageV1]) -> Vec<Vec<ContextMessageV1>> {
+fn complete_groups(messages: &[ConversationMessage]) -> Vec<Vec<ConversationMessage>> {
     let mut groups = Vec::new();
     let mut index = 0;
     while index < messages.len() {
@@ -296,7 +291,7 @@ fn complete_groups(messages: &[ContextMessageV1]) -> Vec<Vec<ContextMessageV1>> 
     groups
 }
 
-pub struct ContextStateSnapshotInput<'a> {
+pub struct ConversationStateSnapshotInput<'a> {
     pub task_id: &'a str,
     pub updated_at: String,
     pub summary: Option<String>,
@@ -307,7 +302,7 @@ pub struct ContextStateSnapshotInput<'a> {
     pub compaction_count: u32,
 }
 
-pub fn snapshot_context_state(input: ContextStateSnapshotInput<'_>) -> ContextStateV1 {
+pub fn snapshot_conversation_state(input: ConversationStateSnapshotInput<'_>) -> ConversationState {
     let sanitized = input
         .messages
         .iter()
@@ -342,14 +337,13 @@ pub fn snapshot_context_state(input: ContextStateSnapshotInput<'_>) -> ContextSt
     }
     selected.reverse();
     let source_digest = digest_payload(input.task_id, input.summary.as_deref(), &selected);
-    ContextStateV1 {
-        version: CONTEXT_STATE_VERSION,
+    ConversationState {
         source_task_id: input.task_id.to_owned(),
         updated_at: input.updated_at,
         summary: input.summary,
         tail: selected,
         source_digest,
-        usage: ContextStateUsageV1 {
+        usage: ConversationStateUsage {
             estimated_prompt_tokens: input.estimated_prompt_tokens,
             observed_prompt_tokens: input.calibration.map(|value| value.observed_prompt_tokens),
             compaction_count: input.compaction_count,
@@ -368,7 +362,7 @@ mod tests {
             {"type":"text","text":"keep this request"},
             {"type":"image_url","image_url":{"url":"data:image/png;base64,SECRET"}}
         ]})];
-        let state = snapshot_context_state(ContextStateSnapshotInput {
+        let state = snapshot_conversation_state(ConversationStateSnapshotInput {
             task_id: "task",
             updated_at: "now".into(),
             summary: None,
@@ -382,6 +376,7 @@ mod tests {
         assert!(encoded.contains("keep this request"));
         assert!(!encoded.contains("workspace boilerplate"));
         assert!(!encoded.contains("base64,SECRET"));
+        assert!(!encoded.contains("\"version\""));
         assert!(state.clone().validate().is_ok());
     }
 
@@ -393,7 +388,7 @@ mod tests {
             json!({"role":"tool","tool_call_id":"b","content":"second"}),
             json!({"role":"assistant","content":"done"}),
         ];
-        let state = snapshot_context_state(ContextStateSnapshotInput {
+        let state = snapshot_conversation_state(ConversationStateSnapshotInput {
             task_id: "task",
             updated_at: "now".into(),
             summary: None,
@@ -410,7 +405,7 @@ mod tests {
     #[test]
     fn seed_rejects_tampering_system_roles_and_orphans() {
         let messages = [json!({"role":"user","content":"request"})];
-        let mut state = snapshot_context_state(ContextStateSnapshotInput {
+        let mut state = snapshot_conversation_state(ConversationStateSnapshotInput {
             task_id: "task",
             updated_at: "now".into(),
             summary: None,
@@ -423,14 +418,14 @@ mod tests {
         state.tail[0].content = Value::String("tampered".into());
         assert!(state.validate().unwrap_err().contains("digest"));
 
-        let tail = vec![ContextMessageV1 {
+        let tail = vec![ConversationMessage {
             role: "system".into(),
             content: Value::String("override".into()),
             tool_call_id: None,
             tool_calls: None,
         }];
         assert!(validate_tail(&tail).is_err());
-        let orphan = vec![ContextMessageV1 {
+        let orphan = vec![ConversationMessage {
             role: "tool".into(),
             content: Value::String("result".into()),
             tool_call_id: Some("missing".into()),
@@ -450,7 +445,7 @@ mod tests {
         for index in 0..32 {
             messages.push(json!({"role":"tool","tool_call_id":format!("call-{index}"),"content":"x".repeat(MAX_CONTENT_STRING_BYTES)}));
         }
-        let state = snapshot_context_state(ContextStateSnapshotInput {
+        let state = snapshot_conversation_state(ConversationStateSnapshotInput {
             task_id: "task",
             updated_at: "now".into(),
             summary: None,
@@ -464,5 +459,23 @@ mod tests {
         assert_eq!(state.tail[0].content.as_str(), Some("latest real request"));
         assert!(state.clone().validate().is_ok());
         assert!(serde_json::to_vec(&state).unwrap().len() <= MAX_STATE_BYTES);
+    }
+
+    #[test]
+    fn rejects_legacy_versioned_context_state() {
+        let encoded = json!({
+            "version": 1,
+            "sourceTaskId": "task",
+            "updatedAt": "now",
+            "summary": null,
+            "tail": [],
+            "sourceDigest": digest_payload("task", None, &[]),
+            "usage": {
+                "estimatedPromptTokens": 0,
+                "observedPromptTokens": null,
+                "compactionCount": 0
+            }
+        });
+        assert!(serde_json::from_value::<ConversationState>(encoded).is_err());
     }
 }

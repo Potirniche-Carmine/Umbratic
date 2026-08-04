@@ -82,7 +82,9 @@ test("an enrolled company server can reconnect or unregister with confirmation",
   assert.match(source, /api\.disconnectCompanySession\(\)/);
   assert.match(actions, /Unregister this device\?/);
   assert.match(actions, /ask your administrator for a new enrollment key/);
-  assert.match(source, /\{!companyServerConnected \? \(/);
+  // Local mode applies a model on selection, so the save step is server-only.
+  assert.match(source, /\{!companyServerConnected && draft\.mode === "server" \? \(/);
+  assert.match(source, /async function selectLocalModel/);
 });
 
 test("connection state and UI are outside the main renderer shell", () => {
@@ -92,4 +94,22 @@ test("connection state and UI are outside the main renderer shell", () => {
   assert.match(main, /<ConnectionSettingsPanel controller=\{connectionSettings\} \/>/);
   assert.doesNotMatch(main, /async function saveEndpointSettings/);
   assert.match(connection, /export function useConnectionSettings/);
+});
+
+test("local mode discovers models automatically and applies a choice without a save step", () => {
+  const source = fs.readFileSync(new URL("../src/renderer/ConnectionSettings.tsx", import.meta.url), "utf8");
+  // Opening the panel probes the runtime; the old flow only read a cache and
+  // waited for a manual refresh, which is how a run could start with no model.
+  assert.match(source, /api\s*\n?\s*\.probeLocalModels\(\{ baseUrl \}\)/);
+  assert.match(source, /setLocalModelDiscovery\(\{ baseUrl, models, status: probe\.status \}\)/);
+  // Choosing a model persists it directly.
+  assert.match(source, /onModelChange=\{\(modelId\) => void controller\.selectLocalModel\(modelId\)\}/);
+  assert.match(source, /await api\.saveModelEndpointSettings\(next\)/);
+  // The runtime URL is no longer the first thing a user meets.
+  assert.match(source, /<details className="settingsAdvanced">/);
+});
+
+test("startup warm-up treats an unchosen local model as ordinary first-run state", () => {
+  const warmup = fs.readFileSync(new URL("../src/main/modelWarmup.ts", import.meta.url), "utf8");
+  assert.match(warmup, /if \(!settings\.modelId\.trim\(\)\) return;/);
 });

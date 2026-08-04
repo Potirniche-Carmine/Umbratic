@@ -16,7 +16,7 @@ type RuntimeMetrics struct {
 }
 
 func (c *Client) RuntimeMetrics(ctx context.Context) (RuntimeMetrics, error) {
-	if c.protocol != ProtocolVLLM {
+	if c.mode != ModeServer {
 		return RuntimeMetrics{}, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.metricsEndpoint, nil)

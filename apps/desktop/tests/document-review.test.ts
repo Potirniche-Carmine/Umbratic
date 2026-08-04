@@ -7,7 +7,6 @@ const review = loadTypeScriptModule(new URL("../src/shared/documentReview.ts", i
 
 function snapshot(overrides = {}) {
   return {
-    schemaVersion: 1,
     documentPath: ".umbratic/artifacts/docx/proposal.docx",
     title: "Proposal",
     blocks: [

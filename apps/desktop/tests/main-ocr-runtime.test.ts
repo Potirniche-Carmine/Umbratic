@@ -67,7 +67,6 @@ test("generateOcrDocument and writeOcrArtifacts keep OCR output local and struct
     },
   });
 
-  assert.equal(document.schemaVersion, 1);
   assert.equal(document.engine.id, "tesseract");
   assert.equal(document.engine.localOnly, true);
   assert.equal(document.pages[0].text, "Hello world\nTotal 42");

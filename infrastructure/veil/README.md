@@ -67,24 +67,27 @@ the env file. Restart Veil after changing its configuration.
 
 ### Required settings
 
-Every deployment must set these three values:
+Every deployment must set these values:
 
 ```sh
 VEIL_AUTH_TOKEN=replace-with-a-long-random-token
+VEIL_MODE=local
 VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
 VEIL_MODEL=llama3
 ```
 
 `VEIL_AUTH_TOKEN` authenticates a local or development client. In company identity
 mode it is an internal process credential and cannot access product routes.
-`VEIL_PROVIDER_BASE_URL` is the private Ollama or vLLM address that Veil can reach.
-`VEIL_MODEL` must exactly match a model returned by the provider's models endpoint.
+`VEIL_MODE` selects the trusted provider adapter once at startup: `server` for vLLM
+or `local` for Ollama. `VEIL_PROVIDER_BASE_URL` is the private runtime address that
+Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 
 ### Complete environment reference
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `VEIL_AUTH_TOKEN` | Yes | None | Local/development bearer token. In company identity mode, Console supplies a separate internal value that cannot access product routes. |
+| `VEIL_MODE` | Yes | None | Trusted runtime mode. `server` uses fixed vLLM endpoints. `local` uses fixed Ollama endpoints. |
 | `VEIL_COMPANY_IDENTITY_MODE` | No | `false` | Enables signed entitlement, user, device, and session access control. |
 | `VEIL_CONTROL_TOKEN` | In company mode | None | Console-only control credential. It must differ from `VEIL_AUTH_TOKEN`. |
 | `VEIL_ENTITLEMENT_PATH` | In company mode | None | Signed customer entitlement file. Veil fails closed if verification fails. |
@@ -93,25 +96,32 @@ mode it is an internal process credential and cannot access product routes.
 | `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. |
 | `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
 | `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
-| `VEIL_PROVIDER_PROTOCOL` | No | `vllm` | Provider wire protocol. Supported values are `vllm` and `ollama`. Setting it explicitly is recommended. |
-| `VEIL_PROVIDER_CHAT_PATH` | No | Protocol default | Chat endpoint path or full URL. Defaults to `/v1/chat/completions` for vLLM and `/api/chat` for Ollama. |
-| `VEIL_PROVIDER_MODELS_PATH` | No | Protocol default | Models endpoint path or full URL. Defaults to `/v1/models` for vLLM and `/api/tags` for Ollama. |
-| `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for Ollama. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. This setting has no effect for vLLM. |
-| `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Veil enforces the smaller of this value and a bounded client request through vLLM `max_tokens` or Ollama `num_predict`. |
+| `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for local Ollama mode. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. Unused in server mode. |
+| `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Clients may request less, never more. |
+| `VEIL_TEMPERATURE` | Server | `0.2` | Sampling temperature from `0.0` to `2.0`. Ignored in local mode, which uses a fixed profile. |
+| `VEIL_TOP_P` | Server | `0.95` | Nucleus sampling from greater than `0.0` to `1.0`. Ignored in local mode. |
+| `VEIL_REASONING_EFFORT` | Server | `none` | `none`, `low`, `medium`, or `high`. Sent on every vLLM chat request when not `none`. |
+| `VEIL_THINKING_TOKEN_BUDGET` | Server | Unset | Optional non-negative thinking token budget no greater than `VEIL_MAX_OUTPUT_TOKENS`. |
+| `VEIL_MODEL_PARALLEL_TOOL_CALLS` | Server | `true` | Whether Veil sets `parallel_tool_calls` on vLLM requests that include tools. |
+| `VEIL_MAX_CONCURRENT_REQUESTS` | Server / Local profile | `32` / `4` | Global admission semaphore for model work. |
+| `VEIL_MAX_CONCURRENT_REQUESTS_PER_USER` | Server / Local profile | `4` / `2` | Per-user admission semaphore when company identity supplies a user. Without identity, only the global bucket applies. |
+| `VEIL_QUEUE_TIMEOUT` | Server / Local profile | `30s` | Maximum wait for an admission slot. Exhaustion returns `503` with `code: busy` and `Retry-After`. |
 | `VEIL_TEMPLATE_REGISTRY_PATH` | No | Empty | Path to the server-owned template registry JSON file. No template metadata is injected when unset. |
 | `VEIL_TELEMETRY_ENABLED` | No | `true` | Enables the authenticated `/api/telemetry` ingestion route. Accepted boolean values are `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. |
 | `VEIL_TELEMETRY_STORE_PATH` | No | Empty | Directory in which accepted telemetry bundles are persisted. Bundles are validated but not persisted when unset. |
 | `VEIL_TELEMETRY_RETENTION_DAYS` | No | `30` | Positive number of days to retain stored telemetry bundles. |
 | `VEIL_TELEMETRY_MAX_BODY_BYTES` | No | `16777216` | Positive maximum request-body size for selective telemetry bundles. |
-| `VEIL_MODEL_TIMEOUT` | No | `60s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
-| `VEIL_REQUEST_TIMEOUT` | No | `75s` | Overall timeout applied by Veil to health, connection, and chat operations. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
+| `VEIL_MODEL_TIMEOUT` | No | `180s` | Timeout for a model-runtime HTTP call. Accepts a Go duration such as `90s` or `2m`, or a bare number of seconds. |
+| `VEIL_REQUEST_TIMEOUT` | No | `195s` | Overall timeout applied by Veil to health, connection, and chat operations after admission. Uses the same duration format as `VEIL_MODEL_TIMEOUT`. |
+| `VEIL_STREAM_IDLE_TIMEOUT` | No | `60s` | Maximum idle gap between streamed model chunks. Separate from request and model timeouts. |
 | `VEIL_MAX_BODY_BYTES` | No | `67108864` | Positive maximum request-body size in bytes for bounded multimodal chat requests. Text and decoded image limits are enforced separately. |
 
 Chat policy accepts at most 64 client messages, 256 KiB of encoded text content
 per message, and 12 base64 image parts of at most 10 MiB decoded each. The overall
-request remains bounded by `VEIL_MAX_BODY_BYTES`.
+request remains bounded by `VEIL_MAX_BODY_BYTES`. Clients cannot override generation
+settings, `tool_choice`, or `parallel_tool_calls`; Veil owns those values.
 
-### Ollama
+### Local mode (Ollama)
 
 Start Ollama, make sure the configured model is installed, and use an env file like:
 
@@ -119,7 +129,7 @@ Start Ollama, make sure the configured model is installed, and use an env file l
 VEIL_ADDR=127.0.0.1:8080
 VEIL_AUTH_TOKEN=replace-with-a-long-random-token
 
-VEIL_PROVIDER_PROTOCOL=ollama
+VEIL_MODE=local
 VEIL_PROVIDER_BASE_URL=http://127.0.0.1:11434
 VEIL_MODEL=llama3.2
 VEIL_CONTEXT_LENGTH=64000
@@ -137,12 +147,13 @@ activating the model and on every chat request. Changing it requires a Veil rest
 Ollama may reload the model with a differently sized KV cache on the next connection
 or request. Larger values require more memory and cannot exceed the model/runtime's
 supported context. Leave it unset or set it to `0` to use Ollama's default.
-Veil sends the effective output allowance as `num_predict` on every chat request.
+Veil applies a small fixed local generation profile and sends the effective output
+allowance as `num_predict` on every chat request.
 
-Veil uses Ollama's `/api/chat`, `/api/tags`, and `/api/generate` endpoints. The
+Veil uses Ollama's `/api/chat`, `/api/tags`, and `/api/show` endpoints. The
 Ollama port should remain private; expose Veil, not Ollama.
 
-### vLLM
+### Server mode (vLLM)
 
 Set the context length when starting vLLM, not in Veil. For a 64,000-token context:
 
@@ -156,9 +167,17 @@ Then configure Veil to use vLLM's OpenAI-compatible API:
 VEIL_ADDR=127.0.0.1:8080
 VEIL_AUTH_TOKEN=replace-with-a-long-random-token
 
-VEIL_PROVIDER_PROTOCOL=vllm
+VEIL_MODE=server
 VEIL_PROVIDER_BASE_URL=http://127.0.0.1:8000/v1
 VEIL_MODEL=your-model
+VEIL_TEMPERATURE=0.2
+VEIL_TOP_P=0.95
+VEIL_MAX_OUTPUT_TOKENS=8192
+VEIL_REASONING_EFFORT=none
+VEIL_MODEL_PARALLEL_TOOL_CALLS=true
+VEIL_MAX_CONCURRENT_REQUESTS=32
+VEIL_MAX_CONCURRENT_REQUESTS_PER_USER=4
+VEIL_QUEUE_TIMEOUT=30s
 ```
 
 `--max-model-len` limits the combined prompt and output length. If it is omitted,
@@ -173,7 +192,8 @@ requested length, and the server must have enough KV-cache memory. Do not start
 vLLM with `--api-key`. Veil supports only a local model runtime without provider
 authentication.
 
-Veil sends the effective output allowance as `max_tokens` on every vLLM chat request.
+Veil sends temperature, top_p, max_tokens, optional reasoning settings, and
+tool-call controls on every vLLM chat request. Clients cannot override them.
 
 The vLLM port should remain private; expose Veil, not vLLM.
 

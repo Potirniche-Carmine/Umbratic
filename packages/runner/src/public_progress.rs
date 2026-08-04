@@ -58,8 +58,10 @@ pub(crate) fn progress_for_calls(calls: &[ToolCall]) -> String {
         "Running workspace actions"
     } else {
         match calls[0].name.as_str() {
-            "read" | "read_attachment" | "retrieve_context" | "read_skill" => "Reading files",
-            "search" => "Searching the codebase",
+            "read" | "read_attachment" | "retrieve_context" | "read_skill" | "ls" => {
+                "Reading files"
+            }
+            "find" | "grep" => "Searching the codebase",
             "lsp" | "workspace_graph" => "Inspecting code relationships",
             "write" | "edit" | "apply_patch" => "Editing files",
             "command" | "run_program" => "Running a command",
@@ -85,13 +87,13 @@ mod tests {
     #[test]
     fn progress_names_the_active_tool_phase() {
         assert_eq!(
-            progress_for_calls(&[call("search")]),
+            progress_for_calls(&[call("grep")]),
             "Searching the codebase"
         );
         assert_eq!(progress_for_calls(&[call("command")]), "Running a command");
         assert_eq!(progress_for_calls(&[call("edit")]), "Editing files");
         assert_eq!(
-            progress_for_calls(&[call("read"), call("search")]),
+            progress_for_calls(&[call("read"), call("grep")]),
             "Running workspace actions"
         );
     }
@@ -100,7 +102,7 @@ mod tests {
     fn progress_never_speaks_in_the_assistant_voice() {
         let phases = [
             progress_for_calls(&[call("read")]),
-            progress_for_calls(&[call("search")]),
+            progress_for_calls(&[call("grep")]),
             progress_for_calls(&[call("lsp")]),
             progress_for_calls(&[call("write")]),
             progress_for_calls(&[call("run_program")]),
@@ -175,7 +177,7 @@ mod tests {
         let mut events = sink.subscribe();
         let mut summary = crate::events::empty_summary();
         let mut schedule = PublicProgressSchedule::default();
-        let _turn = session.try_begin_turn().unwrap();
+        let _run = session.try_begin_run().unwrap();
         session.abort();
 
         schedule.before_tools(&session, &sink, &mut summary, &[call("read")]);

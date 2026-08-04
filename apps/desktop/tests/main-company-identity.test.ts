@@ -87,7 +87,6 @@ test("company enrollment stores only the encrypted-device input and renews opaqu
     deviceLabel: "Work laptop",
   });
   assert.equal(credential.deviceUid, "dev_laptop");
-  assert.equal(credential.version, 2);
   assert.equal(stored.baseUrl, "https://veil.example.com");
   assert.equal(stored.orgName, "Northwind");
   assert.ok(stored.privateKeyPkcs8.length > 40);

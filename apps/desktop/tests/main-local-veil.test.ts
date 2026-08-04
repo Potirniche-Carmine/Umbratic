@@ -15,7 +15,6 @@ test("managed local Veil receives runtime settings, loopback binding, transient 
     const env = localVeil.localVeilEnvironment(
       {
         mode: "local",
-        software: "ollama",
         baseUrl: "http://127.0.0.1:11434/",
         modelId: " llama3.2 ",
         secret: "user-facing-token-is-ignored",
@@ -27,14 +26,12 @@ test("managed local Veil receives runtime settings, loopback binding, transient 
     );
 
     assert.equal(env.VEIL_ADDR, "127.0.0.1:43123");
-    assert.equal(env.VEIL_PROVIDER_PROTOCOL, "ollama");
+    assert.equal(env.VEIL_MODE, "local");
     assert.equal(env.VEIL_PROVIDER_BASE_URL, "http://127.0.0.1:11434");
     assert.equal(env.VEIL_MODEL, "llama3.2");
     assert.equal(env.VEIL_AUTH_TOKEN, "transient-internal-token");
     assert.equal(env.VEIL_ENV_FILE, "-");
     assert.equal(env.VEIL_PROVIDER_API_KEY, "");
-    assert.equal(env.VEIL_PROVIDER_CHAT_PATH, "");
-    assert.equal(env.VEIL_PROVIDER_MODELS_PATH, "");
     assert.equal(env.VEIL_CONTEXT_LENGTH, "64000");
     assert.equal(env.VEIL_MODEL_TIMEOUT, "10m");
     assert.equal(env.VEIL_REQUEST_TIMEOUT, "12m");
@@ -65,7 +62,6 @@ test("source development gives Go its Windows build-cache root", () => {
     const env = localVeil.localVeilEnvironment(
       {
         mode: "local",
-        software: "ollama",
         baseUrl: "http://127.0.0.1:11434",
         modelId: "llama3.2",
         secret: "",

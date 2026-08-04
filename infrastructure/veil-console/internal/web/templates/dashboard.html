@@ -47,6 +47,30 @@
         </div>
       {{end}}
     </section>
+    {{if and .Configured .Healthy .Ops.Available}}
+    <section class="panel">
+      <h2>Load</h2>
+      <dl class="ops-summary">
+        <div><dt>Active</dt><dd>{{.Ops.ActiveRequests}} / {{.Ops.GlobalLimit}}</dd></div>
+        <div><dt>Queue</dt><dd>{{.Ops.QueueDepth}}</dd></div>
+        <div><dt>Per user</dt><dd>{{.Ops.PerUserLimit}}</dd></div>
+        <div><dt>Overload</dt><dd>{{.Ops.OverloadCount}}</dd></div>
+        <div><dt>Cancel</dt><dd>{{.Ops.CancelCount}}</dd></div>
+        <div><dt>Timeout</dt><dd>{{.Ops.TimeoutCount}}</dd></div>
+        {{if gt .Ops.ReleaseErrors 0}}
+        <div><dt>Slot accounting errors</dt><dd>{{.Ops.ReleaseErrors}}</dd></div>
+        {{end}}
+        {{if eq .Ops.RuntimeState "ready"}}
+        <div><dt>Runtime queue</dt><dd>{{printf "%.0f" .Ops.RuntimeQueue}}</dd></div>
+        <div><dt>Prefix cache hit</dt><dd>{{printf "%.2f" .Ops.PrefixCacheHit}}</dd></div>
+        {{else if eq .Ops.RuntimeState "degraded"}}
+        <div><dt>Runtime metrics</dt><dd>Degraded — the runtime scrape failed.</dd></div>
+        {{else}}
+        <div><dt>Runtime metrics</dt><dd>Not reporting yet.</dd></div>
+        {{end}}
+      </dl>
+    </section>
+    {{end}}
     {{if .Configured}}
     <section class="panel management-grid management-grid-single">
       <form class="management-action" method="post" action="/veil/stop">

@@ -14,7 +14,7 @@ func TestSettingsUseCustomChoicesAndShowEverySliderValue(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.render(response, "settings.html", pageData{
 		Title:  "Settings",
-		Config: config.Veil{Protocol: "ollama", Model: "ornith:9b"},
+		Config: config.Veil{Model: "ornith:9b"},
 		Models: []string{"ornith:9b"},
 	})
 	body := response.Body.String()
@@ -27,7 +27,15 @@ func TestSettingsUseCustomChoicesAndShowEverySliderValue(t *testing.T) {
 			t.Fatalf("Settings is missing %q: %s", expected, body)
 		}
 	}
-	if strings.Contains(body, "<select") || strings.Contains(body, "range-ends") {
+	if strings.Contains(body, "<select") || strings.Contains(body, "range-ends") || strings.Contains(body, `name="protocol"`) {
 		t.Fatalf("Settings still uses the old controls: %s", body)
+	}
+	for _, expected := range []string{
+		`name="temperature"`, `name="top_p"`, `name="reasoning_effort"`, `name="parallel_tool_calls"`,
+		`name="max_concurrent_requests"`, `name="queue_timeout"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("Settings is missing generation field %q: %s", expected, body)
+		}
 	}
 }

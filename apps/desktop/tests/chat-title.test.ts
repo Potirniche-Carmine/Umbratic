@@ -7,31 +7,57 @@ const { chatTitleFromFirstMessage, stableChatTitle } = loadTypeScriptModule(
   new URL("../src/shared/chatTitle.ts", import.meta.url),
 );
 
-test("chat titles prefer two or three meaningful words", () => {
-  assert.equal(
-    chatTitleFromFirstMessage("I want you to look at EACH file and give a description for exactly what each is"),
-    "File Description",
+test("chat titles lead with the words that tell one chat from another", () => {
+  // Openers are what every chat shares, so they are dropped before truncation
+  // rather than filling the narrow sidebar column.
+  assert.equal(chatTitleFromFirstMessage("can you tell me about this porject"), "Porject");
+  assert.equal(chatTitleFromFirstMessage("what is the retry policy"), "Retry policy");
+  assert.equal(chatTitleFromFirstMessage("hey, can you please fix the CRLF bug"), "Fix the CRLF bug");
+  assert.equal(chatTitleFromFirstMessage("fix it"), "Fix it");
+});
+
+test("chat titles fit the sidebar column", () => {
+  const long = chatTitleFromFirstMessage(
+    "Investigate why the streaming relay drops events under concurrent load",
   );
-  assert.equal(chatTitleFromFirstMessage("Please implement stable chat titles for the sidebar"), "Implement Stable Chat");
-  assert.equal(chatTitleFromFirstMessage("fix it"), "Fix It");
-  assert.equal(chatTitleFromFirstMessage("do some analysis"), "Analysis");
+  assert.ok(long.length <= 33, `${long} (${long.length})`);
+  assert.ok(long.endsWith("…"), long);
+  assert.doesNotMatch(long, /\s…$/);
+});
+
+test("chat titles keep capitalization the user chose", () => {
+  assert.equal(chatTitleFromFirstMessage("read.rs normalizes line endings"), "read.rs normalizes line endings");
+  assert.equal(chatTitleFromFirstMessage("Veil returns 400"), "Veil returns 400");
+});
+
+test("chat titles use the first statement only", () => {
   assert.equal(
-    chatTitleFromFirstMessage("do some analysis of vulnerabilities in this codebase"),
-    "Analysis Vulnerabilities Codebase",
+    chatTitleFromFirstMessage("Review the auth middleware. Then check the session store."),
+    "Review the auth middleware",
   );
 });
 
-test("chat titles ignore attachment metadata and never exceed three words", () => {
-  const title = chatTitleFromFirstMessage("Review the authentication middleware carefully\n\nAttached files:\n- secret-plan.md");
-  assert.equal(title, "Review Authentication Middleware");
-  assert.ok(title.split(/\s+/).length <= 3);
+test("chat titles ignore attachments, code fences, and list markup", () => {
+  const title = chatTitleFromFirstMessage(
+    "Review the auth middleware\n\nAttached files:\n- secret-plan.md",
+  );
+  assert.equal(title, "Review the auth middleware");
   assert.doesNotMatch(title, /secret/i);
+
+  assert.equal(
+    chatTitleFromFirstMessage("```\nconst a = 1;\n```\nExplain this snippet"),
+    "Snippet",
+  );
+  assert.equal(chatTitleFromFirstMessage("## Add retry\n\nDetails follow"), "Add retry");
+});
+
+test("an empty or formatting-only message keeps the placeholder title", () => {
+  assert.equal(chatTitleFromFirstMessage("   "), "New chat");
+  assert.equal(chatTitleFromFirstMessage("```\ncode only\n```"), "New chat");
 });
 
 test("an existing chat title remains anchored to the first user message", () => {
-  assert.equal(stableChatTitle("File Description", "Now fix the table"), "File Description");
-  assert.equal(stableChatTitle("New chat", "Now fix the table"), "Now Fix Table");
-  assert.equal(stableChatTitle(undefined, "Now fix the table"), "Now Fix Table");
+  assert.equal(stableChatTitle("File description", "Now fix the table"), "File description");
+  assert.equal(stableChatTitle("New chat", "Now fix the table"), "Fix the table");
+  assert.equal(stableChatTitle(undefined, "Now fix the table"), "Fix the table");
 });
-
-

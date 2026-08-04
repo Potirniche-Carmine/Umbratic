@@ -32,7 +32,7 @@ function config(
     cwd,
     workspaceMode: "local",
     permissionMode: "normal",
-    enabledTools: ["read", "write", "edit", "search", "command"],
+    enabledTools: ["read", "ls", "find", "grep", "write", "edit", "command"],
     diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
     provider: {
       id: "company-endpoint",
@@ -130,10 +130,10 @@ async function eventCollector(run: Awaited<ReturnType<typeof startRunner>>) {
   };
 }
 
-async function createSession(run: Awaited<ReturnType<typeof startRunner>>, contextState?: unknown) {
+async function createSession(run: Awaited<ReturnType<typeof startRunner>>, conversationState?: unknown) {
   const response = await run.request("/session", {
     method: "POST",
-    ...(contextState === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contextState }) }),
+    ...(conversationState === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationState }) }),
   });
   if (response.status !== 200) {
     throw new Error(`session create failed ${response.status}: ${await response.text()}`);
@@ -205,7 +205,7 @@ process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); i
 `);
   const provider = await startProvider();
   const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
-    enabledTools: ["read", "search", "lsp"],
+    enabledTools: ["read", "grep", "lsp"],
     lspServers: [{
       id: "typescript-language-server",
       command: process.execPath,
@@ -218,7 +218,7 @@ process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); i
   try {
     const session = await createSession(run);
     assert.equal((await prompt(run, session.id, "LSP_CODE_INTELLIGENCE")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
     const firstChat = provider.requests.find((request) => request.path === "/api/engineering/chat" && request.body.response_mode !== "progress");
     const toolNames = ((firstChat?.body.tools ?? []) as Array<{ function?: { name?: string } }>)
       .map((tool) => tool.function?.name);
@@ -228,12 +228,20 @@ process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); i
         .filter((event) => event.type === "tool.output" && String(event.toolCallId).startsWith("lsp-"))
         .map((event) => [event.toolCallId, String(event.text)]),
     );
-    assert.match(outputs.get("lsp-definition-1") ?? "", /"path":"main\.ts"/);
-    assert.match(outputs.get("lsp-references-1") ?? "", /Found 2 references/);
-    assert.match(outputs.get("lsp-hover-1") ?? "", /const answer: 42/);
-    assert.match(outputs.get("lsp-symbols-1") ?? "", /"name":"answer"/);
+    // Structured evidence is read from typed details; the text is presentation.
+    const details = new Map(events.events
+      .filter((event) => event.type === "tool.finished" && String(event.toolCallId).startsWith("lsp-"))
+      .map((event) => [event.toolCallId, event.details as Record<string, unknown>]));
+    const locations = (id: string) =>
+      (details.get(id)?.locations ?? []) as Array<Record<string, unknown>>;
+    assert.equal(locations("lsp-definition-1")[0]?.path, "main.ts");
+    assert.equal(locations("lsp-references-1").length, 2);
+    assert.match(String(details.get("lsp-hover-1")?.hoverMarkdown), /const answer: 42/);
+    assert.equal(locations("lsp-symbols-1")[0]?.name, "answer");
+    for (const evidence of details.values()) {
+      assert.equal(evidence?.freshness, "ready");
+    }
     for (const output of outputs.values()) {
-      assert.match(output, /"freshness":"ready"/);
       assert.doesNotMatch(output, new RegExp(cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
   } finally {
@@ -273,12 +281,13 @@ test("native runner degrades a crashed language server without failing the task"
   try {
     const session = await createSession(run);
     assert.equal((await prompt(run, session.id, "LSP_DEGRADED")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
     const output = events.events.find((event) => event.type === "tool.output" && event.toolCallId === "lsp-degraded-1");
-    assert.match(String(output?.text), /"freshness":"degraded"/);
     assert.match(String(output?.text), /unavailable for this session/);
     const finished = events.events.find((event) => event.type === "tool.finished" && event.toolCallId === "lsp-degraded-1");
     assert.equal(finished?.status, "success");
+    // Degradation is a typed field, not a string in the model-facing text.
+    assert.equal((finished?.details as Record<string, unknown>)?.freshness, "degraded");
   } finally {
     await events.close();
     await run.close();
@@ -291,7 +300,7 @@ test("native runner semantically compacts a durable prefix and persists the vali
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-compaction-"));
   const provider = await startProvider();
   const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
-    contextLength: 10_000,
+    contextLength: 12_000,
     maxResponseTokens: 4_096,
     protectedPromptReserveTokens: 2_048,
   });
@@ -299,17 +308,18 @@ test("native runner semantically compacts a durable prefix and persists the vali
   try {
     const bootstrap = await createSession(run);
     assert.equal((await prompt(run, bootstrap.id, `old context ${"x".repeat(12_000)}`)).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === bootstrap.id);
-    const bootstrapSnapshot = await run.request(`/session/${bootstrap.id}/context`);
-    assert.equal(bootstrapSnapshot.status, 200);
-    const contextState = await bootstrapSnapshot.json();
-    const session = await createSession(run, contextState);
+    const bootstrapSettled = await events.waitFor((event) =>
+      event.type === "step.settled" && event.sessionId === bootstrap.id
+    );
+    const conversationState = bootstrapSettled.conversationState;
+    const session = await createSession(run, conversationState);
     assert.equal((await prompt(run, session.id, `latest request ${"z".repeat(15_000)}`)).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
     assert.ok(provider.requests.some((request) => request.path === "/api/internal/context/compact"));
-    const snapshotResponse = await run.request(`/session/${session.id}/context`);
-    assert.equal(snapshotResponse.status, 200);
-    const snapshot = await snapshotResponse.json() as { summary?: string; usage: { compactionCount: number }; tail: Array<{ role: string }> };
+    const snapshot = events.events
+      .filter((event) => event.type === "step.settled" && event.sessionId === session.id)
+      .at(-1)?.conversationState as { summary?: string | null; usage: { compactionCount: number }; tail: Array<{ role: string }> };
+    assert.ok(snapshot);
     assert.match(snapshot.summary ?? "", /bounded factual summary/);
     assert.equal(snapshot.usage.compactionCount, 1);
     assert.equal(snapshot.tail[0]?.role, "user");
@@ -344,7 +354,7 @@ test("32K and 64K compaction evaluation preserves latest-request recall without 
         assert.equal((await prompt(run, session.id, `${durableFacts}${latestMarker} ${"q".repeat(7_000)}`)).status, 204);
         idleCount += 1;
         const deadline = Date.now() + 5_000;
-        while (events.events.filter((event) => event.type === "session.idle" && event.sessionId === session.id).length < idleCount) {
+        while (events.events.filter((event) => event.type === "run.settled" && event.sessionId === session.id).length < idleCount) {
           if (Date.now() >= deadline) throw new Error(`timed out waiting for turn ${turn} at ${contextLength}`);
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
@@ -361,13 +371,15 @@ test("32K and 64K compaction evaluation preserves latest-request recall without 
       assert.match(finalMessages, new RegExp(changedFileMarker));
       assert.match(finalMessages, new RegExp(verificationMarker));
       assert.doesNotMatch(finalMessages, /context_window_full|context_overflow/);
-      const snapshotResponse = await run.request(`/session/${session.id}/context`);
-      const snapshotText = await snapshotResponse.text();
+      const snapshot = events.events
+        .filter((event) => event.type === "step.settled" && event.sessionId === session.id)
+        .at(-1)?.conversationState as {
+          sourceDigest: string;
+          usage: { compactionCount: number; estimatedPromptTokens: number };
+        };
+      assert.ok(snapshot);
+      const snapshotText = JSON.stringify(snapshot);
       assert.ok(Buffer.byteLength(snapshotText, "utf8") <= 128 * 1024);
-      const snapshot = JSON.parse(snapshotText) as {
-        sourceDigest: string;
-        usage: { compactionCount: number; estimatedPromptTokens: number };
-      };
       assert.match(snapshot.sourceDigest, /^[a-f0-9]{64}$/);
       assert.equal(snapshot.usage.compactionCount, 1);
       assert.ok(snapshot.usage.estimatedPromptTokens < contextLength);
@@ -426,26 +438,36 @@ test("native runner rejects a second prompt while a turn is active and scopes ab
     const busy = await prompt(run, session.id, "should be rejected");
     assert.equal(busy.status, 409);
     const busyBody = await busy.json() as { code?: string; error?: string };
-    assert.equal(busyBody.code, "turn_in_progress");
+    assert.equal(busyBody.code, "run_in_progress");
 
     assert.equal((await run.request(`/session/${session.id}/abort`, { method: "POST" })).status, 204);
-    const aborted = await events.waitFor((event) =>
-      event.type === "runner.error"
+    const abortedSettled = await events.waitFor((event) =>
+      event.type === "run.settled"
       && event.sessionId === session.id
-      && event.code === "turn_aborted"
+      && event.outcome === "aborted"
     );
-    assert.equal(aborted.category, "abort");
-    assert.equal(events.events.some((event) => event.type === "session.idle" && event.sessionId === session.id), false);
+    assert.equal(abortedSettled.errorCode, null);
+    assert.equal(
+      events.events.filter((event) =>
+        event.type === "runner.error" && event.sessionId === session.id && event.code === "run_aborted"
+      ).length,
+      0,
+    );
+    assert.equal(events.events.filter((event) => event.type === "run.settled" && event.sessionId === session.id).length, 1);
 
-    // Releasing the held provider after abort must not revive the turn into session.idle.
+    // Releasing the held provider after abort must not emit another run.settled.
     releaseFirst();
     await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.equal(events.events.some((event) => event.type === "session.idle" && event.sessionId === session.id), false);
+    assert.equal(events.events.filter((event) => event.type === "run.settled" && event.sessionId === session.id).length, 1);
 
     assert.equal((await prompt(run, session.id, "AFTER_ABORT")).status, 204);
-    const idle = await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
-    assert.match(String(idle.turnId ?? ""), /^turn-/);
-    assert.equal(events.events.filter((event) => event.type === "session.idle" && event.sessionId === session.id).length, 1);
+    const settled = await events.waitFor((event) =>
+      event.type === "run.settled"
+      && event.sessionId === session.id
+      && event.outcome === "completed"
+    );
+    assert.match(String(settled.runId ?? ""), /^run-/);
+    assert.equal(events.events.filter((event) => event.type === "run.settled" && event.sessionId === session.id).length, 2);
   } finally {
     releaseFirst();
     await events.close();
@@ -485,18 +507,18 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       },
       { contentTokens: 16, promptTokens: 16, completionTokens: 4, reserveTokens: 8192, estimatedTokens: 8208, phase: "observed" },
     );
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === readSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === readSession.id);
     assert.deepEqual(
       events.events
         .slice(readEventStart)
         .filter((event) => [
           "assistant.delta", "assistant.progress.delta", "tool.requested",
-          "tool.policy.stage", "tool.output", "tool.finished", "session.idle",
+          "tool.policy.stage", "tool.output", "tool.finished", "step.settled", "run.settled",
         ].includes(String(event.type)))
         .map((event) => event.type),
       [
         "assistant.delta", "assistant.progress.delta", "tool.requested", "tool.policy.stage",
-        "tool.output", "tool.finished", "assistant.delta", "session.idle",
+        "tool.output", "tool.finished", "step.settled", "assistant.delta", "step.settled", "run.settled",
       ],
       "the read scenario keeps one stable public lifecycle trajectory",
     );
@@ -513,7 +535,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
 
     const inspectionRetrySession = await createSession(run), inspectionEventStart = events.events.length;
     assert.equal((await prompt(run, inspectionRetrySession.id, "REQUIRED_INSPECTION_RETRY")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === inspectionRetrySession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === inspectionRetrySession.id);
     assert.equal(
       events.events.slice(inspectionEventStart).some((event) => event.type === "assistant.delta" && event.text === "I can explain this directly without changing or inspecting the workspace."),
       true,
@@ -530,7 +552,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     const permission = await events.waitFor((event) => event.type === "permission.requested" && typeof event.permissionId === "string");
     const reply = await run.request(`/permission/${permission.permissionId}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reply: "once" }) });
     assert.equal(reply.status, 200);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === writeSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === writeSession.id);
     assert.equal(fs.readFileSync(path.join(cwd, "note.txt"), "utf8"), "native write\n");
 
     const approvedSession = await createSession(run);
@@ -566,7 +588,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       ),
       true,
     );
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === approvedSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === approvedSession.id);
 
     const blockedSession = await createSession(run);
     assert.equal((await prompt(run, blockedSession.id, "BLOCK_NETWORK")).status, 204);
@@ -590,7 +612,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       event.type === "tool.finished" && event.toolCallId === "rejected-command-1"
     );
     assert.equal(rejectedFinished.status, "permission_denied");
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === rejectedSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === rejectedSession.id);
     assert.equal(fs.existsSync(path.join(cwd, "rejected-command.txt")), false);
     assert.equal(events.events.some((event) => event.type === "assistant.delta" && event.text === "The command was rejected and was not run."), true);
 
@@ -598,7 +620,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal((await prompt(run, duplicateSession.id, "DUPLICATE_IDS")).status, 204);
     await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "duplicate-fixed-1");
     await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "duplicate-fixed-2");
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === duplicateSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === duplicateSession.id);
     assert.equal(
       events.events.slice(duplicateEventStart).some((event) => event.type === "tool.requested" && event.toolCallId === "duplicate"),
       false,
@@ -609,12 +631,12 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal((await prompt(run, utf8Session.id, "SPLIT_UTF8")).status, 204);
     const utf8 = await events.waitFor((event) => event.type === "assistant.delta" && event.text === "café");
     assert.equal(utf8.text, "café");
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === utf8Session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === utf8Session.id);
 
     const streamingSession = await createSession(run);
     const streamingEventStart = events.events.length;
     assert.equal((await prompt(run, streamingSession.id, "what can you do and who are you")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === streamingSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === streamingSession.id);
     const directAnswer = events.events.slice(streamingEventStart).filter((event) => event.type === "assistant.delta").map((event) => event.text);
     assert.deepEqual(directAnswer, ["Hello ", "there."]);
     assert.equal(events.events.slice(streamingEventStart).some((event) => event.type === "assistant.progress.delta"), false, "a direct answer must not create a public work-summary block");
@@ -644,10 +666,14 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal("model" in firstRequest.body, false, "Veil routes must not receive a client-selected model");
     assert.ok(Array.isArray(firstRequest.body.messages));
     assert.ok(Array.isArray(firstRequest.body.tools));
-    assert.equal(firstRequest.body.parallel_tool_calls, true);
+    assert.equal(firstRequest.body.tools?.length > 0, true);
+    assert.equal("tool_choice" in firstRequest.body, false);
+    assert.equal("parallel_tool_calls" in firstRequest.body, false);
     assert.deepEqual(
       (firstRequest.body.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name).filter(Boolean).sort(),
-      ["apply_patch", "command", "edit", "read", "run_program", "search", "write"],
+      // retrieve_context is declared at task start and answers context_not_available
+      // when nothing has been compacted, rather than appearing between steps.
+      ["apply_patch", "command", "edit", "find", "grep", "ls", "read", "retrieve_context", "run_program", "write"],
     );
     assert.ok(
       provider.requests.some(({ body }) => {
@@ -694,7 +720,7 @@ test("decision behavior suite answers verb-prefixed questions without forced too
       const eventStart = events.events.length;
       const requestStart = provider.requests.length;
       assert.equal((await prompt(run, session.id, userPrompt)).status, 204);
-      await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+      await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
       const trajectory = events.events.slice(eventStart);
       totalToolCalls += trajectory.filter((event) => event.type === "tool.requested").length;
       cannedFailures += trajectory.filter((event) => event.type === "assistant.delta" && String(event.text).includes("I couldn't")).length;
@@ -723,7 +749,7 @@ test("long continuity keeps more than thirty tool rounds append-only", async () 
   try {
     const session = await createSession(run);
     assert.equal((await prompt(run, session.id, "LONG_CONTINUITY")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id, 15_000);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id, 15_000);
     const requests = provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("LONG_CONTINUITY"));
     assert.equal(requests.length, 36);
     for (let index = 1; index < requests.length; index += 1) {
@@ -755,7 +781,7 @@ test("one shared provider accepts 1, 4, and 16 concurrent direct turns", async (
       const started = performance.now();
       await Promise.all(sessions.map((session, index) => prompt(run, session.id, `CONCURRENCY_${concurrency}_${index}`)));
       await Promise.all(sessions.map((session) => events.waitFor(
-        (event) => event.type === "session.idle" && event.sessionId === session.id,
+        (event) => event.type === "run.settled" && event.sessionId === session.id,
         10_000,
       )));
       const elapsedMs = performance.now() - started;
@@ -788,7 +814,7 @@ test("native runner rejects oversized JSON bodies and missing sessions", async (
       body: JSON.stringify({ parts: [{ type: "text", text: "describe" }, { type: "image", data_url: image }] }),
     });
     assert.equal(accepted.status, 204, "the prompt endpoint must accept bounded multimodal requests larger than the control-plane limit");
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
     assert.ok(provider.requests.some(({ body }) => JSON.stringify(body.messages).includes(image.slice(-128))));
   } finally {
     await events?.close();
@@ -817,7 +843,7 @@ test("native runner sends the adaptive response allowance selected during prefli
     const session = await createSession(run);
     assert.equal((await prompt(run, session.id, `Summarize briefly\n${"x".repeat(35_000)}`)).status, 204);
     const preflight = await events.waitFor((event) => event.type === "context.usage" && event.phase === "preflight");
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
 
     assert.ok([1_000, 2_000, 3_000].includes(Number(preflight.reserveTokens)));
     assert.equal(preflight.protectedTokens, 2_048);
@@ -849,7 +875,7 @@ test("native runner retrieves a complete chat attachment across bounded tool cal
   try {
     const session = await createSession(run);
     assert.equal((await prompt(run, session.id, "ATTACHMENT_FILE analyze every part")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === session.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
 
     const attachmentRequests = provider.requests.filter(({ body }) =>
       JSON.stringify(body.messages).includes("ATTACHMENT_FILE")
@@ -931,10 +957,10 @@ test("native runner accepts an unterminated final SSE line, stops stalled repeat
     assert.equal((await prompt(run, trailingSession.id, "DONE_WITHOUT_NEWLINE")).status, 204);
     const trailing = await events.waitFor((event) => event.type === "assistant.delta" && event.taskId === "native-test-task" && event.text === "complete without newline");
     assert.equal(trailing.text, "complete without newline");
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === trailingSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === trailingSession.id);
     const repeatedSession = await createSession(run), repeatedEventStart = events.events.length;
     assert.equal((await prompt(run, repeatedSession.id, "REPEAT_TOOL")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === repeatedSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === repeatedSession.id);
     const repeatedEvents = events.events.slice(repeatedEventStart);
     assert.equal(JSON.stringify(repeatedEvents).includes("<|toolcall>"), false);
     assert.equal(repeatedEvents.some((event) => event.type === "assistant.delta" && String(event.text).includes("same workspace tool call returned the same result")), true);
@@ -946,33 +972,25 @@ test("native runner accepts an unterminated final SSE line, stops stalled repeat
     assert.equal(repeatedRequests.filter(({ body }) => body.response_mode === "progress").length, 0, "tool count must not schedule progress requests");
     const malformedSession = await createSession(run), malformedEventStart = events.events.length;
     assert.equal((await prompt(run, malformedSession.id, "MALFORMED_TOOL_SYNTAX")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === malformedSession.id);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === malformedSession.id);
     const malformedEvents = events.events.slice(malformedEventStart);
     assert.equal(JSON.stringify(malformedEvents).includes("<|tool*call>"), false);
     assert.equal(malformedEvents.some((event) => event.type === "tool.finished" && event.toolCallId === "malformed-recovery-read"), true);
     assert.equal(malformedEvents.some((event) => event.type === "assistant.delta" && event.text === "Recovered from the malformed tool call."), true);
     const recoveringSession = await createSession(run);
     assert.equal((await prompt(run, recoveringSession.id, "RECOVER_AFTER_FAILURES")).status, 204);
-    await events.waitFor((event) => event.type === "session.idle" && event.sessionId === recoveringSession.id);
-    assert.equal(
-      events.events.filter((event) => event.type === "tool.finished" && /^recover-\d+$/.test(String(event.toolCallId)) && event.status !== "success").length,
-      9,
-    );
-    assert.equal(
-      events.events.some((event) => event.type === "tool.finished" && event.toolCallId === "recover-success" && event.status === "success"),
-      true,
-    );
-    assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "Recovered after distinct failures."),
-      true,
-    );
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === recoveringSession.id);
+    assert.equal(events.events.filter((event) => event.type === "tool.finished" && /^recover-\d+$/.test(String(event.toolCallId)) && event.status !== "success").length, 9);
+    assert.equal(events.events.some((event) => event.type === "tool.finished" && event.toolCallId === "recover-success" && event.status === "success"), true);
+    assert.equal(events.events.some((event) => event.type === "assistant.delta" && event.text === "Recovered after distinct failures."), true);
 
     const incompleteSession = await createSession(run);
     assert.equal((await prompt(run, incompleteSession.id, "MISSING_DONE")).status, 204);
     const error = await events.waitFor((event) => event.type === "runner.error" && event.taskId === "native-test-task" && String(event.detail).includes("completion marker"));
     assert.equal(error.category, "provider");
     assert.equal(error.code, "model_stream_incomplete");
-    assert.equal(events.events.some((event) => event.type === "session.idle" && event.sessionId === incompleteSession.id), false);
+    const failed = await events.waitFor((event) => event.type === "run.settled" && event.sessionId === incompleteSession.id && event.outcome === "failed");
+    assert.equal(failed.errorCode, "model_stream_incomplete");
   } finally {
     await events.close();
     await run.close();
