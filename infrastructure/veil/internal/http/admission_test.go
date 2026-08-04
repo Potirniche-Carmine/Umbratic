@@ -138,8 +138,9 @@ type blockingModelClient struct {
 	release chan struct{}
 }
 
-func (c *blockingModelClient) Chat(ctx context.Context, req model.ChatRequest) (model.ChatResponse, error) {
-	c.req = req
+// Chat deliberately does not record req: admission tests drive this client from
+// several goroutines at once and never inspect the recorded request.
+func (c *blockingModelClient) Chat(ctx context.Context, _ model.ChatRequest) (model.ChatResponse, error) {
 	select {
 	case c.started <- struct{}{}:
 	default:

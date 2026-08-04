@@ -22,7 +22,7 @@ func testServer(t *testing.T) (*Server, func()) {
 
 func testServerWithTrustedOrigin(t *testing.T, trustedOrigin string) (*Server, func()) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := tempStateDir(t)
 	binary := filepath.Join(dir, "veil")
 	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
 		t.Fatal(err)
@@ -390,4 +390,15 @@ func formRequest(method, path string, values url.Values, cookies ...*http.Cookie
 		request.AddCookie(cookie)
 	}
 	return request
+}
+
+// tempStateDir resolves symlinks in the test directory because the state store
+// rejects paths that contain one, and macOS puts temporary files under /var.
+func tempStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

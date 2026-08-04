@@ -240,18 +240,23 @@ async fn the_generated_tool_contract_matches_the_shared_fixture() {
         .insert("runtime".into(), executable);
 
     let specs = enabled_tool_specs(&session, true);
-    let encoded = serde_json::to_string_pretty(&specs).unwrap() + "\n";
+    // The command description names the host shell, so the fixture is stored in
+    // its POSIX form and both sides are normalized before comparison. Otherwise
+    // the golden file only ever matches whichever platform last regenerated it.
+    let canonical = |contract: &str| {
+        contract
+            .replace("\r\n", "\n")
+            .replace("Windows PowerShell", "/bin/sh")
+    };
+    let encoded = canonical(&(serde_json::to_string_pretty(&specs).unwrap() + "\n"));
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/tests/fixtures/tool-contract.golden.json");
     if std::env::var("UPDATE_FIXTURES").is_ok() {
         std::fs::write(&fixture, &encoded).unwrap();
     }
-    let expected = std::fs::read_to_string(&fixture)
-        .unwrap_or_default()
-        .replace("\r\n", "\n");
+    let expected = canonical(&std::fs::read_to_string(&fixture).unwrap_or_default());
     assert_eq!(
-        encoded.replace("\r\n", "\n"),
-        expected,
+        encoded, expected,
         "the generated tool contract changed; re-run with UPDATE_FIXTURES=1 and \
          confirm the Veil consumer test still accepts it",
     );

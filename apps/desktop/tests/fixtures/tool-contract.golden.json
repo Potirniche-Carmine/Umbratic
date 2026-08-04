@@ -253,7 +253,7 @@
   },
   {
     "function": {
-      "description": "Run a local workspace command in Windows PowerShell after policy and permission checks. Prefer read, ls, find, and grep for file inspection. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args.",
+      "description": "Run a local workspace command in /bin/sh after policy and permission checks. Prefer read, ls, find, and grep for file inspection. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args.",
       "name": "command",
       "parameters": {
         "additionalProperties": false,
