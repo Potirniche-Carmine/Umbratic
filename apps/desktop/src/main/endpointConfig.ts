@@ -24,7 +24,6 @@ function endpointHeaders(
 
 export function endpointProvider(): (typeof localProviderCatalog)[number] & {
   baseUrl: string;
-  software: ReturnType<typeof readModelEndpointSettings>["software"];
   headers: Record<string, string>;
 } {
   const provider = localProviderCatalog[0];
@@ -33,7 +32,6 @@ export function endpointProvider(): (typeof localProviderCatalog)[number] & {
   return {
     ...provider,
     providerName: "Umbratic Veil",
-    software: settings.software,
     baseUrl: normalizeBaseUrl(localConnection?.baseUrl ?? settings.baseUrl),
     apiKey: localConnection?.authToken ?? currentCompanySessionToken(),
     headers: settings.mode === "local" ? {} : endpointHeaders(settings.headers),

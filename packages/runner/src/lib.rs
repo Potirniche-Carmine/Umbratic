@@ -1,6 +1,6 @@
 pub mod config;
 pub mod context;
-pub mod context_state;
+pub mod conversation_state;
 pub mod diagnostics;
 pub mod events;
 pub mod loop_runtime;
@@ -10,10 +10,13 @@ pub mod policy;
 mod public_progress;
 mod repeat_guard;
 mod response_output;
+pub mod run_queue;
 pub mod safety;
 pub mod server;
 pub mod session;
+pub mod skill_preflight;
 pub mod tools;
+pub mod turn_snapshot;
 pub mod veil_client;
 pub mod workspace_graph;
 

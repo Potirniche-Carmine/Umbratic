@@ -26,7 +26,6 @@ const (
 var ErrRequestTooLarge = errors.New("request body too large")
 
 type CompactionInput struct {
-	Version          int
 	Route            string
 	PreviousSummary  string
 	Messages         []model.Message
@@ -35,7 +34,6 @@ type CompactionInput struct {
 }
 
 type compactionRequest struct {
-	Version          int             `json:"version"`
 	Route            string          `json:"route"`
 	PreviousSummary  string          `json:"previousSummary"`
 	Messages         []model.Message `json:"messages"`
@@ -57,7 +55,7 @@ func DecodeCompactionInput(r io.Reader) (CompactionInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "version", "route", "previousSummary", "messages", "maxSummaryTokens", "sourceDigest":
+		case "route", "previousSummary", "messages", "maxSummaryTokens", "sourceDigest":
 		default:
 			return CompactionInput{}, fmt.Errorf("field %q is not supported", field)
 		}
@@ -65,9 +63,6 @@ func DecodeCompactionInput(r io.Reader) (CompactionInput, error) {
 	var req compactionRequest
 	if json.Unmarshal(body, &req) != nil {
 		return CompactionInput{}, errors.New("invalid JSON request")
-	}
-	if req.Version != 1 {
-		return CompactionInput{}, errors.New("unsupported compaction version")
 	}
 	if req.Route != "engineering" && req.Route != "marketing" && req.Route != "sales" {
 		return CompactionInput{}, errors.New("unsupported compaction route")
@@ -97,15 +92,13 @@ func DecodeCompactionInput(r io.Reader) (CompactionInput, error) {
 			return CompactionInput{}, fmt.Errorf("message %d %s", i, err)
 		}
 	}
-	return CompactionInput{Version: 1, Route: req.Route, PreviousSummary: req.PreviousSummary, Messages: req.Messages, MaxSummaryTokens: req.MaxSummaryTokens, SourceDigest: req.SourceDigest}, nil
+	return CompactionInput{Route: req.Route, PreviousSummary: req.PreviousSummary, Messages: req.Messages, MaxSummaryTokens: req.MaxSummaryTokens, SourceDigest: req.SourceDigest}, nil
 }
 
 type ChatInput struct {
 	Messages        []model.Message
 	Stream          bool
 	Tools           any
-	ToolChoice      any
-	ParallelTools   bool
 	Skills          []prompts.SkillMetadata
 	MaxOutputTokens int
 }
@@ -115,8 +108,6 @@ type chatRequest struct {
 	Messages        []model.Message         `json:"messages"`
 	Stream          bool                    `json:"stream"`
 	Tools           any                     `json:"tools"`
-	ToolChoice      any                     `json:"tool_choice"`
-	ParallelTools   bool                    `json:"parallel_tool_calls"`
 	Skills          []prompts.SkillMetadata `json:"skills"`
 	MaxOutputTokens int                     `json:"max_output_tokens"`
 }
@@ -136,8 +127,8 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "input", "messages", "stream", "tools", "tool_choice", "parallel_tool_calls", "skills", "max_output_tokens":
-		case "model", "system":
+		case "input", "messages", "stream", "tools", "skills", "max_output_tokens":
+		case "model", "system", "tool_choice", "parallel_tool_calls", "temperature", "top_p":
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		default:
 			return ChatInput{}, fmt.Errorf("field %q is not supported", field)
@@ -163,7 +154,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	if req.MaxOutputTokens < 0 || req.MaxOutputTokens > MaxOutputTokens {
 		return ChatInput{}, fmt.Errorf("max_output_tokens must be between 1 and %d when set", MaxOutputTokens)
 	}
-	if err := validateToolContract(req.Tools, req.ToolChoice); err != nil {
+	if err := validateToolContract(req.Tools); err != nil {
 		return ChatInput{}, err
 	}
 	for i, message := range req.Messages {
@@ -188,27 +179,18 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 		Messages:        req.Messages,
 		Stream:          req.Stream,
 		Tools:           req.Tools,
-		ToolChoice:      req.ToolChoice,
-		ParallelTools:   req.ParallelTools,
 		Skills:          skills,
 		MaxOutputTokens: req.MaxOutputTokens,
 	}, nil
 }
 
-func validateToolContract(tools any, toolChoice any) error {
+func validateToolContract(tools any) error {
 	if tools == nil {
-		if toolChoice != nil {
-			return errors.New("tool_choice requires tools")
-		}
 		return nil
 	}
 	rows, ok := tools.([]any)
 	if !ok || len(rows) == 0 || len(rows) > MaxTools {
 		return fmt.Errorf("tools must contain between 1 and %d function definitions", MaxTools)
-	}
-	choice, ok := toolChoice.(string)
-	if !ok || (choice != "auto" && choice != "required") {
-		return errors.New(`tool_choice must be "auto" or "required" when tools are present`)
 	}
 	seen := make(map[string]bool, len(rows))
 	for index, raw := range rows {
@@ -269,18 +251,37 @@ func validateToolContract(tools any, toolChoice any) error {
 }
 
 func validateToolPropertySchema(toolName, field string, schema map[string]any) error {
+	return validateToolPropertySchemaAtDepth(toolName, field, schema, 1)
+}
+
+const maxToolSchemaDepth = 3
+
+func validateToolPropertySchemaAtDepth(toolName, field string, schema map[string]any, depth int) error {
+	if depth > maxToolSchemaDepth {
+		return fmt.Errorf("tool %q property %q nests too deeply", toolName, field)
+	}
+	typeName, ok := schema["type"].(string)
+	if !ok {
+		return fmt.Errorf("tool %q property %q has an unsupported type", toolName, field)
+	}
 	allowed := map[string]bool{
 		"type": true, "description": true, "enum": true, "items": true,
 		"minLength": true, "maxLength": true, "minimum": true, "maximum": true,
 		"minItems": true, "maxItems": true,
+	}
+	if typeName == "object" {
+		allowed["properties"] = true
+		allowed["required"] = true
+		allowed["additionalProperties"] = true
 	}
 	for keyword := range schema {
 		if !allowed[keyword] {
 			return fmt.Errorf("tool %q property %q has unsupported schema keyword %q", toolName, field, keyword)
 		}
 	}
-	typeName, ok := schema["type"].(string)
-	if !ok || (typeName != "string" && typeName != "integer" && typeName != "number" && typeName != "boolean" && typeName != "array") {
+	switch typeName {
+	case "string", "integer", "number", "boolean", "array", "object":
+	default:
 		return fmt.Errorf("tool %q property %q has an unsupported type", toolName, field)
 	}
 	if description, exists := schema["description"]; exists {
@@ -305,6 +306,9 @@ func validateToolPropertySchema(toolName, field string, schema map[string]any) e
 		}
 	}
 	if enum, exists := schema["enum"]; exists {
+		if typeName == "object" || typeName == "array" {
+			return fmt.Errorf("tool %q property %q enum does not match its type", toolName, field)
+		}
 		values, ok := enum.([]any)
 		if !ok || len(values) == 0 || len(values) > 128 {
 			return fmt.Errorf("tool %q property %q has an invalid enum", toolName, field)
@@ -322,18 +326,73 @@ func validateToolPropertySchema(toolName, field string, schema map[string]any) e
 		}
 	}
 	items, hasItems := schema["items"]
-	if typeName == "array" {
+	properties, hasProperties := schema["properties"]
+	required, hasRequired := schema["required"]
+	additionalProperties, hasAdditionalProperties := schema["additionalProperties"]
+	switch typeName {
+	case "array":
 		itemSchema, ok := items.(map[string]any)
 		if !hasItems || !ok {
 			return fmt.Errorf("tool %q property %q array items must be a schema object", toolName, field)
 		}
-		if err := validateToolPropertySchema(toolName, field+"[]", itemSchema); err != nil {
-			return err
+		if hasProperties || hasRequired || hasAdditionalProperties {
+			return fmt.Errorf("tool %q property %q uses object keywords with a non-object type", toolName, field)
 		}
-	} else if hasItems {
-		return fmt.Errorf("tool %q property %q uses items with a non-array type", toolName, field)
+		return validateToolPropertySchemaAtDepth(toolName, field+"[]", itemSchema, depth+1)
+	case "object":
+		if hasItems {
+			return fmt.Errorf("tool %q property %q uses items with a non-array type", toolName, field)
+		}
+		if !hasAdditionalProperties || additionalProperties != false {
+			return fmt.Errorf("tool %q property %q must be a closed object schema", toolName, field)
+		}
+		nestedProperties, ok := properties.(map[string]any)
+		if !hasProperties || !ok || len(nestedProperties) == 0 {
+			return fmt.Errorf("tool %q property %q properties must be a non-empty object", toolName, field)
+		}
+		if len(nestedProperties) > 32 {
+			return fmt.Errorf("tool %q property %q declares too many nested properties", toolName, field)
+		}
+		for nestedField, definition := range nestedProperties {
+			if !validToolPropertyName(nestedField) {
+				return fmt.Errorf("tool %q property %q has an invalid nested property name", toolName, field)
+			}
+			nestedSchema, ok := definition.(map[string]any)
+			if !ok {
+				return fmt.Errorf("tool %q property %q.%s must be a schema object", toolName, field, nestedField)
+			}
+			if err := validateToolPropertySchemaAtDepth(toolName, field+"."+nestedField, nestedSchema, depth+1); err != nil {
+				return err
+			}
+		}
+		if !hasRequired {
+			return fmt.Errorf("tool %q property %q required must be an array", toolName, field)
+		}
+		requiredFields, ok := required.([]any)
+		if !ok {
+			return fmt.Errorf("tool %q property %q required must be an array", toolName, field)
+		}
+		requiredSeen := make(map[string]bool, len(requiredFields))
+		for _, rawField := range requiredFields {
+			nestedField, ok := rawField.(string)
+			if !ok || requiredSeen[nestedField] {
+				return fmt.Errorf("tool %q property %q required fields must be unique strings", toolName, field)
+			}
+			if _, exists := nestedProperties[nestedField]; !exists {
+				return fmt.Errorf("tool %q property %q requires undeclared nested property %q", toolName, field, nestedField)
+			}
+			requiredSeen[nestedField] = true
+		}
+		return nil
+	default:
+		if hasItems {
+			return fmt.Errorf("tool %q property %q uses items with a non-array type", toolName, field)
+		}
+		if hasProperties || hasRequired || hasAdditionalProperties {
+			return fmt.Errorf("tool %q property %q uses object keywords with a non-object type", toolName, field)
+		}
+		return nil
 	}
-	return nil
 }
 
 func schemaValueHasType(value any, typeName string) bool {

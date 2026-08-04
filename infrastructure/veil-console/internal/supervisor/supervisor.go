@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,24 @@ type Status struct {
 	Healthy bool
 	PID     int
 	Message string
+}
+
+// OpsMetrics is the administrator-safe Veil admission and runtime summary.
+type OpsMetrics struct {
+	Available      bool
+	ActiveRequests int64
+	QueueDepth     int64
+	QueueWaitMsAvg float64
+	OverloadCount  uint64
+	CancelCount    uint64
+	TimeoutCount   uint64
+	ReleaseErrors  uint64
+	TrackedUsers   int
+	GlobalLimit    int
+	PerUserLimit   int
+	RuntimeState   string
+	PrefixCacheHit float64
+	RuntimeQueue   float64
 }
 
 type Supervisor struct {
@@ -244,6 +263,63 @@ func waitForHealth(ctx context.Context, address, token string) error {
 			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+// FetchOpsMetrics returns administrator-safe Veil operational counters.
+func (s *Supervisor) FetchOpsMetrics(ctx context.Context, token string) OpsMetrics {
+	status := s.Status()
+	if !status.Healthy || strings.TrimSpace(token) == "" {
+		return OpsMetrics{}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+s.veilAddress+"/api/runtime/metrics", nil)
+	if err != nil {
+		return OpsMetrics{}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return OpsMetrics{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return OpsMetrics{}
+	}
+	var body struct {
+		ActiveRequests     int64   `json:"active_requests"`
+		QueueDepth         int64   `json:"queue_depth"`
+		QueueWaitMsAvg     float64 `json:"queue_wait_ms_avg"`
+		OverloadCount      uint64  `json:"overload_count"`
+		CancelCount        uint64  `json:"cancel_count"`
+		TimeoutCount       uint64  `json:"timeout_count"`
+		ReleaseErrorCount  uint64  `json:"release_error_count"`
+		TrackedUsers       int     `json:"tracked_users"`
+		GlobalLimit        int     `json:"global_limit"`
+		PerUserLimit       int     `json:"per_user_limit"`
+		PrefixCacheHitRate float64 `json:"prefix_cache_hit_rate"`
+		RuntimeQueueDepth  float64 `json:"runtime_queue_depth"`
+		RuntimeState       string  `json:"runtime_state"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body); err != nil {
+		return OpsMetrics{}
+	}
+	return OpsMetrics{
+		Available:      true,
+		ActiveRequests: body.ActiveRequests,
+		QueueDepth:     body.QueueDepth,
+		QueueWaitMsAvg: body.QueueWaitMsAvg,
+		OverloadCount:  body.OverloadCount,
+		CancelCount:    body.CancelCount,
+		TimeoutCount:   body.TimeoutCount,
+		GlobalLimit:    body.GlobalLimit,
+		PerUserLimit:   body.PerUserLimit,
+		ReleaseErrors:  body.ReleaseErrorCount,
+		TrackedUsers:   body.TrackedUsers,
+		RuntimeState:   body.RuntimeState,
+		PrefixCacheHit: body.PrefixCacheHitRate,
+		RuntimeQueue:   body.RuntimeQueueDepth,
 	}
 }
 

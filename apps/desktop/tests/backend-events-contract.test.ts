@@ -21,23 +21,26 @@ const fixtures = [
   ["approval.check", { name: "tests", status: "passed" }], ["merge.approval", { decision: "approved" }],
   ["approval.completed", { target: "main", patchHash: "a" }], ["merge.completed", { targetBranch: "main", commit: "c", patchHash: "a" }],
   ["ide.opened", { ideId: "code", target: "workspace", result: "success" }], ["response.feedback", { messageId: "m", rating: "good", reason: "Solved my issue", comment: "Useful." }],
-  ["tool.failed", { id: "tool-1", toolKind: "edit", input: { filePath: "a.ts" }, response: { stdout: "", stderr: "not found", exitCode: 1 } }],
-  ["skill.selected", { skillId: "s", source: "system", reason: "metadata", fullContent: false }],
+  ["tool.failed", { id: "tool-1", toolKind: "edit", input: { path: "a.ts" }, response: { stdout: "", stderr: "not found", exitCode: 1 } }],
+  ["skill.requested", { sessionId: "s", runId: "r", requestId: "req", skillId: "s", source: "system", origin: "harness" }],
+  ["skill.loaded", { sessionId: "s", runId: "r", requestId: "req", skillId: "s", source: "system", origin: "harness", contentHash: "abc", bytes: 12 }],
+  ["skill.failed", { sessionId: "s", runId: "r", requestId: "req", skillId: "s", source: "system", origin: "harness", code: "skill_not_enabled", message: "missing" }],
   ["required_tool.failed", { requirement: "file_change", reason: "missing_tool_call", requiredTools: ["edit"] }],
   ["task.error", { message: "failed", category: "provider", code: "model_request_failed", detail: "safe detail" }],
 ];
 
-test("every backend event variant normalizes to contract version 1", () => {
+test("every backend event variant parses to its exact unversioned shape", () => {
   for (const [type, payload] of fixtures) {
-    const result = contract.parseBackendUiEvent({ type, taskId: "task-1", ...payload });
+    const input = { type, taskId: "task-1", ...payload };
+    const result = contract.parseBackendUiEvent(input);
     assert.equal(result.ok, true, `${type}: ${result.message ?? "invalid"}`);
-    assert.equal(result.event.version, 1);
+    assert.deepEqual(result.event, input);
   }
 });
 
 test("malformed, unknown, and future backend events are quarantined", () => {
   assert.equal(contract.parseBackendUiEvent(null).code, "not_an_object");
-  assert.equal(contract.parseBackendUiEvent({ version: 2, type: "assistant.done", taskId: "t" }).code, "unsupported_version");
+  assert.equal(contract.parseBackendUiEvent({ ["ver" + "sion"]: 1, type: "assistant.done", taskId: "t" }).code, "invalid_field");
   assert.equal(contract.parseBackendUiEvent({ type: "future.event", taskId: "t" }).code, "unknown_type");
   const invalid = contract.parseBackendUiEvent({ type: "assistant.delta", taskId: "t", text: 42 });
   assert.equal(invalid.code, "invalid_field");

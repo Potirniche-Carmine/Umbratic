@@ -22,7 +22,7 @@ func testServer(t *testing.T) (*Server, func()) {
 
 func testServerWithTrustedOrigin(t *testing.T, trustedOrigin string) (*Server, func()) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := tempStateDir(t)
 	binary := filepath.Join(dir, "veil")
 	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
 		t.Fatal(err)
@@ -231,16 +231,22 @@ func TestSetupLoginAndAuthenticatedPage(t *testing.T) {
 		}
 	}
 	settingsForm := url.Values{
-		"csrf":              {sessionCSRF},
-		"protocol":          {"vllm"},
-		"provider_base_url": {"http://127.0.0.1:8000/v1"},
-		"model":             {"local-model"},
-		"context_length":    {"65536"},
-		"max_output_tokens": {"8192"},
-		"model_timeout":     {"1m"},
-		"request_timeout":   {"1m15s"},
-		"max_body_bytes":    {"67108864"},
-		"password":          {"wrong password"},
+		"csrf":                             {sessionCSRF},
+		"provider_base_url":                {"http://127.0.0.1:8000/v1"},
+		"model":                            {"local-model"},
+		"context_length":                   {"65536"},
+		"max_output_tokens":                {"8192"},
+		"temperature":                      {"0.2"},
+		"top_p":                            {"0.95"},
+		"reasoning_effort":                 {"none"},
+		"parallel_tool_calls":              {"true"},
+		"max_concurrent_requests":          {"32"},
+		"max_concurrent_requests_per_user": {"4"},
+		"queue_timeout":                    {"30s"},
+		"model_timeout":                    {"1m"},
+		"request_timeout":                  {"1m15s"},
+		"max_body_bytes":                   {"67108864"},
+		"password":                         {"wrong password"},
 	}
 	for _, path := range []string{"/settings/test", "/settings/apply"} {
 		settingsRequest := formRequest(http.MethodPost, path, settingsForm, cookies...)
@@ -384,4 +390,15 @@ func formRequest(method, path string, values url.Values, cookies ...*http.Cookie
 		request.AddCookie(cookie)
 	}
 	return request
+}
+
+// tempStateDir resolves symlinks in the test directory because the state store
+// rejects paths that contain one, and macOS puts temporary files under /var.
+func tempStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

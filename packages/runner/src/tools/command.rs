@@ -1,9 +1,11 @@
 use super::*;
 
-#[cfg(not(test))]
-const COMMAND_SILENCE_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const COMMAND_SILENCE_TIMEOUT: Duration = Duration::from_millis(250);
+const DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+const MAX_TIMEOUT_MS: u64 = 30 * 60 * 1000;
+const MIN_TIMEOUT_MS: u64 = 100;
+const PROGRESS_COALESCE_MS: u64 = 100;
+const MAX_UI_OUTPUT_BYTES: usize = 16 * 1024;
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 512 * 1024;
 
 pub(super) async fn command_tool(
     session: &Session,
@@ -11,7 +13,7 @@ pub(super) async fn command_tool(
     input: &Map<String, Value>,
     permissions: &crate::permission::PermissionBroker,
     call_id: &str,
-    safety: &SafetyDecisionV1,
+    safety: &SafetyDecision,
 ) -> ToolExecutionResult {
     let command = command_display(input).trim().to_owned();
     if command.is_empty() {
@@ -23,7 +25,6 @@ pub(super) async fn command_tool(
         "type": "command.safety.decision",
         "taskId": session.task_id,
         "toolCallId": call_id,
-        "schemaVersion": safety.schema_version,
         "policyVersion": safety.policy_version,
         "action": safety.action,
         "severity": safety.severity,
@@ -77,6 +78,11 @@ pub(super) async fn command_tool(
             auto_allow,
         )
         .await;
+    if decision == "abort" {
+        return Err(ToolError::aborted(
+            "The tool call was aborted before the command ran.",
+        ));
+    }
     if decision != "allow" {
         return Err(ToolError::permission(
             "The user rejected this command. It was not run. Do not repeat it unless the user makes a new request that authorizes it.",
@@ -86,8 +92,8 @@ pub(super) async fn command_tool(
     let requested = input
         .get("timeoutMs")
         .and_then(Value::as_u64)
-        .unwrap_or(10 * 60 * 1000)
-        .clamp(100, 30 * 60 * 1000);
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
     let mut process = if let Some(executable) = executable {
         let mut value = Command::new(executable);
         value.args(&program_args);
@@ -134,70 +140,16 @@ pub(super) async fn command_tool(
         .stderr
         .take()
         .ok_or_else(|| "Unable to capture command stderr".to_owned())?;
-    async fn collect_stream<R: AsyncRead + Unpin>(
-        mut reader: R,
-        sink: EventSink,
-        task_id: String,
-        call_id: String,
-        stream: &'static str,
-        last_output_at: Arc<Mutex<TokioInstant>>,
-    ) -> String {
-        const MAX_UI_OUTPUT_BYTES: usize = 16 * 1024;
-        const MAX_CAPTURED_OUTPUT_BYTES: usize = 512 * 1024;
-        let mut collected = String::new();
-        let mut total_bytes = 0usize;
-        let mut shown_bytes = 0usize;
-        let mut buffer = vec![0u8; 8192];
-        while let Ok(count) = reader.read(&mut buffer).await {
-            if count == 0 {
-                break;
-            }
-            if let Ok(mut last_output_at) = last_output_at.lock() {
-                *last_output_at = TokioInstant::now();
-            }
-            let text = redact_stream_text(&String::from_utf8_lossy(&buffer[..count]), 64 * 1024);
-            total_bytes = total_bytes.saturating_add(text.len());
-            if collected.len() < MAX_CAPTURED_OUTPUT_BYTES {
-                let mut end = text.len().min(MAX_CAPTURED_OUTPUT_BYTES - collected.len());
-                while end > 0 && !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                collected.push_str(&text[..end]);
-            }
-            if !text.is_empty() && shown_bytes < MAX_UI_OUTPUT_BYTES {
-                let mut end = text.len().min(MAX_UI_OUTPUT_BYTES - shown_bytes);
-                while end > 0 && !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let shown = &text[..end];
-                shown_bytes += shown.len();
-                if !shown.is_empty() {
-                    sink.emit(json!({ "type":"tool.output", "taskId":task_id, "toolCallId":call_id, "stream":stream, "text":shown, "redacted":true, "originalBytes":total_bytes, "shownBytes":shown_bytes, "truncated":false, "at":now_iso() }));
-                }
-            }
-        }
-        if total_bytes > shown_bytes {
-            let marker = format!(
-                "\n...[output preview truncated: shownBytes={shown_bytes} originalBytes={total_bytes}]"
-            );
-            sink.emit(json!({ "type":"tool.output", "taskId":task_id, "toolCallId":call_id, "stream":stream, "text":marker, "redacted":true, "originalBytes":total_bytes, "shownBytes":shown_bytes, "truncated":true, "at":now_iso() }));
-        }
-        if total_bytes > collected.len() {
-            collected.push_str(&format!(
-                "\n...[captured output truncated: storedBytes={} originalBytes={total_bytes}]",
-                collected.len()
-            ));
-        }
-        collected
-    }
-    let last_output_at = Arc::new(Mutex::new(TokioInstant::now()));
+
+    let stdout_capture = Arc::new(Mutex::new(StreamCapture::default()));
+    let stderr_capture = Arc::new(Mutex::new(StreamCapture::default()));
     let stdout_task = tokio::spawn(collect_stream(
         stdout,
         sink.clone(),
         session.task_id.clone(),
         call_id.to_owned(),
         "stdout",
-        last_output_at.clone(),
+        stdout_capture.clone(),
     ));
     let stderr_task = tokio::spawn(collect_stream(
         stderr,
@@ -205,59 +157,102 @@ pub(super) async fn command_tool(
         session.task_id.clone(),
         call_id.to_owned(),
         "stderr",
-        last_output_at.clone(),
+        stderr_capture.clone(),
     ));
     let deadline = TokioInstant::now() + Duration::from_millis(requested);
     let mut abort_poll = interval(Duration::from_millis(25));
     let mut timed_out = false;
-    let mut silent_timed_out = false;
     let mut aborted = false;
     let status = loop {
         tokio::select! {
             result = child.wait() => break result.map_err(|error| error.to_string())?,
-            _ = sleep_until(deadline) => { timed_out = true; terminate_command_tree(&mut child, pid).await; break child.wait().await.map_err(|error| error.to_string())?; },
+            _ = sleep_until(deadline) => {
+                timed_out = true;
+                terminate_command_tree(&mut child, pid).await;
+                break child.wait().await.map_err(|error| error.to_string())?;
+            }
             _ = abort_poll.tick() => {
                 if session.is_aborted() {
                     aborted = true;
                     terminate_command_tree(&mut child, pid).await;
                     break child.wait().await.map_err(|error| error.to_string())?;
                 }
-                let output_was_silent = last_output_at
-                    .lock()
-                    .map(|last_output_at| last_output_at.elapsed() >= COMMAND_SILENCE_TIMEOUT)
-                    .unwrap_or(true);
-                // A silent child can block steering even though the runner is still alive.
-                // Stop it after 30 seconds and return its captured log to the model as a tool failure.
-                if output_was_silent {
-                    silent_timed_out = true;
-                    terminate_command_tree(&mut child, pid).await;
-                    break child.wait().await.map_err(|error| error.to_string())?;
-                }
             }
         }
     };
-    let stdout = stdout_task.await.unwrap_or_default();
-    let stderr = stderr_task.await.unwrap_or_default();
+    // Wait for stream collectors so the process tree has settled before releasing the barrier.
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+    let stdout_stats = stdout_capture
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default();
+    let stderr_stats = stderr_capture
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default();
     let exit = status.code();
-    let success = status.success() && !timed_out && !silent_timed_out && !aborted;
-    let body = [
-        format!(
-            "exitCode={}",
-            exit.map_or_else(|| "unknown".into(), |value| value.to_string())
-        ),
-        stdout.trim().to_owned(),
-        stderr.trim().to_owned(),
-    ]
-    .into_iter()
-    .filter(|value| !value.is_empty())
-    .collect::<Vec<_>>()
-    .join("\n");
+    let success = status.success() && !timed_out && !aborted;
+    let original_bytes = stdout_stats
+        .original_bytes
+        .saturating_add(stderr_stats.original_bytes);
+    let captured_bytes = stdout_stats
+        .captured
+        .len()
+        .saturating_add(stderr_stats.captured.len());
+    let capture_truncated = stdout_stats.capture_truncated || stderr_stats.capture_truncated;
+    let mut spool = String::new();
+    if !stdout_stats.captured.is_empty() {
+        spool.push_str(&stdout_stats.captured);
+    }
+    if !stderr_stats.captured.is_empty() {
+        if !spool.is_empty() {
+            spool.push('\n');
+        }
+        spool.push_str(&stderr_stats.captured);
+    }
+    let context_hash = {
+        let mut store = session.context_store.lock().await;
+        store
+            .store(
+                call_id,
+                if program_id.is_empty() {
+                    "command"
+                } else {
+                    "run_program"
+                },
+                &redact_text(&command, 320),
+                &spool,
+                &spool,
+                "log",
+                "command_tail",
+            )
+            .ok()
+            .map(|entry| entry.hash)
+    };
+    let mut body_parts = vec![format!(
+        "exitCode={}",
+        exit.map_or_else(|| "unknown".into(), |value| value.to_string())
+    )];
+    body_parts.push(format!(
+        "capturedBytes={captured_bytes} originalBytes={original_bytes} captureTruncated={capture_truncated}"
+    ));
+    if let Some(hash) = &context_hash {
+        body_parts.push(format!("contextHash={hash}"));
+    }
+    if !stdout_stats.captured.trim().is_empty() {
+        body_parts.push(stdout_stats.captured.trim().to_owned());
+    }
+    if !stderr_stats.captured.trim().is_empty() {
+        body_parts.push(stderr_stats.captured.trim().to_owned());
+    }
+    let body = body_parts.join("\n");
     Ok(ToolResult {
-        title: redact_text(&command, 320),
-        output: body,
+        summary: redact_text(&command, 320),
+        content: body,
         status: if aborted {
             "aborted"
-        } else if silent_timed_out || timed_out {
+        } else if timed_out {
             "timeout"
         } else if success {
             "success"
@@ -265,10 +260,8 @@ pub(super) async fn command_tool(
             "runtime_error"
         }
         .into(),
-        error_code: if aborted {
+        code: if aborted {
             Some("aborted".into())
-        } else if silent_timed_out {
-            Some("process_silent_timeout".into())
         } else if timed_out {
             Some("process_timeout".into())
         } else if success {
@@ -278,8 +271,6 @@ pub(super) async fn command_tool(
         },
         error_message: if aborted {
             Some("Command was aborted.".into())
-        } else if silent_timed_out {
-            Some("Command stopped after 30 seconds without stdout or stderr output.".into())
         } else if timed_out {
             Some(format!("Command timed out after {requested} ms."))
         } else if success {
@@ -291,8 +282,144 @@ pub(super) async fn command_tool(
             ))
         },
         exit_code: exit,
-        details: None,
+        details: Some(json!({
+            "capturedBytes": captured_bytes,
+            "originalBytes": original_bytes,
+            "captureTruncated": capture_truncated,
+            "contextHash": context_hash,
+            "timeoutMs": requested,
+        })),
+        continuation: context_hash.map(|hash| json!({ "hash": hash })),
     })
+}
+
+#[derive(Clone, Default)]
+struct StreamCapture {
+    captured: String,
+    original_bytes: usize,
+    capture_truncated: bool,
+}
+
+async fn collect_stream<R: AsyncRead + Unpin>(
+    mut reader: R,
+    sink: EventSink,
+    task_id: String,
+    call_id: String,
+    stream: &'static str,
+    capture: Arc<Mutex<StreamCapture>>,
+) {
+    let mut buffer = vec![0u8; 8192];
+    let mut pending = String::new();
+    let mut shown_bytes = 0usize;
+    let mut last_emit = TokioInstant::now()
+        .checked_sub(Duration::from_millis(PROGRESS_COALESCE_MS))
+        .unwrap_or_else(TokioInstant::now);
+    let mut original_bytes = 0usize;
+
+    let flush = |pending: &mut String,
+                 shown_bytes: &mut usize,
+                 last_emit: &mut TokioInstant,
+                 original_bytes: usize,
+                 force: bool| {
+        if pending.is_empty() {
+            return;
+        }
+        if !force && last_emit.elapsed() < Duration::from_millis(PROGRESS_COALESCE_MS) {
+            return;
+        }
+        if *shown_bytes >= MAX_UI_OUTPUT_BYTES {
+            pending.clear();
+            return;
+        }
+        let text = std::mem::take(pending);
+        let mut end = text.len().min(MAX_UI_OUTPUT_BYTES - *shown_bytes);
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let shown = &text[..end];
+        if shown.is_empty() {
+            return;
+        }
+        *shown_bytes += shown.len();
+        *last_emit = TokioInstant::now();
+        sink.emit(json!({
+            "type":"tool.output",
+            "taskId":task_id,
+            "toolCallId":call_id,
+            "stream":stream,
+            "text":shown,
+            "redacted":true,
+            "originalBytes":original_bytes,
+            "shownBytes":*shown_bytes,
+            "truncated":false,
+            "at":now_iso()
+        }));
+    };
+
+    while let Ok(count) = reader.read(&mut buffer).await {
+        if count == 0 {
+            break;
+        }
+        let text = redact_stream_text(&String::from_utf8_lossy(&buffer[..count]), 64 * 1024);
+        if text.is_empty() {
+            continue;
+        }
+        if let Ok(mut state) = capture.lock() {
+            state.original_bytes = state.original_bytes.saturating_add(text.len());
+            append_tail(&mut state.captured, &text, MAX_CAPTURED_OUTPUT_BYTES);
+            state.capture_truncated = state.original_bytes > state.captured.len();
+            original_bytes = state.original_bytes;
+        }
+        pending.push_str(&text);
+        if pending.len() >= 1024
+            || last_emit.elapsed() >= Duration::from_millis(PROGRESS_COALESCE_MS)
+        {
+            flush(
+                &mut pending,
+                &mut shown_bytes,
+                &mut last_emit,
+                original_bytes,
+                false,
+            );
+        }
+    }
+    flush(
+        &mut pending,
+        &mut shown_bytes,
+        &mut last_emit,
+        original_bytes,
+        true,
+    );
+    if original_bytes > shown_bytes {
+        sink.emit(json!({
+            "type":"tool.output",
+            "taskId":task_id,
+            "toolCallId":call_id,
+            "stream":stream,
+            "text":format!("\n...[output preview truncated: shownBytes={shown_bytes} originalBytes={original_bytes}]"),
+            "redacted":true,
+            "originalBytes":original_bytes,
+            "shownBytes":shown_bytes,
+            "truncated":true,
+            "at":now_iso()
+        }));
+    }
+}
+
+fn append_tail(buffer: &mut String, chunk: &str, limit: usize) {
+    if chunk.is_empty() {
+        return;
+    }
+    buffer.push_str(chunk);
+    if buffer.len() <= limit {
+        return;
+    }
+    let mut start = buffer.len() - limit;
+    while start < buffer.len() && !buffer.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = buffer[start..].to_owned();
+    *buffer = tail;
 }
 
 fn protected_environment_name(name: &str) -> bool {
@@ -417,9 +544,27 @@ async fn terminate_command_tree(child: &mut tokio::process::Child, pid: Option<u
         unsafe {
             libc::kill(-(pid as i32), libc::SIGTERM);
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
         return;
     }
     #[cfg(not(unix))]
     let _ = pid;
     let _ = child.kill().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_tail;
+
+    #[test]
+    fn append_tail_keeps_newest_bytes() {
+        let mut buffer = String::new();
+        append_tail(&mut buffer, "abcdef", 4);
+        assert_eq!(buffer, "cdef");
+        append_tail(&mut buffer, "ghij", 4);
+        assert_eq!(buffer, "ghij");
+    }
 }

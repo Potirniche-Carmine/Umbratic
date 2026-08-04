@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,13 +24,19 @@ func TestProviderAddressRules(t *testing.T) {
 }
 
 func TestProviderChecksSelectedModel(t *testing.T) {
+	// A runtime that only lists models is not usable: the probes require it to
+	// stream and to emit a forced tool call.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"probe_ok\"}}]}}]}\ndata: [DONE]\n"))
+			return
+		}
 		_, _ = w.Write([]byte(`{"models":[{"name":"model-a"}]}`))
 	}))
 	defer server.Close()
 	cfg := config.DefaultVeil()
-	cfg.Protocol, cfg.ProviderBaseURL, cfg.Model = "ollama", server.URL, "model-a"
+	cfg.ProviderBaseURL, cfg.Model = server.URL, "model-a"
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := TestProvider(ctx, cfg); err != nil {
@@ -43,7 +50,7 @@ func TestListModelsReturnsUniqueSortedRuntimeModels(t *testing.T) {
 		_, _ = w.Write([]byte(`{"models":[{"name":"ornith:9b","model":"ornith:9b"},{"name":"alpha:latest"}]}`))
 	}))
 	defer server.Close()
-	models, err := ListModels(t.Context(), "ollama", server.URL)
+	models, err := ListModels(t.Context(), server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}

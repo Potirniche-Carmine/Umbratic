@@ -70,8 +70,7 @@ fn command_safety_evaluation_stays_below_one_millisecond_p95() {
     let mut samples = Vec::with_capacity(1_000);
     for index in 0..1_000 {
         let started = Instant::now();
-        let decision = evaluate_command(commands[index % commands.len()], Path::new("/workspace"));
-        assert_eq!(decision.schema_version, 1);
+        let _ = evaluate_command(commands[index % commands.len()], Path::new("/workspace"));
         samples.push(started.elapsed());
     }
     let measured = p95(samples);

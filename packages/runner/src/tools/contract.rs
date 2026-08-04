@@ -1,205 +1,53 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use serde_json::{Map, Value, json};
+use serde_json::json;
 
-use super::{
-    ToolCall,
-    request::{ToolRequest, parse_arguments},
-};
-use crate::{policy::redact_text, session::Session};
+use super::{ToolCall, catalog::ContractViolation, request::ToolRequest, surface::tool_surface};
+use crate::session::Session;
 
+/// Validates a whole parallel batch before any call in it executes. Per-call
+/// argument checking is the generated validator in `catalog.rs`, reached through
+/// `ToolRequest::parse`; this layer adds only the batch-level rules.
 pub(crate) fn validate_tool_call_batch(
     session: &Session,
     calls: &[ToolCall],
-    declared_tools: &[Value],
-) -> Result<(), String> {
+) -> Result<(), ContractViolation> {
     const MAX_CALLS_PER_RESPONSE: usize = 16;
     if calls.is_empty() {
         return Ok(());
     }
+    let surface = tool_surface(session);
+    let batch_violation = |expected: String| ContractViolation {
+        code: "invalid_arguments",
+        tool: "batch".to_owned(),
+        field: None,
+        expected,
+        allowed_fields: Vec::new(),
+    };
     if calls.len() > MAX_CALLS_PER_RESPONSE {
-        return Err(format!(
-            "A model response can contain at most {MAX_CALLS_PER_RESPONSE} tool calls."
-        ));
+        return Err(batch_violation(format!(
+            "at most {MAX_CALLS_PER_RESPONSE} tool calls in one response"
+        )));
     }
-    let declared = declared_tools
-        .iter()
-        .filter_map(|tool| {
-            let name = tool.get("function")?.get("name")?.as_str()?;
-            Some((name.to_owned(), tool))
-        })
-        .collect::<BTreeMap<_, _>>();
     let mut ids = BTreeSet::new();
     let mut signatures = BTreeSet::new();
     for call in calls {
         if !ids.insert(call.id.clone()) {
-            return Err(format!("Duplicate tool call id: {}.", call.id));
+            return Err(batch_violation("a unique id for each tool call".to_owned()));
         }
-        let Some(declaration) = declared.get(&call.name) else {
-            return Err(format!(
-                "Tool {} is not declared for this response.",
-                redact_text(&call.name, 80)
-            ));
-        };
-        let arguments = parse_arguments(&call.arguments)
-            .map_err(|error| format!("Invalid {} call: {error}", call.name))?;
-        validate_declared_arguments(declaration, &arguments)
-            .map_err(|error| format!("Invalid {} call: {error}", call.name))?;
-        ToolRequest::parse(&call.name, &call.arguments, &session.config.cwd)
-            .map_err(|error| format!("Invalid {} call: {error}", call.name))?;
-        if call.name == "run_program" {
-            let program_id = arguments
-                .get("programId")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !session.config.approved_executables.contains_key(program_id) {
-                return Err(format!(
-                    "run_program programId {} is not declared for this response.",
-                    redact_text(program_id, 80)
-                ));
-            }
-        }
-        let signature = json!({"name":call.name,"arguments":arguments}).to_string();
+        let request = ToolRequest::parse(
+            &call.name,
+            &call.arguments,
+            &session.config.cwd,
+            surface.as_ref(),
+        )?;
+        let signature = json!({"name": call.name, "arguments": request.arguments()}).to_string();
         if !signatures.insert(signature) {
-            return Err(format!(
-                "The response contains the same {} tool call more than once.",
+            return Err(batch_violation(format!(
+                "no repeated {} call in the same response",
                 call.name
-            ));
+            )));
         }
-    }
-    Ok(())
-}
-
-pub(super) fn validate_declared_arguments(
-    declaration: &Value,
-    arguments: &Map<String, Value>,
-) -> Result<(), String> {
-    let parameters = declaration
-        .get("function")
-        .and_then(|function| function.get("parameters"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| "declared parameters are not an object schema".to_owned())?;
-    let properties = parameters
-        .get("properties")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "declared properties are not an object".to_owned())?;
-    let required = parameters
-        .get("required")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "declared required fields are not an array".to_owned())?;
-
-    for field in required {
-        let name = field
-            .as_str()
-            .ok_or_else(|| "a declared required field is not a string".to_owned())?;
-        if !arguments.contains_key(name) {
-            return Err(format!("missing required argument {name}"));
-        }
-    }
-    for (name, value) in arguments {
-        let schema = properties
-            .get(name)
-            .ok_or_else(|| format!("received undeclared argument {name}"))?;
-        validate_value(name, value, schema)?;
-    }
-    Ok(())
-}
-
-fn validate_value(path: &str, value: &Value, schema: &Value) -> Result<(), String> {
-    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
-        && !allowed.contains(value)
-    {
-        return Err(format!("{path} is not one of the declared values"));
-    }
-    match schema.get("type").and_then(Value::as_str) {
-        Some("string") => validate_string(path, value, schema),
-        Some("integer") => validate_integer(path, value, schema),
-        Some("boolean") if value.is_boolean() => Ok(()),
-        Some("boolean") => Err(format!("{path} must be a boolean")),
-        Some("array") => validate_array(path, value, schema),
-        Some("object") if value.is_object() => Ok(()),
-        Some("object") => Err(format!("{path} must be an object")),
-        Some(kind) => Err(format!("{path} uses unsupported declared type {kind}")),
-        None => Err(format!("{path} has no declared type")),
-    }
-}
-
-fn validate_string(path: &str, value: &Value, schema: &Value) -> Result<(), String> {
-    let text = value
-        .as_str()
-        .ok_or_else(|| format!("{path} must be a string"))?;
-    let length = text.chars().count() as u64;
-    if schema
-        .get("minLength")
-        .and_then(Value::as_u64)
-        .is_some_and(|minimum| length < minimum)
-    {
-        return Err(format!("{path} is shorter than the declared minimum"));
-    }
-    if schema
-        .get("maxLength")
-        .and_then(Value::as_u64)
-        .is_some_and(|maximum| length > maximum)
-    {
-        return Err(format!("{path} exceeds the declared maximum length"));
-    }
-    Ok(())
-}
-
-fn validate_integer(path: &str, value: &Value, schema: &Value) -> Result<(), String> {
-    let number = value
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| value.as_u64().map(i128::from))
-        .ok_or_else(|| format!("{path} must be an integer"))?;
-    if schema
-        .get("minimum")
-        .and_then(integer_schema_value)
-        .is_some_and(|minimum| number < minimum)
-    {
-        return Err(format!("{path} is below the declared minimum"));
-    }
-    if schema
-        .get("maximum")
-        .and_then(integer_schema_value)
-        .is_some_and(|maximum| number > maximum)
-    {
-        return Err(format!("{path} exceeds the declared maximum"));
-    }
-    Ok(())
-}
-
-fn integer_schema_value(value: &Value) -> Option<i128> {
-    value
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| value.as_u64().map(i128::from))
-}
-
-fn validate_array(path: &str, value: &Value, schema: &Value) -> Result<(), String> {
-    let values = value
-        .as_array()
-        .ok_or_else(|| format!("{path} must be an array"))?;
-    let length = values.len() as u64;
-    if schema
-        .get("minItems")
-        .and_then(Value::as_u64)
-        .is_some_and(|minimum| length < minimum)
-    {
-        return Err(format!("{path} has fewer than the declared minimum items"));
-    }
-    if schema
-        .get("maxItems")
-        .and_then(Value::as_u64)
-        .is_some_and(|maximum| length > maximum)
-    {
-        return Err(format!("{path} exceeds the declared maximum items"));
-    }
-    let Some(item_schema) = schema.get("items") else {
-        return Ok(());
-    };
-    for (index, item) in values.iter().enumerate() {
-        validate_value(&format!("{path}[{index}]"), item, item_schema)?;
     }
     Ok(())
 }
@@ -208,68 +56,110 @@ fn validate_array(path: &str, value: &Value, schema: &Value) -> Result<(), Strin
 mod tests {
     use serde_json::json;
 
+    use super::super::catalog::{TOOLS, definition};
     use super::*;
 
-    fn declaration(properties: Value, required: Value) -> Value {
-        json!({
-            "function": {
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                    "additionalProperties": false
-                }
-            }
-        })
+    fn surface_for(directory: &std::path::Path) -> std::sync::Arc<super::super::ToolSurface> {
+        tool_surface(&crate::session::test_session(directory))
     }
 
     #[test]
-    fn exact_schema_validation_rejects_unknown_missing_and_wrong_types() {
-        let tool = declaration(
-            json!({
-                "name":{"type":"string","minLength":1},
-                "count":{"type":"integer","minimum":1,"maximum":3}
-            }),
-            json!(["name"]),
-        );
+    fn generated_validation_rejects_unknown_missing_and_out_of_range_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        let surface = surface_for(directory.path());
+        for invalid in [
+            json!({}),                               // missing required path
+            json!({"path": "a.rs", "extra": true}),  // undeclared field
+            json!({"path": 7}),                      // wrong type
+            json!({"path": "a.rs", "limit": 0}),     // below declared minimum
+            json!({"path": "a.rs", "limit": 2_001}), // above the real maximum
+        ] {
+            assert!(
+                surface
+                    .validate("read", invalid.as_object().unwrap())
+                    .is_err(),
+                "read accepted {invalid}"
+            );
+        }
         assert!(
-            validate_declared_arguments(&tool, json!({"name":"ok","count":2}).as_object().unwrap())
+            surface
+                .validate(
+                    "read",
+                    json!({"path": "a.rs", "limit": 2_000}).as_object().unwrap()
+                )
                 .is_ok()
         );
-        for invalid in [
-            json!({"count":2}),
-            json!({"name":"ok","extra":true}),
-            json!({"name":7}),
-            json!({"name":"ok","count":0}),
-            json!({"name":"ok","count":4}),
-        ] {
-            assert!(validate_declared_arguments(&tool, invalid.as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn every_declared_limit_is_enforced_by_the_generated_validator() {
+        // The schema and the validator come from one definition, so a schema that
+        // declares a bound the executor does not enforce cannot exist.
+        let directory = tempfile::tempdir().unwrap();
+        let surface = surface_for(directory.path());
+        for spec in surface.specs() {
+            let name = spec["function"]["name"].as_str().unwrap();
+            let tool = definition(name).expect("declared tool is in the catalog");
+            let properties = &spec["function"]["parameters"]["properties"];
+            for field in tool.fields {
+                assert!(
+                    properties.get(field.name).is_some(),
+                    "{name}.{} is validated but not declared",
+                    field.name
+                );
+            }
+            let declared = properties.as_object().unwrap().len();
+            assert_eq!(
+                declared,
+                tool.fields.len(),
+                "{name} declares fields the validator does not know"
+            );
         }
     }
 
     #[test]
-    fn exact_schema_validation_enforces_enums_and_array_items() {
-        let tool = declaration(
-            json!({
-                "mode":{"type":"string","enum":["one","two"]},
-                "args":{"type":"array","maxItems":2,"items":{"type":"string","maxLength":4}}
-            }),
-            json!(["mode"]),
+    fn the_catalog_declares_each_tool_once() {
+        let mut names = BTreeSet::new();
+        for tool in TOOLS {
+            assert!(names.insert(tool.name), "{} is defined twice", tool.name);
+        }
+    }
+
+    #[test]
+    fn a_batch_rejects_duplicate_ids_repeats_and_oversize() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = crate::session::test_session(directory.path());
+        let call = |id: &str, path: &str| ToolCall {
+            id: id.into(),
+            name: "read".into(),
+            arguments: json!({"path": path}),
+            index: 0,
+        };
+        assert!(
+            validate_tool_call_batch(&session, &[call("a", "one.rs"), call("b", "two.rs")]).is_ok()
         );
         assert!(
-            validate_declared_arguments(
-                &tool,
-                json!({"mode":"one","args":["a","bc"]}).as_object().unwrap()
-            )
-            .is_ok()
+            validate_tool_call_batch(&session, &[call("a", "one.rs"), call("a", "two.rs")])
+                .is_err()
         );
-        for invalid in [
-            json!({"mode":"three"}),
-            json!({"mode":"one","args":"a"}),
-            json!({"mode":"one","args":["a","b","c"]}),
-            json!({"mode":"one","args":["12345"]}),
-        ] {
-            assert!(validate_declared_arguments(&tool, invalid.as_object().unwrap()).is_err());
-        }
+        assert!(
+            validate_tool_call_batch(&session, &[call("a", "one.rs"), call("b", "one.rs")])
+                .is_err()
+        );
+        let oversize = (0..17)
+            .map(|index| call(&format!("call-{index}"), &format!("file-{index}.rs")))
+            .collect::<Vec<_>>();
+        assert!(validate_tool_call_batch(&session, &oversize).is_err());
+    }
+
+    #[test]
+    fn an_undeclared_tool_is_rejected_before_execution() {
+        let directory = tempfile::tempdir().unwrap();
+        let surface = surface_for(directory.path());
+        assert!(
+            surface
+                .validate("search", json!({"query": "anything"}).as_object().unwrap())
+                .is_err()
+        );
     }
 }

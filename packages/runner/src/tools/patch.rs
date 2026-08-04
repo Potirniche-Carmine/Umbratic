@@ -12,11 +12,22 @@ use crate::{
     session::Session,
 };
 
+const MAX_PATCH_DIFF_BYTES: usize = 16 * 1024;
+
+type PatchLine = (String, &'static str);
+type HunkLine = (char, String, &'static str);
+
 #[derive(Debug)]
 enum PatchOperation {
-    Add(String, Vec<String>),
+    Add(String, Vec<PatchLine>),
     Delete(String),
-    Update(String, Option<String>, Vec<Vec<(char, String)>>),
+    Update(String, Option<String>, Vec<Vec<HunkLine>>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SourceSnapshot {
+    Missing,
+    Text(String),
 }
 
 #[derive(Debug)]
@@ -26,14 +37,57 @@ struct PlannedChange {
 }
 
 #[derive(Debug)]
+struct SnapshotRecord {
+    path: PathBuf,
+    relative: String,
+    expected: SourceSnapshot,
+}
+
+#[derive(Debug)]
+pub(super) struct PatchEffect {
+    pub(super) path: String,
+    pub(super) action: &'static str,
+    pub(super) summary: String,
+}
+
+#[derive(Debug)]
+pub(super) struct PatchCommitResult {
+    pub(super) effects: Vec<PatchEffect>,
+    pub(super) diff: String,
+}
+
+#[derive(Debug)]
+pub(super) enum PatchCommitError {
+    Failed { message: String },
+    RollbackFailed { message: String },
+}
+
+#[derive(Debug)]
 pub(super) struct PatchTransaction {
     changes: Vec<PlannedChange>,
     summaries: Vec<String>,
+    effects: Vec<PatchEffect>,
+    snapshots: Vec<SnapshotRecord>,
+    before_contents: Vec<(String, Option<String>)>,
+    after_contents: Vec<(String, Option<String>)>,
 }
 
 impl PatchTransaction {
     pub(super) fn summaries(&self) -> &[String] {
         &self.summaries
+    }
+
+    pub(super) fn revalidate(&self) -> Result<(), String> {
+        for snapshot in &self.snapshots {
+            let current = read_snapshot(&snapshot.path)?;
+            if current != snapshot.expected {
+                return Err(format!(
+                    "Patch source changed externally for {}. Re-read and retry; no mutation was applied.",
+                    snapshot.relative
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn set_change(&mut self, path: PathBuf, content: Option<String>) {
@@ -49,6 +103,29 @@ impl PatchTransaction {
             .iter()
             .find(|change| change.path == path)
             .map(|change| &change.content)
+    }
+
+    fn record_snapshot(
+        &mut self,
+        path: PathBuf,
+        relative: String,
+        expected: SourceSnapshot,
+    ) -> Result<(), String> {
+        if self
+            .snapshots
+            .iter()
+            .any(|snapshot| snapshot.path == path && snapshot.expected != expected)
+        {
+            return Err(format!("Patch snapshot conflict for {relative}"));
+        }
+        if !self.snapshots.iter().any(|snapshot| snapshot.path == path) {
+            self.snapshots.push(SnapshotRecord {
+                path,
+                relative,
+                expected,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -68,39 +145,129 @@ struct CommitRecord {
     installed: bool,
 }
 
-pub(super) fn normalized_line_endings(value: &str) -> String {
-    value.replace("\r\n", "\n").replace('\r', "\n")
+/// One unique-or-reject match, byte-exact and shared by `edit` and `apply_patch`.
+/// Neither tool normalizes line endings: `read` hands back the file's own bytes,
+/// so a verbatim copy matches on LF, CRLF, and mixed-ending files alike.
+pub(super) enum UniqueMatch {
+    Missing,
+    Ambiguous(usize),
 }
 
-fn preferred_line_ending(value: &str) -> &'static str {
-    if value.contains("\r\n") {
-        "\r\n"
-    } else if value.contains('\r') {
-        "\r"
-    } else {
-        "\n"
+pub(super) fn unique_match(current: &str, old: &str) -> Result<usize, UniqueMatch> {
+    let matches = current.match_indices(old).collect::<Vec<_>>();
+    match matches.len() {
+        1 => Ok(matches[0].0),
+        0 => Err(UniqueMatch::Missing),
+        count => Err(UniqueMatch::Ambiguous(count)),
     }
 }
 
-fn with_line_endings(value: &str, line_ending: &str) -> String {
-    normalized_line_endings(value).replace('\n', line_ending)
+pub(super) fn replace_unique(current: &str, old: &str, new: &str) -> Result<String, UniqueMatch> {
+    let start = unique_match(current, old)?;
+    let mut updated = String::with_capacity(current.len() - old.len() + new.len());
+    updated.push_str(&current[..start]);
+    updated.push_str(new);
+    updated.push_str(&current[start + old.len()..]);
+    Ok(updated)
 }
 
-pub(super) fn replace_text_block(current: &str, old: &str, new: &str) -> Option<String> {
-    let line_ending = preferred_line_ending(current);
-    let replacement = with_line_endings(new, line_ending);
-    if current.contains(old) {
-        return Some(current.replacen(old, &replacement, 1));
+pub(super) fn replace_unique_hunk(current: &str, old: &str, new: &str) -> Result<String, String> {
+    if old.is_empty() {
+        return Err("Patch hunk was empty".into());
     }
-    let old = with_line_endings(old, line_ending);
-    current
-        .contains(&old)
-        .then(|| current.replacen(&old, &replacement, 1))
+    replace_unique(current, old, new).map_err(|failure| match failure {
+        UniqueMatch::Missing => "Patch hunk was not found".to_owned(),
+        UniqueMatch::Ambiguous(count) => {
+            format!("Patch hunk matched {count} times; each hunk must be unique")
+        }
+    })
+}
+
+/// Splits a patch document into `(content, terminator)` pairs without rewriting a
+/// single byte, so hunk bodies keep the line endings the patch was written with.
+fn patch_lines(patch: &str) -> Vec<(&str, &'static str)> {
+    let mut lines = Vec::new();
+    let mut rest = patch;
+    while !rest.is_empty() {
+        match rest.find('\n') {
+            Some(index) => {
+                let (line, remainder) = rest.split_at(index + 1);
+                let content = line.strip_suffix('\n').unwrap_or(line);
+                let (content, terminator) = match content.strip_suffix('\r') {
+                    Some(trimmed) => (trimmed, "\r\n"),
+                    None => (content, "\n"),
+                };
+                lines.push((content, terminator));
+                rest = remainder;
+            }
+            None => {
+                lines.push((rest, ""));
+                rest = "";
+            }
+        }
+    }
+    lines
+}
+
+/// Concatenates parsed patch lines with their own terminators, dropping the last
+/// one so the result stays an exact substring of a file whose final line is
+/// unterminated.
+fn joined_lines<'a>(lines: impl Iterator<Item = &'a (String, &'a str)>) -> String {
+    let collected: Vec<_> = lines.collect();
+    let mut joined = String::new();
+    for (index, (text, _)) in collected.iter().enumerate() {
+        if index > 0 {
+            joined.push_str(collected[index - 1].1);
+        }
+        joined.push_str(text);
+    }
+    joined
+}
+
+pub(super) fn bounded_unified_diff(path: &str, before: &str, after: &str, limit: usize) -> String {
+    let before_lines = before.lines().collect::<Vec<_>>();
+    let after_lines = after.lines().collect::<Vec<_>>();
+    let mut body = format!("--- a/{path}\n+++ b/{path}\n");
+    let mut index = 0usize;
+    let mut before_line = 1usize;
+    let mut after_line = 1usize;
+    while index < before_lines.len() || index < after_lines.len() {
+        let left = before_lines.get(index).copied();
+        let right = after_lines.get(index).copied();
+        if left == right {
+            index += 1;
+            before_line += 1;
+            after_line += 1;
+            continue;
+        }
+        let hunk = format!(
+            "@@ -{before_line},1 +{after_line},1 @@\n{}{}",
+            left.map(|line| format!("-{line}\n")).unwrap_or_default(),
+            right.map(|line| format!("+{line}\n")).unwrap_or_default()
+        );
+        if body.len() + hunk.len() > limit {
+            body.push_str(&format!("...[diff truncated at {limit} bytes]\n"));
+            break;
+        }
+        body.push_str(&hunk);
+        index += 1;
+        if left.is_some() {
+            before_line += 1;
+        }
+        if right.is_some() {
+            after_line += 1;
+        }
+    }
+    body
 }
 
 fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
-    let normalized = normalized_line_endings(patch);
-    let mut lines: Vec<_> = normalized.lines().collect();
+    let mut raw = patch_lines(patch);
+    if raw.last().map(|(content, _)| content.is_empty()) == Some(true) {
+        raw.pop();
+    }
+    let mut lines: Vec<&str> = raw.iter().map(|(content, _)| *content).collect();
+    let mut endings: Vec<&'static str> = raw.iter().map(|(_, terminator)| *terminator).collect();
     if lines.first() != Some(&"*** Begin Patch") {
         return Err("Patch must start with *** Begin Patch".into());
     }
@@ -109,6 +276,8 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
     }
     lines.remove(0);
     lines.pop();
+    endings.remove(0);
+    endings.pop();
     let mut operations = Vec::new();
     let mut index = 0;
     while index < lines.len() {
@@ -120,7 +289,7 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
                 let Some(value) = lines[index].strip_prefix('+') else {
                     return Err(format!("Add File lines must start with + in {path}"));
                 };
-                body.push(value.to_owned());
+                body.push((value.to_owned(), endings[index]));
                 index += 1;
             }
             if body.is_empty() {
@@ -165,7 +334,11 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
                 if !matches!(marker, ' ' | '+' | '-') {
                     return Err(format!("Invalid patch line in {path}: {value}"));
                 }
-                current.push((marker, value[marker.len_utf8()..].to_owned()));
+                current.push((
+                    marker,
+                    value[marker.len_utf8()..].to_owned(),
+                    endings[index],
+                ));
                 index += 1;
             }
             if !current.is_empty() {
@@ -182,15 +355,31 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
     Ok(operations)
 }
 
+fn read_snapshot(path: &Path) -> Result<SourceSnapshot, String> {
+    if !path.exists() {
+        return Ok(SourceSnapshot::Missing);
+    }
+    Ok(SourceSnapshot::Text(ensure_text_file(path)?))
+}
+
 pub(super) fn plan_patch(session: &Session, patch: &str) -> Result<PatchTransaction, String> {
     let mut transaction = PatchTransaction {
         changes: Vec::new(),
         summaries: Vec::new(),
+        effects: Vec::new(),
+        snapshots: Vec::new(),
+        before_contents: Vec::new(),
+        after_contents: Vec::new(),
     };
     for operation in parse_patch(patch)? {
         match operation {
             PatchOperation::Add(path, lines) => {
                 let (target, relative) = resolve_workspace_path(&session.config.cwd, &path)?;
+                transaction.record_snapshot(
+                    target.clone(),
+                    relative.clone(),
+                    SourceSnapshot::Missing,
+                )?;
                 if transaction
                     .planned_content(&target)
                     .and_then(Option::as_ref)
@@ -199,16 +388,47 @@ pub(super) fn plan_patch(session: &Session, patch: &str) -> Result<PatchTransact
                 {
                     return Err(format!("Patch target already exists: {relative}"));
                 }
-                transaction.set_change(target, Some(lines.join("\n")));
+                let content = joined_lines(lines.iter());
+                transaction.before_contents.push((relative.clone(), None));
+                transaction
+                    .after_contents
+                    .push((relative.clone(), Some(content.clone())));
+                transaction.set_change(target, Some(content));
                 transaction.summaries.push(format!("added {relative}"));
+                transaction.effects.push(PatchEffect {
+                    path: relative,
+                    action: "added",
+                    summary: "added".into(),
+                });
             }
             PatchOperation::Delete(path) => {
                 let (target, relative) = resolve_workspace_path(&session.config.cwd, &path)?;
-                if !target.exists() && transaction.planned_content(&target).is_none() {
-                    return Err(format!("Patch delete target was not found: {relative}"));
-                }
+                let existing = match transaction.planned_content(&target) {
+                    Some(Some(value)) => value.clone(),
+                    Some(None) => {
+                        return Err(format!("Patch delete target was not found: {relative}"));
+                    }
+                    None => {
+                        let content = ensure_text_file(&target)?;
+                        transaction.record_snapshot(
+                            target.clone(),
+                            relative.clone(),
+                            SourceSnapshot::Text(content.clone()),
+                        )?;
+                        content
+                    }
+                };
+                transaction
+                    .before_contents
+                    .push((relative.clone(), Some(existing)));
+                transaction.after_contents.push((relative.clone(), None));
                 transaction.set_change(target, None);
                 transaction.summaries.push(format!("deleted {relative}"));
+                transaction.effects.push(PatchEffect {
+                    path: relative.clone(),
+                    action: "deleted",
+                    summary: format!("deleted {relative}"),
+                });
             }
             PatchOperation::Update(path, move_to, hunks) => {
                 let (target, relative) = resolve_workspace_path(&session.config.cwd, &path)?;
@@ -217,66 +437,138 @@ pub(super) fn plan_patch(session: &Session, patch: &str) -> Result<PatchTransact
                     Some(None) => {
                         return Err(format!("Patch update target was not found: {relative}"));
                     }
-                    None => ensure_text_file(&target)?,
+                    None => {
+                        let content = ensure_text_file(&target)?;
+                        transaction.record_snapshot(
+                            target.clone(),
+                            relative.clone(),
+                            SourceSnapshot::Text(content.clone()),
+                        )?;
+                        content
+                    }
                 };
+                let before = content.clone();
                 for hunk in hunks {
-                    let old = hunk
+                    let kept: Vec<PatchLine> = hunk
                         .iter()
-                        .filter(|(kind, _)| *kind != '+')
-                        .map(|(_, line)| line.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let new = hunk
+                        .filter(|(kind, _, _)| *kind != '+')
+                        .map(|(_, line, terminator)| (line.clone(), *terminator))
+                        .collect();
+                    let replacement: Vec<PatchLine> = hunk
                         .iter()
-                        .filter(|(kind, _)| *kind != '-')
-                        .map(|(_, line)| line.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                        .filter(|(kind, _, _)| *kind != '-')
+                        .map(|(_, line, terminator)| (line.clone(), *terminator))
+                        .collect();
+                    let old = joined_lines(kept.iter());
+                    let new = joined_lines(replacement.iter());
                     if old == new {
                         continue;
                     }
-                    if old.is_empty() {
-                        return Err(format!("Patch hunk was not found in {relative}"));
-                    }
-                    content = replace_text_block(&content, &old, &new)
-                        .ok_or_else(|| format!("Patch hunk was not found in {relative}"))?;
+                    content = replace_unique_hunk(&content, &old, &new)
+                        .map_err(|error| format!("{error} in {relative}"))?;
                 }
                 if let Some(destination) = move_to {
                     let (moved, moved_relative) =
                         resolve_workspace_path(&session.config.cwd, &destination)?;
+                    transaction.record_snapshot(
+                        moved.clone(),
+                        moved_relative.clone(),
+                        SourceSnapshot::Missing,
+                    )?;
                     if moved != target
                         && (moved.exists() || transaction.planned_content(&moved).is_some())
                     {
                         return Err(format!("Patch target already exists: {moved_relative}"));
                     }
+                    transaction
+                        .before_contents
+                        .push((relative.clone(), Some(before)));
+                    transaction.after_contents.push((relative.clone(), None));
+                    transaction
+                        .before_contents
+                        .push((moved_relative.clone(), None));
+                    transaction
+                        .after_contents
+                        .push((moved_relative.clone(), Some(content.clone())));
                     transaction.set_change(target, None);
                     transaction.set_change(moved, Some(content));
                     transaction
                         .summaries
                         .push(format!("renamed {relative} -> {moved_relative}"));
+                    transaction.effects.push(PatchEffect {
+                        path: moved_relative.clone(),
+                        action: "renamed",
+                        summary: format!("renamed {relative} -> {moved_relative}"),
+                    });
                 } else {
+                    transaction
+                        .before_contents
+                        .push((relative.clone(), Some(before)));
+                    transaction
+                        .after_contents
+                        .push((relative.clone(), Some(content.clone())));
                     transaction.set_change(target, Some(content));
                     transaction.summaries.push(format!("modified {relative}"));
+                    transaction.effects.push(PatchEffect {
+                        path: relative.clone(),
+                        action: "modified",
+                        summary: format!("modified {relative}"),
+                    });
                 }
             }
+        }
+    }
+    // Fix effect summaries to include path for add
+    for effect in &mut transaction.effects {
+        if effect.action == "added" && effect.summary == "added" {
+            effect.summary = format!("added {}", effect.path);
         }
     }
     Ok(transaction)
 }
 
-pub(super) fn commit_patch(root: &Path, transaction: PatchTransaction) -> Result<(), String> {
-    commit_patch_with_hook(root, transaction, |_| Ok(()))
+pub(super) fn commit_patch(
+    root: &Path,
+    transaction: PatchTransaction,
+) -> Result<PatchCommitResult, PatchCommitError> {
+    let effects = transaction.effects;
+    let mut diff = String::new();
+    for ((path, before), (_, after)) in transaction
+        .before_contents
+        .iter()
+        .zip(transaction.after_contents.iter())
+    {
+        let before_text = before.as_deref().unwrap_or("");
+        let after_text = after.as_deref().unwrap_or("");
+        if before_text == after_text {
+            continue;
+        }
+        let chunk = bounded_unified_diff(path, before_text, after_text, MAX_PATCH_DIFF_BYTES);
+        if diff.len() + chunk.len() > MAX_PATCH_DIFF_BYTES {
+            diff.push_str(&format!(
+                "...[patch diff truncated at {MAX_PATCH_DIFF_BYTES} bytes]\n"
+            ));
+            break;
+        }
+        if !diff.is_empty() {
+            diff.push('\n');
+        }
+        diff.push_str(&chunk);
+    }
+    commit_patch_with_hook(root, transaction.changes, |_| Ok(()))?;
+    Ok(PatchCommitResult { effects, diff })
 }
 
 fn commit_patch_with_hook<F>(
     root: &Path,
-    transaction: PatchTransaction,
+    changes: Vec<PlannedChange>,
     mut before_step: F,
-) -> Result<(), String>
+) -> Result<(), PatchCommitError>
 where
     F: FnMut(PatchCommitStep) -> Result<(), String>,
 {
-    let (changes, directories) = validate_transaction(root, transaction.changes)?;
+    let (changes, directories) = validate_transaction(root, changes)
+        .map_err(|message| PatchCommitError::Failed { message })?;
     let mut created_directories = Vec::new();
     let mut records = changes
         .iter()
@@ -293,7 +585,9 @@ where
             .and_then(|_| fs::create_dir(directory).map_err(|error| error.to_string()))
         {
             cleanup_staging(&records, &created_directories);
-            return Err(format!("Patch staging failed: {error}"));
+            return Err(PatchCommitError::Failed {
+                message: format!("Patch staging failed: {error}"),
+            });
         }
         created_directories.push(directory.clone());
     }
@@ -320,7 +614,9 @@ where
             Ok(())
         }) {
             cleanup_staging(&records, &created_directories);
-            return Err(format!("Patch staging failed: {error}"));
+            return Err(PatchCommitError::Failed {
+                message: format!("Patch staging failed: {error}"),
+            });
         }
     }
 
@@ -329,14 +625,18 @@ where
         if let Err(error) = result {
             let rollback_errors = rollback(&mut records, &created_directories);
             return if rollback_errors.is_empty() {
-                Err(format!(
-                    "Patch commit failed and all changes were rolled back: {error}"
-                ))
+                Err(PatchCommitError::Failed {
+                    message: format!(
+                        "Patch commit failed and all changes were rolled back: {error}"
+                    ),
+                })
             } else {
-                Err(format!(
-                    "Patch commit failed: {error}. Rollback also failed: {}",
-                    rollback_errors.join("; ")
-                ))
+                Err(PatchCommitError::RollbackFailed {
+                    message: format!(
+                        "Patch commit failed: {error}. Rollback also failed: {}",
+                        rollback_errors.join("; ")
+                    ),
+                })
             };
         }
     }
@@ -547,6 +847,13 @@ mod tests {
     }
 
     #[test]
+    fn unique_hunk_rejects_ambiguous_matches() {
+        let current = "alpha\nalpha\n";
+        let error = replace_unique_hunk(current, "alpha", "beta").unwrap_err();
+        assert!(error.contains("matched 2 times"));
+    }
+
+    #[test]
     fn every_target_mutation_failure_rolls_back_the_transaction() {
         let failure_steps = [
             PatchCommitStep::PreserveOriginal(0),
@@ -560,7 +867,7 @@ mod tests {
             let directory = fixture();
             let session = crate::session::test_session(directory.path());
             let transaction = plan_patch(&session, COMPLEX_PATCH).unwrap();
-            let result = commit_patch_with_hook(directory.path(), transaction, |step| {
+            let result = commit_patch_with_hook(directory.path(), transaction.changes, |step| {
                 if step == failure_step {
                     Err(format!("injected failure at {step:?}"))
                 } else {
@@ -580,7 +887,7 @@ mod tests {
         let directory = fixture();
         let session = crate::session::test_session(directory.path());
         let transaction = plan_patch(&session, COMPLEX_PATCH).unwrap();
-        let result = commit_patch_with_hook(directory.path(), transaction, |step| {
+        let result = commit_patch_with_hook(directory.path(), transaction.changes, |step| {
             if step == PatchCommitStep::StageWrite(2) {
                 Err("injected staged write failure".into())
             } else {
@@ -596,7 +903,7 @@ mod tests {
         let directory = fixture();
         let session = crate::session::test_session(directory.path());
         let transaction = plan_patch(&session, COMPLEX_PATCH).unwrap();
-        let result = commit_patch_with_hook(directory.path(), transaction, |step| {
+        let result = commit_patch_with_hook(directory.path(), transaction.changes, |step| {
             if step == PatchCommitStep::CreateDirectory(0) {
                 Err("injected directory creation failure".into())
             } else {

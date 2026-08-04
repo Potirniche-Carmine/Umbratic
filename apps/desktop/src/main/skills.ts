@@ -46,7 +46,6 @@ type SkillManifestEntry = {
 };
 
 type SkillManifest = {
-  version: 1;
   skills: Record<string, SkillManifestEntry>;
 };
 
@@ -122,8 +121,8 @@ function manifestPath(directory: string): string {
 function readSkillManifest(directory: string): SkillManifest {
   try {
     const parsed = JSON.parse(fs.readFileSync(manifestPath(directory), "utf8")) as unknown;
-    if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.skills)) {
-      return { version: 1, skills: {} };
+    if (!isRecord(parsed) || !isRecord(parsed.skills)) {
+      return { skills: {} };
     }
     const skills: Record<string, SkillManifestEntry> = {};
     for (const [id, value] of Object.entries(parsed.skills)) {
@@ -142,9 +141,9 @@ function readSkillManifest(directory: string): SkillManifest {
         };
       }
     }
-    return { version: 1, skills };
+    return { skills };
   } catch {
-    return { version: 1, skills: {} };
+    return { skills: {} };
   }
 }
 

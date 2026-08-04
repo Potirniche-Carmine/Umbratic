@@ -1,13 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import type { ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
-import type { BackendUiEventInput } from "../shared/backendEvents";
+import type { BackendUiEvent } from "../shared/backendEvents";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "auto_safe";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
-export type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
+export type RunnerToolId = "read" | "ls" | "find" | "grep" | "write" | "edit" | "lsp" | "command";
 export type RequiredToolContractRequirement = "file_change";
 export type RequiredToolContractReason =
   | "file_tools_disabled"
@@ -18,10 +18,8 @@ export type RequiredToolContractReason =
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
-export type ModelEndpointSoftware = "ollama" | "vllm";
 export type ActiveModelEndpointSettings = {
   mode: ModelEndpointMode;
-  software: ModelEndpointSoftware;
   baseUrl: string;
   modelId: string;
   secret: string;
@@ -338,23 +336,22 @@ export type ChatAttachment = {
   contextTokens?: number;
 };
 
-export type ContextMessageV1 = {
+export type ConversationMessage = {
   role: "user" | "assistant" | "tool";
   content: unknown;
   tool_call_id?: string;
   tool_calls?: unknown[];
 };
 
-export type ContextStateV1 = {
-  version: 1;
+export type ConversationState = {
   sourceTaskId: string;
   updatedAt: string;
-  summary?: string;
-  tail: ContextMessageV1[];
+  summary: string | null;
+  tail: ConversationMessage[];
   sourceDigest: string;
   usage: {
     estimatedPromptTokens: number;
-    observedPromptTokens?: number;
+    observedPromptTokens: number | null;
     compactionCount: number;
   };
 };
@@ -417,7 +414,7 @@ export type ChatRecord = {
   worktreeBaseCommit?: string;
   draftPrompt?: string;
   attachedFiles?: ChatAttachment[];
-  contextState?: ContextStateV1;
+  conversationState?: ConversationState;
 };
 
 export type TaskRecord = TaskInfo & {
@@ -486,7 +483,7 @@ export type PermissionRequest = {
   suggestion?: string;
 };
 
-export type BackendUiEvent = BackendUiEventInput;
+export type { BackendUiEvent };
 
 export type ApproveResult =
   | { ok: true; targetBranch: string; commit: string; patchHash: string; metadataPath: string }

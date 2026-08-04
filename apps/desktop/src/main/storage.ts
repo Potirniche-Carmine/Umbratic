@@ -5,16 +5,14 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   defaultEndpointApiKey,
-  defaultEndpointBaseUrlForSoftware,
+  defaultEndpointBaseUrlForMode,
   defaultEndpointModelId,
-  defaultEndpointSoftware,
   defaultHarnessProfileId,
   defaultLocalModelId,
   defaultModelEndpointMode,
   endpointEditingAllowed,
   isHarnessProfileId,
   isModelEndpointMode,
-  isModelEndpointSoftware,
   localEndpointForced,
   managedModelEndpointDefaults,
 } from "./config";
@@ -827,19 +825,19 @@ function pathKey(pathValue: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-export function normalizeContextState(value: unknown): ChatRecord["contextState"] | undefined {
-  if (!isRecord(value) || value.version !== 1 || typeof value.sourceTaskId !== "string"
+export function normalizeConversationState(value: unknown): ChatRecord["conversationState"] | undefined {
+  // Conversation state carries no version field; a payload with one is discarded.
+  if (!isRecord(value) || "version" in value || typeof value.sourceTaskId !== "string"
     || !value.sourceTaskId || value.sourceTaskId.length > 200 || typeof value.updatedAt !== "string"
     || !value.updatedAt || value.updatedAt.length > 80 || typeof value.sourceDigest !== "string"
     || !/^[a-f0-9]{64}$/.test(value.sourceDigest) || !Array.isArray(value.tail) || value.tail.length > 32
     || !isRecord(value.usage) || typeof value.usage.estimatedPromptTokens !== "number"
-    || !Number.isSafeInteger(value.usage.estimatedPromptTokens)
-    || value.usage.estimatedPromptTokens < 0 || typeof value.usage.compactionCount !== "number"
-    || !Number.isSafeInteger(value.usage.compactionCount) || value.usage.compactionCount < 0
-    || (value.usage.observedPromptTokens !== undefined
-      && (typeof value.usage.observedPromptTokens !== "number"
-        || !Number.isSafeInteger(value.usage.observedPromptTokens) || value.usage.observedPromptTokens < 0))
-    || (value.summary !== undefined && (typeof value.summary !== "string" || value.summary.length > 24_000))) {
+    || !Number.isSafeInteger(value.usage.estimatedPromptTokens) || value.usage.estimatedPromptTokens < 0
+    || typeof value.usage.compactionCount !== "number" || !Number.isSafeInteger(value.usage.compactionCount)
+    || value.usage.compactionCount < 0
+    || !(value.usage.observedPromptTokens === null || (typeof value.usage.observedPromptTokens === "number"
+      && Number.isSafeInteger(value.usage.observedPromptTokens) && value.usage.observedPromptTokens >= 0))
+    || !(value.summary === null || (typeof value.summary === "string" && value.summary.length <= 24_000))) {
     return undefined;
   }
   const tail = value.tail.map((message) => {
@@ -854,26 +852,23 @@ export function normalizeContextState(value: unknown): ChatRecord["contextState"
     };
   });
   if (tail.some((message) => !message) || Buffer.byteLength(JSON.stringify(value), "utf8") > 128 * 1024) return undefined;
-  const normalizedTail = tail as NonNullable<ChatRecord["contextState"]>["tail"];
-  if (!contextStateTailIsComplete(normalizedTail)) return undefined;
+  const normalizedTail = tail as NonNullable<ChatRecord["conversationState"]>["tail"];
+  if (!conversationStateTailIsComplete(normalizedTail)) return undefined;
   return {
-    version: 1,
     sourceTaskId: value.sourceTaskId,
     updatedAt: value.updatedAt,
-    ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
+    summary: typeof value.summary === "string" ? value.summary : null,
     tail: normalizedTail,
     sourceDigest: value.sourceDigest,
     usage: {
       estimatedPromptTokens: value.usage.estimatedPromptTokens as number,
-      ...(typeof value.usage.observedPromptTokens === "number"
-        ? { observedPromptTokens: value.usage.observedPromptTokens }
-        : {}),
+      observedPromptTokens: typeof value.usage.observedPromptTokens === "number" ? value.usage.observedPromptTokens : null,
       compactionCount: value.usage.compactionCount as number,
     },
   };
 }
 
-function contextStateTailIsComplete(tail: NonNullable<ChatRecord["contextState"]>["tail"]): boolean {
+function conversationStateTailIsComplete(tail: NonNullable<ChatRecord["conversationState"]>["tail"]): boolean {
   if (tail[0]?.role === "tool") return false;
   const seen = new Set<string>();
   let pending: string[] = [];
@@ -945,7 +940,7 @@ function normalizeChatRecord(chat: unknown): ChatRecord | null {
     attachedFiles: Array.isArray(chat.attachedFiles)
       ? chat.attachedFiles.filter((file) => file && typeof file.path === "string" && typeof file.name === "string")
       : [],
-    contextState: normalizeContextState(chat.contextState),
+    conversationState: normalizeConversationState(chat.conversationState),
   } as ChatRecord;
 }
 
@@ -1104,7 +1099,6 @@ type NoteRow = {
 };
 const appSettingsKey = "app";
 const userNotesId = "user";
-const modelEndpointSettingsVersion = 3;
 const localModelCacheLimit = 8;
 const localModelLimit = 200;
 type StoredLocalModelCacheEntry = {
@@ -1179,7 +1173,6 @@ function writeRawSettings(settings: RawSettings) {
 }
 
 type StoredModelEndpointSettings = Omit<ActiveModelEndpointSettings, "headers" | "secret"> & {
-  version: typeof modelEndpointSettingsVersion;
   secret: "" | StoredProtectedString;
   headers: Array<{ name: string; value: "" | StoredProtectedString }>;
 };
@@ -1203,9 +1196,9 @@ function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: 
   return headers;
 }
 
-const activeModelEndpointSettings = (settings: RawSettings) => activeStoredEndpoint(settings, modelEndpointSettingsVersion);
+const activeModelEndpointSettings = (settings: RawSettings) => activeStoredEndpoint(settings);
 const storedModelEndpointSettings = (settings: RawSettings, mode: ModelEndpointMode) =>
-  storedEndpointForMode(settings, mode, modelEndpointSettingsVersion);
+  storedEndpointForMode(settings, mode);
 
 export function hasStoredModelEndpointSettings(): boolean {
   const settings = readRawSettings();
@@ -1225,21 +1218,11 @@ function modelEndpointSettings(
     (activeEndpoint.mode === "local" || activeEndpoint.mode === "server" ? activeEndpoint.mode : defaultModelEndpointMode());
   const endpoint = storedModelEndpointSettings(settings, mode) ?? {};
   const managedBaseUrl = forceLocal ? undefined : managed?.baseUrl;
-  const managedSoftware = forceLocal ? undefined : managed?.software;
   const storedLocalEndpoint = endpoint.mode === "local";
   const storedEndpointAllowed = !forceLocal || storedLocalEndpoint;
-  const storedLocalVllm = endpoint.mode === "local" && endpoint.software === "vllm";
-  const storedBaseUrl = storedEndpointAllowed && !storedLocalVllm && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
+  const storedBaseUrl = storedEndpointAllowed && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
     ? endpoint.baseUrl.trim()
     : undefined;
-  const software =
-    mode === "local"
-      ? "ollama"
-      : forceLocal
-      ? storedLocalEndpoint && isModelEndpointSoftware(endpoint.software)
-        ? endpoint.software
-        : defaultEndpointSoftware("local")
-      : managedSoftware ?? (isModelEndpointSoftware(endpoint.software) ? endpoint.software : defaultEndpointSoftware(mode, managedBaseUrl ?? storedBaseUrl));
   const modelId =
     mode === "local"
       ? storedLocalEndpoint && typeof endpoint.modelId === "string" && endpoint.modelId.trim()
@@ -1248,8 +1231,7 @@ function modelEndpointSettings(
       : defaultEndpointModelId;
   return {
     mode,
-    software,
-    baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForSoftware(mode, software),
+    baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForMode(mode),
     modelId,
     secret: mode === "local" ? "" : managed?.secret ?? readProtectedString(endpoint.secret) ?? defaultEndpointApiKey,
     headers: mode === "local" ? normalizeEndpointHeaders([]) : normalizeEndpointHeaders(endpoint.headers),
@@ -1299,7 +1281,6 @@ export function publicModelEndpointSettings(settings: ActiveModelEndpointSetting
 function protectEndpointSettings(settings: ActiveModelEndpointSettings): StoredModelEndpointSettings {
   return {
     ...settings,
-    version: modelEndpointSettingsVersion,
     secret: writeProtectedString(settings.secret),
     headers: settings.headers.map((header) => ({
       name: header.name,
@@ -1311,30 +1292,17 @@ function protectEndpointSettings(settings: ActiveModelEndpointSettings): StoredM
 export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSettings>): ActiveModelEndpointSettings {
   const current = readModelEndpointSettings();
   const managed = managedModelEndpointDefaults();
-  const hasManagedEndpoint = !!(managed?.baseUrl || managed?.mode || managed?.software);
+  const hasManagedEndpoint = !!(managed?.baseUrl || managed?.mode);
   const canEditEndpoint = endpointEditingAllowed() && !hasManagedEndpoint;
   const nextMode = canEditEndpoint && isModelEndpointMode(input.mode) ? input.mode : current.mode;
-  const nextSoftware = nextMode === "local"
-    ? "ollama"
-    : isModelEndpointSoftware(input.software)
-      ? canEditEndpoint
-        ? input.software
-        : current.software
-      : current.mode === nextMode
-        ? current.software
-        : defaultEndpointSoftware(nextMode);
-  const rejectedLocalVllm = nextMode === "local" && input.software === "vllm";
   const next: ActiveModelEndpointSettings = {
     mode: nextMode,
-    software: nextSoftware,
     baseUrl:
       !canEditEndpoint
         ? current.baseUrl
-        : rejectedLocalVllm
-          ? defaultEndpointBaseUrlForSoftware("local", "ollama")
         : typeof input.baseUrl === "string" && input.baseUrl.trim()
           ? input.baseUrl.trim()
-          : defaultEndpointBaseUrlForSoftware(nextMode, nextSoftware),
+          : defaultEndpointBaseUrlForMode(nextMode),
     modelId:
       nextMode === "local"
         ? typeof input.modelId === "string"

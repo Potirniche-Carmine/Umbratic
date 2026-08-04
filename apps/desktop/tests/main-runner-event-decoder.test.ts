@@ -66,6 +66,25 @@ test("runner event decoder accepts handled events and marks internal events as i
       },
     },
   );
+
+  const queueUpdated = decoder.decodeRunnerEvent({
+    type: "run.queue.updated",
+    taskId: "task-1",
+    sessionId: "session-1",
+    runId: null,
+    actionId: "steer-1",
+    action: "steer",
+    disposition: "accepted",
+    pendingSteer: true,
+    followUpCount: 0,
+    followUpCapacity: 8,
+    reasonCode: null,
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  assert.equal(queueUpdated.ok, true);
+  assert.equal(queueUpdated.ignored, false);
+  assert.equal(queueUpdated.event.type, "run.queue.updated");
+  assert.equal(queueUpdated.event.pendingSteer, true);
 });
 
 test("runner event decoder rejects malformed native events before translation", () => {

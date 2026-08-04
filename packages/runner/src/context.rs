@@ -177,25 +177,6 @@ pub struct CompressionResult {
     pub marker_hash: Option<String>,
 }
 
-fn classify_kind(tool_name: &str, output: &str) -> &'static str {
-    let trimmed = output.trim_start();
-    if tool_name == "search" {
-        "search"
-    } else if trimmed.starts_with("Directory:") {
-        "directory"
-    } else if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        "json"
-    } else if output.lines().any(|line| line.starts_with("diff --git")) {
-        "diff"
-    } else if tool_name == "command" {
-        "log"
-    } else if tool_name == "read" {
-        "file"
-    } else {
-        "plain_text"
-    }
-}
-
 fn numbered_lines(lines: &[&str], start: usize, byte_limit: usize) -> String {
     let mut output = String::new();
     for (offset, line) in lines.iter().enumerate() {
@@ -365,16 +346,19 @@ fn compressed_body(tool_name: &str, output: &str, kind: &str) -> (String, &'stat
     )
 }
 
+/// Compacts one tool result. `declared_kind` is the output shape the tool
+/// catalog declares, so classification never depends on the model-facing text.
 pub fn compress_tool_result(
     store: &mut SessionContextStore,
     tool_name: &str,
+    declared_kind: &str,
     tool_call_id: &str,
     title: &str,
     output: &str,
     status: &str,
 ) -> CompressionResult {
     let original_bytes = output.len();
-    let kind = classify_kind(tool_name, output).to_owned();
+    let kind = declared_kind.to_owned();
     if tool_name == "retrieve_context" || original_bytes < MIN_COMPRESS_BYTES {
         return CompressionResult {
             output: output.to_owned(),
@@ -705,8 +689,9 @@ mod tests {
     fn large_output_is_stored_and_retrievable() {
         let mut store = SessionContextStore::default();
         let source = "line of output\n".repeat(2000);
-        let result =
-            compress_tool_result(&mut store, "read", "call", "read BIG", &source, "success");
+        let result = compress_tool_result(
+            &mut store, "read", "file", "call", "read BIG", &source, "success",
+        );
         assert!(result.modified);
         let hash = result.marker_hash.unwrap();
         let first = store.retrieve(&hash, None, Some(100)).unwrap();
@@ -728,8 +713,9 @@ mod tests {
     fn retrieval_offsets_preserve_utf8_boundaries_and_limits() {
         let mut store = SessionContextStore::default();
         let source = "é".repeat(20_000);
-        let result =
-            compress_tool_result(&mut store, "read", "call", "unicode", &source, "success");
+        let result = compress_tool_result(
+            &mut store, "read", "file", "call", "unicode", &source, "success",
+        );
         let window = store
             .retrieve(&result.marker_hash.unwrap(), Some(1), Some(17))
             .unwrap();
@@ -750,12 +736,14 @@ mod tests {
     }
 
     #[test]
-    fn diff_classification_wins_over_tool_kind() {
-        assert_eq!(
-            classify_kind("command", "diff --git a/a b/a\n+next"),
-            "diff"
+    fn compaction_uses_the_declared_kind_not_the_output_text() {
+        // A command whose output happens to look like a diff is still a log.
+        let mut store = SessionContextStore::default();
+        let source = format!("diff --git a/a b/a{}", "+next".repeat(MIN_COMPRESS_BYTES));
+        let result = compress_tool_result(
+            &mut store, "command", "log", "call", "cmd", &source, "success",
         );
-        assert_eq!(classify_kind("read", "diff --git a/a b/a\n+next"), "diff");
+        assert_eq!(result.kind, "log");
     }
 
     #[test]
@@ -871,6 +859,7 @@ mod tests {
             let result = compress_tool_result(
                 &mut store,
                 "read",
+                "file",
                 &format!("call-{index}"),
                 "read",
                 &source,
@@ -881,7 +870,9 @@ mod tests {
         let oldest = store.order.front().cloned().unwrap();
         assert!(store.retrieve(&oldest, None, Some(10)).is_some());
         let source = format!("new entry {}", "y".repeat(MIN_COMPRESS_BYTES));
-        let _ = compress_tool_result(&mut store, "read", "new", "read", &source, "success");
+        let _ = compress_tool_result(
+            &mut store, "read", "file", "new", "read", &source, "success",
+        );
         assert!(store.retrieve(&oldest, None, Some(10)).is_some());
     }
 }

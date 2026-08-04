@@ -15,14 +15,19 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "")
 	t.Setenv("VEIL_ENTITLEMENT_PATH", "")
 	t.Setenv("VEIL_IDENTITY_STORE_PATH", "")
-	t.Setenv("VEIL_PROVIDER_PROTOCOL", "")
+	t.Setenv("VEIL_MODE", "server")
 	t.Setenv("VEIL_PROVIDER_BASE_URL", "http://provider.test")
-	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
-	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
 	t.Setenv("VEIL_MODEL", "default-model")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "")
 	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
+	t.Setenv("VEIL_TEMPERATURE", "")
+	t.Setenv("VEIL_TOP_P", "")
+	t.Setenv("VEIL_REASONING_EFFORT", "")
+	t.Setenv("VEIL_THINKING_TOKEN_BUDGET", "")
 	t.Setenv("VEIL_MODEL_PARALLEL_TOOL_CALLS", "")
+	t.Setenv("VEIL_MAX_CONCURRENT_REQUESTS", "")
+	t.Setenv("VEIL_MAX_CONCURRENT_REQUESTS_PER_USER", "")
+	t.Setenv("VEIL_QUEUE_TIMEOUT", "")
 	t.Setenv("VEIL_MODEL_VISION", "")
 	t.Setenv("VEIL_MODEL_REASONING", "")
 	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
@@ -84,27 +89,26 @@ func TestLoadCompanyModeRequiresSeparateControlAndIdentityFiles(t *testing.T) {
 	}
 }
 
-func TestLoadUsesConfiguredModel(t *testing.T) {
+func TestLoadUsesConfiguredServerMode(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("VEIL_PROVIDER_PROTOCOL", "ollama")
-	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "/api/chat")
-	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "/api/tags")
+	t.Setenv("VEIL_MODE", "server")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "12s")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "20")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "64000")
+	t.Setenv("VEIL_TEMPERATURE", "0.4")
+	t.Setenv("VEIL_TOP_P", "0.8")
+	t.Setenv("VEIL_REASONING_EFFORT", "medium")
+	t.Setenv("VEIL_THINKING_TOKEN_BUDGET", "1024")
+	t.Setenv("VEIL_MAX_CONCURRENT_REQUESTS", "16")
+	t.Setenv("VEIL_MAX_CONCURRENT_REQUESTS_PER_USER", "2")
+	t.Setenv("VEIL_QUEUE_TIMEOUT", "45s")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderProtocol != "ollama" {
-		t.Fatalf("unexpected provider protocol %q", cfg.ProviderProtocol)
-	}
-	if cfg.ProviderChatEndpointPath != "/api/chat" {
-		t.Fatalf("unexpected endpoint path %q", cfg.ProviderChatEndpointPath)
-	}
-	if cfg.ProviderModelsEndpointPath != "/api/tags" {
-		t.Fatalf("unexpected models endpoint path %q", cfg.ProviderModelsEndpointPath)
+	if cfg.Mode != "server" {
+		t.Fatalf("unexpected mode %q", cfg.Mode)
 	}
 	if cfg.DefaultModel != "default-model" {
 		t.Fatalf("unexpected default model %q", cfg.DefaultModel)
@@ -114,6 +118,15 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	}
 	if cfg.MaxOutputTokens != 8192 || cfg.MaxBodyBytes != 64<<20 {
 		t.Fatalf("unexpected context enforcement defaults: %#v", cfg)
+	}
+	if cfg.Generation.Temperature != 0.4 || cfg.Generation.TopP != 0.8 {
+		t.Fatalf("unexpected generation sampling: %#v", cfg.Generation)
+	}
+	if cfg.Generation.ReasoningEffort != "medium" || cfg.Generation.ThinkingTokenBudget == nil || *cfg.Generation.ThinkingTokenBudget != 1024 {
+		t.Fatalf("unexpected reasoning profile: %#v", cfg.Generation)
+	}
+	if cfg.Generation.MaxConcurrentRequests != 16 || cfg.Generation.MaxConcurrentRequestsUser != 2 || cfg.Generation.QueueTimeout != 45*time.Second {
+		t.Fatalf("unexpected admission profile: %#v", cfg.Generation)
 	}
 	if !cfg.ModelParallelToolCalls || cfg.ModelVision || cfg.ModelReasoning {
 		t.Fatalf("unexpected model capability defaults: %#v", cfg)
@@ -126,6 +139,25 @@ func TestLoadUsesConfiguredModel(t *testing.T) {
 	}
 	if cfg.ModelTimeout != 12*time.Second || cfg.RequestTimeout != 20*time.Second {
 		t.Fatalf("unexpected timeouts: %s %s", cfg.ModelTimeout, cfg.RequestTimeout)
+	}
+}
+
+func TestLoadLocalModeUsesFixedGenerationProfile(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_MODE", "local")
+	t.Setenv("VEIL_TEMPERATURE", "1.5")
+	t.Setenv("VEIL_TOP_P", "0.1")
+	t.Setenv("VEIL_REASONING_EFFORT", "high")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != "local" {
+		t.Fatalf("unexpected mode %q", cfg.Mode)
+	}
+	if cfg.Generation.Temperature != 0.2 || cfg.Generation.TopP != 0.95 || cfg.Generation.ReasoningEffort != "none" {
+		t.Fatalf("local mode should ignore server profile env: %#v", cfg.Generation)
 	}
 }
 
@@ -282,20 +314,39 @@ func TestLoadRequiresProviderBaseURL(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnsupportedProviderProtocol(t *testing.T) {
+func TestLoadRejectsUnsupportedMode(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("VEIL_PROVIDER_PROTOCOL", "raw-runtime")
+	t.Setenv("VEIL_MODE", "vllm")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected unsupported provider protocol error")
+		t.Fatal("expected unsupported mode error")
+	}
+}
+
+func TestLoadRejectsInvalidGenerationProfile(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_TOP_P", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected top_p of 0 to be rejected")
+	}
+	setRequiredEnv(t)
+	t.Setenv("VEIL_TEMPERATURE", "2.1")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected temperature above 2 to be rejected")
+	}
+	setRequiredEnv(t)
+	t.Setenv("VEIL_THINKING_TOKEN_BUDGET", "9000")
+	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "1024")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected thinking budget above max output to be rejected")
 	}
 }
 
 func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	if err := os.WriteFile(envPath, []byte("VEIL_AUTH_TOKEN=from-file\nVEIL_MODEL=file-model\nVEIL_PROVIDER_BASE_URL=http://from-file.test\nVEIL_ADDR=0.0.0.0:9000\n"), 0o600); err != nil {
+	if err := os.WriteFile(envPath, []byte("VEIL_AUTH_TOKEN=from-file\nVEIL_MODEL=file-model\nVEIL_PROVIDER_BASE_URL=http://from-file.test\nVEIL_ADDR=0.0.0.0:9000\nVEIL_MODE=server\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,13 +355,31 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	unsetEnv(t, "VEIL_ADDR")
 	unsetEnv(t, "VEIL_MODEL")
 	unsetEnv(t, "VEIL_PROVIDER_BASE_URL")
-	t.Setenv("VEIL_PROVIDER_PROTOCOL", "")
+	unsetEnv(t, "VEIL_MODE")
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
 	t.Setenv("VEIL_TELEMETRY_MAX_BODY_BYTES", "")
-	t.Setenv("VEIL_PROVIDER_CHAT_PATH", "")
-	t.Setenv("VEIL_PROVIDER_MODELS_PATH", "")
+	t.Setenv("VEIL_TEMPERATURE", "")
+	t.Setenv("VEIL_TOP_P", "")
+	t.Setenv("VEIL_REASONING_EFFORT", "")
+	t.Setenv("VEIL_THINKING_TOKEN_BUDGET", "")
+	t.Setenv("VEIL_MODEL_PARALLEL_TOOL_CALLS", "")
+	t.Setenv("VEIL_MAX_CONCURRENT_REQUESTS", "")
+	t.Setenv("VEIL_MAX_CONCURRENT_REQUESTS_PER_USER", "")
+	t.Setenv("VEIL_QUEUE_TIMEOUT", "")
+	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
+	t.Setenv("VEIL_CONTEXT_LENGTH", "")
+	t.Setenv("VEIL_MODEL_VISION", "")
+	t.Setenv("VEIL_MODEL_REASONING", "")
+	t.Setenv("VEIL_TEMPLATE_REGISTRY_PATH", "")
+	t.Setenv("VEIL_TELEMETRY_ENABLED", "")
+	t.Setenv("VEIL_TELEMETRY_STORE_PATH", "")
+	t.Setenv("VEIL_TELEMETRY_RETENTION_DAYS", "")
+	t.Setenv("VEIL_CONTROL_TOKEN", "")
+	t.Setenv("VEIL_COMPANY_IDENTITY_MODE", "")
+	t.Setenv("VEIL_ENTITLEMENT_PATH", "")
+	t.Setenv("VEIL_IDENTITY_STORE_PATH", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -319,7 +388,7 @@ func TestLoadDotEnvPopulatesMissingValuesWithoutOverridingProcessEnv(t *testing.
 	if cfg.AuthToken != "from-process" {
 		t.Fatalf("dotenv overrode process env token: %q", cfg.AuthToken)
 	}
-	if cfg.DefaultModel != "file-model" || cfg.ProviderBaseURL != "http://from-file.test" || cfg.Addr != "0.0.0.0:9000" {
+	if cfg.DefaultModel != "file-model" || cfg.ProviderBaseURL != "http://from-file.test" || cfg.Addr != "0.0.0.0:9000" || cfg.Mode != "server" {
 		t.Fatalf("dotenv values were not loaded: %#v", cfg)
 	}
 }

@@ -38,17 +38,37 @@ type Server struct {
 	identity     *identity.Store
 	identityErr  error
 	identityRate *identityRateLimiter
+	admission    *admissionController
+	lifecycle    *lifecycle
+	stream       *streamMetrics
 	templateErr  error
 	templateData templates.Registry
 }
 
-const streamVersionHeader = "X-Umbratic-Stream-Version"
+type contextKey int
 
-func NewServer(cfg config.Config, modelClient ModelClient) http.Handler {
+const (
+	admissionUserKey contextKey = 1
+)
+
+// NewServer returns the API handler. It is a concrete type so the process can
+// drive readiness and draining around it.
+func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
+	profile := cfg.Generation
+	if cfg.Mode == model.ModeLocal {
+		profile = model.LocalGenerationProfile(cfg.MaxOutputTokens)
+	}
 	server := &Server{
 		cfg: cfg, model: modelClient, templateData: registry, templateErr: err,
 		identityRate: &identityRateLimiter{entries: map[string]rateEntry{}},
+		lifecycle:    &lifecycle{},
+		stream:       newStreamMetrics(),
+		admission: newAdmissionController(
+			profile.MaxConcurrentRequests,
+			profile.MaxConcurrentRequestsUser,
+			profile.QueueTimeout,
+		),
 	}
 	if cfg.CompanyIdentityMode {
 		license, licenseErr := entitlement.Load(cfg.EntitlementPath)
@@ -84,14 +104,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		deviceUID, sessionErr := s.authenticateProduct(r.Header.Get("Authorization"))
-		if r.URL.Path == "/api/health" && sessionErr != nil && s.controlAuthorized(r.Header.Get("Authorization")) {
+		if (r.URL.Path == "/api/health" || r.URL.Path == "/api/runtime/metrics") && sessionErr != nil && s.controlAuthorized(r.Header.Get("Authorization")) {
 			sessionErr = nil
 		}
 		if sessionErr != nil {
 			writeIdentityError(w, sessionErr)
 			return
 		}
+		if deviceUID != "" {
+			if userUID, userErr := s.identity.UserUIDForDevice(deviceUID); userErr == nil && userUID != "" {
+				r = r.WithContext(context.WithValue(r.Context(), admissionUserKey, userUID))
+			}
+		}
 		if isActivityProductRoute(r.URL.Path) {
+			if deviceUID == "" {
+				writeCodedError(w, http.StatusUnauthorized, "session_invalid", "The session is invalid.")
+				return
+			}
 			if err := s.identity.Touch(deviceUID); err != nil {
 				writeCodedError(w, http.StatusServiceUnavailable, "activity_update_failed", "Company access is unavailable.")
 				return
@@ -132,6 +161,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Model work is refused while starting or draining; telemetry and control
+	// routes stay available so a restart is still observable.
+	switch r.URL.Path {
+	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat", "/api/internal/context/compact":
+		if !s.guardLifecycle(w) {
+			return
+		}
+	}
+
 	switch r.URL.Path {
 	case "/api/model/connect":
 		s.handleModelConnect(w, r)
@@ -150,15 +188,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleRuntimeMetrics(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
-	defer cancel()
-	metrics, err := s.model.RuntimeMetrics(ctx)
+func (s *Server) admitModelWork(w http.ResponseWriter, r *http.Request) (*admissionLease, bool) {
+	userKey, _ := r.Context().Value(admissionUserKey).(string)
+	lease, err := s.admission.acquire(r.Context(), userKey)
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "runtime metrics unavailable")
-		return
+		if errors.Is(err, context.Canceled) {
+			writeCodedError(w, http.StatusRequestTimeout, "request_canceled", "The request was canceled.")
+			return nil, false
+		}
+		writeBusy(w, s.activeGenerationProfile().QueueTimeout)
+		return nil, false
 	}
-	writeJSON(w, http.StatusOK, metrics)
+	return lease, true
+}
+
+func (s *Server) noteModelFailure(failure modelFailure) {
+	switch failure.Code {
+	case "model_service_timeout":
+		s.admission.recordTimeout()
+	}
 }
 
 func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Request) bool {
@@ -495,8 +543,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "configured model unavailable")
 		return
 	}
+	// A successful health check is also the warm signal: the model answered.
+	s.lifecycle.markReady()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
+		"state":  string(s.lifecycle.state()),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,
@@ -531,18 +582,33 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			return
 		}
 
+		lease, ok := s.admitModelWork(w, r)
+		if !ok {
+			return
+		}
+		defer lease.release()
+
 		ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 		defer cancel()
 
 		maxOutputTokens := effectiveMaxOutputTokens(input.MaxOutputTokens, s.cfg.MaxOutputTokens)
+		profile := s.activeGenerationProfile()
+		var toolChoice any
+		if input.Tools != nil {
+			toolChoice = "auto"
+		}
 		req := model.ChatRequest{
-			Model:           s.cfg.DefaultModel,
-			Messages:        messages,
-			Stream:          input.Stream,
-			Tools:           input.Tools,
-			ToolChoice:      input.ToolChoice,
-			ParallelTools:   input.ParallelTools,
-			MaxOutputTokens: maxOutputTokens,
+			Model:               s.cfg.DefaultModel,
+			Messages:            messages,
+			Stream:              input.Stream,
+			Tools:               input.Tools,
+			ToolChoice:          toolChoice,
+			ParallelTools:       profile.ParallelToolCalls,
+			MaxOutputTokens:     maxOutputTokens,
+			Temperature:         profile.Temperature,
+			TopP:                profile.TopP,
+			ReasoningEffort:     profile.ReasoningEffort,
+			ThinkingTokenBudget: profile.ThinkingTokenBudget,
 		}
 		if estimated, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
@@ -561,7 +627,11 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		startedAt := time.Now()
 		resp, err := s.model.Chat(ctx, req)
 		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				s.admission.recordCancel()
+			}
 			failure := classifyModelFailure(err, 0)
+			s.noteModelFailure(failure)
 			recordModelFailure(route, "request", failure, req, time.Since(startedAt))
 			writeModelFailure(w, failure)
 			return
@@ -650,21 +720,36 @@ func (s *Server) handleContextCompact(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid compaction messages", "code": "invalid_compaction_request"})
 		return
 	}
+	profile := s.activeGenerationProfile()
 	req := model.ChatRequest{
-		Model:           s.cfg.DefaultModel,
-		Messages:        prompts.BuildCompaction(input.PreviousSummary, string(source)),
-		Stream:          false,
-		MaxOutputTokens: input.MaxSummaryTokens,
+		Model:               s.cfg.DefaultModel,
+		Messages:            prompts.BuildCompaction(input.PreviousSummary, string(source)),
+		Stream:              false,
+		MaxOutputTokens:     input.MaxSummaryTokens,
+		Temperature:         profile.Temperature,
+		TopP:                profile.TopP,
+		ReasoningEffort:     profile.ReasoningEffort,
+		ThinkingTokenBudget: profile.ThinkingTokenBudget,
+		ParallelTools:       profile.ParallelToolCalls,
 	}
 	if _, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "compaction input exceeds context", "code": "compaction_input_overflow"})
 		return
 	}
+	lease, ok := s.admitModelWork(w, r)
+	if !ok {
+		return
+	}
+	defer lease.release()
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 	defer cancel()
 	response, err := s.model.Chat(ctx, req)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			s.admission.recordCancel()
+		}
 		failure := classifyModelFailure(err, 0)
+		s.noteModelFailure(failure)
 		writeModelFailure(w, failure)
 		return
 	}
@@ -674,14 +759,21 @@ func (s *Server) handleContextCompact(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "model returned an invalid compaction summary", "code": "invalid_compaction_summary"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"version": 1, "summary": summary, "sourceDigest": input.SourceDigest})
+	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "sourceDigest": input.SourceDigest})
 }
 
 func effectiveMaxOutputTokens(requested int, configured int) int {
-	if requested > 0 && requested < configured {
-		return requested
+	if requested <= 0 || requested > configured {
+		return configured
 	}
-	return configured
+	return requested
+}
+
+func (s *Server) activeGenerationProfile() model.GenerationProfile {
+	if s.cfg.Mode == model.ModeLocal {
+		return model.LocalGenerationProfile(s.cfg.MaxOutputTokens)
+	}
+	return s.cfg.Generation
 }
 
 func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
@@ -801,9 +893,13 @@ func writeModelFailure(w http.ResponseWriter, failure modelFailure) {
 
 func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, route prompts.Route, req model.ChatRequest) {
 	startedAt := time.Now()
-	resp, err := s.model.DoChat(ctx, req)
+	resp, err := s.attemptChatStream(ctx, req)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			s.admission.recordCancel()
+		}
 		failure := classifyModelFailure(err, 0)
+		s.noteModelFailure(failure)
 		recordModelFailure(route, "request", failure, req, time.Since(startedAt))
 		writeModelFailure(w, failure)
 		return
@@ -820,10 +916,38 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, route pr
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set(streamVersionHeader, "2")
 	w.WriteHeader(http.StatusOK)
-	if err := model.WriteOpenAIChatSSE(s.cfg.ProviderProtocol, w, resp.Body); err != nil {
+
+	go func() {
+		<-ctx.Done()
+		_ = resp.Body.Close()
+	}()
+
+	observer := &firstWriteObserver{
+		dst:     w,
+		started: startedAt,
+		onFirst: s.stream.timeToFirstToken.observe,
+	}
+	streamErr := model.WriteOpenAIChatSSE(ctx, s.cfg.Mode, observer, resp.Body, s.cfg.StreamIdleTimeout)
+	s.stream.streamDuration.observe(time.Since(startedAt))
+	if err := streamErr; err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			s.admission.recordCancel()
+			s.stream.disconnects.Add(1)
+			return
+		}
+		s.stream.invalidStreams.Add(1)
 		failure := modelFailure{Status: http.StatusBadGateway, Code: "model_service_stream_incomplete", Message: "model service stream ended unexpectedly"}
+		if errors.Is(err, context.DeadlineExceeded) {
+			failure = modelFailure{Status: http.StatusGatewayTimeout, Code: "model_service_timeout", Message: "model service timed out"}
+			s.noteModelFailure(failure)
+		} else {
+			var providerError model.ProviderError
+			if errors.As(err, &providerError) && providerError.Kind == model.ProviderFailureTimeout {
+				failure = modelFailure{Status: http.StatusGatewayTimeout, Code: "model_service_timeout", Message: "model service timed out"}
+				s.noteModelFailure(failure)
+			}
+		}
 		recordModelFailure(route, "response_stream", failure, req, time.Since(startedAt))
 		encoded, _ := json.Marshal(map[string]string{"error": failure.Message, "code": failure.Code})
 		_, _ = io.WriteString(w, "event: error\ndata: "+string(encoded)+"\n\n")

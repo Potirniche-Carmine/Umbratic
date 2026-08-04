@@ -247,7 +247,7 @@ export function canAutoResolvePermission(
 ): boolean {
   if (mode !== "auto_safe" || classification.risky) return false;
   return permissionKind === "read"
-    || permissionKind === "search"
+    || permissionKind === "ls" || permissionKind === "find" || permissionKind === "grep"
     || permissionKind === "edit"
     || (permissionKind === "bash" && safetyAction === "allow");
 }

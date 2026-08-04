@@ -23,13 +23,17 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model           string
-	Messages        []Message
-	Stream          bool
-	Tools           any
-	ToolChoice      any
-	ParallelTools   bool
-	MaxOutputTokens int
+	Model               string
+	Messages            []Message
+	Stream              bool
+	Tools               any
+	ToolChoice          any
+	ParallelTools       bool
+	MaxOutputTokens     int
+	Temperature         float64
+	TopP                float64
+	ReasoningEffort     ReasoningEffort
+	ThinkingTokenBudget *int
 }
 
 type ChatResponse struct {
@@ -41,24 +45,15 @@ type ModelInfo struct {
 	ContextLength int    `json:"context_length,omitempty"`
 }
 
-type ProviderProtocol string
-
-const (
-	ProtocolVLLM   ProviderProtocol = "vllm"
-	ProtocolOllama ProviderProtocol = "ollama"
-)
-
 type ClientConfig struct {
-	Protocol           ProviderProtocol
-	BaseURL            string
-	ChatEndpointPath   string
-	ModelsEndpointPath string
-	ContextLength      int
-	Timeout            time.Duration
+	Mode          Mode
+	BaseURL       string
+	ContextLength int
+	Timeout       time.Duration
 }
 
 type Client struct {
-	protocol         ProviderProtocol
+	mode             Mode
 	chatEndpoint     string
 	modelsEndpoint   string
 	metricsEndpoint  string
@@ -92,35 +87,24 @@ func (e ProviderError) Error() string {
 	return fmt.Sprintf("model runtime returned status %d", e.StatusCode)
 }
 
-func ParseProviderProtocol(value string) (ProviderProtocol, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "vllm":
-		return ProtocolVLLM, nil
-	case "ollama":
-		return ProtocolOllama, nil
-	default:
-		return "", fmt.Errorf("unsupported model runtime protocol %q", value)
-	}
-}
-
 func NewClient(cfg ClientConfig) (*Client, error) {
-	protocol := cfg.Protocol
-	if protocol == "" {
-		protocol = ProtocolVLLM
+	mode := cfg.Mode
+	if mode != ModeServer && mode != ModeLocal {
+		return nil, fmt.Errorf("unsupported Veil mode %q", mode)
 	}
 
 	chatDefaultPath := "v1/chat/completions"
 	modelsDefaultPath := "v1/models"
-	if protocol == ProtocolOllama {
+	if mode == ModeLocal {
 		chatDefaultPath = "api/chat"
 		modelsDefaultPath = "api/tags"
 	}
 
-	chatEndpoint, err := providerEndpointURL(cfg.BaseURL, cfg.ChatEndpointPath, chatDefaultPath)
+	chatEndpoint, err := providerEndpointURL(cfg.BaseURL, "", chatDefaultPath)
 	if err != nil {
 		return nil, err
 	}
-	modelsEndpoint, err := providerEndpointURL(cfg.BaseURL, cfg.ModelsEndpointPath, modelsDefaultPath)
+	modelsEndpoint, err := providerEndpointURL(cfg.BaseURL, "", modelsDefaultPath)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +114,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 	generateEndpoint := ""
 	showEndpoint := ""
-	if protocol == ProtocolOllama {
+	if mode == ModeLocal {
 		generateEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "api/generate")
 		if err != nil {
 			return nil, err
@@ -146,7 +130,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		timeout = 180 * time.Second
 	}
 	return &Client{
-		protocol:         protocol,
+		mode:             mode,
 		chatEndpoint:     chatEndpoint,
 		modelsEndpoint:   modelsEndpoint,
 		metricsEndpoint:  metricsEndpoint,
@@ -239,7 +223,7 @@ func ensurePrivateRemote(conn net.Conn) (net.Conn, error) {
 }
 
 func (c *Client) ActivateModel(ctx context.Context, modelID string) error {
-	if c.protocol != ProtocolOllama {
+	if c.mode != ModeLocal {
 		return nil
 	}
 	body := map[string]any{
@@ -273,35 +257,36 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 		return ChatResponse{}, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 
-	switch c.protocol {
-	case ProtocolVLLM:
+	switch c.mode {
+	case ModeServer:
 		return decodeVLLMChat(resp.Body)
-	case ProtocolOllama:
+	case ModeLocal:
 		return decodeOllamaChat(resp.Body)
 	default:
-		return ChatResponse{}, fmt.Errorf("unsupported model runtime protocol %q", c.protocol)
+		return ChatResponse{}, fmt.Errorf("unsupported Veil mode %q", c.mode)
 	}
 }
 
 func (c *Client) DoChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
-	switch c.protocol {
-	case ProtocolVLLM:
+	switch c.mode {
+	case ModeServer:
 		return c.doVLLMChat(ctx, req)
-	case ProtocolOllama:
+	case ModeLocal:
 		return c.doOllamaChat(ctx, req)
 	default:
-		return nil, fmt.Errorf("unsupported model runtime protocol %q", c.protocol)
+		return nil, fmt.Errorf("unsupported Veil mode %q", c.mode)
 	}
 }
 
-func WriteOpenAIChatSSE(protocol ProviderProtocol, dst io.Writer, src io.Reader) error {
-	switch protocol {
-	case "", ProtocolVLLM:
+func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration) error {
+	src = withIdleAndCancel(ctx, src, idleTimeout)
+	switch mode {
+	case ModeServer:
 		return writeVLLMAsSafeOpenAIChatSSE(dst, src)
-	case ProtocolOllama:
+	case ModeLocal:
 		return writeOllamaAsOpenAIChatSSE(dst, src)
 	default:
-		return fmt.Errorf("unsupported model runtime protocol %q", protocol)
+		return fmt.Errorf("unsupported Veil mode %q", mode)
 	}
 }
 
@@ -332,7 +317,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 }
 
 func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error) {
-	if c.protocol == ProtocolVLLM {
+	if c.mode == ModeServer {
 		models, err := c.ListModels(ctx)
 		if err != nil {
 			return 0, err
@@ -344,8 +329,8 @@ func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error)
 		}
 		return 0, errors.New("model runtime did not report a context length")
 	}
-	if c.protocol != ProtocolOllama {
-		return 0, fmt.Errorf("unsupported model runtime protocol %q", c.protocol)
+	if c.mode != ModeLocal {
+		return 0, fmt.Errorf("unsupported Veil mode %q", c.mode)
 	}
 
 	resp, err := c.postJSON(ctx, c.showEndpoint, map[string]any{"model": modelID})
@@ -370,9 +355,11 @@ func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error)
 
 func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
 	body := map[string]any{
-		"model":    req.Model,
-		"messages": req.Messages,
-		"stream":   req.Stream,
+		"model":       req.Model,
+		"messages":    req.Messages,
+		"stream":      req.Stream,
+		"temperature": req.Temperature,
+		"top_p":       req.TopP,
 	}
 	if req.Stream {
 		body["stream_options"] = map[string]any{"include_usage": true}
@@ -380,13 +367,17 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 	if req.MaxOutputTokens > 0 {
 		body["max_tokens"] = req.MaxOutputTokens
 	}
-	if req.Tools != nil {
-		body["tools"] = req.Tools
+	if req.ReasoningEffort != "" && req.ReasoningEffort != ReasoningNone {
+		body["reasoning_effort"] = string(req.ReasoningEffort)
 	}
-	if req.ToolChoice != nil {
-		body["tool_choice"] = req.ToolChoice
+	if req.ThinkingTokenBudget != nil {
+		body["thinking_budget"] = *req.ThinkingTokenBudget
 	}
 	if req.Tools != nil {
+		body["tools"] = strictTools(req.Tools)
+		if req.ToolChoice != nil {
+			body["tool_choice"] = req.ToolChoice
+		}
 		body["parallel_tool_calls"] = req.ParallelTools
 	}
 	return c.postJSON(ctx, c.chatEndpoint, body)
@@ -401,16 +392,17 @@ func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Respo
 	if req.Tools != nil {
 		body["tools"] = req.Tools
 	}
-	if c.contextLength > 0 || req.MaxOutputTokens > 0 {
-		options := map[string]any{}
-		if c.contextLength > 0 {
-			options["num_ctx"] = c.contextLength
-		}
-		if req.MaxOutputTokens > 0 {
-			options["num_predict"] = req.MaxOutputTokens
-		}
-		body["options"] = options
+	options := map[string]any{
+		"temperature": req.Temperature,
+		"top_p":       req.TopP,
 	}
+	if c.contextLength > 0 {
+		options["num_ctx"] = c.contextLength
+	}
+	if req.MaxOutputTokens > 0 {
+		options["num_predict"] = req.MaxOutputTokens
+	}
+	body["options"] = options
 	return c.postJSON(ctx, c.chatEndpoint, body)
 }
 
@@ -491,20 +483,28 @@ func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	sentRole := false
 	sentDone := false
+	var pendingToolCalls any
 
 	for scanner.Scan() {
 		trimmed := strings.TrimSpace(scanner.Text())
-		if trimmed != "" {
-			done, roleSent, lineErr := writeOllamaLineAsOpenAIChatSSE(dst, trimmed, sentRole)
-			if lineErr != nil {
-				return lineErr
-			}
-			if roleSent {
-				sentRole = true
-			}
-			if done {
-				sentDone = true
-			}
+		if trimmed == "" {
+			continue
+		}
+		done, roleSent, toolCalls, lineErr := writeOllamaLineAsOpenAIChatSSE(
+			dst,
+			trimmed,
+			sentRole,
+			pendingToolCalls,
+		)
+		if lineErr != nil {
+			return lineErr
+		}
+		if roleSent {
+			sentRole = true
+		}
+		pendingToolCalls = toolCalls
+		if done {
+			sentDone = true
 		}
 	}
 	if scanner.Err() != nil {
@@ -516,10 +516,15 @@ func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 	return nil
 }
 
-func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent bool) (bool, bool, error) {
+func writeOllamaLineAsOpenAIChatSSE(
+	dst io.Writer,
+	line string,
+	roleAlreadySent bool,
+	pendingToolCalls any,
+) (bool, bool, any, error) {
 	var row map[string]any
 	if err := json.Unmarshal([]byte(line), &row); err != nil {
-		return false, roleAlreadySent, ProviderError{Kind: ProviderFailureInvalidResponse}
+		return false, roleAlreadySent, pendingToolCalls, ProviderError{Kind: ProviderFailureInvalidResponse}
 	}
 
 	message, _ := row["message"].(map[string]any)
@@ -530,7 +535,7 @@ func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent 
 			role = "assistant"
 		}
 		if role != "assistant" {
-			return false, roleAlreadySent, errors.New("model runtime returned a non-assistant message")
+			return false, roleAlreadySent, pendingToolCalls, errors.New("model runtime returned a non-assistant message")
 		}
 		delta["role"] = role
 		roleAlreadySent = true
@@ -538,8 +543,10 @@ func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent 
 	if content := textFromRuntimeValue(message["content"]); content != "" {
 		delta["content"] = content
 	}
-	if toolCalls := openAIToolCallDeltas(message["tool_calls"]); len(toolCalls) > 0 {
-		delta["tool_calls"] = toolCalls
+	if message != nil {
+		if toolCalls, ok := message["tool_calls"]; ok && toolCalls != nil {
+			pendingToolCalls = toolCalls
+		}
 	}
 	if len(delta) > 0 {
 		if err := writeSSEData(dst, map[string]any{
@@ -547,31 +554,45 @@ func writeOllamaLineAsOpenAIChatSSE(dst io.Writer, line string, roleAlreadySent 
 				map[string]any{"delta": delta},
 			},
 		}); err != nil {
-			return false, roleAlreadySent, err
+			return false, roleAlreadySent, pendingToolCalls, err
 		}
 	}
 
 	done, _ := row["done"].(bool)
-	if done {
-		promptTokens, promptOK := runtimeTokenCount(row["prompt_eval_count"])
-		completionTokens, completionOK := runtimeTokenCount(row["eval_count"])
-		if promptOK || completionOK {
-			if err := writeSSEData(dst, map[string]any{
-				"choices": []any{},
-				"usage": map[string]any{
-					"prompt_tokens":     promptTokens,
-					"completion_tokens": completionTokens,
-					"total_tokens":      promptTokens + completionTokens,
-				},
-			}); err != nil {
-				return false, roleAlreadySent, err
-			}
-		}
-		if err := writeSSEDone(dst); err != nil {
-			return false, roleAlreadySent, err
+	if !done {
+		return false, roleAlreadySent, pendingToolCalls, nil
+	}
+
+	// Emit the final tool-call snapshot once before usage/DONE so the runner
+	// receives complete parallel calls with stable indexes instead of merging
+	// repeated Ollama stream chunks onto index 0.
+	if toolCalls := openAIToolCallDeltas(pendingToolCalls); len(toolCalls) > 0 {
+		if err := writeSSEData(dst, map[string]any{
+			"choices": []any{
+				map[string]any{"delta": map[string]any{"tool_calls": toolCalls}},
+			},
+		}); err != nil {
+			return false, roleAlreadySent, nil, err
 		}
 	}
-	return done, roleAlreadySent, nil
+	promptTokens, promptOK := runtimeTokenCount(row["prompt_eval_count"])
+	completionTokens, completionOK := runtimeTokenCount(row["eval_count"])
+	if promptOK || completionOK {
+		if err := writeSSEData(dst, map[string]any{
+			"choices": []any{},
+			"usage": map[string]any{
+				"prompt_tokens":     promptTokens,
+				"completion_tokens": completionTokens,
+				"total_tokens":      promptTokens + completionTokens,
+			},
+		}); err != nil {
+			return false, roleAlreadySent, nil, err
+		}
+	}
+	if err := writeSSEDone(dst); err != nil {
+		return false, roleAlreadySent, nil, err
+	}
+	return true, roleAlreadySent, nil, nil
 }
 
 func runtimeTokenCount(value any) (int, bool) {

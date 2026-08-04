@@ -128,7 +128,6 @@ async function sampleDesktop(index) {
       // benchmark and development mode otherwise compiles it with `go run`.
       UMBRATIC_MANAGED_ENDPOINT_MODE: "server",
       UMBRATIC_MANAGED_MODEL_BASE_URL: "https://127.0.0.1:9",
-      UMBRATIC_MANAGED_MODEL_SOFTWARE: "vllm",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -158,7 +157,6 @@ async function main() {
   const values = [];
   for (let index = 0; index < samples; index += 1) values.push(await sampleDesktop(index));
   const result = {
-    schemaVersion: 1,
     label,
     measuredAt: new Date().toISOString(),
     host: { platform: process.platform, arch: process.arch, node: process.version },

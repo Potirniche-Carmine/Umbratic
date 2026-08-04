@@ -326,10 +326,49 @@
   background: color-mix(in srgb, var(--surface-3) 48%, transparent);
 }
 
-.connectionUnsaved {
-  color: var(--amber);
+.settingsAdvanced > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
   font-size: 11.5px;
   font-weight: 600;
+  letter-spacing: 0.02em;
+  list-style: none;
+  user-select: none;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 100ms ease-out;
+}
+
+.settingsAdvanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settingsAdvanced > summary:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
+}
+
+.settingsAdvanced > summary:active {
+  transform: scale(0.97);
+}
+
+.settingsAdvanced[open] > summary {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.12), rgba(178, 186, 197, 0.045)),
+    color-mix(in srgb, var(--surface-2) 56%, transparent);
+}
+
+.settingsAdvanced[open] > .settingsField {
+  margin-top: 8px;
 }
 
 .connectionFeedback {

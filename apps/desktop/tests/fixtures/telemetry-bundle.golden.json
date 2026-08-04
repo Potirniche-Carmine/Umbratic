@@ -1,0 +1,171 @@
+{
+  "exportedAt": "2026-01-01T00:00:11.000Z",
+  "productEvents": [
+    {
+      "id": "event-golden",
+      "type": "review.opened",
+      "at": "2026-01-01T00:00:08.000Z",
+      "taskId": "task-golden",
+      "data": {
+        "scope": "task"
+      }
+    }
+  ],
+  "localDiagnostics": {
+    "total": 2,
+    "warnings": 1,
+    "errors": 1,
+    "bySource": {
+      "umbratic-runner": 2
+    },
+    "byEvent": {
+      "runner.error": 1,
+      "tool.blocked": 1
+    }
+  },
+  "tasks": [
+    {
+      "id": "task-golden",
+      "chatId": "chat-golden",
+      "repoId": "repo-golden",
+      "workspace": {
+        "kind": "git",
+        "mode": "worktree"
+      },
+      "model": {
+        "providerId": "company-endpoint",
+        "modelId": "golden-model"
+      },
+      "runner": {
+        "name": "umbratic-runner",
+        "version": "0.0.3"
+      },
+      "mode": {
+        "permission": "normal",
+        "reasoning": "reasoning"
+      },
+      "status": "review_ready",
+      "outcome": "success",
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "changes": {
+        "fileCount": 1,
+        "review": {
+          "fileCount": 1,
+          "additions": 1,
+          "deletions": 1
+        },
+        "latestTest": {
+          "passed": true,
+          "exitCode": 0
+        }
+      },
+      "runtimeHealth": {
+        "total": 1,
+        "affectedCurrentRun": 1,
+        "byStatus": {
+          "degraded": 1
+        },
+        "byImportance": {
+          "required": 1
+        }
+      },
+      "activity": {
+        "eventCount": 6,
+        "messages": {
+          "user": 1,
+          "promptChars": 25,
+          "assistantChars": 21,
+          "reasoningChars": 0
+        },
+        "commands": {
+          "started": 0,
+          "finished": 0,
+          "failed": 0,
+          "outputEvents": 0,
+          "outputChars": 0,
+          "durationMs": 0,
+          "byClass": {},
+          "errors": {}
+        },
+        "permissions": {
+          "requested": 0,
+          "allowed": 0,
+          "denied": 0
+        },
+        "reviews": {
+          "ready": 0,
+          "changedSinceReady": 0
+        },
+        "context": {
+          "compressed": 0,
+          "retrieved": 0,
+          "originalBytes": 0,
+          "outputBytes": 0,
+          "bytesSaved": 0,
+          "retrievedBytes": 0,
+          "byKind": {},
+          "byStrategy": {}
+        },
+        "requiredToolFailures": {},
+        "feedback": {
+          "good": 0,
+          "bad": 1
+        }
+      },
+      "feedback": [
+        {
+          "messageId": "assistant-1",
+          "rating": "bad",
+          "comment": "Missed the requested edge case.",
+          "at": "2026-01-01T00:00:07.000Z",
+          "conversation": [
+            {
+              "role": "user",
+              "content": "Fix the parser edge case.",
+              "taskId": "task-golden",
+              "at": "2026-01-01T00:00:00.000Z"
+            },
+            {
+              "role": "assistant",
+              "content": "I updated the parser.",
+              "taskId": "task-golden",
+              "at": "2026-01-01T00:00:01.000Z",
+              "messageId": "assistant-1"
+            }
+          ]
+        }
+      ],
+      "failedTools": [
+        {
+          "id": "tool-golden",
+          "toolKind": "edit",
+          "at": "2026-01-01T00:00:05.000Z",
+          "exitCode": null,
+          "status": "validation_error",
+          "errorCode": "edit_not_found",
+          "inputMeta": {
+            "pathHash": "841254fe75488c1b",
+            "argKeys": [
+              "path",
+              "edits"
+            ]
+          },
+          "responseMeta": {
+            "stdoutChars": 0,
+            "stderrChars": 0,
+            "toolResponseChars": 8,
+            "errorMessage": "oldText did not match token=[redacted]"
+          }
+        }
+      ],
+      "contextTriggers": [
+        {
+          "threshold": 90,
+          "at": "2026-01-01T00:00:06.000Z",
+          "estimatedTokens": 90000,
+          "contextLength": 100000
+        }
+      ]
+    }
+  ]
+}

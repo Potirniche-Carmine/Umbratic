@@ -1,5 +1,3 @@
-export const BACKEND_EVENT_VERSION = 1 as const;
-
 import type { ReviewFile as NormalizedReviewFile } from "./reviewDiff";
 import {
   isResponseFeedbackReason,
@@ -42,9 +40,9 @@ export type BackendTestResult = {
   completedAt: string;
 };
 
-type BackendEventMeta = { version: typeof BACKEND_EVENT_VERSION; at?: string; endedAt?: string };
+type BackendEventMeta = { at?: string; endedAt?: string };
 
-export type BackendUiEventV1 = BackendEventMeta & (
+export type BackendUiEvent = BackendEventMeta & (
   | { type: "user.message"; taskId: string; text: string; attachedFiles?: BackendChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.progress.delta"; taskId: string; text: string }
@@ -53,7 +51,7 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass; toolKind?: string; input?: unknown }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
-  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number }
+  | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number; details?: Record<string, unknown>; continuation?: Record<string, unknown> }
   | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; promptTokens?: number; completionTokens?: number; reserveTokens: number; protectedTokens?: number; estimatedTokens: number; phase?: "preflight" | "observed"; source?: "heuristic" | "provider"; confidence?: "low" | "high" }
   | { type: "context.threshold"; taskId: string; threshold: 75 | 90; contextLength: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
@@ -68,29 +66,25 @@ export type BackendUiEventV1 = BackendEventMeta & (
   | { type: "merge.completed"; taskId: string; targetBranch: string; commit: string; patchHash: string }
   | { type: "ide.opened"; taskId: string; ideId: string; target: "workspace" | "file"; filePath?: string; result: "success" | "failed"; message?: string }
   | { type: "response.feedback"; taskId: string; messageId: string; rating: ResponseRating; reason?: ResponseFeedbackReason; comment?: string }
-  | { type: "tool.failed"; taskId: string; id: string; toolKind: string; input: unknown; response: { stdout: string; stderr: string; toolResponse?: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string } }
+  | { type: "tool.failed"; taskId: string; id: string; toolKind: string; input: unknown; response: { stdout: string; stderr: string; toolResponse?: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string }; details?: Record<string, unknown> }
   | { type: "tool.policy.stage"; taskId: string; toolCallId: string; stage: string; outcome: string; reason?: string }
-  | { type: "skill.selected"; taskId: string; skillId: string; source: "system" | "local"; reason: "explicit_request" | "strong_match" | "metadata"; fullContent: boolean }
+  | { type: "skill.requested"; taskId: string; sessionId: string; runId: string; requestId: string; skillId: string; source: string; origin: "harness" | "model" }
+  | { type: "skill.loaded"; taskId: string; sessionId: string; runId: string; requestId: string; skillId: string; source: string; origin: "harness" | "model"; contentHash: string; bytes: number }
+  | { type: "skill.failed"; taskId: string; sessionId: string; runId: string; requestId: string; skillId: string; source: string; origin: "harness" | "model"; code: string; message: string }
   | { type: "turn.outcome"; taskId: string; outcome: "completed" | "model_gave_up" | "safety_limit" }
   | { type: "required_tool.failed"; taskId: string; requirement: "file_change"; reason: string; requiredTools: string[]; attemptedTools?: string[]; attempt?: number; detail?: string }
   | { type: "task.error"; taskId: string; message: string; category?: string; code?: string; detail?: string }
 );
 
-export type BackendUiEventInput = BackendUiEventV1 extends infer Event
-  ? Event extends unknown
-    ? Omit<Event, "version"> & { version?: typeof BACKEND_EVENT_VERSION }
-    : never
-  : never;
-
 export type BackendEventParseFailure = {
   ok: false;
-  code: "not_an_object" | "unsupported_version" | "unknown_type" | "invalid_field";
+  code: "not_an_object" | "unknown_type" | "invalid_field";
   message: string;
   type?: string;
 };
 
 export type BackendEventParseResult =
-  | { ok: true; event: BackendUiEventV1 }
+  | { ok: true; event: BackendUiEvent }
   | BackendEventParseFailure;
 
 const eventTypes = new Set([
@@ -119,7 +113,9 @@ const eventTypes = new Set([
   "response.feedback",
   "tool.failed",
   "tool.policy.stage",
-  "skill.selected",
+  "skill.requested",
+  "skill.loaded",
+  "skill.failed",
   "turn.outcome",
   "required_tool.failed",
   "task.error",
@@ -224,8 +220,20 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
     case "tool.policy.stage":
       return hasString(value, "toolCallId") && hasString(value, "stage") && hasString(value, "outcome")
         && (value.reason === undefined || hasString(value, "reason"));
-    case "skill.selected":
-      return hasString(value, "skillId") && hasString(value, "source") && hasString(value, "reason") && typeof value.fullContent === "boolean";
+    case "skill.requested":
+      return hasString(value, "sessionId") && hasString(value, "runId") && hasString(value, "requestId")
+        && hasString(value, "skillId") && hasString(value, "source")
+        && (value.origin === "harness" || value.origin === "model");
+    case "skill.loaded":
+      return hasString(value, "sessionId") && hasString(value, "runId") && hasString(value, "requestId")
+        && hasString(value, "skillId") && hasString(value, "source")
+        && (value.origin === "harness" || value.origin === "model")
+        && hasString(value, "contentHash") && hasNonNegativeNumber(value, "bytes");
+    case "skill.failed":
+      return hasString(value, "sessionId") && hasString(value, "runId") && hasString(value, "requestId")
+        && hasString(value, "skillId") && hasString(value, "source")
+        && (value.origin === "harness" || value.origin === "model")
+        && hasString(value, "code") && hasString(value, "message");
     case "turn.outcome":
       return value.outcome === "completed" || value.outcome === "model_gave_up" || value.outcome === "safety_limit";
     case "required_tool.failed":
@@ -237,8 +245,8 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
 
 export function parseBackendUiEvent(value: unknown): BackendEventParseResult {
   if (!isRecord(value)) return { ok: false, code: "not_an_object", message: "Backend event must be an object." };
-  if (value.version !== undefined && value.version !== BACKEND_EVENT_VERSION) {
-    return { ok: false, code: "unsupported_version", message: `Unsupported backend event version: ${String(value.version)}.` };
+  if ("version" in value) {
+    return { ok: false, code: "invalid_field", message: "Backend events do not carry a version field." };
   }
   if (!hasString(value, "type") || !eventTypes.has(value.type as string)) {
     return { ok: false, code: "unknown_type", message: "Backend event type is missing or unknown.", ...(hasString(value, "type") ? { type: value.type as string } : {}) };
@@ -249,7 +257,7 @@ export function parseBackendUiEvent(value: unknown): BackendEventParseResult {
   if ((value.at !== undefined && typeof value.at !== "string") || (value.endedAt !== undefined && typeof value.endedAt !== "string")) {
     return { ok: false, code: "invalid_field", message: `Backend event ${String(value.type)} has invalid timestamps.`, type: value.type as string };
   }
-  return { ok: true, event: { ...value, version: BACKEND_EVENT_VERSION } as BackendUiEventV1 };
+  return { ok: true, event: value as BackendUiEvent };
 }
 
 export function backendEventDiagnostic(failure: BackendEventParseFailure): string {

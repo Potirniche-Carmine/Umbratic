@@ -131,10 +131,14 @@ test("toast close control centers its icon without a text line box", () => {
   );
   const buttonRule = css.match(/\.toast button\s*{[^}]+}/s)?.[0] ?? "";
   const iconRule = css.match(/\.toast button svg\s*{[^}]+}/s)?.[0] ?? "";
+  const turnOutcomeRule = css.match(/\.turnOutcomeToast\s*{[^}]+}/s)?.[0] ?? "";
   assert.match(buttonRule, /place-items:\s*center/);
   assert.match(buttonRule, /padding:\s*0/);
   assert.match(buttonRule, /line-height:\s*0/);
   assert.match(iconRule, /display:\s*block/);
+  assert.match(turnOutcomeRule, /var\(--modal-bg\)/);
+  assert.match(turnOutcomeRule, /color:\s*var\(--text\)/);
+  assert.doesNotMatch(turnOutcomeRule, /--panel-bg|--text-primary/);
 });
 
 test("feedback dialog and prompt controls do not allow horizontal growth", () => {
@@ -351,7 +355,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   const skillTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "I will inspect the project.", at: "2026-01-01T00:00:01.000Z" },
-    { type: "skill.selected", taskId: "task-1", skillId: "project-review", source: "local", reason: "strong_match", fullContent: true, at: "2026-01-01T00:00:02.000Z" },
+    { type: "skill.loaded", taskId: "task-1", sessionId: "session-1", runId: "run-1", requestId: "skill-req-1", skillId: "project-review", source: "local", origin: "harness", contentHash: "abc", bytes: 20, at: "2026-01-01T00:00:02.000Z" },
     events[2],
     events[3],
     events[4],
@@ -572,9 +576,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
 
   const searchRun = {
     id: "tool-1",
-    command: 'search "composer"',
+    command: 'grep "composer"',
     kind: "read",
-    toolKind: "search",
+    toolKind: "grep",
     commandClass: "read",
     cwd: "C:/repo",
     stdout: "apps/desktop/src/renderer/main.tsx: content\n",
@@ -582,8 +586,8 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     exitCode: 0,
     status: "passed",
   };
-  assert.equal(commandLabel(searchRun.command), "Search workspace");
-  assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
+  assert.equal(commandLabel(searchRun.command), "Search text");
+  assert.equal(commandDetailLabel(searchRun), "Search text results - read");
   assert.equal(commandShellText(searchRun), "apps/desktop/src/renderer/main.tsx: content");
 
   // Every runner tool is rendered from its reported tool kind, so a tool whose
@@ -592,7 +596,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "read",
     "read_attachment",
     "read_skill",
-    "search",
+    "ls",
+    "find",
+    "grep",
     "write",
     "edit",
     "apply_patch",
@@ -668,4 +674,39 @@ test("prompt mention parsing supports file and skill completion triggers", () =>
   );
   assert.match(highlighted, /promptMentionToken/);
   assert.match(highlighted, /\$review/);
+});
+
+test("spaced list items stay one list and inline math renders as symbols", () => {
+  const { MarkdownContent } = loadRenderer();
+  const content = [
+    String.raw`Desktop $\rightarrow$ Runner $\rightarrow$ Veil`,
+    "",
+    "1. First step",
+    "",
+    "2. Second step",
+    "",
+    "3. Third step",
+    "",
+    "```",
+    String.raw`literal $\rightarrow$ stays`,
+    "```",
+  ].join("\n");
+
+  const html = renderToStaticMarkup(React.createElement(MarkdownContent, { content }));
+  // A blank line between items used to close the list, so every <ol> restarted
+  // at 1 and the reader saw "1. 1. 1.".
+  assert.equal(html.match(/<ol>/g)?.length, 1);
+  assert.equal(html.match(/<li>/g)?.length, 3);
+  assert.match(html, /Desktop → Runner → Veil/);
+  assert.doesNotMatch(html.split("<pre")[0], new RegExp(String.raw`\\rightarrow`));
+  // Code keeps whatever the author wrote.
+  assert.ok(html.includes(String.raw`literal $\rightarrow$ stays`), html);
+});
+
+test("unsupported inline math is left verbatim rather than half translated", () => {
+  const { MarkdownContent } = loadRenderer();
+  const html = renderToStaticMarkup(
+    React.createElement(MarkdownContent, { content: String.raw`Ratio $\frac{a}{b}$ holds` }),
+  );
+  assert.ok(html.includes(String.raw`$\frac{a}{b}$`), html);
 });

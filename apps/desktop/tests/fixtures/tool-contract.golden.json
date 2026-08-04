@@ -1,0 +1,351 @@
+[
+  {
+    "function": {
+      "description": "Read one UTF-8 workspace text file. Send exactly one JSON object with path and optional one-based line offset and limit. Returns raw file text with original line endings and no line-number prefixes. Never list directories; use ls. If a result is partial, continue with the reported nextOffset.",
+      "name": "read",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Maximum number of lines to return.",
+            "maximum": 2000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "One-based line offset to begin reading.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative file path.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "List one workspace directory non-recursively. Entries are returned in lexical order with / on directories. Use find for recursion. Continue with nextOffset when truncated.",
+      "name": "ls",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Maximum entries to return.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "One-based entry offset.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative directory path. Use \".\" for the workspace root.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Find workspace paths by one explicit glob under path. Returns stable sorted relative paths. No fuzzy query language.",
+      "name": "find",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "glob": {
+            "description": "One include glob, such as **/*.rs.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum paths to return.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Workspace-relative directory or file scope.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "glob"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Search text with one pattern in literal or regex mode under path. Optional glob, caseSensitive, context lines, and limit. Returns path:line: text rows.",
+      "name": "grep",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "caseSensitive": {
+            "description": "Match case exactly.",
+            "type": "boolean"
+          },
+          "context": {
+            "description": "Context lines around each match.",
+            "maximum": 5,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "glob": {
+            "description": "Optional include glob.",
+            "maxLength": 512,
+            "minLength": 0,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum rows to return.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "How pattern is interpreted.",
+            "enum": [
+              "literal",
+              "regex"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Workspace-relative file or directory scope.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "pattern": {
+            "description": "Exact literal or regex pattern.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern",
+          "mode",
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Create or replace one workspace text file after permission. Send exactly path and content. Parents are created after approval; the write is staged and installed atomically.",
+      "name": "write",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "Complete UTF-8 file content.",
+            "minLength": 0,
+            "type": "string"
+          },
+          "path": {
+            "description": "Workspace-relative destination file.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Apply one or more exact replacements to one workspace file after permission. Send exactly path and edits[]. Each oldText must match the same original snapshot uniquely and without overlap. Copy oldText verbatim from the latest read result, including its line endings. No fuzzy matching.",
+      "name": "edit",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "description": "Exact replacements to apply to one original snapshot.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "newText": {
+                  "description": "Replacement text.",
+                  "type": "string"
+                },
+                "oldText": {
+                  "description": "Exact current text to replace.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "oldText",
+                "newText"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          },
+          "path": {
+            "description": "Workspace-relative file to edit.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "edits"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Apply one exact Begin Patch document to workspace files after permission. Send exactly the patch field. Every hunk must match uniquely. Do not send edit fields.",
+      "name": "apply_patch",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "patch": {
+            "description": "A complete *** Begin Patch through *** End Patch document.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "patch"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Run a local workspace command in /bin/sh after policy and permission checks. Prefer read, ls, find, and grep for file inspection. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args.",
+      "name": "command",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "One complete shell command.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeoutMs": {
+            "description": "Bounded execution timeout.",
+            "maximum": 1800000,
+            "minimum": 100,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Run one approved executable by id without shell lookup. Send exactly programId, optional args, and optional timeoutMs. Put one argument value in each args item. Do not repeat the executable name, use shell operators, or send a command field.",
+      "name": "run_program",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "description": "Argument values only, in process order. Do not include the executable id.",
+            "items": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "programId": {
+            "description": "One exact executable id from this enum.",
+            "enum": [
+              "runtime"
+            ],
+            "type": "string"
+          },
+          "timeoutMs": {
+            "description": "Bounded execution timeout.",
+            "maximum": 1800000,
+            "minimum": 100,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "programId"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  },
+  {
+    "function": {
+      "description": "Retrieve a bounded window of exact compacted local tool output by its reported hash. Returns context_not_available when no output has been compacted yet.",
+      "name": "retrieve_context",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "hash": {
+            "description": "The hash reported by a compacted tool result.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum bytes to return.",
+            "maximum": 65536,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Zero-based byte offset.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "function"
+  }
+]

@@ -1,4 +1,3 @@
-export const documentReviewSchemaVersion = 1 as const;
 export const documentReviewByteLimit = 1024 * 1024;
 export const documentReviewBlockLimit = 1_000;
 export const documentReviewTextLimit = 500_000;
@@ -21,7 +20,6 @@ export type DocumentReviewBlock = {
 };
 
 export type DocumentReviewSnapshot = {
-  schemaVersion: typeof documentReviewSchemaVersion;
   documentPath: string;
   title: string;
   blocks: DocumentReviewBlock[];
@@ -84,10 +82,7 @@ export function parseDocumentReviewSnapshot(
   expectedDocumentPath?: string,
 ): DocumentReviewSnapshot {
   if (!isRecord(value)) throw new Error("Document review snapshot must be an object.");
-  assertKnownKeys(value, ["schemaVersion", "documentPath", "title", "blocks"], "Document review snapshot");
-  if (value.schemaVersion !== documentReviewSchemaVersion) {
-    throw new Error("Document review snapshot version is unsupported.");
-  }
+  assertKnownKeys(value, ["documentPath", "title", "blocks"], "Document review snapshot");
   const documentPath = normalizedText(value.documentPath, "Document path", 320);
   if (!isDocumentReviewArtifactPath(documentPath)) {
     throw new Error("Document path is outside the supported artifact directory.");
@@ -122,5 +117,5 @@ export function parseDocumentReviewSnapshot(
     if (textLength > documentReviewTextLimit) throw new Error("Document review text exceeds the supported limit.");
     return { id, style: candidate.style as DocumentReviewBlockStyle, text };
   });
-  return { schemaVersion: documentReviewSchemaVersion, documentPath, title, blocks };
+  return { documentPath, title, blocks };
 }

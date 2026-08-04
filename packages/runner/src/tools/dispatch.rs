@@ -20,7 +20,15 @@ fn tool_finished_event(
         "at":finished_at,
     });
     let fields = event.as_object_mut().expect("tool event is an object");
-    if let Some(code) = &result.error_code {
+    // Typed payloads travel with the event so consumers never parse model-facing
+    // text to learn what a tool did.
+    if let Some(details) = &result.details {
+        fields.insert("details".into(), details.clone());
+    }
+    if let Some(continuation) = &result.continuation {
+        fields.insert("continuation".into(), continuation.clone());
+    }
+    if let Some(code) = &result.code {
         fields.insert("errorCode".into(), Value::String(code.clone()));
     }
     if let Some(message) = &result.error_message {
@@ -28,9 +36,46 @@ fn tool_finished_event(
         fields.insert("errorMessage".into(), Value::String(redacted.clone()));
         fields.insert("response".into(), Value::String(redacted));
     } else if result.status != "success" {
-        fields.insert("response".into(), Value::String(result.output.clone()));
+        fields.insert("response".into(), Value::String(result.content.clone()));
     }
     event
+}
+
+/// Renders structured evidence for the model. The typed payload stays in
+/// details; this is presentation only.
+fn evidence_text(evidence: &Value) -> String {
+    let mut lines = Vec::new();
+    if let Some(summary) = evidence.get("summary").and_then(Value::as_str) {
+        lines.push(summary.to_owned());
+    }
+    for (label, key) in [
+        ("Locations", "locations"),
+        ("Nodes", "nodes"),
+        ("Edges", "edges"),
+    ] {
+        if let Some(items) = evidence.get(key).and_then(Value::as_array)
+            && !items.is_empty()
+        {
+            lines.push(format!("{label}: {}", items.len()));
+        }
+    }
+    if let Some(markdown) = evidence.get("hoverMarkdown").and_then(Value::as_str) {
+        lines.push(markdown.to_owned());
+    }
+    for warning in evidence
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Value::as_str)
+    {
+        lines.push(format!("Warning: {warning}"));
+    }
+    if lines.is_empty() {
+        return "No evidence was returned.".to_owned();
+    }
+    lines.join("\n")
 }
 
 pub async fn execute_tool(
@@ -42,7 +87,14 @@ pub async fn execute_tool(
     let started_at = now_iso();
     let started = Instant::now();
     let name = redact_text(&call.name, 80);
-    let parsed_request = ToolRequest::parse(&call.name, &call.arguments, &session.config.cwd);
+    let surface = tool_surface(&session);
+    let declared_kind = catalog::definition(&call.name).map_or("plain_text", |tool| tool.kind);
+    let parsed_request = ToolRequest::parse(
+        &call.name,
+        &call.arguments,
+        &session.config.cwd,
+        surface.as_ref(),
+    );
     let summary = parsed_request.as_ref().map_or_else(
         |_| format!("Invalid {name} tool request"),
         ToolRequest::summary,
@@ -51,57 +103,44 @@ pub async fn execute_tool(
         .as_ref()
         .map_or("unknown", ToolRequest::command_class);
     sink.emit(json!({ "type":"tool.requested", "taskId":session.task_id, "toolCallId":call.id, "toolKind":name, "arguments":call.arguments.clone(), "commandClass":command_class, "summary":summary, "cwd":session.config.cwd, "at":started_at }));
-    let request = match parsed_request {
-        Ok(value) => value,
-        Err(error) => {
-            sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"blocked", "reason":"invalid_arguments", "at":now_iso() }));
-            return finish_failure(
-                &session,
-                &sink,
-                &call,
-                &name,
-                &started_at,
-                started,
-                "validation_error",
-                "invalid_arguments",
-                error,
-            );
-        }
-    };
     if session.is_aborted() {
         sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"blocked", "reason":"aborted", "at":now_iso() }));
-        return finish_failure(
-            &session,
-            &sink,
-            &call,
+        let result = finish_failure_pending(
             &name,
-            &started_at,
-            started,
             "aborted",
             "aborted",
-            "Tool call was aborted.".into(),
+            "Tool call was aborted.".to_owned(),
         );
-    }
-    if let Some(capability) = request.capability_name()
-        && !session
-            .config
-            .enabled_tools
-            .iter()
-            .any(|enabled| enabled == capability)
-    {
-        sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"blocked", "reason":"tool_disabled", "at":now_iso() }));
-        return finish_failure(
+        sink.emit(tool_finished_event(
             &session,
-            &sink,
             &call,
-            &name,
             &started_at,
             started,
-            "validation_error",
-            "tool_disabled",
-            format!("Tool {name} is not available in this session."),
-        );
+            &result,
+        ));
+        return result;
     }
+    let request = match parsed_request {
+        Ok(value) => value,
+        Err(violation) => {
+            sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"blocked", "reason":"invalid_arguments", "at":now_iso() }));
+            let mut result = finish_failure_pending(
+                &name,
+                "validation_error",
+                violation.code,
+                violation.message(),
+            );
+            result.details = Some(violation.details());
+            sink.emit(tool_finished_event(
+                &session,
+                &call,
+                &started_at,
+                started,
+                &result,
+            ));
+            return result;
+        }
+    };
     sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"passed", "at":now_iso() }));
     let emits_own_output = request.emits_own_output();
     let result: ToolExecutionResult = match request {
@@ -113,13 +152,25 @@ pub async fn execute_tool(
         ToolRequest::Edit(request) => {
             edit_tool(&session, &sink, &request.arguments, &permissions).await
         }
-        ToolRequest::Search(request) => search_tool(&session, &request.arguments).await,
+        ToolRequest::ApplyPatch(request) => {
+            apply_patch_tool(&session, &sink, &request.arguments, &permissions).await
+        }
+        ToolRequest::Ls(request) => ls_tool(&session, &request.arguments).await,
+        ToolRequest::Find(request) => find_tool(&session, &request.arguments).await,
+        ToolRequest::Grep(request) => grep_tool(&session, &request.arguments).await,
         ToolRequest::Lsp(request) => match session.lsp.as_ref() {
+            // Structured evidence goes in details; content is a short rendering
+            // for the model. No consumer parses the prose.
             Some(service) => service
                 .query(&request.arguments, &session)
                 .await
                 .map(|value| {
-                    ToolResult::success(format!("lsp {}", request.primary), value.to_string())
+                    ToolResult::success_detailed(
+                        format!("lsp {}", request.primary),
+                        evidence_text(&value),
+                        Some(value),
+                        None,
+                    )
                 })
                 .map_err(ToolError::runtime),
             None => Err(ToolError::runtime(
@@ -130,11 +181,12 @@ pub async fn execute_tool(
             .workspace_graph
             .as_ref()
             .map(|service| {
-                ToolResult::success(
+                let evidence = service.query(&Value::Object(request.arguments.clone()));
+                ToolResult::success_detailed(
                     format!("workspace_graph {}", request.primary),
-                    service
-                        .query(&Value::Object(request.arguments.clone()))
-                        .to_string(),
+                    evidence_text(&evidence),
+                    Some(evidence),
+                    None,
                 )
             })
             .ok_or_else(|| {
@@ -151,55 +203,58 @@ pub async fn execute_tool(
             )
             .await
         }
-        ToolRequest::ReadSkill(request) => read_skill_tool(&session, &request.arguments),
+        ToolRequest::ReadSkill(request) => {
+            let skill_id = string_arg(&request.arguments, &["skillId"]);
+            let run_id = session
+                .active_run_id()
+                .unwrap_or_else(|| format!("run-{}", session.id));
+            match crate::skill_preflight::load_skill_with_lifecycle(
+                &session, &run_id, &skill_id, "model", &sink,
+            ) {
+                Ok(_) => read_skill_tool(&session, &request.arguments),
+                Err(failure) => Err(ToolError::validation(failure.message)),
+            }
+        }
         ToolRequest::RetrieveContext(request) => {
             let hash = request.primary;
             let args = request.arguments;
             let mut store = session.context_store.lock().await;
-            store.retrieve(&hash, args.get("offset").and_then(Value::as_u64).map(|value| value as usize), args.get("limit").and_then(Value::as_u64).map(|value| value as usize)).map(|window| { sink.emit(json!({"type":"context.retrieved","taskId":session.task_id,"toolCallId":call.id,"hash":window.entry.hash,"offset":window.offset,"bytesShown":window.bytes_shown,"totalBytes":window.entry.original_bytes,"at":now_iso()})); let status = window.next_offset.map(|value| format!("Next offset: {value}")).unwrap_or_else(|| if window.entry.original_truncated { format!("Read status: stored copy complete; original output was capped at {} of {} bytes", window.entry.stored_bytes, window.entry.original_bytes) } else { "Read status: complete".into() }); ToolResult::success(hash.clone(), format!("Retrieved context {}\nKind: {}\nStrategy: {}\nBytes shown: {}-{} of {}\n{}\n\n{}", window.entry.hash, window.entry.kind, window.entry.strategy, window.offset, window.offset + window.bytes_shown, window.entry.original_bytes, status, window.content)) }).ok_or_else(|| ToolError::validation(format!("No stored context found for hash {hash}.")))
+            store.retrieve(&hash, args.get("offset").and_then(Value::as_u64).map(|value| value as usize), args.get("limit").and_then(Value::as_u64).map(|value| value as usize)).map(|window| { sink.emit(json!({"type":"context.retrieved","taskId":session.task_id,"toolCallId":call.id,"hash":window.entry.hash,"offset":window.offset,"bytesShown":window.bytes_shown,"totalBytes":window.entry.original_bytes,"at":now_iso()})); let status = window.next_offset.map(|value| format!("Next offset: {value}")).unwrap_or_else(|| if window.entry.original_truncated { format!("Read status: stored copy complete; original output was capped at {} of {} bytes", window.entry.stored_bytes, window.entry.original_bytes) } else { "Read status: complete".into() }); ToolResult::success(hash.clone(), format!("Retrieved context {}\nKind: {}\nStrategy: {}\nBytes shown: {}-{} of {}\n{}\n\n{}", window.entry.hash, window.entry.kind, window.entry.strategy, window.offset, window.offset + window.bytes_shown, window.entry.original_bytes, status, window.content)) }).ok_or_else(|| {
+                // retrieve_context is declared for the whole task, so an empty store
+                // answers with one stable typed result instead of the tool vanishing
+                // from the surface between steps.
+                let empty = !store.has_entries();
+                ToolError {
+                    status: "validation_error",
+                    code: if empty { "context_not_available" } else { "context_hash_unknown" },
+                    message: if empty {
+                        "No tool output has been compacted yet, so there is nothing to retrieve.".to_owned()
+                    } else {
+                        format!("No stored context found for hash {hash}.")
+                    },
+                    details: Some(json!({"hash": hash, "storeEmpty": empty})),
+                }
+            })
         }
     };
     match result {
         Ok(mut result) => {
-            if call.name == "read_skill" {
-                let skill_id = call
-                    .arguments
-                    .as_object()
-                    .and_then(|arguments| arguments.get("skillId"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                if let Some(skill) = session
-                    .config
-                    .skills
-                    .iter()
-                    .find(|skill| skill.id == skill_id)
-                {
-                    sink.emit(json!({
-                        "type":"skill.selected",
-                        "taskId":session.task_id,
-                        "skillId":skill.id,
-                        "source":skill.source,
-                        "reason":"metadata",
-                        "fullContent":result.output.contains("Read status: complete"),
-                        "at":now_iso()
-                    }));
-                }
-            }
-            if !emits_own_output && !result.output.is_empty() {
-                sink.emit(json!({ "type":"tool.output", "taskId":session.task_id, "toolCallId":call.id, "stream":"stdout", "text":result.output, "redacted":true, "at":now_iso() }));
+            if !emits_own_output && !result.content.is_empty() {
+                sink.emit(json!({ "type":"tool.output", "taskId":session.task_id, "toolCallId":call.id, "stream":"stdout", "text":result.content, "redacted":true, "at":now_iso() }));
             }
             let mut store = session.context_store.lock().await;
             let compressed = compress_tool_result(
                 &mut store,
                 &name,
+                declared_kind,
                 &call.id,
-                &result.title,
-                &result.output,
+                &result.summary,
+                &result.content,
                 &result.status,
             );
             if compressed.modified {
                 sink.emit(json!({"type":"context.compressed","taskId":session.task_id,"toolCallId":call.id,"toolKind":name,"kind":compressed.kind,"strategy":compressed.strategy,"hash":compressed.marker_hash,"originalBytes":compressed.original_bytes,"outputBytes":compressed.output_bytes,"at":now_iso()}));
-                result.output = compressed.output;
+                result.content = compressed.output;
             }
             sink.emit(tool_finished_event(
                 &session,
@@ -210,36 +265,24 @@ pub async fn execute_tool(
             ));
             result
         }
-        Err(error) => finish_failure(
-            &session,
-            &sink,
-            &call,
-            &name,
-            &started_at,
-            started,
-            error.status,
-            error.code,
-            error.message,
-        ),
+        Err(error) => {
+            let mut result = finish_failure_pending(&name, error.status, error.code, error.message);
+            result.details = error.details;
+            sink.emit(tool_finished_event(
+                &session,
+                &call,
+                &started_at,
+                started,
+                &result,
+            ));
+            result
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn finish_failure(
-    session: &Session,
-    sink: &EventSink,
-    call: &ToolCall,
-    name: &str,
-    started_at: &str,
-    started: Instant,
-    status: &str,
-    code: &str,
-    message: String,
-) -> ToolResult {
+fn finish_failure_pending(name: &str, status: &str, code: &str, message: String) -> ToolResult {
     let mut result = ToolResult::failure(status, code, message);
-    result.title = name.to_owned();
-    sink.emit(tool_finished_event(
-        session, call, started_at, started, &result,
-    ));
+    result.summary = name.to_owned();
     result
 }

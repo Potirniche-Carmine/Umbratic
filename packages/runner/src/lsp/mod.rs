@@ -171,18 +171,17 @@ impl LspQuery {
             return Err("lsp action must be definition, references, hover, or symbols.".to_owned());
         }
         let file_text = input
-            .get("filePath")
-            .or_else(|| input.get("path"))
+            .get("path")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
         if action != "symbols" && file_text.is_none() {
-            return Err("lsp requires filePath for this action.".to_owned());
+            return Err("lsp requires path for this action.".to_owned());
         }
         let (file, language_id) = if let Some(file_text) = file_text {
             let (absolute, relative) = resolve_workspace_path(root, file_text)?;
             if !absolute.is_file() {
-                return Err("lsp filePath must identify an existing file.".to_owned());
+                return Err("lsp path must identify an existing file.".to_owned());
             }
             if is_generated_runtime_path(&relative) {
                 return Err("lsp refuses generated runtime paths.".to_owned());
@@ -562,7 +561,6 @@ fn format_response(
         _ => format!("Found {count} references."),
     };
     json!({
-        "schemaVersion": 1,
         "freshness": "ready",
         "languageId": query.language_id.as_deref().unwrap_or(&config.language_ids[0]),
         "serverId": config.id,
@@ -575,7 +573,6 @@ fn format_response(
 
 fn degraded_payload(server_id: &str, language_id: Option<&str>, warning: &str) -> Value {
     json!({
-        "schemaVersion": 1,
         "freshness": "degraded",
         "languageId": language_id,
         "serverId": server_id,
@@ -983,15 +980,15 @@ mod tests {
         std::fs::write(workspace.path().join("main.ts"), "export const x = 1;").unwrap();
         let valid = json!({
             "action": "definition",
-            "filePath": "main.ts",
+            "path": "main.ts",
             "line": 1,
             "character": 1
         });
         assert!(LspQuery::parse(workspace.path(), valid.as_object().unwrap()).is_ok());
         for invalid in [
-            json!({"action":"rename","filePath":"main.ts"}),
-            json!({"action":"definition","filePath":"main.ts","line":0}),
-            json!({"action":"definition","filePath":"../outside.ts"}),
+            json!({"action":"rename","path":"main.ts"}),
+            json!({"action":"definition","path":"main.ts","line":0}),
+            json!({"action":"definition","path":"../outside.ts"}),
             json!({"action":"symbols","query":""}),
         ] {
             assert!(

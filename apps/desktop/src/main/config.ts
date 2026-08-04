@@ -1,6 +1,6 @@
 import { env } from "node:process";
 
-import type { HarnessProfileId, LocalProviderId, ModelEndpointMode, ModelEndpointSoftware, TaskState } from "./types";
+import type { HarnessProfileId, LocalProviderId, ModelEndpointMode, TaskState } from "./types";
 
 export type EndpointMtlsConfig = {
   caPath?: string;
@@ -28,24 +28,6 @@ export function isModelEndpointMode(value: unknown): value is ModelEndpointMode 
   return value === "local" || value === "server";
 }
 
-export function isModelEndpointSoftware(value: unknown): value is ModelEndpointSoftware {
-  return value === "ollama" || value === "vllm";
-}
-
-export function defaultEndpointSoftware(mode: ModelEndpointMode, baseUrl = defaultEndpointBaseUrl): ModelEndpointSoftware {
-  if (mode === "local") return "ollama";
-  const normalized = baseUrl.toLowerCase();
-  if (env.UMBRATIC_MANAGED_MODEL_SOFTWARE && isModelEndpointSoftware(env.UMBRATIC_MANAGED_MODEL_SOFTWARE)) {
-    return env.UMBRATIC_MANAGED_MODEL_SOFTWARE;
-  }
-  if (env.UMBRATIC_MODEL_SOFTWARE && isModelEndpointSoftware(env.UMBRATIC_MODEL_SOFTWARE)) {
-    return env.UMBRATIC_MODEL_SOFTWARE;
-  }
-  if (env.OLLAMA_BASE_URL || normalized.includes("11434") || normalized.includes("ollama")) return "ollama";
-  if (env.UMBRATIC_VLLM_BASE_URL || env.VLLM_BASE_URL || normalized.includes("vllm") || normalized.includes("8000")) return "vllm";
-  return "vllm";
-}
-
 export function defaultModelEndpointMode(): ModelEndpointMode {
   if (isModelEndpointMode(env.UMBRATIC_DEFAULT_ENDPOINT_MODE)) return env.UMBRATIC_DEFAULT_ENDPOINT_MODE;
   return configuredEndpointBaseUrl ? "server" : "local";
@@ -54,18 +36,15 @@ export function defaultModelEndpointMode(): ModelEndpointMode {
 export function managedModelEndpointDefaults():
   | {
       mode?: ModelEndpointMode;
-      software?: ModelEndpointSoftware;
       baseUrl?: string;
       secret?: string;
     }
   | undefined {
   const mode = isModelEndpointMode(env.UMBRATIC_MANAGED_ENDPOINT_MODE) ? env.UMBRATIC_MANAGED_ENDPOINT_MODE : undefined;
-  const software = isModelEndpointSoftware(env.UMBRATIC_MANAGED_MODEL_SOFTWARE) ? env.UMBRATIC_MANAGED_MODEL_SOFTWARE : undefined;
   const baseUrl = env.UMBRATIC_MANAGED_MODEL_BASE_URL?.trim();
   const secret = env.UMBRATIC_MANAGED_MODEL_API_KEY ?? undefined;
   const managed = {
     mode,
-    software,
     baseUrl: baseUrl || undefined,
     secret,
   };
@@ -89,7 +68,7 @@ export function isHarnessProfileId(value: unknown): value is HarnessProfileId {
   return value === "marketing" || value === "sales" || value === "engineering";
 }
 
-export function defaultEndpointBaseUrlForSoftware(mode: ModelEndpointMode, software: ModelEndpointSoftware): string {
+export function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode): string {
   if (mode === "local") {
     const configuredLocalRuntime =
       env.UMBRATIC_LOCAL_RUNTIME_BASE_URL ||

@@ -494,9 +494,12 @@ mod tests {
     #[test]
     fn write_confirmation_rejects_symlink_leaves() {
         let parent = tempfile::tempdir().unwrap();
-        let workspace = parent.path().join("workspace");
+        // Canonicalize first: macOS hands out temporary directories under the
+        // /var symlink, which this function rejects by design.
+        let root = parent.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
         std::fs::create_dir(&workspace).unwrap();
-        let outside = parent.path().join("outside.txt");
+        let outside = root.join("outside.txt");
         std::fs::write(&outside, "secret").unwrap();
         let link = workspace.join("link.txt");
         let created = {

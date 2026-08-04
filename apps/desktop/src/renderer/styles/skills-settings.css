@@ -323,7 +323,10 @@
 .contextLengthSliderLabels {
   position: relative;
   height: 28px;
-  margin-top: 3px;
+  /* The 17px thumb travels between half-thumb insets of the track, so the
+     label rail is inset by the same 8.5px for the percentage positions to
+     land on the thumb centers. */
+  margin: 3px 8.5px 0;
 }
 
 .contextLengthSliderLabels > span {

@@ -108,7 +108,6 @@ export async function enrollCompanyDevice(
     throw new Error("Veil returned invalid enrollment details.");
   }
   const credential: CompanyDeviceCredential = {
-    version: 2,
     baseUrl,
     orgUid,
     orgName,

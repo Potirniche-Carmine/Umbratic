@@ -54,13 +54,14 @@ fn completed_exchange_signature(calls: &[ToolCall], results: &[ToolResult]) -> O
                     "tool": call.name,
                     "arguments": call.arguments,
                     "result": {
-                        "title": result.title,
-                        "output": result.output,
+                        "summary": result.summary,
+                        "content": result.content,
                         "status": result.status,
-                        "errorCode": result.error_code,
+                        "errorCode": result.code,
                         "errorMessage": result.error_message,
                         "exitCode": result.exit_code,
                         "details": result.details,
+                        "continuation": result.continuation,
                     }
                 })
                 .to_string()
@@ -79,20 +80,21 @@ mod tests {
         vec![ToolCall {
             id: "call-1".into(),
             name: name.into(),
-            arguments: json!({"filePath":"README.md"}),
+            arguments: json!({"path":"README.md"}),
             index: 0,
         }]
     }
 
     fn result(output: &str, status: &str) -> Vec<ToolResult> {
         vec![ToolResult {
-            title: "README.md".into(),
-            output: output.into(),
+            summary: "README.md".into(),
+            content: output.into(),
             status: status.into(),
-            error_code: (status != "success").then(|| "invalid_arguments".into()),
+            code: (status != "success").then(|| "invalid_arguments".into()),
             error_message: (status != "success").then(|| "failed".into()),
             exit_code: Some(i32::from(status != "success")),
             details: None::<Value>,
+            continuation: None,
         }]
     }
 

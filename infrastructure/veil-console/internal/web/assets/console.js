@@ -162,24 +162,6 @@
   const form = document.querySelector("[data-settings-form]");
   if (!form) return;
 
-  const provider = form.querySelector("[data-provider]");
-  const providerURL = form.querySelector("[data-provider-url]");
-  const defaults = {
-    ollama: "http://127.0.0.1:11434",
-    vllm: "http://127.0.0.1:8000/v1",
-  };
-  let previousProvider = provider?.value || "ollama";
-  const updateProvider = () => {
-    if (!provider || !providerURL) return;
-    const next = provider.value;
-    if (!providerURL.value || providerURL.value === defaults[previousProvider]) {
-      providerURL.value = defaults[next];
-    }
-    previousProvider = next;
-  };
-  provider?.addEventListener("change", updateProvider);
-  updateProvider();
-
   const contextSlider = form.querySelector("[data-context-slider]");
   const contextValue = form.querySelector("[data-context-value]");
   const contextLabel = form.querySelector("[data-context-label]");

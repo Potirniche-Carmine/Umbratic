@@ -8,7 +8,6 @@ import type {
   HarnessProfileId,
   IdeInfo,
   ModelEndpointMode,
-  ModelEndpointSoftware,
   PermissionMode,
   PublicModelEndpointSettings,
   RepositoryInfo,
@@ -26,7 +25,6 @@ const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 export const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
   mode: "local",
-  software: "ollama",
   baseUrl: "http://127.0.0.1:11434",
   modelId: "",
   secret: "",
@@ -171,10 +169,7 @@ function normalizeEndpointHeaders(
   return headers;
 }
 
-function defaultEndpointBaseUrlForMode(
-  mode: ModelEndpointMode,
-  _software: ModelEndpointSoftware,
-): string {
+function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode): string {
   return mode === "local"
     ? "http://127.0.0.1:11434"
     : "https://your-veil-server.example";
@@ -189,19 +184,12 @@ export function normalizeEndpointSettings(value: unknown): ModelEndpointSettings
     settings.mode === "local" || settings.mode === "server"
       ? settings.mode
       : defaultModelEndpointSettings.mode;
-  const software =
-    mode === "local"
-      ? "ollama"
-      : settings.software === "ollama" || settings.software === "vllm"
-        ? settings.software
-        : "vllm";
   return {
     mode,
-    software,
     baseUrl:
       typeof settings.baseUrl === "string"
         ? settings.baseUrl
-        : defaultEndpointBaseUrlForMode(mode, software),
+        : defaultEndpointBaseUrlForMode(mode),
     modelId:
       typeof settings.modelId === "string"
         ? settings.modelId

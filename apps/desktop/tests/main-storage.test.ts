@@ -48,14 +48,10 @@ function loadStorage(userData, home = userData) {
     UMBRATIC_MANAGED_ENDPOINT_MODE: undefined,
     UMBRATIC_MANAGED_MODEL_API_KEY: undefined,
     UMBRATIC_MANAGED_MODEL_BASE_URL: undefined,
-    UMBRATIC_MANAGED_MODEL_SOFTWARE: undefined,
     UMBRATIC_MODEL_API_KEY: "",
     UMBRATIC_MODEL_BASE_URL: "",
-    UMBRATIC_MODEL_SOFTWARE: "",
     UMBRATIC_VEIL_BASE_URL: "",
     UMBRATIC_VEIL_TOKEN: "",
-    UMBRATIC_VLLM_BASE_URL: "",
-    VLLM_BASE_URL: "",
     VLLM_API_KEY: "",
   });
   return loadTypeScriptModule(storagePath, { cache: new Map(), mocks: { electron: electronMock(userData) } });
@@ -424,7 +420,6 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
 
   const saved = storage.writeModelEndpointSettings({
     mode: "server",
-    software: "vllm",
     baseUrl: " https://veil.example.internal/ ",
     secret: "super-secret-token",
     headers: [
@@ -434,7 +429,6 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   });
 
   assert.equal(saved.mode, "server");
-  assert.equal(saved.software, "vllm");
   assert.equal(saved.baseUrl, "https://veil.example.internal/");
   assert.equal(storage.readModelEndpointSettings().secret, "super-secret-token");
   assert.deepEqual(plain(storage.readModelEndpointSettings().headers), [
@@ -443,7 +437,6 @@ test("endpoint settings round-trip secrets through safeStorage without writing p
   ]);
   assert.deepEqual(plain(storage.publicModelEndpointSettings(storage.readModelEndpointSettings())), {
     mode: "server",
-    software: "vllm",
     baseUrl: "https://veil.example.internal/",
     modelId: "veil-managed",
     secret: "",
@@ -465,13 +458,11 @@ test("endpoint settings default to the local model runtime", () => {
 
   assert.equal(storage.hasStoredModelEndpointSettings(), false);
   assert.equal(storage.readModelEndpointSettings().mode, "local");
-  assert.equal(storage.readModelEndpointSettings().software, "ollama");
   assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
   assert.equal(storage.readModelEndpointSettings().modelId, "");
 
   const savedLocal = storage.writeModelEndpointSettings({
     mode: "local",
-    software: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     modelId: "llama3.2",
     secret: "must-not-be-stored",
@@ -485,7 +476,10 @@ test("endpoint settings default to the local model runtime", () => {
   assert.equal(storage.readModelEndpointSettings().mode, "local");
 
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
-  assert.equal(rawSettings.modelEndpoint.version, 3);
+  assert.deepEqual(
+    Object.keys(rawSettings.modelEndpoint).sort(),
+    ["baseUrl", "headers", "mode", "modelId", "secret"],
+  );
   assert.doesNotMatch(JSON.stringify(rawSettings), /must-not-be-stored|also-not-stored/);
 });
 
@@ -495,13 +489,11 @@ test("local model settings remain in SQLite after a switch to a company server",
 
   storage.writeModelEndpointSettings({
     mode: "local",
-    software: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     modelId: "qwen3:8b",
   });
   storage.writeModelEndpointSettings({
     mode: "server",
-    software: "vllm",
     baseUrl: "https://veil.example.internal",
     modelId: "veil-managed",
   });
@@ -509,7 +501,6 @@ test("local model settings remain in SQLite after a switch to a company server",
   assert.equal(storage.readModelEndpointSettings().mode, "server");
   assert.deepEqual(plain(storage.readModelEndpointSettingsForMode("local")), {
     mode: "local",
-    software: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     modelId: "qwen3:8b",
     secret: "",
@@ -548,9 +539,7 @@ test("an explicitly forced local configuration overrides a stored server endpoin
   loadStorage(userData).readModelEndpointSettings();
   writeSettingsPayload(userData, {
     modelEndpoint: {
-      version: 3,
       mode: "server",
-      software: "vllm",
       baseUrl: "https://veil.example.internal",
       modelId: "veil-managed",
       secret: "",
@@ -560,12 +549,10 @@ test("an explicitly forced local configuration overrides a stored server endpoin
   process.env.UMBRATIC_FORCE_LOCAL_ENDPOINT = "1";
   process.env.UMBRATIC_LOCAL_RUNTIME_BASE_URL = "http://127.0.0.1:11434";
   process.env.UMBRATIC_LOCAL_MODEL_ID = "gemma4:12b-it-q4_K_M";
-  process.env.UMBRATIC_MODEL_SOFTWARE = "ollama";
   const storage = loadTypeScriptModule(storagePath, { cache: new Map(), mocks: { electron: electronMock(userData) } });
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    software: "ollama",
     baseUrl: "http://127.0.0.1:11434",
     modelId: "gemma4:12b-it-q4_K_M",
     secret: "",
@@ -574,15 +561,13 @@ test("an explicitly forced local configuration overrides a stored server endpoin
 
   storage.writeModelEndpointSettings({
     mode: "local",
-    software: "vllm",
-    baseUrl: "http://127.0.0.1:8000/v1",
+    baseUrl: "http://127.0.0.1:11500",
     modelId: "user-selected-model",
   });
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    software: "ollama",
-    baseUrl: "http://127.0.0.1:11434",
+    baseUrl: "http://127.0.0.1:11500",
     modelId: "user-selected-model",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
@@ -733,7 +718,6 @@ test("company device credentials keep the private key in safeStorage and expose 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-company-credential-"));
   const storage = loadStorage(userData);
   const credential = {
-    version: 2,
     baseUrl: "https://veil.example.com",
     orgUid: "org_enterprise",
     orgName: "Northwind",

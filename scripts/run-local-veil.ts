@@ -22,24 +22,23 @@ function usage() {
     "Usage:",
     "  npm run local",
     "  npm run local -- --model llama3.1",
-    "  npm run local -- --software vllm --base-url http://127.0.0.1:8000/v1 --model your-model",
+    "  npm run local -- --base-url http://127.0.0.1:11434 --model llama3.1",
     "",
     "Options:",
-    "  --software <name>    ollama or vllm. Overrides VEIL_PROVIDER_PROTOCOL.",
-    "  --base-url <url>     Local model runtime URL. Overrides VEIL_PROVIDER_BASE_URL.",
-    "  --model <name>       Runtime model name. Overrides VEIL_MODEL.",
+    "  --base-url <url>     Local Ollama URL. Overrides UMBRATIC_LOCAL_RUNTIME_BASE_URL.",
+    "  --model <name>       Runtime model name. Overrides UMBRATIC_LOCAL_MODEL_ID.",
     "  --help              Show this message.",
     "",
-    "Starts with Local as the first-run default. You can switch between Local and Server in Settings.",
+    "Starts with Local as the first-run default. Local mode always uses Ollama through Veil.",
+    "You can switch between Local and Server in Settings.",
   ].join("\n");
 }
 
 function envWithOverrides(args, baseEnv) {
   const env = { ...baseEnv };
   const overrides = {
-    VEIL_PROVIDER_PROTOCOL: readFlag(args, "--software"),
-    VEIL_PROVIDER_BASE_URL: readFlag(args, "--base-url"),
-    VEIL_MODEL: readFlag(args, "--model"),
+    UMBRATIC_LOCAL_RUNTIME_BASE_URL: readFlag(args, "--base-url"),
+    UMBRATIC_LOCAL_MODEL_ID: readFlag(args, "--model"),
   };
   for (const [key, value] of Object.entries(overrides)) {
     if (value !== undefined) {
@@ -47,23 +46,18 @@ function envWithOverrides(args, baseEnv) {
       env[key] = value;
     }
   }
-  if (env.VEIL_PROVIDER_PROTOCOL && !["ollama", "vllm"].includes(env.VEIL_PROVIDER_PROTOCOL)) {
-    throw new Error("--software must be one of: ollama, vllm.");
-  }
   return env;
 }
 
-function desktopEnvFromVeil(veilEnv) {
-  const software = veilEnv.VEIL_PROVIDER_PROTOCOL === "vllm" ? "vllm" : "ollama";
-  const runtimeBaseUrl =
-    veilEnv.VEIL_PROVIDER_BASE_URL || (software === "vllm" ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:11434");
+function desktopEnvFromLocal(args) {
+  const env = envWithOverrides(args, { ...process.env });
   return {
-    ...process.env,
+    ...env,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT || "1",
     UMBRATIC_DEFAULT_ENDPOINT_MODE: "local",
-    UMBRATIC_LOCAL_MODEL_ID: veilEnv.VEIL_MODEL || "",
-    UMBRATIC_LOCAL_RUNTIME_BASE_URL: runtimeBaseUrl,
-    UMBRATIC_MODEL_SOFTWARE: process.env.UMBRATIC_MODEL_SOFTWARE || software,
+    UMBRATIC_LOCAL_MODEL_ID: env.UMBRATIC_LOCAL_MODEL_ID || process.env.UMBRATIC_LOCAL_MODEL_ID || "",
+    UMBRATIC_LOCAL_RUNTIME_BASE_URL:
+      env.UMBRATIC_LOCAL_RUNTIME_BASE_URL || process.env.UMBRATIC_LOCAL_RUNTIME_BASE_URL || "http://127.0.0.1:11434",
   };
 }
 
@@ -72,9 +66,8 @@ function localEnv(args) {
     console.log(usage());
     process.exit(0);
   }
-  const veilEnv = envWithOverrides(args, { ...process.env });
   return {
-    desktopEnv: desktopEnvFromVeil(veilEnv),
+    desktopEnv: desktopEnvFromLocal(args),
   };
 }
 
@@ -138,4 +131,3 @@ function main() {
 }
 
 main();
-

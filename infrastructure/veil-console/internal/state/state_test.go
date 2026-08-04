@@ -12,7 +12,7 @@ import (
 
 func TestSetupIsOneUseAndSessionsPersist(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := tempStateDir(t)
 	store, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestSetupIsOneUseAndSessionsPersist(t *testing.T) {
 
 func TestSetupExpires(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(t.TempDir())
+	store, err := Open(tempStateDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestSetupExpires(t *testing.T) {
 }
 
 func TestExclusiveStateLock(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempStateDir(t)
 	first, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestExclusiveStateLock(t *testing.T) {
 }
 
 func TestStaleStateLockFileDoesNotBlock(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempStateDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "console.lock"), []byte("12345\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestStaleStateLockFileDoesNotBlock(t *testing.T) {
 
 func TestSessionIdleAndAbsoluteExpiry(t *testing.T) {
 	ctx := context.Background()
-	store, err := Open(t.TempDir())
+	store, err := Open(tempStateDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,4 +108,15 @@ func TestSessionIdleAndAbsoluteExpiry(t *testing.T) {
 	if _, err := store.Session(ctx, absoluteToken, now.Add(SessionAbsoluteTimeout)); err == nil {
 		t.Fatal("absolute session did not expire")
 	}
+}
+
+// tempStateDir resolves symlinks in the test directory because Open rejects
+// state paths that contain one, and macOS puts temporary files under /var.
+func tempStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

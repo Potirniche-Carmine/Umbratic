@@ -6,7 +6,7 @@ Development runs natively on Windows, macOS, and Linux. The production release t
 
 ## Development
 
-Install Node.js, npm, and Go. Start Ollama on the same operating system as Veil Console. Then run this command from the repository root:
+Install Node.js, npm, and Go. Start a private vLLM OpenAI-compatible server that Console can reach. Then run this command from the repository root:
 
 ```sh
 npm run veil-console:dev
@@ -35,7 +35,7 @@ Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA "Umbratic\Veil Console\dev
 
 The next `npm run veil-console:dev` creates a new state directory and a new one-time setup code. When you use `--state-dir`, remove that selected directory instead.
 
-The default Ollama address is `http://127.0.0.1:11434`. A native Windows Console connects to Windows Ollama. A native macOS Console connects to macOS Ollama. Run both services in the same operating system for the simplest setup.
+The default vLLM address is `http://127.0.0.1:8000/v1`. Run Console and vLLM in the same operating system for the simplest setup.
 
 On the first run, the terminal shows a setup URL and a one-time setup code. Keep the command active and open this address in the Windows browser:
 
@@ -43,13 +43,15 @@ On the first run, the terminal shows a setup URL and a one-time setup code. Keep
 http://127.0.0.1:8177/setup
 ```
 
-Enter the setup code, choose the owner username, and choose a password with at least 15 characters. After login, configure one private model runtime:
+Enter the setup code, choose the owner username, and choose a password with at least 15 characters. After login, configure the private vLLM runtime:
 
-- Protocol: `Ollama` or `vLLM`.
-- Runtime URL: the private runtime address that Console can reach.
+- Runtime URL: the private vLLM address that Console can reach.
 - Model: the exact model ID reported by the runtime.
+- Advanced: one generation profile (temperature, top P, output tokens, reasoning, concurrency).
 
-Veil and Veil Console do not accept a model-provider API key. They support only local or private Ollama and vLLM runtimes.
+Veil Console always starts Veil in server mode against vLLM. Local Ollama is managed by the desktop app, not Console.
+
+Veil and Veil Console do not accept a model-provider API key.
 
 Use **Test connection** to verify the selected runtime. **Apply and restart** validates the submitted values, deploys them, and restarts Veil. In a customer release, go to **Access**, create an assigned user, and give that user the one-time Enrollment code.
 
@@ -103,10 +105,10 @@ Console stores only session-token hashes. Login cookies are HTTP-only, strict sa
 
 ## Expected process model
 
-The administrator browser communicates with Veil Console through loopback, either on the server or through an SSH tunnel. Console reads and writes its SQLite state and restricted secret file. When settings are valid, Console starts the fixed Veil binary with an allowlisted environment. Veil then communicates with Ollama or vLLM.
+The administrator browser communicates with Veil Console through loopback, either on the server or through an SSH tunnel. Console reads and writes its SQLite state and restricted secret file. When settings are valid, Console starts the fixed Veil binary with an allowlisted environment in server mode. Veil then communicates with vLLM.
 
 ```text
-Browser -> native Veil Console :8177 -> supervised Veil :8080 -> Ollama or vLLM
+Browser -> native Veil Console :8177 -> supervised Veil :8080 -> vLLM
 ```
 
 Console does not expose a shell or a generic environment editor. It does not read a Veil `.env` file. A failed configuration test or failed Veil start keeps or restores the last known-good configuration.
@@ -133,7 +135,7 @@ Administrator browser -> SSH tunnel -> Veil Console 127.0.0.1:8177
 Desktop application
   -> restricted HTTPS Caddy :8432
   -> Veil 127.0.0.1:8080
-  -> Ollama 127.0.0.1:11434 or vLLM 127.0.0.1:8000
+  -> vLLM 127.0.0.1:8000
 ```
 
 Allow the Veil HTTPS port only from the company VPN or an exact list of approved desktop IP addresses. Do not expose ports `8177`, `8080`, `11434`, or `8000`.
@@ -143,7 +145,7 @@ Allow the Veil HTTPS port only from the company VPN or an exact list of approved
 - Ubuntu 24.04 LTS on `amd64`.
 - A DNS record for the Veil domain.
 - Caddy installed from its supported Ubuntu package.
-- Ollama or vLLM on a private address.
+- vLLM on a private address.
 
 Build the installation archive from Ubuntu or Ubuntu WSL:
 

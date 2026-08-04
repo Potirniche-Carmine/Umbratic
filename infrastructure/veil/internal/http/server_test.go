@@ -136,13 +136,25 @@ func testConfig() config.Config {
 	return config.Config{
 		Addr:                   "127.0.0.1:0",
 		AuthToken:              "test-token",
+		Mode:                   model.ModeServer,
 		DefaultModel:           "default-model",
 		TelemetryEnabled:       true,
 		TelemetryRetentionDays: 30,
 		RequestTimeout:         time.Second,
+		StreamIdleTimeout:      time.Second,
 		MaxBodyBytes:           1 << 20,
 		MaxOutputTokens:        4096,
 		ModelParallelToolCalls: true,
+		Generation: model.GenerationProfile{
+			Temperature:               0.2,
+			TopP:                      0.95,
+			MaxOutputTokens:           4096,
+			ReasoningEffort:           model.ReasoningNone,
+			ParallelToolCalls:         true,
+			MaxConcurrentRequests:     32,
+			MaxConcurrentRequestsUser: 4,
+			QueueTimeout:              30 * time.Second,
+		},
 	}
 }
 
@@ -258,7 +270,7 @@ func TestContextCompactionRouteUsesProtectedPromptAndEchoesDigest(t *testing.T) 
 	cfg.ContextLength = 64_000
 	client := &fakeModelClient{chatContent: "# Goal and current request\nSummary facts.\n# Constraints and decisions\nConstraints.\n# Work completed\nCompleted work.\n# Files and verification\nVerification facts.\n# Errors or blockers\nNo blockers.\n# Next work\nContinue verification. " + strings.Repeat("bounded facts ", 8)}
 	server := NewServer(cfg, client)
-	body := fmt.Sprintf(`{"version":1,"route":"engineering","messages":[{"role":"user","content":%q}],"maxSummaryTokens":512,"sourceDigest":"%s"}`, strings.Repeat("source facts ", 200), strings.Repeat("a", 64))
+	body := fmt.Sprintf(`{"route":"engineering","messages":[{"role":"user","content":%q}],"maxSummaryTokens":512,"sourceDigest":"%s"}`, strings.Repeat("source facts ", 200), strings.Repeat("a", 64))
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/context/compact", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
@@ -275,7 +287,7 @@ func TestContextCompactionRejectsSummaryWithoutRequiredHandoffStructure(t *testi
 	cfg := testConfig()
 	client := &fakeModelClient{chatContent: strings.Repeat("generic summary without structure ", 20)}
 	server := NewServer(cfg, client)
-	body := fmt.Sprintf(`{"version":1,"route":"engineering","messages":[{"role":"user","content":"%s"}],"maxSummaryTokens":512,"sourceDigest":"%s"}`, strings.Repeat("source facts ", 200), strings.Repeat("b", 64))
+	body := fmt.Sprintf(`{"route":"engineering","messages":[{"role":"user","content":"%s"}],"maxSummaryTokens":512,"sourceDigest":"%s"}`, strings.Repeat("source facts ", 200), strings.Repeat("b", 64))
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/context/compact", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
@@ -557,8 +569,8 @@ func TestChatRouteHidesTemplateRegistryLoadErrors(t *testing.T) {
 
 func selectiveTelemetryBody() string {
 	return `{
-		"schemaVersion": 4,
 		"exportedAt": "2026-01-01T00:00:00.000Z",
+		"localDiagnostics": {"total": 0, "warnings": 0, "errors": 0, "bySource": {}, "byEvent": {}},
 		"productEvents": [{
 			"id": "event-1",
 			"type": "review.opened",
@@ -585,7 +597,7 @@ func selectiveTelemetryBody() string {
 				"exitCode": 1,
 				"status": "validation_error",
 				"errorCode": "invalid_arguments",
-				"inputMeta": {"pathHash": "abc123", "argKeys": ["filePath", "oldText", "newText"]},
+				"inputMeta": {"pathHash": "abc123", "argKeys": ["path", "edits"]},
 				"responseMeta": {"stdoutChars": 0, "stderrChars": 0, "toolResponseChars": 21, "errorMessage": "oldText was not found"}
 			}],
 			"contextTriggers": [{"threshold": 75, "estimatedTokens": 750, "contextLength": 1000}]
@@ -757,29 +769,6 @@ func TestHealthRouteRejectsMissingConfiguredModel(t *testing.T) {
 	}
 }
 
-func TestRuntimeMetricsRouteReturnsOnlySafeServingCounters(t *testing.T) {
-	modelClient := &fakeModelClient{runtimeMetrics: model.RuntimeMetrics{
-		PrefixCacheHitRate: 0.75,
-		QueueDepth:         4,
-		Available:          true,
-	}}
-	server := NewServer(testConfig(), modelClient)
-	req := httptest.NewRequest(http.MethodGet, "/api/runtime/metrics", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rr := httptest.NewRecorder()
-	server.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d body %s", rr.Code, rr.Body.String())
-	}
-	var body map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if body["prefix_cache_hit_rate"] != 0.75 || body["queue_depth"] != float64(4) || body["available"] != true {
-		t.Fatalf("unexpected metrics body: %#v", body)
-	}
-}
-
 func TestHealthRouteRequiresGetAndSanitizesListErrors(t *testing.T) {
 	modelClient := &fakeModelClient{listErr: errors.New("provider leaked model default-model")}
 	server := NewServer(testConfig(), modelClient)
@@ -914,7 +903,7 @@ func TestChatRouteConvertsOllamaStreamToOpenAISSE(t *testing.T) {
 		}, "\n"),
 	}
 	cfg := testConfig()
-	cfg.ProviderProtocol = model.ProtocolOllama
+	cfg.Mode = model.ModeLocal
 	server := NewServer(cfg, modelClient)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"stream":true}`))
@@ -928,8 +917,8 @@ func TestChatRouteConvertsOllamaStreamToOpenAISSE(t *testing.T) {
 	if got := rr.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("got content type %q", got)
 	}
-	if got := rr.Header().Get(streamVersionHeader); got != "2" {
-		t.Fatalf("got stream version %q", got)
+	if got := rr.Header().Get("X-Umbratic-Stream-Version"); got != "" {
+		t.Fatalf("stream responses must not advertise a contract version, got %q", got)
 	}
 	body := rr.Body.String()
 	if !strings.Contains(body, `"content":"hel"`) || !strings.Contains(body, `"content":"lo"`) {
@@ -964,10 +953,9 @@ func TestUnknownAPIRouteReturnsJSONAfterAuth(t *testing.T) {
 }
 
 func TestChatRouteRejectsOversizedBody(t *testing.T) {
-	modelClient := &fakeModelClient{}
 	cfg := testConfig()
 	cfg.MaxBodyBytes = 8
-	server := NewServer(cfg, modelClient)
+	server := NewServer(cfg, &fakeModelClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/engineering/chat", strings.NewReader(`{"input":"hello"}`))
 	req.Header.Set("Authorization", "Bearer test-token")

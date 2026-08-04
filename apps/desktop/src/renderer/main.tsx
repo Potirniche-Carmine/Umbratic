@@ -134,7 +134,7 @@ export { activityHasTools, activitySummary } from "./activityTiming";
 export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
 type AppearanceTheme = "system" | "light" | "dark";
-type RunnerToolId = "read" | "write" | "edit" | "search" | "lsp" | "command";
+type RunnerToolId = "read" | "ls" | "find" | "grep" | "write" | "edit" | "lsp" | "command";
 type RequiredToolContractRequirement = "file_change";
 type RequiredToolContractReason =
   | "file_tools_disabled"
@@ -217,9 +217,14 @@ type ComposerActivitySegment =
       type: "skill";
       id: string;
       skillId: string;
-      source: "system" | "local";
-      reason: "explicit_request" | "strong_match" | "metadata";
-      fullContent: boolean;
+      source: string;
+      origin: "harness" | "model";
+      status: "requested" | "loaded" | "failed";
+      requestId: string;
+      contentHash?: string;
+      bytes?: number;
+      code?: string;
+      message?: string;
     }
   | { type: "command"; id: string; run: CommandRun };
 
@@ -1338,7 +1343,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       flushAssistant();
       continue;
     }
-    if (event.type === "skill.selected") {
+    if (event.type === "skill.requested") {
       closeAssistantForActivity();
       skillIndex += 1;
       activitySegments.push({
@@ -1346,9 +1351,43 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
         id: `skill-${skillIndex}`,
         skillId: event.skillId,
         source: event.source,
-        reason: event.reason,
-        fullContent: event.fullContent,
+        origin: event.origin,
+        status: "requested",
+        requestId: event.requestId,
       });
+      markActivityTime(event.at, event.endedAt ?? event.at);
+      continue;
+    }
+    if (event.type === "skill.loaded" || event.type === "skill.failed") {
+      closeAssistantForActivity();
+      const existing = [...activitySegments].reverse().find(
+        (segment): segment is Extract<ComposerActivitySegment, { type: "skill" }> =>
+          segment.type === "skill" && segment.requestId === event.requestId,
+      );
+      if (existing) {
+        existing.status = event.type === "skill.loaded" ? "loaded" : "failed";
+        if (event.type === "skill.loaded") {
+          existing.contentHash = event.contentHash;
+          existing.bytes = event.bytes;
+        } else {
+          existing.code = event.code;
+          existing.message = event.message;
+        }
+      } else {
+        skillIndex += 1;
+        activitySegments.push({
+          type: "skill",
+          id: `skill-${skillIndex}`,
+          skillId: event.skillId,
+          source: event.source,
+          origin: event.origin,
+          status: event.type === "skill.loaded" ? "loaded" : "failed",
+          requestId: event.requestId,
+          ...(event.type === "skill.loaded"
+            ? { contentHash: event.contentHash, bytes: event.bytes }
+            : { code: event.code, message: event.message }),
+        });
+      }
       markActivityTime(event.at, event.endedAt ?? event.at);
       continue;
     }

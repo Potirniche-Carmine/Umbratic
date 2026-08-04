@@ -29,12 +29,13 @@ use tokio::{
 };
 
 use crate::{
-    context::estimate_context_usage,
-    context_state::{ContextStateV1, snapshot_context_state},
-    events::now_iso,
+    conversation_state::ConversationState,
+    events::{now_iso, run_settled_event},
     loop_runtime::run_turn,
     policy::redact_text,
+    run_queue::{QueueAction, QueueDisposition},
     session::{InputPart, SessionStore},
+    skill_preflight::parse_selected_skill_ids,
 };
 
 const MAX_JSON_BODY_BYTES: usize = 512 * 1024;
@@ -386,92 +387,34 @@ async fn create_session(State(state): State<AppState>, request: Request) -> Resp
         Ok(body) => body,
         Err(response) => return response,
     };
-    if body.keys().any(|key| key != "contextState") {
+    if body.keys().any(|key| key != "conversationState") {
         return error_response(
             StatusCode::BAD_REQUEST,
             "invalid_session_seed",
             "Session creation contains an unknown field.",
         );
     }
-    let context_state = match body.get("contextState") {
+    let conversation_state = match body.get("conversationState") {
         None | Some(Value::Null) => None,
-        Some(value) => match serde_json::from_value::<ContextStateV1>(value.clone()) {
+        Some(value) => match serde_json::from_value::<ConversationState>(value.clone()) {
             Ok(value) => Some(value),
             Err(_) => {
                 return error_response(
                     StatusCode::BAD_REQUEST,
-                    "invalid_context_state",
-                    "Context state is malformed.",
+                    "invalid_conversation_state",
+                    "Conversation state is malformed.",
                 );
             }
         },
     };
-    match state.store.create(context_state).await {
+    match state.store.create(conversation_state).await {
         Ok(session) => json_response(StatusCode::OK, json!({ "id": session.id })),
         Err(_) => error_response(
             StatusCode::BAD_REQUEST,
-            "invalid_context_state",
-            "Context state failed validation.",
+            "invalid_conversation_state",
+            "Conversation state failed validation.",
         ),
     }
-}
-
-async fn session_context(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    let Ok(session) = state.store.get(&id).await else {
-        return error_response(
-            StatusCode::NOT_FOUND,
-            "session_not_found",
-            "Session not found.",
-        );
-    };
-    let messages = session.messages.lock().await.clone();
-    let summary = session.durable_summary.lock().await.clone();
-    let calibration = session.context_calibration.lock().await.clone();
-    let skills = session
-        .config
-        .skills
-        .iter()
-        .map(|skill| {
-            json!({
-                "id": skill.id,
-                "name": skill.name,
-                "description": skill.description,
-                "source": skill.source,
-            })
-        })
-        .collect::<Vec<_>>();
-    let additional = if skills.is_empty() {
-        vec![]
-    } else {
-        vec![Value::Array(skills)]
-    };
-    let estimate = estimate_context_usage(
-        &messages,
-        &[],
-        session.config.context_length,
-        session.config.max_response_tokens,
-        session.config.protected_prompt_reserve_tokens,
-        &additional,
-    );
-    let snapshot = snapshot_context_state(crate::context_state::ContextStateSnapshotInput {
-        task_id: &session.task_id,
-        updated_at: now_iso(),
-        summary,
-        messages: &messages,
-        context_length: session.config.context_length,
-        estimated_prompt_tokens: estimate.heuristic_prompt_tokens,
-        calibration: calibration.as_ref(),
-        compaction_count: session
-            .compaction_count
-            .load(std::sync::atomic::Ordering::SeqCst),
-    });
-    json_response(
-        StatusCode::OK,
-        serde_json::to_value(snapshot).unwrap_or(Value::Null),
-    )
 }
 
 async fn prompt(
@@ -497,31 +440,47 @@ async fn prompt(
             "System prompts are managed by Veil.",
         );
     }
-    let turn = match session.try_begin_turn() {
-        Ok(turn) => turn,
+    let run = match session.try_begin_run() {
+        Ok(run) => run,
         Err(_) => {
             return error_response(
                 StatusCode::CONFLICT,
-                "turn_in_progress",
-                "A turn is already in progress for this session.",
+                "run_in_progress",
+                "A run is already in progress for this session.",
             );
         }
     };
     let parts = input_parts(&body);
+    let selected_skill_ids = parse_selected_skill_ids(&body);
     let sink = state.store.sink.clone();
     let permissions = state.store.permissions.clone();
-    let turn_id = turn.turn_id().to_owned();
+    let run_id = run.run_id().to_owned();
     tokio::spawn(async move {
-        let result = run_turn(session.clone(), parts, sink.clone(), permissions).await;
+        let result = run_turn(
+            session.clone(),
+            run_id.clone(),
+            parts,
+            selected_skill_ids,
+            sink.clone(),
+            permissions,
+        )
+        .await;
         match result {
-            Ok(summary) => sink.emit(json!({
-                "type":"session.idle",
-                "taskId":session.task_id,
-                "sessionId":session.id,
-                "turnId":turn_id,
-                "summary":summary,
-                "at":now_iso()
-            })),
+            Ok(summary) => {
+                let outcome = summary
+                    .get("outcome")
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed")
+                    .to_owned();
+                sink.emit(run_settled_event(
+                    &session.task_id,
+                    &session.id,
+                    &run_id,
+                    &outcome,
+                    Some(summary),
+                    None,
+                ));
+            }
             Err(error) => {
                 let detail = redact_text(
                     &error.split_whitespace().collect::<Vec<_>>().join(" "),
@@ -532,18 +491,37 @@ async fn prompt(
                     "type":"runner.error",
                     "taskId":session.task_id,
                     "sessionId":session.id,
-                    "turnId":turn_id,
+                    "runId":run_id,
                     "category":category,
                     "code":code,
-                    "message":format!("Runner turn failed: {detail}"),
+                    "message":format!("Runner run failed: {detail}"),
                     "detail":detail,
                     "at":now_iso()
                 }));
+                let outcome = if category == "abort" {
+                    "aborted"
+                } else {
+                    "failed"
+                };
+                sink.emit(run_settled_event(
+                    &session.task_id,
+                    &session.id,
+                    &run_id,
+                    outcome,
+                    None,
+                    Some(code),
+                ));
             }
         }
         // Keep the busy guard until terminal events are emitted so clients never see
-        // a free slot while this turn's idle/error is still in flight.
-        drop(turn);
+        // a free slot while this run's settled event is still in flight.
+        drop(run);
+        let mut queue = session.queue.lock().await;
+        if let Some((_queued, update)) =
+            queue.dequeue_next(&session.task_id, &session.id, Some(&run_id))
+        {
+            sink.emit(update.event);
+        }
     });
     StatusCode::NO_CONTENT.into_response()
 }
@@ -551,7 +529,10 @@ async fn prompt(
 fn runner_failure_classification(detail: &str) -> (&'static str, &'static str) {
     let normalized = detail.to_ascii_lowercase();
     if normalized.contains("aborted") {
-        return ("abort", "turn_aborted");
+        return ("abort", "run_aborted");
+    }
+    if normalized.contains("explicit skill load failed") {
+        return ("skill", "skill_load_failed");
     }
     if normalized.contains("context window is full") {
         return ("context", "context_window_full");
@@ -604,6 +585,105 @@ async fn abort(State(state): State<AppState>, AxumPath(id): AxumPath<String>) ->
     }
 }
 
+async fn queue_action(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    request: Request,
+) -> Response {
+    let Ok(session) = state.store.get(&id).await else {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "session_not_found",
+            "Session not found.",
+        );
+    };
+    let body = match read_json(request).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let Some(action) = body
+        .get("action")
+        .and_then(Value::as_str)
+        .and_then(QueueAction::parse)
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_queue_action",
+            "Queue action must be steer, follow_up, or cancel.",
+        );
+    };
+    let Some(action_id) = body
+        .get("actionId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 160)
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_action_id",
+            "Queue actionId is required.",
+        );
+    };
+    let prompt = body
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if matches!(action, QueueAction::Steer | QueueAction::FollowUp)
+        && prompt.as_ref().is_none_or(|value| value.trim().is_empty())
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_prompt",
+            "Steer and follow_up require a prompt.",
+        );
+    }
+    let run_id = session.active_run_id();
+    let update = {
+        let mut queue = session.queue.lock().await;
+        queue.enqueue(
+            &session.task_id,
+            &session.id,
+            run_id.as_deref(),
+            action,
+            action_id,
+            prompt,
+        )
+    };
+    state.store.sink.emit(update.event.clone());
+    if update.disposition == QueueDisposition::Accepted {
+        match action {
+            QueueAction::Cancel => {
+                let cleared = {
+                    let mut queue = session.queue.lock().await;
+                    queue.clear(&session.task_id, &session.id, run_id.as_deref(), action_id)
+                };
+                for cleared_update in cleared {
+                    state.store.sink.emit(cleared_update.event);
+                }
+                let _ = state.store.abort(&id).await;
+            }
+            QueueAction::Steer => {
+                let _ = state.store.abort(&id).await;
+            }
+            QueueAction::FollowUp => {}
+        }
+    }
+    json_response(
+        if update.disposition == QueueDisposition::Rejected {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::OK
+        },
+        json!({
+            "actionId": update.action_id,
+            "action": update.action.as_str(),
+            "disposition": update.disposition.as_str(),
+            "pendingSteer": update.pending_steer,
+            "followUpCount": update.follow_up_count,
+            "reasonCode": update.reason_code,
+        }),
+    )
+}
+
 async fn not_found() -> Response {
     error_response(StatusCode::NOT_FOUND, "not_found", "Not found")
 }
@@ -621,9 +701,9 @@ pub async fn listen(hostname: &str, port: u16, password: String) -> Result<Runne
         .route("/diagnostics/export", get(diagnostics_export))
         .route("/provider/session", post(provider_session))
         .route("/session", post(create_session))
-        .route("/session/{id}/context", get(session_context))
         .route("/session/{id}/prompt_async", post(prompt))
         .route("/session/{id}/abort", post(abort))
+        .route("/session/{id}/queue", post(queue_action))
         .route("/permission/{id}/reply", post(permission_reply))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
@@ -750,6 +830,12 @@ mod tests {
         assert_eq!(
             runner_failure_classification("model stream ended before the completion marker"),
             ("provider", "model_stream_incomplete")
+        );
+        assert_eq!(
+            runner_failure_classification(
+                "Explicit skill load failed (skill_not_enabled): Skill missing is not enabled."
+            ),
+            ("skill", "skill_load_failed")
         );
     }
 }

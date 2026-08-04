@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
@@ -14,11 +14,14 @@ use uuid::Uuid;
 use crate::{
     config::{RunnerConfig, load_runner_config},
     context::{ContextCalibration, SessionContextStore},
-    context_state::ContextStateV1,
+    conversation_state::ConversationState,
     diagnostics::RunnerDiagnostics,
     events::RunnerEvent,
     lsp::LspService,
     permission::PermissionBroker,
+    run_queue::RunQueue,
+    skill_preflight::SharedSkillCache,
+    tools::ToolSurface,
     workspace_graph::WorkspaceGraphService,
 };
 
@@ -58,66 +61,79 @@ pub struct Session {
     pub context_store: Mutex<SessionContextStore>,
     pub lsp: Option<LspService>,
     pub workspace_graph: Option<WorkspaceGraphService>,
-    /// At most one in-flight turn per session. Abort is scoped to the active turn id.
-    pub(crate) turn: std::sync::Mutex<Option<ActiveTurn>>,
+    pub skill_cache: SharedSkillCache,
+    /// The tool contract presented to the model, frozen on first use and reused
+    /// for every step of the task.
+    pub(crate) tool_surface: OnceLock<Arc<ToolSurface>>,
+    /// At most one in-flight run per session. Abort is scoped to the active run id.
+    pub(crate) run: std::sync::Mutex<Option<ActiveRun>>,
+    pub queue: Mutex<RunQueue>,
 }
 
-pub(crate) struct ActiveTurn {
+pub(crate) struct ActiveRun {
     id: String,
     aborted: AtomicBool,
 }
 
-/// RAII handle that clears the active turn when the owning prompt task ends.
-pub struct TurnGuard {
+/// RAII handle that clears the active run when the owning prompt task ends.
+pub struct RunGuard {
     session: Arc<Session>,
-    turn_id: String,
+    run_id: String,
 }
 
-impl TurnGuard {
-    pub fn turn_id(&self) -> &str {
-        &self.turn_id
+impl RunGuard {
+    pub fn run_id(&self) -> &str {
+        &self.run_id
     }
 }
 
-impl Drop for TurnGuard {
+impl Drop for RunGuard {
     fn drop(&mut self) {
-        self.session.end_turn(&self.turn_id);
+        self.session.end_run(&self.run_id);
     }
 }
 
 impl Session {
-    pub fn try_begin_turn(self: &Arc<Self>) -> Result<TurnGuard, &'static str> {
-        let mut turn = self
-            .turn
+    pub fn try_begin_run(self: &Arc<Self>) -> Result<RunGuard, &'static str> {
+        let mut run = self
+            .run
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if turn.is_some() {
-            return Err("turn_in_progress");
+        if run.is_some() {
+            return Err("run_in_progress");
         }
-        let turn_id = format!("turn-{}", Uuid::new_v4());
-        *turn = Some(ActiveTurn {
-            id: turn_id.clone(),
+        let run_id = format!("run-{}", Uuid::new_v4());
+        *run = Some(ActiveRun {
+            id: run_id.clone(),
             aborted: AtomicBool::new(false),
         });
-        Ok(TurnGuard {
+        Ok(RunGuard {
             session: Arc::clone(self),
-            turn_id,
+            run_id,
         })
     }
 
-    fn end_turn(&self, turn_id: &str) {
-        let mut turn = self
-            .turn
+    fn end_run(&self, run_id: &str) {
+        let mut run = self
+            .run
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if turn.as_ref().is_some_and(|active| active.id == turn_id) {
-            *turn = None;
+        if run.as_ref().is_some_and(|active| active.id == run_id) {
+            *run = None;
         }
+    }
+
+    pub fn active_run_id(&self) -> Option<String> {
+        self.run
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|active| active.id.clone())
     }
 
     pub fn abort(&self) {
         if let Some(active) = self
-            .turn
+            .run
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
@@ -127,7 +143,7 @@ impl Session {
     }
 
     pub fn is_aborted(&self) -> bool {
-        self.turn
+        self.run
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
@@ -168,9 +184,11 @@ impl SessionStore {
 
     pub async fn create(
         &self,
-        context_state: Option<ContextStateV1>,
+        conversation_state: Option<ConversationState>,
     ) -> Result<Arc<Session>, String> {
-        let context_state = context_state.map(ContextStateV1::validate).transpose()?;
+        let conversation_state = conversation_state
+            .map(ConversationState::validate)
+            .transpose()?;
         let id = format!("session-{}", Uuid::new_v4());
         let task_id = self.config.task_id.clone().unwrap_or_else(|| id.clone());
         let workspace_graph = self.config.workspace_graph.as_ref().map(|graph| {
@@ -178,11 +196,11 @@ impl SessionStore {
         });
         let lsp = (!self.config.lsp_servers.is_empty())
             .then(|| LspService::new(self.config.cwd.clone(), self.config.lsp_servers.clone()));
-        let messages = context_state
+        let messages = conversation_state
             .as_ref()
-            .map(ContextStateV1::seeded_messages)
+            .map(ConversationState::seeded_messages)
             .unwrap_or_default();
-        let durable_summary = context_state.and_then(|state| state.summary);
+        let durable_summary = conversation_state.and_then(|state| state.summary);
         let session = Arc::new(Session {
             id: id.clone(),
             task_id,
@@ -195,7 +213,10 @@ impl SessionStore {
             context_store: Mutex::new(SessionContextStore::default()),
             lsp,
             workspace_graph,
-            turn: std::sync::Mutex::new(None),
+            skill_cache: SharedSkillCache::default(),
+            tool_surface: OnceLock::new(),
+            run: std::sync::Mutex::new(None),
+            queue: Mutex::new(RunQueue::default()),
         });
         self.sessions.write().await.insert(id, session.clone());
         Ok(session)
@@ -213,7 +234,7 @@ impl SessionStore {
     pub async fn abort(&self, id: &str) -> Result<(), String> {
         let session = self.get(id).await?;
         session.abort();
-        self.permissions.deny_all(&self.sink, &session.task_id);
+        self.permissions.abort_all(&self.sink, &session.task_id);
         Ok(())
     }
 
@@ -308,7 +329,10 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         context_store: Mutex::new(SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
-        turn: std::sync::Mutex::new(None),
+        skill_cache: SharedSkillCache::default(),
+        tool_surface: OnceLock::new(),
+        run: std::sync::Mutex::new(None),
+        queue: Mutex::new(RunQueue::default()),
     })
 }
 
@@ -317,31 +341,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abort_state_is_scoped_to_the_active_turn_and_sessions_are_independent() {
+    fn abort_state_is_scoped_to_the_active_run_and_sessions_are_independent() {
         let directory = tempfile::tempdir().unwrap();
         let first = test_session(directory.path());
         let second = test_session(directory.path());
-        let first_turn = first.try_begin_turn().expect("first turn");
-        let _second_turn = second.try_begin_turn().expect("second session turn");
+        let first_run = first.try_begin_run().expect("first run");
+        let _second_run = second.try_begin_run().expect("second session run");
         first.abort();
         assert!(first.is_aborted());
         assert!(!second.is_aborted());
-        drop(first_turn);
+        drop(first_run);
         assert!(!first.is_aborted());
-        let next = first.try_begin_turn().expect("next turn after prior ends");
+        let next = first.try_begin_run().expect("next run after prior ends");
         assert!(!first.is_aborted());
-        assert!(next.turn_id().starts_with("turn-"));
+        assert!(next.run_id().starts_with("run-"));
     }
 
     #[test]
-    fn second_begin_turn_is_rejected_while_a_turn_is_active() {
+    fn second_begin_run_is_rejected_while_a_run_is_active() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path());
-        let _active = session.try_begin_turn().expect("first turn");
-        assert_eq!(session.try_begin_turn().err(), Some("turn_in_progress"));
+        let _active = session.try_begin_run().expect("first run");
+        assert_eq!(session.try_begin_run().err(), Some("run_in_progress"));
         session.abort();
         assert!(session.is_aborted());
-        // A second begin must still fail; abort must not clear the active turn.
-        assert_eq!(session.try_begin_turn().err(), Some("turn_in_progress"));
+        // A second begin must still fail; abort must not clear the active run.
+        assert_eq!(session.try_begin_run().err(), Some("run_in_progress"));
     }
 }

@@ -5,7 +5,6 @@ import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 const selection = loadTypeScriptModule(new URL("../src/renderer/review/documentReviewSelection.ts", import.meta.url));
 const preview = {
-  schemaVersion: 1,
   documentPath: ".umbratic/artifacts/docx/proposal.docx",
   title: "Proposal",
   blocks: [

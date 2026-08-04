@@ -42,7 +42,6 @@ async function main() {
     checksum += results.reduce((sum, result) => sum + result.path.length + result.match.length, 0);
   }
   const report = {
-    schemaVersion: 1,
     label,
     measuredAt: new Date().toISOString(),
     host: { platform: process.platform, arch: process.arch, node: process.version },

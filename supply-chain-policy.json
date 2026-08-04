@@ -8,9 +8,17 @@
   "govulncheckVersion": "1.6.0",
   "reviewedNpmOverrides": {
     "@electron/asar": "4.2.0",
+    "@electron/get": {
+      "undici": "7.29.0"
+    },
     "@electron/universal": "3.0.6",
-    "brace-expansion": "5.0.8",
-    "jake": "12.10.1"
+    "brace-expansion": "5.0.9",
+    "fast-uri": "3.1.5",
+    "jake": "12.10.1",
+    "node-gyp": {
+      "undici": "6.28.0"
+    },
+    "postcss": "8.5.25"
   },
   "omittedNpmPeerPackages": [
     "electron-builder-squirrel-windows@26.15.3"

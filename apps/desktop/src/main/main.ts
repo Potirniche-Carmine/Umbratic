@@ -113,6 +113,7 @@ import {
   writeTask,
   writeTasks,
   closeStorageDatabases,
+  normalizeConversationState,
 } from "./storage";
 import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
 import { buildRedactedTelemetryBundle } from "./telemetry";
@@ -149,7 +150,6 @@ import type {
   CommandClass,
   CommandOutput,
   CommandResult,
-  ContextStateV1,
   HarnessProfileId,
   IdeInfo,
   IdeOpenResult,
@@ -178,9 +178,8 @@ import type {
 } from "./types";
 import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
 import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { appendTaskEvent as appendSharedTaskEvent, compactTaskEvents as compactSharedTaskEvents, isResponseFeedbackReason, removeResponseFeedback, taskEventSignature } from "../shared/taskEvents";
-import { isDocumentReviewSidecarPath } from "../shared/documentReview";
-import { backendEventDiagnostic, parseBackendUiEvent, type BackendUiEventV1 } from "../shared/backendEvents";
+import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
+import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
 import {
   registerDesktopIpcHandlers,
   type DesktopIpcHandlers,
@@ -203,12 +202,23 @@ import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPar
 import { findAgentInstructionFiles } from "./repositoryInstructions";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
+import {
+  appendTaskEvent,
+  compactTaskEvents,
+  filterReviewPaths,
+  hiddenRendererReviewPaths,
+  isReviewReadyAssistantEvent,
+  mergeTaskEvents,
+  rendererReviewFiles,
+  visibleTaskEvents,
+} from "./taskReviewPresentation";
 const isDev = !app.isPackaged;
 const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 type RunnerPromptPart = ContextPromptPart;
 type RunnerPrompt = string | RunnerPromptPart[];
 type PendingTaskSteer = {
+  actionId: string;
   prompt: string;
   attachments: ChatAttachment[];
   resolve: () => void;
@@ -222,6 +232,8 @@ const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
 const pendingTaskSteers = new Map<string, PendingTaskSteer>();
+const pendingTaskCancelWaits = new Map<string, () => void>();
+const runnerGracefulCancelDeadlineMs = 2_000;
 const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
 const textAttachmentByteLimit = 512 * 1024;
 const chatAttachmentByteLimit = 25 * 1024 * 1024;
@@ -384,39 +396,6 @@ function saveChat(chat: ChatRecord) {
   writeChat(chat);
 }
 
-function isReviewReadyAssistantEvent(event: BackendUiEvent): boolean {
-  return event.type === "assistant.delta" && event.text.trim() === "Ready for review.";
-}
-
-function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
-  return events.filter((event) => !isReviewReadyAssistantEvent(event) && event.type !== "review.ready");
-}
-
-function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {
-  return appendSharedTaskEvent(visibleTaskEvents(events), event, limit) as BackendUiEvent[];
-}
-
-function compactTaskEvents(events: BackendUiEvent[], limit: number): BackendUiEvent[] {
-  return compactSharedTaskEvents(events, limit) as BackendUiEvent[];
-}
-
-function mergeTaskEvents(...groups: BackendUiEvent[][]): BackendUiEvent[] {
-  const merged: BackendUiEvent[] = [];
-  const mergedCounts = new Map<string, number>();
-  for (const group of groups) {
-    const groupCounts = new Map<string, number>();
-    for (const event of group) {
-      const signature = taskEventSignature(event);
-      const groupCount = (groupCounts.get(signature) ?? 0) + 1;
-      groupCounts.set(signature, groupCount);
-      if (groupCount <= (mergedCounts.get(signature) ?? 0)) continue;
-      mergedCounts.set(signature, groupCount);
-      merged.push(event);
-    }
-  }
-  return compactTaskEvents(merged, 500);
-}
-
 function applyTaskPolicyMetadata(task: TaskRecord) {
   task.runnerName = task.runnerName || umbraticRunnerName;
   task.runnerVersion = task.runnerVersion || umbraticRunnerVersion;
@@ -561,31 +540,6 @@ function publicTask(task: TaskRecord): TaskInfo {
     patchHash,
     error,
   };
-}
-
-function hiddenRendererReviewPaths(task: TaskRecord): Set<string> {
-  const hidden = new Set<string>();
-  for (const file of task.reviewFiles ?? []) {
-    const relativePath = normalizeRelativePath(file.path);
-    if (isDocumentReviewSidecarPath(relativePath)) hidden.add(relativePath);
-  }
-  return hidden;
-}
-
-function filterReviewPaths(files: readonly string[], ignoredPaths: ReadonlySet<string>): string[] {
-  if (ignoredPaths.size === 0) return [...files];
-  return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file)));
-}
-
-function filterReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
-  if (ignoredPaths.size === 0) return [...files];
-  return files.filter((file) => !ignoredPaths.has(normalizeRelativePath(file.path)));
-}
-
-function rendererReviewFiles(files: readonly ReviewFile[], ignoredPaths: ReadonlySet<string>): ReviewFile[] {
-  return filterReviewFiles(files, ignoredPaths).map((file) => file.tooLarge
-    ? { ...file, patch: "", hunks: [] }
-    : file);
 }
 
 function getTask(taskId: string): TaskRecord {
@@ -1221,7 +1175,7 @@ function updateChatFromTask(task: TaskRecord) {
     worktreeBaseCommit: isolatedWorktree ? task.baseCommit : undefined,
     draftPrompt: existing?.draftPrompt ?? "",
     attachedFiles: existing?.attachedFiles ?? [],
-    ...(existing?.contextState ? { contextState: existing.contextState } : {}),
+    ...(existing?.conversationState ? { conversationState: existing.conversationState } : {}),
   };
   writeChat(next);
 }
@@ -1566,7 +1520,7 @@ async function ocrAttachmentArtifact(
       engine: {
         id: "tesseract",
         command: engineProbe.detectedCommand ?? "tesseract",
-        version: engineProbe.version,
+        engineVersion: engineProbe.version,
       },
       pageLimit: kind === "pdf" ? pdfImagePageLimit : 1,
       imageScale: kind === "pdf" ? pdfImageScale : undefined,
@@ -1778,8 +1732,12 @@ function historyLineForEvent(event: BackendUiEvent): string | null {
       return `Merge completed into ${event.targetBranch}.`;
     case "ide.opened":
       return `IDE open ${event.result}: ${event.filePath ?? event.target}.`;
-    case "skill.selected":
-      return `Skill selected: ${event.skillId} (${event.reason}, ${event.fullContent ? "full instructions" : "metadata only"})`;
+    case "skill.requested":
+      return `Skill requested: ${event.skillId} (${event.origin})`;
+    case "skill.loaded":
+      return `Skill loaded: ${event.skillId} (${event.bytes} bytes)`;
+    case "skill.failed":
+      return `Skill failed: ${event.skillId} (${event.code}: ${compactHistoryText(event.message, 300)})`;
     case "required_tool.failed":
       return `Required tool failed: ${event.requirement} (${event.reason}${event.detail ? `: ${compactHistoryText(event.detail, 300)}` : ""})`;
     case "task.error":
@@ -1914,7 +1872,7 @@ async function attachmentPromptParts(
     }
     const fullAccess = isChatAttachment
       ? `Complete attachment: use read_attachment with attachmentId ${JSON.stringify(path.basename(absolute))} and the reported byte offsets.`
-      : `Complete workspace file: use read with filePath ${JSON.stringify(file.path)} and successive line offsets.`;
+      : `Complete workspace file: use read with path ${JSON.stringify(file.path)} and successive line offsets.`;
     lines.push(fullAccess);
     const excerpt = attachmentTextExcerpt(text, options.textBudget.remainingTokens);
     options.textBudget.remainingTokens = Math.max(
@@ -1986,7 +1944,7 @@ async function runnerPromptForTask(
     }
   }
   const hasDurableContext = options.useDurableContext
-    ?? Boolean(task.chatId && readChat(task.chatId)?.contextState);
+    ?? Boolean(task.chatId && readChat(task.chatId)?.conversationState);
   const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
   if (history) {
     lines.push(
@@ -2116,7 +2074,7 @@ function taskMetadataPath(task: TaskRecord): string {
   return path.join(appPaths.taskMetadataDirectory(app.getPath("userData")), `${task.id}.json`);
 }
 
-function recordTaskEvent(event: BackendUiEventV1) {
+function recordTaskEvent(event: BackendUiEvent) {
   if (isReviewReadyAssistantEvent(event) || event.type === "review.ready") return;
   const events = pendingTaskEvents.get(event.taskId) ?? [];
   pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
@@ -2135,7 +2093,7 @@ function flushRendererEvents() {
   }
 }
 
-function dispatchRendererEvent(event: BackendUiEventV1) {
+function dispatchRendererEvent(event: BackendUiEvent) {
   if (!shouldBufferBackendEvent(event)) {
     flushRendererEvents();
     mainWindow?.webContents.send("umbratic:backend-event", event);
@@ -2147,7 +2105,7 @@ function dispatchRendererEvent(event: BackendUiEventV1) {
   }
 }
 
-function validatedBackendEvent(value: unknown): BackendUiEventV1 | null {
+function validatedBackendEvent(value: unknown): BackendUiEvent | null {
   const parsed = parseBackendUiEvent(value);
   if (parsed.ok) return parsed.event;
   recordLocalDiagnostic({
@@ -2160,7 +2118,7 @@ function validatedBackendEvent(value: unknown): BackendUiEventV1 | null {
   return null;
 }
 
-function persistBackendEvent(value: unknown): BackendUiEventV1 | null {
+function persistBackendEvent(value: unknown): BackendUiEvent | null {
   const event = validatedBackendEvent(value);
   if (!event) return null;
   recordBackendEventDiagnostic(event);
@@ -2203,13 +2161,12 @@ function contextThresholdEvents(event: Extract<BackendUiEvent, { type: "context.
 function emit(event: BackendUiEvent) {
   const stampedEvent = persistBackendEvent({
     ...event,
-    version: 1 as const,
     at: event.at ?? new Date().toISOString(),
   });
   if (!stampedEvent) return;
   if (stampedEvent.type === "context.usage") {
     for (const thresholdEvent of contextThresholdEvents(stampedEvent)) {
-      persistBackendEvent({ ...thresholdEvent, version: 1 as const });
+      persistBackendEvent(thresholdEvent);
     }
   }
 }
@@ -2257,8 +2214,7 @@ async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readMo
     throw new Error("Wait for the active run to finish before changing the model connection.");
   }
   const current = readModelEndpointSettings();
-  const requested = { ...current, ...input };
-  const candidate = requested.mode === "local" ? { ...requested, software: "ollama" as const } : requested;
+  const candidate = { ...current, ...input };
   const baseUrl = typeof candidate.baseUrl === "string" ? candidate.baseUrl.trim() : "";
   let parsedUrl: URL;
   try {
@@ -2340,7 +2296,7 @@ async function enrollCompanyConnection(input: unknown) {
   stopLocalVeil();
   await enrollCompanyDevice({ baseUrl, enrollmentCode, deviceLabel: label }, companyTransportOptions());
   const settings = writeModelEndpointSettings({
-    mode: "server", software: "vllm", baseUrl, modelId: "veil-managed", secret: "",
+    mode: "server", baseUrl, modelId: "veil-managed", secret: "",
   });
   const status = await getBackendStatus();
   return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
@@ -2368,7 +2324,6 @@ async function connectCompanyConnection() {
         await connectCompanySession({ ...companyTransportOptions(), signal: controller.signal });
         const settings = writeModelEndpointSettings({
           mode: "server",
-          software: "vllm",
           baseUrl: connection.baseUrl,
           modelId: "veil-managed",
           secret: "",
@@ -2483,7 +2438,7 @@ async function getBackendStatus(): Promise<BackendStatus> {
   const capabilityReport = await probeLocalCapabilities({ runnerPath });
   const managedEndpoint = managedModelEndpointDefaults();
   const endpointSettings = readModelEndpointSettings();
-  const hasManagedEndpoint = !!(managedEndpoint?.baseUrl || managedEndpoint?.mode || managedEndpoint?.software);
+  const hasManagedEndpoint = !!(managedEndpoint?.baseUrl || managedEndpoint?.mode);
   const endpointStatus = providers.some((provider) => provider.status === "ready")
     ? "ready"
     : providers.some((provider) => provider.status === "degraded")
@@ -3349,13 +3304,13 @@ async function handleRunnerPermission(
   const safetyCommandClass = typeof safety?.commandClass === "string" ? safety.commandClass as CommandClass : undefined;
   const classification = type.includes("edit")
     ? ({ commandClass: "edit" as const, risky: false })
-    : type === "read" || type === "search"
+    : type === "read" || type === "ls" || type === "find" || type === "grep"
       ? ({ commandClass: "read" as const, risky: false })
     : safetyCommandClass
       ? ({ commandClass: safetyCommandClass, risky: safety?.action !== "allow" })
       : classifyCommandText(title, task.worktreePath);
 
-  if (type === "read" || type === "search") {
+  if (type === "read" || type === "ls" || type === "find" || type === "grep") {
     emit({ type: "permission.resolved", taskId: task.id, id, decision: "allow" });
     await replyRunnerPermission(run, id, true);
     return "resolved";
@@ -3398,7 +3353,7 @@ async function handleRunnerPermission(
 
   const request: PermissionRequest = {
     id,
-    kind: type.includes("edit") ? "edit" : type === "read" || type === "search" ? "read" : "bash",
+    kind: type.includes("edit") ? "edit" : type === "read" || type === "ls" || type === "find" || type === "grep" ? "read" : "bash",
     summary: title,
     command: title,
     commandClass: classification.commandClass,
@@ -3512,38 +3467,7 @@ async function runRunnerTask(
       rejectCompletion(new Error(message));
     };
 
-    const runnerEvents = new RunnerEventAdapter({
-      task,
-      emit,
-      onPermission: (permission, safety) =>
-        handleRunnerPermission(
-          task,
-          run as RunnerProcess,
-          permission,
-          prompt,
-          intent,
-          safety,
-        ),
-      onDelegated: () => {
-        delegatedToWorktree = true;
-      },
-      onFinish: finish,
-      onFailure: (message, details) => {
-        if (details) runnerFailureDetails = details;
-        fail(message);
-      },
-      onInvalid: (invalid) => {
-        recordLocalDiagnostic({
-          level: "warn",
-          source: "runner",
-          event: "runner.event.invalid",
-          taskId: task.id,
-          message: invalid.message,
-          data: { code: invalid.code, type: invalid.type },
-        });
-      },
-    });
-
+    let session!: { id: string };
     const launchPendingSteer = (pending: PendingTaskSteer) => {
       appendUserMessage(task, pending.prompt, pending.attachments);
       void runnerPromptForTask(task, pending.prompt, pending.attachments,
@@ -3563,14 +3487,71 @@ async function runRunnerTask(
           fail(message);
         });
     };
-    const handleRunnerEvent = (event: Record<string, unknown>) => {
-      const pending = pendingTaskSteers.get(task.id);
-      const terminalTurnEvent = event.type === "session.idle" || event.type === "runner.error";
-      if (pending && terminalTurnEvent) {
+
+    const runnerEvents = new RunnerEventAdapter({
+      task,
+      emit,
+      onPermission: (permission, safety) =>
+        handleRunnerPermission(
+          task,
+          run as RunnerProcess,
+          permission,
+          prompt,
+          intent,
+          safety,
+        ),
+      onDelegated: () => {
+        delegatedToWorktree = true;
+      },
+      onStepSettled: (conversationStateValue) => {
+        const conversationState = normalizeConversationState(conversationStateValue);
+        if (!conversationState || !task.chatId) {
+          return;
+        }
+        const chat = readChat(task.chatId);
+        if (chat) {
+          writeChat({ ...chat, conversationState });
+        }
+      },
+      onFinish: finish,
+      onFailure: (message, details) => {
+        if (pendingTaskSteers.has(task.id)) {
+          if (details) runnerFailureDetails = details;
+          return;
+        }
+        if (details) runnerFailureDetails = details;
+        fail(message);
+      },
+      onInvalid: (invalid) => {
+        recordLocalDiagnostic({
+          level: "warn",
+          source: "runner",
+          event: "runner.event.invalid",
+          taskId: task.id,
+          message: invalid.message,
+          data: { code: invalid.code, type: invalid.type },
+        });
+      },
+      onQueueUpdated: (queueEvent) => {
+        if (queueEvent.disposition !== "dequeued") return;
+        if (queueEvent.action !== "steer" && queueEvent.action !== "follow_up") return;
+        const pending = pendingTaskSteers.get(task.id);
+        if (!pending || pending.actionId !== queueEvent.actionId) return;
         pendingTaskSteers.delete(task.id);
+        if (completed) armCompletion();
         launchPendingSteer(pending);
-        return;
+      },
+    });
+
+    const handleRunnerEvent = (event: Record<string, unknown>) => {
+      if (event.type === "run.settled") {
+        const cancelWait = pendingTaskCancelWaits.get(task.id);
+        if (cancelWait) {
+          pendingTaskCancelWaits.delete(task.id);
+          cancelWait();
+        }
       }
+      // Always settle adapter state before launching queue work.
       runnerEvents.handle(event);
     };
     const stream = beginRunnerEventStream(run, handleRunnerEvent);
@@ -3585,32 +3566,31 @@ async function runRunnerTask(
     // Runner sessions live only inside the runner process started above.
     // Because Umbratic starts a fresh process for each task run, a persisted
     // runnerSessionId from an earlier process is stale and cannot be reused.
-    let contextState = task.chatId ? readChat(task.chatId)?.contextState : undefined;
-    let session: { id: string };
+    let conversationState = task.chatId ? readChat(task.chatId)?.conversationState : undefined;
     try {
       session = await runnerRequest<{ id: string }>(run, "/session", {
         method: "POST",
-        body: { contextState: contextState ?? null },
+        body: { conversationState: conversationState ?? null },
       });
     } catch (error) {
       const message = String(error instanceof Error ? error.message : error);
-      if (!contextState || !message.includes("invalid_context_state")) {
+      if (!conversationState || !message.includes("invalid_conversation_state")) {
         throw error;
       }
       if (task.chatId) {
         const chat = readChat(task.chatId);
         if (chat) {
-          writeChat({ ...chat, contextState: undefined });
+          writeChat({ ...chat, conversationState: undefined });
         }
       }
       recordLocalDiagnostic({
         level: "warn",
         source: "desktop",
-        event: "context_state.invalid",
-        message: "Persisted chat context was invalid and was cleared; falling back to event history.",
+        event: "conversation_state.invalid",
+        message: "Persisted chat conversation state was invalid and was cleared; falling back to event history.",
         data: { taskId: task.id, chatId: task.chatId },
       });
-      contextState = undefined;
+      conversationState = undefined;
       if (!promptForRun) {
         prompt = await runnerPromptForTask(
           task,
@@ -3623,7 +3603,7 @@ async function runRunnerTask(
       }
       session = await runnerRequest<{ id: string }>(run, "/session", {
         method: "POST",
-        body: { contextState: null },
+        body: { conversationState: null },
       });
     }
     run.sessionId = session.id;
@@ -3645,17 +3625,6 @@ async function runRunnerTask(
       ]);
 
     await waitForCompletion();
-
-    if (task.chatId) {
-      const snapshot = await runnerRequest<ContextStateV1>(
-        run,
-        `/session/${encodeURIComponent(session.id)}/context`,
-      );
-      const chat = readChat(task.chatId);
-      if (chat) {
-        writeChat({ ...chat, contextState: snapshot });
-      }
-    }
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
       return;
@@ -4297,13 +4266,27 @@ async function cancelTask(input: unknown): Promise<void> {
   if (run) {
     activeRunnerProcesses.delete(task.id);
     if (run.sessionId) {
-      await runnerRequest<boolean>(run, `/session/${encodeURIComponent(run.sessionId)}/abort`, { method: "POST" }).catch(
-        () => undefined,
-      );
+      const actionId = `cancel-${crypto.randomUUID()}`;
+      const settled = new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          pendingTaskCancelWaits.delete(task.id);
+          resolve();
+        }, runnerGracefulCancelDeadlineMs);
+        pendingTaskCancelWaits.set(task.id, () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      await runnerRequest<{ disposition?: string }>(run, `/session/${encodeURIComponent(run.sessionId)}/queue`, {
+        method: "POST",
+        body: { action: "cancel", actionId },
+      }).catch(() => undefined);
+      await settled;
     }
     stopRunnerProcess(run);
   }
   pendingRunnerPrompts.delete(task.id);
+  pendingTaskSteers.delete(task.id);
   clearPendingPermissionsForTask(task.id);
   task.state = "failed";
   task.error = "Task was cancelled.";
@@ -4323,13 +4306,19 @@ async function steerTask(input: unknown): Promise<void> {
     throw new Error("A steer message is already pending.");
   }
   const attachments = sanitizeAttachments(input.attachedFiles, task.originalRepoPath, task.chatId ?? task.id);
+  const actionId = `steer-${crypto.randomUUID()}`;
   await new Promise<void>((resolve, reject) => {
-    pendingTaskSteers.set(task.id, { prompt, attachments, resolve, reject });
-    void runnerRequest<void>(run, `/session/${encodeURIComponent(run.sessionId as string)}/abort`, {
-      method: "POST",
-    }).catch((cause) => {
+    pendingTaskSteers.set(task.id, { actionId, prompt, attachments, resolve, reject });
+    void runnerRequest<{ disposition?: string; reasonCode?: string | null }>(
+      run,
+      `/session/${encodeURIComponent(run.sessionId as string)}/queue`,
+      {
+        method: "POST",
+        body: { action: "steer", actionId, prompt },
+      },
+    ).catch((cause) => {
       const pending = pendingTaskSteers.get(task.id);
-      if (!pending) return;
+      if (!pending || pending.actionId !== actionId) return;
       pendingTaskSteers.delete(task.id);
       pending.reject(new Error(String(cause instanceof Error ? cause.message : cause)));
     });

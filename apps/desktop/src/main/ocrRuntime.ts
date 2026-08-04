@@ -31,7 +31,6 @@ export type OcrPage = {
 };
 
 export type OcrDocument = {
-  schemaVersion: 1;
   source: {
     pathLabel: string;
     kind: OcrSourceKind;
@@ -40,7 +39,7 @@ export type OcrDocument = {
   };
   engine: {
     id: OcrEngineId;
-    version?: string;
+    engineVersion?: string;
     model?: string;
     localOnly: true;
   };
@@ -85,10 +84,10 @@ type TesseractEngineInput =
   | {
       id: "tesseract";
       command?: string;
-      version?: string;
+      engineVersion?: string;
       model?: string;
     }
-  | { id: "none"; version?: string; model?: string };
+  | { id: "none"; engineVersion?: string; model?: string };
 
 export type GenerateOcrDocumentInput = {
   sourcePath: string;
@@ -451,7 +450,6 @@ export async function generateOcrDocument(input: GenerateOcrDocumentInput): Prom
     ? allLines.reduce((total, line) => total + line.confidence, 0) / allLines.length
     : undefined;
   return {
-    schemaVersion: 1,
     source: {
       pathLabel: input.pathLabel,
       kind: input.kind,
@@ -460,7 +458,7 @@ export async function generateOcrDocument(input: GenerateOcrDocumentInput): Prom
     },
     engine: {
       id: input.engine.id,
-      version: input.engine.version,
+      engineVersion: input.engine.engineVersion,
       model: input.engine.model,
       localOnly: true,
     },

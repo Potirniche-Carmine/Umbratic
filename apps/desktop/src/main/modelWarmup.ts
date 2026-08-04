@@ -10,6 +10,9 @@ export async function warmConfiguredModel(): Promise<void> {
   try {
     const settings = readModelEndpointSettings();
     if (settings.mode !== "local") return;
+    // No model chosen yet is the ordinary first-run state, not a failure worth
+    // logging: the connection panel discovers and applies one.
+    if (!settings.modelId.trim()) return;
     await ensureLocalVeil(settings, readContextLengthSetting(), (diagnostic) => {
       recordLocalDiagnostic({
         ...diagnostic,

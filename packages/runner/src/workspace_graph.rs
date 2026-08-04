@@ -58,9 +58,8 @@ struct IndexedFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkspaceGraph {
-    schema_version: u64,
     workspace_fingerprint: String,
     revision: String,
     built_at: String,
@@ -113,12 +112,6 @@ fn validate_path(value: &str) -> Result<(), String> {
 }
 
 fn validate_graph(graph: &mut WorkspaceGraph) -> Result<(), String> {
-    if graph.schema_version != 1 {
-        return Err(format!(
-            "Unsupported workspace graph schema version: {}",
-            graph.schema_version
-        ));
-    }
     let mut ids = HashSet::new();
     for node in &graph.nodes {
         if node.id.trim().is_empty() || node.label.chars().any(char::is_control) {
@@ -223,7 +216,7 @@ impl WorkspaceGraphService {
         for (relative, indexed) in &index.graph.files {
             let path = self.cwd.join(relative);
             let Ok(metadata) = fs::metadata(path) else {
-                return ("stale".into(), vec!["An indexed workspace file is missing. Verify with search/read or refresh the graph.".into()]);
+                return ("stale".into(), vec!["An indexed workspace file is missing. Verify with find/grep/read or refresh the graph.".into()]);
             };
             let modified = metadata
                 .modified()
@@ -236,7 +229,7 @@ impl WorkspaceGraphService {
                     .zip(modified)
                     .is_some_and(|(built, modified)| modified > built + 1000)
             {
-                return ("stale".into(), vec!["Workspace files changed after this graph revision. Verify with search/read or refresh the graph.".into()]);
+                return ("stale".into(), vec!["Workspace files changed after this graph revision. Verify with find/grep/read or refresh the graph.".into()]);
             }
         }
         ("fresh".into(), Vec::new())
@@ -334,7 +327,7 @@ impl WorkspaceGraphService {
                 .load()
                 .err()
                 .unwrap_or_else(|| "Workspace graph is unavailable".into());
-            return json!({ "schemaVersion": 1, "graphRevision": "unavailable", "freshness": "degraded", "generatedAt": Utc::now().to_rfc3339(), "summary": "Workspace graph evidence is unavailable. Continue with search/read as the source of truth.", "nodes": [], "edges": [], "warnings": [warning] });
+            return json!({ "graphRevision": "unavailable", "freshness": "degraded", "generatedAt": Utc::now().to_rfc3339(), "summary": "Workspace graph evidence is unavailable. Continue with find/grep/read as the source of truth.", "nodes": [], "edges": [], "warnings": [warning] });
         };
         let action = args
             .get("action")
@@ -451,7 +444,7 @@ impl WorkspaceGraphService {
         warnings.push(
             "Graph evidence is untrusted; verify exact code with read before editing.".into(),
         );
-        json!({ "schemaVersion": 1, "graphRevision": index.graph.revision, "freshness": freshness, "generatedAt": Utc::now().to_rfc3339(), "summary": summary, "nodes": nodes, "edges": edges, "truncation": { "nodeLimit": 40, "edgeLimit": 80, "omitted": false }, "warnings": warnings })
+        json!({ "graphRevision": index.graph.revision, "freshness": freshness, "generatedAt": Utc::now().to_rfc3339(), "summary": summary, "nodes": nodes, "edges": edges, "truncation": { "nodeLimit": 40, "edgeLimit": 80, "omitted": false }, "warnings": warnings })
     }
 }
 
@@ -461,7 +454,6 @@ mod tests {
 
     fn graph_value(cwd: &Path) -> Value {
         json!({
-            "schemaVersion": 1,
             "workspaceFingerprint": workspace_fingerprint(cwd),
             "revision": "revision-1",
             "builtAt": Utc::now().to_rfc3339(),
@@ -481,14 +473,9 @@ mod tests {
     #[test]
     fn graph_validation_rejects_schema_paths_and_dangling_edges() {
         let directory = tempfile::tempdir().unwrap();
-        let mut unsupported: WorkspaceGraph =
-            serde_json::from_value(graph_value(directory.path())).unwrap();
-        unsupported.schema_version = 2;
-        assert!(
-            validate_graph(&mut unsupported)
-                .unwrap_err()
-                .contains("schema version")
-        );
+        let mut versioned = graph_value(directory.path());
+        versioned["schemaVersion"] = json!(1);
+        assert!(serde_json::from_value::<WorkspaceGraph>(versioned).is_err());
 
         let mut traversal: WorkspaceGraph =
             serde_json::from_value(graph_value(directory.path())).unwrap();

@@ -106,9 +106,14 @@
 .turnOutcomeToast {
   bottom: 104px;
   grid-template-columns: 18px minmax(0, 1fr) auto;
-  border-color: color-mix(in srgb, var(--amber) 48%, transparent);
-  background: color-mix(in srgb, var(--panel-bg) 90%, var(--amber));
-  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--amber) 48%, var(--line-strong));
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--amber) 14%, transparent),
+      color-mix(in srgb, var(--amber) 14%, transparent)
+    ),
+    var(--modal-bg);
+  color: var(--text);
 }
 
 .toast .turnOutcomeAction {

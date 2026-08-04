@@ -1,7 +1,7 @@
-import { BACKEND_EVENT_VERSION, type BackendUiEventInput } from "./backendEvents";
+import type { BackendUiEvent } from "./backendEvents";
 import type { ResponseRating } from "./responseFeedback";
 
-export type TaskUiEvent = BackendUiEventInput;
+export type TaskUiEvent = BackendUiEvent;
 export { isResponseFeedbackReason } from "./responseFeedback";
 export type { ResponseRating } from "./responseFeedback";
 
@@ -30,10 +30,6 @@ function eventSignature(event: TaskUiEvent): string {
     });
   }
   return JSON.stringify(event);
-}
-
-function withVersion(event: TaskUiEvent): TaskUiEvent {
-  return { ...event, version: BACKEND_EVENT_VERSION };
 }
 
 function boundedEvents(events: TaskUiEvent[], limit: number): TaskUiEvent[] {
@@ -66,7 +62,7 @@ export function removeResponseFeedback(
 }
 
 export function appendTaskEvent(events: TaskUiEvent[], event: TaskUiEvent, limit = 500): TaskUiEvent[] {
-  const nextEvent = withVersion(event);
+  const nextEvent = event;
   const existing = events;
   if (nextEvent.type === "response.feedback") {
     return boundedEvents([

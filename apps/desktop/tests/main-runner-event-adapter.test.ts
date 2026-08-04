@@ -13,6 +13,7 @@ function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
   const emitted: BackendUiEvent[] = [];
   const invalid: Array<{ message: string; code: string; type?: string }> = [];
   const failures: string[] = [];
+  const settledSteps: unknown[] = [];
   let finished = 0;
   const adapter = new RunnerEventAdapter({
     task: {
@@ -23,13 +24,16 @@ function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
     emit: (event) => emitted.push(event),
     onPermission: async () => "resolved",
     onDelegated: () => undefined,
+    onStepSettled: (conversationState) => {
+      settledSteps.push(conversationState);
+    },
     onFinish: () => {
       finished += 1;
     },
     onFailure: (message) => failures.push(message),
     onInvalid: (input) => invalid.push(input),
   });
-  return { adapter, emitted, invalid, failures, finished: () => finished };
+  return { adapter, emitted, invalid, failures, settledSteps, finished: () => finished };
 }
 
 test("runner event adapter translates one typed tool lifecycle", () => {
@@ -47,7 +51,7 @@ test("runner event adapter translates one typed tool lifecycle", () => {
     toolKind: "read",
     summary: "read src/app.ts",
     commandClass: "read",
-    arguments: { filePath: "src/app.ts" },
+    arguments: { path: "src/app.ts" },
     at: "2026-01-01T00:00:01.000Z",
   });
   harness.adapter.handle({
@@ -67,8 +71,13 @@ test("runner event adapter translates one typed tool lifecycle", () => {
     at: "2026-01-01T00:00:03.000Z",
   });
   harness.adapter.handle({
-    type: "session.idle",
+    type: "run.settled",
     taskId: "task-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    outcome: "completed",
+    summary: { outcome: "completed", turns: 1 },
+    errorCode: null,
     at: "2026-01-01T00:00:04.000Z",
   });
 
@@ -79,6 +88,7 @@ test("runner event adapter translates one typed tool lifecycle", () => {
       "command.started",
       "command.output",
       "command.finished",
+      "turn.outcome",
     ],
   );
   assert.equal(harness.finished(), 1);
@@ -153,14 +163,19 @@ test("assistant text reaches the renderer as it streams instead of at the turn b
     at: "2026-01-01T00:00:01.000Z",
   });
   harness.adapter.handle({
-    type: "session.idle",
+    type: "run.settled",
     taskId: "task-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    outcome: "completed",
+    summary: { outcome: "completed" },
+    errorCode: null,
     at: "2026-01-01T00:00:02.000Z",
   });
 
   assert.deepEqual(
     plain(harness.emitted.map((event) => event.type)),
-    ["assistant.delta", "assistant.delta"],
+    ["assistant.delta", "assistant.delta", "turn.outcome"],
   );
   assert.equal(harness.finished(), 1);
 });
@@ -230,14 +245,19 @@ test("recovering compacted context never becomes a visible workspace action", ()
     at: "2026-01-01T00:00:02.000Z",
   });
   harness.adapter.handle({
-    type: "session.idle",
+    type: "run.settled",
     taskId: "task-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    outcome: "completed",
+    summary: { outcome: "completed" },
+    errorCode: null,
     at: "2026-01-01T00:00:03.000Z",
   });
 
   // The retrieval stays observable for telemetry, but the user sees no command
   // row, no hash, and none of the recovered bytes.
-  assert.deepEqual(plain(harness.emitted.map((event) => event.type)), ["context.retrieved"]);
+  assert.deepEqual(plain(harness.emitted.map((event) => event.type)), ["context.retrieved", "turn.outcome"]);
   assert.deepEqual(plain(harness.failures), []);
   assert.equal(harness.invalid.length, 0);
 });
@@ -295,5 +315,55 @@ test("runner event adapter keeps runner failures typed and bounded", () => {
     detail: "private detail",
     at: "2026-01-01T00:00:00.000Z",
   });
+  assert.deepEqual(plain(harness.failures), []);
+  harness.adapter.handle({
+    type: "run.settled",
+    taskId: "task-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    outcome: "failed",
+    summary: null,
+    errorCode: "veil_failed",
+    at: "2026-01-01T00:00:01.000Z",
+  });
   assert.deepEqual(plain(harness.failures), ["Veil request failed."]);
+  assert.equal(harness.finished(), 0);
+});
+
+test("runner event adapter forwards run.queue.updated to the queue callback", () => {
+  const queueEvents: Array<Record<string, unknown>> = [];
+  const adapter = new RunnerEventAdapter({
+    task: {
+      id: "task-1",
+      worktreePath: "C:/workspace",
+      reasoningMode: "reasoning",
+    },
+    emit: () => undefined,
+    onPermission: async () => "resolved",
+    onDelegated: () => undefined,
+    onStepSettled: () => undefined,
+    onFinish: () => undefined,
+    onFailure: () => undefined,
+    onInvalid: () => undefined,
+    onQueueUpdated: (event) => {
+      queueEvents.push(event as unknown as Record<string, unknown>);
+    },
+  });
+  adapter.handle({
+    type: "run.queue.updated",
+    taskId: "task-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    actionId: "steer-1",
+    action: "steer",
+    disposition: "dequeued",
+    pendingSteer: false,
+    followUpCount: 0,
+    followUpCapacity: 8,
+    reasonCode: null,
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  assert.equal(queueEvents.length, 1);
+  assert.equal(queueEvents[0]?.disposition, "dequeued");
+  assert.equal(queueEvents[0]?.actionId, "steer-1");
 });

@@ -8,7 +8,6 @@ export type StoredProtectedString = {
 };
 
 type StoredCompanyDeviceCredential = {
-  version: 2;
   baseUrl: string;
   orgUid: string;
   orgName: string;
@@ -52,13 +51,12 @@ export function writeProtectedString(
 }
 
 export function decodeCompanyDeviceCredential(value: unknown): CompanyDeviceCredential | null {
-  if (!isRecord(value) || value.version !== 2) return null;
+  if (!isRecord(value) || "version" in value) return null;
   const required = ["baseUrl", "orgUid", "orgName", "userUid", "deviceUid", "deviceLabel", "publicKey"] as const;
   if (required.some((name) => typeof value[name] !== "string" || !value[name])) return null;
   const privateKeyPkcs8 = readProtectedString(value.privateKeyPkcs8);
   if (!privateKeyPkcs8) return null;
   return {
-    version: 2,
     baseUrl: value.baseUrl as string,
     orgUid: value.orgUid as string,
     orgName: value.orgName as string,
@@ -72,7 +70,6 @@ export function decodeCompanyDeviceCredential(value: unknown): CompanyDeviceCred
 
 export function encodeCompanyDeviceCredential(input: CompanyDeviceCredential): StoredCompanyDeviceCredential {
   return {
-    version: 2,
     baseUrl: input.baseUrl,
     orgUid: input.orgUid,
     orgName: input.orgName,

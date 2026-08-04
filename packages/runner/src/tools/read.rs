@@ -1,37 +1,8 @@
-use super::*;
+use std::io::{BufRead, BufReader};
 
-fn list_directory(cwd: &Path, directory: &Path, depth: usize) -> Vec<String> {
-    let workspace_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let mut rows = BTreeSet::new();
-    for entry in WalkDir::new(directory)
-        .min_depth(1)
-        .max_depth(depth)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        let relative_workspace = entry
-            .path()
-            .strip_prefix(&workspace_root)
-            .unwrap_or(entry.path())
-            .to_string_lossy()
-            .replace('\\', "/");
-        if should_skip(&relative_workspace) {
-            continue;
-        }
-        let display = entry
-            .path()
-            .strip_prefix(directory)
-            .unwrap_or(entry.path())
-            .to_string_lossy()
-            .replace('\\', "/");
-        rows.insert(format!(
-            "{display}{}",
-            if entry.file_type().is_dir() { "/" } else { "" }
-        ));
-    }
-    rows.into_iter().collect()
-}
+use serde_json::json;
+
+use super::*;
 
 fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
     let workspace_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
@@ -44,7 +15,7 @@ fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
         .unwrap_or(directory)
         .to_string_lossy()
         .replace('\\', "/");
-    let nearby = list_directory(&workspace_root, directory, 1)
+    let nearby = list_entries(directory)
         .into_iter()
         .take(12)
         .map(|entry| {
@@ -56,44 +27,71 @@ fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
         })
         .collect::<Vec<_>>();
     let guidance = if nearby.is_empty() {
-        "Use search to find an existing workspace path.".to_owned()
+        "Use ls or find to locate an existing workspace path.".to_owned()
     } else {
         format!(
-            "Nearby workspace entries:\n- {}\nUse an exact listed path, or use search with a broader query.",
+            "Nearby workspace entries:\n- {}\nUse an exact listed path, or use find/grep with a broader scope.",
             nearby.join("\n- ")
         )
     };
     format!("Path not found: {relative}.\n{guidance}")
 }
 
+pub(super) fn list_entries(directory: &Path) -> Vec<String> {
+    let mut rows = BTreeSet::new();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().replace('\\', "/");
+        if name == "." || name == ".." {
+            continue;
+        }
+        let is_dir = entry
+            .file_type()
+            .map(|value| value.is_dir())
+            .unwrap_or(false);
+        rows.insert(format!("{name}{}", if is_dir { "/" } else { "" }));
+    }
+    rows.into_iter().collect()
+}
+
+fn decode_text_line(buffer: &[u8], line_number: usize) -> Result<String, ToolError> {
+    if buffer.contains(&0) {
+        return Err(ToolError::validation("Refusing to read binary file"));
+    }
+    if buffer.len() > MAX_READ_OUTPUT_BYTES {
+        return Err(ToolError::validation_code(
+            "line_too_long",
+            format!(
+                "Line {line_number} is {} bytes and exceeds the {MAX_READ_OUTPUT_BYTES}-byte line cap.",
+                buffer.len()
+            ),
+        ));
+    }
+    String::from_utf8(buffer.to_vec())
+        .map_err(|_| ToolError::validation("Refusing to read non-UTF-8 file"))
+}
+
 pub(super) async fn read_tool(
     session: &Session,
     input: &Map<String, Value>,
 ) -> ToolExecutionResult {
-    let mut file_path = string_arg(input, &["filePath", "file_path", "path", "directory"]);
-    if file_path.is_empty() {
-        return Err("read requires string argument filePath".into());
+    let path = string_arg(input, &["path"]);
+    if path.is_empty() {
+        return Err("read requires string argument path".into());
     }
-    let explicit_offset = input
+    let offset = input
         .get("offset")
         .and_then(Value::as_u64)
-        .filter(|value| *value > 0);
-    let mut offset = explicit_offset.unwrap_or(1) as usize;
-    if explicit_offset.is_none()
-        && let Some((path, line)) = file_path
-            .rsplit_once(':')
-            .and_then(|(path, suffix)| suffix.parse::<usize>().ok().map(|line| (path, line)))
-        && resolve_workspace_path(&session.config.cwd, path)
-            .ok()
-            .is_some_and(|(target, _)| target.is_file())
-    {
-        file_path = path.to_owned();
-        offset = line.saturating_sub(5).max(1);
-    }
-    let limit = number_arg(input, "limit", 500, 500) as usize;
-    let depth = number_arg(input, "depth", 1, 6) as usize;
+        .unwrap_or(1)
+        .max(1) as usize;
+    let line_limit = input
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize);
     let (absolute, relative) =
-        resolve_workspace_path(&session.config.cwd, &file_path).map_err(ToolError::policy)?;
+        resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -106,45 +104,105 @@ pub(super) async fn read_tool(
         Err(error) => return Err(ToolError::runtime(error.to_string())),
     };
     if metadata.is_dir() {
-        let entries = list_directory(&session.config.cwd, &absolute, depth);
-        let start = offset.saturating_sub(1).min(entries.len());
-        let selected = &entries[start..(start + limit).min(entries.len())];
-        let next = start + selected.len();
-        let status = if next < entries.len() {
-            format!("partial; continue with offset {}", next + 1)
-        } else {
-            "complete".into()
-        };
-        let output = format!(
-            "Directory: {}\nDepth: {depth}\nEntries shown: {}-{} of {}\nListing status: {status}\nEntries:\n{}",
-            if relative.is_empty() { "." } else { &relative },
-            if entries.is_empty() { 0 } else { start + 1 },
-            next,
-            entries.len(),
-            if selected.is_empty() {
-                "(empty directory)".into()
-            } else {
-                selected.join("\n")
-            }
-        );
-        return Ok(ToolResult::success(
-            if relative.is_empty() { "." } else { &relative },
-            clip_read_output(output),
+        return Err(ToolError::validation(
+            "read accepts one UTF-8 text file. Use ls to list a directory.",
         ));
     }
-    let content = ensure_text_file(&absolute)?.replace("\r\n", "\n");
-    let mut reads = RECENT_READS.get_or_init(Default::default).lock().unwrap();
-    *reads.entry(absolute.clone()).or_default() += 1;
-    drop(reads);
-    let output = content
-        .split('\n')
-        .skip(offset.saturating_sub(1))
-        .take(limit)
-        .enumerate()
-        .map(|(index, line)| format!("{}: {line}", offset + index))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(ToolResult::success(relative, clip_read_output(output)))
+    if !metadata.is_file() {
+        return Err(ToolError::validation("Path is not a file"));
+    }
+    let file = fs::File::open(&absolute).map_err(|error| ToolError::runtime(error.to_string()))?;
+    let mut reader = BufReader::new(file);
+    let mut total_lines = 0usize;
+    let mut selected = Vec::new();
+    let mut selected_bytes = 0usize;
+    let mut collecting = true;
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        let read = reader
+            .read_until(b'\n', &mut buffer)
+            .map_err(|error| ToolError::runtime(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        // The terminator is carried with its line so that read output is a byte-exact
+        // slice of the file on every line-ending style. edit matches raw bytes, so
+        // normalizing here would break a verbatim copy into edits[].oldText.
+        let mut terminator = "";
+        if buffer.last() == Some(&b'\n') {
+            buffer.pop();
+            if buffer.last() == Some(&b'\r') {
+                buffer.pop();
+                terminator = "\r\n";
+            } else {
+                terminator = "\n";
+            }
+        }
+        total_lines += 1;
+        let line = decode_text_line(&buffer, total_lines)?;
+        if !collecting || total_lines < offset {
+            continue;
+        }
+        if line_limit.is_some_and(|limit| selected.len() >= limit) {
+            collecting = false;
+            continue;
+        }
+        let joiner = selected
+            .last()
+            .map_or(0, |(_, previous): &(String, &str)| previous.len());
+        let next_bytes = selected_bytes + line.len() + joiner;
+        if next_bytes > MAX_READ_OUTPUT_BYTES {
+            if selected.is_empty() {
+                return Err(ToolError::validation_code(
+                    "line_too_long",
+                    format!(
+                        "Line {total_lines} is {} bytes and exceeds the remaining output budget.",
+                        line.len()
+                    ),
+                ));
+            }
+            collecting = false;
+            continue;
+        }
+        selected_bytes = next_bytes;
+        selected.push((line, terminator));
+    }
+    let shown_start = if selected.is_empty() { 0 } else { offset };
+    let shown_end = if selected.is_empty() {
+        0
+    } else {
+        offset + selected.len() - 1
+    };
+    let next_offset = if shown_end > 0 && shown_end < total_lines {
+        Some(shown_end + 1)
+    } else {
+        None
+    };
+    // Each line keeps its own terminator; the final terminator is left off so the
+    // result stays an exact substring of the file even at an unterminated last line.
+    let mut content = String::with_capacity(selected_bytes);
+    for (index, (line, _)) in selected.iter().enumerate() {
+        if index > 0 {
+            content.push_str(selected[index - 1].1);
+        }
+        content.push_str(line);
+    }
+    let details = json!({
+        "path": if relative.is_empty() { "." } else { &relative },
+        "offset": offset,
+        "shownStart": shown_start,
+        "shownEnd": shown_end,
+        "totalLines": total_lines,
+        "bytes": content.len(),
+    });
+    let continuation = next_offset.map(|value| json!({ "nextOffset": value }));
+    Ok(ToolResult::success_detailed(
+        relative,
+        content,
+        Some(details),
+        continuation,
+    ))
 }
 
 pub(super) fn read_attachment_tool(
@@ -214,15 +272,27 @@ pub(super) fn read_attachment_tool(
     let content = std::str::from_utf8(&bytes[leading..end])
         .map_err(|_| "Refusing to read a non-UTF-8 attachment.".to_owned())?;
     let next_offset = actual_offset + content.len();
-    let status = if next_offset < total {
+    let continuation = if next_offset < total {
+        Some(json!({ "nextOffset": next_offset }))
+    } else {
+        None
+    };
+    let status = if continuation.is_some() {
         format!("partial; continue with offset {next_offset}")
     } else {
         "complete".to_owned()
     };
-    Ok(ToolResult::success(
+    Ok(ToolResult::success_detailed(
         format!("attachment {attachment_id}"),
         format!(
             "Attachment: {attachment_id}\nBytes shown: {actual_offset}-{next_offset} of {total}\nRead status: {status}\n\n{content}"
         ),
+        Some(json!({
+            "attachmentId": attachment_id,
+            "offset": actual_offset,
+            "nextOffset": if next_offset < total { Value::from(next_offset as u64) } else { Value::Null },
+            "totalBytes": total,
+        })),
+        continuation,
     ))
 }

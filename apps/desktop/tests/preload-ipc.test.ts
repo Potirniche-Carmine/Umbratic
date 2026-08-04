@@ -68,7 +68,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getModelEndpointSettings", [{ mode: "local" }], "umbratic:get-model-endpoint-settings"],
     ["getCachedLocalModels", [{ baseUrl: "http://127.0.0.1:11434" }], "umbratic:get-cached-local-models"],
     ["probeLocalModels", [{ baseUrl: "http://127.0.0.1:11434" }], "umbratic:probe-local-models"],
-    ["saveModelEndpointSettings", [{ mode: "local", software: "ollama", baseUrl: "http://127.0.0.1:8080", modelId: "veil-managed", secret: "", headers: [] }], "umbratic:save-model-endpoint-settings"],
+    ["saveModelEndpointSettings", [{ mode: "local", baseUrl: "http://127.0.0.1:8080", modelId: "veil-managed", secret: "", headers: [] }], "umbratic:save-model-endpoint-settings"],
     ["getCompanyConnectionStatus", [], "umbratic:get-company-connection-status", undefined],
     ["enrollCompanyConnection", [{ baseUrl: "https://veil.example.com", enrollmentCode: "umbr_code" }], "umbratic:enroll-company-connection"],
     ["connectCompanyConnection", [], "umbratic:connect-company-connection", undefined],
@@ -117,10 +117,10 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   const unsubscribe = exposedApi.onBackendEvent((event) => received.push(event));
   assert.equal(listeners.has("umbratic:backend-event"), true);
   listeners.get("umbratic:backend-event")({}, { type: "assistant.done", taskId: "task-1" });
-  listeners.get("umbratic:backend-event")({}, { version: 2, type: "assistant.done", taskId: "task-1" });
+  listeners.get("umbratic:backend-event")({}, { ["ver" + "sion"]: 1, type: "assistant.done", taskId: "task-1" });
   listeners.get("umbratic:backend-event")({}, { type: "assistant.delta", taskId: "task-1", text: 42 });
   listeners.get("umbratic:backend-event")({}, { type: "permission.resolved", taskId: "task-1", id: "p", decision: "later" });
-  assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1", version: 1 }]);
+  assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1" }]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);
 });

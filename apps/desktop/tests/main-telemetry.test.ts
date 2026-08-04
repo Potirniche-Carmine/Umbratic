@@ -65,13 +65,28 @@ function listen(server) {
   });
 }
 
+// The golden fixture is shared with the Veil consumer test, which reads it by
+// relative path. Both sides must accept the same bytes or the bundle silently
+// stops round-tripping in production.
+test("telemetry bundle matches the shared golden contract fixture", () => {
+  const fixtures = new URL("fixtures/", import.meta.url);
+  const input = JSON.parse(fs.readFileSync(new URL("telemetry-bundle.input.json", fixtures), "utf8"));
+  const golden = JSON.parse(fs.readFileSync(new URL("telemetry-bundle.golden.json", fixtures), "utf8"));
+
+  const bundle = plain(
+    buildRedactedTelemetryBundle(input.tasks, input.projects, input.productEvents, input.localDiagnostics),
+  );
+  assert.match(bundle.exportedAt, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+  bundle.exportedAt = golden.exportedAt;
+  assert.deepEqual(bundle, golden);
+});
+
 test("telemetry bundle keeps workflow facts while redacting prompts, paths, command output, and secrets", () => {
   const diagnosticDir = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-diagnostics-"));
   const diagnosticLogPath = path.join(diagnosticDir, "task-1.jsonl");
   fs.writeFileSync(
     diagnosticLogPath,
     `${JSON.stringify({
-      schemaVersion: 1,
       source: "umbratic-runner",
       level: "error",
       eventType: "runner.error",
@@ -220,12 +235,16 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
             at: "2026-01-01T00:00:05.000Z",
           },
           {
-            type: "skill.selected",
+            type: "skill.loaded",
             taskId: "task-1",
+            sessionId: "session-1",
+            runId: "run-1",
+            requestId: "skill-req-1",
             skillId: "deal-review",
             source: "local",
-            reason: "explicit_request",
-            fullContent: true,
+            origin: "harness",
+            contentHash: "abc123",
+            bytes: 42,
             at: "2026-01-01T00:00:06.000Z",
           },
           {
@@ -264,7 +283,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.doesNotMatch(serialized, /echo token/);
   assert.doesNotMatch(serialized, /C:\/secret/);
   assert.doesNotMatch(serialized, /executablePath/);
-  assert.equal(bundle.schemaVersion, 6);
+  assert.equal("schemaVersion" in bundle, false);
   assert.equal("policy" in bundle, false);
   assert.deepEqual(plain(bundle.productEvents), []);
 
@@ -363,7 +382,7 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
           taskId: "task-1",
           id: "ar-call-1",
           toolKind: "edit",
-          input: { filePath: "src/app.ts", oldText: "before", newText: "after" },
+          input: { path: "src/app.ts", edits: [{ oldText: "before", newText: "after" }] },
           response: { stdout: "", stderr: "", toolResponse: "oldText was not found", exitCode: 1, status: "validation_error", errorCode: "invalid_arguments" },
           at: "2026-01-01T00:00:08.000Z",
         },
@@ -378,7 +397,7 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
     [{ id: "event-1", type: "review.opened", at: "2026-01-01T00:00:00.000Z", taskId: "task-1", repositoryId: "repo-1", data: { scope: "task" } }],
   );
 
-  assert.equal(bundle.schemaVersion, 6);
+  assert.equal("schemaVersion" in bundle, false);
   assert.deepEqual(plain(bundle.productEvents).map((event) => event.type), ["review.opened"]);
   assert.deepEqual(plain(bundle.tasks[0].feedback[0]), {
     messageId: "assistant-1",
@@ -397,7 +416,7 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
   assert.equal(failed.toolKind, "edit");
   assert.equal(failed.status, "validation_error");
   assert.equal(failed.errorCode, "invalid_arguments");
-  assert.deepEqual(failed.inputMeta.argKeys, ["filePath", "oldText", "newText"]);
+  assert.deepEqual(failed.inputMeta.argKeys, ["path", "edits"]);
   assert.equal(typeof failed.inputMeta.pathHash, "string");
   assert.equal(failed.responseMeta.toolResponseChars, "oldText was not found".length);
   assert.doesNotMatch(JSON.stringify(bundle.tasks[0].failedTools), /"before"|"after"|oldText was not found/);
@@ -471,7 +490,7 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
   assert.doesNotMatch(received[0].body, /\/secret\/repo/);
   assert.doesNotMatch(received[0].body, /promptRedacted/);
   const uploadedBundle = JSON.parse(received[0].body);
-  assert.equal(uploadedBundle.schemaVersion, 6);
+  assert.equal("schemaVersion" in uploadedBundle, false);
   assert.equal(uploadedBundle.tasks[0].outcome, "success");
   assert.equal(uploadedBundle.tasks[0].activity.messages.promptChars, "password=abcdefghijklmnopqrstuvwxyz".length);
   assert.equal("events" in uploadedBundle.tasks[0], false);

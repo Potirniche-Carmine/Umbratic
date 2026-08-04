@@ -165,9 +165,11 @@ func sessionCSRF(client *http.Client) string {
 
 func settingsValues(csrf, providerURL string) url.Values {
 	return url.Values{
-		"csrf": {csrf}, "protocol": {"vllm"}, "provider_base_url": {providerURL}, "model": {"fake-model"},
-		"context_length": {"0"}, "max_output_tokens": {"8192"}, "model_timeout": {"10s"},
-		"request_timeout": {"15s"}, "max_body_bytes": {"67108864"},
+		"csrf": {csrf}, "provider_base_url": {providerURL}, "model": {"fake-model"},
+		"context_length": {"0"}, "max_output_tokens": {"8192"}, "temperature": {"0.2"}, "top_p": {"0.95"},
+		"reasoning_effort": {"none"}, "parallel_tool_calls": {"true"},
+		"max_concurrent_requests": {"32"}, "max_concurrent_requests_per_user": {"4"}, "queue_timeout": {"30s"},
+		"model_timeout": {"10s"}, "request_timeout": {"15s"}, "max_body_bytes": {"67108864"},
 	}
 }
 

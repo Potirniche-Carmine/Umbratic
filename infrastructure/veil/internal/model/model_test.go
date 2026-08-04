@@ -43,9 +43,9 @@ func TestVLLMClientChat(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(ClientConfig{
-		Protocol: ProtocolVLLM,
-		BaseURL:  server.URL,
-		Timeout:  time.Second,
+		Mode:    ModeServer,
+		BaseURL: server.URL,
+		Timeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestOllamaClientChat(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(ClientConfig{
-		Protocol:      ProtocolOllama,
+		Mode:          ModeLocal,
 		BaseURL:       server.URL,
 		ContextLength: 64000,
 		Timeout:       time.Second,
@@ -153,7 +153,7 @@ func TestOllamaMessagesConvertStructuredOpenAIToolHistory(t *testing.T) {
 				"type": "function",
 				"function": map[string]any{
 					"name":      "read",
-					"arguments": `{"filePath":"README.md"}`,
+					"arguments": `{"path":"README.md"}`,
 				},
 			},
 		}},
@@ -169,7 +169,7 @@ func TestOllamaMessagesConvertStructuredOpenAIToolHistory(t *testing.T) {
 	}
 	function := toolCalls[0]["function"].(map[string]any)
 	arguments, ok := function["arguments"].(map[string]any)
-	if !ok || arguments["filePath"] != "README.md" {
+	if !ok || arguments["path"] != "README.md" {
 		t.Fatalf("tool arguments were not decoded for Ollama: %#v", function["arguments"])
 	}
 	if messages[2]["tool_name"] != "read" {
@@ -196,7 +196,7 @@ func TestOllamaClientActivatesConfiguredModel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{Protocol: ProtocolOllama, BaseURL: server.URL, Timeout: time.Second})
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestListModelsNormalizesVLLMAndOllamaPayloads(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{BaseURL: server.URL, Timeout: time.Second})
+	client, err := NewClient(ClientConfig{Mode: ModeServer, BaseURL: server.URL, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestOllamaClientContextLengthUsesModelMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{Protocol: ProtocolOllama, BaseURL: server.URL, Timeout: time.Second})
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,19 +293,23 @@ func TestOllamaClientContextLengthUsesModelMetadata(t *testing.T) {
 	}
 }
 
-func TestParseProviderProtocolValues(t *testing.T) {
-	cases := map[string]ProviderProtocol{
-		"":       ProtocolVLLM,
-		"vllm":   ProtocolVLLM,
-		"ollama": ProtocolOllama,
+func TestParseModeValues(t *testing.T) {
+	cases := map[string]Mode{
+		"server": ModeServer,
+		"local":  ModeLocal,
 	}
 	for input, want := range cases {
-		got, err := ParseProviderProtocol(input)
+		got, err := ParseMode(input)
 		if err != nil {
 			t.Fatalf("%q returned error: %v", input, err)
 		}
 		if got != want {
 			t.Fatalf("%q got %q, want %q", input, got, want)
+		}
+	}
+	for _, input := range []string{"", "vllm", "ollama", "raw"} {
+		if _, err := ParseMode(input); err == nil {
+			t.Fatalf("expected unsupported mode error for %q", input)
 		}
 	}
 }
@@ -334,12 +338,8 @@ func TestNewClientRejectsInvalidRuntimeConfig(t *testing.T) {
 	if _, err := NewClient(ClientConfig{BaseURL: "file:///tmp/model.sock"}); err == nil {
 		t.Fatal("expected non-http base URL rejection")
 	}
-	client, err := NewClient(ClientConfig{Protocol: ProviderProtocol("raw"), BaseURL: "http://provider.test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.DoChat(context.Background(), ChatRequest{}); err == nil {
-		t.Fatal("expected unsupported protocol rejection when issuing a chat request")
+	if _, err := NewClient(ClientConfig{Mode: Mode("raw"), BaseURL: "http://provider.test"}); err == nil {
+		t.Fatal("expected unsupported mode rejection")
 	}
 	if _, err := providerEndpointURL("", "", "v1/chat/completions"); err == nil {
 		t.Fatal("expected missing base URL rejection")
@@ -363,10 +363,10 @@ func TestHardenedHTTPClientHasDeliberateSharedRuntimePoolLimits(t *testing.T) {
 	}
 }
 
-func TestVLLMDoChatForwardsToolsAndToolChoice(t *testing.T) {
+func TestVLLMDoChatForwardsToolsAndGenerationProfile(t *testing.T) {
 	var got map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/custom/chat" {
+		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
@@ -378,20 +378,26 @@ func TestVLLMDoChatForwardsToolsAndToolChoice(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(ClientConfig{
-		BaseURL:          server.URL,
-		ChatEndpointPath: "/custom/chat",
-		Timeout:          time.Second,
+		Mode:    ModeServer,
+		BaseURL: server.URL,
+		Timeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	budget := 512
 	resp, err := client.DoChat(context.Background(), ChatRequest{
-		Model:           "model-a",
-		Messages:        []Message{{Role: "user", Content: "hello"}},
-		Stream:          true,
-		Tools:           []any{map[string]any{"type": "function"}},
-		ToolChoice:      "auto",
-		MaxOutputTokens: 2048,
+		Model:               "model-a",
+		Messages:            []Message{{Role: "user", Content: "hello"}},
+		Stream:              true,
+		Tools:               []any{map[string]any{"type": "function"}},
+		ToolChoice:          "auto",
+		ParallelTools:       true,
+		MaxOutputTokens:     2048,
+		Temperature:         0.2,
+		TopP:                0.95,
+		ReasoningEffort:     ReasoningLow,
+		ThinkingTokenBudget: &budget,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +405,9 @@ func TestVLLMDoChatForwardsToolsAndToolChoice(t *testing.T) {
 	defer resp.Body.Close()
 
 	streamOptions, _ := got["stream_options"].(map[string]any)
-	if got["model"] != "model-a" || got["stream"] != true || got["tools"] == nil || got["tool_choice"] != "auto" || streamOptions["include_usage"] != true || got["max_tokens"] != float64(2048) {
+	if got["model"] != "model-a" || got["stream"] != true || got["tools"] == nil || got["tool_choice"] != "auto" ||
+		got["parallel_tool_calls"] != true || streamOptions["include_usage"] != true || got["max_tokens"] != float64(2048) ||
+		got["temperature"] != 0.2 || got["top_p"] != 0.95 || got["reasoning_effort"] != "low" || got["thinking_budget"] != float64(512) {
 		t.Fatalf("unexpected request body: %#v", got)
 	}
 }
@@ -418,7 +426,7 @@ func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{Protocol: ProtocolOllama, BaseURL: server.URL, Timeout: time.Second})
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +487,7 @@ func TestListModelsNormalizesOllamaPayloadsAndDedupes(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{Protocol: ProtocolOllama, BaseURL: server.URL, Timeout: time.Second})
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,20 +502,33 @@ func TestListModelsNormalizesOllamaPayloadsAndDedupes(t *testing.T) {
 
 func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 	src := strings.NewReader(strings.Join([]string{
-		`{"message":{"role":"assistant","content":"hi","tool_calls":[{"function":{"name":"read","arguments":{"filePath":"README.md"}}}]},"done":false}`,
-		`{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1234,"eval_count":56}`,
+		`{"message":{"role":"assistant","content":"hi","tool_calls":[{"function":{"name":"read","arguments":{"path":"README.md"}}},{"function":{"name":"grep","arguments":{"pattern":"main","mode":"literal","path":"."}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"README.md"}}},{"function":{"name":"grep","arguments":{"pattern":"main","mode":"literal","path":"."}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"README.md"}}},{"function":{"name":"grep","arguments":{"pattern":"main","mode":"literal","path":"."}}}]},"done":true,"prompt_eval_count":1234,"eval_count":56}`,
 		"",
 	}, "\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(ProtocolOllama, &dst, src); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
 	if !strings.Contains(body, `"role":"assistant"`) || !strings.Contains(body, `"content":"hi"`) {
 		t.Fatalf("missing assistant delta: %q", body)
 	}
-	if !strings.Contains(body, `"name":"read"`) || !strings.Contains(body, `"{\"filePath\":\"README.md\"}"`) {
+	if !strings.Contains(body, `"name":"read"`) || !strings.Contains(body, `"{\"path\":\"README.md\"}"`) {
 		t.Fatalf("missing converted tool call: %q", body)
+	}
+	if !strings.Contains(body, `"name":"grep"`) || !strings.Contains(body, `"index":1`) {
+		t.Fatalf("missing parallel tool call indexes: %q", body)
+	}
+	toolMarker := `"tool_calls"`
+	firstTools := strings.Index(body, toolMarker)
+	doneMarker := strings.Index(body, "data: [DONE]")
+	if firstTools < 0 || doneMarker < 0 || firstTools > doneMarker {
+		t.Fatalf("tool calls must be emitted before the completion marker: %q", body)
+	}
+	if strings.Count(body, `"name":"read"`) != 1 || strings.Count(body, `"name":"grep"`) != 1 {
+		t.Fatalf("Ollama tool calls were repeated across stream chunks: %q", body)
 	}
 	if !strings.Contains(body, `"prompt_tokens":1234`) || !strings.Contains(body, `"completion_tokens":56`) || !strings.Contains(body, `"total_tokens":1290`) {
 		t.Fatalf("missing converted usage: %q", body)
@@ -525,7 +546,7 @@ func TestWriteOpenAIChatSSEStripsPrivateReasoningFromVLLM(t *testing.T) {
 		"",
 	}, "\n\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(ProtocolVLLM, &dst, src); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, src, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
@@ -543,7 +564,7 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 		"oversized line":     "data: " + strings.Repeat("x", 4*1024*1024+1) + "\n\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := WriteOpenAIChatSSE(ProtocolVLLM, &bytes.Buffer{}, strings.NewReader(stream)); err == nil {
+			if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &bytes.Buffer{}, strings.NewReader(stream), time.Second); err == nil {
 				t.Fatal("expected invalid stream error")
 			}
 		})
@@ -551,23 +572,23 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 }
 
 func TestWriteOpenAIChatSSERejectsTruncatedOllamaStream(t *testing.T) {
-	err := WriteOpenAIChatSSE(ProtocolOllama, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"))
+	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"), time.Second)
 	if err == nil {
 		t.Fatal("expected truncated stream error")
 	}
 }
 
 func TestWriteOpenAIChatSSERejectsNonAssistantOllamaMessages(t *testing.T) {
-	err := WriteOpenAIChatSSE(ProtocolOllama, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"user","content":"bad"},"done":false}`))
+	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"user","content":"bad"},"done":false}`), time.Second)
 	if err == nil {
 		t.Fatal("expected non-assistant message error")
 	}
 }
 
-func TestWriteOpenAIChatSSERejectsUnsupportedProtocol(t *testing.T) {
-	err := WriteOpenAIChatSSE(ProviderProtocol("raw"), &bytes.Buffer{}, strings.NewReader(""))
+func TestWriteOpenAIChatSSERejectsUnsupportedMode(t *testing.T) {
+	err := WriteOpenAIChatSSE(context.Background(), Mode("raw"), &bytes.Buffer{}, strings.NewReader(""), time.Second)
 	if err == nil {
-		t.Fatal("expected unsupported protocol error")
+		t.Fatal("expected unsupported mode error")
 	}
 }
 
@@ -604,9 +625,9 @@ func TestHardenedTransportRejectsRedirectsAndIgnoresProxy(t *testing.T) {
 	t.Setenv("http_proxy", "http://127.0.0.1:9")
 
 	client, err := NewClient(ClientConfig{
-		Protocol: ProtocolOllama,
-		BaseURL:  server.URL,
-		Timeout:  time.Second,
+		Mode:    ModeLocal,
+		BaseURL: server.URL,
+		Timeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -632,5 +653,31 @@ func TestHardenedTransportRejectsPublicProviderIP(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "loopback or private") && !strings.Contains(err.Error(), "disallowed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVLLMRequestsMarkFunctionsStrict(t *testing.T) {
+	// The runner sends the canonical three-key function; strict mode is a vLLM
+	// detail applied at the boundary.
+	tools := []any{map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "read",
+			"description": "Read one file.",
+			"parameters":  map[string]any{"type": "object"},
+		},
+	}}
+	marked, ok := strictTools(tools).([]any)
+	if !ok || len(marked) != 1 {
+		t.Fatalf("unexpected tools shape: %#v", marked)
+	}
+	function := marked[0].(map[string]any)["function"].(map[string]any)
+	if function["strict"] != true {
+		t.Fatalf("vLLM functions must be strict: %#v", function)
+	}
+	// The caller's value is left alone; only the outgoing request is changed.
+	original := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, added := original["strict"]; added {
+		t.Fatal("strictTools mutated the caller's tool contract")
 	}
 }

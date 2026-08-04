@@ -58,7 +58,6 @@ export function parseLocalVeilDiagnosticLine(line: string): LocalVeilDiagnostic 
 
 function localVeilKey(settings: ActiveModelEndpointSettings, contextLength: number): string {
   return JSON.stringify({
-    software: "ollama",
     runtimeBaseUrl: settings.baseUrl.trim().replace(/\/+$/, ""),
     modelId: settings.modelId.trim(),
     contextLength,
@@ -174,7 +173,6 @@ function probeLocalModelIds(runtimeBaseUrl: string): Promise<string[]> {
   const launch = localVeilCommand();
   const settings: ActiveModelEndpointSettings = {
     mode: "local",
-    software: "ollama",
     baseUrl,
     modelId: "__umbratic_model_probe__",
     secret: "",
@@ -297,6 +295,7 @@ export function localVeilEnvironment(
     VEIL_ADDR: address,
     VEIL_AUTH_TOKEN: authToken,
     VEIL_ENV_FILE: "-",
+    VEIL_MODE: "local",
     VEIL_MODEL: settings.modelId.trim(),
     // Large local-document prompts can spend more than a minute in prompt
     // evaluation before Ollama emits the first response byte. The runner still
@@ -307,9 +306,6 @@ export function localVeilEnvironment(
     VEIL_MAX_OUTPUT_TOKENS: "8192",
     VEIL_PROVIDER_API_KEY: "",
     VEIL_PROVIDER_BASE_URL: settings.baseUrl.trim().replace(/\/+$/, ""),
-    VEIL_PROVIDER_CHAT_PATH: "",
-    VEIL_PROVIDER_MODELS_PATH: "",
-    VEIL_PROVIDER_PROTOCOL: "ollama",
     VEIL_CONTEXT_LENGTH: String(normalizeContextLength(contextLength)),
     VEIL_TEMPLATE_REGISTRY_PATH: "",
     VEIL_TELEMETRY_ENABLED: "false",
@@ -448,7 +444,6 @@ export async function ensureLocalVeil(
   onDiagnostic: LocalVeilDiagnosticSink = () => undefined,
 ): Promise<LocalVeilConnection> {
   if (settings.mode !== "local") throw new Error("Local Veil can only run in Local mode.");
-  if (settings.software !== "ollama") throw new Error("Local mode supports Ollama. Use Server mode for vLLM.");
   const contextLength = normalizeContextLength(configuredContextLength);
   const key = localVeilKey(settings, contextLength);
   const current = currentLocalVeilConnection();

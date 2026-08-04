@@ -73,7 +73,7 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
     taskId: "task-1",
     cwd: "C:/repo",
     permissionMode: "normal",
-    enabledTools: ["read", "search"],
+    enabledTools: ["read", "grep"],
     lspServers: [],
     provider: {
       id: "company-endpoint",
@@ -96,18 +96,22 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
 test("tool settings normalize enabled tools without accepting unknown ids", () => {
   assert.deepEqual(plain(tools.defaultToolSettings()), {
     read: true,
+    ls: true,
+    find: true,
+    grep: true,
     write: true,
     edit: true,
-    search: true,
     lsp: true,
     command: true,
   });
   assert.deepEqual(plain(tools.normalizeEnabledTools(["command", "bad", "read", "read", "unknown-tool"])), ["read", "command"]);
   assert.deepEqual(plain(tools.toolSettingsFromEnabledTools(["read", "unknown-tool"])), {
     read: true,
+    ls: false,
+    find: false,
+    grep: false,
     write: false,
     edit: false,
-    search: false,
     lsp: false,
     command: false,
   });
