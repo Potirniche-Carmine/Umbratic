@@ -93,10 +93,20 @@ func TestOrientRouteNullsTheSummaryForDirectAnswerAndInvalidSentences(t *testing
 		}
 	}
 
-	// A broken envelope still invalidates the whole decision.
+	// A fenced decision from a local model is normalized, not degraded.
+	fenced := post("```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"I'll make the change and verify it.\"}\n```")
+	if fenced.Code != http.StatusOK || !strings.Contains(fenced.Body.String(), `"bucket":"code_change"`) {
+		t.Fatalf("fenced output must normalize: %d %s", fenced.Code, fenced.Body.String())
+	}
+
+	// A broken envelope still invalidates the whole decision, and the response
+	// names a static reason so the runner's degraded diagnostic can carry it.
 	bad := post("I think this is a code change.")
 	if bad.Code != http.StatusBadGateway || !strings.Contains(bad.Body.String(), "invalid_orient_decision") {
 		t.Fatalf("unparseable output must be rejected: %d %s", bad.Code, bad.Body.String())
+	}
+	if !strings.Contains(bad.Body.String(), `"reason":"output is not one JSON object`) {
+		t.Fatalf("rejection must name a reason: %s", bad.Body.String())
 	}
 }
 

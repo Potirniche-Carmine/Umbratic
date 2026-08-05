@@ -241,16 +241,39 @@ func TestOrientDecisionValidationSeparatesTheBucketFromTheSentence(t *testing.T)
 		t.Fatalf("a sentence naming a bucket id must be dropped without losing the bucket, got %+v", decision)
 	}
 
+	// A local model wrapping a valid decision in a think block or a code fence
+	// is normalized rather than degraded; the wrapped content is still parsed
+	// strictly as one JSON object.
+	for name, raw := range map[string]string{
+		"fenced":        "```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}\n```",
+		"bare fence":    "```\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}\n```",
+		"think block":   "<think>The user wants a change made.</think>\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}",
+		"think + fence": "<think>hmm</think>\n```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}\n```",
+	} {
+		if decision := valid(raw); decision.Bucket != "code_change" || decision.SummarySentence != "Doing it." {
+			t.Fatalf("%s must normalize to a full decision, got %+v", name, decision)
+		}
+	}
+
 	// Only a broken envelope invalidates the decision itself.
 	for name, raw := range map[string]string{
 		"not json":          `I think this is a code change.`,
-		"fenced":            "```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}\n```",
+		"unclosed fence":    "```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}",
+		"truncated object":  `{"bucket":"code_change","summarySentence":"I will make the ch`,
+		"prose then json":   `The decision: {"bucket":"code_change","summarySentence":"Doing it."}`,
 		"unknown field":     `{"bucket":"code_change","summarySentence":"Doing it.","confidence":0.9}`,
 		"missing bucket":    `{"summarySentence":"Doing it."}`,
 		"non-string bucket": `{"bucket":7,"summarySentence":"Doing it."}`,
 	} {
-		if _, err := ParseOrientDecision(EngineeringChat, raw); err == nil {
+		err := func() error {
+			_, err := ParseOrientDecision(EngineeringChat, raw)
+			return err
+		}()
+		if err == nil {
 			t.Fatalf("%s must be rejected: %s", name, raw)
+		}
+		if OrientFailureReason(err) == "" {
+			t.Fatalf("%s must carry a static failure reason", name)
 		}
 	}
 

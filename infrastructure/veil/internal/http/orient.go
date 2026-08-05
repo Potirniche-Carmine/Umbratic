@@ -11,8 +11,12 @@ import (
 )
 
 // orientMaxOutputTokens bounds the classifier reply. The decision is one small
-// JSON object; anything longer is not a decision.
-const orientMaxOutputTokens = 96
+// JSON object, but the budget must fit a two-sentence status (up to 240
+// characters), the JSON scaffolding, and a stray reasoning preamble from a
+// local model that ignores the no-reasoning request. 96 proved too tight in a
+// live run — the reply truncated mid-object and orient degraded. Validation,
+// not this cap, is what rejects non-decisions.
+const orientMaxOutputTokens = 256
 
 // handleOrient classifies one request into a hidden intent bucket.
 //
@@ -71,7 +75,14 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 	raw, _ := response.Message.Content.(string)
 	decision, err := prompts.ParseOrientDecision(input.Route, raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "model returned an invalid orient decision", "code": "invalid_orient_decision"})
+		// The reason is a static classification of the failure, never model
+		// output. It travels to the runner's degraded diagnostic so "why did
+		// orient degrade?" is answerable from the log.
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":  "model returned an invalid orient decision",
+			"code":   "invalid_orient_decision",
+			"reason": prompts.OrientFailureReason(err),
+		})
 		return
 	}
 	// summarySentence is explicitly null for direct_answer.

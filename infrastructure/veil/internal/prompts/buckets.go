@@ -427,8 +427,46 @@ type OrientDecision struct {
 }
 
 // ErrInvalidOrientDecision is returned for output that cannot be coerced into a
-// valid decision. The caller degrades to today's chat path.
+// valid decision. The caller degrades to today's chat path. Returned errors
+// wrap this sentinel with a static reason so the degradation is diagnosable;
+// reasons never echo model output.
 var ErrInvalidOrientDecision = errors.New("invalid orient decision")
+
+func invalidOrientDecision(reason string) error {
+	return fmt.Errorf("%w: %s", ErrInvalidOrientDecision, reason)
+}
+
+// OrientFailureReason extracts the static reason from a ParseOrientDecision
+// error, or "" when there is none.
+func OrientFailureReason(err error) string {
+	if err == nil || !errors.Is(err, ErrInvalidOrientDecision) {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(err.Error(), ErrInvalidOrientDecision.Error()), ": ")
+}
+
+// normalizeOrientOutput removes the two harmless wrappers small local models
+// put around an otherwise valid decision: one leading think block, and one
+// markdown code fence. The result is still parsed strictly as a single JSON
+// object; the content is never substring-searched for one.
+func normalizeOrientOutput(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(trimmed), "<think>") {
+		if end := strings.Index(strings.ToLower(trimmed), "</think>"); end >= 0 {
+			trimmed = strings.TrimSpace(trimmed[end+len("</think>"):])
+		}
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		if end := strings.LastIndex(trimmed, "```"); end > 3 {
+			body := strings.TrimSpace(trimmed[3:end])
+			if len(body) >= 4 && strings.EqualFold(body[:4], "json") {
+				body = body[4:]
+			}
+			trimmed = strings.TrimSpace(body)
+		}
+	}
+	return trimmed
+}
 
 // ParseOrientDecision validates raw model output against the route catalog.
 //
@@ -437,29 +475,30 @@ var ErrInvalidOrientDecision = errors.New("invalid orient decision")
 // missing or non-string bucket) invalidates it, and an unknown but parseable
 // bucket becomes open_task. The sentence is the optional status line: on
 // direct_answer it is always null, and elsewhere an invalid sentence is
-// dropped while the bucket survives. Model output is never rewritten or
-// substring-stripped into validity.
+// dropped while the bucket survives. Normalization removes exactly two known
+// wrappers (a think block, a code fence); beyond that, model output is never
+// rewritten or substring-stripped into validity.
 func ParseOrientDecision(route Route, raw string) (OrientDecision, error) {
 	if _, ok := routeBuckets[route]; !ok {
-		return OrientDecision{}, ErrInvalidOrientDecision
+		return OrientDecision{}, invalidOrientDecision("unknown route")
 	}
-	trimmed := strings.TrimSpace(raw)
+	trimmed := normalizeOrientOutput(raw)
 	var fields map[string]json.RawMessage
 	if json.Unmarshal([]byte(trimmed), &fields) != nil {
-		return OrientDecision{}, ErrInvalidOrientDecision
+		return OrientDecision{}, invalidOrientDecision("output is not one JSON object; a truncated reply from a too-small output budget also lands here")
 	}
 	for field := range fields {
 		if field != "bucket" && field != "summarySentence" {
-			return OrientDecision{}, ErrInvalidOrientDecision
+			return OrientDecision{}, invalidOrientDecision("undeclared field in decision object")
 		}
 	}
 	rawBucket, ok := fields["bucket"]
 	if !ok {
-		return OrientDecision{}, ErrInvalidOrientDecision
+		return OrientDecision{}, invalidOrientDecision("bucket field is missing")
 	}
 	var bucket string
 	if json.Unmarshal(rawBucket, &bucket) != nil {
-		return OrientDecision{}, ErrInvalidOrientDecision
+		return OrientDecision{}, invalidOrientDecision("bucket is not a string")
 	}
 	if !KnownBucket(route, bucket) {
 		// A parseable unknown bucket falls back to the conservative catch-all

@@ -168,11 +168,22 @@ pub async fn orient_request(
     let payload: Value =
         serde_json::from_slice(&bytes).map_err(|_| "orient returned invalid JSON".to_owned())?;
     if !status.is_success() {
-        return Err(payload
+        let code = payload
             .get("code")
             .and_then(Value::as_str)
-            .unwrap_or("invalid_orient_decision")
-            .to_owned());
+            .unwrap_or("invalid_orient_decision");
+        // Veil attaches a static failure reason (never model output); carry it
+        // into the degraded diagnostic so the log says why orient degraded.
+        return Err(
+            match payload
+                .get("reason")
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.trim().is_empty())
+            {
+                Some(reason) => format!("{code}: {reason}"),
+                None => code.to_owned(),
+            },
+        );
     }
     let Some(object) = payload.as_object() else {
         return Err("invalid_orient_decision".into());
