@@ -1,7 +1,11 @@
 use super::*;
 use std::sync::Arc;
 
-use crate::{context::SessionContextStore, session::test_config};
+use crate::{
+    context::{ContextBreakdown, SessionContextStore},
+    context_events::SessionEstimateState,
+    session::{test_config, test_session},
+};
 
 #[test]
 fn tool_execution_segments_use_path_scoped_conflicts_and_global_barriers() {
@@ -118,14 +122,41 @@ fn first_tool_history_summary_is_bounded() {
     assert!(summary.contains(TOOL_HISTORY_ELISION));
 }
 
-#[test]
-fn observed_usage_does_not_double_count_protected_prompts_or_completion() {
-    let usage = observed_context_usage(64_000, 4_096, 12_000, 800);
+#[tokio::test]
+async fn observed_usage_does_not_double_count_protected_prompts_or_completion() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = test_session(directory.path());
+    let result = VeilChatResult {
+        prompt_tokens: Some(12_000),
+        completion_tokens: Some(800),
+        system_prompt_tokens: Some(3_187),
+        system_prompt_tokens_exact: true,
+        ..VeilChatResult::default()
+    };
+    let breakdown = ContextBreakdown {
+        conversation_tokens: 900,
+        tool_result_tokens: 120,
+        ..ContextBreakdown::default()
+    };
+    let usage = observed_context_event(&session, &result, 4_096, breakdown).unwrap();
     assert_eq!(usage["contentTokens"], 12_000);
     assert_eq!(usage["completionTokens"], 800);
     assert_eq!(usage["reserveTokens"], 4_096);
     assert_eq!(usage["estimatedTokens"], 16_096);
     assert_eq!(usage["phase"], "observed");
+    assert_eq!(usage["anchored"], true);
+    assert_eq!(usage["compactionBlocked"], false);
+    // The response's own measurement of the protected prefix beats whatever
+    // stand-in the request was assembled with.
+    assert_eq!(usage["protectedTokens"], 3_187);
+    assert_eq!(usage["breakdown"]["systemPromptTokens"], 3_187);
+    assert_eq!(usage["breakdown"]["systemPromptExact"], true);
+    assert_eq!(usage["breakdown"]["conversationTokens"], 900);
+    assert_eq!(usage["breakdown"]["toolResultTokens"], 120);
+    assert_eq!(
+        usage["estimatedTokens"].as_u64().unwrap(),
+        usage["contentTokens"].as_u64().unwrap() + usage["reserveTokens"].as_u64().unwrap()
+    );
 }
 
 #[test]
@@ -184,8 +215,8 @@ fn semantic_compaction_retains_exact_failure_change_and_verification_anchors() {
         json!({"role":"assistant","content":"Changed packages/runner/src/conversation_state.rs."}),
         json!({"role":"assistant","content":"cargo test --locked passed."}),
     ];
-    let (_, anchor) = compaction_source(&messages);
-    let encoded = serde_json::to_string(&anchor.unwrap()).unwrap();
+    let (_, carriers) = compaction_source(&messages);
+    let encoded = serde_json::to_string(&carriers).unwrap();
     assert!(encoded.contains("exit code 29"));
     assert!(encoded.contains("packages/runner/src/conversation_state.rs"));
     assert!(encoded.contains("cargo test --locked passed"));
@@ -215,6 +246,10 @@ async fn preflight_compacts_complete_tool_lifecycles_until_the_request_fits() {
         durable_summary: tokio::sync::Mutex::new(None),
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
+        compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
+        usage_anchor: tokio::sync::Mutex::new(None),
+        system_prompt_size: tokio::sync::Mutex::new(None),
         context_calibration: tokio::sync::Mutex::new(None),
         context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
         lsp: None,
@@ -262,6 +297,10 @@ async fn preflight_rejects_an_oversized_atomic_user_request() {
         durable_summary: tokio::sync::Mutex::new(None),
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
+        compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
+        usage_anchor: tokio::sync::Mutex::new(None),
+        system_prompt_size: tokio::sync::Mutex::new(None),
         context_calibration: tokio::sync::Mutex::new(None),
         context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
         lsp: None,
@@ -327,7 +366,13 @@ async fn compaction_refuses_while_a_tool_batch_is_unresolved() {
         ]}),
     ];
     assert!(
-        !attempt_semantic_compaction(&session, &mut messages, &[]).await,
+        !attempt_semantic_compaction(
+            &session,
+            &mut messages,
+            &[],
+            &SessionEstimateState::default()
+        )
+        .await,
         "compaction must not run inside an active step",
     );
 }
@@ -348,4 +393,266 @@ fn a_persisted_tool_step_never_carries_the_preamble_back_into_context() {
     assert_eq!(message["content"], Value::Null);
     assert_eq!(message["tool_calls"][0]["id"], "call-1");
     assert_eq!(message["tool_calls"][0]["function"]["name"], "ls");
+}
+
+fn session_with(config: crate::config::RunnerConfig, messages: Vec<Value>) -> Session {
+    Session {
+        id: "session".into(),
+        task_id: "task".into(),
+        config: Arc::new(config),
+        messages: tokio::sync::Mutex::new(messages),
+        durable_summary: tokio::sync::Mutex::new(None),
+        failed_compaction_digest: tokio::sync::Mutex::new(None),
+        compaction_count: std::sync::atomic::AtomicU32::new(0),
+        compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
+        usage_anchor: tokio::sync::Mutex::new(None),
+        system_prompt_size: tokio::sync::Mutex::new(None),
+        context_calibration: tokio::sync::Mutex::new(None),
+        context_store: tokio::sync::Mutex::new(SessionContextStore::default()),
+        lsp: None,
+        workspace_graph: None,
+        skill_cache: crate::skill_preflight::SharedSkillCache::default(),
+        run: std::sync::Mutex::new(None),
+        search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
+        tool_surface: std::sync::OnceLock::new(),
+        queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
+    }
+}
+
+fn measured(prompt_tokens: u64, completion_tokens: u64) -> VeilChatResult {
+    VeilChatResult {
+        prompt_tokens: Some(prompt_tokens),
+        completion_tokens: Some(completion_tokens),
+        ..VeilChatResult::default()
+    }
+}
+
+#[tokio::test]
+async fn a_response_anchors_the_session_and_a_prefix_rewrite_invalidates_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = session_with(
+        (*test_config(directory.path())).clone(),
+        vec![json!({"role":"user","content":"x".repeat(9_000)})],
+    );
+
+    let heuristic = {
+        let messages = session.messages.lock().await.clone();
+        let state = estimate_state(&session).await;
+        request_estimate(&session, &messages, &[], &state).0
+    };
+    assert!(!heuristic.anchored);
+    assert_eq!(context_event(&session, heuristic)["source"], "heuristic");
+
+    // The response is the measurement: the whole prompt estimate is replaced,
+    // not adjusted.
+    append_assistant_turn(
+        &session,
+        json!({"role":"assistant","content":"done"}),
+        &measured(5_000, 200),
+    )
+    .await;
+    let messages = session.messages.lock().await.clone();
+    let state = estimate_state(&session).await;
+    let anchored = request_estimate(&session, &messages, &[], &state).0;
+    assert!(anchored.anchored);
+    assert_eq!(anchored.calibrated_prompt_tokens, 5_200);
+    assert_ne!(anchored.heuristic_prompt_tokens, 5_200);
+    let event = context_event(&session, anchored);
+    assert_eq!(event["source"], "provider");
+    assert_eq!(event["confidence"], "high");
+    assert_eq!(event["anchored"], true);
+
+    // Only what was appended after the anchor is estimated.
+    session
+        .messages
+        .lock()
+        .await
+        .push(json!({"role":"tool","tool_call_id":"a","content":"y".repeat(600)}));
+    let messages = session.messages.lock().await.clone();
+    let state = estimate_state(&session).await;
+    let with_tail = request_estimate(&session, &messages, &[], &state).0;
+    assert!(with_tail.anchored);
+    assert!(with_tail.calibrated_prompt_tokens > 5_200);
+    assert!(with_tail.calibrated_prompt_tokens < 5_200 + 600);
+
+    // A rewritten prefix leaves the anchor describing a conversation that no
+    // longer exists, so it is dropped rather than reused.
+    clear_usage_anchor(&session).await;
+    let state = estimate_state(&session).await;
+    let cleared = request_estimate(&session, &messages, &[], &state).0;
+    assert!(!cleared.anchored);
+    assert_eq!(context_event(&session, cleared)["source"], "heuristic");
+    assert!(session.awaiting_observed_usage.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_stale_estimate_cannot_compact_twice_before_the_next_measurement() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = session_with((*test_config(directory.path())).clone(), Vec::new());
+    assert!(semantic_compaction_allowed(&session, false));
+
+    clear_usage_anchor(&session).await;
+    assert!(
+        !semantic_compaction_allowed(&session, false),
+        "a heuristic estimate must not re-trigger compaction while awaiting a measurement",
+    );
+    // A fresh measurement, whatever it says, ends the wait.
+    assert!(semantic_compaction_allowed(&session, true));
+    set_usage_anchor(&session, &measured(1_000, 10), 0).await;
+    assert!(semantic_compaction_allowed(&session, false));
+}
+
+#[tokio::test]
+async fn two_measured_verdicts_stop_auto_compaction_and_the_event_says_so() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = (*test_config(directory.path())).clone();
+    config.context_length = 10_000;
+    let session = session_with(config, Vec::new());
+    // context_length 10_000 ⇒ the semantic trigger sits at 7_200 tokens.
+    for _ in 0..MAX_COMPACTION_STRIKES {
+        clear_usage_anchor(&session).await;
+        record_compaction_verdict(&session, &measured(9_000, 10)).await;
+    }
+    assert_eq!(
+        session.compaction_strikes.load(Ordering::SeqCst),
+        MAX_COMPACTION_STRIKES
+    );
+    assert!(!semantic_compaction_allowed(&session, true));
+    let event = observed_context_event(
+        &session,
+        &measured(9_000, 10),
+        1_000,
+        ContextBreakdown::default(),
+    )
+    .unwrap();
+    assert_eq!(event["compactionBlocked"], true);
+
+    // A measurement that finally lands under the trigger clears the breaker.
+    clear_usage_anchor(&session).await;
+    record_compaction_verdict(&session, &measured(3_000, 10)).await;
+    assert_eq!(session.compaction_strikes.load(Ordering::SeqCst), 0);
+    assert!(semantic_compaction_allowed(&session, true));
+
+    // A verdict is only rendered against the compaction that is awaiting one.
+    record_compaction_verdict(&session, &measured(9_000, 10)).await;
+    assert_eq!(session.compaction_strikes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn overflow_recovery_resolves_without_a_summarization_call() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = (*test_config(directory.path())).clone();
+    config.context_length = 4_000;
+    config.protected_prompt_reserve_tokens = 0;
+    let mut history = vec![json!({"role":"user","content":"original request"})];
+    for index in 0..6 {
+        history.push(json!({"role":"assistant","content":null,"tool_calls":[{"id":format!("call-{index}"),"type":"function","function":{"name":"read","arguments":"{}"}}]}));
+        history.push(json!({"role":"tool","tool_call_id":format!("call-{index}"),"content":format!("result {index}: {}", "x".repeat(4_000))}));
+    }
+    let session = session_with(config, history);
+    set_usage_anchor(&session, &measured(3_000, 10), 1).await;
+
+    // The provider is unreachable in tests, so a recovery that depended on a
+    // Veil summarization call could not succeed at all.
+    assert!(recover_from_overflow(&session, &[]).await);
+    assert!(
+        session.durable_summary.lock().await.is_none(),
+        "overflow recovery must not produce a semantic summary",
+    );
+    assert!(session.usage_anchor.lock().await.is_none());
+    assert!(session.awaiting_observed_usage.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn the_prune_tier_folds_stale_tool_results_and_honours_the_reclaim_gate() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = (*test_config(directory.path())).clone();
+    config.context_length = 16_000;
+    config.protected_prompt_reserve_tokens = 0;
+    let session = session_with(config, Vec::new());
+    let state = SessionEstimateState::default();
+
+    let mut messages = vec![json!({"role":"user","content":"original request"})];
+    for index in 0..8 {
+        messages.push(json!({"role":"assistant","content":null,"tool_calls":[{"id":format!("call-{index}"),"type":"function","function":{"name":"read","arguments":format!("{{\"path\":\"src/file-{index}.rs\"}}")}}]}));
+        messages.push(json!({"role":"tool","tool_call_id":format!("call-{index}"),"content":format!("result {index}: {}", "x".repeat(6_000))}));
+    }
+    messages.push(json!({"role":"user","content":"latest request"}));
+    let protected = messages.last().cloned().unwrap();
+    assert!(prune_stale_tool_results(
+        &session,
+        &mut messages,
+        &[],
+        &state
+    ));
+    assert_eq!(
+        messages.last(),
+        Some(&protected),
+        "the protected tail is never pruned",
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message["tool_call_id"] == "call-0"),
+        "the oldest exchange goes first",
+    );
+    assert!(messages.iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.starts_with(TOOL_HISTORY_SUMMARY_PREFIX))
+    }));
+    for (index, message) in messages.iter().enumerate() {
+        if message["role"] == "tool" {
+            assert!(index > 0 && messages[index - 1].get("tool_calls").is_some());
+        }
+    }
+
+    // Over the trigger, but the only foldable evidence is trivial: rewriting
+    // the prefix would break the runtime's prefix cache to reclaim nothing.
+    let mut incompressible = vec![
+        json!({"role":"user","content":"x".repeat(40_000)}),
+        json!({"role":"assistant","content":null,"tool_calls":[{"id":"a","type":"function","function":{"name":"read","arguments":"{}"}}]}),
+        json!({"role":"tool","tool_call_id":"a","content":"tiny result"}),
+        json!({"role":"user","content":"latest request"}),
+    ];
+    let unchanged = incompressible.clone();
+    assert!(!prune_stale_tool_results(
+        &session,
+        &mut incompressible,
+        &[],
+        &state
+    ));
+    assert_eq!(incompressible, unchanged);
+}
+
+#[test]
+fn the_compaction_source_carries_a_deterministic_file_list() {
+    let messages = vec![
+        json!({"role":"assistant","content":null,"tool_calls":[
+            {"id":"a","type":"function","function":{"name":"read","arguments":"{\"path\":\"packages/runner/src/context.rs\"}"}},
+            {"id":"b","type":"function","function":{"name":"write","arguments":"{\"path\":\"packages/runner/src/session.rs\"}"}}
+        ]}),
+        json!({"role":"tool","tool_call_id":"a","content":"contents"}),
+        json!({"role":"tool","tool_call_id":"b","content":"written"}),
+        json!({"role":"assistant","content":null,"tool_calls":[
+            {"id":"c","type":"function","function":{"name":"read","arguments":"{\"path\":\"packages/runner/src/context.rs\"}"}}
+        ]}),
+        json!({"role":"tool","tool_call_id":"c","content":"contents"}),
+    ];
+    let carrier = file_list_carrier(&messages).unwrap();
+    let content = carrier["content"].as_str().unwrap();
+    assert!(content.starts_with(SEMANTIC_FILES_PREFIX));
+    assert!(content.contains("Read: packages/runner/src/context.rs"));
+    assert!(content.contains("Modified: packages/runner/src/session.rs"));
+    // Paths come from the runner's own calls, so a repeat read is one entry.
+    assert_eq!(content.matches("packages/runner/src/context.rs").count(), 1);
+
+    let (source, carriers) = compaction_source(&messages);
+    assert_eq!(source.len(), messages.len() + carriers.len());
+    assert!(carriers.contains(&carrier));
+
+    // A prefix with no tool calls contributes no file list at all.
+    assert!(file_list_carrier(&[json!({"role":"user","content":"hello"})]).is_none());
 }

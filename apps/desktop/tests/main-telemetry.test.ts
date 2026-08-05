@@ -505,3 +505,33 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
 
   assert.equal((await listTelemetrySpoolFiles(spool)).length, 0);
 });
+
+test("anchoring a preflight estimate does not change which usage events trigger thresholds", () => {
+  const usage = (extra: Record<string, unknown>) => ({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 1000,
+    contentTokens: 800,
+    reserveTokens: 100,
+    estimatedTokens: 900,
+    at: "2026-01-01T00:00:00.000Z",
+    ...extra,
+  });
+  const triggersFrom = (events: unknown[]) =>
+    buildRedactedTelemetryBundle(
+      [{
+        id: "task-1", title: "t", createdAt: "2026-01-01T00:00:00.000Z", state: "done",
+        changedFiles: [], reviewFiles: [], prompt: "p", events,
+      }],
+      { installId: "install-1" },
+    ).tasks[0].contextTriggers ?? [];
+
+  // A preflight is still a preflight, anchored or not: the settled prefix is
+  // measured, but the request has not been sent.
+  assert.equal(triggersFrom([usage({ phase: "preflight", source: "provider", confidence: "high", anchored: true })]).length, 0);
+  assert.equal(triggersFrom([usage({ phase: "preflight", source: "heuristic", confidence: "low", anchored: false })]).length, 0);
+
+  const observed = triggersFrom([usage({ phase: "observed", source: "provider", confidence: "high", anchored: true })]);
+  // 90% of the window crosses both marks at once.
+  assert.equal(Array.from(observed, (trigger) => trigger.threshold).join(","), "75,90");
+});

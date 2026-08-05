@@ -65,13 +65,14 @@ import type {
 import {
   CONTEXT_LENGTH_OPTIONS,
   DEFAULT_CONTEXT_LENGTH,
+  contextMeterState,
   estimateContextUsage,
   formatTokenCount,
   normalizeContextLength,
   shouldShowContextMeter,
   type ContextEstimateMessage,
-  type ContextUsageEstimate,
 } from "../shared/contextWindow";
+import { ContextMeter } from "./contextMeter";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { eventDetail, eventTitle } from "./eventDisplay";
@@ -626,42 +627,6 @@ function AttachmentPreviewList({
           </React.Fragment>
         );
       })}
-    </div>
-  );
-}
-
-function ContextMeter({ estimate }: { estimate: ContextUsageEstimate }) {
-  const displayedPercentage = Math.min(100, Math.max(0, estimate.percentage));
-  const roundedPercentage = Math.round(estimate.percentage);
-  const valueText = `Estimated context use: ${formatTokenCount(estimate.estimatedTokens)} / ${formatTokenCount(estimate.contextLength)}, ${roundedPercentage}%.`;
-  return (
-    <div
-      className={`contextMeter is-${estimate.level}`}
-      role="meter"
-      aria-label="Estimated model context use"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.min(100, roundedPercentage)}
-      aria-valuetext={valueText}
-      aria-describedby="context-meter-detail"
-      tabIndex={0}
-    >
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <circle className="contextMeterTrack" cx="12" cy="12" r="9" pathLength="100" />
-        <circle
-          className="contextMeterValue"
-          cx="12"
-          cy="12"
-          r="9"
-          pathLength="100"
-          strokeDasharray={`${displayedPercentage} 100`}
-        />
-      </svg>
-      <div className="contextMeterTooltip" id="context-meter-detail" role="tooltip">
-        <span>
-          Estimated use: <b>{formatTokenCount(estimate.estimatedTokens)} / {formatTokenCount(estimate.contextLength)}</b> · {roundedPercentage}%
-        </span>
-      </div>
     </div>
   );
 }
@@ -1973,13 +1938,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const hasComposerMessage = prompt.trim().length > 0 || reviewPromptFeedback.length > 0;
   const activeQueuedPrompts = task ? queuedPrompts.filter((item) => item.taskId === task.id) : [];
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
-  const latestTurnOutcome = useMemo(() => {
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      if (event.taskId === task?.id && event.type === "turn.outcome") return event.outcome;
-    }
-    return undefined;
-  }, [events, task?.id]);
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
   const canUndo =
@@ -2056,6 +2014,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
     return null;
   }, [visibleEvents]);
+  const contextMeterLabel = contextMeterState(runnerContextUsage);
   const contextEstimateMessages = useMemo<ContextEstimateMessage[]>(() => {
     const messages = runnerContextUsage ? [] : composerItems.map((item): ContextEstimateMessage => {
       if (item.type === "user") return { text: item.rawText, attachments: item.attachedFiles };
@@ -2089,6 +2048,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         : undefined,
     ),
     [attachedFiles.length, contextEstimateMessages, contextLength, prompt, runnerContextUsage],
+  );
+  // What the composer adds on top of whatever the runner last reported. Before
+  // the first response there is no measured base, and the local estimate folds
+  // the protected reserve into contentTokens, so that reserve is subtracted
+  // here — otherwise the draft row would report the system prompt as typing.
+  const composerDraftTokens = Math.max(
+    0,
+    contextEstimate.contentTokens - (runnerContextUsage?.contentTokens ?? contextEstimate.protectedTokens),
   );
   const showContextMeter = shouldShowContextMeter({
     hasRunnerUsage: !!runnerContextUsage,
@@ -5453,7 +5420,15 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 <Paperclip size={14} />
                 {attachedFiles.length ? <span className="attachmentCount">{attachedFiles.length}</span> : null}
               </button>
-              {showContextMeter ? <ContextMeter estimate={contextEstimate} /> : null}
+              {showContextMeter ? (
+                <ContextMeter
+                  estimate={contextEstimate}
+                  state={contextMeterLabel}
+                  breakdown={runnerContextUsage?.breakdown}
+                  compactionBlocked={runnerContextUsage?.compactionBlocked}
+                  draftTokens={composerDraftTokens}
+                />
+              ) : null}
             </div>
           </div>
           {closedChatNotice ? (
@@ -6462,30 +6437,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
       ) : null}
 
-      {task && task.state !== "running" && latestTurnOutcome && latestTurnOutcome !== "completed" && latestTurnOutcome !== "aborted" ? (
-        <div className="toast turnOutcomeToast" role="status">
-          <TriangleAlert size={16} />
-          <span>
-            {latestTurnOutcome === "safety_limit"
-              ? "The turn stopped at a safety limit."
-              : "The model stopped before it completed the request."}
-          </span>
-          <button
-            className="turnOutcomeAction"
-            type="button"
-            disabled={busy}
-            onClick={() => void startTask({
-              prompt: latestTurnOutcome === "safety_limit"
-                ? "Continue from the current workspace state. Review the latest tool result and finish the request."
-                : task.prompt,
-              attachedFiles: [],
-              reviewFeedback: [],
-            })}
-          >
-            {latestTurnOutcome === "safety_limit" ? "Continue" : "Try again"}
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -156,14 +156,13 @@ test("toast close control centers its icon without a text line box", () => {
   );
   const buttonRule = css.match(/\.toast button\s*{[^}]+}/s)?.[0] ?? "";
   const iconRule = css.match(/\.toast button svg\s*{[^}]+}/s)?.[0] ?? "";
-  const turnOutcomeRule = css.match(/\.turnOutcomeToast\s*{[^}]+}/s)?.[0] ?? "";
   assert.match(buttonRule, /place-items:\s*center/);
   assert.match(buttonRule, /padding:\s*0/);
   assert.match(buttonRule, /line-height:\s*0/);
   assert.match(iconRule, /display:\s*block/);
-  assert.match(turnOutcomeRule, /var\(--modal-bg\)/);
-  assert.match(turnOutcomeRule, /color:\s*var\(--text\)/);
-  assert.doesNotMatch(turnOutcomeRule, /--panel-bg|--text-primary/);
+  // The turn-outcome toast is gone: it keyed off the newest turn.outcome
+  // event, which persists with the task, so it could never dismiss itself.
+  assert.doesNotMatch(css, /turnOutcome/);
 });
 
 test("feedback dialog and prompt controls do not allow horizontal growth", () => {

@@ -489,6 +489,45 @@ fn estimate_json_array_tokens(values: &[Value]) -> u64 {
     encoded_json_array_len(values).div_ceil(3) as u64
 }
 
+/// Row-level JSON length with image payloads elided.
+///
+/// An inline `data:` image is tens of kilobytes of base64 that costs a flat
+/// per-image price at the runtime, not one token per three bytes. Counting it
+/// by length would make the conversation row wrong by an order of magnitude, so
+/// images are priced once in their own row instead.
+fn encoded_json_len_excluding_images(value: &Value) -> usize {
+    match value {
+        Value::Object(values)
+            if values.get("type").and_then(Value::as_str) == Some("image_url") =>
+        {
+            IMAGE_PLACEHOLDER_LEN
+        }
+        Value::Array(values) => {
+            2 + values.len().saturating_sub(1)
+                + values
+                    .iter()
+                    .map(encoded_json_len_excluding_images)
+                    .sum::<usize>()
+        }
+        Value::Object(values) => {
+            2 + values.len().saturating_sub(1)
+                + values
+                    .iter()
+                    .map(|(key, value)| {
+                        encoded_json_string_len(key)
+                            .saturating_add(1)
+                            .saturating_add(encoded_json_len_excluding_images(value))
+                    })
+                    .sum::<usize>()
+        }
+        value => encoded_json_len(value),
+    }
+}
+
+const IMAGE_PLACEHOLDER_LEN: usize = 24;
+const MESSAGE_OVERHEAD_TOKENS: u64 = 10;
+const IMAGE_TOKENS: u64 = 1_600;
+
 fn count_images(value: &serde_json::Value) -> u64 {
     match value {
         serde_json::Value::Array(values) => values.iter().map(count_images).sum(),
@@ -522,6 +561,102 @@ pub fn adaptive_output_reserve(
     preferred.min((available / OUTPUT_STEP_TOKENS) * OUTPUT_STEP_TOKENS)
 }
 
+/// The provider-reported size of the settled context.
+///
+/// `prompt_tokens` is by definition the exact size of everything that was sent:
+/// Veil's protected prefix, the tool definitions, the skill catalog, and every
+/// message up to `anchor_len`. Nothing about it needs a local tokenizer. Only
+/// the un-sent tail beyond `anchor_len` is estimated on top of it, until the
+/// next response replaces the whole number with a fresh measurement.
+///
+/// `anchor_len` is `messages.len()` *after* the assistant turn was appended, so
+/// `completion_tokens` accounts for the part of the response that will be
+/// resent. The stored assistant message drops the preamble the model streamed,
+/// which makes the anchor a slight over-count — the safe direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsageAnchor {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub anchor_len: usize,
+}
+
+impl UsageAnchor {
+    pub fn total(self) -> u64 {
+        self.prompt_tokens.saturating_add(self.completion_tokens)
+    }
+}
+
+/// The measured size of Veil's protected prefix, which the runner never sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemPromptSize {
+    pub tokens: u64,
+    pub exact: bool,
+}
+
+/// Per-category estimates over the actually assembled request.
+///
+/// Only the headline total is measured. These rows are deliberately *not*
+/// reconciled to sum to it: forcing them to agree would smear the estimator's
+/// error across every category and make each individual row less true.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ContextBreakdown {
+    pub system_prompt_tokens: u64,
+    pub system_prompt_exact: bool,
+    pub tool_definition_tokens: u64,
+    pub skill_tokens: u64,
+    pub conversation_tokens: u64,
+    pub tool_result_tokens: u64,
+    pub image_tokens: u64,
+}
+
+impl ContextBreakdown {
+    pub fn event(self) -> Value {
+        json!({
+            "systemPromptTokens": self.system_prompt_tokens,
+            "systemPromptExact": self.system_prompt_exact,
+            "toolDefinitionTokens": self.tool_definition_tokens,
+            "skillTokens": self.skill_tokens,
+            "conversationTokens": self.conversation_tokens,
+            "toolResultTokens": self.tool_result_tokens,
+            "imageTokens": self.image_tokens,
+        })
+    }
+}
+
+fn row_tokens<'a>(messages: impl Iterator<Item = &'a Value>) -> u64 {
+    let mut count = 0u64;
+    let mut bytes = 0usize;
+    for message in messages {
+        count += 1;
+        bytes = bytes.saturating_add(encoded_json_len_excluding_images(message));
+    }
+    if count == 0 {
+        return 0;
+    }
+    (bytes.div_ceil(3) as u64).saturating_add(count * MESSAGE_OVERHEAD_TOKENS)
+}
+
+fn is_tool_result(message: &Value) -> bool {
+    message.get("role").and_then(Value::as_str) == Some("tool")
+}
+
+pub fn context_breakdown(
+    messages: &[Value],
+    tools: &[Value],
+    skills: &[Value],
+    system_prompt: SystemPromptSize,
+) -> ContextBreakdown {
+    ContextBreakdown {
+        system_prompt_tokens: system_prompt.tokens,
+        system_prompt_exact: system_prompt.exact,
+        tool_definition_tokens: array_tokens(tools),
+        skill_tokens: array_tokens(skills),
+        conversation_tokens: row_tokens(messages.iter().filter(|message| !is_tool_result(message))),
+        tool_result_tokens: row_tokens(messages.iter().filter(|message| is_tool_result(message))),
+        image_tokens: messages.iter().map(count_images).sum::<u64>() * IMAGE_TOKENS,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextUsageEstimate {
     pub context_length: u64,
@@ -529,6 +664,10 @@ pub struct ContextUsageEstimate {
     pub calibrated_prompt_tokens: u64,
     pub reserve_tokens: u64,
     pub protected_tokens: u64,
+    /// True when `calibrated_prompt_tokens` is a provider measurement plus an
+    /// estimated un-sent tail, rather than an estimate of the whole prompt.
+    pub anchored: bool,
+    pub breakdown: ContextBreakdown,
 }
 
 impl ContextUsageEstimate {
@@ -544,11 +683,14 @@ impl ContextUsageEstimate {
             "promptTokens": self.calibrated_prompt_tokens,
             "completionTokens": 0,
             "reserveTokens": self.reserve_tokens,
-            "protectedTokens": self.protected_tokens,
+            // The protected prefix is part of the prompt, never more than it.
+            "protectedTokens": self.protected_tokens.min(self.calibrated_prompt_tokens),
             "estimatedTokens": self.estimated_tokens(),
             "phase": "preflight",
-            "source": "heuristic",
-            "confidence": "low"
+            "source": if self.anchored { "provider" } else { "heuristic" },
+            "confidence": if self.anchored { "high" } else { "low" },
+            "anchored": self.anchored,
+            "breakdown": self.breakdown.event(),
         })
     }
 }
@@ -631,248 +773,79 @@ pub fn request_profile_fingerprint(
     format!("{:x}", digest.finalize())
 }
 
-pub fn estimate_context_usage(
-    messages: &[Value],
-    tools: &[Value],
-    context_length: u64,
-    max_response_tokens: u64,
-    protected_prompt_reserve_tokens: u64,
-    additional: &[Value],
-) -> ContextUsageEstimate {
+pub struct ContextEstimateInput<'a> {
+    pub messages: &'a [Value],
+    pub tools: &'a [Value],
+    pub skills: &'a [Value],
+    pub context_length: u64,
+    pub max_response_tokens: u64,
+    pub protected_prompt_reserve_tokens: u64,
+    /// Veil's measurement of its own protected prefix, when it reported one.
+    pub system_prompt: Option<SystemPromptSize>,
+    pub anchor: Option<UsageAnchor>,
+}
+
+fn array_tokens(values: &[Value]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    estimate_json_array_tokens(values)
+}
+
+fn tail_estimate(messages: &[Value]) -> u64 {
+    if messages.is_empty() {
+        return 0;
+    }
+    estimate_json_array_tokens(messages)
+        + messages.len() as u64 * MESSAGE_OVERHEAD_TOKENS
+        + messages.iter().map(count_images).sum::<u64>() * IMAGE_TOKENS
+}
+
+pub fn estimate_context_usage(input: ContextEstimateInput<'_>) -> ContextUsageEstimate {
+    let ContextEstimateInput {
+        messages,
+        tools,
+        skills,
+        context_length,
+        max_response_tokens,
+        protected_prompt_reserve_tokens,
+        system_prompt,
+        anchor,
+    } = input;
+    let system_prompt = system_prompt.unwrap_or(SystemPromptSize {
+        tokens: protected_prompt_reserve_tokens.min(context_length / 4),
+        exact: false,
+    });
+    let protected_tokens = system_prompt.tokens;
     let value_tokens = estimate_json_array_tokens(messages)
         + estimate_json_array_tokens(tools)
-        + additional
-            .iter()
-            .map(|value| encoded_json_len(value).div_ceil(3) as u64)
-            .sum::<u64>();
-    let message_overhead = messages.len() as u64 * 10;
-    let image_tokens = messages.iter().map(count_images).sum::<u64>() * 1600;
-    let protected_tokens = protected_prompt_reserve_tokens.min(context_length / 4);
-    let prompt_tokens = value_tokens + message_overhead + image_tokens + protected_tokens;
+        + array_tokens(skills);
+    let message_overhead = messages.len() as u64 * MESSAGE_OVERHEAD_TOKENS;
+    let image_tokens = messages.iter().map(count_images).sum::<u64>() * IMAGE_TOKENS;
+    let heuristic_prompt_tokens = value_tokens + message_overhead + image_tokens + protected_tokens;
+    // A live anchor makes the settled prefix a measurement, so only the tail
+    // appended since that response is guessed at.
+    let (prompt_tokens, anchored) = match anchor {
+        Some(anchor) if messages.len() >= anchor.anchor_len => (
+            anchor
+                .total()
+                .saturating_add(tail_estimate(&messages[anchor.anchor_len..])),
+            true,
+        ),
+        _ => (heuristic_prompt_tokens, false),
+    };
     let reserve_tokens =
         adaptive_output_reserve(context_length, max_response_tokens, prompt_tokens);
     ContextUsageEstimate {
         context_length,
-        heuristic_prompt_tokens: prompt_tokens,
+        heuristic_prompt_tokens,
         calibrated_prompt_tokens: prompt_tokens,
         reserve_tokens,
         protected_tokens,
+        anchored,
+        breakdown: context_breakdown(messages, tools, skills, system_prompt),
     }
 }
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn allocation_free_json_length_matches_serde_json_encoding() {
-        let values = vec![
-            serde_json::json!(null),
-            serde_json::json!(true),
-            serde_json::json!(123.5),
-            serde_json::json!("quote \" slash \\ controls \n \u{0001} unicode 中🙂"),
-            serde_json::json!({"key":"value","nested":[1,false,null]}),
-        ];
-        for value in &values {
-            assert_eq!(
-                encoded_json_len(value),
-                serde_json::to_vec(value).unwrap().len(),
-                "{value}"
-            );
-        }
-        assert_eq!(
-            encoded_json_array_len(&values),
-            serde_json::to_vec(&values).unwrap().len()
-        );
-    }
-
-    #[test]
-    fn large_output_is_stored_and_retrievable() {
-        let mut store = SessionContextStore::default();
-        let source = "line of output\n".repeat(2000);
-        let result = compress_tool_result(
-            &mut store, "read", "file", "call", "read BIG", &source, "success",
-        );
-        assert!(result.modified);
-        let hash = result.marker_hash.unwrap();
-        let first = store.retrieve(&hash, None, Some(100)).unwrap();
-        assert_eq!(first.offset, 0);
-        assert_eq!(first.content, source[..first.bytes_shown]);
-        assert_eq!(first.total_bytes, source.len());
-        assert_eq!(first.next_offset, Some(first.bytes_shown));
-
-        let second = store.retrieve(&hash, first.next_offset, Some(100)).unwrap();
-        assert_eq!(second.offset, first.bytes_shown);
-        assert_eq!(
-            second.content,
-            source[second.offset..second.offset + second.bytes_shown]
-        );
-        assert_eq!(store.stats(), (1, source.len()));
-    }
-
-    #[test]
-    fn retrieval_offsets_preserve_utf8_boundaries_and_limits() {
-        let mut store = SessionContextStore::default();
-        let source = "é".repeat(20_000);
-        let result = compress_tool_result(
-            &mut store, "read", "file", "call", "unicode", &source, "success",
-        );
-        let window = store
-            .retrieve(&result.marker_hash.unwrap(), Some(1), Some(17))
-            .unwrap();
-        assert_eq!(window.offset, 2);
-        assert!(window.content.is_char_boundary(window.content.len()));
-        assert!(window.bytes_shown <= 17);
-    }
-
-    #[test]
-    fn head_tail_compression_preserves_both_ends_and_errors() {
-        let middle = "middle line with enough padding to consume bytes\n".repeat(500);
-        let source = format!("first line\n{middle}fatal: final failure\nlast line");
-        let body = text_head_tail(&source, "Log compressed.", true);
-        assert!(body.len() <= MAX_DISPLAYED_BYTES);
-        assert!(body.contains("first line"));
-        assert!(body.contains("fatal: final failure"));
-        assert!(body.contains("last line"));
-    }
-
-    #[test]
-    fn compaction_uses_the_declared_kind_not_the_output_text() {
-        // A command whose output happens to look like a diff is still a log.
-        let mut store = SessionContextStore::default();
-        let source = format!("diff --git a/a b/a{}", "+next".repeat(MIN_COMPRESS_BYTES));
-        let result = compress_tool_result(
-            &mut store, "command", "log", "call", "cmd", &source, "success",
-        );
-        assert_eq!(result.kind, "log");
-    }
-
-    #[test]
-    fn json_compression_samples_both_ends_structurally() {
-        let source = serde_json::to_string(
-            &(0..100)
-                .map(|index| serde_json::json!({"index":index,"payload":"x".repeat(1000)}))
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        let body = json_sample(&serde_json::from_str(&source).unwrap());
-        assert!(body.contains("0: {"));
-        assert!(body.contains("99: {"));
-        assert!(body.contains("Total entries: 100"));
-        assert!(body.len() <= MAX_DISPLAYED_BYTES);
-    }
-
-    #[test]
-    fn context_estimate_matches_veil_json_accounting_and_handles_images_conservatively() {
-        let messages = vec![serde_json::json!({"role":"user","content":[
-            {"type":"text","text":"你好🙂"},
-            {"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}", "A".repeat(100_000))}}
-        ]})];
-        let usage = estimate_context_usage(&messages, &[], 64_000, 4_096, 4_096, &[]);
-        let veil_value_tokens = serde_json::to_vec(&messages).unwrap().len().div_ceil(3) as u64
-            + serde_json::to_vec(&Vec::<serde_json::Value>::new())
-                .unwrap()
-                .len()
-                .div_ceil(3) as u64;
-        assert_eq!(
-            usage.calibrated_prompt_tokens,
-            veil_value_tokens + 10 + 1_600 + 4_096
-        );
-        assert_eq!(usage.reserve_tokens, 4_096);
-        assert_eq!(usage.event()["phase"], "preflight");
-        assert_eq!(usage.event()["source"], "heuristic");
-    }
-
-    #[test]
-    fn output_reserve_grows_to_eight_thousand_and_keeps_a_one_thousand_token_minimum() {
-        assert_eq!(adaptive_output_reserve(16_000, 8_192, 8_000), 8_000);
-        assert_eq!(adaptive_output_reserve(16_000, 8_192, 12_400), 3_000);
-        assert_eq!(adaptive_output_reserve(16_000, 8_192, 13_400), 2_000);
-        assert_eq!(adaptive_output_reserve(16_000, 8_192, 14_400), 1_000);
-        assert_eq!(adaptive_output_reserve(16_000, 8_192, 15_400), 1_000);
-    }
-
-    #[test]
-    fn context_estimate_uses_the_adaptive_response_allowance() {
-        let messages = vec![serde_json::json!({"role":"user","content":"x".repeat(37_000)})];
-        let usage = estimate_context_usage(&messages, &[], 16_000, 4_096, 0, &[]);
-        assert_eq!(usage.reserve_tokens, 3_000);
-        assert!(usage.estimated_tokens() <= 16_000);
-    }
-
-    #[test]
-    fn calibration_is_conservative_bounded_and_profile_scoped() {
-        let calibration =
-            ContextCalibration::from_observation("profile-a".into(), 1_200, 1_000, 8_000).unwrap();
-        assert_eq!(calibration.multiplier_milli, 1_200);
-        assert_eq!(calibration.apply("profile-a", 2_000), 2_400);
-        assert_eq!(calibration.apply("profile-b", 2_000), 2_000);
-
-        let downward = ContextCalibration::from_observation("p".into(), 800, 1_000, 8_000).unwrap();
-        assert_eq!(downward.multiplier_milli, 1_000);
-        let upward = ContextCalibration::from_observation("p".into(), 2_000, 1_000, 8_000).unwrap();
-        assert_eq!(upward.multiplier_milli, 1_500);
-        assert!(ContextCalibration::from_observation("p".into(), 0, 1_000, 8_000).is_none());
-        assert!(ContextCalibration::from_observation("p".into(), 8_001, 1_000, 8_000).is_none());
-    }
-
-    #[test]
-    fn calibration_arithmetic_saturates_without_overflow() {
-        let calibration = ContextCalibration {
-            profile_fingerprint: "p".into(),
-            multiplier_milli: 1_500,
-            observed_prompt_tokens: u64::MAX,
-            estimated_prompt_tokens: u64::MAX,
-        };
-        assert_eq!(calibration.apply("p", u64::MAX), u64::MAX);
-    }
-
-    #[test]
-    fn request_profile_changes_with_tools_and_skills() {
-        let base =
-            request_profile_fingerprint("model", "/api/engineering/chat", 64_000, 2_048, &[], &[]);
-        let tool = request_profile_fingerprint(
-            "model",
-            "/api/engineering/chat",
-            64_000,
-            2_048,
-            &[serde_json::json!({"name":"read"})],
-            &[],
-        );
-        let skill = request_profile_fingerprint(
-            "model",
-            "/api/engineering/chat",
-            64_000,
-            2_048,
-            &[],
-            &[serde_json::json!({"id":"docs"})],
-        );
-        assert_ne!(base, tool);
-        assert_ne!(base, skill);
-        assert_ne!(tool, skill);
-    }
-
-    #[test]
-    fn retrieval_refreshes_lru_retention() {
-        let mut store = SessionContextStore::default();
-        for index in 0..MAX_ENTRIES {
-            let source = format!("entry {index} {}", "x".repeat(MIN_COMPRESS_BYTES));
-            let result = compress_tool_result(
-                &mut store,
-                "read",
-                "file",
-                &format!("call-{index}"),
-                "read",
-                &source,
-                "success",
-            );
-            assert!(result.marker_hash.is_some());
-        }
-        let oldest = store.order.front().cloned().unwrap();
-        assert!(store.retrieve(&oldest, None, Some(10)).is_some());
-        let source = format!("new entry {}", "y".repeat(MIN_COMPRESS_BYTES));
-        let _ = compress_tool_result(
-            &mut store, "read", "file", "new", "read", &source, "success",
-        );
-        assert!(store.retrieve(&oldest, None, Some(10)).is_some());
-    }
-}
+#[path = "context_tests.rs"]
+mod tests;

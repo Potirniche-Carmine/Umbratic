@@ -1,3 +1,5 @@
+import { isContextBreakdown, type BackendContextBreakdown } from "../shared/backendEvents";
+
 type RunnerEventBase = {
   taskId: string;
   at?: string;
@@ -55,6 +57,12 @@ export type RunnerEvent =
       promptTokens?: number;
       completionTokens?: number;
       reserveTokens: number;
+      protectedTokens?: number;
+      estimatedTokens?: number;
+      anchored?: boolean;
+      compactionBlocked?: boolean;
+      awaitingMeasurement?: boolean;
+      breakdown?: BackendContextBreakdown;
       phase?: unknown;
       source?: unknown;
       confidence?: unknown;
@@ -310,6 +318,12 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && hasNonNegativeNumber(value, "reserveTokens")
         && (value.promptTokens === undefined || hasNonNegativeNumber(value, "promptTokens"))
         && (value.completionTokens === undefined || hasNonNegativeNumber(value, "completionTokens"))
+        && (value.protectedTokens === undefined || hasNonNegativeNumber(value, "protectedTokens"))
+        && (value.estimatedTokens === undefined || hasNonNegativeNumber(value, "estimatedTokens"))
+        && (value.anchored === undefined || typeof value.anchored === "boolean")
+        && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
+        && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
+        && (value.breakdown === undefined || isContextBreakdown(value.breakdown))
       );
     case "context.retrieved":
       return (

@@ -398,3 +398,62 @@ test("runner event adapter forwards run.queue.updated to the queue callback", ()
   assert.equal(queueEvents[0]?.disposition, "dequeued");
   assert.equal(queueEvents[0]?.actionId, "steer-1");
 });
+
+test("runner event adapter forwards the anchor and the category rows intact", () => {
+  const harness = adapterHarness();
+  const breakdown = {
+    systemPromptTokens: 3187, systemPromptExact: true, toolDefinitionTokens: 2100,
+    skillTokens: 320, conversationTokens: 4200, toolResultTokens: 1900, imageTokens: 1600,
+  };
+  harness.adapter.handle({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 12000,
+    completionTokens: 256,
+    reserveTokens: 4096,
+    protectedTokens: 3187,
+    estimatedTokens: 16096,
+    anchored: true,
+    compactionBlocked: true,
+    breakdown,
+    phase: "observed",
+    source: "provider",
+    confidence: "high",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 12000,
+    completionTokens: 256,
+    reserveTokens: 4096,
+    protectedTokens: 3187,
+    estimatedTokens: 16096,
+    anchored: true,
+    compactionBlocked: true,
+    breakdown,
+    phase: "observed",
+    source: "provider",
+    confidence: "high",
+  }]);
+});
+
+test("runner event adapter drops a usage event whose two names disagree", () => {
+  const harness = adapterHarness();
+  // promptTokens and contentTokens are the same measurement under two names.
+  // A runner emitting them differently has broken the contract, and a broken
+  // meter must not be presented as a working one.
+  harness.adapter.handle({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 900,
+    reserveTokens: 4096,
+  });
+  assert.deepEqual(plain(harness.emitted), []);
+});

@@ -596,11 +596,23 @@ button.attachmentPreview:focus-visible {
   z-index: 2;
   display: grid;
   place-items: center;
+}
+
+.contextMeterButton {
+  display: grid;
+  place-items: center;
   width: 22px;
   height: 28px;
+  padding: 0;
+  border: none;
   border-radius: 50%;
   color: var(--accent);
-  cursor: help;
+  background: none;
+  cursor: pointer;
+}
+
+.contextMeterButton.is-stale {
+  opacity: 0.55;
 }
 
 .contextMeter svg {
@@ -627,26 +639,29 @@ button.attachmentPreview:focus-visible {
   transition: stroke-dasharray 180ms ease, stroke 180ms ease;
 }
 
-.contextMeter.is-warning {
+.contextMeterButton.is-warning {
   color: var(--amber);
 }
 
-.contextMeter.is-critical {
+.contextMeterButton.is-critical {
   color: var(--red);
 }
 
-.contextMeter:focus-visible {
+.contextMeterButton:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.contextMeterTooltip {
+.contextMeterPanel {
   position: absolute;
   left: 50%;
   bottom: calc(100% + 8px);
+  display: grid;
+  gap: 5px;
   width: max-content;
+  min-width: 216px;
   max-width: calc(100vw - 32px);
-  padding: 7px 9px;
+  padding: 9px 11px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   color: var(--text);
@@ -659,27 +674,129 @@ button.attachmentPreview:focus-visible {
   transform: translate(-50%, 4px) scale(0.98);
   transform-origin: center bottom;
   visibility: hidden;
-  white-space: nowrap;
   transition: opacity 150ms ease, transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1), visibility 150ms ease;
 }
 
-.contextMeter:hover .contextMeterTooltip,
-.contextMeter:focus-visible .contextMeterTooltip {
+.contextMeterPanel.is-open {
   opacity: 1;
+  pointer-events: auto;
   transform: translate(-50%, 0) scale(1);
   visibility: visible;
 }
 
-.contextMeterTooltip span {
+.contextMeterPanel span {
   display: block;
   color: var(--muted);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
 
-.contextMeterTooltip b {
+.contextMeterPanel b {
   color: var(--text);
   font-weight: 720;
+}
+
+.contextMeterTitle {
+  display: flex;
+  gap: 20px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.contextMeterTitle b {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+}
+
+/* One segment per category, in the same order and colour as the rows below,
+   so the bar and the table read as one object rather than two. */
+.contextMeterBar {
+  display: flex;
+  gap: 1px;
+  overflow: hidden;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line-strong) 70%, transparent);
+}
+
+.contextMeterBar i {
+  min-width: 0;
+  transition: width 180ms ease;
+}
+
+.contextMeterRowsTitle {
+  margin-top: 3px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-strong);
+  font-size: 10.5px !important;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.contextMeterRows {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contextMeterRows li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.contextMeterRows b {
+  justify-self: end;
+  font-weight: 620;
+}
+
+.contextMeterRows u {
+  justify-self: end;
+  min-width: 38px;
+  text-align: right;
+  text-decoration: none;
+  opacity: 0.68;
+}
+
+.contextMeterRows em {
+  font-style: normal;
+  opacity: 0.66;
+}
+
+.contextMeterSwatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.contextMeterBar i.is-conversation,
+.contextMeterSwatch.is-conversation { background: var(--accent); }
+.contextMeterBar i.is-toolResults,
+.contextMeterSwatch.is-toolResults { background: color-mix(in srgb, var(--accent) 55%, var(--green)); }
+.contextMeterBar i.is-tools,
+.contextMeterSwatch.is-tools { background: var(--green); }
+.contextMeterBar i.is-skills,
+.contextMeterSwatch.is-skills { background: var(--amber); }
+.contextMeterBar i.is-images,
+.contextMeterSwatch.is-images { background: color-mix(in srgb, var(--amber) 60%, var(--red)); }
+.contextMeterBar i.is-system,
+.contextMeterSwatch.is-system { background: color-mix(in srgb, var(--accent) 45%, var(--line-strong)); }
+.contextMeterBar i.is-draft,
+.contextMeterSwatch.is-draft { background: color-mix(in srgb, var(--text) 62%, transparent); }
+.contextMeterBar i.is-reserve,
+.contextMeterSwatch.is-reserve { background: color-mix(in srgb, var(--muted) 52%, transparent); }
+.contextMeterSwatch.is-free { background: color-mix(in srgb, var(--line-strong) 78%, transparent); }
+
+.contextMeterNotice {
+  color: var(--amber) !important;
+  white-space: normal;
 }
 
 .sendButton {

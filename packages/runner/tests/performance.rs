@@ -5,7 +5,7 @@ use std::{
 
 use serde_json::json;
 use umbratic_runner::{
-    context::{estimate_context_usage, request_profile_fingerprint},
+    context::{ContextEstimateInput, estimate_context_usage, request_profile_fingerprint},
     safety::evaluate_command,
 };
 
@@ -25,11 +25,19 @@ fn maximum_active_view_planning_meets_the_release_p95_gate() {
     let skills = (0..32)
         .map(|index| json!({"id":format!("skill-{index}"),"name":format!("Skill {index}"),"description":"bounded skill metadata","source":"system"}))
         .collect::<Vec<_>>();
-    let additional = vec![serde_json::Value::Array(skills.clone())];
     let mut samples = Vec::with_capacity(500);
     for _ in 0..500 {
         let started = Instant::now();
-        let usage = estimate_context_usage(&messages, &tools, 64_000, 8_192, 2_048, &additional);
+        let usage = estimate_context_usage(ContextEstimateInput {
+            messages: &messages,
+            tools: &tools,
+            skills: &skills,
+            context_length: 64_000,
+            max_response_tokens: 8_192,
+            protected_prompt_reserve_tokens: 2_048,
+            system_prompt: None,
+            anchor: None,
+        });
         let fingerprint = request_profile_fingerprint(
             "model",
             "/api/engineering/chat",

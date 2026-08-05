@@ -76,21 +76,33 @@ func Build(route Route, clientMessages []model.Message) ([]model.Message, error)
 	return BuildWithProtectedMessages(route, clientMessages, nil, nil)
 }
 
-func BuildWithProtectedMessages(route Route, clientMessages []model.Message, protectedMessages []model.Message, skills []SkillMetadata) ([]model.Message, error) {
+// ProtectedPrefix is everything Veil prepends before any client message: the
+// global prompt, the route prompt, the skill catalog, and the rendered
+// playbook. The runner strips system messages from what it sends, so this is
+// the part of the context it cannot see and cannot size for itself.
+func ProtectedPrefix(route Route, protectedMessages []model.Message, skills []SkillMetadata) ([]model.Message, error) {
 	routePrompt, ok := routePrompts[route]
 	if !ok {
 		return nil, fmt.Errorf("unknown prompt route %q", route)
 	}
 
-	messages := make([]model.Message, 0, len(clientMessages)+3+len(protectedMessages))
+	messages := make([]model.Message, 0, 3+len(protectedMessages))
 	messages = append(messages, model.Message{Role: "system", Content: GlobalSystemPrompt})
 	messages = append(messages, model.Message{Role: "system", Content: routePrompt})
 	if skillPrompt := SkillCatalogPrompt(skills); skillPrompt != "" {
 		messages = append(messages, model.Message{Role: "system", Content: skillPrompt})
 	}
-	messages = append(messages, protectedMessages...)
-	messages = append(messages, clientMessages...)
-	return messages, nil
+	return append(messages, protectedMessages...), nil
+}
+
+func BuildWithProtectedMessages(route Route, clientMessages []model.Message, protectedMessages []model.Message, skills []SkillMetadata) ([]model.Message, error) {
+	prefix, err := ProtectedPrefix(route, protectedMessages, skills)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]model.Message, 0, len(prefix)+len(clientMessages))
+	messages = append(messages, prefix...)
+	return append(messages, clientMessages...), nil
 }
 
 func RoutePrompt(route Route) (string, bool) {

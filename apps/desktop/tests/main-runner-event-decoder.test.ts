@@ -100,3 +100,47 @@ test("runner event decoder rejects malformed native events before translation", 
     assert.equal(decoder.decodeRunnerEvent(event).ok, false, JSON.stringify(event));
   }
 });
+
+test("runner context usage decodes the anchor, the breakdown, and the protected prefix", () => {
+  const decoded = decoder.decodeRunnerEvent({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 12000,
+    completionTokens: 256,
+    reserveTokens: 4096,
+    protectedTokens: 3187,
+    estimatedTokens: 16096,
+    anchored: true,
+    compactionBlocked: false,
+    breakdown: {
+      systemPromptTokens: 3187, systemPromptExact: true, toolDefinitionTokens: 2100,
+      skillTokens: 320, conversationTokens: 4200, toolResultTokens: 1900, imageTokens: 1600,
+    },
+  });
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.event.anchored, true);
+  assert.equal(decoded.event.protectedTokens, 3187);
+  assert.equal(decoded.event.breakdown.systemPromptExact, true);
+  assert.equal(decoded.event.breakdown.imageTokens, 1600);
+
+  // A usage event that carries none of it is still a usage event.
+  assert.equal(
+    decoder.decodeRunnerEvent({ type: "context.usage", taskId: "task-1", contextLength: 64000, contentTokens: 1, reserveTokens: 1 }).ok,
+    true,
+  );
+
+  for (const invalid of [
+    { anchored: "yes" },
+    { breakdown: { systemPromptTokens: 1, systemPromptExact: true, toolDefinitionTokens: 1, skillTokens: 1, conversationTokens: 1, toolResultTokens: 1 } },
+    { breakdown: { systemPromptTokens: 1, systemPromptExact: "true", toolDefinitionTokens: 1, skillTokens: 1, conversationTokens: 1, toolResultTokens: 1, imageTokens: 1 } },
+    { protectedTokens: -4 },
+  ]) {
+    assert.equal(
+      decoder.decodeRunnerEvent({ type: "context.usage", taskId: "task-1", contextLength: 64000, contentTokens: 1, reserveTokens: 1, ...invalid }).ok,
+      false,
+      JSON.stringify(invalid),
+    );
+  }
+});
