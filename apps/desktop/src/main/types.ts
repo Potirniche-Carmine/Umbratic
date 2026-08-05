@@ -39,6 +39,7 @@ export type CommandClass =
   | "destructive-file"
   | "network"
   | "external-directory"
+  | "blocked-path"
   | "unknown";
 export type TaskState =
   | "awaiting_worktree_approval"

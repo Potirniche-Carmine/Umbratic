@@ -272,6 +272,7 @@ impl SessionStore {
 #[cfg(test)]
 pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
     Arc::new(RunnerConfig {
+        password: "test-password".into(),
         task_id: Some("test-task".into()),
         cwd: cwd.to_path_buf(),
         context_length: 64_000,

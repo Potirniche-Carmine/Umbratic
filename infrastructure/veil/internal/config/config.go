@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -37,6 +38,33 @@ type Config struct {
 	RequestTimeout         time.Duration
 	StreamIdleTimeout      time.Duration
 	MaxBodyBytes           int64
+	// Networks whose X-Forwarded-For header may be believed. Empty by default,
+	// so an unconfigured deployment keys rate limits on the immediate peer
+	// rather than on a header any client can forge.
+	TrustedProxyCIDRs []netip.Prefix
+}
+
+// parseTrustedProxyCIDRs reads the comma-separated CIDR allowlist that decides
+// whether X-Forwarded-For is believed. Bare addresses are accepted as
+// single-host prefixes.
+func parseTrustedProxyCIDRs(value string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for _, entry := range strings.Split(value, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(entry); err == nil {
+			prefixes = append(prefixes, prefix)
+			continue
+		}
+		address, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("VEIL_TRUSTED_PROXY_CIDRS entry %q is not an address or CIDR", entry)
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
+	}
+	return prefixes, nil
 }
 
 func Load() (Config, error) {
@@ -96,6 +124,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("VEIL_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	telemetryRetentionDays, err := envInt("VEIL_TELEMETRY_RETENTION_DAYS", 30)
 	if err != nil {
 		return Config{}, err
@@ -113,6 +146,7 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		Addr:                   envString("VEIL_ADDR", "127.0.0.1:8080"),
+		TrustedProxyCIDRs:      trustedProxyCIDRs,
 		AuthToken:              strings.TrimSpace(os.Getenv("VEIL_AUTH_TOKEN")),
 		ControlToken:           strings.TrimSpace(os.Getenv("VEIL_CONTROL_TOKEN")),
 		CompanyIdentityMode:    companyIdentityMode,

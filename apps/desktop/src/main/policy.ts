@@ -128,12 +128,6 @@ export function isBarePythonCommand(command: string): boolean {
   return first === "python" || first === "python3" || first === "py";
 }
 
-function firstCommandToken(command: string): string {
-  const normalized = command.trim().replace(/^run\s+/i, "");
-  const match = normalized.match(/^"([^"]+)"|^'([^']+)'|^(\S+)/);
-  return (match?.[1] ?? match?.[2] ?? match?.[3] ?? "").toLowerCase();
-}
-
 function commandContainsGit(command: string): boolean {
   return /\bgit(?:\.exe)?\b/i.test(command);
 }
@@ -233,6 +227,64 @@ function commandTouchesExternalDirectory(command: string, cwd?: string): boolean
   return false;
 }
 
+/** Split a command into shell-ish tokens, dropping the quotes that group them. */
+function commandTokens(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: string | undefined;
+  for (const character of command) {
+    if (quote && character === quote) quote = undefined;
+    else if (!quote && (character === '"' || character === "'")) { quote = character; started = true; }
+    else if (!quote && /\s/.test(character)) { if (started) { tokens.push(current); current = ""; started = false; } }
+    else { current += character; started = true; }
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/** `find` predicates that run a program or mutate the filesystem. */
+const findActionPredicates = new Set([
+  "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf",
+]);
+
+/** Bare words that name no file are arguments, not paths. */
+function looksLikePath(token: string): boolean {
+  if (!token || token.startsWith("-")) return false;
+  const normalized = token.replace(/\\/g, "/");
+  const basename = path.posix.basename(normalized).toLowerCase();
+  return normalized.includes("/") || normalized.includes(".") || basename === "id_rsa" || basename === "id_ed25519";
+}
+
+/** Lexically decide whether a relative path climbs above the workspace root. */
+function escapesWorkspace(token: string): boolean {
+  let depth = 0;
+  for (const part of token.replace(/\\/g, "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") { if (--depth < 0) return true; } else depth += 1;
+  }
+  return false;
+}
+
+function tokenIsBlockedPath(token: string): boolean {
+  const normalized = token.replace(/\\/g, "/");
+  return isBlockedPath(normalized) || isBlockedPath(normalized.replace(/[*?]/g, ""));
+}
+
+/**
+ * The audited read-only class, which Auto-safe runs without a prompt. The whole
+ * segment has to prove itself: a locator name is not enough, because `find`
+ * reaches an arbitrary interpreter through `-exec` and deletes through
+ * `-delete`, and any of these can redirect their output into a file.
+ */
+function isAuditedReadOnly(command: string, tokens: string[]): boolean {
+  const first = tokens[0]?.toLowerCase() ?? "";
+  if (!["cat", "type", "dir", "ls", "find", "where"].includes(first)) return false;
+  if (command.includes(">") || command.includes("<")) return false;
+  if (first === "find" && tokens.some((token) => findActionPredicates.has(token.toLowerCase()))) return false;
+  return true;
+}
+
 export type CommandClassification = {
   commandClass: CommandClass;
   risky: boolean;
@@ -262,10 +314,19 @@ export function canAutoResolvePermission(
 export function classifyCommandText(command: string, cwd?: string): CommandClassification {
   const trimmed = command.trim();
   const lower = trimmed.toLowerCase();
-  const first = firstCommandToken(trimmed);
 
   if (!trimmed) return { commandClass: "unknown", risky: false };
   if (commandHasNetworkIntent(trimmed)) return { commandClass: "network", risky: true, reason: "network command" };
+  // The blocklist that guards the file tools, applied to command arguments so
+  // the shell cannot read what `read` refuses.
+  const tokens = commandTokens(trimmed);
+  for (const token of tokens.slice(1)) {
+    if (!looksLikePath(token)) continue;
+    if (escapesWorkspace(token)) return { commandClass: "external-directory", risky: true, reason: "external path" };
+    if (tokenIsBlockedPath(token)) {
+      return { commandClass: "blocked-path", risky: true, reason: "blocked workspace path" };
+    }
+  }
   if (commandTouchesExternalDirectory(trimmed, cwd)) {
     return { commandClass: "external-directory", risky: true, reason: "external path" };
   }
@@ -290,9 +351,7 @@ export function classifyCommandText(command: string, cwd?: string): CommandClass
   if (/\b(markdownlint|remark|prettier)\b/i.test(trimmed) || /\.(md|markdown)\b/i.test(trimmed)) {
     return { commandClass: "markdown", risky: false };
   }
-  if (first === "cat" || first === "type" || first === "dir" || first === "ls" || first === "find" || first === "where") {
-    return { commandClass: "read", risky: false };
-  }
+  if (isAuditedReadOnly(trimmed, tokens)) return { commandClass: "read", risky: false };
   if (lower.includes("powershell") || lower.includes("pwsh") || lower.includes("bash") || lower.includes("sh -c")) {
     return { commandClass: "shell", risky: false };
   }

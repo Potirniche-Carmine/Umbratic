@@ -46,6 +46,15 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     ["curl http://127.0.0.1:8080/api/health", "network", true],
     [process.platform === "win32" ? `type "${external}"` : `cat "${external}"`, "external-directory", true],
     [process.platform === "win32" ? `type "${inside}"` : `cat "${inside}"`, "read", false],
+    // The auto-allow boundary: a locator name alone never proves read-only.
+    ["find . -type f -exec sh -c id ;", "shell", false],
+    ["find . -name x -delete", "shell", false],
+    ["cat notes.txt > stolen.txt", "shell", false],
+    ["find . -name '*.rs'", "read", false],
+    ["cat .env", "blocked-path", true],
+    ["cat *.env", "blocked-path", true],
+    ["type id_rsa", "blocked-path", true],
+    ["cat ..\\..\\secret.txt", "external-directory", true],
   ];
 
   for (const [command, commandClass, risky] of cases) {

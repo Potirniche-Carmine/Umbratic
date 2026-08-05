@@ -133,18 +133,31 @@ export type PublicModelEndpointSettings = Omit<ActiveModelEndpointSettings, "hea
   headers: Array<{ name: string; value: string; valueConfigured: boolean }>;
 };
 
-function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
+function normalizeHeaderRows(
+  value: unknown,
+  readValue: (value: unknown) => string,
+): Array<{ name: string; value: string }> {
   const rows = Array.isArray(value) ? value : [];
   const headers = rows.slice(0, 2).map((row) => {
     if (!row || typeof row !== "object" || Array.isArray(row)) return { name: "", value: "" };
     const record = row as Record<string, unknown>;
     return {
       name: typeof record.name === "string" ? record.name.trim() : "",
-      value: readProtectedString(record.value) ?? "",
+      value: readValue(record.value),
     };
   });
   while (headers.length < 2) headers.push({ name: "", value: "" });
   return headers;
+}
+
+/** Headers arriving from the renderer or already-decrypted settings. */
+function normalizeEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
+  return normalizeHeaderRows(value, (raw) => (typeof raw === "string" ? raw : ""));
+}
+
+/** Headers read off disk, where every value must be an encrypted envelope. */
+function normalizeStoredEndpointHeaders(value: unknown): Array<{ name: string; value: string }> {
+  return normalizeHeaderRows(value, (raw) => readProtectedString(raw) ?? "");
 }
 
 const activeModelEndpointSettings = (settings: RawSettings) => activeStoredEndpoint(settings);
@@ -185,12 +198,17 @@ function modelEndpointSettings(
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForMode(mode),
     modelId,
     secret: mode === "local" ? "" : managed?.secret ?? readProtectedString(endpoint.secret) ?? defaultEndpointApiKey,
-    headers: mode === "local" ? normalizeEndpointHeaders([]) : normalizeEndpointHeaders(endpoint.headers),
+    headers: mode === "local" ? normalizeEndpointHeaders([]) : normalizeStoredEndpointHeaders(endpoint.headers),
   };
 }
 
 export function readCompanyDeviceCredential(): CompanyDeviceCredential | null {
-  return decodeCompanyDeviceCredential(readRawSettings().companyCredential);
+  const stored = readRawSettings().companyCredential;
+  const credential = decodeCompanyDeviceCredential(stored);
+  // A record that will not decode is corrupt or tampered with. Drop it so the
+  // device re-enrolls instead of carrying an unusable credential forward.
+  if (!credential && stored !== undefined) clearCompanyDeviceCredential();
+  return credential;
 }
 
 export function writeCompanyDeviceCredential(input: CompanyDeviceCredential): CompanyDeviceCredential {

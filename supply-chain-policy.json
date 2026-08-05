@@ -6,6 +6,16 @@
   "minimumGoVersion": "1.26.5",
   "cargoAuditVersion": "0.22.2",
   "govulncheckVersion": "1.6.0",
+  "acceptedGoModuleAdvisories": [
+    {
+      "id": "GO-2026-5932",
+      "module": "golang.org/x/crypto",
+      "package": "golang.org/x/crypto/openpgp",
+      "reachable": false,
+      "fixedIn": null,
+      "reason": "Permanent deprecation notice with no fix, reported under Module Results only. The single import from this module is golang.org/x/crypto/argon2 (veil-console internal/auth/auth.go); go list -deps confirms only argon2 and blake2b compile in. Go 1.26 ships no Argon2 in the standard library, so replacing the password hash to silence an unreachable advisory would be a net security loss."
+    }
+  ],
   "reviewedNpmOverrides": {
     "@electron/asar": "4.2.0",
     "@electron/get": {

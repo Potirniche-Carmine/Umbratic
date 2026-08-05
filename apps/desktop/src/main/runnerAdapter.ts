@@ -317,13 +317,15 @@ export async function startUmbraticRunnerServer(
     ...runtimeEnv(task.worktreePath),
     ...umbraticRunnerHardeningEnvironment(),
   };
-  const child = spawn(binaryPath, ["serve", "--hostname=127.0.0.1", `--port=${port}`, `--password=${password}`], {
+  const child = spawn(binaryPath, ["serve", "--hostname=127.0.0.1", `--port=${port}`], {
     cwd: task.worktreePath,
     env,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  child.stdin?.end(JSON.stringify(config));
+  // The password travels on stdin with the rest of the configuration. Process
+  // arguments are readable by any local process via `ps` or WMI.
+  child.stdin?.end(JSON.stringify({ ...config, password }));
 
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {

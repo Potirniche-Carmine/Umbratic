@@ -7,7 +7,6 @@ struct Args {
     command: Option<String>,
     hostname: Option<String>,
     port: Option<u16>,
-    password: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -23,7 +22,6 @@ fn parse_args() -> Args {
         match key {
             "--hostname" => parsed.hostname = Some(value.to_owned()),
             "--port" => parsed.port = value.parse().ok(),
-            "--password" => parsed.password = Some(value.to_owned()),
             _ => {}
         }
     }
@@ -35,17 +33,13 @@ async fn main() -> ExitCode {
     let args = parse_args();
     if args.command.as_deref() != Some("serve") {
         eprintln!("{RUNNER_NAME} {RUNNER_VERSION}");
-        eprintln!("usage: umbratic-runner serve --port=<port> --password=<password>");
+        eprintln!("usage: umbratic-runner serve --port=<port>");
+        eprintln!("the runner configuration, including the API password, is read from stdin");
         return ExitCode::FAILURE;
     }
-    let Some(password) = args.password.filter(|value| !value.is_empty()) else {
-        eprintln!("--password is required");
-        return ExitCode::FAILURE;
-    };
     match server::listen(
         &args.hostname.unwrap_or_else(|| "127.0.0.1".to_owned()),
         args.port.unwrap_or(0),
-        password,
     )
     .await
     {

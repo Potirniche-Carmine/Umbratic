@@ -26,8 +26,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Only an OS-encrypted envelope is a valid secret. A bare string would let
+ * anything that can write the settings file downgrade keychain protection to
+ * cleartext, and nothing binds a record to this installation, so a tampered
+ * file would be indistinguishable from a legitimate one.
+ */
 export function readProtectedString(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
   if (!isRecord(value) || value.encoding !== "electron-safe-storage-v1" || typeof value.encrypted !== "string") {
     return undefined;
   }

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -263,6 +264,10 @@ func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Reque
 			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
 			return true
 		}
+		// Unauthenticated Ed25519 verification. Bounded like `challenge`.
+		if !s.allowIdentityRequest(w, r, "session", 30) {
+			return true
+		}
 		var input struct {
 			ChallengeUID string `json:"challenge_uid"`
 			Signature    string `json:"signature"`
@@ -280,6 +285,9 @@ func (s *Server) handleCompanyIdentityRoute(w http.ResponseWriter, r *http.Reque
 	case "/api/session/logout":
 		if r.Method != http.MethodPost {
 			writeCodedError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+			return true
+		}
+		if !s.allowIdentityRequest(w, r, "logout", 30) {
 			return true
 		}
 		token := bearerToken(r.Header.Get("Authorization"))
@@ -309,7 +317,7 @@ type identityRateLimiter struct {
 }
 
 func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, action string, limit int) bool {
-	key := identityRateKey(r, action)
+	key := s.identityRateKey(r, action)
 	now := time.Now()
 	s.identityRate.mu.Lock()
 	entry := s.identityRate.entries[key]
@@ -342,12 +350,57 @@ func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, ac
 	writeCodedError(w, http.StatusTooManyRequests, "rate_limited", "Try again later.")
 	return false
 }
-func identityRateKey(r *http.Request, action string) string {
+// clientAddress returns the address the rate limiter should key on. The shipped
+// deployment terminates TLS in Caddy and proxies to loopback, so RemoteAddr is
+// the proxy for every request and would make each limit organization-wide
+// rather than per client. X-Forwarded-For is believed only when the immediate
+// peer is a configured trusted proxy, because any client can send that header.
+func (s *Server) clientAddress(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	return action + "|" + host
+	if len(s.cfg.TrustedProxyCIDRs) == 0 {
+		return host
+	}
+	peer, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err != nil {
+		return host
+	}
+	peer = peer.Unmap()
+	trusted := false
+	for _, prefix := range s.cfg.TrustedProxyCIDRs {
+		if prefix.Contains(peer) {
+			trusted = true
+			break
+		}
+	}
+	if !trusted {
+		return host
+	}
+	// Caddy is configured to overwrite rather than append, so the right-most
+	// entry is the closest untrusted hop.
+	forwarded := r.Header.Values("X-Forwarded-For")
+	for index := len(forwarded) - 1; index >= 0; index-- {
+		hops := strings.Split(forwarded[index], ",")
+		for hop := len(hops) - 1; hop >= 0; hop-- {
+			candidate := strings.TrimSpace(hops[hop])
+			if candidate == "" {
+				continue
+			}
+			if address, parseErr := netip.ParseAddr(candidate); parseErr == nil {
+				return address.Unmap().String()
+			}
+			if addressPort, parseErr := netip.ParseAddrPort(candidate); parseErr == nil {
+				return addressPort.Addr().Unmap().String()
+			}
+		}
+	}
+	return host
+}
+
+func (s *Server) identityRateKey(r *http.Request, action string) string {
+	return action + "|" + s.clientAddress(r)
 }
 
 func (s *Server) handleControlRoute(w http.ResponseWriter, r *http.Request) {
