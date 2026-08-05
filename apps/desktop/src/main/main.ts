@@ -38,6 +38,8 @@ import {
 } from "./capabilities";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
 import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
+import { inspectPdf } from "./pdfInspector";
+import { pdfAttachmentPromptSection } from "./pdfPrompt";
 import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
@@ -1351,7 +1353,7 @@ function isPdfRenderWorkerResult(value: unknown): value is PdfRenderWorkerResult
   );
 }
 
-async function renderPdfAttachmentInWorker(filePath: string, outputDir: string): Promise<PdfRenderWorkerResult | null> {
+async function renderPdfAttachmentInWorker(filePath: string, outputDir: string, pageNumbers?: number[]): Promise<PdfRenderWorkerResult | null> {
   const workerPath = path.resolve(__dirname, "pdfRendererWorker.js");
   if (!fs.existsSync(workerPath)) {
     return null;
@@ -1404,6 +1406,7 @@ async function renderPdfAttachmentInWorker(filePath: string, outputDir: string):
         pageLimit: pdfImagePageLimit,
         scale: pdfImageScale,
         byteLimit: pdfAttachmentByteLimit,
+        ...(pageNumbers?.length ? { pageNumbers } : {}),
       },
       (error) => {
         if (error) finish(null);
@@ -1412,7 +1415,7 @@ async function renderPdfAttachmentInWorker(filePath: string, outputDir: string):
   });
 }
 
-async function pdfAttachmentImageParts(filePath: string): Promise<{ pageCount: number; rendered: number; parts: RunnerPromptPart[] } | null> {
+async function pdfAttachmentImageParts(filePath: string, pageNumbers?: number[]): Promise<{ pageCount: number; rendered: number; parts: RunnerPromptPart[] } | null> {
   let outputDir: string | null = null;
   try {
     const stat = fs.statSync(filePath);
@@ -1420,7 +1423,7 @@ async function pdfAttachmentImageParts(filePath: string): Promise<{ pageCount: n
       return null;
     }
     outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-pdf-"));
-    const result = await renderPdfAttachmentInWorker(filePath, outputDir);
+    const result = await renderPdfAttachmentInWorker(filePath, outputDir, pageNumbers);
     if (!result?.ok) {
       return null;
     }
@@ -1842,19 +1845,26 @@ async function attachmentPromptParts(
       }
     }
     if (isPdfFile(absolute)) {
-      const rendered = await pdfAttachmentImageParts(absolute);
-      if (!rendered) {
-        lines.push("(PDF pages could not be rendered for image input; the file may be encrypted, too large, or unsupported)");
-        continue;
+      const section = await pdfAttachmentPromptSection<RunnerPromptPart>({
+        inspect: () =>
+          inspectPdf(absolute, {
+            full: true,
+            tokenBudget: options.textBudget.remainingTokens,
+            maxBytes: pdfAttachmentByteLimit,
+          }),
+        renderImages: (pageNumbers) => pdfAttachmentImageParts(absolute, pageNumbers),
+        fullAccessHint: isChatAttachment
+          ? `Complete extracted text: use read_attachment with attachmentId ${JSON.stringify(path.basename(absolute))} and the reported byte offsets.`
+          : `Complete extracted text: use read with path ${JSON.stringify(file.path)} and successive line offsets.`,
+        pageLimit: pdfImagePageLimit,
+        textBudget: options.textBudget,
+      });
+      lines.push(...section.lines);
+      if (section.imageParts?.length) {
+        pushPromptText(parts, lines, heading);
+        parts.push(...section.imageParts);
+        lines.push(heading);
       }
-      lines.push(
-        rendered.rendered < rendered.pageCount
-          ? `PDF rendered as images for the vision model: first ${rendered.rendered} of ${rendered.pageCount} pages.`
-          : `PDF rendered as images for the vision model: ${rendered.pageCount} page${rendered.pageCount === 1 ? "" : "s"}.`,
-      );
-      pushPromptText(parts, lines, heading);
-      parts.push(...rendered.parts);
-      lines.push(heading);
       continue;
     }
     const imageDataUrl = imageDataUrlIfSafe(absolute);

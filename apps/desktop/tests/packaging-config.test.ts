@@ -27,7 +27,8 @@ test("release-mode native binaries are runnable before packaging", () => {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const runner = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
   const desktopCore = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-desktop-core.exe" : "umbratic-desktop-core");
-  for (const binary of [runner, desktopCore]) {
+  const pdfInspector = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf");
+  for (const binary of [runner, desktopCore, pdfInspector]) {
     assert.equal(fs.existsSync(binary), true, `missing release binary ${binary}`);
     const result = spawnSync(binary, [], { encoding: "utf8", timeout: 5_000 });
     assert.equal(result.error, undefined);
@@ -54,6 +55,8 @@ test("desktop packages the native Rust runner instead of a Node launcher", () =>
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-runner\.exe" : "umbratic-runner"/);
   assert.match(config, /- from: \.package\/desktop-core\r?\n\s+to: desktop-core/);
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-desktop-core\.exe" : "umbratic-desktop-core"/);
+  assert.match(config, /- from: \.package\/pdf\r?\n\s+to: pdf/);
+  assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-pdf\.exe" : "umbratic-pdf"/);
   assert.doesNotMatch(preparePackage, /umbratic-runner\.cjs|dist["'], ["']cli\.js/);
 });
 

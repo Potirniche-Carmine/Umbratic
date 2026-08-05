@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 import { estimateAttachmentTextTokens } from "../shared/contextWindow";
+import { pdfContextTokens } from "./pdfInspector";
 import type { BackendUiEvent, ChatAttachment } from "./types";
 
 const chatAttachmentByteLimit = 25 * 1024 * 1024;
@@ -18,6 +20,9 @@ export function readAttachmentTextIfSafe(filePath: string): string | null {
 }
 
 export function attachmentContextTokens(filePath: string): number | undefined {
+  if (path.extname(filePath).toLowerCase() === ".pdf") {
+    return pdfContextTokens(filePath);
+  }
   const text = readAttachmentTextIfSafe(filePath);
   return text === null ? undefined : estimateAttachmentTextTokens(text);
 }
