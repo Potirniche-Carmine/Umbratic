@@ -16,6 +16,8 @@ files:
 extraResources:
   - from: .package/desktop-core
     to: desktop-core
+  - from: .package/pdf
+    to: pdf
   - from: .package/runner
     to: runner
   - from: .package/veil

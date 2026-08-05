@@ -1,5 +1,7 @@
 import { chatAttachmentRoot, isHiddenChatTask } from "./chatStore";
-import { RunnerPrompt, RunnerPromptPart, pdfImagePageLimit, promptImageCharacterLimit } from "./mainRuntime";
+import { RunnerPrompt, RunnerPromptPart, pdfAttachmentByteLimit, pdfImagePageLimit, promptImageCharacterLimit } from "./mainRuntime";
+import { inspectPdf } from "./pdfInspector";
+import { pdfAttachmentPromptSection } from "./pdfPrompt";
 import { ignoredSnapshotDirectories, imageDataUrlIfSafe, isBinarySnapshotValue, isPdfFile, ocrAttachmentArtifact, ocrInputKindForPath, ocrInputKindsForAttachments, ocrPromptDigest, pdfAttachmentImageParts, readTextFileIfSafe, relativeArtifactPath } from "./workspaceSnapshot";
 import { directoryIsEmpty } from "./worktreeOps";
 import {
@@ -428,19 +430,26 @@ export async function attachmentPromptParts(
       }
     }
     if (isPdfFile(absolute)) {
-      const rendered = await pdfAttachmentImageParts(absolute);
-      if (!rendered) {
-        lines.push("(PDF pages could not be rendered for image input; the file may be encrypted, too large, or unsupported)");
-        continue;
+      const section = await pdfAttachmentPromptSection<RunnerPromptPart>({
+        inspect: () =>
+          inspectPdf(absolute, {
+            full: true,
+            tokenBudget: options.textBudget.remainingTokens,
+            maxBytes: pdfAttachmentByteLimit,
+          }),
+        renderImages: (pageNumbers) => pdfAttachmentImageParts(absolute, pageNumbers),
+        fullAccessHint: isChatAttachment
+          ? `Complete extracted text: use read_attachment with attachmentId ${JSON.stringify(path.basename(absolute))} and the reported byte offsets.`
+          : `Complete extracted text: use read with path ${JSON.stringify(file.path)} and successive line offsets.`,
+        pageLimit: pdfImagePageLimit,
+        textBudget: options.textBudget,
+      });
+      lines.push(...section.lines);
+      if (section.imageParts?.length) {
+        pushPromptText(parts, lines, heading);
+        parts.push(...section.imageParts);
+        lines.push(heading);
       }
-      lines.push(
-        rendered.rendered < rendered.pageCount
-          ? `PDF rendered as images for the vision model: first ${rendered.rendered} of ${rendered.pageCount} pages.`
-          : `PDF rendered as images for the vision model: ${rendered.pageCount} page${rendered.pageCount === 1 ? "" : "s"}.`,
-      );
-      pushPromptText(parts, lines, heading);
-      parts.push(...rendered.parts);
-      lines.push(heading);
       continue;
     }
     const imageDataUrl = imageDataUrlIfSafe(absolute);

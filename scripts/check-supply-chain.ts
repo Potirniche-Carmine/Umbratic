@@ -7,6 +7,7 @@ const root = process.cwd();
 const manifestPaths = [
   "package.json",
   "apps/desktop/package.json",
+  "packages/pdf/package.json",
   "packages/runner/package.json",
 ];
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];

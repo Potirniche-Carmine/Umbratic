@@ -11,12 +11,16 @@ const runnerBinary = path.resolve(desktopRoot, "../../target/release", runnerBin
 const desktopCoreTarget = path.join(desktopRoot, ".package", "desktop-core");
 const desktopCoreBinaryName = process.platform === "win32" ? "umbratic-desktop-core.exe" : "umbratic-desktop-core";
 const desktopCoreBinary = path.resolve(desktopRoot, "../../target/release", desktopCoreBinaryName);
+const pdfTarget = path.join(desktopRoot, ".package", "pdf");
+const pdfBinaryName = process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf";
+const pdfBinary = path.resolve(desktopRoot, "../../target/release", pdfBinaryName);
 const veilRoot = path.resolve(desktopRoot, "../../infrastructure/veil");
 const veilTarget = path.join(desktopRoot, ".package", "veil");
 
 const requiredFiles = [
   runnerBinary,
   desktopCoreBinary,
+  pdfBinary,
 ];
 
 for (const file of requiredFiles) {
@@ -39,6 +43,13 @@ const packagedDesktopCore = path.join(desktopCoreTarget, desktopCoreBinaryName);
 fs.copyFileSync(desktopCoreBinary, packagedDesktopCore);
 if (process.platform !== "win32") fs.chmodSync(packagedDesktopCore, 0o755);
 console.log(`Prepared packaged desktop core at ${path.relative(desktopRoot, packagedDesktopCore)}`);
+
+fs.rmSync(pdfTarget, { recursive: true, force: true });
+fs.mkdirSync(pdfTarget, { recursive: true });
+const packagedPdfBinary = path.join(pdfTarget, pdfBinaryName);
+fs.copyFileSync(pdfBinary, packagedPdfBinary);
+if (process.platform !== "win32") fs.chmodSync(packagedPdfBinary, 0o755);
+console.log(`Prepared packaged PDF inspector at ${path.relative(desktopRoot, packagedPdfBinary)}`);
 
 fs.rmSync(veilTarget, { recursive: true, force: true });
 fs.mkdirSync(veilTarget, { recursive: true });

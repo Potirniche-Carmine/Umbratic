@@ -139,3 +139,16 @@ test("context percentage includes the response reserve shown in preflight", () =
   assert.equal(estimate.percentage, 81.25);
   assert.equal(estimate.level, "warning");
 });
+
+test("PDF attachments without a measured inspection estimate as a page image, not a file stub", () => {
+  assert.equal(contextWindow.isPdfContextAttachment({ name: "brief.pdf" }), true);
+  assert.equal(contextWindow.isPdfContextAttachment({ path: "docs/brief.PDF" }), true);
+  assert.equal(contextWindow.isPdfContextAttachment({ name: "readme.md" }), false);
+
+  const estimate = contextWindow.estimateContextUsage([
+    { text: "review", attachments: [{ name: "scan.pdf" }, { name: "notes.pdf", contextTokens: 9000 }] },
+  ], 64000);
+  // 1600 honest fallback for the uninspected PDF; the measured one uses its
+  // route-aware inspection estimate instead of the 512 file stub.
+  assert.equal(estimate.contentTokens, 2048 + 2 + 10 + 1600 + 9000);
+});

@@ -15,14 +15,15 @@ description: Use for local PDF reading, extraction, generation, rendering, page-
 ## Local Workflow
 
 1. Treat supplied PDFs and source files as the factual source of truth. Separate extracted facts, assumptions, and generated copy.
-2. Use `pdfplumber` or `pypdf` for extraction, metadata checks, page counts, outlines, and quick text verification. Do not rely on extracted text for layout fidelity.
-3. Generate new PDFs with `reportlab` when PDF authoring is requested and the Python artifact runtime is available.
-4. Render final PDFs with Poppler (`pdftoppm` plus `pdfinfo`) before claiming visual QA.
-5. Inspect rendered page PNGs for clipping, overlap, illegible type, bad table geometry, missing images, broken glyphs, page-number issues, and awkward section breaks.
+2. Prefer the native inspector for reading: attached PDFs arrive pre-routed (native text extract for text PDFs, page images for scans), and the `read` / `read_attachment` tools return the same native Markdown extract with page markers, classification, and page counts.
+3. Fall back to `pdfplumber` or `pypdf` only when the native extract reports encoding issues, when table or layout structure must be reconstructed, or for metadata and outline inspection the native extract does not cover.
+4. Generate new PDFs with `reportlab` when PDF authoring is requested and the Python artifact runtime is available.
+5. Render final PDFs with Poppler (`pdftoppm` plus `pdfinfo`) before claiming visual QA.
+6. Inspect rendered page PNGs for clipping, overlap, illegible type, bad table geometry, missing images, broken glyphs, page-number issues, and awkward section breaks.
 
 ## OCR Workflow
 
-1. Prefer clean embedded PDF text when it is available and layout fidelity is not important.
+1. Prefer clean embedded PDF text when it is available and layout fidelity is not important. The native inspector flags pages without a text layer and garbled encodings; reserve OCR and vision for those pages.
 2. For image or scanned-PDF text, use the local OCR artifact digest when one is provided in the prompt.
 3. Treat OCR Markdown as the readable digest and OCR JSON as the auditable source for coordinates, page numbers, confidence, warnings, and timing.
 4. Preserve uncertainty. Mention low-confidence lines when a value matters, and never silently drop uncertain text.
@@ -44,7 +45,8 @@ description: Use for local PDF reading, extraction, generation, rendering, page-
 
 ## Fallbacks
 
-- If extraction packages are missing, use available render/page inspection paths or state the extraction gap.
+- If the native extract reports encoding issues or a page has no text layer, do not trust that text; use vision/OCR paths for those pages.
+- If extraction packages are missing, use the native extract or available render/page inspection paths, or state the extraction gap.
 - If `reportlab` is missing, provide clean structured source content and state the PDF generation gap.
 - If Poppler render tools are missing or rendering fails, do not claim PDF visual QA. State exactly what was checked instead.
 - If the OCR engine is missing or fails on a page, preserve the warning and do not claim that page was read.

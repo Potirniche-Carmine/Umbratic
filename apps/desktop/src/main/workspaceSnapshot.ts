@@ -387,7 +387,7 @@ export function isPdfRenderWorkerResult(value: unknown): value is PdfRenderWorke
   );
 }
 
-export async function renderPdfAttachmentInWorker(filePath: string, outputDir: string): Promise<PdfRenderWorkerResult | null> {
+export async function renderPdfAttachmentInWorker(filePath: string, outputDir: string, pageNumbers?: number[]): Promise<PdfRenderWorkerResult | null> {
   const workerPath = path.resolve(__dirname, "pdfRendererWorker.js");
   if (!fs.existsSync(workerPath)) {
     return null;
@@ -440,6 +440,7 @@ export async function renderPdfAttachmentInWorker(filePath: string, outputDir: s
         pageLimit: pdfImagePageLimit,
         scale: pdfImageScale,
         byteLimit: pdfAttachmentByteLimit,
+        ...(pageNumbers?.length ? { pageNumbers } : {}),
       },
       (error) => {
         if (error) finish(null);
@@ -448,7 +449,7 @@ export async function renderPdfAttachmentInWorker(filePath: string, outputDir: s
   });
 }
 
-export async function pdfAttachmentImageParts(filePath: string): Promise<{ pageCount: number; rendered: number; parts: RunnerPromptPart[] } | null> {
+export async function pdfAttachmentImageParts(filePath: string, pageNumbers?: number[]): Promise<{ pageCount: number; rendered: number; parts: RunnerPromptPart[] } | null> {
   let outputDir: string | null = null;
   try {
     const stat = fs.statSync(filePath);
@@ -456,7 +457,7 @@ export async function pdfAttachmentImageParts(filePath: string): Promise<{ pageC
       return null;
     }
     outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-pdf-"));
-    const result = await renderPdfAttachmentInWorker(filePath, outputDir);
+    const result = await renderPdfAttachmentInWorker(filePath, outputDir, pageNumbers);
     if (!result?.ok) {
       return null;
     }
