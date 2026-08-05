@@ -1,7 +1,6 @@
 package model
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -59,8 +58,10 @@ type Client struct {
 	metricsEndpoint  string
 	generateEndpoint string
 	showEndpoint     string
+	tokenizeEndpoint string
 	contextLength    int
 	client           *http.Client
+	prefixTokens     prefixTokenCache
 }
 
 type ProviderError struct {
@@ -112,6 +113,16 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// vLLM exposes /tokenize at the server root. Ollama has no stable
+	// equivalent, so the local mode never resolves one and falls back to a
+	// flagged byte-length estimate.
+	tokenizeEndpoint := ""
+	if mode == ModeServer {
+		tokenizeEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "tokenize")
+		if err != nil {
+			return nil, err
+		}
+	}
 	generateEndpoint := ""
 	showEndpoint := ""
 	if mode == ModeLocal {
@@ -136,6 +147,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		metricsEndpoint:  metricsEndpoint,
 		generateEndpoint: generateEndpoint,
 		showEndpoint:     showEndpoint,
+		tokenizeEndpoint: tokenizeEndpoint,
 		contextLength:    cfg.ContextLength,
 		client:           hardenedHTTPClient(timeout),
 	}, nil
@@ -278,13 +290,13 @@ func (c *Client) DoChat(ctx context.Context, req ChatRequest) (*http.Response, e
 	}
 }
 
-func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration) error {
+func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration, annotation UsageAnnotation) error {
 	src = withIdleAndCancel(ctx, src, idleTimeout)
 	switch mode {
 	case ModeServer:
-		return writeVLLMAsSafeOpenAIChatSSE(dst, src)
+		return writeVLLMAsSafeOpenAIChatSSE(dst, src, annotation)
 	case ModeLocal:
-		return writeOllamaAsOpenAIChatSSE(dst, src)
+		return writeOllamaAsOpenAIChatSSE(dst, src, annotation)
 	default:
 		return fmt.Errorf("unsupported Veil mode %q", mode)
 	}
@@ -478,122 +490,6 @@ func decodeOllamaChat(r io.Reader) (ChatResponse, error) {
 	return ChatResponse{Message: decoded.Message}, nil
 }
 
-func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
-	scanner := bufio.NewScanner(src)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	sentRole := false
-	sentDone := false
-	var pendingToolCalls any
-
-	for scanner.Scan() {
-		trimmed := strings.TrimSpace(scanner.Text())
-		if trimmed == "" {
-			continue
-		}
-		done, roleSent, toolCalls, lineErr := writeOllamaLineAsOpenAIChatSSE(
-			dst,
-			trimmed,
-			sentRole,
-			pendingToolCalls,
-		)
-		if lineErr != nil {
-			return lineErr
-		}
-		if roleSent {
-			sentRole = true
-		}
-		pendingToolCalls = toolCalls
-		if done {
-			sentDone = true
-		}
-	}
-	if scanner.Err() != nil {
-		return ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-	if !sentDone {
-		return ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-	return nil
-}
-
-func writeOllamaLineAsOpenAIChatSSE(
-	dst io.Writer,
-	line string,
-	roleAlreadySent bool,
-	pendingToolCalls any,
-) (bool, bool, any, error) {
-	var row map[string]any
-	if err := json.Unmarshal([]byte(line), &row); err != nil {
-		return false, roleAlreadySent, pendingToolCalls, ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-
-	message, _ := row["message"].(map[string]any)
-	delta := make(map[string]any)
-	if !roleAlreadySent && message != nil {
-		role, _ := message["role"].(string)
-		if role == "" {
-			role = "assistant"
-		}
-		if role != "assistant" {
-			return false, roleAlreadySent, pendingToolCalls, errors.New("model runtime returned a non-assistant message")
-		}
-		delta["role"] = role
-		roleAlreadySent = true
-	}
-	if content := textFromRuntimeValue(message["content"]); content != "" {
-		delta["content"] = content
-	}
-	if message != nil {
-		if toolCalls, ok := message["tool_calls"]; ok && toolCalls != nil {
-			pendingToolCalls = toolCalls
-		}
-	}
-	if len(delta) > 0 {
-		if err := writeSSEData(dst, map[string]any{
-			"choices": []any{
-				map[string]any{"delta": delta},
-			},
-		}); err != nil {
-			return false, roleAlreadySent, pendingToolCalls, err
-		}
-	}
-
-	done, _ := row["done"].(bool)
-	if !done {
-		return false, roleAlreadySent, pendingToolCalls, nil
-	}
-
-	// Emit the final tool-call snapshot once before usage/DONE so the runner
-	// receives complete parallel calls with stable indexes instead of merging
-	// repeated Ollama stream chunks onto index 0.
-	if toolCalls := openAIToolCallDeltas(pendingToolCalls); len(toolCalls) > 0 {
-		if err := writeSSEData(dst, map[string]any{
-			"choices": []any{
-				map[string]any{"delta": map[string]any{"tool_calls": toolCalls}},
-			},
-		}); err != nil {
-			return false, roleAlreadySent, nil, err
-		}
-	}
-	promptTokens, promptOK := runtimeTokenCount(row["prompt_eval_count"])
-	completionTokens, completionOK := runtimeTokenCount(row["eval_count"])
-	if promptOK || completionOK {
-		if err := writeSSEData(dst, map[string]any{
-			"choices": []any{},
-			"usage": map[string]any{
-				"prompt_tokens":     promptTokens,
-				"completion_tokens": completionTokens,
-				"total_tokens":      promptTokens + completionTokens,
-			},
-		}); err != nil {
-			return false, roleAlreadySent, nil, err
-		}
-	}
-	if err := writeSSEDone(dst); err != nil {
-		return false, roleAlreadySent, nil, err
-	}
-	return true, roleAlreadySent, nil, nil
-}
 
 func runtimeTokenCount(value any) (int, bool) {
 	count, ok := value.(float64)

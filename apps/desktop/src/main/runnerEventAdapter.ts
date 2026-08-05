@@ -443,6 +443,11 @@ export class RunnerEventAdapter {
   private handleContextUsage(
     event: Extract<RunnerEvent, { type: "context.usage" }>,
   ): void {
+    // The contract pins `promptTokens === contentTokens`: they are the same
+    // measurement under two names. A runner that ever diverges has changed the
+    // contract, and the contract test is where that must be caught — dropping
+    // the event here keeps a broken meter from being presented as a working
+    // one in the meantime.
     if (
       event.promptTokens !== undefined
       && event.promptTokens !== event.contentTokens
@@ -461,7 +466,18 @@ export class RunnerEventAdapter {
         ? { completionTokens: event.completionTokens }
         : {}),
       reserveTokens: event.reserveTokens,
+      ...(event.protectedTokens !== undefined
+        ? { protectedTokens: event.protectedTokens }
+        : {}),
       estimatedTokens: event.contentTokens + event.reserveTokens,
+      ...(event.anchored !== undefined ? { anchored: event.anchored } : {}),
+      ...(event.compactionBlocked !== undefined
+        ? { compactionBlocked: event.compactionBlocked }
+        : {}),
+      ...(event.awaitingMeasurement !== undefined
+        ? { awaitingMeasurement: event.awaitingMeasurement }
+        : {}),
+      ...(event.breakdown !== undefined ? { breakdown: event.breakdown } : {}),
       ...(event.phase === "preflight" || event.phase === "observed"
         ? { phase: event.phase }
         : {}),

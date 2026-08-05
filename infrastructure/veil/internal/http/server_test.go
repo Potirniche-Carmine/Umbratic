@@ -65,6 +65,7 @@ type fakeModelClient struct {
 	contextErr        error
 	runtimeMetrics    model.RuntimeMetrics
 	runtimeMetricsErr error
+	prefixTokenCalls  int
 }
 
 func (f *fakeModelClient) RuntimeMetrics(context.Context) (model.RuntimeMetrics, error) {

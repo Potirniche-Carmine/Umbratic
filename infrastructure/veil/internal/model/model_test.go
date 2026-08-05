@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -508,7 +509,7 @@ func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 		"",
 	}, "\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
@@ -546,7 +547,7 @@ func TestWriteOpenAIChatSSEStripsPrivateReasoningFromVLLM(t *testing.T) {
 		"",
 	}, "\n\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, src, time.Second); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, src, time.Second, UsageAnnotation{}); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
@@ -564,7 +565,7 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 		"oversized line":     "data: " + strings.Repeat("x", 4*1024*1024+1) + "\n\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &bytes.Buffer{}, strings.NewReader(stream), time.Second); err == nil {
+			if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &bytes.Buffer{}, strings.NewReader(stream), time.Second, UsageAnnotation{}); err == nil {
 				t.Fatal("expected invalid stream error")
 			}
 		})
@@ -572,21 +573,21 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 }
 
 func TestWriteOpenAIChatSSERejectsTruncatedOllamaStream(t *testing.T) {
-	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"), time.Second)
+	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"), time.Second, UsageAnnotation{})
 	if err == nil {
 		t.Fatal("expected truncated stream error")
 	}
 }
 
 func TestWriteOpenAIChatSSERejectsNonAssistantOllamaMessages(t *testing.T) {
-	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"user","content":"bad"},"done":false}`), time.Second)
+	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"user","content":"bad"},"done":false}`), time.Second, UsageAnnotation{})
 	if err == nil {
 		t.Fatal("expected non-assistant message error")
 	}
 }
 
 func TestWriteOpenAIChatSSERejectsUnsupportedMode(t *testing.T) {
-	err := WriteOpenAIChatSSE(context.Background(), Mode("raw"), &bytes.Buffer{}, strings.NewReader(""), time.Second)
+	err := WriteOpenAIChatSSE(context.Background(), Mode("raw"), &bytes.Buffer{}, strings.NewReader(""), time.Second, UsageAnnotation{})
 	if err == nil {
 		t.Fatal("expected unsupported mode error")
 	}
@@ -679,5 +680,118 @@ func TestVLLMRequestsMarkFunctionsStrict(t *testing.T) {
 	original := tools[0].(map[string]any)["function"].(map[string]any)
 	if _, added := original["strict"]; added {
 		t.Fatal("strictTools mutated the caller's tool contract")
+	}
+}
+
+func TestUsageFramesCarryTheProtectedPrefixSize(t *testing.T) {
+	annotation := UsageAnnotation{SystemPromptTokens: 3187, Exact: true}
+
+	var vllm bytes.Buffer
+	vllmStream := strings.NewReader(strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"answer"}}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":41230,"completion_tokens":512,"total_tokens":41742}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n"))
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &vllm, vllmStream, time.Second, annotation); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(vllm.String(), `"system_prompt_tokens":3187`) {
+		t.Fatalf("vLLM usage frame lost the prefix size: %q", vllm.String())
+	}
+	if !strings.Contains(vllm.String(), `"system_prompt_tokens_exact":true`) {
+		t.Fatalf("vLLM usage frame lost the exactness flag: %q", vllm.String())
+	}
+	if strings.Count(vllm.String(), `"system_prompt_tokens"`) != 1 {
+		t.Fatalf("the prefix size belongs only on the usage frame: %q", vllm.String())
+	}
+
+	// Ollama has no tokenize endpoint, so its size is a flagged estimate.
+	var ollama bytes.Buffer
+	ollamaStream := strings.NewReader(
+		`{"message":{"role":"assistant","content":"answer"},"done":true,"prompt_eval_count":1234,"eval_count":56}` + "\n",
+	)
+	estimated := UsageAnnotation{SystemPromptTokens: 812}
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &ollama, ollamaStream, time.Second, estimated); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ollama.String(), `"system_prompt_tokens":812`) {
+		t.Fatalf("Ollama usage frame lost the prefix size: %q", ollama.String())
+	}
+	if !strings.Contains(ollama.String(), `"system_prompt_tokens_exact":false`) {
+		t.Fatalf("an estimated Ollama size must not claim to be exact: %q", ollama.String())
+	}
+
+	// Without a size, nothing is added and the frame stays exactly as before.
+	var bare bytes.Buffer
+	bareStream := strings.NewReader(
+		`{"message":{"role":"assistant","content":"answer"},"done":true,"prompt_eval_count":10,"eval_count":2}` + "\n",
+	)
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bare, bareStream, time.Second, UsageAnnotation{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(bare.String(), "system_prompt_tokens") {
+		t.Fatalf("an unknown prefix size must not be reported as zero: %q", bare.String())
+	}
+}
+
+func TestPrefixTokensCountsOncePerDistinctPrefix(t *testing.T) {
+	counts := 0
+	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tokenize" {
+			t.Errorf("unexpected tokenize path %q", r.URL.Path)
+		}
+		counts++
+		_, _ = io.WriteString(w, `{"count":3187}`)
+	}))
+	defer runtime.Close()
+
+	client, err := NewClient(ClientConfig{Mode: ModeServer, BaseURL: runtime.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := []Message{{Role: "system", Content: "protected prompt"}}
+	for range 2 {
+		annotation := client.PrefixTokens(context.Background(), "engineering:a", "model", prefix)
+		if annotation.SystemPromptTokens != 3187 || !annotation.Exact {
+			t.Fatalf("unexpected annotation %+v", annotation)
+		}
+	}
+	if counts != 1 {
+		t.Fatalf("a repeated prefix must be counted once, got %d calls", counts)
+	}
+
+	// A different catalog is a different key, so it is recounted.
+	client.PrefixTokens(context.Background(), "engineering:b", "model", prefix)
+	if counts != 2 {
+		t.Fatalf("a changed prefix must be recounted, got %d calls", counts)
+	}
+}
+
+func TestPrefixTokensFallsBackToAFlaggedEstimate(t *testing.T) {
+	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer runtime.Close()
+
+	client, err := NewClient(ClientConfig{Mode: ModeServer, BaseURL: runtime.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := []Message{{Role: "system", Content: strings.Repeat("x", 400)}}
+	annotation := client.PrefixTokens(context.Background(), "engineering:a", "model", prefix)
+	if annotation.Exact {
+		t.Fatal("a runtime that cannot tokenize must not yield an exact count")
+	}
+	if annotation.SystemPromptTokens != 101 {
+		t.Fatalf("unexpected fallback estimate %d", annotation.SystemPromptTokens)
+	}
+
+	local, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: runtime.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local.PrefixTokens(context.Background(), "engineering:a", "model", prefix).Exact {
+		t.Fatal("the local runtime has no tokenize endpoint to be exact with")
 	}
 }

@@ -23,6 +23,26 @@ export type ContextEstimateMessage = {
 
 export type ContextUsageLevel = "normal" | "warning" | "critical";
 
+export type ContextMeterState = "measured" | "estimated" | "recalculating";
+
+/// What the meter may honestly claim about the number it is showing.
+///
+/// An anchored event means the settled context was measured by the provider.
+/// Otherwise the runner reports whether the prefix was just rewritten, in which
+/// case the true size is unknown until the next response and saying so beats a
+/// confident wrong number.
+///
+/// The rewrite has to be reported rather than inferred from the event history:
+/// an unanchored event following an anchored one also describes a conversation
+/// resumed in a fresh runner session, where nothing was compacted at all.
+export function contextMeterState(
+  latest: { anchored?: boolean; awaitingMeasurement?: boolean } | null | undefined,
+): ContextMeterState {
+  if (!latest) return "estimated";
+  if (latest.anchored) return "measured";
+  return latest.awaitingMeasurement ? "recalculating" : "estimated";
+}
+
 export type ContextUsageEstimate = {
   contextLength: number;
   contentTokens: number;

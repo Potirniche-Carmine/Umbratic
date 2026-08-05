@@ -30,6 +30,12 @@ pub struct VeilChatResult {
     pub tool_calls: Vec<ToolCall>,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
+    /// Veil's size for the protected prefix it prepends. The runner strips
+    /// system messages before sending, so this is the only way it can know.
+    pub system_prompt_tokens: Option<u64>,
+    /// False when the runtime has no tokenize endpoint and Veil fell back to a
+    /// byte-length estimate.
+    pub system_prompt_tokens_exact: bool,
     pub truncated_tool_arguments: bool,
 }
 
@@ -497,6 +503,13 @@ fn update_usage(result: &mut VeilChatResult, usage: &Value) {
         });
     result.prompt_tokens = prompt.or(result.prompt_tokens);
     result.completion_tokens = completion.or(result.completion_tokens);
+    if let Some(system_prompt_tokens) = usage.get("system_prompt_tokens").and_then(Value::as_u64) {
+        result.system_prompt_tokens = Some(system_prompt_tokens);
+        result.system_prompt_tokens_exact = usage
+            .get("system_prompt_tokens_exact")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
 }
 
 fn complete_utf8_lines(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<Vec<String>, String> {
@@ -829,6 +842,9 @@ mod tests {
         update_usage(&mut result, &json!({"total_tokens": 1300}));
         assert_eq!(result.prompt_tokens, Some(1200));
         assert_eq!(result.completion_tokens, Some(100));
+        // A runtime that reports no protected-prefix size leaves the runner on
+        // its configured stand-in rather than on a zero.
+        assert_eq!(result.system_prompt_tokens, None);
 
         let mut result = VeilChatResult {
             completion_tokens: Some(100),
@@ -837,6 +853,19 @@ mod tests {
         update_usage(&mut result, &json!({"total_tokens": 1300}));
         assert_eq!(result.prompt_tokens, Some(1200));
         assert_eq!(result.completion_tokens, Some(100));
+
+        update_usage(
+            &mut result,
+            &json!({"prompt_tokens": 1200, "completion_tokens": 100, "system_prompt_tokens": 3187, "system_prompt_tokens_exact": true}),
+        );
+        assert_eq!(result.system_prompt_tokens, Some(3187));
+        assert!(result.system_prompt_tokens_exact);
+
+        // A size without an exactness claim is treated as an estimate.
+        let mut result = VeilChatResult::default();
+        update_usage(&mut result, &json!({"system_prompt_tokens": 800}));
+        assert_eq!(result.system_prompt_tokens, Some(800));
+        assert!(!result.system_prompt_tokens_exact);
     }
 
     #[test]
