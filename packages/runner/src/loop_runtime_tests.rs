@@ -331,3 +331,21 @@ async fn compaction_refuses_while_a_tool_batch_is_unresolved() {
         "compaction must not run inside an active step",
     );
 }
+
+#[test]
+fn a_persisted_tool_step_never_carries_the_preamble_back_into_context() {
+    let calls = vec![ToolCall {
+        id: "call-1".into(),
+        name: "ls".into(),
+        arguments: json!({"path":"."}),
+        index: 0,
+    }];
+    let message = assistant_tool_message(&calls);
+
+    // The preamble streamed to the desktop already. Persisting it would give the
+    // next step of this turn a longer preamble to imitate, which is the whole
+    // mid-turn-recap ratchet.
+    assert_eq!(message["content"], Value::Null);
+    assert_eq!(message["tool_calls"][0]["id"], "call-1");
+    assert_eq!(message["tool_calls"][0]["function"]["name"], "ls");
+}
