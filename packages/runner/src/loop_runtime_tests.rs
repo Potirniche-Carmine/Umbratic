@@ -22,14 +22,17 @@ fn tool_execution_segments_use_path_scoped_conflicts_and_global_barriers() {
         call("write-a", "write", Some("a.txt")),
         call("edit-b", "edit", Some("b.txt")),
     ];
-    assert_eq!(execution_segments(&session, &independent), vec![vec![0, 1]]);
+    assert_eq!(
+        crate::tool_scheduling::execution_segments(&session, &independent),
+        vec![vec![0, 1]]
+    );
 
     let conflict = vec![
         call("write-a", "write", Some("a.txt")),
         call("read-a", "read", Some("a.txt")),
     ];
     assert_eq!(
-        execution_segments(&session, &conflict),
+        crate::tool_scheduling::execution_segments(&session, &conflict),
         vec![vec![0], vec![1]]
     );
 
@@ -39,7 +42,7 @@ fn tool_execution_segments_use_path_scoped_conflicts_and_global_barriers() {
         call("read-b", "read", Some("b.txt")),
     ];
     assert_eq!(
-        execution_segments(&session, &command),
+        crate::tool_scheduling::execution_segments(&session, &command),
         vec![vec![0], vec![1], vec![2]]
     );
 }
@@ -218,6 +221,8 @@ async fn preflight_compacts_complete_tool_lifecycles_until_the_request_fits() {
         workspace_graph: None,
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
+        search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
@@ -263,6 +268,8 @@ async fn preflight_rejects_an_oversized_atomic_user_request() {
         workspace_graph: None,
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
+        search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };

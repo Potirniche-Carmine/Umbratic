@@ -94,7 +94,11 @@ test("desktop packaging runs only for version tags", () => {
   assert.doesNotMatch(packageTriggers, /branches:|pull_request:/);
   assert.match(verifyTriggers, /branches:\r?\n\s+- main/);
   assert.match(verifyTriggers, /pull_request:/);
+  // Solo-developer CI: the audit runs on pull requests only. Merges to main
+  // trigger nothing, and the full verification runs on tagged releases.
+  assert.doesNotMatch(verifyTriggers, /push:/);
   assert.doesNotMatch(verifyWorkflow, /run package|electron-builder/);
+  assert.doesNotMatch(verifyWorkflow, /test:all|release:check/);
 });
 
 test("desktop workflows omit the unused Squirrel peer dependency", () => {
@@ -103,7 +107,10 @@ test("desktop workflows omit the unused Squirrel peer dependency", () => {
 
   assert.doesNotMatch(packageWorkflow, /npm ci --ignore-scripts\s*$/m);
   assert.match(packageWorkflow, /npm ci --ignore-scripts --omit=peer/g);
-  assert.match(verifyWorkflow, /npm ci --ignore-scripts --omit=peer/);
+  // The pull-request audit is lockfile-only: no npm ci at all, and the audit
+  // itself skips peer dependencies the same way installs do.
+  assert.doesNotMatch(verifyWorkflow, /npm ci/);
+  assert.match(verifyWorkflow, /npm audit --package-lock-only --ignore-scripts --omit=peer/);
 });
 
 test("desktop release workflow pins actions and limits write permission to publishing", () => {

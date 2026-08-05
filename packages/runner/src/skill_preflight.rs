@@ -334,6 +334,8 @@ mod tests {
             skill_cache: SharedSkillCache::default(),
             queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
             run: std::sync::Mutex::new(None),
+            search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+            previous_bucket: std::sync::Mutex::new(None),
             tool_surface: std::sync::OnceLock::new(),
         });
         let ids = collect_selected_skill_ids(
@@ -389,6 +391,8 @@ mod tests {
             skill_cache: SharedSkillCache::default(),
             queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
             run: std::sync::Mutex::new(None),
+            search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+            previous_bucket: std::sync::Mutex::new(None),
             tool_surface: std::sync::OnceLock::new(),
         });
         let sink = test_sink(directory.path());

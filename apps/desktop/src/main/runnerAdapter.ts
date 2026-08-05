@@ -85,6 +85,9 @@ export function buildUmbraticRunnerConfig(
       id: selectedModel.providerId,
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
+      // Trusted config, not inferred from the URL: the runner selects its orient
+      // timeout from this, and a wrong guess would silently change degradation.
+      mode: endpointSettings.mode,
       chatEndpointPath: route.chatEndpointPath,
       apiKey: localVeil?.authToken ?? "",
       modelId: selectedModel.modelId,

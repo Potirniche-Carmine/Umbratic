@@ -482,10 +482,6 @@
   margin-bottom: 0;
 }
 
-.streamingTextContent p {
-  white-space: pre-wrap;
-}
-
 .streamingTextCaret {
   display: inline-block;
   width: 0;
@@ -924,8 +920,4 @@
   line-height: 1.35;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.streamingPlainTail {
-  white-space: pre-wrap;
 }

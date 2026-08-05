@@ -29,9 +29,32 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "one short plain sentence", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
+	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "one short plain sentence", "at most three short sentences", "save every finding for the final answer", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
+		}
+	}
+	// search is the warm primary locator; grep stays the exact escape hatch.
+	for _, want := range []string{
+		"use search to locate code or content by name or literal text",
+		"grep only when you need an exact regex or context lines",
+		"never use command to run ripgrep, grep, or find for routine search",
+	} {
+		if !strings.Contains(global, want) {
+			t.Fatalf("global prompt missing search-first guidance %q", want)
+		}
+	}
+	// The promise/tool sentence is deleted in full, including its colon clause.
+	// Its anti-stall behavior lives in the bucket playbooks' stop and anti-loop
+	// rules, so discovery buckets may end a turn on questions alone.
+	for _, gone := range []string{
+		"never end a turn by merely saying you will read",
+		"make the structured tool call in that turn",
+		"provide the complete final answer from results already obtained",
+		"prefer ls, find, and grep to shell listing",
+	} {
+		if strings.Contains(global, gone) {
+			t.Fatalf("global prompt still contains removed guidance %q", gone)
 		}
 	}
 	route, _ := RoutePrompt(EngineeringChat)

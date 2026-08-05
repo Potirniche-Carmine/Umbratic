@@ -15,7 +15,7 @@ test("changing Auto-run does not wait for model status", () => {
   const start = source.indexOf("function setPermissionMode");
   const end = source.indexOf("\n}", start);
   const implementation = source.slice(start, end);
-  assert.match(implementation, /return permissionMode/);
+  assert.match(implementation, /return mode/);
   assert.doesNotMatch(implementation, /getBackendStatus/);
 });
 

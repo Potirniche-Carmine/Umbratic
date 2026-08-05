@@ -68,6 +68,12 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
   { id: "umbratic-presentations" },
   { id: "umbratic-documents" },
   { id: "umbratic-spreadsheets" },
+  { id: "umbratic-cmake" },
+  { id: "umbratic-discovery" },
+  { id: "umbratic-product-spec" },
+  { id: "umbratic-security-review" },
+  { id: "umbratic-marketing-brief" },
+  { id: "umbratic-sales-enablement" },
 ];
 
 const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
@@ -76,6 +82,10 @@ const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
     "umbratic-git-worktree",
     "umbratic-markdown",
     "umbratic-python",
+    "umbratic-cmake",
+    "umbratic-discovery",
+    "umbratic-product-spec",
+    "umbratic-security-review",
   ]),
   marketing: new Set([
     "umbratic-markdown",
@@ -85,6 +95,8 @@ const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
     "umbratic-presentations",
     "umbratic-documents",
     "umbratic-spreadsheets",
+    "umbratic-discovery",
+    "umbratic-marketing-brief",
   ]),
   sales: new Set([
     "umbratic-markdown",
@@ -94,6 +106,8 @@ const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
     "umbratic-presentations",
     "umbratic-documents",
     "umbratic-spreadsheets",
+    "umbratic-discovery",
+    "umbratic-sales-enablement",
   ]),
 };
 

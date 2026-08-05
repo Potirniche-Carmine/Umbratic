@@ -6,141 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
 import { startProvider } from "./native-runner-provider.ts";
+import { config, createSession, eventCollector, prompt, requestBody, sse, startRunner } from "./native-runner-harness.ts";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const binary = path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
-
-function sse(value: unknown) {
-  return `data: ${JSON.stringify(value)}\n\n`;
-}
-
-async function requestBody(request: http.IncomingMessage) {
-  let body = "";
-  for await (const chunk of request) body += chunk.toString("utf8");
-  return body ? JSON.parse(body) : {};
-}
-
-function config(
-  cwd: string,
-  providerUrl: string,
-  diagnosticLogPath: string,
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    taskId: "native-test-task",
-    cwd,
-    workspaceMode: "local",
-    permissionMode: "normal",
-    enabledTools: ["read", "ls", "find", "grep", "write", "edit", "command"],
-    diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
-    provider: {
-      id: "company-endpoint",
-      name: "Test Veil",
-      baseURL: providerUrl,
-      chatEndpointPath: "/api/engineering/chat",
-      apiKey: "local",
-      modelId: "test",
-      capabilities: { parallelToolCalls: true, vision: false, reasoning: false },
-    },
-    ...overrides,
-  };
-}
-
-async function startRunner(
-  cwd: string,
-  providerUrl: string,
-  diagnosticLogPath: string,
-  overrides: Record<string, unknown> = {},
-) {
-  const password = "native-test-secret";
-  const child = spawn(binary, ["serve", "--hostname=127.0.0.1", "--port=0", `--password=${password}`], {
-    cwd,
-    env: { ...process.env },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.stdin.end(JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, overrides)));
-  let output = "";
-  const url = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`runner startup timed out: ${output}`)), 5_000);
-    const inspect = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      const match = output.match(/runner listening on\s+(http:\/\/\S+)/i);
-      if (match?.[1]) { clearTimeout(timer); resolve(match[1]); }
-    };
-    child.stdout.on("data", inspect);
-    child.stderr.on("data", inspect);
-    child.once("error", reject);
-  });
-  const authorization = `Basic ${Buffer.from(`umbratic-runner:${password}`).toString("base64")}`;
-  const request = (route: string, init: RequestInit = {}) => {
-    const headers = new Headers(init.headers);
-    headers.set("Authorization", authorization);
-    return fetch(new URL(route, url), { ...init, headers });
-  };
-  return {
-    child, url, request,
-    async close() {
-      if (child.exitCode !== null) return;
-      child.kill("SIGTERM");
-      await new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    },
-  };
-}
-
-async function eventCollector(run: Awaited<ReturnType<typeof startRunner>>) {
-  const response = await run.request("/event");
-  assert.equal(response.status, 200);
-  assert.ok(response.body);
-  const events: Record<string, unknown>[] = [];
-  const waiters: Array<{ predicate(event: Record<string, unknown>): boolean; resolve(event: Record<string, unknown>): void }> = [];
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const pump = (async () => {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      let boundary = buffer.indexOf("\n\n");
-      while (boundary >= 0) {
-        const block = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        const data = block.split(/\r?\n/).find((line) => line.startsWith("data: "))?.slice(6);
-        if (data) {
-          const event = JSON.parse(data) as Record<string, unknown>;
-          events.push(event);
-          for (const waiter of [...waiters]) if (waiter.predicate(event)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(event); }
-        }
-        boundary = buffer.indexOf("\n\n");
-      }
-    }
-  })();
-  return {
-    events,
-    waitFor(predicate: (event: Record<string, unknown>) => boolean) {
-      const existing = events.find(predicate);
-      if (existing) return Promise.resolve(existing);
-      return new Promise<Record<string, unknown>>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`timed out waiting for runner event; observed ${events.map((event) => `${event.type}:${event.toolCallId ?? event.sessionId ?? ""}:${event.status ?? ""}:${event.errorMessage ?? ""}`).join(", ")}`)), 5_000);
-        waiters.push({ predicate, resolve(event) { clearTimeout(timer); resolve(event); } });
-      });
-    },
-    async close() { await reader.cancel(); await pump.catch(() => undefined); },
-  };
-}
-
-async function createSession(run: Awaited<ReturnType<typeof startRunner>>, conversationState?: unknown) {
-  const response = await run.request("/session", {
-    method: "POST",
-    ...(conversationState === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationState }) }),
-  });
-  if (response.status !== 200) {
-    throw new Error(`session create failed ${response.status}: ${await response.text()}`);
-  }
-  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
-  return response.json() as Promise<{ id: string }>;
-}
 
 test("native runner gates and executes workspace-relative LSP code intelligence", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-lsp-"));
@@ -393,9 +264,6 @@ test("32K and 64K compaction evaluation preserves latest-request recall without 
   }
 });
 
-async function prompt(run: Awaited<ReturnType<typeof startRunner>>, id: string, text: string) {
-  return run.request(`/session/${id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text }) });
-}
 
 test("native runner rejects a second prompt while a turn is active and scopes abort to that turn", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-turn-guard-"));
@@ -517,10 +385,10 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
         ].includes(String(event.type)))
         .map((event) => event.type),
       [
-        "assistant.delta", "assistant.progress.delta", "tool.requested", "tool.policy.stage",
+        "assistant.delta", "tool.requested", "tool.policy.stage",
         "tool.output", "tool.finished", "step.settled", "assistant.delta", "step.settled", "run.settled",
       ],
-      "the read scenario keeps one stable public lifecycle trajectory",
+      "the read scenario keeps one stable public lifecycle trajectory with no pre-tool progress row",
     );
     assert.equal(
       events.events.some((event) => event.type === "assistant.delta" && event.text === "I will read the requested file before I answer."),
@@ -673,7 +541,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       (firstRequest.body.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name).filter(Boolean).sort(),
       // retrieve_context is declared at task start and answers context_not_available
       // when nothing has been compacted, rather than appearing between steps.
-      ["apply_patch", "command", "edit", "find", "grep", "ls", "read", "retrieve_context", "run_program", "write"],
+      ["apply_patch", "command", "edit", "find", "grep", "ls", "read", "retrieve_context", "run_program", "search", "write"],
     );
     assert.ok(
       provider.requests.some(({ body }) => {
@@ -964,8 +832,9 @@ test("native runner accepts an unterminated final SSE line, stops stalled repeat
     const repeatedEvents = events.events.slice(repeatedEventStart);
     assert.equal(JSON.stringify(repeatedEvents).includes("<|toolcall>"), false);
     assert.equal(repeatedEvents.some((event) => event.type === "assistant.delta" && String(event.text).includes("same workspace tool call returned the same result")), true);
-    assert.equal(repeatedEvents.filter((event) => event.type === "assistant.progress.delta").length, 1);
-    assert.deepEqual(repeatedEvents.filter((event) => event.type === "assistant.progress.delta").map((event) => event.text), ["Reading files"], "tool-aware local progress replaces a second model request");
+    // Tool calls speak for themselves in the activity log, so nothing announces
+    // them beforehand. Compaction remains the only progress the runner emits.
+    assert.equal(repeatedEvents.filter((event) => event.type === "assistant.progress.delta").length, 0);
     assert.equal(events.events.filter((event) => event.type === "tool.finished" && event.toolCallId === "repeat").length, 10);
     const repeatedRequests = provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL"));
     assert.equal(repeatedRequests.length, 11, "ten identical tool turns and one final request are required");

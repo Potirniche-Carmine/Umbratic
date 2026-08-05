@@ -233,6 +233,39 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         ],
     },
     ToolDefinition {
+        name: "search",
+        kind: "search",
+        gate: Gate::Capability("search"),
+        description: "Locate workspace paths or content from a warm index. Prefer this over grep for finding where something lives. path mode ranks files and directories by name; content mode returns path:line: text rows for a literal match. Matching is case-insensitive unless query contains an uppercase character. Use grep for regex or context lines. Narrow path, glob, or query when a result is truncated.",
+        fields: &[
+            bounded_text(
+                "query",
+                true,
+                1,
+                MAX_PATTERN_LEN,
+                "Name fragment for path mode, or exact literal text for content mode.",
+            ),
+            choice(
+                "mode",
+                true,
+                &["path", "content"],
+                "path ranks file and directory names; content searches inside files.",
+            ),
+            text(
+                "path",
+                true,
+                "Workspace-relative file or directory scope. Use \".\" for the workspace root.",
+            ),
+            bounded_text("glob", false, 0, MAX_PATTERN_LEN, "Optional include glob."),
+            integer(
+                "limit",
+                1,
+                MAX_LISTING_ITEMS,
+                "Maximum results to return. Defaults to 100 for path and 50 for content.",
+            ),
+        ],
+    },
+    ToolDefinition {
         name: "write",
         kind: "plain_text",
         gate: Gate::Capability("write"),

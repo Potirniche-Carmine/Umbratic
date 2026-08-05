@@ -1,0 +1,150 @@
+//! Shared process/event harness for the native-runner integration tests.
+//! Extracted so each test file stays inside the repository source-size budget.
+
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { startProvider } from "./native-runner-provider.ts";
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const binary = path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
+
+export function sse(value: unknown) {
+  return `data: ${JSON.stringify(value)}\n\n`;
+}
+
+export async function requestBody(request: http.IncomingMessage) {
+  let body = "";
+  for await (const chunk of request) body += chunk.toString("utf8");
+  return body ? JSON.parse(body) : {};
+}
+
+export function config(
+  cwd: string,
+  providerUrl: string,
+  diagnosticLogPath: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    taskId: "native-test-task",
+    cwd,
+    workspaceMode: "local",
+    permissionMode: "normal",
+    enabledTools: ["read", "ls", "find", "grep", "search", "write", "edit", "command"],
+    diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
+    provider: {
+      id: "company-endpoint",
+      name: "Test Veil",
+      baseURL: providerUrl,
+      mode: "local",
+      chatEndpointPath: "/api/engineering/chat",
+      apiKey: "local",
+      modelId: "test",
+      capabilities: { parallelToolCalls: true, vision: false, reasoning: false },
+    },
+    ...overrides,
+  };
+}
+
+export async function startRunner(
+  cwd: string,
+  providerUrl: string,
+  diagnosticLogPath: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const password = "native-test-secret";
+  const child = spawn(binary, ["serve", "--hostname=127.0.0.1", "--port=0", `--password=${password}`], {
+    cwd,
+    env: { ...process.env },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdin.end(JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, overrides)));
+  let output = "";
+  const url = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`runner startup timed out: ${output}`)), 5_000);
+    const inspect = (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      const match = output.match(/runner listening on\s+(http:\/\/\S+)/i);
+      if (match?.[1]) { clearTimeout(timer); resolve(match[1]); }
+    };
+    child.stdout.on("data", inspect);
+    child.stderr.on("data", inspect);
+    child.once("error", reject);
+  });
+  const authorization = `Basic ${Buffer.from(`umbratic-runner:${password}`).toString("base64")}`;
+  const request = (route: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", authorization);
+    return fetch(new URL(route, url), { ...init, headers });
+  };
+  return {
+    child, url, request,
+    async close() {
+      if (child.exitCode !== null) return;
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    },
+  };
+}
+
+export async function eventCollector(run: Awaited<ReturnType<typeof startRunner>>) {
+  const response = await run.request("/event");
+  assert.equal(response.status, 200);
+  assert.ok(response.body);
+  const events: Record<string, unknown>[] = [];
+  const waiters: Array<{ predicate(event: Record<string, unknown>): boolean; resolve(event: Record<string, unknown>): void }> = [];
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const pump = (async () => {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = block.split(/\r?\n/).find((line) => line.startsWith("data: "))?.slice(6);
+        if (data) {
+          const event = JSON.parse(data) as Record<string, unknown>;
+          events.push(event);
+          for (const waiter of [...waiters]) if (waiter.predicate(event)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(event); }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  })();
+  return {
+    events,
+    waitFor(predicate: (event: Record<string, unknown>) => boolean) {
+      const existing = events.find(predicate);
+      if (existing) return Promise.resolve(existing);
+      return new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`timed out waiting for runner event; observed ${events.map((event) => `${event.type}:${event.toolCallId ?? event.sessionId ?? ""}:${event.status ?? ""}:${event.errorMessage ?? ""}`).join(", ")}`)), 5_000);
+        waiters.push({ predicate, resolve(event) { clearTimeout(timer); resolve(event); } });
+      });
+    },
+    async close() { await reader.cancel(); await pump.catch(() => undefined); },
+  };
+}
+
+export async function createSession(run: Awaited<ReturnType<typeof startRunner>>, conversationState?: unknown) {
+  const response = await run.request("/session", {
+    method: "POST",
+    ...(conversationState === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationState }) }),
+  });
+  if (response.status !== 200) {
+    throw new Error(`session create failed ${response.status}: ${await response.text()}`);
+  }
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+  return response.json() as Promise<{ id: string }>;
+}
+
+export async function prompt(run: Awaited<ReturnType<typeof startRunner>>, id: string, text: string) {
+  return run.request(`/session/${id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text }) });
+}

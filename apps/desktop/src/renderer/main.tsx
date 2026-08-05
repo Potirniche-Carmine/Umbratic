@@ -97,6 +97,8 @@ import {
   insertPastedComposerText,
   markdownPreview,
   parseMarkdown,
+  stabilizeStreamingInlineText,
+  type MarkdownBlock,
 } from "./composerText";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
@@ -119,6 +121,7 @@ import {
   type TaskPermissionRequest,
 } from "./taskEventReducer";
 import { activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
   commandDetailLabel,
@@ -134,7 +137,7 @@ export { activityHasTools, activitySummary } from "./activityTiming";
 export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
 type AppearanceTheme = "system" | "light" | "dark";
-type RunnerToolId = "read" | "ls" | "find" | "grep" | "write" | "edit" | "lsp" | "command";
+type RunnerToolId = "read" | "ls" | "find" | "grep" | "search" | "write" | "edit" | "lsp" | "command";
 type RequiredToolContractRequirement = "file_change";
 type RequiredToolContractReason =
   | "file_tools_disabled"
@@ -388,81 +391,6 @@ const previewEnvironment = composerTestMode
   ? window.__UMBRATIC_PREVIEW_ENVIRONMENT__ ?? null
   : null;
 let api: DesktopApi;
-
-function VsCodeLogo(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false" {...props}>
-      <mask id="vscodeMask" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
-        <path
-          fill="#fff"
-          fillRule="evenodd"
-          clipRule="evenodd"
-          d="M70.9 99.3a6.2 6.2 0 0 0 5-.2L96 89.5a6.3 6.3 0 0 0 3.6-5.7V16.2a6.3 6.3 0 0 0-3.6-5.7L75.9 1A6.3 6.3 0 0 0 68.7 2L30.2 37.1 13.4 24.4a4.2 4.2 0 0 0-5.4.2L2.6 29.5a4.2 4.2 0 0 0 0 6.2L17.2 50 2.6 64.3a4.2 4.2 0 0 0 0 6.2L8 75.4a4.2 4.2 0 0 0 5.4.2l16.8-12.7L68.7 98a6.3 6.3 0 0 0 2.2 1.3Zm4.4-72.4L46.1 50l29.2 23.1V26.9Z"
-        />
-      </mask>
-      <g mask="url(#vscodeMask)">
-        <path fill="#0065A9" d="M96.1 10.5 75.9 1A6.3 6.3 0 0 0 68.7 2L2.5 64.3a4.2 4.2 0 0 0 0 6.2L8 75.4a4.2 4.2 0 0 0 5.4.2l79.7-60.4a4.2 4.2 0 0 1 6.7 3.3v-.2a6.3 6.3 0 0 0-3.7-5.8Z" />
-        <path fill="#007ACC" d="m96.1 89.5-20.2 9.6a6.3 6.3 0 0 1-7.2-1L2.5 35.7a4.2 4.2 0 0 1 0-6.2L8 24.6a4.2 4.2 0 0 1 5.4-.2l79.7 60.4a4.2 4.2 0 0 0 6.7-3.3v.2a6.3 6.3 0 0 1-3.7 5.8Z" />
-        <path fill="#1F9CF0" d="M75.9 99.1A6.3 6.3 0 0 1 68.7 98c2.1 2 5.5.6 5.5-2.4V4.4c0-3-3.4-4.4-5.5-2.4A6.3 6.3 0 0 1 75.9 1L96 10.5a6.3 6.3 0 0 1 3.6 5.7v67.6a6.3 6.3 0 0 1-3.6 5.7l-20.2 9.6Z" />
-      </g>
-    </svg>
-  );
-}
-
-function VisualStudioLogo(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...props}>
-      <defs>
-        <linearGradient id="vsGrad" x1="2" y1="12" x2="22" y2="12" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#52218a" />
-          <stop offset=".5" stopColor="#682dac" />
-          <stop offset="1" stopColor="#9b4ddc" />
-        </linearGradient>
-      </defs>
-      <path fill="url(#vsGrad)" d="M16.7 2.5 22 4.6v14.8l-5.3 2.1-7.4-7.1-5.3 4.1L2 17.2V6.8L4 5.5l5.3 4.1 7.4-7.1Z" />
-      <path fill="#fff" d="M16.7 7.4 11.7 12l5 4.6V7.4ZM4 9.5v5l3-2.5L4 9.5Z" />
-    </svg>
-  );
-}
-
-function ExplorerLogo(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...props}>
-      <defs>
-        <linearGradient id="folderTop" x1="12" y1="5" x2="12" y2="9" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#f0a93a" />
-          <stop offset="1" stopColor="#d68a1a" />
-        </linearGradient>
-        <linearGradient id="folderFront" x1="12" y1="9" x2="12" y2="19" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#ffd06b" />
-          <stop offset="1" stopColor="#e8a83a" />
-        </linearGradient>
-      </defs>
-      <path fill="url(#folderTop)" d="M3 7.2A2.2 2.2 0 0 1 5.2 5h3.6a2 2 0 0 1 1.5.7L12 7.5h6.8A2.2 2.2 0 0 1 21 9.7v1.6H3V7.2Z" />
-      <path fill="url(#folderFront)" d="M3 10.4h18v6.4a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 16.8v-6.4Z" />
-      <path fill="#ffffff" opacity=".18" d="M3 10.4h18v1.2H3z" />
-    </svg>
-  );
-}
-
-function FinderLogo(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...props}>
-      <path fill="#38a8ff" d="M4.2 3.2h7.6v17.6H5.8a2.6 2.6 0 0 1-2.6-2.6V4.2a1 1 0 0 1 1-1Z" />
-      <path fill="#d8f0ff" d="M11.8 3.2h8a1 1 0 0 1 1 1v14a2.6 2.6 0 0 1-2.6 2.6h-6.4V3.2Z" />
-      <path fill="#14304a" d="M8 8.4a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6Zm8 0a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6Z" />
-      <path fill="none" stroke="#14304a" strokeLinecap="round" strokeWidth="1.2" d="M9 15.4c1.7 1 4.3 1 6 0M11.8 4.5c-.6 2.8-.6 5.6 0 8.4" />
-    </svg>
-  );
-}
-
-function IdeIcon({ icon }: { icon: IdeChoice["icon"] }) {
-  if (icon === "vscode") return <VsCodeLogo className="ideLogo" />;
-  if (icon === "visualstudio") return <VisualStudioLogo className="ideLogo" />;
-  if (icon === "finder") return <FinderLogo className="ideLogo" />;
-  if (icon === "files") return <FolderOpen className="ideLogo" />;
-  return <ExplorerLogo className="ideLogo" />;
-}
 
 function isReviewReadyText(text: string): boolean {
   return text.trim() === "Ready for review.";
@@ -1192,6 +1120,13 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     items.push({ type: "user", id: "user-prompt", text: visiblePrompt.text, rawText: prompt, reviewFeedback: visiblePrompt.feedback, attachedFiles: [] });
   }
 
+  // Narration demoted into the activity block, and whether this turn ever
+  // produced a real answer. Together they recover the case where the model says
+  // everything it has to say before a tool call and then falls silent: that text
+  // is the answer, so it is promoted back out rather than buried in the log.
+  let lastNarration: { id: string; text: string; container: ComposerActivitySegment[] } | null = null;
+  let producedAnswer = false;
+
   const flushAssistant = (streaming = false) => {
     const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
     if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
@@ -1203,6 +1138,21 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       streaming: streaming || undefined,
     });
     assistantBuffer = ""; assistantNeedsSeparator = false;
+    producedAnswer = true;
+    lastNarration = null;
+  };
+
+  // Ends a turn: if nothing was left to say after the last tool, the most recent
+  // narration was in fact the answer.
+  const promoteTrailingNarration = () => {
+    const narration = lastNarration;
+    lastNarration = null;
+    if (producedAnswer || !narration) return;
+    const index = narration.container.findIndex((segment) => segment.id === narration.id);
+    if (index >= 0) narration.container.splice(index, 1);
+    assistantIndex += 1;
+    items.push({ type: "assistant", id: `assistant-${assistantIndex}`, text: narration.text });
+    producedAnswer = true;
   };
 
   const markActivityTime = (startedAt?: string, endedAt?: string) => {
@@ -1288,11 +1238,27 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     reasoningEndedAt = undefined;
   };
 
-  // Assistant text that precedes workspace activity is ordinary prose, so it
-  // settles into the transcript above the activity block rather than being
-  // demoted into it.
+  // Assistant text that is followed by more workspace activity is narration of
+  // the work — a preamble, or a mid-turn "now I'll look at X". It belongs inside
+  // the activity block. Only the text that ends the turn, with no tool after it,
+  // is the answer the user actually reads, and that stays buffered until the
+  // final flush below.
   const closeAssistantForActivity = () => {
-    flushAssistant();
+    const narration = stripAssistantSpeakerPrefix(assistantBuffer).trim();
+    assistantBuffer = "";
+    assistantNeedsSeparator = false;
+    if (narration) {
+      reasoningIndex += 1;
+      const id = `narration-${reasoningIndex}`;
+      activitySegments.push({
+        type: "reasoning",
+        id,
+        text: narration,
+        durationMs: null,
+        finished: true,
+      });
+      lastNarration = { id, text: narration, container: activitySegments };
+    }
     flushReasoning();
   };
 
@@ -1301,6 +1267,8 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       flushReasoning();
       flushActivity();
       flushAssistant();
+      promoteTrailingNarration();
+      producedAnswer = false;
       const visiblePrompt = visibleReviewPrompt(event.text);
       items.push({
         type: "user",
@@ -1317,8 +1285,15 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
       flushReasoning();
-      markActivityTime(undefined, event.at);
-      flushActivity();
+      // The work is over once the model starts speaking, so the first token of a
+      // burst closes the elapsed window. Later tokens of the same answer must not
+      // keep inflating it.
+      if (!assistantBuffer) markActivityTime(undefined, event.at);
+      // A pending block with no tools is thinking-only and never settles into a
+      // timed Working summary, so flushing lets it drop. A block that already
+      // has tools stays open, so later tools join this same turn instead of
+      // starting a second "Worked for" block separated by narration.
+      if (!activityHasTools(activitySegments)) flushActivity();
       const separator = assistantNeedsSeparator
         && assistantBuffer.trim()
         && !/\s$/.test(assistantBuffer)
@@ -1336,11 +1311,24 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       reasoningBuffer = `${reasoningBuffer}${reasoningBuffer ? "\n\n" : ""}${event.text}`;
       continue;
     }
+    if (event.type === "turn.outcome") {
+      // A stopped turn ends where it was: partial narration stays in the log
+      // and is never promoted into a response the model did not finish. A
+      // partial tool-less answer keeps streaming semantics and flushes below.
+      if (event.outcome === "aborted" && activityHasTools(activitySegments)) {
+        closeAssistantForActivity();
+        flushActivity();
+        lastNarration = null;
+      }
+      continue;
+    }
     if (event.type === "assistant.done") {
       flushReasoning();
-      markActivityTime(undefined, event.at);
+      // Streaming the answer is not work, so completing it does not extend the
+      // elapsed window either.
       flushActivity();
       flushAssistant();
+      promoteTrailingNarration();
       continue;
     }
     if (event.type === "skill.requested") {
@@ -1499,9 +1487,30 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       flushAssistant();
     }
   }
+  // While the run is still active, text that follows tool activity cannot be
+  // classified yet: it is mid-turn narration if another tool call follows, or
+  // the answer if the run settles. Streaming it inside the open Working block
+  // means narration never flashes as a response and then jumps into the log;
+  // the trailing text becomes the answer only once the run settles below.
+  if (taskState === "running" && activityHasTools(activitySegments)) {
+    const trailing = stripAssistantSpeakerPrefix(assistantBuffer).trim();
+    assistantBuffer = "";
+    assistantNeedsSeparator = false;
+    if (trailing) {
+      reasoningIndex += 1;
+      activitySegments.push({
+        type: "reasoning",
+        id: `narration-${reasoningIndex}`,
+        text: trailing,
+        durationMs: null,
+        finished: false,
+      });
+    }
+  }
   flushReasoning(taskState !== "running");
   flushActivity(taskState !== "running");
   flushAssistant(taskState === "running");
+  if (taskState !== "running") promoteTrailingNarration();
   return items;
 }
 
@@ -1616,6 +1625,78 @@ export function renderInlineMarkdown(text: string, options?: ReviewReferenceOpti
   return nodes;
 }
 
+function MarkdownBlockView({
+  block,
+  referenceOptions,
+  trailingInline,
+}: {
+  block: MarkdownBlock;
+  blockKey?: string;
+  referenceOptions?: ReviewReferenceOptions;
+  trailingInline?: React.ReactNode;
+}) {
+  if (block.type === "code") {
+    return <MarkdownCodeBlock content={block.content} language={block.language} />;
+  }
+  if (block.type === "heading") {
+    const headingContent = (
+      <>
+        {renderInlineMarkdown(block.text, referenceOptions)}
+        {trailingInline ?? null}
+      </>
+    );
+    if (block.level === 1) return <h3>{headingContent}</h3>;
+    if (block.level === 2) return <h4>{headingContent}</h4>;
+    return <h5>{headingContent}</h5>;
+  }
+  if (block.type === "list") {
+    const listItems = block.items.map((item, itemIndex) => (
+      <li key={itemIndex}>
+        {renderInlineMarkdown(item, referenceOptions)}
+        {itemIndex === block.items.length - 1 ? trailingInline ?? null : null}
+      </li>
+    ));
+    return block.ordered ? <ol>{listItems}</ol> : <ul>{listItems}</ul>;
+  }
+  if (block.type === "table") {
+    return (
+      <div className="markdownTableWrapper">
+        <table>
+          <thead>
+            <tr>
+              {block.headers.map((header, headerIndex) => (
+                <th key={headerIndex}>{renderInlineMarkdown(header, referenceOptions)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex}>{renderInlineMarkdown(cell, referenceOptions)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  return (
+    <p>
+      {renderInlineMarkdown(block.text, referenceOptions)}
+      {trailingInline ?? null}
+    </p>
+  );
+}
+
+// Settled blocks never change once streamed past, so a stable serialized key
+// lets every block before the live tail skip re-rendering entirely.
+const MemoizedMarkdownBlockView = React.memo(
+  MarkdownBlockView,
+  (previous, next) => previous.blockKey === next.blockKey && previous.referenceOptions === next.referenceOptions,
+);
+
 export function MarkdownContent({
   content,
   onReviewFileClick,
@@ -1626,62 +1707,14 @@ export function MarkdownContent({
   const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
   return (
     <div className="markdownContent">
-      {blocks.map((block, index) => {
-        const isLast = index === blocks.length - 1;
-        if (block.type === "code") {
-          return <MarkdownCodeBlock content={block.content} key={index} language={block.language} />;
-        }
-        if (block.type === "heading") {
-          const headingContent = (
-            <>
-              {renderInlineMarkdown(block.text, referenceOptions)}
-              {isLast ? trailingInline : null}
-            </>
-          );
-          if (block.level === 1) return <h3 key={index}>{headingContent}</h3>;
-          if (block.level === 2) return <h4 key={index}>{headingContent}</h4>;
-          return <h5 key={index}>{headingContent}</h5>;
-        }
-        if (block.type === "list") {
-          const listItems = block.items.map((item, itemIndex) => (
-            <li key={itemIndex}>
-              {renderInlineMarkdown(item, referenceOptions)}
-              {isLast && itemIndex === block.items.length - 1 ? trailingInline : null}
-            </li>
-          ));
-          return block.ordered ? <ol key={index}>{listItems}</ol> : <ul key={index}>{listItems}</ul>;
-        }
-        if (block.type === "table") {
-          return (
-            <div className="markdownTableWrapper" key={index}>
-              <table>
-                <thead>
-                  <tr>
-                    {block.headers.map((header, headerIndex) => (
-                      <th key={headerIndex}>{renderInlineMarkdown(header, referenceOptions)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {block.rows.map((row, rowIndex) => (
-                    <tr key={rowIndex}>
-                      {row.map((cell, cellIndex) => (
-                        <td key={cellIndex}>{renderInlineMarkdown(cell, referenceOptions)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        }
-        return (
-          <p key={index}>
-            {renderInlineMarkdown(block.text, referenceOptions)}
-            {isLast ? trailingInline : null}
-          </p>
-        );
-      })}
+      {blocks.map((block, index) => (
+        <MarkdownBlockView
+          key={index}
+          block={block}
+          referenceOptions={referenceOptions}
+          trailingInline={index === blocks.length - 1 ? trailingInline : undefined}
+        />
+      ))}
     </div>
   );
 }
@@ -1712,33 +1745,61 @@ export function LongMarkdownContent({
   );
 }
 
-function StreamingTextContent({ content }: { content: string }) {
-  const boundary = content.lastIndexOf("\n\n");
-  const completed = boundary >= 0 ? content.slice(0, boundary + 2) : "";
-  const tail = boundary >= 0 ? content.slice(boundary + 2) : content;
+// The live tail block re-renders as markdown with unfinished inline syntax
+// stabilized first, so styling appears progressively instead of popping from
+// plain text to formatted at each paragraph boundary. Everything before the
+// tail is memoized per block and never re-parsed into DOM. parseMarkdown
+// already renders an unterminated ``` fence as a code block, so the split is
+// fence-safe by construction.
+function stabilizedStreamingBlock(block: MarkdownBlock): MarkdownBlock {
+  if (block.type === "paragraph" || block.type === "heading") {
+    return { ...block, text: stabilizeStreamingInlineText(block.text) };
+  }
+  if (block.type === "list" && block.items.length) {
+    const items = [...block.items];
+    items[items.length - 1] = stabilizeStreamingInlineText(items[items.length - 1]);
+    return { ...block, items };
+  }
+  return block;
+}
+
+function StreamingMarkdownContent({ content, caretClassName }: { content: string; caretClassName: string }) {
+  const blocks = useMemo(() => parseMarkdown(content), [content]);
+  const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
+  const caret = <span className={caretClassName} aria-hidden="true" />;
+  const lastBlock = blocks.at(-1);
+  const caretInline =
+    !!lastBlock && (lastBlock.type === "paragraph" || lastBlock.type === "heading" || lastBlock.type === "list");
   return (
-    <div className="streamingTextContent">
-      {completed ? <MemoizedMarkdownContent content={completed} /> : null}
-      <span className="streamingPlainTail">
-        {tail || "\u200b"}
-        <span className="streamingTextCaret" aria-hidden="true" />
-      </span>
+    <div className="markdownContent">
+      {blocks.map((block, index) =>
+        index < blocks.length - 1 ? (
+          <MemoizedMarkdownBlockView key={index} block={block} blockKey={blockKeys[index]} />
+        ) : (
+          <MarkdownBlockView
+            key={index}
+            block={stabilizedStreamingBlock(block)}
+            trailingInline={caretInline ? caret : undefined}
+          />
+        ),
+      )}
+      {caretInline ? null : caret}
     </div>
   );
 }
-const MemoizedMarkdownContent = React.memo(MarkdownContent);
+
+function StreamingTextContent({ content }: { content: string }) {
+  return (
+    <div className="streamingTextContent">
+      <StreamingMarkdownContent content={content} caretClassName="streamingTextCaret" />
+    </div>
+  );
+}
 export function WorkMarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
   if (streaming) {
-    const boundary = content.lastIndexOf("\n\n");
-    const completed = boundary >= 0 ? content.slice(0, boundary + 2) : "";
-    const tail = boundary >= 0 ? content.slice(boundary + 2) : content;
     return (
       <div className="workMarkdownContent isStreaming">
-        {completed ? <MemoizedMarkdownContent content={completed} /> : null}
-        <span className="streamingPlainTail">
-          {tail}
-          <span className="workStreamingCaret" aria-hidden="true" />
-        </span>
+        <StreamingMarkdownContent content={content} caretClassName="workStreamingCaret" />
       </div>
     );
   }
@@ -6453,7 +6514,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
       ) : null}
 
-      {task && task.state !== "running" && latestTurnOutcome && latestTurnOutcome !== "completed" ? (
+      {task && task.state !== "running" && latestTurnOutcome && latestTurnOutcome !== "completed" && latestTurnOutcome !== "aborted" ? (
         <div className="toast turnOutcomeToast" role="status">
           <TriangleAlert size={16} />
           <span>

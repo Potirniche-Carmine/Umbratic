@@ -55,6 +55,7 @@ export type RunnerEventAdapterOptions = {
   onDelegated(): void;
   onStepSettled(conversationState: unknown): void;
   onFinish(): void;
+  onAborted(): void;
   onFailure(message: string, details?: RunnerFailureDetails): void;
   onInvalid(input: { message: string; code: string; type?: string }): void;
   onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
@@ -194,6 +195,13 @@ export class RunnerEventAdapter {
         return;
       case "run.settled":
         this.finishOpenToolRuns();
+        // A run the user stopped is not an error: nothing is announced and the
+        // caller decides whether the task ends (cancel) or continues (steer).
+        if (event.outcome === "aborted") {
+          this.pendingFailure = undefined;
+          this.options.onAborted();
+          return;
+        }
         if (
           event.outcome === "completed"
           || event.outcome === "model_gave_up"
@@ -316,7 +324,7 @@ export class RunnerEventAdapter {
       toolKind === "command" || toolKind === "run_program"
         ? "bash"
         : toolKind === "read"
-            || toolKind === "ls" || toolKind === "find" || toolKind === "grep"
+            || toolKind === "ls" || toolKind === "find" || toolKind === "grep" || toolKind === "search"
             || toolKind === "read_skill"
           ? "read"
           : "edit";

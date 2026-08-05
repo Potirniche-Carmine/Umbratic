@@ -121,13 +121,8 @@ fn only_declared_tool_names_map_to_runner_capabilities() {
     assert_eq!(tool_capability_name("find"), Some("find"));
     assert_eq!(tool_capability_name("apply_patch"), Some("edit"));
     assert_eq!(tool_capability_name("run_program"), Some("command"));
-    for undeclared in [
-        "search",
-        "search_files",
-        "apply-patch",
-        "PowerShell",
-        "bash",
-    ] {
+    assert_eq!(tool_capability_name("search"), Some("search"));
+    for undeclared in ["search_files", "apply-patch", "PowerShell", "bash"] {
         assert_eq!(tool_capability_name(undeclared), None, "{undeclared}");
     }
 }
@@ -181,11 +176,18 @@ async fn tool_specs_offer_clear_replace_patch_and_readonly_shapes() {
         named("grep")["function"]["parameters"]["required"],
         json!(["pattern", "mode", "path"])
     );
+    assert_eq!(
+        named("search")["function"]["parameters"]["required"],
+        json!(["query", "mode", "path"])
+    );
+    assert_eq!(
+        named("search")["function"]["parameters"]["properties"]["mode"]["enum"],
+        json!(["path", "content"])
+    );
+    // `search` is the warm locator, not a replacement for the regex escape hatch.
     assert!(
-        specs
-            .iter()
-            .all(|spec| spec["function"]["name"] != "search"),
-        "workspace search tool must be removed"
+        specs.iter().any(|spec| spec["function"]["name"] == "grep"),
+        "grep stays available for exact regex and context lines"
     );
     assert!(
         specs.iter().all(|spec| spec["function"]["name"] != "lsp"),
@@ -649,6 +651,8 @@ async fn disabled_and_aborted_calls_keep_complete_lifecycles() {
         workspace_graph: None,
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
+        search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     });
@@ -767,6 +771,8 @@ async fn attachment_reader_retrieves_every_utf8_byte_and_rejects_escape_paths() 
         workspace_graph: None,
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
+        search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
@@ -869,6 +875,8 @@ async fn read_skill_is_limited_to_enabled_skill_resources() {
         workspace_graph: None,
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
+        search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     });

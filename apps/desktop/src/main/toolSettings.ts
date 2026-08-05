@@ -1,6 +1,6 @@
 import type { RunnerToolId } from "./types";
 
-export const runnerToolIds = ["read", "ls", "find", "grep", "write", "edit", "lsp", "command"] as const satisfies readonly RunnerToolId[];
+export const runnerToolIds = ["read", "ls", "find", "grep", "search", "write", "edit", "lsp", "command"] as const satisfies readonly RunnerToolId[];
 
 export function defaultToolSettings(): Record<RunnerToolId, boolean> {
   return Object.fromEntries(runnerToolIds.map((id) => [id, true])) as Record<RunnerToolId, boolean>;

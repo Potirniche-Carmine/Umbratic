@@ -309,6 +309,75 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
   return blocks.map(withRenderedMath);
 }
 
+// Streaming text ends mid-construct constantly. Rendering the tail with the
+// normal inline rules would leave "**bol" as literal asterisks and then snap it
+// to bold when the closer arrives; stabilizing first means styling appears
+// progressively instead of popping. Two moves: a bare marker at the very end
+// (an opener the model is still typing) is held back from display, and a
+// marker that already opened styled content is closed at the end of the text.
+export function stabilizeStreamingInlineText(text: string): string {
+  const closers: string[] = [];
+  let openCode: string | null = null;
+  let holdBackFrom: number | null = null;
+  const drop = (marker: string) => {
+    const index = closers.lastIndexOf(marker);
+    if (index >= 0) closers.splice(index, 1);
+  };
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\\" && /[`*_\\]/.test(text[index + 1] ?? "")) {
+      index += 1;
+      continue;
+    }
+    if (char === "`") {
+      let endOfRun = index;
+      while (endOfRun < text.length && text[endOfRun] === "`") endOfRun += 1;
+      const run = text.slice(index, endOfRun);
+      if (openCode === run) {
+        openCode = null;
+        drop(run);
+      } else if (!openCode) {
+        if (endOfRun === text.length) {
+          holdBackFrom = index;
+          break;
+        }
+        openCode = run;
+        closers.push(run);
+      }
+      index = endOfRun - 1;
+      continue;
+    }
+    if (openCode) continue;
+    if (char !== "*" && char !== "_") {
+      // Emphasis never spans a line break, so an open single marker lapses.
+      if (char === "\n") {
+        drop("*");
+        drop("_");
+      }
+      continue;
+    }
+    const marker = text.startsWith("**", index) ? "**" : char;
+    const before = text[index - 1];
+    const after = text[index + marker.length];
+    const open = closers.includes(marker);
+    if (open && before !== undefined && !/\s/.test(before)) {
+      drop(marker);
+    } else if (!open && (before === undefined || /\s/.test(before))) {
+      // Only a word-leading marker counts as an opener: an intra-word "*" or
+      // "_" (snake_case, 5 * 3) may never see a closer, and styling it during
+      // the stream would pop back to literal text on the final render.
+      if (after === undefined) {
+        holdBackFrom = index;
+        break;
+      }
+      if (!/\s/.test(after)) closers.push(marker);
+    }
+    index += marker.length - 1;
+  }
+  const visible = holdBackFrom === null ? text : text.slice(0, holdBackFrom);
+  return `${visible}${closers.reverse().join("")}`;
+}
+
 export function markdownPreview(content: string, limit = 60000): { text: string; truncated: boolean } {
   if (content.length <= limit) return { text: content, truncated: false };
   const paragraphBreak = content.lastIndexOf("\n\n", limit);

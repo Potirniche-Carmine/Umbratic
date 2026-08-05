@@ -15,6 +15,7 @@ function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
   const failures: string[] = [];
   const settledSteps: unknown[] = [];
   let finished = 0;
+  let aborted = 0;
   const adapter = new RunnerEventAdapter({
     task: {
       id: "task-1",
@@ -30,10 +31,13 @@ function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
     onFinish: () => {
       finished += 1;
     },
+    onAborted: () => {
+      aborted += 1;
+    },
     onFailure: (message) => failures.push(message),
     onInvalid: (input) => invalid.push(input),
   });
-  return { adapter, emitted, invalid, failures, settledSteps, finished: () => finished };
+  return { adapter, emitted, invalid, failures, settledSteps, finished: () => finished, aborted: () => aborted };
 }
 
 test("runner event adapter translates one typed tool lifecycle", () => {
@@ -330,6 +334,32 @@ test("runner event adapter keeps runner failures typed and bounded", () => {
   assert.equal(harness.finished(), 0);
 });
 
+test("a run the user stopped settles quietly through onAborted, never as a failure", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "runner.error",
+    taskId: "task-1",
+    message: "Run aborted.",
+    category: "abort",
+    code: "run_aborted",
+    at: "2026-01-01T00:00:00.000Z",
+  });
+  harness.adapter.handle({
+    type: "run.settled",
+    taskId: "task-1",
+    sessionId: "session-1",
+    runId: "run-1",
+    outcome: "aborted",
+    summary: { outcome: "aborted", turns: 1 },
+    errorCode: null,
+    at: "2026-01-01T00:00:01.000Z",
+  });
+  assert.equal(harness.aborted(), 1);
+  assert.deepEqual(plain(harness.failures), []);
+  assert.equal(harness.finished(), 0);
+  assert.ok(!harness.emitted.some((event) => event.type === "task.error" || event.type === "turn.outcome"));
+});
+
 test("runner event adapter forwards run.queue.updated to the queue callback", () => {
   const queueEvents: Array<Record<string, unknown>> = [];
   const adapter = new RunnerEventAdapter({
@@ -343,6 +373,7 @@ test("runner event adapter forwards run.queue.updated to the queue callback", ()
     onDelegated: () => undefined,
     onStepSettled: () => undefined,
     onFinish: () => undefined,
+    onAborted: () => undefined,
     onFailure: () => undefined,
     onInvalid: () => undefined,
     onQueueUpdated: (event) => {
