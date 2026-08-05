@@ -36,12 +36,15 @@ function loadTypeScriptModule(filePath) {
 }
 
 const {
+  attachmentMention,
   composerPromptForSend,
   continueNumberedList,
   insertPastedComposerText,
   markdownPreview,
+  matchHighlightSegments,
   parseMarkdown,
   promptHighlightSegments,
+  rankSkillMatches,
   splitMarkdownTableRow,
 } = loadTypeScriptModule(modulePath);
 
@@ -171,4 +174,45 @@ test("markdown preview truncates on a complete paragraph boundary", () => {
   const preview = markdownPreview(["First sentence.", "Second paragraph with plenty of room.", "Third paragraph."].join("\n\n"), 26);
   assert.equal(preview.truncated, true);
   assert.equal(preview.text, "First sentence.");
+});
+
+test("folder mentions carry a trailing slash so they read as folders", () => {
+  assert.equal(attachmentMention({ path: "src/renderer", name: "renderer", kind: "folder" }), "@renderer/");
+  assert.equal(attachmentMention({ path: "src/main.tsx", name: "main.tsx", kind: "file" }), "@main.tsx");
+  assert.equal(attachmentMention({ path: "src/main.tsx", name: "main.tsx" }), "@main.tsx");
+});
+
+test("match highlighting marks the first case-insensitive occurrence of the query", () => {
+  assert.deepEqual(plain(matchHighlightSegments("main.tsx", "main")), [
+    { text: "main", hit: true },
+    { text: ".tsx", hit: false },
+  ]);
+  assert.deepEqual(plain(matchHighlightSegments("apps/Desktop/main.tsx", "desk")), [
+    { text: "apps/", hit: false },
+    { text: "Desk", hit: true },
+    { text: "top/main.tsx", hit: false },
+  ]);
+  assert.deepEqual(plain(matchHighlightSegments("styles.css", "zap")), [{ text: "styles.css", hit: false }]);
+  assert.deepEqual(plain(matchHighlightSegments("styles.css", "  ")), [{ text: "styles.css", hit: false }]);
+});
+
+test("skill ranking puts prefix matches before substring and description matches", () => {
+  const skills = [
+    { id: "review", name: "Review", description: "Look over pending edits" },
+    { id: "apple-design", name: "Apple Design", description: "Fluid interface guidance" },
+    { id: "deploy", name: "Deploy", description: "Ship the app build" },
+  ];
+  assert.deepEqual(
+    rankSkillMatches(skills, "app").map((skill) => skill.id),
+    ["apple-design", "deploy"],
+  );
+  assert.deepEqual(
+    rankSkillMatches(skills, "edits").map((skill) => skill.id),
+    ["review"],
+  );
+  assert.deepEqual(
+    rankSkillMatches(skills, "").map((skill) => skill.id),
+    ["review", "apple-design", "deploy"],
+  );
+  assert.deepEqual(rankSkillMatches(skills, "zzz"), []);
 });

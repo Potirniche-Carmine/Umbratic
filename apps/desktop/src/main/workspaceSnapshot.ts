@@ -656,12 +656,14 @@ export function sanitizeAttachments(input: unknown, rootPath: string, chatIdValu
     const name =
       typeof item.name === "string" && item.name.trim() ? item.name.trim().slice(0, 120) : path.basename(relative);
     seen.add(relative);
+    const isFolder = fs.statSync(absolute).isDirectory();
     files.push({
       path: relative,
       name,
+      kind: isFolder ? "folder" : "file",
       source: "workspace",
-      previewDataUrl: imagePreviewDataUrl(absolute),
-      contextTokens: attachmentContextTokens(absolute),
+      previewDataUrl: isFolder ? undefined : imagePreviewDataUrl(absolute),
+      contextTokens: isFolder ? undefined : attachmentContextTokens(absolute),
     });
     if (files.length >= 16) break;
   }

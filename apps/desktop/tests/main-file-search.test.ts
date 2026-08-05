@@ -18,10 +18,18 @@ test("native desktop file search falls back from development resources and prese
   try {
     const search = loadTypeScriptModule(new URL("../src/main/fileSearch.ts", import.meta.url).pathname, { cache: new Map() });
     const results = await search.searchRootFiles(root, "runner", 10);
-    assert.deepEqual(JSON.parse(JSON.stringify(results.map((result: { path: string; match: string }) => [result.path, result.match]))), [
-      ["src/runner.ts", "path"],
-      ["src/other.ts", "content"],
-    ]);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(results.map((result: { path: string; kind: string; match: string }) => [result.path, result.kind, result.match]))),
+      [
+        ["src/runner.ts", "file", "path"],
+        ["src/other.ts", "file", "content"],
+      ],
+    );
+    const folders = await search.searchRootFiles(root, "sr", 10, "folder");
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(folders.map((result: { path: string; kind: string }) => [result.path, result.kind]))),
+      [["src", "folder"]],
+    );
   } finally {
     if (originalResourcesPath) {
       Object.defineProperty(process, "resourcesPath", originalResourcesPath);

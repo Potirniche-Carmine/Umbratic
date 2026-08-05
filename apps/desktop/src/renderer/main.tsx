@@ -11,6 +11,7 @@ import type {
   ChatRecord,
   DesktopStartupSettings,
   DesktopApi,
+  FileSearchKind,
   FileSearchResult,
   HarnessProfileId,
   IdeInfo,
@@ -46,6 +47,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CheckCircle2,
   CircleDashed,
@@ -56,6 +58,7 @@ import {
   ExternalLink,
   File,
   FileText,
+  Folder,
   FolderPlus,
   FolderX,
   FolderOpen,
@@ -96,7 +99,9 @@ import {
   continueNumberedList,
   insertPastedComposerText,
   markdownPreview,
+  matchHighlightSegments,
   parseMarkdown,
+  rankSkillMatches,
   stabilizeStreamingInlineText,
   type MarkdownBlock,
 } from "./composerText";
@@ -367,6 +372,7 @@ function localFontAccessAvailable(): boolean {
 
 function normalizeAttachment(file: ChatAttachment): ChatAttachment {
   const normalized: ChatAttachment = { path: file.path, name: file.name || file.path.split(/[\\/]/).pop() || file.path };
+  if (file.kind === "file" || file.kind === "folder") normalized.kind = file.kind;
   if (file.source === "chat" || file.source === "workspace") normalized.source = file.source;
   if (file.storedPath) normalized.storedPath = file.storedPath;
   if (file.originalPath) normalized.originalPath = file.originalPath;
@@ -525,6 +531,7 @@ function chatAttachmentsMatch(left: ChatAttachment[], right: ChatAttachment[]): 
       !!other &&
       file.path === other.path &&
       file.name === other.name &&
+      file.kind === other.kind &&
       file.source === other.source &&
       file.storedPath === other.storedPath &&
       file.originalPath === other.originalPath
@@ -537,6 +544,7 @@ function chatAttachmentsSignature(files: ChatAttachment[]): string {
     files.map((file) => ({
       path: file.path,
       name: file.name,
+      kind: file.kind,
       source: file.source,
       storedPath: file.storedPath,
       originalPath: file.originalPath,
@@ -545,6 +553,7 @@ function chatAttachmentsSignature(files: ChatAttachment[]): string {
 }
 
 function attachmentDetail(file: ChatAttachment): string {
+  if (file.kind === "folder") return "Workspace folder";
   if (file.source === "workspace") return "Workspace file";
   return "Attached file";
 }
@@ -563,6 +572,32 @@ export function mentionAtCursor(value: string, cursor: number): PromptMention | 
 
 export function skillMention(skill: SkillInfo): string {
   return `$${skill.id}`;
+}
+
+type MentionCategoryId = "file" | "folder" | "skill";
+
+type MentionCategory = { id: MentionCategoryId; label: string; hint: string };
+
+const mentionCategories: MentionCategory[] = [
+  { id: "file", label: "Files", hint: "Attach a file from the project" },
+  { id: "folder", label: "Folders", hint: "Reference a folder and everything in it" },
+  { id: "skill", label: "Skills", hint: "Use a skill for this turn" },
+];
+
+function mentionCategoryIcon(id: MentionCategoryId): React.ReactNode {
+  if (id === "folder") return <Folder size={14} />;
+  if (id === "skill") return <Sparkles size={14} />;
+  return <File size={14} />;
+}
+
+function MentionMatchText({ text, query }: { text: string; query: string }) {
+  return (
+    <>
+      {matchHighlightSegments(text, query).map((segment, index) =>
+        segment.hit ? <mark key={index}>{segment.text}</mark> : <React.Fragment key={index}>{segment.text}</React.Fragment>,
+      )}
+    </>
+  );
 }
 
 export function renderPromptHighlights(value: string, files: ChatAttachment[], skills: SkillInfo[]): React.ReactNode[] {
@@ -788,7 +823,7 @@ function AttachmentPreviewList({
         ) : (
           <>
             <span className="attachmentPreviewFileIcon">
-              <File size={14} />
+              {file.kind === "folder" ? <Folder size={14} /> : <File size={14} />}
             </span>
             <span className="attachmentPreviewFileName">{label}</span>
           </>
@@ -1988,6 +2023,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [previewAttachment, setPreviewAttachment] = useState<ChatAttachment | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchResult[]>([]);
   const [mention, setMention] = useState<PromptMention | null>(null);
+  const [mentionScope, setMentionScope] = useState<MentionCategoryId | null>(null);
+  const [selectedCategoryIndex, setSelectedCategoryIndex] = useState(0);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [promptScrollTop, setPromptScrollTop] = useState(0);
@@ -2178,23 +2215,27 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     : task.state === "review_ready"
       ? "No file changes found"
       : stateLabel(task.state);
-  const attachmentMenuOpen = mention?.kind === "file";
-  const skillMenuOpen = mention?.kind === "skill";
-  const promptReferenceMenuOpen = attachmentMenuOpen || skillMenuOpen;
-  const attachmentSearchQuery = attachmentMenuOpen ? mention?.query ?? "" : "";
-  const skillSearchQuery = skillMenuOpen ? mention?.query ?? "" : "";
-  const skillMatches = useMemo(() => {
-    const query = skillSearchQuery.trim().toLowerCase();
-    const candidates = skills.filter((skill) => {
-      if (!query) return true;
-      return (
-        skill.id.toLowerCase().includes(query) ||
-        skill.name.toLowerCase().includes(query) ||
-        skill.description.toLowerCase().includes(query)
-      );
-    });
-    return candidates.slice(0, 10);
-  }, [skillSearchQuery, skills]);
+  const mentionQuery = mention?.query ?? "";
+  // The @ menu walks through modes: "category" (just pressed @ — pick Files,
+  // Folders, or Skills), a scoped search, or "all" (typed straight through the
+  // category list). The $ trigger jumps directly to skills.
+  const mentionMode: "category" | FileSearchKind | "skill" | null = !mention
+    ? null
+    : mention.kind === "skill" || mentionScope === "skill"
+      ? "skill"
+      : mentionScope === "file" || mentionScope === "folder"
+        ? mentionScope
+        : mentionQuery
+          ? "all"
+          : "category";
+  const promptReferenceMenuOpen = mentionMode !== null;
+  const categoryMenuOpen = mentionMode === "category";
+  const fileSearchKind: FileSearchKind | null =
+    mentionMode === "file" || mentionMode === "folder" || mentionMode === "all" ? mentionMode : null;
+  const attachmentSearchQuery = fileSearchKind ? mentionQuery : "";
+  const skillMenuOpen = mentionMode === "skill";
+  const skillSearchQuery = skillMenuOpen ? mentionQuery : "";
+  const skillMatches = useMemo(() => rankSkillMatches(skills, skillSearchQuery, 10), [skillSearchQuery, skills]);
   const selectedSkillPreview = useMemo(
     () => (skillDocument ? skillPreviewMarkdown(skillDocument.content, skillDocument.name) : ""),
     [skillDocument],
@@ -2773,7 +2814,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }, [activeChatId, prompt, attachedFiles]);
 
   useEffect(() => {
-    if (!attachmentMenuOpen || !repository) {
+    if (!fileSearchKind || !repository) {
       setFileMatches([]);
       setSelectedFileIndex(0);
       return undefined;
@@ -2781,7 +2822,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     let canceled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const matches = await api.searchFiles({ repositoryId: repository.id, query: attachmentSearchQuery, limit: 10 });
+        const matches = await api.searchFiles({
+          repositoryId: repository.id,
+          query: attachmentSearchQuery,
+          limit: 10,
+          kind: fileSearchKind,
+        });
         if (!canceled) {
           setFileMatches(matches);
           setSelectedFileIndex(0);
@@ -2798,7 +2844,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [attachmentMenuOpen, attachmentSearchQuery, repository?.id]);
+  }, [fileSearchKind, attachmentSearchQuery, repository?.id]);
+
+  // A different mention (new trigger position or trigger character) starts the
+  // picker over at the category step; refining the query keeps the scope.
+  const mentionIdentityRef = useRef<string | null>(null);
+  useEffect(() => {
+    const identity = mention ? `${mention.kind}:${mention.start}` : null;
+    if (mentionIdentityRef.current === identity) return;
+    mentionIdentityRef.current = identity;
+    setMentionScope(null);
+    setSelectedCategoryIndex(0);
+  }, [mention]);
+
+  useEffect(() => {
+    const menu = attachmentMenuRef.current;
+    if (!menu || !categoryMenuOpen) return;
+    menu.querySelector<HTMLButtonElement>(`[data-category-index="${selectedCategoryIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [categoryMenuOpen, selectedCategoryIndex]);
 
   useEffect(() => {
     const menu = attachmentMenuRef.current;
@@ -4372,9 +4435,25 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     insertAttachmentMentions([normalized]);
   }
 
+  function selectMentionCategory(category: MentionCategoryId) {
+    setMentionScope(category);
+    setSelectedFileIndex(0);
+    setSelectedSkillIndex(0);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }
+
+  function backToMentionCategories() {
+    const index = mentionCategories.findIndex((category) => category.id === mentionScope);
+    setMentionScope(null);
+    setSelectedCategoryIndex(index >= 0 ? index : 0);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }
+
   function insertSkillMention(skill: SkillInfo) {
     const node = textareaRef.current;
-    const activeMention = mention?.kind === "skill" ? mention : null;
+    // Skills commit from the $ trigger and from the @ menu's Skills scope;
+    // either way the typed trigger text is replaced by the skill token.
+    const activeMention = mention;
     const cursor = activeMention?.start ?? node?.selectionStart ?? prompt.length;
     const end = activeMention?.end ?? cursor;
     const before = prompt.slice(0, activeMention ? activeMention.start : cursor);
@@ -4491,12 +4570,34 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (event.key === "Escape") {
         event.preventDefault();
         setMention(null);
+        setMentionScope(null);
         setFileMatches([]);
+        setSelectedCategoryIndex(0);
         setSelectedFileIndex(0);
         setSelectedSkillIndex(0);
         return;
       }
-      if (attachmentMenuOpen && (event.key === "ArrowDown" || event.key === "ArrowUp") && fileMatches.length) {
+      if (categoryMenuOpen) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          setSelectedCategoryIndex((current) => {
+            const direction = event.key === "ArrowDown" ? 1 : -1;
+            return (current + direction + mentionCategories.length) % mentionCategories.length;
+          });
+          return;
+        }
+        if ((!event.shiftKey && event.key === "Enter") || event.key === "Tab") {
+          event.preventDefault();
+          selectMentionCategory(mentionCategories[selectedCategoryIndex].id);
+          return;
+        }
+      }
+      if (mentionScope && mention?.kind === "file" && !mentionQuery && event.key === "Backspace") {
+        event.preventDefault();
+        backToMentionCategories();
+        return;
+      }
+      if (fileSearchKind && (event.key === "ArrowDown" || event.key === "ArrowUp") && fileMatches.length) {
         event.preventDefault();
         setSelectedFileIndex((current) => {
           const direction = event.key === "ArrowDown" ? 1 : -1;
@@ -4512,7 +4613,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         });
         return;
       }
-      if (attachmentMenuOpen && ((!event.shiftKey && event.key === "Enter") || event.key === "Tab") && fileMatches.length) {
+      if (fileSearchKind && ((!event.shiftKey && event.key === "Enter") || event.key === "Tab") && fileMatches.length) {
         event.preventDefault();
         addAttachment(fileMatches[Math.min(selectedFileIndex, fileMatches.length - 1)]);
         return;
@@ -5589,16 +5690,56 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             {promptReferenceMenuOpen && !closedChatNotice ? (
               <div className="attachmentMenu" ref={attachmentMenuRef}>
                 <div className="attachmentMenuHeader">
-                  {skillMenuOpen ? <Sparkles size={14} /> : <AtSign size={14} />}
+                  {mentionScope && mention?.kind === "file" ? (
+                    <button
+                      className="attachmentMenuBack"
+                      type="button"
+                      aria-label="Back to categories"
+                      title="Back (⌫)"
+                      onMouseDown={(pointer) => pointer.preventDefault()}
+                      onClick={backToMentionCategories}
+                    >
+                      <ChevronLeft size={13} />
+                    </button>
+                  ) : skillMenuOpen ? (
+                    <Sparkles size={14} />
+                  ) : (
+                    <AtSign size={14} />
+                  )}
                   <span>
                     {skillMenuOpen
                       ? "Use a skill for this turn"
-                      : repository
-                        ? `Attach from ${repository.name}`
-                        : "Search files after selecting a folder"}
+                      : !repository
+                        ? "Search files after selecting a folder"
+                        : categoryMenuOpen
+                          ? `Add context from ${repository.name}`
+                          : mentionMode === "file"
+                            ? `Files in ${repository.name}`
+                            : mentionMode === "folder"
+                              ? `Folders in ${repository.name}`
+                              : `Files & folders in ${repository.name}`}
                   </span>
                 </div>
-                {skillMenuOpen ? (
+                {categoryMenuOpen ? (
+                  mentionCategories.map((category, index) => (
+                    <button
+                      className={`attachmentMenuCategory${index === selectedCategoryIndex ? " active" : ""}`}
+                      data-category-index={index}
+                      key={category.id}
+                      type="button"
+                      onMouseDown={(pointer) => pointer.preventDefault()}
+                      onClick={() => selectMentionCategory(category.id)}
+                      onMouseEnter={() => setSelectedCategoryIndex(index)}
+                    >
+                      {mentionCategoryIcon(category.id)}
+                      <span>
+                        <strong>{category.label}</strong>
+                        <em>{category.hint}</em>
+                      </span>
+                      <ChevronRight className="attachmentMenuCategoryChevron" size={13} />
+                    </button>
+                  ))
+                ) : skillMenuOpen ? (
                   skillMatches.length ? (
                     skillMatches.map((skill, index) => (
                       <button
@@ -5611,7 +5752,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       >
                         <Sparkles size={14} />
                         <span>
-                          <strong>{skill.name}</strong>
+                          <strong>
+                            <MentionMatchText text={skill.name} query={skillSearchQuery} />
+                          </strong>
                           <em>{skill.description || skill.id}</em>
                         </span>
                         <small>{skillsEnabled[skill.id] === false ? "Off" : skillMention(skill)}</small>
@@ -5631,18 +5774,46 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         onClick={() => addAttachment(file)}
                         onMouseEnter={() => setSelectedFileIndex(index)}
                       >
-                        <File size={14} />
+                        {file.kind === "folder" ? <Folder size={14} /> : <File size={14} />}
                         <span>
-                          <strong>{file.name}</strong>
-                          <em>{file.path}</em>
+                          <strong>
+                            <MentionMatchText text={file.name} query={attachmentSearchQuery} />
+                          </strong>
+                          <em>
+                            <MentionMatchText text={file.path} query={attachmentSearchQuery} />
+                          </em>
                         </span>
-                        <small>{file.match}</small>
+                        {file.match === "content" ? <small>in contents</small> : null}
                       </button>
                     ))
                   ) : (
-                    <div className="attachmentMenuEmpty">No matches yet</div>
+                    <div className="attachmentMenuEmpty">
+                      {mentionMode === "file"
+                        ? "No matching files"
+                        : mentionMode === "folder"
+                          ? "No matching folders"
+                          : "No matching files or folders"}
+                    </div>
                   )
                 ) : null}
+                <div className="attachmentMenuHints">
+                  <span>
+                    <kbd>↑</kbd>
+                    <kbd>↓</kbd> Navigate
+                  </span>
+                  <span>
+                    <kbd>↵</kbd> Select
+                  </span>
+                  {mentionScope && mention?.kind === "file" ? (
+                    <span>
+                      <kbd>⌫</kbd> Back
+                    </span>
+                  ) : null}
+                  <span>
+                    <kbd>esc</kbd> Dismiss
+                  </span>
+                  {categoryMenuOpen ? <span className="attachmentMenuHintNote">or just type to search</span> : null}
+                </div>
               </div>
             ) : null}
             {activeQueuedPrompts.length ? (
