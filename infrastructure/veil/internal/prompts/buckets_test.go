@@ -70,8 +70,10 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Active task playbook (harness-internal).",
+		"defines the plan for this turn",
+		"they do not override this plan",
+		"Begin the plan now",
 		"Do not mention playbooks, buckets, or routing to the user.",
-		PreambleRule,
 		"Preferred skills (optional): umbratic-security-review",
 		"read_skill",
 		"Stop when: ",
@@ -80,6 +82,11 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("deep_review playbook is missing %q:\n%s", want, rendered)
 		}
+	}
+	// Conduct is stated once, in the global prompt. Repeating the preamble rule
+	// per step made formatting the nearest instruction before every tool call.
+	if strings.Contains(rendered, PreambleRule) {
+		t.Fatal("the playbook must not repeat PreambleRule")
 	}
 	// umbratic-git-worktree is preferred but not enabled here, so it must not
 	// be named. Every playbook has to work without its preferred skills.
@@ -141,7 +148,7 @@ func TestOrientPromptListsExactlyTheRouteCatalog(t *testing.T) {
 	}
 }
 
-func TestOrientDecisionValidationAppliesExactlyTwoCoercions(t *testing.T) {
+func TestOrientDecisionValidationSeparatesTheBucketFromTheSentence(t *testing.T) {
 	valid := func(raw string) OrientDecision {
 		decision, err := ParseOrientDecision(EngineeringChat, raw)
 		if err != nil {
@@ -155,13 +162,13 @@ func TestOrientDecisionValidationAppliesExactlyTwoCoercions(t *testing.T) {
 		t.Fatalf("unexpected decision %+v", got)
 	}
 
-	// Coercion 1: parseable but unknown bucket falls back to open_task.
+	// A parseable but unknown bucket falls back to open_task.
 	coerced := valid(`{"bucket":"invent_something","summarySentence":"I'll take the smallest useful step."}`)
 	if coerced.Bucket != OpenTaskBucket {
 		t.Fatalf("unknown bucket must coerce to %s, got %s", OpenTaskBucket, coerced.Bucket)
 	}
 
-	// Coercion 2: direct_answer never carries a sentence.
+	// direct_answer never carries a sentence.
 	forced := valid(`{"bucket":"direct_answer","summarySentence":"I'll answer this now."}`)
 	if forced.Bucket != DirectAnswerBucket || forced.SummarySentence != "" {
 		t.Fatalf("direct_answer must force a null summary, got %+v", forced)
@@ -170,21 +177,34 @@ func TestOrientDecisionValidationAppliesExactlyTwoCoercions(t *testing.T) {
 		t.Fatal("explicit null must decode as no sentence")
 	}
 
+	// The sentence is the optional part of the decision: a bad sentence loses
+	// the sentence only, and the bucket still guides the run.
 	for name, raw := range map[string]string{
-		"not json":            `I think this is a code change.`,
-		"fenced":              "```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}\n```",
-		"unknown field":       `{"bucket":"code_change","summarySentence":"Doing it.","confidence":0.9}`,
-		"missing bucket":      `{"summarySentence":"Doing it."}`,
-		"non-string bucket":   `{"bucket":7,"summarySentence":"Doing it."}`,
 		"non-string sentence": `{"bucket":"code_change","summarySentence":42}`,
 		"null sentence":       `{"bucket":"code_change","summarySentence":null}`,
 		"empty sentence":      `{"bucket":"code_change","summarySentence":"   "}`,
 		"no terminator":       `{"bucket":"code_change","summarySentence":"I will make the change"}`,
 		"multi line":          `{"bucket":"code_change","summarySentence":"First.\nSecond."}`,
-		"names a bucket":      `{"bucket":"deep_review","summarySentence":"Running a deep_review of the auth code."}`,
 		"names bucket cased":  `{"bucket":"code_change","summarySentence":"Starting the Code_Change now."}`,
 		"too long": `{"bucket":"code_change","summarySentence":"` +
 			strings.Repeat("x", MaxSummarySentenceRunes) + `."}`,
+	} {
+		decision := valid(raw)
+		if decision.Bucket != "code_change" || decision.SummarySentence != "" {
+			t.Fatalf("%s must keep the bucket and drop the sentence, got %+v", name, decision)
+		}
+	}
+	if decision := valid(`{"bucket":"deep_review","summarySentence":"Running a deep_review of the auth code."}`); decision.Bucket != "deep_review" || decision.SummarySentence != "" {
+		t.Fatalf("a sentence naming a bucket id must be dropped without losing the bucket, got %+v", decision)
+	}
+
+	// Only a broken envelope invalidates the decision itself.
+	for name, raw := range map[string]string{
+		"not json":          `I think this is a code change.`,
+		"fenced":            "```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"Doing it.\"}\n```",
+		"unknown field":     `{"bucket":"code_change","summarySentence":"Doing it.","confidence":0.9}`,
+		"missing bucket":    `{"summarySentence":"Doing it."}`,
+		"non-string bucket": `{"bucket":7,"summarySentence":"Doing it."}`,
 	} {
 		if _, err := ParseOrientDecision(EngineeringChat, raw); err == nil {
 			t.Fatalf("%s must be rejected: %s", name, raw)

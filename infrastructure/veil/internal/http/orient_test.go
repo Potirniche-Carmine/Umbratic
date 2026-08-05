@@ -60,7 +60,7 @@ func TestOrientRouteReturnsAValidatedDecisionWithADeterministicProfile(t *testin
 	}
 }
 
-func TestOrientRouteNullsTheSummaryForDirectAnswerAndRejectsBadOutput(t *testing.T) {
+func TestOrientRouteNullsTheSummaryForDirectAnswerAndInvalidSentences(t *testing.T) {
 	post := func(content string) *httptest.ResponseRecorder {
 		cfg := testConfig()
 		cfg.ContextLength = 64_000
@@ -78,16 +78,25 @@ func TestOrientRouteNullsTheSummaryForDirectAnswerAndRejectsBadOutput(t *testing
 		t.Fatalf("direct_answer must carry a null summary: %d %s", rr.Code, rr.Body.String())
 	}
 
+	// An invalid sentence costs only the sentence: the bucket still guides the
+	// run, so the decision comes back with a null summary rather than failing.
 	for _, content := range []string{
-		"I think this is a code change.",
 		`{"bucket":"code_change","summarySentence":null}`,
 		`{"bucket":"code_change","summarySentence":"Running deep_review now."}`,
 		`{"bucket":"code_change","summarySentence":"no terminator"}`,
 	} {
-		bad := post(content)
-		if bad.Code != http.StatusBadGateway || !strings.Contains(bad.Body.String(), "invalid_orient_decision") {
-			t.Fatalf("invalid output %q must be rejected: %d %s", content, bad.Code, bad.Body.String())
+		kept := post(content)
+		if kept.Code != http.StatusOK ||
+			!strings.Contains(kept.Body.String(), `"bucket":"code_change"`) ||
+			!strings.Contains(kept.Body.String(), `"summarySentence":null`) {
+			t.Fatalf("output %q must keep the bucket with a null summary: %d %s", content, kept.Code, kept.Body.String())
 		}
+	}
+
+	// A broken envelope still invalidates the whole decision.
+	bad := post("I think this is a code change.")
+	if bad.Code != http.StatusBadGateway || !strings.Contains(bad.Body.String(), "invalid_orient_decision") {
+		t.Fatalf("unparseable output must be rejected: %d %s", bad.Code, bad.Body.String())
 	}
 }
 
