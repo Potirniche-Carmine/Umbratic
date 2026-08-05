@@ -29,6 +29,40 @@ import type {
 } from "../shared/desktopApi";
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
+  attachmentDetail,
+  chatAttachmentsMatch,
+  chatAttachmentsSignature,
+  chatCountLabel,
+  chatDisplayTitle,
+  chatProjectKey,
+  chatSubline,
+  chatWorktreeKey,
+  closedChatMessage,
+  deleteCandidateActionLabel,
+  deleteCandidateDescription,
+  deleteCandidateTitle,
+  draftMatchesTaskPrompt,
+  eventTimelineTime,
+  folderName,
+  isImageAttachment,
+  relativeChatAge,
+  shortHash,
+  stateLabel,
+  titleFromPrompt,
+  worktreeSubline,
+  worktreeTitle,
+  type ChatProjectGroup,
+  type DeleteCandidate,
+  type ProjectDeleteTarget,
+  type WorktreeChatGroup,
+} from "./chatListPresentation";
+import type {
+  AppearanceSettings, AppearanceTheme, ComposerActivitySegment, ComposerSubmission,
+  ComposerTimelineItem, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt,
+  RequiredToolContractReason, RequiredToolContractRequirement, ResponseFeedbackDialogState,
+  ReviewFile, RunnerToolId, SkillSourceFilter, ToolErrorCode, ToolResultStatus,
+} from "./rendererTypes";
+import {
   CONTEXT_LENGTH_OPTIONS,
   DEFAULT_CONTEXT_LENGTH,
   estimateContextUsage,
@@ -140,116 +174,6 @@ import {
 } from "./commandDisplay";
 export { activityHasTools, activitySummary } from "./activityTiming";
 export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
-
-type AppearanceTheme = "system" | "light" | "dark";
-type RunnerToolId = "read" | "ls" | "find" | "grep" | "search" | "write" | "edit" | "lsp" | "command";
-type RequiredToolContractRequirement = "file_change";
-type RequiredToolContractReason =
-  | "file_tools_disabled"
-  | "missing_tool_call"
-  | "agent_reported_blocker"
-  | "attempted_tool_failed"
-  | "no_review_changes";
-type ToolResultStatus = "success" | "permission_denied" | "policy_blocked" | "validation_error" | "runtime_error" | "timeout";
-type ToolErrorCode =
-  | "tool_disabled"
-  | "unknown_tool"
-  | "invalid_arguments"
-  | "permission_denied"
-  | "policy_blocked"
-  | "workspace_boundary"
-  | "blocked_path"
-  | "command_exit_nonzero"
-  | "process_timeout"
-  | "process_error"
-  | "missing_dependency"
-  | "runtime_error";
-type ReviewFile = NormalizedReviewFile;
-
-type IdeChoice = IdeInfo;
-
-type WorktreeChatGroup = {
-  key: string;
-  rootTaskId: string;
-  branch: string;
-  path: string;
-  baseCommit?: string;
-  chats: ChatRecord[];
-};
-
-type ChatProjectGroup = {
-  key: string;
-  name: string;
-  path?: string;
-  chats: ChatRecord[];
-  worktrees: WorktreeChatGroup[];
-};
-type ProjectDeleteTarget = {
-  id: string;
-  key: string;
-  name: string;
-  path: string;
-  chatCount: number;
-};
-type DeleteCandidate =
-  | { kind: "chat"; chat: ChatRecord }
-  | { kind: "projectChats"; project: ProjectDeleteTarget }
-  | { kind: "project"; project: ProjectDeleteTarget };
-type ResponseFeedbackDialogState = {
-  messageId: string;
-  rating: ResponseRating;
-  reason?: ResponseFeedbackReason;
-  comment: string;
-};
-type ComposerSubmission = {
-  prompt: string;
-  attachedFiles: ChatAttachment[];
-  reviewFeedback: ReviewCommentDraft[];
-};
-type QueuedComposerPrompt = ComposerSubmission & {
-  id: string;
-  taskId: string;
-};
-
-type AppearanceSettings = {
-  theme: AppearanceTheme;
-  uiFont: string;
-  monoFont: string;
-};
-
-type PermissionRequest = TaskPermissionRequest;
-
-type ComposerActivitySegment =
-  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
-  | {
-      type: "skill";
-      id: string;
-      skillId: string;
-      source: string;
-      origin: "harness" | "model";
-      status: "requested" | "loaded" | "failed";
-      requestId: string;
-      contentHash?: string;
-      bytes?: number;
-      code?: string;
-      message?: string;
-    }
-  | { type: "command"; id: string; run: CommandRun };
-
-type ComposerTimelineItem =
-  | { type: "user"; id: string; text: string; rawText: string; reviewFeedback: ReviewFeedbackReference[]; attachedFiles: ChatAttachment[] }
-  | {
-      type: "activity";
-      id: string;
-      segments: ComposerActivitySegment[];
-      startedAt?: string;
-      endedAt?: string;
-      finished: boolean;
-    }
-  | { type: "assistant"; id: string; text: string; streaming?: boolean };
-
-type SkillSourceFilter = "local" | "system";
-type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };
 
 const appearanceSettingsKey = "umbratic-ui-appearance";
 const workspaceModeKey = "umbratic-ui-workspace-mode";
@@ -412,154 +336,6 @@ export function compactBackendEvents(events: BackendUiEvent[], limit = 500): Bac
 
 export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): BackendUiEvent[] {
   return pendingEvents.splice(0);
-}
-
-function eventTimelineTime(event: BackendUiEvent): string {
-  return event.endedAt ?? event.at ?? "";
-}
-
-function shortHash(value: string): string {
-  return value ? value.slice(0, 12) : "unknown";
-}
-
-function stateLabel(state?: TaskState): string {
-  if (!state) return "idle";
-  if (state === "awaiting_worktree_approval") return "awaiting worktree";
-  if (state === "completed") return "answered";
-  if (state === "review_ready") return "ready for review";
-  if (state === "rejected") return "undone";
-  return state.replace(/_/g, " ");
-}
-
-function titleFromPrompt(prompt: string): string {
-  return chatTitleFromFirstMessage(prompt);
-}
-
-function chatDisplayTitle(chat: ChatRecord): string {
-  return chat.title === "New chat" ? chat.title : titleFromPrompt(chat.title);
-}
-
-function draftMatchesTaskPrompt(draftPrompt: string, taskPrompt: string): boolean {
-  const draft = draftPrompt.trim();
-  const prompt = taskPrompt.trim();
-  return !!draft && (prompt === draft || prompt.startsWith(`${draft}\n\nAttached files:`));
-}
-
-function relativeChatAge(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "";
-  const elapsedMs = Math.max(0, Date.now() - timestamp);
-  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
-  if (elapsedMinutes < 1) return "<1m";
-  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
-  const elapsedHours = Math.floor(elapsedMs / 3_600_000);
-  if (elapsedHours < 24) return `${elapsedHours}h`;
-  const elapsedDays = Math.floor(elapsedHours / 24);
-  if (elapsedDays < 7) return `${elapsedDays}d`;
-  return `${Math.floor(elapsedDays / 7)}w`;
-}
-
-function chatSubline(chat: ChatRecord): string {
-  return chat.updatedAt ? relativeChatAge(chat.updatedAt) : "";
-}
-
-function closedChatMessage(state?: TaskState): string | undefined {
-  if (state === "merged") {
-    return "This chat was closed after its approved merge. Start a new chat for more changes.";
-  }
-  return undefined;
-}
-
-function folderName(pathValue?: string): string {
-  if (!pathValue) return "No folder";
-  return pathValue.split(/[\\/]/).filter(Boolean).pop() ?? pathValue;
-}
-
-function chatProjectKey(chat: ChatRecord): string {
-  return chat.repositoryPath || "__unassigned__";
-}
-
-function chatWorktreeKey(chat: ChatRecord): string {
-  if (!chat.worktreePath) return "";
-  return `worktree:${chat.worktreeRootTaskId || chat.worktreePath}`;
-}
-
-function worktreeTitle(group: WorktreeChatGroup): string {
-  return group.branch || folderName(group.path);
-}
-
-function worktreeSubline(group: WorktreeChatGroup): string {
-  const count = chatCountLabel(group.chats.length);
-  const base = group.baseCommit ? `base ${group.baseCommit.slice(0, 7)}` : folderName(group.path);
-  return `${count} - ${base}`;
-}
-
-function chatCountLabel(count: number): string {
-  return `${count} chat${count === 1 ? "" : "s"}`;
-}
-
-function deleteCandidateTitle(candidate: DeleteCandidate): string {
-  if (candidate.kind === "chat") return "Delete chat?";
-  if (candidate.kind === "projectChats") return `Delete all chats in ${candidate.project.name}?`;
-  return `Delete project ${candidate.project.name}?`;
-}
-
-function deleteCandidateDescription(candidate: DeleteCandidate): string {
-  if (candidate.kind === "chat") {
-    return `This removes "${chatDisplayTitle(candidate.chat)}" from the chat archive and deletes app-managed chat files. Project folders and task worktrees are left alone.`;
-  }
-  if (candidate.kind === "projectChats") {
-    return `This removes all ${chatCountLabel(candidate.project.chatCount)} in "${candidate.project.name}" from the chat archive and deletes app-managed chat files. The project folder and task worktrees are left alone.`;
-  }
-  if (candidate.project.chatCount === 0) {
-    return `This removes "${candidate.project.name}" from saved projects. The project folder and task worktrees are left alone.`;
-  }
-  return `This removes "${candidate.project.name}" from saved projects and deletes its ${chatCountLabel(candidate.project.chatCount)} from the chat archive. The project folder and task worktrees are left alone.`;
-}
-
-function deleteCandidateActionLabel(candidate: DeleteCandidate): string {
-  if (candidate.kind === "chat") return "Delete chat";
-  if (candidate.kind === "projectChats") return "Delete chats";
-  return "Delete project";
-}
-
-function chatAttachmentsMatch(left: ChatAttachment[], right: ChatAttachment[]): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((file, index) => {
-    const other = right[index];
-    return (
-      !!other &&
-      file.path === other.path &&
-      file.name === other.name &&
-      file.kind === other.kind &&
-      file.source === other.source &&
-      file.storedPath === other.storedPath &&
-      file.originalPath === other.originalPath
-    );
-  });
-}
-
-function chatAttachmentsSignature(files: ChatAttachment[]): string {
-  return JSON.stringify(
-    files.map((file) => ({
-      path: file.path,
-      name: file.name,
-      kind: file.kind,
-      source: file.source,
-      storedPath: file.storedPath,
-      originalPath: file.originalPath,
-    })),
-  );
-}
-
-function attachmentDetail(file: ChatAttachment): string {
-  if (file.kind === "folder") return "Workspace folder";
-  if (file.source === "workspace") return "Workspace file";
-  return "Attached file";
-}
-
-function isImageAttachment(file: ChatAttachment): boolean {
-  return !!file.previewDataUrl || /\.(png|jpe?g|webp|gif)$/i.test(file.name || file.path);
 }
 
 export function mentionAtCursor(value: string, cursor: number): PromptMention | null {
