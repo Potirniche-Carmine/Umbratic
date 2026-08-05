@@ -251,6 +251,14 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 "Network transfer commands and visible network URLs are blocked.",
                 None,
             ),
+            "blocked-path" => (
+                SafetyAction::Deny,
+                SafetySeverity::Critical,
+                SafetyCertainty::Heuristic,
+                "blocked_workspace_path",
+                "The command references a workspace path the file tools refuse, such as a key, an environment file, or a credential.",
+                None,
+            ),
             "external-directory" => (
                 SafetyAction::Deny,
                 SafetySeverity::Critical,
@@ -443,6 +451,40 @@ mod tests {
             evaluate_command("echo $(generated)", cwd).certainty,
             SafetyCertainty::Unknown
         );
+    }
+
+    /// The auto-allow boundary. Anything that reaches an interpreter, mutates
+    /// the workspace, or reads a blocked path must never be `Allow`, because
+    /// Auto-safe runs `Allow` without a prompt.
+    #[test]
+    fn the_auto_allow_boundary_excludes_execution_and_blocked_paths() {
+        let cwd = Path::new("/workspace");
+        for command in [
+            "find . -type f -exec sh -c id ;",
+            r"find . -type f -exec sh -c 'id' \;",
+            "find . -name x -delete",
+            "cat notes.txt > stolen.txt",
+        ] {
+            let decision = evaluate_command(command, cwd);
+            assert_ne!(decision.action, SafetyAction::Allow, "{command}");
+            assert_ne!(decision.rule_id, "audited_read_only", "{command}");
+        }
+        for command in ["cat .env", "cat *.env", "type id_rsa"] {
+            let decision = evaluate_command(command, cwd);
+            assert_eq!(decision.action, SafetyAction::Deny, "{command}");
+            assert_eq!(decision.command_class, "blocked-path", "{command}");
+            assert_eq!(decision.rule_id, "blocked_workspace_path", "{command}");
+        }
+        let decision = evaluate_command(r"cat ..\..\secret.txt", cwd);
+        assert_eq!(decision.action, SafetyAction::Deny);
+        assert_eq!(decision.command_class, "external-directory");
+        assert_eq!(decision.rule_id, "outside_workspace");
+        // Ordinary locator use stays unattended.
+        for command in ["ls -la src", "find . -name '*.rs'"] {
+            let decision = evaluate_command(command, cwd);
+            assert_eq!(decision.action, SafetyAction::Allow, "{command}");
+            assert_eq!(decision.rule_id, "audited_read_only", "{command}");
+        }
     }
 
     #[test]

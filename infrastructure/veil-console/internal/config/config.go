@@ -257,6 +257,10 @@ func formatFloat(value float64) string {
 func (v Veil) CompanyEnvironment(veilAddress, internalToken, controlToken, entitlementPath, identityStorePath string) []string {
 	values := v.Environment(veilAddress, internalToken)
 	values = append(values,
+		// Veil listens on loopback behind Caddy, which overwrites
+		// X-Forwarded-For. Without this, every identity rate limit would key on
+		// the proxy and apply to the whole organization at once.
+		"VEIL_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128",
 		"VEIL_COMPANY_IDENTITY_MODE=true",
 		"VEIL_CONTROL_TOKEN="+controlToken,
 		"VEIL_ENTITLEMENT_PATH="+entitlementPath,

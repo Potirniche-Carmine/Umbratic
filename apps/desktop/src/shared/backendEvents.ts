@@ -30,7 +30,7 @@ export type BackendPermissionRequest = {
 export type BackendCommandClass =
   | "read" | "edit" | "shell" | "python-runtime" | "markdown" | "cmake-build" | "compiler"
   | "package-manager" | "git-read" | "git-write" | "destructive-file" | "network"
-  | "external-directory" | "unknown";
+  | "external-directory" | "blocked-path" | "unknown";
 
 export type BackendTestResult = {
   command: string;

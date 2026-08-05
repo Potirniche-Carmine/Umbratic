@@ -108,6 +108,9 @@ pub struct LspServerConfig {
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
+    /// Credential for the loopback API. Arrives on stdin with the rest of the
+    /// configuration, never on `argv`, which any local process can read.
+    pub password: String,
     pub task_id: Option<String>,
     pub cwd: PathBuf,
     pub context_length: u64,
@@ -554,6 +557,7 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         .map(|value| (*value).to_owned())
         .collect();
     Ok(RunnerConfig {
+        password: string_value(config.get("password"), "password")?,
         task_id: optional_string(config.get("taskId")),
         cwd: PathBuf::from(string_value(config.get("cwd"), "cwd")?),
         context_length: positive_integer(config.get("contextLength"), DEFAULT_CONTEXT_LENGTH),

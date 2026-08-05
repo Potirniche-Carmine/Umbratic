@@ -2,7 +2,11 @@
     @control path /api/control /api/control/*
 	respond @control 404
 
-	reverse_proxy 127.0.0.1:@@VEIL_PORT@@
+	reverse_proxy 127.0.0.1:@@VEIL_PORT@@ {
+		# Overwrite rather than append, so a client cannot prepend a forged hop
+		# and pick its own rate-limit bucket.
+		header_up X-Forwarded-For {remote_host}
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"

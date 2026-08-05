@@ -34,7 +34,7 @@ const lineLimit = 1_000;
 // behavior-preserving — a change that deserves its own review, not a drive-by.
 // The limit is pinned to the file's exact current size, so it can only shrink.
 const grandfatheredLimits = new Map<string, number>([
-  ["apps/desktop/src/renderer/main.tsx", 6_578],
+  ["apps/desktop/src/renderer/main.tsx", 6_526],
 ]);
 
 function sourceFiles(directory: string): string[] {

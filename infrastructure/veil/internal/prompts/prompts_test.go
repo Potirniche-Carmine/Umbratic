@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "one short plain sentence", "at most three short sentences", "save every finding for the final answer", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
+	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "exactly one sentence, never two", "belongs in the final response", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
@@ -147,5 +148,47 @@ func TestRelevantSkillsHidesPathScopedEntriesUntilToolTouch(t *testing.T) {
 	visible = RelevantSkills(skills, []model.Message{{Role: "tool", Content: "edit: apps/desktop/src/main/main.ts (ok)"}})
 	if len(visible) != 2 || visible[1].ID != "typescript" {
 		t.Fatalf("suffix glob skill was not revealed: %#v", visible)
+	}
+}
+
+// The step-level playbook is the nearest instruction the model sees before each
+// tool call, and the global prompt is the farthest. If those two ever describe
+// the preamble differently, the model resolves the conflict on its own and
+// preamble length stops being predictable. They must be the same bytes.
+func TestThePreambleRuleIsStatedIdenticallyEverywhereItAppears(t *testing.T) {
+	if !strings.Contains(GlobalSystemPrompt, PreambleRule) {
+		t.Fatal("the global prompt must embed PreambleRule verbatim, not paraphrase it")
+	}
+	if !strings.Contains(playbookHeader, PreambleRule) {
+		t.Fatal("the playbook header must embed PreambleRule verbatim, not paraphrase it")
+	}
+	// The old header asserted a preamble had already been shown, which
+	// contradicted the global prompt's allowance from the second step onward.
+	for _, gone := range []string{
+		"already been shown to the user",
+		"second status preamble",
+		"at most three short sentences",
+	} {
+		if strings.Contains(GlobalSystemPrompt, gone) || strings.Contains(playbookHeader, gone) {
+			t.Fatalf("contradicting preamble guidance %q is still present", gone)
+		}
+	}
+}
+
+// A playbook step that says to report or return something is a deliverable
+// instruction re-sent on every step of the turn. Unscoped, it invites the model
+// to deliver part of the answer alongside tool calls, which is exactly the
+// mid-turn recap the preamble rule forbids.
+func TestEngineeringPlaybookDeliverablesAreScopedToTheFinalResponse(t *testing.T) {
+	reporting := regexp.MustCompile(`(?mi)^\d+\. .*\b(report|return|explain|summarize|order findings)\b`)
+	for _, bucket := range engineeringBuckets {
+		for _, line := range strings.Split(bucket.Playbook, "\n") {
+			if !reporting.MatchString(line) {
+				continue
+			}
+			if !strings.Contains(strings.ToLower(line), "final response") {
+				t.Errorf("%s has an unscoped deliverable step: %q", bucket.ID, line)
+			}
+		}
 	}
 }

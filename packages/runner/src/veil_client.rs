@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, net::ToSocketAddrs, sync::OnceLock};
+use std::{collections::BTreeMap, fs, sync::OnceLock};
 
 use futures_util::StreamExt;
 use reqwest::{Certificate, Client, Identity, tls::Version};
@@ -10,6 +10,7 @@ use crate::{
     response_output::{SafeAssistantText, looks_like_unstructured_tool_call},
     session::{EventSink, Session},
     tools::ToolCall,
+    veil_tls::{expected_pin, pinned_tls_config, resolve_server_name, verify_certificate_pin},
 };
 
 fn provider_bearer(provider: &ProviderConfig) -> String {
@@ -296,23 +297,21 @@ fn client_for(provider: &ProviderConfig) -> Result<Client, String> {
         .redirect(reqwest::redirect::Policy::none())
         .min_tls_version(Version::TLS_1_2)
         .tls_info(true);
+    if let Some(pin) = provider
+        .mtls
+        .as_ref()
+        .and_then(|mtls| mtls.pinned_server_certificate_sha256.as_deref())
+    {
+        let mtls = provider.mtls.as_ref().expect("pin implies mTLS config");
+        builder = builder.use_preconfigured_tls(pinned_tls_config(mtls, expected_pin(pin)?)?);
+        if let Some(server_name) = &mtls.server_name {
+            builder = resolve_server_name(builder, provider, server_name)?;
+        }
+        return builder.build().map_err(|error| error.to_string());
+    }
     if let Some(mtls) = &provider.mtls {
         if let Some(server_name) = &mtls.server_name {
-            let base = url::Url::parse(&provider.base_url).map_err(|error| error.to_string())?;
-            let host = base
-                .host_str()
-                .ok_or_else(|| "Provider base URL has no host".to_owned())?;
-            let port = base
-                .port_or_known_default()
-                .ok_or_else(|| "Provider base URL has no port".to_owned())?;
-            let addresses = (host, port)
-                .to_socket_addrs()
-                .map_err(|error| format!("Unable to resolve provider host: {error}"))?
-                .collect::<Vec<_>>();
-            if addresses.is_empty() {
-                return Err("Provider host did not resolve to an address.".into());
-            }
-            builder = builder.resolve_to_addrs(server_name, &addresses);
+            builder = resolve_server_name(builder, provider, server_name)?;
         }
         if let Some(path) = &mtls.ca_path {
             let certificate = Certificate::from_pem(
@@ -361,47 +360,6 @@ fn request_endpoint(provider: &ProviderConfig) -> Result<(url::Url, Option<Strin
         .set_host(Some(server_name))
         .map_err(|_| "Invalid mTLS serverName override".to_owned())?;
     Ok((endpoint, Some(host_header)))
-}
-
-fn normalize_sha256_fingerprint(value: &str) -> String {
-    let normalized = value.trim().to_ascii_lowercase();
-    let normalized = normalized
-        .strip_prefix("sha256:")
-        .or_else(|| normalized.strip_prefix("sha256/"))
-        .unwrap_or(&normalized);
-    normalized.chars().filter(char::is_ascii_hexdigit).collect()
-}
-
-fn verify_certificate_pin(
-    provider: &ProviderConfig,
-    response: &reqwest::Response,
-) -> Result<(), String> {
-    let Some(expected) = provider
-        .mtls
-        .as_ref()
-        .and_then(|mtls| mtls.pinned_server_certificate_sha256.as_deref())
-    else {
-        return Ok(());
-    };
-    let expected = normalize_sha256_fingerprint(expected);
-    if expected.len() != 64 {
-        return Err(
-            "Pinned server certificate SHA-256 must contain 64 hexadecimal characters.".into(),
-        );
-    }
-    let certificate = response
-        .extensions()
-        .get::<reqwest::tls::TlsInfo>()
-        .and_then(reqwest::tls::TlsInfo::peer_certificate)
-        .ok_or_else(|| {
-            "Pinned server certificate was unavailable from the TLS connection.".to_owned()
-        })?;
-    use sha2::Digest;
-    let actual = format!("{:x}", sha2::Sha256::digest(certificate));
-    if actual != expected {
-        return Err("Pinned server certificate mismatch.".into());
-    }
-    Ok(())
 }
 
 fn text_content(value: Option<&Value>) -> String {
@@ -815,26 +773,6 @@ mod tests {
             Some("{\"path\":\"README.md\"}")
         );
     }
-    #[test]
-    fn certificate_fingerprints_normalize_common_notation() {
-        let hex = "AB".repeat(32);
-        assert_eq!(
-            normalize_sha256_fingerprint(&format!("sha256/{hex}")),
-            hex.to_lowercase()
-        );
-        assert_eq!(
-            normalize_sha256_fingerprint(&format!(
-                "sha256:{}",
-                hex.as_bytes()
-                    .chunks(2)
-                    .map(|part| std::str::from_utf8(part).unwrap())
-                    .collect::<Vec<_>>()
-                    .join(":")
-            )),
-            hex.to_lowercase()
-        );
-    }
-
     #[test]
     fn split_multibyte_utf8_is_preserved_until_a_complete_line() {
         let source = "data: {\"choices\":[{\"delta\":{\"content\":\"café\"}}]}\n";

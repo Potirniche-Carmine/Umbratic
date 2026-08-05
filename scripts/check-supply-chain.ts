@@ -71,6 +71,8 @@ if (!fs.existsSync(npmrcPath)) {
     ["save-exact", "true"],
     ["ignore-scripts", "true"],
     ["min-release-age", String(supplyChainPolicy.minimumReleaseAgeDays)],
+    // Without this the engines pins are advisory outside CI: npm warns and installs anyway.
+    ["engine-strict", "true"],
   ]);
   for (const [key, expected] of requiredSettings) {
     const pattern = new RegExp(`^${key}\\s*=\\s*${expected}\\s*$`, "m");

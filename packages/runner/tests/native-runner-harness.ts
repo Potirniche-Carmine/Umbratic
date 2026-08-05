@@ -23,6 +23,8 @@ export async function requestBody(request: http.IncomingMessage) {
   return body ? JSON.parse(body) : {};
 }
 
+export const runnerPassword = "native-test-secret";
+
 export function config(
   cwd: string,
   providerUrl: string,
@@ -30,6 +32,7 @@ export function config(
   overrides: Record<string, unknown> = {},
 ) {
   return {
+    password: runnerPassword,
     taskId: "native-test-task",
     cwd,
     workspaceMode: "local",
@@ -56,8 +59,7 @@ export async function startRunner(
   diagnosticLogPath: string,
   overrides: Record<string, unknown> = {},
 ) {
-  const password = "native-test-secret";
-  const child = spawn(binary, ["serve", "--hostname=127.0.0.1", "--port=0", `--password=${password}`], {
+  const child = spawn(binary, ["serve", "--hostname=127.0.0.1", "--port=0"], {
     cwd,
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -75,7 +77,7 @@ export async function startRunner(
     child.stderr.on("data", inspect);
     child.once("error", reject);
   });
-  const authorization = `Basic ${Buffer.from(`umbratic-runner:${password}`).toString("base64")}`;
+  const authorization = `Basic ${Buffer.from(`umbratic-runner:${runnerPassword}`).toString("base64")}`;
   const request = (route: string, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
     headers.set("Authorization", authorization);

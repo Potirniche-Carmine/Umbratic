@@ -790,11 +790,36 @@ test("native runner rejects client system prompts", async () => {
   }
 });
 
+test("native runner keeps its API password out of process arguments", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-argv-"));
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  try {
+    // Any local process can read argv via `ps` on macOS and Linux, and via WMI
+    // on Windows. The credential belongs on the stdin channel instead.
+    const listing = process.platform === "win32"
+      ? spawn("wmic", ["process", "where", `ProcessId=${run.child.pid}`, "get", "CommandLine"])
+      : spawn("ps", ["-o", "args=", "-p", String(run.child.pid)]);
+    let argv = "";
+    listing.stdout.on("data", (chunk) => { argv += chunk.toString("utf8"); });
+    await new Promise((resolve) => listing.once("exit", resolve));
+    assert.match(argv, /umbratic-runner/);
+    assert.doesNotMatch(argv, /password/i);
+    assert.doesNotMatch(argv, /native-test-secret/);
+    // The credential still authenticates, so it did arrive over stdin.
+    assert.ok((await createSession(run)).id);
+  } finally {
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("native runner refuses non-loopback listener addresses", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-listener-"));
   const provider = await startProvider();
   try {
-    const child = spawn(binary, ["serve", "--hostname=0.0.0.0", "--port=0", "--password=secret"], {
+    const child = spawn(binary, ["serve", "--hostname=0.0.0.0", "--port=0"], {
       cwd,
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],

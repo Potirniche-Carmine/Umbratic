@@ -80,7 +80,11 @@ fn allowed_entry(root: &Path, entry: &DirEntry) -> bool {
     !blocked_path(&relative.to_string_lossy().replace('\\', "/"))
 }
 
-fn add_result(results: &mut HashMap<String, FileSearchResult>, relative: String, kind: &'static str) {
+fn add_result(
+    results: &mut HashMap<String, FileSearchResult>,
+    relative: String,
+    kind: &'static str,
+) {
     if relative.is_empty() || blocked_path(&relative) || results.contains_key(&relative) {
         return;
     }

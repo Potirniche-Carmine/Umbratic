@@ -70,10 +70,17 @@ fn message_content(parts: Vec<InputPart>) -> Value {
     )
 }
 
-fn assistant_tool_message(result: &VeilChatResult, calls: &[ToolCall]) -> Value {
+/// A preamble is narration for the user, not conversation state. It already
+/// streamed to the desktop, and the tool calls below it carry every fact the
+/// next step needs. Persisting it would put the model's own prose back in its
+/// context, where each step imitates and extends the longest preamble it can
+/// see; that ratchet is what turns a one-line preamble into a mid-turn recap by
+/// step five. Dropping it here is what makes the one-sentence rule stable
+/// instead of advisory.
+fn assistant_tool_message(calls: &[ToolCall]) -> Value {
     json!({
         "role": "assistant",
-        "content": if result.content.is_empty() { Value::Null } else { Value::String(result.content.clone()) },
+        "content": Value::Null,
         "tool_calls": calls.iter().map(|call| json!({
             "id": call.id,
             "type": "function",
@@ -662,13 +669,8 @@ pub async fn run_turn(
                     index: 0,
                 };
                 let error = "Assistant text contained raw tool syntax. Use one available structured tool with its declared JSON schema.";
-                let result = VeilChatResult {
-                    content: String::new(),
-                    tool_calls: vec![call.clone()],
-                    ..VeilChatResult::default()
-                };
                 let mut messages = session.messages.lock().await;
-                messages.push(assistant_tool_message(&result, std::slice::from_ref(&call)));
+                messages.push(assistant_tool_message(std::slice::from_ref(&call)));
                 messages.push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
                 drop(messages);
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
@@ -704,7 +706,7 @@ pub async fn run_turn(
             let error = violation.message();
             consecutive_invalid += 1;
             let mut messages = session.messages.lock().await;
-            messages.push(assistant_tool_message(&result, &calls));
+            messages.push(assistant_tool_message(&calls));
             for call in &calls {
                 messages.push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
             }
@@ -722,7 +724,7 @@ pub async fn run_turn(
             .messages
             .lock()
             .await
-            .push(assistant_tool_message(&result, &calls));
+            .push(assistant_tool_message(&calls));
         let results = execute_calls(
             session.clone(),
             sink.clone(),

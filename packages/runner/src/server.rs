@@ -688,12 +688,12 @@ async fn not_found() -> Response {
     error_response(StatusCode::NOT_FOUND, "not_found", "Not found")
 }
 
-pub async fn listen(hostname: &str, port: u16, password: String) -> Result<RunnerServer, String> {
+pub async fn listen(hostname: &str, port: u16) -> Result<RunnerServer, String> {
     require_loopback(hostname)?;
     let store = SessionStore::new()?;
     let state = AppState {
+        password: Arc::from(store.config.password.as_str()),
         store: store.clone(),
-        password: Arc::from(password),
     };
     let app = Router::new()
         .route("/event", get(events))

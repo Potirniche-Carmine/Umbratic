@@ -216,16 +216,92 @@ pub fn resolve_workspace_path(cwd: &Path, file_path: &str) -> Result<(PathBuf, S
     Ok((normalized, relative))
 }
 
-fn regex(pattern: &'static str, value: &str) -> bool {
-    static REGEXES: OnceLock<Mutex<HashMap<&'static str, Regex>>> = OnceLock::new();
-    let mut regexes = REGEXES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    let regex = regexes
-        .entry(pattern)
-        .or_insert_with(|| Regex::new(pattern).expect("static policy regex must compile"));
-    regex.is_match(value)
+/// Split a command segment into shell-ish tokens, dropping the quotes that
+/// group them. Good enough to inspect arguments; the safety evaluator has
+/// already refused unbalanced quotes and dynamic syntax by this point.
+fn command_tokens(segment: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    for character in segment.chars() {
+        match character {
+            '\'' | '"' if quote == Some(character) => quote = None,
+            '\'' | '"' if quote.is_none() => {
+                quote = Some(character);
+                started = true;
+            }
+            character if character.is_whitespace() && quote.is_none() => {
+                if started {
+                    tokens.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            character => {
+                current.push(character);
+                started = true;
+            }
+        }
+    }
+    if started {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// `find` predicates that run a program or mutate the filesystem. Their
+/// presence disqualifies a segment from the audited read-only class.
+const FIND_ACTION_PREDICATES: [&str; 9] = [
+    "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf",
+];
+
+/// Whether an argument is worth resolving as a path. Bare words that name no
+/// existing file are ignored so `grep -n secret src` is not mistaken for a
+/// read of a secret.
+fn looks_like_path(token: &str, cwd: Option<&Path>) -> bool {
+    if token.is_empty() || token.starts_with('-') {
+        return false;
+    }
+    let normalized = token.replace('\\', "/");
+    let basename = normalized.rsplit('/').next().unwrap_or("");
+    normalized.contains('/')
+        || normalized.contains('.')
+        || matches!(
+            basename.to_ascii_lowercase().as_str(),
+            "id_rsa" | "id_ed25519"
+        )
+        || cwd.is_some_and(|root| root.join(&normalized).exists())
+}
+
+/// Lexically decide whether a relative path climbs above the workspace root.
+/// Catches the Windows separator style the absolute-path regexes never see.
+fn escapes_workspace(token: &str) -> bool {
+    let normalized = token.replace('\\', "/");
+    let mut depth = 0i32;
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
+/// Apply the file-tool blocklist to a command argument. Wildcards are stripped
+/// as well as kept, so `cat *.env` is refused alongside `cat .env`.
+fn token_is_blocked_path(token: &str) -> bool {
+    let normalized = token.replace('\\', "/");
+    let expanded: String = normalized
+        .chars()
+        .filter(|character| !matches!(character, '*' | '?'))
+        .collect();
+    is_blocked_path(&normalized) || is_blocked_path(&expanded)
 }
 
 pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassification {
@@ -246,6 +322,28 @@ pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassi
             risky: true,
             reason: Some("network command"),
         };
+    }
+    // The blocklist that guards the file tools, applied to command arguments so
+    // the shell cannot read what `read` refuses.
+    let tokens = command_tokens(trimmed);
+    for token in tokens.iter().skip(1) {
+        if !looks_like_path(token, cwd) {
+            continue;
+        }
+        if escapes_workspace(token) {
+            return CommandClassification {
+                command_class: "external-directory",
+                risky: true,
+                reason: Some("external path"),
+            };
+        }
+        if token_is_blocked_path(token) {
+            return CommandClassification {
+                command_class: "blocked-path",
+                risky: true,
+                reason: Some("blocked workspace path"),
+            };
+        }
     }
     if let Some(root) = cwd {
         static ABSOLUTE_PATH: OnceLock<Regex> = OnceLock::new();
@@ -268,6 +366,55 @@ pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassi
             };
         }
     }
+    classify_command_body(trimmed, &tokens)
+}
+
+fn regex(pattern: &'static str, value: &str) -> bool {
+    static REGEXES: OnceLock<Mutex<HashMap<&'static str, Regex>>> = OnceLock::new();
+    let mut regexes = REGEXES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let regex = regexes
+        .entry(pattern)
+        .or_insert_with(|| Regex::new(pattern).expect("static policy regex must compile"));
+    regex.is_match(value)
+}
+
+/// The audited read-only class, which Auto-safe runs without a prompt. The
+/// whole segment has to prove itself: a locator name is not enough, because
+/// `find` reaches an arbitrary interpreter through `-exec` and deletes through
+/// `-delete`, and any of these can redirect their output into a file.
+fn is_audited_read_only(trimmed: &str, tokens: &[String]) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    let first = first.to_ascii_lowercase();
+    if !matches!(
+        first.as_str(),
+        "cat" | "type" | "dir" | "ls" | "find" | "where"
+    ) {
+        return false;
+    }
+    if trimmed.contains('>') || trimmed.contains('<') {
+        return false;
+    }
+    if first == "find" {
+        let predicates: Vec<String> = tokens
+            .iter()
+            .map(|token| token.to_ascii_lowercase())
+            .collect();
+        if predicates
+            .iter()
+            .any(|token| FIND_ACTION_PREDICATES.contains(&token.as_str()))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn classify_command_body(trimmed: &str, tokens: &[String]) -> CommandClassification {
     if regex(
         r"(?i)\brm\s+(-\S*r\S*f|-\S*f\S*r)\b|\bRemove-Item\b|\b(del|erase|rmdir)\b|\bgit(?:\.exe)?\b.*\b(reset\s+--hard|clean\s+-\S*f|branch\s+(?:-D|--delete\s+--force)|worktree\s+(?:remove|prune)|push\s+.*(?:--force|-f|--force-with-lease))\b",
         trimmed,
@@ -331,16 +478,7 @@ pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassi
             reason: None,
         };
     }
-    let first = trimmed
-        .trim_start_matches(|c: char| c.is_whitespace() || c == '\'' || c == '"')
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if matches!(
-        first.as_str(),
-        "cat" | "type" | "dir" | "ls" | "find" | "where"
-    ) {
+    if is_audited_read_only(trimmed, tokens) {
         return CommandClassification {
             command_class: "read",
             risky: false,
@@ -432,6 +570,64 @@ mod tests {
         assert_eq!(
             classify_command_text("curl https://example.com", None).command_class,
             "network"
+        );
+    }
+
+    #[test]
+    fn locator_commands_prove_themselves_before_the_read_class() {
+        let workspace = std::env::temp_dir().join("umbratic-policy-workspace");
+        let root = Some(workspace.as_path());
+        assert_eq!(
+            classify_command_text("ls -la src", root).command_class,
+            "read"
+        );
+        assert_eq!(
+            classify_command_text("find . -name '*.rs'", root).command_class,
+            "read"
+        );
+        for command in [
+            "find . -type f -exec sh -c id ;",
+            r"find . -type f -exec sh -c 'id' \;",
+            "find . -name x -delete",
+            "find . -okdir rm {} ;",
+            "cat notes.txt > stolen.txt",
+        ] {
+            assert_ne!(
+                classify_command_text(command, root).command_class,
+                "read",
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_arguments_honor_the_file_tool_blocklist() {
+        let workspace = std::env::temp_dir().join("umbratic-policy-workspace");
+        let root = Some(workspace.as_path());
+        for command in [
+            "cat .env",
+            "cat *.env",
+            "ls certs/client.key",
+            "type id_rsa",
+        ] {
+            assert_eq!(
+                classify_command_text(command, root).command_class,
+                "blocked-path",
+                "{command}"
+            );
+        }
+        assert_eq!(
+            classify_command_text(r"cat ..\..\secret.txt", root).command_class,
+            "external-directory"
+        );
+        assert_eq!(
+            classify_command_text("cat ../../secret.txt", root).command_class,
+            "external-directory"
+        );
+        // A bare word that names no file is an argument, not a path.
+        assert_eq!(
+            classify_command_text(r#"grep -n "secret" src"#, root).command_class,
+            "shell"
         );
     }
 

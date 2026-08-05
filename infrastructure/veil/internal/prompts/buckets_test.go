@@ -71,7 +71,7 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	for _, want := range []string{
 		"Active task playbook (harness-internal).",
 		"Do not mention playbooks, buckets, or routing to the user.",
-		"A one-sentence preamble has already been shown to the user",
+		PreambleRule,
 		"Preferred skills (optional): umbratic-security-review",
 		"read_skill",
 		"Stop when: ",

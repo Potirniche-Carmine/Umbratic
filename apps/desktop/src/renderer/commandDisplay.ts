@@ -14,6 +14,7 @@ export type CommandClass =
   | "destructive-file"
   | "network"
   | "external-directory"
+  | "blocked-path"
   | "unknown";
 
 export type CommandRun = {

@@ -45,6 +45,7 @@ const descriptiveVersionFiles = new Set([
   "apps/desktop/tests/fixtures/telemetry-bundle.golden.json",
   "apps/desktop/src/main/telemetry.ts",
   "apps/desktop/src/renderer/previewEnvironment.ts",
+  "apps/desktop/src/renderer/previewCapabilities.ts",
   "apps/desktop/tests/main-capabilities.test.ts",
   "apps/desktop/tests/main-ocr-runtime.test.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
