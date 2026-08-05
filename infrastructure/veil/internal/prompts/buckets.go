@@ -52,7 +52,7 @@ var engineeringBuckets = []Bucket{
 		Playbook: `1. Run ls on "." and continue with nextOffset if the listing is partial.
 2. Use search to locate manifests, READMEs, and main entrypoints. Use find only for an explicit glob.
 3. Read a few high-signal files. Do not recursively read everything.
-4. In your final response, return a short structured map: purpose, major directories, and how to run it if that is evident. Build no part of that map in a response that also calls tools.`,
+4. Return a short structured map: purpose, major directories, and how to run it if that is evident.`,
 		PreferredSkills: []string{"umbratic-markdown"},
 		Stop:            "the map is delivered. Do not write files unless the user asked for a durable map.",
 	},
@@ -61,7 +61,7 @@ var engineeringBuckets = []Bucket{
 		When: "How does X work, explain this module, trace a data flow.",
 		Playbook: `1. Use search to find the symbols and paths named in the request. Use find when an explicit glob is enough.
 2. Read the owning files and follow only the references you actually need.
-3. In your final response, explain using exact paths and symbols. No speculative architecture.`,
+3. Explain using exact paths and symbols. No speculative architecture.`,
 		Stop: "the explanation is clear. Make no edits.",
 	},
 	{
@@ -70,7 +70,7 @@ var engineeringBuckets = []Bucket{
 		Playbook: `1. Gather the failure evidence: message, log, failing test name, from the request or the workspace.
 2. Locate the likely code with search and read. Use grep only when an exact regex is needed.
 3. Reproduce with command or run_program when it is safe and useful.
-4. Fix only if the user asked for a fix. Otherwise report the root cause in your final response.
+4. Fix only if the user asked for a fix. Otherwise report the root cause.
 5. Re-run the failing check after any fix.`,
 		PreferredSkills: []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		Stop:            "you have a verified fix or a concrete root-cause answer. Do not thrash on tools.",
@@ -81,7 +81,7 @@ var engineeringBuckets = []Bucket{
 		Playbook: `1. Gather evidence with search and read before any write.
 2. Prefer edit or apply_patch over rewriting a file. Match the surrounding style.
 3. Verify with the narrowest relevant command or test.
-4. In your final response, report briefly: paths changed and the verification result. Do not dump file contents.`,
+4. Report briefly: paths changed and the verification result. Do not dump file contents.`,
 		PreferredSkills: []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		Stop:            "the change is made and verified, or a blocker needs the user.",
 	},
@@ -90,7 +90,7 @@ var engineeringBuckets = []Bucket{
 		When: "A normal code review, quality pass, or a light \"any issues here?\".",
 		Playbook: `1. Determine the scope: a diff, named paths, or the area the user named. Read-only git commands are fine.
 2. Use search and read across the scoped files. Track what you did and did not cover.
-3. In your final response, order findings by severity with path and symbol evidence.
+3. Order findings by severity with path and symbol evidence.
 4. Make no writes unless the user asked you to fix the findings.`,
 		PreferredSkills: []string{"umbratic-git-worktree", "umbratic-security-review"},
 		Stop:            "the findings are reported, plus an optional fix pass if the user asked for one.",
@@ -110,7 +110,7 @@ Then:
 2. Run search in targeted waves (auth, tokens, secrets, exec, deserialize, SQL, path joins, outbound HTTP, permissions, CORS), then read only the top hits.
 3. Use grep only for precise confirmation patterns.
 4. Respect a read budget of roughly 25 to 40 substantive reads, then synthesize.
-5. In your final response, report Confirmed, Needs validation, and Not covered as separate sections.
+5. Report Confirmed, Needs validation, and Not covered as separate sections.
 6. Stay read-only unless the user asked for fixes.
 
 Anti-stuck rules:
@@ -127,7 +127,7 @@ Anti-stuck rules:
 		Playbook: `1. Find the project's test or build command from its manifests or repository norms.
 2. Run the narrowest useful command.
 3. Add or adjust tests only if the user asked.
-4. In your final response, report pass or fail with the relevant output excerpt.`,
+4. Report pass or fail with the relevant output excerpt.`,
 		PreferredSkills: []string{"umbratic-python", "umbratic-cmake"},
 		Stop:            "the results are reported and interpreted.",
 	},
@@ -137,7 +137,7 @@ Anti-stuck rules:
 		Playbook: `1. Scope both sides. Use search and read to compare actual behavior.
 2. Decide a short internal sequence for the edits.
 3. Apply edits in dependency order and verify after meaningful chunks.
-4. In your final response, summarize migration risks and leftover work.`,
+4. Summarize migration risks and leftover work.`,
 		PreferredSkills: []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		Stop:            "the sequenced changes are made and verified, or the requested plan is delivered.",
 	},
@@ -418,7 +418,8 @@ func BuildOrient(route Route, requestText string, previousBucket string) ([]mode
 // OrientDecision is the validated classifier result.
 type OrientDecision struct {
 	Bucket string `json:"bucket"`
-	// SummarySentence is empty exactly when Bucket is direct_answer.
+	// SummarySentence is empty for direct_answer and when the classifier's
+	// sentence failed validation; the bucket stands on its own either way.
 	SummarySentence string `json:"summarySentence"`
 }
 
@@ -428,10 +429,13 @@ var ErrInvalidOrientDecision = errors.New("invalid orient decision")
 
 // ParseOrientDecision validates raw model output against the route catalog.
 //
-// Exactly two coercions are applied, matching the design: an unknown but
-// parseable bucket becomes open_task, and a non-null summary on direct_answer
-// becomes null. Everything else invalidates the decision; model output is never
-// rewritten or substring-stripped into validity.
+// The bucket and the sentence are validated independently. The bucket is the
+// decision: only a broken envelope (unparseable JSON, undeclared fields, a
+// missing or non-string bucket) invalidates it, and an unknown but parseable
+// bucket becomes open_task. The sentence is the optional status line: on
+// direct_answer it is always null, and elsewhere an invalid sentence is
+// dropped while the bucket survives. Model output is never rewritten or
+// substring-stripped into validity.
 func ParseOrientDecision(route Route, raw string) (OrientDecision, error) {
 	if _, ok := routeBuckets[route]; !ok {
 		return OrientDecision{}, ErrInvalidOrientDecision
@@ -455,25 +459,26 @@ func ParseOrientDecision(route Route, raw string) (OrientDecision, error) {
 		return OrientDecision{}, ErrInvalidOrientDecision
 	}
 	if !KnownBucket(route, bucket) {
-		// Coercion 1: a parseable unknown bucket falls back to the conservative
-		// catch-all rather than failing the run.
+		// A parseable unknown bucket falls back to the conservative catch-all
+		// rather than failing the run.
 		bucket = OpenTaskBucket
 	}
 
 	var sentence string
 	if rawSentence, present := fields["summarySentence"]; present && string(rawSentence) != "null" {
 		if json.Unmarshal(rawSentence, &sentence) != nil {
-			return OrientDecision{}, ErrInvalidOrientDecision
+			sentence = ""
 		}
 	}
 	sentence = strings.TrimSpace(sentence)
 
 	if bucket == DirectAnswerBucket {
-		// Coercion 2: direct answers never carry a status sentence.
+		// Direct answers never carry a status sentence.
 		return OrientDecision{Bucket: bucket}, nil
 	}
 	if !validSummarySentence(route, sentence) {
-		return OrientDecision{}, ErrInvalidOrientDecision
+		// A bad sentence loses the sentence only; the classification stands.
+		return OrientDecision{Bucket: bucket}, nil
 	}
 	return OrientDecision{Bucket: bucket, SummarySentence: sentence}, nil
 }
@@ -519,13 +524,13 @@ func mentionsBucketID(route Route, sentence string) bool {
 	return false
 }
 
-// The preamble rule is repeated here verbatim rather than paraphrased. This
+// The header deliberately does not restate the global preamble rule. This
 // message is re-sent on every step of the turn, so it is the nearest instruction
-// the model sees before each tool call; an approximation here would compete with
-// the global prompt instead of reinforcing it.
-const playbookHeader = `Active task playbook (harness-internal). Follow this soft plan; adapt when evidence changes.
-Do not mention playbooks, buckets, or routing to the user.
-` + PreambleRule
+// the model sees before each tool call; repeating conduct rules here made
+// formatting, not the plan, the dominant instruction. The header's job is the
+// opposite: state the precedence split and push the model into the first step.
+const playbookHeader = `Active task playbook (harness-internal). This playbook defines the plan for this turn: what work happens, in what order, and when to stop. The global instructions define who you are and how to call tools correctly; they do not override this plan. Follow it as a soft plan and adapt when evidence changes.
+Do not mention playbooks, buckets, or routing to the user. Begin the plan now: call tools or ask the required questions directly.`
 
 const playbookAntiLoop = `Anti-loop: after a tool failure, change the approach; do not repeat an equivalent failing call.`
 

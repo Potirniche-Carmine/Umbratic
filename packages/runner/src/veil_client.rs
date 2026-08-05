@@ -51,7 +51,8 @@ pub struct VeilRequestOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrientDecision {
     pub bucket: String,
-    /// `None` exactly when `bucket` is `direct_answer`.
+    /// `None` for `direct_answer`, and for a guided bucket whose sentence
+    /// failed validation — the sentence is the optional part of the decision.
     pub summary_sentence: Option<String>,
 }
 
@@ -93,8 +94,9 @@ fn bounded_request_text(text: &str) -> String {
 /// standalone token" check. The runner cannot repeat that check without the
 /// catalog, so it enforces a strict superset instead: every bucket id contains
 /// an underscore, so rejecting any sentence containing one guarantees no id can
-/// reach a user-visible event. The sentence goes into exported telemetry, so
-/// this is a hard reject rather than a lossy scrub.
+/// reach a user-visible event. The sentence goes into exported telemetry, so a
+/// failing sentence is dropped whole rather than scrubbed — but it costs only
+/// the sentence, never the bucket.
 fn valid_summary_sentence(sentence: &str) -> bool {
     !sentence.is_empty()
         && !sentence.contains('\n')
@@ -193,16 +195,18 @@ pub async fn orient_request(
             summary_sentence: None,
         });
     }
+    // The sentence is optional: a missing or invalid one is dropped and the
+    // validated bucket still guides the run.
     let sentence = match object.get("summarySentence") {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        _ => return Err("invalid_orient_decision".into()),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            valid_summary_sentence(trimmed).then(|| trimmed.to_owned())
+        }
+        _ => None,
     };
-    if !valid_summary_sentence(&sentence) {
-        return Err("invalid_orient_decision".into());
-    }
     Ok(OrientDecision {
         bucket,
-        summary_sentence: Some(sentence),
+        summary_sentence: sentence,
     })
 }
 
