@@ -1,14 +1,12 @@
 use std::{
     collections::HashMap,
-    env, fs,
+    env,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
 use serde::Serialize;
 use walkdir::{DirEntry, WalkDir};
-
-const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchKind {
@@ -41,8 +39,6 @@ struct FileSearchResult {
     path: String,
     name: String,
     kind: &'static str,
-    #[serde(rename = "match")]
-    match_kind: &'static str,
 }
 
 fn ignored_directory(name: &str) -> bool {
@@ -84,19 +80,8 @@ fn allowed_entry(root: &Path, entry: &DirEntry) -> bool {
     !blocked_path(&relative.to_string_lossy().replace('\\', "/"))
 }
 
-fn add_result(
-    results: &mut HashMap<String, FileSearchResult>,
-    relative: String,
-    kind: &'static str,
-    match_kind: &'static str,
-) {
-    if relative.is_empty() || blocked_path(&relative) {
-        return;
-    }
-    if results
-        .get(&relative)
-        .is_some_and(|existing| existing.match_kind == "path")
-    {
+fn add_result(results: &mut HashMap<String, FileSearchResult>, relative: String, kind: &'static str) {
+    if relative.is_empty() || blocked_path(&relative) || results.contains_key(&relative) {
         return;
     }
     let name = Path::new(&relative)
@@ -110,14 +95,13 @@ fn add_result(
             path: relative,
             name,
             kind,
-            match_kind,
         },
     );
 }
 
 /// Ranks matches so what the user is typing surfaces first: names that start
 /// with the query beat path segments that start with it, which beat plain
-/// substring hits, which beat content hits.
+/// substring hits.
 fn score(result: &FileSearchResult, query: &str) -> u8 {
     if query.is_empty() {
         return 0;
@@ -130,12 +114,8 @@ fn score(result: &FileSearchResult, query: &str) -> u8 {
         1
     } else if name.contains(query) {
         2
-    } else if path.contains(query) {
-        3
-    } else if result.match_kind == "content" {
-        4
     } else {
-        5
+        3
     }
 }
 
@@ -178,7 +158,7 @@ fn search_files(
         if is_dir {
             folders.push(relative);
         } else {
-            files.push((entry.path().to_owned(), relative));
+            files.push(relative);
         }
     }
 
@@ -186,7 +166,7 @@ fn search_files(
     if kind.includes_folders() {
         for relative in &folders {
             if query_lower.is_empty() || relative.to_lowercase().contains(&query_lower) {
-                add_result(&mut results, relative.clone(), "folder", "path");
+                add_result(&mut results, relative.clone(), "folder");
                 if results.len() >= collection_limit {
                     break;
                 }
@@ -194,32 +174,9 @@ fn search_files(
         }
     }
     if kind.includes_files() {
-        for (_, relative) in &files {
+        for relative in &files {
             if query_lower.is_empty() || relative.to_lowercase().contains(&query_lower) {
-                add_result(&mut results, relative.clone(), "file", "path");
-                if results.len() >= collection_limit {
-                    break;
-                }
-            }
-        }
-    }
-    if kind.includes_files() && query_lower.len() >= 2 && results.len() < collection_limit {
-        for (absolute, relative) in &files {
-            let Ok(metadata) = fs::metadata(absolute) else {
-                continue;
-            };
-            if metadata.len() > MAX_SEARCH_FILE_BYTES {
-                continue;
-            }
-            let Ok(bytes) = fs::read(absolute) else {
-                continue;
-            };
-            if bytes.contains(&0) {
-                continue;
-            }
-            let content = String::from_utf8_lossy(&bytes).to_lowercase();
-            if content.contains(&query_lower) {
-                add_result(&mut results, relative.clone(), "file", "content");
+                add_result(&mut results, relative.clone(), "file");
                 if results.len() >= collection_limit {
                     break;
                 }
@@ -292,6 +249,8 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     fn path_result(path: &str) -> FileSearchResult {
@@ -303,20 +262,7 @@ mod tests {
                 .unwrap_or(path)
                 .to_owned(),
             kind: "file",
-            match_kind: "path",
         }
-    }
-
-    #[test]
-    fn score_matches_desktop_ordering() {
-        let path = path_result("src/runner.ts");
-        let content = FileSearchResult {
-            path: "src/other.ts".into(),
-            name: "other.ts".into(),
-            kind: "file",
-            match_kind: "content",
-        };
-        assert!(score(&path, "runner") < score(&content, "runner"));
     }
 
     #[test]
@@ -361,41 +307,20 @@ mod tests {
     }
 
     #[test]
-    fn search_skips_binary_oversized_and_secret_content_and_honors_limits() {
+    fn search_matches_names_only_and_skips_secret_paths_and_honors_limits() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("first.txt"), "needle").unwrap();
-        fs::write(directory.path().join("second.txt"), "needle").unwrap();
-        fs::write(directory.path().join("binary.dat"), b"needle\0hidden").unwrap();
-        fs::write(
-            directory.path().join("large.txt"),
-            vec![b'x'; MAX_SEARCH_FILE_BYTES as usize + 1],
-        )
-        .unwrap();
-        fs::write(directory.path().join(".env.local"), "needle=secret").unwrap();
+        fs::write(directory.path().join("needle-first.txt"), "alpha").unwrap();
+        fs::write(directory.path().join("needle-second.txt"), "beta").unwrap();
+        fs::write(directory.path().join("contents-only.txt"), "needle").unwrap();
+        fs::write(directory.path().join(".env.needle"), "secret").unwrap();
 
-        let results = search_files(directory.path(), "needle", 1, SearchKind::File).unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(matches!(
-            results[0].path.as_str(),
-            "first.txt" | "second.txt"
-        ));
-        assert!(results.iter().all(|result| !matches!(
-            result.path.as_str(),
-            "binary.dat" | "large.txt" | ".env.local"
-        )));
-    }
+        let limited = search_files(directory.path(), "needle", 1, SearchKind::File).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].path, "needle-first.txt");
 
-    #[test]
-    fn search_handles_non_utf8_files_and_rejects_non_directory_roots() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(
-            directory.path().join("mixed.bin"),
-            b"prefix \xff needle suffix",
-        )
-        .unwrap();
         let results = search_files(directory.path(), "needle", 10, SearchKind::File).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].path, "mixed.bin");
+        let paths: Vec<&str> = results.iter().map(|result| result.path.as_str()).collect();
+        assert_eq!(paths, ["needle-first.txt", "needle-second.txt"]);
 
         let file = directory.path().join("file.txt");
         fs::write(&file, "text").unwrap();

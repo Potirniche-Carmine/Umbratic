@@ -2825,7 +2825,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         const matches = await api.searchFiles({
           repositoryId: repository.id,
           query: attachmentSearchQuery,
-          limit: 10,
+          limit: 25,
           kind: fileSearchKind,
         });
         if (!canceled) {
@@ -4582,7 +4582,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           event.preventDefault();
           setSelectedCategoryIndex((current) => {
             const direction = event.key === "ArrowDown" ? 1 : -1;
-            return (current + direction + mentionCategories.length) % mentionCategories.length;
+            return Math.max(0, Math.min(mentionCategories.length - 1, current + direction));
           });
           return;
         }
@@ -4601,7 +4601,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         event.preventDefault();
         setSelectedFileIndex((current) => {
           const direction = event.key === "ArrowDown" ? 1 : -1;
-          return (current + direction + fileMatches.length) % fileMatches.length;
+          return Math.max(0, Math.min(fileMatches.length - 1, current + direction));
         });
         return;
       }
@@ -4609,7 +4609,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         event.preventDefault();
         setSelectedSkillIndex((current) => {
           const direction = event.key === "ArrowDown" ? 1 : -1;
-          return (current + direction + skillMatches.length) % skillMatches.length;
+          return Math.max(0, Math.min(skillMatches.length - 1, current + direction));
         });
         return;
       }
@@ -5720,6 +5720,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                               : `Files & folders in ${repository.name}`}
                   </span>
                 </div>
+                <div className="attachmentMenuList">
                 {categoryMenuOpen ? (
                   mentionCategories.map((category, index) => (
                     <button
@@ -5783,7 +5784,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                             <MentionMatchText text={file.path} query={attachmentSearchQuery} />
                           </em>
                         </span>
-                        {file.match === "content" ? <small>in contents</small> : null}
                       </button>
                     ))
                   ) : (
@@ -5796,6 +5796,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     </div>
                   )
                 ) : null}
+                </div>
                 <div className="attachmentMenuHints">
                   <span>
                     <kbd>↑</kbd>

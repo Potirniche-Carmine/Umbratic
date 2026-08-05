@@ -229,11 +229,6 @@
   background: #ffffff;
 }
 
-:root[data-theme="light"] .attachmentMenuHeader,
-:root[data-theme="light"] .attachmentMenuHints {
-  background: #ffffff;
-}
-
 :root[data-theme="light"] .attachmentMenu mark {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }

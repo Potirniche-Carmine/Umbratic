@@ -763,11 +763,19 @@ function createPreviewApi(): DesktopApi {
     const kind = input.kind ?? "file";
     const startsWith = (entry: { name: string }) => Number(entry.name.toLowerCase().startsWith(query));
     return [
-      { path: "apps/desktop/src/renderer", name: "renderer", kind: "folder" as const, match: "path" as const },
-      { path: "apps/desktop/src/main", name: "main", kind: "folder" as const, match: "path" as const },
-      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", kind: "file" as const, match: "path" as const },
-      { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", kind: "file" as const, match: "path" as const },
-      { path: "apps/desktop/src/main/main.ts", name: "main.ts", kind: "file" as const, match: "content" as const },
+      { path: "apps/desktop/src/renderer", name: "renderer", kind: "folder" as const },
+      { path: "apps/desktop/src/main", name: "main", kind: "folder" as const },
+      { path: "apps/desktop/src/renderer/components", name: "components", kind: "folder" as const },
+      { path: "apps/desktop/src/renderer/styles", name: "styles", kind: "folder" as const },
+      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/composerText.ts", name: "composerText.ts", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/eventDisplay.ts", name: "eventDisplay.ts", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/previewSupport.ts", name: "previewSupport.ts", kind: "file" as const },
+      { path: "apps/desktop/src/main/main.ts", name: "main.ts", kind: "file" as const },
+      { path: "apps/desktop/src/main/fileSearch.ts", name: "fileSearch.ts", kind: "file" as const },
+      { path: "apps/desktop/src/main/taskActions.ts", name: "taskActions.ts", kind: "file" as const },
+      { path: "apps/desktop/src/shared/desktopApi.ts", name: "desktopApi.ts", kind: "file" as const },
     ]
       .filter((file) => (kind === "all" ? true : file.kind === kind))
       .filter((file) => file.path.toLowerCase().includes(query))

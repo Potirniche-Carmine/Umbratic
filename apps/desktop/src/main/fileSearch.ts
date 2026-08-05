@@ -23,8 +23,7 @@ function isFileSearchResult(value: unknown): value is FileSearchResult {
   return isRecord(value)
     && typeof value.path === "string"
     && typeof value.name === "string"
-    && (value.kind === "file" || value.kind === "folder")
-    && (value.match === "path" || value.match === "content");
+    && (value.kind === "file" || value.kind === "folder");
 }
 
 const activeSearches = new Map<string, ChildProcessWithoutNullStreams>();

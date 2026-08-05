@@ -211,7 +211,7 @@ export type PastedAttachmentInput = {
 };
 
 export type FileSearchResult = ChatAttachment & {
-  match: "path" | "content";
+  kind: "file" | "folder";
 };
 
 export type UserNotes = {
