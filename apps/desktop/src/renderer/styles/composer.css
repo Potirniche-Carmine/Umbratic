@@ -208,10 +208,11 @@ button.attachmentPreview:focus-visible {
   right: 0;
   bottom: calc(100% + 10px);
   z-index: 80;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
-  max-height: 260px;
-  overflow: auto;
+  max-height: 300px;
+  overflow: hidden;
   padding: 8px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius);
@@ -223,14 +224,40 @@ button.attachmentPreview:focus-visible {
   animation: menuRise 180ms ease both;
 }
 
+.attachmentMenuList {
+  display: grid;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+}
+
 .attachmentMenuHeader {
   display: flex;
   align-items: center;
   gap: 7px;
+  flex: 0 0 auto;
   min-height: 24px;
-  padding: 0 4px 3px;
+  padding: 4px 4px 3px;
   color: var(--muted);
   font-size: 11.5px;
+}
+
+.attachmentMenu .attachmentMenuBack {
+  display: grid;
+  place-items: center;
+  grid-template-columns: none;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin-left: -2px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.attachmentMenu .attachmentMenuBack:hover {
+  color: var(--text);
+  background: var(--control-hover);
 }
 
 .attachmentMenu button {
@@ -285,8 +312,64 @@ button.attachmentPreview:focus-visible {
   border-radius: 999px;
 }
 
+.attachmentMenu mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  font-weight: 640;
+}
+
+.attachmentMenu button > svg.attachmentMenuCategoryChevron {
+  color: var(--faint);
+  transition: transform 140ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.attachmentMenu button.active > svg.attachmentMenuCategoryChevron,
+.attachmentMenu button:hover > svg.attachmentMenuCategoryChevron {
+  transform: translateX(2px);
+  color: var(--muted);
+}
+
 .attachmentMenuEmpty {
   padding: 10px 8px;
+}
+
+.attachmentMenuHints {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 6px 6px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.attachmentMenuHints span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.attachmentMenuHints kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 85%, transparent);
+  border-radius: 4px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--control-bg) 80%, transparent);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.attachmentMenuHintNote {
+  margin-left: auto;
+  color: var(--faint);
 }
 
 .queuedPromptList {

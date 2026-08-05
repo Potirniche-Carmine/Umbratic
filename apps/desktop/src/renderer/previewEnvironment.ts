@@ -758,12 +758,29 @@ function createPreviewApi(): DesktopApi {
   readDocumentReview: async (input) => input.documentPath === composerTestDocumentPath
     ? { ok: true, preview: composerTestDocumentPreview }
     : { ok: false, code: "not_available", message: "This document does not include a review preview." },
-  searchFiles: async (input) =>
-    [
-      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", match: "path" as const },
-      { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", match: "path" as const },
-      { path: "apps/desktop/src/main/main.ts", name: "main.ts", match: "content" as const },
-    ].filter((file) => file.path.toLowerCase().includes(input.query.toLowerCase())),
+  searchFiles: async (input) => {
+    const query = input.query.toLowerCase();
+    const kind = input.kind ?? "file";
+    const startsWith = (entry: { name: string }) => Number(entry.name.toLowerCase().startsWith(query));
+    return [
+      { path: "apps/desktop/src/renderer", name: "renderer", kind: "folder" as const },
+      { path: "apps/desktop/src/main", name: "main", kind: "folder" as const },
+      { path: "apps/desktop/src/renderer/components", name: "components", kind: "folder" as const },
+      { path: "apps/desktop/src/renderer/styles", name: "styles", kind: "folder" as const },
+      { path: "apps/desktop/src/renderer/main.tsx", name: "main.tsx", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/styles.css", name: "styles.css", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/composerText.ts", name: "composerText.ts", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/eventDisplay.ts", name: "eventDisplay.ts", kind: "file" as const },
+      { path: "apps/desktop/src/renderer/previewSupport.ts", name: "previewSupport.ts", kind: "file" as const },
+      { path: "apps/desktop/src/main/main.ts", name: "main.ts", kind: "file" as const },
+      { path: "apps/desktop/src/main/fileSearch.ts", name: "fileSearch.ts", kind: "file" as const },
+      { path: "apps/desktop/src/main/taskActions.ts", name: "taskActions.ts", kind: "file" as const },
+      { path: "apps/desktop/src/shared/desktopApi.ts", name: "desktopApi.ts", kind: "file" as const },
+    ]
+      .filter((file) => (kind === "all" ? true : file.kind === kind))
+      .filter((file) => file.path.toLowerCase().includes(query))
+      .sort((left, right) => startsWith(right) - startsWith(left));
+  },
   pickRepository: async () => {
     const repository = {
       id: "preview-umbratic",

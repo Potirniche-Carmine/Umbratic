@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { FileSearchResult } from "./types";
+import type { FileSearchKind, FileSearchResult } from "./types";
 import { isRecord } from "./utils";
 
 function desktopCoreBinaryPath(): string {
@@ -23,7 +23,7 @@ function isFileSearchResult(value: unknown): value is FileSearchResult {
   return isRecord(value)
     && typeof value.path === "string"
     && typeof value.name === "string"
-    && (value.match === "path" || value.match === "content");
+    && (value.kind === "file" || value.kind === "folder");
 }
 
 const activeSearches = new Map<string, ChildProcessWithoutNullStreams>();
@@ -40,13 +40,18 @@ export function cancelRootSearch(rootPath: string): void {
   }
 }
 
-export async function searchRootFiles(rootPath: string, query: string, limit: number): Promise<FileSearchResult[]> {
+export async function searchRootFiles(
+  rootPath: string,
+  query: string,
+  limit: number,
+  kind: FileSearchKind = "file",
+): Promise<FileSearchResult[]> {
   const key = path.resolve(rootPath);
   cancelRootSearch(key);
   return new Promise((resolve, reject) => {
     const child = spawn(
       desktopCoreBinaryPath(),
-      ["search-files", `--root=${rootPath}`, `--query=${query}`, `--limit=${limit}`],
+      ["search-files", `--root=${rootPath}`, `--query=${query}`, `--limit=${limit}`, `--kind=${kind}`],
       { windowsHide: true },
     );
     activeSearches.set(key, child);

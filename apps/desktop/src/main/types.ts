@@ -329,12 +329,15 @@ export type ReviewScope = "task" | "worktree";
 export type ChatAttachment = {
   path: string;
   name: string;
+  kind?: "file" | "folder";
   source?: "workspace" | "chat";
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
   contextTokens?: number;
 };
+
+export type FileSearchKind = "file" | "folder" | "all";
 
 export type ConversationMessage = {
   role: "user" | "assistant" | "tool";
@@ -363,7 +366,7 @@ export type PastedAttachmentInput = {
 };
 
 export type FileSearchResult = ChatAttachment & {
-  match: "path" | "content";
+  kind: "file" | "folder";
 };
 
 export type TaskInfo = {

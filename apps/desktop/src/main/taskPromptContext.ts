@@ -380,6 +380,23 @@ export function pushPromptText(parts: RunnerPromptPart[], lines: string[], empty
   lines.length = 0;
 }
 
+const folderListingEntryLimit = 40;
+
+function folderListingPreview(absolute: string): string[] {
+  try {
+    const entries = fs
+      .readdirSync(absolute, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules")
+      .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name));
+    const shown = entries.slice(0, folderListingEntryLimit);
+    const lines = shown.map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name));
+    if (entries.length > shown.length) lines.push(`… ${entries.length - shown.length} more entries`);
+    return lines;
+  } catch {
+    return [];
+  }
+}
+
 export async function attachmentPromptParts(
   rootPath: string,
   attachments: ChatAttachment[],
@@ -412,6 +429,14 @@ export async function attachmentPromptParts(
     const allowed = isChatAttachment ? pathInside(chatAttachmentRoot(), absolute) : pathInside(rootPath, absolute);
     if (!allowed || !fs.existsSync(absolute)) {
       lines.push("(file is no longer available)");
+      continue;
+    }
+    if (fs.statSync(absolute).isDirectory()) {
+      lines.push(`Attached folder: explore it with the list/glob/read tools under ${JSON.stringify(file.path)}.`);
+      const listing = folderListingPreview(absolute);
+      if (listing.length) {
+        lines.push("Top-level contents:", "```", ...listing, "```");
+      }
       continue;
     }
     const ocrKind = ocrInputKindForPath(absolute);

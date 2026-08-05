@@ -1,11 +1,23 @@
 export type ComposerAttachmentReference = {
   path: string;
   name: string;
+  kind?: "file" | "folder";
 };
 
 export type PromptHighlightSegment = {
   text: string;
   mention: boolean;
+};
+
+export type MatchHighlightSegment = {
+  text: string;
+  hit: boolean;
+};
+
+export type SkillSearchCandidate = {
+  id: string;
+  name: string;
+  description: string;
 };
 
 export type NumberedListContinuation = {
@@ -34,7 +46,47 @@ export function attachmentLabel(file: ComposerAttachmentReference): string {
 }
 
 export function attachmentMention(file: ComposerAttachmentReference): string {
-  return `@${attachmentLabel(file)}`;
+  const label = attachmentLabel(file);
+  return file.kind === "folder" ? `@${label}/` : `@${label}`;
+}
+
+/// Marks where the query matched, so the picker can show *why* each row is in
+/// the list instead of leaving the user to guess.
+export function matchHighlightSegments(text: string, query: string): MatchHighlightSegment[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle || !text) return [{ text, hit: false }];
+  const index = text.toLowerCase().indexOf(needle);
+  if (index < 0) return [{ text, hit: false }];
+  const segments: MatchHighlightSegment[] = [];
+  if (index > 0) segments.push({ text: text.slice(0, index), hit: false });
+  segments.push({ text: text.slice(index, index + needle.length), hit: true });
+  if (index + needle.length < text.length) segments.push({ text: text.slice(index + needle.length), hit: false });
+  return segments;
+}
+
+/// Prefix matches on the skill's name or id come first, then substring
+/// matches, then description hits — mirroring how the file search ranks.
+export function rankSkillMatches<T extends SkillSearchCandidate>(
+  skills: readonly T[],
+  query: string,
+  limit = 10,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  const tier = (skill: SkillSearchCandidate): number => {
+    if (!needle) return 0;
+    const id = skill.id.toLowerCase();
+    const name = skill.name.toLowerCase();
+    if (name.startsWith(needle) || id.startsWith(needle)) return 0;
+    if (name.includes(needle) || id.includes(needle)) return 1;
+    if (skill.description.toLowerCase().includes(needle)) return 2;
+    return 3;
+  };
+  return skills
+    .map((skill, index) => ({ skill, index, tier: tier(skill) }))
+    .filter((entry) => entry.tier < 3)
+    .sort((left, right) => left.tier - right.tier || left.index - right.index)
+    .slice(0, limit)
+    .map((entry) => entry.skill);
 }
 
 export function withoutTrailingEmptyLines(value: string): string {

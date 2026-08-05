@@ -194,12 +194,15 @@ export type RepositoryInfo = {
 export type ChatAttachment = {
   path: string;
   name: string;
+  kind?: "file" | "folder";
   source?: "workspace" | "chat";
   storedPath?: string;
   originalPath?: string;
   previewDataUrl?: string;
   contextTokens?: number;
 };
+
+export type FileSearchKind = "file" | "folder" | "all";
 
 export type PastedAttachmentInput = {
   name?: string;
@@ -208,7 +211,7 @@ export type PastedAttachmentInput = {
 };
 
 export type FileSearchResult = ChatAttachment & {
-  match: "path" | "content";
+  kind: "file" | "folder";
 };
 
 export type UserNotes = {
@@ -423,6 +426,7 @@ export type DesktopApi = {
     repositoryId: string;
     query: string;
     limit?: number;
+    kind?: FileSearchKind;
   }): Promise<FileSearchResult[]>;
   pickRepository(): Promise<
     { canceled: true } | { canceled: false; repository: RepositoryInfo }

@@ -229,6 +229,10 @@
   background: #ffffff;
 }
 
+:root[data-theme="light"] .attachmentMenu mark {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 :root[data-theme="light"] .floatingApproval {
   border-color: rgba(31, 111, 235, 0.24);
   background: rgba(255, 255, 255, 0.96);
