@@ -7,6 +7,8 @@ type PdfRenderRequest = {
   pageLimit: number;
   scale: number;
   byteLimit: number;
+  /** 1-indexed pages to render; when absent the first pageLimit pages render. */
+  pageNumbers?: number[];
 };
 
 type PdfRenderResult =
@@ -29,7 +31,19 @@ function requestFromMessage(message: unknown): PdfRenderRequest {
   if (!filePath || !outputDir || pageLimit < 1 || pageLimit > 50 || scale <= 0 || scale > 4 || byteLimit < 1) {
     throw new Error("Invalid PDF render request.");
   }
-  return { filePath, outputDir, pageLimit, scale, byteLimit };
+  let pageNumbers: number[] | undefined;
+  if (message.pageNumbers !== undefined) {
+    if (
+      !Array.isArray(message.pageNumbers) ||
+      message.pageNumbers.length < 1 ||
+      message.pageNumbers.length > pageLimit ||
+      !message.pageNumbers.every((page) => typeof page === "number" && Number.isInteger(page) && page >= 1)
+    ) {
+      throw new Error("Invalid PDF render request.");
+    }
+    pageNumbers = [...new Set(message.pageNumbers as number[])].sort((left, right) => left - right);
+  }
+  return { filePath, outputDir, pageLimit, scale, byteLimit, pageNumbers };
 }
 
 function sendAndExit(result: PdfRenderResult, code: number) {
@@ -52,9 +66,13 @@ async function renderPdf(message: unknown): Promise<PdfRenderResult> {
   const { pdf } = await import("pdf-to-img");
   const document = await pdf(request.filePath, { scale: request.scale });
   try {
-    const rendered = Math.min(document.length, request.pageLimit);
+    const targetPages = (
+      request.pageNumbers ?? Array.from({ length: request.pageLimit }, (_, index) => index + 1)
+    )
+      .filter((pageNumber) => pageNumber <= document.length)
+      .slice(0, request.pageLimit);
     const pages: Array<{ pageNumber: number; filePath: string }> = [];
-    for (let pageNumber = 1; pageNumber <= rendered; pageNumber += 1) {
+    for (const pageNumber of targetPages) {
       const png = await document.getPage(pageNumber);
       const pagePath = path.join(request.outputDir, `page-${pageNumber}.png`);
       fs.writeFileSync(pagePath, png);

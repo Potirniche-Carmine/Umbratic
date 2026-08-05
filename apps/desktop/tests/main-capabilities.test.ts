@@ -179,3 +179,35 @@ test("command probes execute and record the resolved absolute executable path", 
   }
 });
 
+
+test("pdf inspector probe follows the provided binary path and feeds OCR guidance", async () => {
+  const available = await capabilities.probeLocalCapabilities({
+    force: true,
+    runnerPath: "/app/bin/umbratic-runner",
+    pdfInspectorPath: "/app/bin/umbratic-pdf",
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    env: { PATH: "" },
+    execFile: fakeExecFile,
+    resolvePackage,
+  });
+  const availableProbe = available.probes.find((probe) => probe.id === "umbratic-pdf");
+  assert.equal(availableProbe.status, "available");
+  assert.equal(availableProbe.executablePath, "/app/bin/umbratic-pdf");
+
+  const missing = await capabilities.probeLocalCapabilities({
+    force: true,
+    runnerPath: "/app/bin/umbratic-runner",
+    pdfInspectorPath: null,
+    now: () => new Date("2026-01-01T00:00:00.000Z"),
+    env: { PATH: "" },
+    execFile: fakeExecFile,
+    resolvePackage,
+  });
+  const missingProbe = missing.probes.find((probe) => probe.id === "umbratic-pdf");
+  assert.equal(missingProbe.status, "missing");
+  const guidance = capabilities.capabilityPromptGuidance(missing, { ocr: true });
+  assert.match(guidance, /native PDF inspector \(classification \+ text extraction\): missing/);
+  const snapshot = capabilities.capabilityTelemetrySnapshot(missing, { ocr: true });
+  const pdfTelemetry = snapshot.find((probe) => probe.id === "umbratic-pdf");
+  assert.equal(pdfTelemetry.affectedCurrentRun, true);
+});

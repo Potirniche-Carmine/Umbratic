@@ -1,8 +1,146 @@
 use std::io::{BufRead, BufReader};
 
 use serde_json::json;
+use umbratic_pdf::{InspectError, InspectOptions, PdfType, inspect_file};
 
 use super::*;
+
+/// True when the path both claims to be and actually starts like a PDF, so
+/// misnamed binaries still hit the regular binary refusal.
+fn is_pdf_file(path: &Path) -> bool {
+    let claims_pdf = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+    if !claims_pdf {
+        return false;
+    }
+    let mut header = [0u8; 5];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map(|_| &header == b"%PDF-")
+        .unwrap_or(false)
+}
+
+fn pdf_type_label(pdf_type: PdfType) -> &'static str {
+    match pdf_type {
+        PdfType::TextBased => "text_based",
+        PdfType::Scanned => "scanned",
+        PdfType::ImageBased => "image_based",
+        PdfType::Mixed => "mixed",
+    }
+}
+
+/// Extracts the native-text Markdown for a PDF, failing closed for documents
+/// without a usable text layer instead of returning silent empty text.
+fn pdf_markdown(path: &Path, label: &str) -> Result<(umbratic_pdf::Inspection, String), ToolError> {
+    let options = InspectOptions {
+        extract: true,
+        ..InspectOptions::default()
+    };
+    let inspection = inspect_file(path, &options).map_err(|error| match error {
+        InspectError::TooLarge { .. } => ToolError::validation(error.to_string()),
+        other => ToolError::validation_code("pdf_unreadable", format!("{label}: {other}")),
+    })?;
+    if matches!(inspection.pdf_type, PdfType::Scanned | PdfType::ImageBased) {
+        return Err(ToolError::validation_code(
+            "pdf_needs_ocr",
+            format!(
+                "{label} is a {} PDF ({} page{}) without a machine-readable text layer. Rasterize the pages or use OCR instead of reading it as text.",
+                pdf_type_label(inspection.pdf_type),
+                inspection.page_count,
+                if inspection.page_count == 1 { "" } else { "s" },
+            ),
+        ));
+    }
+    let markdown = inspection.markdown.clone().unwrap_or_default();
+    if markdown.trim().is_empty() {
+        return Err(ToolError::validation_code(
+            "pdf_unreadable",
+            format!("{label}: no text could be extracted from the PDF."),
+        ));
+    }
+    Ok((inspection, markdown))
+}
+
+fn pdf_header_lines(inspection: &umbratic_pdf::Inspection, label: &str) -> String {
+    let mut header = format!(
+        "PDF {label}: {}, {} page{}; native text extract shown below.",
+        pdf_type_label(inspection.pdf_type),
+        inspection.page_count,
+        if inspection.page_count == 1 { "" } else { "s" },
+    );
+    if !inspection.pages_needing_ocr.is_empty() {
+        header.push_str(&format!(
+            "\nPages without a text layer (need vision/OCR): {:?}.",
+            inspection.pages_needing_ocr
+        ));
+    }
+    if inspection.has_encoding_issues {
+        header.push_str(
+            "\nWarning: the text layer shows encoding issues; verify important values visually.",
+        );
+    }
+    header
+}
+
+/// Serves the extracted Markdown with the same offset/limit line semantics as
+/// the plain-text `read` path.
+fn read_pdf_tool(
+    absolute: &Path,
+    relative: &str,
+    offset: usize,
+    line_limit: Option<usize>,
+) -> ToolExecutionResult {
+    let (inspection, markdown) = pdf_markdown(absolute, relative)?;
+    let lines: Vec<&str> = markdown.lines().collect();
+    let total_lines = lines.len();
+    let mut selected: Vec<&str> = Vec::new();
+    let mut selected_bytes = 0usize;
+    for line in lines.iter().skip(offset.saturating_sub(1)) {
+        if line_limit.is_some_and(|limit| selected.len() >= limit) {
+            break;
+        }
+        let joiner = usize::from(!selected.is_empty());
+        if selected_bytes + line.len() + joiner > MAX_READ_OUTPUT_BYTES {
+            break;
+        }
+        selected_bytes += line.len() + joiner;
+        selected.push(line);
+    }
+    let shown_start = if selected.is_empty() { 0 } else { offset };
+    let shown_end = if selected.is_empty() {
+        0
+    } else {
+        offset + selected.len() - 1
+    };
+    let next_offset = if shown_end > 0 && shown_end < total_lines {
+        Some(shown_end + 1)
+    } else {
+        None
+    };
+    let content = format!(
+        "{}\n\n{}",
+        pdf_header_lines(&inspection, relative),
+        selected.join("\n")
+    );
+    let details = json!({
+        "path": relative,
+        "pdfType": pdf_type_label(inspection.pdf_type),
+        "pageCount": inspection.page_count,
+        "hasEncodingIssues": inspection.has_encoding_issues,
+        "offset": offset,
+        "shownStart": shown_start,
+        "shownEnd": shown_end,
+        "totalLines": total_lines,
+    });
+    let continuation = next_offset.map(|value| json!({ "nextOffset": value }));
+    Ok(ToolResult::success_detailed(
+        relative.to_owned(),
+        content,
+        Some(details),
+        continuation,
+    ))
+}
 
 fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
     let workspace_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
@@ -111,6 +249,9 @@ pub(super) async fn read_tool(
     if !metadata.is_file() {
         return Err(ToolError::validation("Path is not a file"));
     }
+    if is_pdf_file(&absolute) {
+        return read_pdf_tool(&absolute, &relative, offset, line_limit);
+    }
     let file = fs::File::open(&absolute).map_err(|error| ToolError::runtime(error.to_string()))?;
     let mut reader = BufReader::new(file);
     let mut total_lines = 0usize;
@@ -205,6 +346,61 @@ pub(super) async fn read_tool(
     ))
 }
 
+/// Serves the extracted Markdown of a PDF attachment through the same byte
+/// offset/limit window as plain-text attachments; offsets index the extract.
+fn read_pdf_attachment(
+    attachment_id: &str,
+    canonical: &Path,
+    input: &Map<String, Value>,
+) -> ToolExecutionResult {
+    let label = format!("Attachment {attachment_id}");
+    let (inspection, markdown) = pdf_markdown(canonical, &label)?;
+    let total = markdown.len();
+    let requested_offset = input
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(total as u64) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(MAX_ATTACHMENT_CHUNK_BYTES as u64)
+        .clamp(1, MAX_ATTACHMENT_CHUNK_BYTES as u64) as usize;
+    let mut start = requested_offset;
+    while !markdown.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = (start + limit).min(total);
+    while !markdown.is_char_boundary(end) {
+        end -= 1;
+    }
+    let chunk = &markdown[start..end];
+    let next_offset = start + chunk.len();
+    let continuation = (next_offset < total).then(|| json!({ "nextOffset": next_offset }));
+    let status = if continuation.is_some() {
+        format!("partial; continue with offset {next_offset}")
+    } else {
+        "complete".to_owned()
+    };
+    Ok(ToolResult::success_detailed(
+        format!("attachment {attachment_id}"),
+        format!(
+            "Attachment: {attachment_id}\n{}\nBytes shown: {start}-{next_offset} of {total} (of the extracted Markdown)\nRead status: {status}\n\n{chunk}",
+            pdf_header_lines(&inspection, &label),
+        ),
+        Some(json!({
+            "attachmentId": attachment_id,
+            "pdfType": pdf_type_label(inspection.pdf_type),
+            "pageCount": inspection.page_count,
+            "hasEncodingIssues": inspection.has_encoding_issues,
+            "offset": start,
+            "nextOffset": if next_offset < total { Value::from(next_offset as u64) } else { Value::Null },
+            "totalBytes": total,
+        })),
+        continuation,
+    ))
+}
+
 pub(super) fn read_attachment_tool(
     session: &Session,
     input: &Map<String, Value>,
@@ -236,6 +432,9 @@ pub(super) fn read_attachment_tool(
     let metadata = fs::metadata(&canonical).map_err(|error| error.to_string())?;
     if !metadata.is_file() {
         return Err("Attachment is not a file.".into());
+    }
+    if is_pdf_file(&canonical) {
+        return read_pdf_attachment(&attachment_id, &canonical, input);
     }
     let total = metadata.len() as usize;
     let requested_offset = input

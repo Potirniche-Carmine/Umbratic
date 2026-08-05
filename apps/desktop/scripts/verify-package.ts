@@ -60,6 +60,7 @@ const appArchive = requireFile(path.join(resources, "app.asar"));
 verifyDocumentsSkill(appArchive);
 verifyBinary(path.join(resources, "runner", executable("umbratic-runner")), /UmbraticRunner/);
 verifyBinary(path.join(resources, "desktop-core", executable("umbratic-desktop-core")), /usage: umbratic-desktop-core/);
+verifyBinary(path.join(resources, "pdf", executable("umbratic-pdf")), /umbratic-pdf inspect/);
 verifyBinary(
   path.join(resources, "veil", executable("veil")),
   /VEIL_AUTH_TOKEN is required/,

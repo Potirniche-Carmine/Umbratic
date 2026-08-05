@@ -136,4 +136,6 @@ fn should_skip(relative: &str) -> bool {
 }
 
 #[cfg(test)]
+mod read_pdf_tests;
+#[cfg(test)]
 mod tests;
