@@ -27,7 +27,8 @@ test("release-mode native binaries are runnable before packaging", () => {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const runner = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-runner.exe" : "umbratic-runner");
   const desktopCore = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-desktop-core.exe" : "umbratic-desktop-core");
-  for (const binary of [runner, desktopCore]) {
+  const pdfInspector = path.join(repositoryRoot, "target", "release", process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf");
+  for (const binary of [runner, desktopCore, pdfInspector]) {
     assert.equal(fs.existsSync(binary), true, `missing release binary ${binary}`);
     const result = spawnSync(binary, [], { encoding: "utf8", timeout: 5_000 });
     assert.equal(result.error, undefined);
@@ -54,6 +55,8 @@ test("desktop packages the native Rust runner instead of a Node launcher", () =>
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-runner\.exe" : "umbratic-runner"/);
   assert.match(config, /- from: \.package\/desktop-core\r?\n\s+to: desktop-core/);
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-desktop-core\.exe" : "umbratic-desktop-core"/);
+  assert.match(config, /- from: \.package\/pdf\r?\n\s+to: pdf/);
+  assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-pdf\.exe" : "umbratic-pdf"/);
   assert.doesNotMatch(preparePackage, /umbratic-runner\.cjs|dist["'], ["']cli\.js/);
 });
 
@@ -94,7 +97,11 @@ test("desktop packaging runs only for version tags", () => {
   assert.doesNotMatch(packageTriggers, /branches:|pull_request:/);
   assert.match(verifyTriggers, /branches:\r?\n\s+- main/);
   assert.match(verifyTriggers, /pull_request:/);
+  // Solo-developer CI: the audit runs on pull requests only. Merges to main
+  // trigger nothing, and the full verification runs on tagged releases.
+  assert.doesNotMatch(verifyTriggers, /push:/);
   assert.doesNotMatch(verifyWorkflow, /run package|electron-builder/);
+  assert.doesNotMatch(verifyWorkflow, /test:all|release:check/);
 });
 
 test("desktop workflows omit the unused Squirrel peer dependency", () => {
@@ -103,7 +110,10 @@ test("desktop workflows omit the unused Squirrel peer dependency", () => {
 
   assert.doesNotMatch(packageWorkflow, /npm ci --ignore-scripts\s*$/m);
   assert.match(packageWorkflow, /npm ci --ignore-scripts --omit=peer/g);
-  assert.match(verifyWorkflow, /npm ci --ignore-scripts --omit=peer/);
+  // The pull-request audit is lockfile-only: no npm ci at all, and the audit
+  // itself skips peer dependencies the same way installs do.
+  assert.doesNotMatch(verifyWorkflow, /npm ci/);
+  assert.match(verifyWorkflow, /npm audit --package-lock-only --ignore-scripts --omit=peer/);
 });
 
 test("desktop release workflow pins actions and limits write permission to publishing", () => {

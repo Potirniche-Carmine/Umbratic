@@ -105,11 +105,36 @@ test("WorkMarkdownContent renders safe markdown with a distinct streaming marker
   );
   assert.match(html, /workMarkdownContent isStreaming/);
   assert.match(html, /<strong>Inspecting<\/strong>/);
-  assert.doesNotMatch(html, /<ul>/);
-  assert.match(html, /streamingPlainTail/);
-  assert.match(html, /- Read `main\.tsx`/);
+  // The live tail renders as real markdown too, so completed blocks never pop
+  // from plain text to styled when the next paragraph boundary arrives.
+  assert.match(html, /<ul>/);
+  assert.match(html, /Run tests/);
   assert.match(html, /workStreamingCaret/);
+  assert.doesNotMatch(html, /streamingPlainTail/);
   assert.doesNotMatch(html, /\*\*Inspecting\*\*/);
+});
+
+test("streaming markdown stabilizes unfinished inline syntax instead of popping", () => {
+  const { WorkMarkdownContent } = loadRenderer();
+  const unfinishedBold = renderToStaticMarkup(
+    React.createElement(WorkMarkdownContent, { content: "Checking the **invoice tot", streaming: true }),
+  );
+  assert.match(unfinishedBold, /<strong>invoice tot<\/strong>/);
+  const heldBackOpener = renderToStaticMarkup(
+    React.createElement(WorkMarkdownContent, { content: "Checking the **", streaming: true }),
+  );
+  assert.doesNotMatch(heldBackOpener, /\*\*/);
+  const intraWordMarkers = renderToStaticMarkup(
+    React.createElement(WorkMarkdownContent, { content: "compute 5 * 3 in snake_case fields", streaming: true }),
+  );
+  assert.doesNotMatch(intraWordMarkers, /<em>/);
+  // An unterminated fence renders as a code block mid-stream, never as a
+  // paragraph of backticks that later converts.
+  const openFence = renderToStaticMarkup(
+    React.createElement(WorkMarkdownContent, { content: "Running:\n\n```bash\nnpm test", streaming: true }),
+  );
+  assert.match(openFence, /npm test/);
+  assert.doesNotMatch(openFence, /```/);
 });
 
 test("work activity styles keep reasoning and tool calls in one seamless flow", () => {
@@ -378,21 +403,21 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
-  // Assistant text stays assistant prose even when workspace activity follows
-  // it, so a streamed preamble is never demoted into the activity log.
-  // Thinking-only progress before tools does not leave a timed Working block.
-  assert.deepEqual(interleavedTimeline.map((item) => item.type), [
-    "user",
-    "assistant",
-    "activity",
-    "assistant",
-  ]);
-  assert.equal(interleavedTimeline[1].text, "I’ll inspect the project.");
-  assert.deepEqual(interleavedTimeline[2].segments.map((segment) => segment.type), ["command", "reasoning"]);
-  assert.equal(interleavedTimeline[2].segments[1].text, "Second step.");
-  assert.equal(interleavedTimeline[3].text, "Here is the complete answer.");
-  // Copying the response takes every assistant paragraph, separated the way the
-  // transcript shows them.
+  // Assistant text followed by more workspace activity is narration of the work,
+  // so it belongs inside the activity block. Only the text that ends the turn is
+  // the answer, and the turn produces exactly one activity block rather than one
+  // per burst of prose.
+  assert.deepEqual(interleavedTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.deepEqual(
+    interleavedTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "reasoning"],
+  );
+  assert.equal(interleavedTimeline[1].segments[0].text, "I’ll inspect the project.");
+  assert.equal(interleavedTimeline[1].segments[2].text, "Second step.");
+  assert.equal(interleavedTimeline[2].text, "Here is the complete answer.");
+  // Copying the response copies what the transcript actually shows as the
+  // answer. Mid-turn narration lives in the activity log, so it is not part of
+  // the response the user copies.
   assert.equal(assistantTextFromEvents([
     events[0],
     { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
@@ -400,7 +425,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     events[3],
     events[4],
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
-  ]), "I’ll inspect the project.\n\nHere is the complete answer.");
+  ]), "Here is the complete answer.");
 
   const progressOnlyAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Tell me about this project", at: "2026-01-01T00:00:00.000Z" },
@@ -421,9 +446,12 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "command.finished", taskId: "task-1", id: "search-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "assistant", "activity"]);
-  assert.equal(preToolOnlyAnswerTimeline[1].text, "# Umbratic Project Overview\n\nA private AI workbench.");
-  assert.deepEqual(preToolOnlyAnswerTimeline[2].segments.map((segment) => segment.type), ["command"]);
+  // The model said everything before the tool call and then fell silent, so that
+  // text is the answer: it is promoted back out of the activity log rather than
+  // leaving the turn with nothing to read.
+  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.deepEqual(preToolOnlyAnswerTimeline[1].segments.map((segment) => segment.type), ["command"]);
+  assert.equal(preToolOnlyAnswerTimeline[2].text, "# Umbratic Project Overview\n\nA private AI workbench.");
 
   const escapedPlanTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "write me bubble sort algorithm in python and verify that it runs", at: "2026-01-01T00:00:00.000Z" },
@@ -435,10 +463,82 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     { type: "assistant.delta", taskId: "task-1", text: "Done — the script passed five test cases.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
-  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
-  assert.equal(escapedPlanTimeline[1].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
-  assert.deepEqual(escapedPlanTimeline[2].segments.map((segment) => segment.type), ["command", "command"]);
-  assert.equal(escapedPlanTimeline[3].text, "Done — the script passed five test cases.");
+  // The plan preamble is narration, not the answer, so it stays in the log and
+  // the transcript shows only the outcome.
+  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.deepEqual(
+    escapedPlanTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "command"],
+  );
+  assert.equal(escapedPlanTimeline[1].segments[0].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
+  assert.equal(escapedPlanTimeline[2].text, "Done — the script passed five test cases.");
+
+  // The reported regression: a multi-round turn narrating between tool batches
+  // produced one visible message per burst of prose. Every round of narration
+  // belongs to one activity block, and only the closing summary is the answer.
+  const multiRoundTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "I'll start by listing all the contents of the root directory.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.started", taskId: "task-1", id: "ls-1", command: "ls .", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:02.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "ls-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "I have listed the root. Now I will list the main subdirectories.", at: "2026-01-01T00:00:04.000Z" },
+    { type: "command.started", taskId: "task-1", id: "ls-2", command: "ls src", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:05.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "ls-2", exitCode: 0, at: "2026-01-01T00:00:06.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "This repository is a Next.js application.", at: "2026-01-01T00:00:07.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:08.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(multiRoundTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.deepEqual(
+    multiRoundTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "reasoning", "command"],
+  );
+  assert.equal(multiRoundTimeline[1].segments[0].text, "I'll start by listing all the contents of the root directory.");
+  assert.equal(multiRoundTimeline[1].segments[2].text, "I have listed the root. Now I will list the main subdirectories.");
+  assert.equal(multiRoundTimeline[2].text, "This repository is a Next.js application.");
+
+  // While the run is still active, prose after tool activity is not yet
+  // classifiable, so it streams inside the open Working block instead of
+  // flashing as a response and then jumping into the log.
+  const streamingMidTurnTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
+    { type: "command.started", taskId: "task-1", id: "ls-1", command: "ls .", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "ls-1", exitCode: 0, at: "2026-01-01T00:00:02.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Now I will list the main subdirectories.", at: "2026-01-01T00:00:03.000Z" },
+  ], undefined, "running")));
+  assert.deepEqual(streamingMidTurnTimeline.map((item) => item.type), ["user", "activity"]);
+  assert.equal(streamingMidTurnTimeline[1].finished, false);
+  assert.deepEqual(streamingMidTurnTimeline[1].segments.map((segment) => segment.type), ["command", "reasoning"]);
+  assert.equal(streamingMidTurnTimeline[1].segments[1].text, "Now I will list the main subdirectories.");
+  assert.equal(streamingMidTurnTimeline[1].segments[1].finished, false);
+
+  // A stopped turn ends where it was: no error bubble, no promoted response,
+  // partial narration stays inside the finished Working block.
+  const cancelledTurnTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "tell me about the invoices", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "I'll look at the invoice list.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.started", taskId: "task-1", id: "read-1", command: "read src/invoices.ts", cwd: "C:/repo", kind: "read", commandClass: "read", at: "2026-01-01T00:00:02.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "read-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "* \n* ", at: "2026-01-01T00:00:04.000Z" },
+    { type: "turn.outcome", taskId: "task-1", outcome: "aborted", at: "2026-01-01T00:00:05.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:05.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(cancelledTurnTimeline.map((item) => item.type), ["user", "activity"]);
+  assert.equal(cancelledTurnTimeline[1].finished, true);
+  assert.deepEqual(
+    cancelledTurnTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "reasoning"],
+  );
+  assert.equal(cancelledTurnTimeline[1].segments[2].text, "* \n*");
+
+  // Stopping a tool-less turn keeps the partial answer as the answer.
+  const cancelledDirectAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "tell me about the invoices", at: "2026-01-01T00:00:00.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Invoices are stored in", at: "2026-01-01T00:00:01.000Z" },
+    { type: "turn.outcome", taskId: "task-1", outcome: "aborted", at: "2026-01-01T00:00:02.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:02.000Z" },
+  ], undefined, "completed")));
+  assert.deepEqual(cancelledDirectAnswerTimeline.map((item) => item.type), ["user", "assistant"]);
+  assert.equal(cancelledDirectAnswerTimeline[1].text, "Invoices are stored in");
 
   const failedToolTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     events[0],
@@ -590,6 +690,18 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
   assert.equal(commandDetailLabel(searchRun), "Search text results - read");
   assert.equal(commandShellText(searchRun), "apps/desktop/src/renderer/main.tsx: content");
 
+  // The warm locator is a workspace read. Without its entry in the tool-label
+  // map it would fall through to shell rendering, which is a user-visible
+  // regression rather than a cosmetic one.
+  const warmSearchRun = {
+    ...searchRun,
+    toolKind: "search",
+    command: "search harnessRoute",
+    commandClass: "read",
+  };
+  assert.equal(commandDetailLabel(warmSearchRun), "Search workspace results - read");
+  assert.ok(!commandDetailLabel(warmSearchRun).startsWith("Shell"));
+
   // Every runner tool is rendered from its reported tool kind, so a tool whose
   // summary does not look like a known command is still not shown as a shell.
   for (const toolKind of [
@@ -599,6 +711,7 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "ls",
     "find",
     "grep",
+    "search",
     "write",
     "edit",
     "apply_patch",

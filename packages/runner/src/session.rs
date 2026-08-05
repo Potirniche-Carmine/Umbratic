@@ -21,7 +21,7 @@ use crate::{
     permission::PermissionBroker,
     run_queue::RunQueue,
     skill_preflight::SharedSkillCache,
-    tools::ToolSurface,
+    tools::{SearchIndex, ToolSurface},
     workspace_graph::WorkspaceGraphService,
 };
 
@@ -62,6 +62,14 @@ pub struct Session {
     pub lsp: Option<LspService>,
     pub workspace_graph: Option<WorkspaceGraphService>,
     pub skill_cache: SharedSkillCache,
+    /// Warm workspace path index behind `search`. Lives for the session and is
+    /// marked stale at the start of every accepted run, so between-turn editor
+    /// changes are observed without a filesystem watcher.
+    pub search_index: Arc<SearchIndex>,
+    /// The last valid orient bucket for this session. A continuity hint only,
+    /// for referential follow-ups such as "yes, draft it". It is cleared on any
+    /// orient failure so a stale playbook can never be reused.
+    pub previous_bucket: std::sync::Mutex<Option<String>>,
     /// The tool contract presented to the model, frozen on first use and reused
     /// for every step of the task.
     pub(crate) tool_surface: OnceLock<Arc<ToolSurface>>,
@@ -214,6 +222,8 @@ impl SessionStore {
             lsp,
             workspace_graph,
             skill_cache: SharedSkillCache::default(),
+            search_index: Arc::new(SearchIndex::default()),
+            previous_bucket: std::sync::Mutex::new(None),
             tool_surface: OnceLock::new(),
             run: std::sync::Mutex::new(None),
             queue: Mutex::new(RunQueue::default()),
@@ -288,6 +298,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             id: "company-endpoint".into(),
             name: "Test Veil".into(),
             base_url: "http://127.0.0.1:1".into(),
+            mode: crate::config::ProviderMode::Local,
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
@@ -330,6 +341,8 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         lsp: None,
         workspace_graph: None,
         skill_cache: SharedSkillCache::default(),
+        search_index: Arc::new(SearchIndex::default()),
+        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: OnceLock::new(),
         run: std::sync::Mutex::new(None),
         queue: Mutex::new(RunQueue::default()),

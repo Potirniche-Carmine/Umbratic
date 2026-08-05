@@ -35,6 +35,168 @@ pub struct VeilChatResult {
 pub struct VeilRequestOptions {
     pub max_output_tokens: u64,
     pub include_tools: bool,
+    /// The run's validated bucket selector. Protected control metadata, not
+    /// prompt text: Veil renders the playbook from its own catalog.
+    pub harness_bucket: Option<String>,
+}
+
+/// A validated classifier decision for the active run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrientDecision {
+    pub bucket: String,
+    /// `None` exactly when `bucket` is `direct_answer`.
+    pub summary_sentence: Option<String>,
+}
+
+/// The bucket that suppresses the playbook and the status sentence entirely.
+pub const DIRECT_ANSWER_BUCKET: &str = "direct_answer";
+
+const MAX_ORIENT_REQUEST_BYTES: usize = 32 * 1024;
+const ORIENT_HEAD_TAIL_BYTES: usize = 16 * 1024;
+const MAX_SUMMARY_SENTENCE_RUNES: usize = 240;
+const ORIENT_OMISSION_MARKER: &str = "\n[... request text omitted ...]\n";
+
+/// Truncates to a UTF-8-safe head and tail so a long paste still classifies on
+/// its actual intent rather than being rejected.
+fn bounded_request_text(text: &str) -> String {
+    if text.len() <= MAX_ORIENT_REQUEST_BYTES {
+        return text.to_owned();
+    }
+    let mut head_end = ORIENT_HEAD_TAIL_BYTES.min(text.len());
+    while !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len().saturating_sub(ORIENT_HEAD_TAIL_BYTES);
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    if tail_start < head_end {
+        tail_start = head_end;
+    }
+    format!(
+        "{}{ORIENT_OMISSION_MARKER}{}",
+        &text[..head_end],
+        &text[tail_start..]
+    )
+}
+
+/// The runner-side check on the status sentence.
+///
+/// Veil owns the bucket catalog and does the precise "no bucket id as a
+/// standalone token" check. The runner cannot repeat that check without the
+/// catalog, so it enforces a strict superset instead: every bucket id contains
+/// an underscore, so rejecting any sentence containing one guarantees no id can
+/// reach a user-visible event. The sentence goes into exported telemetry, so
+/// this is a hard reject rather than a lossy scrub.
+fn valid_summary_sentence(sentence: &str) -> bool {
+    !sentence.is_empty()
+        && !sentence.contains('\n')
+        && !sentence.contains('\r')
+        && !sentence.contains('_')
+        && sentence.chars().count() <= MAX_SUMMARY_SENTENCE_RUNES
+        && (sentence.ends_with('.') || sentence.ends_with('!'))
+}
+
+/// Classifies one accepted run. Orient can only add behavior: every failure
+/// path returns `Err`, and the caller then runs exactly today's chat path.
+pub async fn orient_request(
+    session: &Session,
+    request_text: &str,
+    previous_bucket: Option<&str>,
+) -> Result<OrientDecision, String> {
+    let request_text = bounded_request_text(request_text);
+    if request_text.trim().is_empty() {
+        return Err("orient skipped for a blank request".into());
+    }
+    let (mut endpoint, host_header) = request_endpoint(&session.config.provider)?;
+    // The Veil route allowlist is widened only here. Ordinary chat still accepts
+    // only the three chat paths.
+    endpoint.set_path("/api/internal/orient");
+    endpoint.set_query(None);
+    let route = provider_endpoint_url(&session.config.provider)?
+        .path()
+        .trim_start_matches("/api/")
+        .trim_end_matches('/')
+        .to_owned();
+    let body = json!({
+        "route": route,
+        "requestText": request_text,
+        "previousBucket": previous_bucket.unwrap_or(""),
+    });
+    let timeout = match session.config.provider.mode {
+        crate::config::ProviderMode::Server => std::time::Duration::from_secs(3),
+        crate::config::ProviderMode::Local => std::time::Duration::from_secs(10),
+    };
+    let client = shared_client(&session.config.provider)?;
+    let mut request = client
+        .post(endpoint)
+        .timeout(timeout)
+        .header("Content-Type", "application/json");
+    if let Some(host) = host_header {
+        request = request.header("Host", host);
+    }
+    let bearer = provider_bearer(&session.config.provider);
+    if !bearer.trim().is_empty() {
+        request = request.bearer_auth(&bearer);
+    }
+    for (name, value) in &session.config.provider.headers {
+        request = request.header(name, value);
+    }
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("orient failed: {error}"))?;
+    verify_certificate_pin(&session.config.provider, &response)?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("orient failed: {error}"))?;
+    if bytes.len() > 8 * 1024 {
+        return Err("orient returned an oversized response".into());
+    }
+    let payload: Value =
+        serde_json::from_slice(&bytes).map_err(|_| "orient returned invalid JSON".to_owned())?;
+    if !status.is_success() {
+        return Err(payload
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("invalid_orient_decision")
+            .to_owned());
+    }
+    let Some(object) = payload.as_object() else {
+        return Err("invalid_orient_decision".into());
+    };
+    if object
+        .keys()
+        .any(|key| key != "bucket" && key != "summarySentence")
+    {
+        return Err("invalid_orient_decision".into());
+    }
+    let bucket = object
+        .get("bucket")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "invalid_orient_decision".to_owned())?
+        .to_owned();
+    if bucket == DIRECT_ANSWER_BUCKET {
+        return Ok(OrientDecision {
+            bucket,
+            summary_sentence: None,
+        });
+    }
+    let sentence = match object.get("summarySentence") {
+        Some(Value::String(value)) => value.trim().to_owned(),
+        _ => return Err("invalid_orient_decision".into()),
+    };
+    if !valid_summary_sentence(&sentence) {
+        return Err("invalid_orient_decision".into());
+    }
+    Ok(OrientDecision {
+        bucket,
+        summary_sentence: Some(sentence),
+    })
 }
 
 pub async fn compact_context(
@@ -511,6 +673,7 @@ pub async fn stream_veil_chat(
     let VeilRequestOptions {
         max_output_tokens,
         include_tools,
+        harness_bucket,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -534,6 +697,9 @@ pub async fn stream_veil_chat(
     }
     if include_tools && !tools.is_empty() {
         object.insert("tools".into(), Value::Array(tools.to_vec()));
+    }
+    if let Some(bucket) = harness_bucket.as_deref().filter(|value| !value.is_empty()) {
+        object.insert("harness_bucket".into(), Value::String(bucket.to_owned()));
     }
     let client = shared_client(&session.config.provider)?;
     let mut request = client
@@ -800,6 +966,7 @@ mod tests {
             id: "company-endpoint".into(),
             name: "test".into(),
             base_url: "https://127.0.0.1".into(),
+            mode: crate::config::ProviderMode::Local,
             chat_endpoint_path: Some("/v1/chat/completions".into()),
             api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),

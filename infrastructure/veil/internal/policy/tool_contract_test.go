@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"umbratic-veil/internal/prompts"
 )
 
 // The runner generates its tool contract from one catalog; this file is that
@@ -37,7 +39,7 @@ func TestChatRouteAcceptsTheGeneratedRunnerToolContract(t *testing.T) {
 		t.Fatalf("read tool contract fixture: %v", err)
 	}
 	body := `{"messages":[{"role":"user","content":"hello"}],"stream":true,"tools":` + string(raw) + `}`
-	if _, err := DecodeChatInput(strings.NewReader(body)); err != nil {
+	if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err != nil {
 		t.Fatalf("chat route rejected the runner's generated tools: %v", err)
 	}
 }

@@ -10,11 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
-pub const RUNNER_TOOL_NAMES: [&str; 9] = [
+pub const RUNNER_TOOL_NAMES: [&str; 10] = [
     "read",
     "ls",
     "find",
     "grep",
+    "search",
     "write",
     "edit",
     "lsp",
@@ -65,11 +66,22 @@ pub struct MtlsConfig {
     pub pinned_server_certificate_sha256: Option<String>,
 }
 
+/// Where the configured Veil runs. Supplied as trusted desktop config rather
+/// than inferred from the URL, because it selects request timeouts and a wrong
+/// guess would silently change degradation behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderMode {
+    Server,
+    Local,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
     pub id: String,
     pub name: String,
     pub base_url: String,
+    pub mode: ProviderMode,
     pub chat_endpoint_path: Option<String>,
     pub api_key: Arc<RwLock<String>>,
     pub model_id: String,
@@ -487,6 +499,16 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
         base_url: string_value(provider_object.get("baseURL"), "provider.baseURL")?
             .trim_end_matches('/')
             .to_owned(),
+        mode: match provider_object.get("mode").and_then(Value::as_str) {
+            Some("server") => ProviderMode::Server,
+            Some("local") => ProviderMode::Local,
+            Some(other) => {
+                return Err(format!(
+                    "provider.mode must be server or local, got {other}"
+                ));
+            }
+            None => return Err("provider.mode is required".to_owned()),
+        },
         chat_endpoint_path: optional_string(provider_object.get("chatEndpointPath")),
         api_key: Arc::new(RwLock::new(
             provider_object
@@ -609,6 +631,7 @@ mod tests {
             id: "company-endpoint".into(),
             name: "Veil".into(),
             base_url: "http://127.0.0.1:1234".into(),
+            mode: ProviderMode::Local,
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
@@ -629,6 +652,7 @@ mod tests {
             id: "company-endpoint".into(),
             name: "Veil".into(),
             base_url: base_url.into(),
+            mode: ProviderMode::Local,
             chat_endpoint_path: Some(endpoint.into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),

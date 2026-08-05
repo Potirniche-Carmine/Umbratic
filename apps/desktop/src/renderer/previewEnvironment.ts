@@ -444,7 +444,7 @@ function previewCapabilityReport(): CapabilityProbeReport {
       category: "required",
       importance: "required",
       status: "missing",
-      purpose: "Starts local workspace tools for read, find, grep, write, edit, and command execution.",
+      purpose: "Starts local workspace tools for read, find, grep, search, write, edit, and command execution.",
       installHint: "Open the Electron app to check the runner bundle.",
       workflows: ["runner", "workspace tools"],
       checkedAt,

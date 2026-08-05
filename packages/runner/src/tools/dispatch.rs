@@ -1,5 +1,40 @@
 use super::*;
 
+/// How one dispatched call affects the warm `search` path index.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexUpdate {
+    None,
+    /// A typed mutation whose result names exactly which paths changed.
+    Mutation,
+    /// A command can create or delete files before it fails, times out, or is
+    /// aborted, so exit status says nothing about whether the tree moved.
+    Coarse,
+}
+
+impl IndexUpdate {
+    fn for_request(request: &ToolRequest) -> Self {
+        match request {
+            ToolRequest::Write(_) | ToolRequest::Edit(_) | ToolRequest::ApplyPatch(_) => {
+                Self::Mutation
+            }
+            ToolRequest::Command(_) => Self::Coarse,
+            _ => Self::None,
+        }
+    }
+
+    fn settle(self, session: &Session, tool: &str, result: Option<&ToolResult>) {
+        match self {
+            Self::None => {}
+            Self::Coarse => session.search_index.mark_stale(),
+            Self::Mutation => {
+                if let Some(result) = result {
+                    note_mutation(&session.search_index, tool, result.details.as_ref());
+                }
+            }
+        }
+    }
+}
+
 fn tool_finished_event(
     session: &Session,
     call: &ToolCall,
@@ -143,6 +178,7 @@ pub async fn execute_tool(
     };
     sink.emit(json!({ "type":"tool.policy.stage", "taskId":session.task_id, "toolCallId":call.id, "stage":"normalize_tool_call", "outcome":"passed", "at":now_iso() }));
     let emits_own_output = request.emits_own_output();
+    let index_update = IndexUpdate::for_request(&request);
     let result: ToolExecutionResult = match request {
         ToolRequest::Read(request) => read_tool(&session, &request.arguments).await,
         ToolRequest::ReadAttachment(request) => read_attachment_tool(&session, &request.arguments),
@@ -158,6 +194,7 @@ pub async fn execute_tool(
         ToolRequest::Ls(request) => ls_tool(&session, &request.arguments).await,
         ToolRequest::Find(request) => find_tool(&session, &request.arguments).await,
         ToolRequest::Grep(request) => grep_tool(&session, &request.arguments).await,
+        ToolRequest::Search(request) => search_tool(session.clone(), &request.arguments).await,
         ToolRequest::Lsp(request) => match session.lsp.as_ref() {
             // Structured evidence goes in details; content is a short rendering
             // for the model. No consumer parses the prose.
@@ -237,6 +274,7 @@ pub async fn execute_tool(
             })
         }
     };
+    index_update.settle(&session, &call.name, result.as_ref().ok());
     match result {
         Ok(mut result) => {
             if !emits_own_output && !result.content.is_empty() {

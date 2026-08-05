@@ -150,6 +150,11 @@ export function isImageContextAttachment(attachment: ContextAttachment): boolean
   return /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)(?:\s|$)/i.test(candidate);
 }
 
+export function isPdfContextAttachment(attachment: ContextAttachment): boolean {
+  const candidate = `${attachment.name ?? ""} ${attachment.path ?? ""}`.toLowerCase();
+  return /\.pdf(?:\s|$)/i.test(candidate);
+}
+
 export function adaptiveOutputReserve(contextLength: number, contentTokens: number): number {
   const preferred = Math.min(CONTEXT_OUTPUT_RESERVE_TOKENS, Math.floor(contextLength * 0.5));
   const available = Math.max(0, contextLength - contentTokens);
@@ -180,7 +185,11 @@ export function estimateContextUsage(
       (total, attachment) => {
         if (isImageContextAttachment(attachment)) return total + CONTEXT_IMAGE_TOKENS;
         const measured = attachment.contextTokens;
-        const requested = Number.isFinite(measured) && (measured ?? -1) >= 0 ? Math.round(measured ?? 0) : CONTEXT_FILE_TOKENS;
+        // A PDF without a measured inspection is not a 512-token stub: absent a
+        // native text extract it will be rasterized, so at least one page image
+        // is the honest fallback.
+        const fallback = isPdfContextAttachment(attachment) ? CONTEXT_IMAGE_TOKENS : CONTEXT_FILE_TOKENS;
+        const requested = Number.isFinite(measured) && (measured ?? -1) >= 0 ? Math.round(measured ?? 0) : fallback;
         const included = Math.min(requested, remainingAttachmentTokens);
         remainingAttachmentTokens -= included;
         return total + included;

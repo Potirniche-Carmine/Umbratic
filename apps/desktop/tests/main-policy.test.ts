@@ -79,6 +79,7 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
       id: "company-endpoint",
       modelId: "veil-managed",
       baseURL: "http://127.0.0.1:8080",
+      mode: "local",
       chatEndpointPath: "/api/engineering/chat",
     },
   };
@@ -91,6 +92,16 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
     /approved Veil chat API/,
   );
   assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, system: "client prompt" }, model), /protected system prompts/);
+  // provider.mode is trusted config that selects the runner's orient timeout,
+  // so it must be explicit rather than inferred from the URL.
+  for (const mode of [undefined, "", "auto", "Local", 1]) {
+    assert.throws(
+      () => policy.assertUmbraticRunnerConfig({ ...config, provider: { ...config.provider, mode } }, model),
+      /provider mode/,
+      `mode ${JSON.stringify(mode)} must be rejected`,
+    );
+  }
+  assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig({ ...config, provider: { ...config.provider, mode: "server" } }, model));
 });
 
 test("tool settings normalize enabled tools without accepting unknown ids", () => {
@@ -99,6 +110,7 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     ls: true,
     find: true,
     grep: true,
+    search: true,
     write: true,
     edit: true,
     lsp: true,
@@ -110,6 +122,7 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     ls: false,
     find: false,
     grep: false,
+    search: false,
     write: false,
     edit: false,
     lsp: false,

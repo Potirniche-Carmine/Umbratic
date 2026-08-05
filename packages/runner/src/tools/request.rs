@@ -26,6 +26,7 @@ request_type!(ApplyPatchRequest);
 request_type!(LsRequest);
 request_type!(FindRequest);
 request_type!(GrepRequest);
+request_type!(SearchRequest);
 request_type!(LspRequest);
 request_type!(WorkspaceGraphRequest);
 request_type!(ReadSkillRequest);
@@ -48,6 +49,7 @@ pub(super) enum ToolRequest {
     Ls(LsRequest),
     Find(FindRequest),
     Grep(GrepRequest),
+    Search(SearchRequest),
     Lsp(LspRequest),
     WorkspaceGraph(WorkspaceGraphRequest),
     Command(CommandRequest),
@@ -104,6 +106,10 @@ impl ToolRequest {
                 primary: string_arg(&arguments, &["pattern"]),
                 arguments,
             }),
+            "search" => Self::Search(SearchRequest {
+                primary: string_arg(&arguments, &["query"]),
+                arguments,
+            }),
             "lsp" => Self::Lsp(LspRequest {
                 primary: format!(
                     "{} {}",
@@ -158,6 +164,7 @@ impl ToolRequest {
             Self::Ls(request) => format!("ls {}", request.primary),
             Self::Find(request) => format!("find {}", request.primary),
             Self::Grep(request) => format!("grep {}", request.primary),
+            Self::Search(request) => format!("search {}", request.primary),
             Self::Lsp(request) => format!("lsp {}", request.primary),
             Self::Command(request) => redact_text(&request.command, 320),
             Self::WorkspaceGraph(request) => {
@@ -189,6 +196,7 @@ impl ToolRequest {
             Self::Ls(request) => &request.arguments,
             Self::Find(request) => &request.arguments,
             Self::Grep(request) => &request.arguments,
+            Self::Search(request) => &request.arguments,
             Self::Lsp(request) => &request.arguments,
             Self::WorkspaceGraph(request) => &request.arguments,
             Self::Command(request) => &request.arguments,
@@ -220,6 +228,7 @@ pub fn tool_capability_name(name: &str) -> Option<&'static str> {
         "ls" => Some("ls"),
         "find" => Some("find"),
         "grep" => Some("grep"),
+        "search" => Some("search"),
         "lsp" => Some("lsp"),
         "workspace_graph" => Some("workspace_graph"),
         "command" | "run_program" => Some("command"),

@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { pdfInspectorBinaryPath } from "./pdfInspector";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
@@ -41,6 +42,8 @@ type PackageResolveResult = { version?: string; path?: string } | null | undefin
 export type CapabilityProbeOptions = {
   force?: boolean;
   runnerPath?: string | null;
+  /** Overrides umbratic-pdf binary resolution; pass null to simulate absence. */
+  pdfInspectorPath?: string | null;
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
   execFile?: ExecFileLike;
@@ -372,7 +375,7 @@ function runnerBinaryProbe(options: CapabilityProbeOptions): CapabilityProbeResu
       label: "Umbratic runner",
       category: "required",
       importance: "required",
-      purpose: "Starts local workspace tools for read, find, grep, write, edit, and command execution.",
+      purpose: "Starts local workspace tools for read, find, grep, search, write, edit, and command execution.",
       installHint: "Build the runner workspace before starting tasks.",
       workflows: ["runner", "workspace tools"],
     },
@@ -384,6 +387,27 @@ function runnerBinaryProbe(options: CapabilityProbeOptions): CapabilityProbeResu
   );
 }
 
+function pdfInspectorProbe(options: CapabilityProbeOptions): CapabilityProbeResult {
+  const inspectorPath =
+    options.pdfInspectorPath !== undefined ? options.pdfInspectorPath : pdfInspectorBinaryPath();
+  return staticProbe(
+    {
+      id: "umbratic-pdf",
+      label: "Umbratic PDF inspector",
+      category: "recommended",
+      importance: "recommended",
+      purpose: "Classifies PDF attachments and extracts native text so text PDFs skip page rasterization.",
+      installHint: "Build the Rust workspace so the umbratic-pdf CLI is available.",
+      workflows: ["PDF attachment", "PDF extraction", "context estimates"],
+    },
+    inspectorPath ? "available" : "missing",
+    options,
+    inspectorPath
+      ? { version: "built", executablePath: inspectorPath }
+      : { message: "The umbratic-pdf CLI was not found; PDF attachments fall back to page images." },
+  );
+}
+
 function workspaceToolsProbe(options: CapabilityProbeOptions): CapabilityProbeResult {
   return staticProbe(
     {
@@ -391,13 +415,13 @@ function workspaceToolsProbe(options: CapabilityProbeOptions): CapabilityProbeRe
       label: "Workspace tool surface",
       category: "required",
       importance: "required",
-      purpose: "Provides the model-visible read, ls, find, grep, write, edit, and command tools.",
+      purpose: "Provides the model-visible read, ls, find, grep, search, write, edit, and command tools.",
       installHint: "Build and start the runner if workspace tools are unavailable.",
-      workflows: ["read", "ls", "find", "grep", "write", "edit", "command"],
+      workflows: ["read", "ls", "find", "grep", "search", "write", "edit", "command"],
     },
     "available",
     options,
-    { version: "read/ls/find/grep/write/edit/command" },
+    { version: "read/ls/find/grep/search/write/edit/command" },
   );
 }
 
@@ -706,6 +730,7 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
   const nodeProbe = nodeRuntimeProbe(options);
   const runnerProbe = runnerBinaryProbe(options);
   const workspaceProbe = workspaceToolsProbe(options);
+  const pdfProbe = pdfInspectorProbe(options);
   const pythonSpec = commandProbeSpecs.find((spec) => spec.id === "python");
   if (!pythonSpec) {
     throw new Error("Python probe spec is missing.");
@@ -725,6 +750,7 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
     nodeProbe,
     runnerProbe,
     workspaceProbe,
+    pdfProbe,
     ...commandProbes.slice(0, 4),
     pythonProbe,
     ...commandProbes.slice(4),
@@ -821,8 +847,10 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
   if (needs.ocr) {
     const tesseract = capabilityById(report, "tesseract");
     const pdfToImg = capabilityById(report, "pdf-to-img");
+    const pdfInspector = capabilityById(report, "umbratic-pdf");
     lines.push(`- local OCR engine: ${statusLabel(tesseract)}`);
     lines.push(`- PDF-to-image support for OCR: ${statusLabel(pdfToImg)}`);
+    lines.push(`- native PDF inspector (classification + text extraction): ${statusLabel(pdfInspector)}`);
     if (tesseract?.status !== "available") {
       lines.push("- local OCR digest generation is unavailable.");
     }
@@ -844,7 +872,7 @@ function affectedCurrentRun(probe: CapabilityProbeResult, needs: CapabilityPromp
   if ((probe.id === "rg" || probe.id === "fd") && (needs.python || needs.cmake || needs.artifacts)) return true;
   if (needs.python && ["uv", "python"].includes(probe.id)) return true;
   if (needs.cmake && ["cmake", "ninja", "compiler"].includes(probe.id)) return true;
-  if (needs.ocr && ["tesseract", "pdf-to-img"].includes(probe.id)) return true;
+  if (needs.ocr && ["tesseract", "pdf-to-img", "umbratic-pdf"].includes(probe.id)) return true;
   if (needs.artifacts && probe.category === "optional-artifacts") return true;
   return undefined;
 }

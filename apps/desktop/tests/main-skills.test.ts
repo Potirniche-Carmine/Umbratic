@@ -55,7 +55,13 @@ test("installBundledSystemSkills provisions the central skills layout", () => {
   const documentsSkill = fs.readFileSync(path.join(directory, "system", "umbratic-documents", "SKILL.md"), "utf8");
   assert.match(documentsSkill, /Non-Negotiable Visual QA/);
   assert.doesNotMatch(documentsSkill, /In-App Review Snapshot|\.docx\.review\.json/);
-  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-cmake")), false);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-cmake", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-discovery", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-product-spec", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-security-review", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-marketing-brief", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-sales-enablement", "SKILL.md")), true);
+  // OCR stays orphaned on disk: umbratic-pdf covers that path in v1.
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-ocr")), false);
   assert.match(fs.readFileSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md"), "utf8"), /OCR Workflow/);
   const pythonSkill = fs.readFileSync(path.join(directory, "system", "umbratic-python", "SKILL.md"), "utf8");
@@ -156,7 +162,12 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-ocr"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-git-worktree" && skill.name === "Git Worktree"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-python" && skill.name === "Python"), true);
-  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-cmake"), false);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-cmake" && skill.name === "C/CMake"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-discovery" && skill.name === "Discovery"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-product-spec" && skill.name === "Product Spec"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-security-review" && skill.name === "Security Review"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing-brief" && skill.name === "Marketing Brief"), true);
+  assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales-enablement" && skill.name === "Sales Enablement"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-data-analysis" && skill.name === "Data Analysis"), true);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-marketing"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
@@ -211,7 +222,13 @@ test("harness profiles select only their relevant system skills", () => {
   assert.equal(engineering["umbratic-presentations"], false);
   assert.equal(engineering["umbratic-documents"], false);
   assert.equal(engineering["umbratic-spreadsheets"], false);
-  assert.equal("umbratic-cmake" in engineering, false);
+  assert.equal(engineering["umbratic-cmake"], true);
+  assert.equal(engineering["umbratic-discovery"], true);
+  assert.equal(engineering["umbratic-product-spec"], true);
+  assert.equal(engineering["umbratic-security-review"], true);
+  // Domain skills belong to their own profile only.
+  assert.equal(engineering["umbratic-marketing-brief"], false);
+  assert.equal(engineering["umbratic-sales-enablement"], false);
   assert.equal("umbratic-ocr" in engineering, false);
 
   for (const profile of ["marketing", "sales"]) {
@@ -222,6 +239,13 @@ test("harness profiles select only their relevant system skills", () => {
     assert.equal(business["umbratic-presentations"], true);
     assert.equal(business["umbratic-documents"], true);
     assert.equal(business["umbratic-spreadsheets"], true);
+    assert.equal(business["umbratic-discovery"], true);
+    // Engineering-only skills must not leak into the business profiles.
+    assert.equal(business["umbratic-cmake"], false);
+    assert.equal(business["umbratic-product-spec"], false);
+    assert.equal(business["umbratic-security-review"], false);
+    assert.equal(business["umbratic-marketing-brief"], profile === "marketing");
+    assert.equal(business["umbratic-sales-enablement"], profile === "sales");
   }
 });
 

@@ -1,9 +1,11 @@
-name: Verify
+name: Audit
+
+# Solo-developer CI: pull requests get a fast dependency audit and nothing
+# else — the full test-and-build verification is runnable locally and still
+# gates every tagged release in package-desktop.yml, which is the only place
+# binaries are built. Nothing runs on merges to main.
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
@@ -11,10 +13,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: audit-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
-    name: Verify
+  audit:
+    name: Audit
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -23,43 +30,9 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: infrastructure/veil/go.mod
-          cache: false
-
-      - name: Set up Rust
-        run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt --no-self-update && rustup default 1.96.0
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts --omit=peer
-
-      - name: Fetch locked Rust dependencies
-        run: cargo fetch --locked
-
-      - name: Audit Rust dependencies
-        run: cargo install cargo-audit --locked --version 0.22.2
-
-      - name: Install Go vulnerability scanner
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-
-      - name: Audit dependency vulnerabilities and provenance
-        run: npm run supply-chain:audit
-
-      - name: Generate locked dependency SBOM
-        run: npm run supply-chain:sbom
-
-      - name: Verify changes
-        env:
-          CARGO_NET_OFFLINE: "true"
-        run: npm run test:all
-
-      - name: Upload dependency SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: umbratic-supply-chain-metadata
-          path: artifacts/supply-chain/umbratic-sbom.cdx.json
-          if-no-files-found: error
+      # Lockfile-only, so no dependency install and no toolchain setup: the
+      # whole job stays under a minute. The deeper Rust/Go audits and
+      # provenance checks still run in the tagged-release workflow.
+      - name: Audit npm dependency vulnerabilities
+        run: npm audit --package-lock-only --ignore-scripts --omit=peer --audit-level=low

@@ -1,0 +1,1021 @@
+[
+  {
+    "id": "eng-capabilities",
+    "route": "engineering/chat",
+    "request": "what can you do?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "eng-change",
+    "route": "engineering/chat",
+    "request": "add a --verbose flag to the CLI",
+    "bucket": "code_change"
+  },
+  {
+    "id": "eng-change-2",
+    "route": "engineering/chat",
+    "request": "fix the off-by-one in the pagination helper",
+    "bucket": "code_change"
+  },
+  {
+    "id": "eng-change-3",
+    "route": "engineering/chat",
+    "request": "implement retry with backoff on the upload path",
+    "bucket": "code_change"
+  },
+  {
+    "id": "eng-change-4",
+    "route": "engineering/chat",
+    "request": "make the timeout configurable instead of hardcoded",
+    "bucket": "code_change"
+  },
+  {
+    "id": "eng-change-5",
+    "route": "engineering/chat",
+    "request": "wire the new endpoint into the router",
+    "bucket": "code_change"
+  },
+  {
+    "id": "eng-chitchat",
+    "route": "engineering/chat",
+    "request": "hey, how's it going?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "eng-concept",
+    "route": "engineering/chat",
+    "request": "what's the difference between a mutex and a semaphore?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "eng-concept-2",
+    "route": "engineering/chat",
+    "request": "explain what CRDTs are, generally",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "eng-debug",
+    "route": "engineering/chat",
+    "request": "the auth test is failing with a nil pointer, why?",
+    "bucket": "debug_failure"
+  },
+  {
+    "id": "eng-debug-2",
+    "route": "engineering/chat",
+    "request": "app crashes on startup since the last commit",
+    "bucket": "debug_failure"
+  },
+  {
+    "id": "eng-debug-3",
+    "route": "engineering/chat",
+    "request": "why is this throwing ECONNREFUSED?",
+    "bucket": "debug_failure"
+  },
+  {
+    "id": "eng-debug-4",
+    "route": "engineering/chat",
+    "request": "CI is red but it passes locally, what's different?",
+    "bucket": "debug_failure"
+  },
+  {
+    "id": "eng-debug-5",
+    "route": "engineering/chat",
+    "request": "this test is flaky, track down why",
+    "bucket": "debug_failure"
+  },
+  {
+    "id": "eng-debug-hard",
+    "route": "engineering/chat",
+    "request": "think really hard about why this segfaults",
+    "bucket": "debug_failure",
+    "note": "adversarial: think hard is not deep_review"
+  },
+  {
+    "id": "eng-deep",
+    "route": "engineering/chat",
+    "request": "do a security review of the auth and session code",
+    "bucket": "deep_review"
+  },
+  {
+    "id": "eng-deep-2",
+    "route": "engineering/chat",
+    "request": "threat model the IPC boundary",
+    "bucket": "deep_review"
+  },
+  {
+    "id": "eng-deep-3",
+    "route": "engineering/chat",
+    "request": "look for injection vulnerabilities in the command path",
+    "bucket": "deep_review"
+  },
+  {
+    "id": "eng-deep-4",
+    "route": "engineering/chat",
+    "request": "audit this whole monorepo for security issues",
+    "bucket": "deep_review",
+    "note": "must ask scoping questions before scanning"
+  },
+  {
+    "id": "eng-deep-5",
+    "route": "engineering/chat",
+    "request": "check whether we leak secrets anywhere in logging or telemetry",
+    "bucket": "deep_review"
+  },
+  {
+    "id": "eng-deep-6",
+    "route": "engineering/chat",
+    "request": "review the upload handler for path traversal and SSRF",
+    "bucket": "deep_review"
+  },
+  {
+    "id": "eng-deep-adversarial",
+    "route": "engineering/chat",
+    "request": "do a really deep, careful analysis of this rendering performance problem",
+    "bucket": "debug_failure",
+    "note": "adversarial: deep analysis without security intent"
+  },
+  {
+    "id": "eng-deep-adversarial-2",
+    "route": "engineering/chat",
+    "request": "take your time and audit the readability of this module",
+    "bucket": "review_audit",
+    "note": "adversarial: audit without security intent"
+  },
+  {
+    "id": "eng-direct-opinion",
+    "route": "engineering/chat",
+    "request": "is Rust a good choice for this kind of tool, generally?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "eng-direct-syntax",
+    "route": "engineering/chat",
+    "request": "remind me of the syntax for a Go type switch",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "eng-docs",
+    "route": "engineering/chat",
+    "request": "update the README to match the new CLI flags",
+    "bucket": "docs_change"
+  },
+  {
+    "id": "eng-docs-2",
+    "route": "engineering/chat",
+    "request": "the setup instructions are stale, fix them",
+    "bucket": "docs_change"
+  },
+  {
+    "id": "eng-docs-3",
+    "route": "engineering/chat",
+    "request": "document the new config fields in the docs folder",
+    "bucket": "docs_change"
+  },
+  {
+    "id": "eng-explain",
+    "route": "engineering/chat",
+    "request": "how does authentication work here?",
+    "bucket": "code_explain"
+  },
+  {
+    "id": "eng-explain-2",
+    "route": "engineering/chat",
+    "request": "walk me through the request lifecycle in the runner",
+    "bucket": "code_explain"
+  },
+  {
+    "id": "eng-explain-3",
+    "route": "engineering/chat",
+    "request": "what does the compaction path actually do?",
+    "bucket": "code_explain"
+  },
+  {
+    "id": "eng-explain-4",
+    "route": "engineering/chat",
+    "request": "where does the retry logic live and when does it fire?",
+    "bucket": "code_explain"
+  },
+  {
+    "id": "eng-explain-hard",
+    "route": "engineering/chat",
+    "request": "think hard about how the tool loop is structured and explain it",
+    "bucket": "code_explain",
+    "note": "adversarial: think hard is not deep_review"
+  },
+  {
+    "id": "eng-followup-continue",
+    "route": "engineering/chat",
+    "request": "keep going",
+    "previousBucket": "deep_review",
+    "bucket": "deep_review",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "eng-followup-draft",
+    "route": "engineering/chat",
+    "request": "ok, draft it",
+    "previousBucket": "spec_discovery",
+    "bucket": "spec_discovery",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "eng-followup-no",
+    "route": "engineering/chat",
+    "request": "actually, just explain it instead",
+    "previousBucket": "code_change",
+    "bucket": "code_explain",
+    "note": "referential follow-up that changes intent"
+  },
+  {
+    "id": "eng-followup-scope",
+    "route": "engineering/chat",
+    "request": "narrow it to just the auth package",
+    "previousBucket": "deep_review",
+    "bucket": "deep_review",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "eng-followup-yes",
+    "route": "engineering/chat",
+    "request": "yes, go ahead",
+    "previousBucket": "code_change",
+    "bucket": "code_change",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "eng-open",
+    "route": "engineering/chat",
+    "request": "clean this up and also write the launch email",
+    "bucket": "open_task"
+  },
+  {
+    "id": "eng-open-2",
+    "route": "engineering/chat",
+    "request": "there's a bunch of stuff wrong with this project, help",
+    "bucket": "open_task"
+  },
+  {
+    "id": "eng-refactor",
+    "route": "engineering/chat",
+    "request": "migrate the v1 client to the v2 API across the repo",
+    "bucket": "refactor_migrate"
+  },
+  {
+    "id": "eng-refactor-2",
+    "route": "engineering/chat",
+    "request": "split this god object into smaller modules",
+    "bucket": "refactor_migrate"
+  },
+  {
+    "id": "eng-refactor-3",
+    "route": "engineering/chat",
+    "request": "extract the duplicated retry code into one helper across all three callers",
+    "bucket": "refactor_migrate"
+  },
+  {
+    "id": "eng-review",
+    "route": "engineering/chat",
+    "request": "review my latest changes",
+    "bucket": "review_audit"
+  },
+  {
+    "id": "eng-review-2",
+    "route": "engineering/chat",
+    "request": "any issues with this diff?",
+    "bucket": "review_audit"
+  },
+  {
+    "id": "eng-review-3",
+    "route": "engineering/chat",
+    "request": "do a quality pass over the parser module",
+    "bucket": "review_audit"
+  },
+  {
+    "id": "eng-review-4",
+    "route": "engineering/chat",
+    "request": "look over this PR before I merge it",
+    "bucket": "review_audit"
+  },
+  {
+    "id": "eng-spec",
+    "route": "engineering/chat",
+    "request": "help me write a PRD for offline mode",
+    "bucket": "spec_discovery"
+  },
+  {
+    "id": "eng-spec-2",
+    "route": "engineering/chat",
+    "request": "I want to plan out a new sync architecture",
+    "bucket": "spec_discovery"
+  },
+  {
+    "id": "eng-spec-3",
+    "route": "engineering/chat",
+    "request": "draft an RFC for how we should do multi-tenancy",
+    "bucket": "spec_discovery"
+  },
+  {
+    "id": "eng-spec-4",
+    "route": "engineering/chat",
+    "request": "write a design doc for how we should handle offline conflict resolution",
+    "bucket": "spec_discovery"
+  },
+  {
+    "id": "eng-test",
+    "route": "engineering/chat",
+    "request": "run the test suite",
+    "bucket": "test_verify"
+  },
+  {
+    "id": "eng-test-2",
+    "route": "engineering/chat",
+    "request": "does the build still pass?",
+    "bucket": "test_verify"
+  },
+  {
+    "id": "eng-test-3",
+    "route": "engineering/chat",
+    "request": "add tests for the new parser",
+    "bucket": "test_verify"
+  },
+  {
+    "id": "eng-test-4",
+    "route": "engineering/chat",
+    "request": "verify the runner suite is still green after my change",
+    "bucket": "test_verify"
+  },
+  {
+    "id": "eng-tour",
+    "route": "engineering/chat",
+    "request": "what's in this repo?",
+    "bucket": "repo_orient"
+  },
+  {
+    "id": "eng-tour-2",
+    "route": "engineering/chat",
+    "request": "give me a high-level map of this codebase",
+    "bucket": "repo_orient"
+  },
+  {
+    "id": "eng-tour-3",
+    "route": "engineering/chat",
+    "request": "I just cloned this. Where do I start?",
+    "bucket": "repo_orient"
+  },
+  {
+    "id": "eng-tour-4",
+    "route": "engineering/chat",
+    "request": "which directories actually matter here?",
+    "bucket": "repo_orient"
+  },
+  {
+    "id": "eng-who",
+    "route": "engineering/chat",
+    "request": "who are you and who made you?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "mkt-asset",
+    "route": "marketing/chat",
+    "request": "make a one-pager deck for the trade show",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-asset-2",
+    "route": "marketing/chat",
+    "request": "turn this brief into a PPTX",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-asset-3",
+    "route": "marketing/chat",
+    "request": "build the customer-facing overview deck",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-asset-4",
+    "route": "marketing/chat",
+    "request": "I need a comparison sheet as an XLSX",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-asset-5",
+    "route": "marketing/chat",
+    "request": "put together a DOCX case study template",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-asset-6",
+    "route": "marketing/chat",
+    "request": "make a one-pager we can hand out at the booth",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-asset-7",
+    "route": "marketing/chat",
+    "request": "turn the campaign brief into slides for Thursday",
+    "bucket": "asset_build"
+  },
+  {
+    "id": "mkt-campaign",
+    "route": "marketing/chat",
+    "request": "build me a launch plan for Q3",
+    "bucket": "campaign_plan"
+  },
+  {
+    "id": "mkt-campaign-2",
+    "route": "marketing/chat",
+    "request": "what should our GTM look like for the enterprise tier?",
+    "bucket": "campaign_plan"
+  },
+  {
+    "id": "mkt-campaign-3",
+    "route": "marketing/chat",
+    "request": "plan the webinar series for next quarter",
+    "bucket": "campaign_plan"
+  },
+  {
+    "id": "mkt-campaign-4",
+    "route": "marketing/chat",
+    "request": "we have $40k and six weeks, what campaign do we run?",
+    "bucket": "campaign_plan"
+  },
+  {
+    "id": "mkt-campaign-5",
+    "route": "marketing/chat",
+    "request": "map out the channels for the v2 launch",
+    "bucket": "campaign_plan"
+  },
+  {
+    "id": "mkt-campaign-6",
+    "route": "marketing/chat",
+    "request": "build a nurture sequence for trial signups",
+    "bucket": "campaign_plan"
+  },
+  {
+    "id": "mkt-chitchat",
+    "route": "marketing/chat",
+    "request": "morning!",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "mkt-complete-brief",
+    "route": "marketing/chat",
+    "request": "Audience: platform engineers. CTA: book a demo. Tone: plain, technical. Must include SOC 2. Max 120 words. Write the landing hero.",
+    "bucket": "copy_draft",
+    "note": "complete brief; playbook must skip discovery"
+  },
+  {
+    "id": "mkt-concept",
+    "route": "marketing/chat",
+    "request": "what does CAC mean?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "mkt-copy",
+    "route": "marketing/chat",
+    "request": "write the hero copy for the landing page",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-copy-2",
+    "route": "marketing/chat",
+    "request": "tighten this email, here's the draft: ...",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-copy-3",
+    "route": "marketing/chat",
+    "request": "write three subject line options for the announcement",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-copy-4",
+    "route": "marketing/chat",
+    "request": "rewrite this paragraph to be less jargony",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-copy-5",
+    "route": "marketing/chat",
+    "request": "draft the LinkedIn ad variants for the enterprise audience",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-copy-6",
+    "route": "marketing/chat",
+    "request": "we need pricing page copy that explains the tiers",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-copy-7",
+    "route": "marketing/chat",
+    "request": "shorten this to fit a 90-character meta description",
+    "bucket": "copy_draft"
+  },
+  {
+    "id": "mkt-deep-adversarial",
+    "route": "marketing/chat",
+    "request": "think hard about our positioning",
+    "bucket": "positioning",
+    "note": "adversarial: think hard is not a routing signal"
+  },
+  {
+    "id": "mkt-direct-2",
+    "route": "marketing/chat",
+    "request": "what's the difference between demand gen and growth marketing?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "mkt-direct-3",
+    "route": "marketing/chat",
+    "request": "thanks, that's helpful",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "mkt-direct-4",
+    "route": "marketing/chat",
+    "request": "who are you?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "mkt-followup",
+    "route": "marketing/chat",
+    "request": "yes, write it",
+    "previousBucket": "copy_draft",
+    "bucket": "copy_draft",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "mkt-followup-2",
+    "route": "marketing/chat",
+    "request": "yes, all defaults are fine",
+    "previousBucket": "campaign_plan",
+    "bucket": "campaign_plan",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "mkt-followup-3",
+    "route": "marketing/chat",
+    "request": "go ahead and build it",
+    "previousBucket": "asset_build",
+    "bucket": "asset_build",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "mkt-followup-4",
+    "route": "marketing/chat",
+    "request": "make it shorter",
+    "previousBucket": "copy_draft",
+    "bucket": "copy_draft",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "mkt-open",
+    "route": "marketing/chat",
+    "request": "we need to do something about awareness",
+    "bucket": "open_task"
+  },
+  {
+    "id": "mkt-open-2",
+    "route": "marketing/chat",
+    "request": "the launch is in three weeks and nothing is ready",
+    "bucket": "open_task"
+  },
+  {
+    "id": "mkt-open-3",
+    "route": "marketing/chat",
+    "request": "can you help with marketing stuff?",
+    "bucket": "open_task"
+  },
+  {
+    "id": "mkt-perf",
+    "route": "marketing/chat",
+    "request": "here are last month's channel numbers, what's working?",
+    "bucket": "performance_review"
+  },
+  {
+    "id": "mkt-perf-2",
+    "route": "marketing/chat",
+    "request": "analyze this campaign spreadsheet",
+    "bucket": "performance_review"
+  },
+  {
+    "id": "mkt-perf-3",
+    "route": "marketing/chat",
+    "request": "our conversion dropped 12% last month, dig into this data",
+    "bucket": "performance_review"
+  },
+  {
+    "id": "mkt-perf-4",
+    "route": "marketing/chat",
+    "request": "which channels are actually paying back, here's the export",
+    "bucket": "performance_review"
+  },
+  {
+    "id": "mkt-perf-5",
+    "route": "marketing/chat",
+    "request": "review these ad set numbers and tell me what to cut",
+    "bucket": "performance_review"
+  },
+  {
+    "id": "mkt-positioning",
+    "route": "marketing/chat",
+    "request": "help me sharpen our positioning against the incumbent",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-positioning-2",
+    "route": "marketing/chat",
+    "request": "we need messaging pillars for the new product",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-positioning-3",
+    "route": "marketing/chat",
+    "request": "our value prop is muddled, help me tighten it",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-positioning-4",
+    "route": "marketing/chat",
+    "request": "what category should we be competing in?",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-positioning-5",
+    "route": "marketing/chat",
+    "request": "write a brand narrative for the rebrand",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-positioning-6",
+    "route": "marketing/chat",
+    "request": "how do we differentiate from the open-source alternative?",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-positioning-7",
+    "route": "marketing/chat",
+    "request": "draft messaging pillars we can hand to sales",
+    "bucket": "positioning"
+  },
+  {
+    "id": "mkt-research",
+    "route": "marketing/chat",
+    "request": "synthesize the attached interview notes",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-2",
+    "route": "marketing/chat",
+    "request": "pull the themes out of this research pack",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-3",
+    "route": "marketing/chat",
+    "request": "read these three competitor PDFs and tell me where we're weak",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-4",
+    "route": "marketing/chat",
+    "request": "summarize what the survey responses actually say",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-5",
+    "route": "marketing/chat",
+    "request": "what patterns show up across these customer calls?",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "mkt-research-6",
+    "route": "marketing/chat",
+    "request": "synthesize the analyst report into three takeaways",
+    "bucket": "research_synth"
+  },
+  {
+    "id": "sales-account",
+    "route": "sales/chat",
+    "request": "build me an account brief from these notes",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-2",
+    "route": "sales/chat",
+    "request": "what do we know about this account?",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-3",
+    "route": "sales/chat",
+    "request": "summarize what happened on this account so far",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-4",
+    "route": "sales/chat",
+    "request": "here are my call notes, turn them into a brief",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-5",
+    "route": "sales/chat",
+    "request": "who are the stakeholders in this deal based on what we have?",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-6",
+    "route": "sales/chat",
+    "request": "pull together background on this prospect from the attached files",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-account-7",
+    "route": "sales/chat",
+    "request": "what do we still not know about this account?",
+    "bucket": "account_research"
+  },
+  {
+    "id": "sales-chitchat",
+    "route": "sales/chat",
+    "request": "hey there",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "sales-complete-brief",
+    "route": "sales/chat",
+    "request": "Persona: CFO. Objection: price vs incumbent. Approved proof: 30% cost reduction case study. No discount authority. Draft the response.",
+    "bucket": "objection_handling",
+    "note": "complete brief; playbook must skip discovery"
+  },
+  {
+    "id": "sales-concept",
+    "route": "sales/chat",
+    "request": "what's MEDDIC?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "sales-deep-adversarial",
+    "route": "sales/chat",
+    "request": "think hard about how to unstick this deal",
+    "bucket": "open_task",
+    "note": "adversarial: think hard is not a routing signal"
+  },
+  {
+    "id": "sales-demo",
+    "route": "sales/chat",
+    "request": "write me a 20-minute demo flow",
+    "bucket": "demo_script"
+  },
+  {
+    "id": "sales-demo-2",
+    "route": "sales/chat",
+    "request": "I need a talk track for the technical buyer",
+    "bucket": "demo_script"
+  },
+  {
+    "id": "sales-demo-3",
+    "route": "sales/chat",
+    "request": "script the demo for a non-technical economic buyer",
+    "bucket": "demo_script"
+  },
+  {
+    "id": "sales-demo-4",
+    "route": "sales/chat",
+    "request": "what's the right order to show features in for this account?",
+    "bucket": "demo_script"
+  },
+  {
+    "id": "sales-demo-5",
+    "route": "sales/chat",
+    "request": "build a 10-minute version of our standard demo",
+    "bucket": "demo_script"
+  },
+  {
+    "id": "sales-demo-6",
+    "route": "sales/chat",
+    "request": "write a talk track for the integration portion",
+    "bucket": "demo_script"
+  },
+  {
+    "id": "sales-direct-2",
+    "route": "sales/chat",
+    "request": "what does ARR stand for?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "sales-direct-3",
+    "route": "sales/chat",
+    "request": "good morning, ready to work?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "sales-direct-4",
+    "route": "sales/chat",
+    "request": "what can you help me with?",
+    "bucket": "direct_answer"
+  },
+  {
+    "id": "sales-discovery",
+    "route": "sales/chat",
+    "request": "prep me for the discovery call tomorrow",
+    "bucket": "discovery_prep"
+  },
+  {
+    "id": "sales-discovery-2",
+    "route": "sales/chat",
+    "request": "what should I ask on the first call?",
+    "bucket": "discovery_prep"
+  },
+  {
+    "id": "sales-discovery-3",
+    "route": "sales/chat",
+    "request": "build me a qualification question set for this persona",
+    "bucket": "discovery_prep"
+  },
+  {
+    "id": "sales-discovery-4",
+    "route": "sales/chat",
+    "request": "what hypotheses should I test on the intro call?",
+    "bucket": "discovery_prep"
+  },
+  {
+    "id": "sales-discovery-5",
+    "route": "sales/chat",
+    "request": "I have 30 minutes with the VP, what do I ask?",
+    "bucket": "discovery_prep"
+  },
+  {
+    "id": "sales-discovery-6",
+    "route": "sales/chat",
+    "request": "prep questions for a technical evaluation call",
+    "bucket": "discovery_prep"
+  },
+  {
+    "id": "sales-enablement",
+    "route": "sales/chat",
+    "request": "make a leave-behind one-pager",
+    "bucket": "enablement_asset"
+  },
+  {
+    "id": "sales-enablement-2",
+    "route": "sales/chat",
+    "request": "create an internal battlecard for the team",
+    "bucket": "enablement_asset"
+  },
+  {
+    "id": "sales-enablement-3",
+    "route": "sales/chat",
+    "request": "we need an onboarding deck for new AEs",
+    "bucket": "enablement_asset"
+  },
+  {
+    "id": "sales-enablement-4",
+    "route": "sales/chat",
+    "request": "make a leave-behind PDF summarizing the offering",
+    "bucket": "enablement_asset"
+  },
+  {
+    "id": "sales-enablement-5",
+    "route": "sales/chat",
+    "request": "build a competitive one-pager for the field",
+    "bucket": "enablement_asset"
+  },
+  {
+    "id": "sales-followup",
+    "route": "sales/chat",
+    "request": "yes, draft it",
+    "previousBucket": "proposal_draft",
+    "bucket": "proposal_draft",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "sales-followup-2",
+    "route": "sales/chat",
+    "request": "yes, use those assumptions",
+    "previousBucket": "proposal_draft",
+    "bucket": "proposal_draft",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "sales-followup-3",
+    "route": "sales/chat",
+    "request": "add a section on onboarding",
+    "previousBucket": "proposal_draft",
+    "bucket": "proposal_draft",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "sales-followup-4",
+    "route": "sales/chat",
+    "request": "shorter, and more direct",
+    "previousBucket": "objection_handling",
+    "bucket": "objection_handling",
+    "note": "referential follow-up"
+  },
+  {
+    "id": "sales-objection",
+    "route": "sales/chat",
+    "request": "they said we're too expensive, how do I respond?",
+    "bucket": "objection_handling"
+  },
+  {
+    "id": "sales-objection-2",
+    "route": "sales/chat",
+    "request": "the competitor claims better uptime, what do I say?",
+    "bucket": "objection_handling"
+  },
+  {
+    "id": "sales-objection-3",
+    "route": "sales/chat",
+    "request": "buyer says they already have a solution that works, help",
+    "bucket": "objection_handling"
+  },
+  {
+    "id": "sales-objection-4",
+    "route": "sales/chat",
+    "request": "how do I respond to 'send me some info' brush-offs?",
+    "bucket": "objection_handling"
+  },
+  {
+    "id": "sales-objection-5",
+    "route": "sales/chat",
+    "request": "security team is pushing back on data residency, what do I say?",
+    "bucket": "objection_handling"
+  },
+  {
+    "id": "sales-open",
+    "route": "sales/chat",
+    "request": "this deal is stalling",
+    "bucket": "open_task"
+  },
+  {
+    "id": "sales-open-2",
+    "route": "sales/chat",
+    "request": "I'm behind on quota and not sure where to focus",
+    "bucket": "open_task"
+  },
+  {
+    "id": "sales-open-3",
+    "route": "sales/chat",
+    "request": "help me with this account, it's complicated",
+    "bucket": "open_task"
+  },
+  {
+    "id": "sales-pipeline",
+    "route": "sales/chat",
+    "request": "our CRM stages are a mess, help me fix the process",
+    "bucket": "pipeline_ops"
+  },
+  {
+    "id": "sales-pipeline-2",
+    "route": "sales/chat",
+    "request": "how should we define stage exit criteria?",
+    "bucket": "pipeline_ops"
+  },
+  {
+    "id": "sales-pipeline-3",
+    "route": "sales/chat",
+    "request": "our forecast is always wrong, help me fix the process",
+    "bucket": "pipeline_ops"
+  },
+  {
+    "id": "sales-pipeline-4",
+    "route": "sales/chat",
+    "request": "half the opportunities have no next step logged, what do we do?",
+    "bucket": "pipeline_ops"
+  },
+  {
+    "id": "sales-proposal",
+    "route": "sales/chat",
+    "request": "draft a proposal for this deal",
+    "bucket": "proposal_draft"
+  },
+  {
+    "id": "sales-proposal-2",
+    "route": "sales/chat",
+    "request": "I need an SOW outline",
+    "bucket": "proposal_draft"
+  },
+  {
+    "id": "sales-proposal-3",
+    "route": "sales/chat",
+    "request": "put together the commercial narrative for this renewal",
+    "bucket": "proposal_draft"
+  },
+  {
+    "id": "sales-proposal-4",
+    "route": "sales/chat",
+    "request": "write the scope and timeline sections of the proposal",
+    "bucket": "proposal_draft"
+  },
+  {
+    "id": "sales-proposal-5",
+    "route": "sales/chat",
+    "request": "they asked for a formal quote document, draft it",
+    "bucket": "proposal_draft"
+  }
+]

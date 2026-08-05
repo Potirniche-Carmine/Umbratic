@@ -30,6 +30,10 @@ pub struct TurnSnapshot {
     skill_catalog_hash: String,
     conversation_digest: String,
     capabilities: Capabilities,
+    /// The active run's validated bucket selector, if orient produced a guided
+    /// decision. It changes the request, so the snapshot owns it. It is a
+    /// selector only: the playbook bytes are Veil-owned and never hashed here.
+    harness_bucket: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +51,7 @@ impl TurnSnapshot {
         max_output_tokens: u64,
         skills: &[Value],
         route: String,
+        harness_bucket: Option<String>,
     ) -> Self {
         let conversation_digest = digest_of(&messages);
         Self {
@@ -59,12 +64,19 @@ impl TurnSnapshot {
             context_length: session.config.context_length,
             skill_catalog_hash: skill_catalog_hash(skills),
             conversation_digest,
+            harness_bucket,
             capabilities: Capabilities {
                 lsp: session.lsp.is_some(),
                 workspace_graph: session.workspace_graph.is_some(),
                 parallel_tool_calls: session.config.provider.parallel_tool_calls,
             },
         }
+    }
+
+    /// The validated bucket selector for every normal request and retry in this
+    /// run. `None` for direct answers and every degraded run.
+    pub fn harness_bucket(&self) -> Option<&str> {
+        self.harness_bucket.as_deref()
     }
 
     pub fn messages(&self) -> &[Value] {
@@ -136,6 +148,7 @@ mod tests {
             4_096,
             &[json!({"id": "python"})],
             "/api/engineering/chat".into(),
+            None,
         );
         (session, snapshot)
     }

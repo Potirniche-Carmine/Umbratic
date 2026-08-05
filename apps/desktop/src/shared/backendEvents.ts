@@ -71,7 +71,7 @@ export type BackendUiEvent = BackendEventMeta & (
   | { type: "skill.requested"; taskId: string; sessionId: string; runId: string; requestId: string; skillId: string; source: string; origin: "harness" | "model" }
   | { type: "skill.loaded"; taskId: string; sessionId: string; runId: string; requestId: string; skillId: string; source: string; origin: "harness" | "model"; contentHash: string; bytes: number }
   | { type: "skill.failed"; taskId: string; sessionId: string; runId: string; requestId: string; skillId: string; source: string; origin: "harness" | "model"; code: string; message: string }
-  | { type: "turn.outcome"; taskId: string; outcome: "completed" | "model_gave_up" | "safety_limit" }
+  | { type: "turn.outcome"; taskId: string; outcome: "completed" | "model_gave_up" | "safety_limit" | "aborted" }
   | { type: "required_tool.failed"; taskId: string; requirement: "file_change"; reason: string; requiredTools: string[]; attemptedTools?: string[]; attempt?: number; detail?: string }
   | { type: "task.error"; taskId: string; message: string; category?: string; code?: string; detail?: string }
 );
@@ -235,7 +235,7 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
         && (value.origin === "harness" || value.origin === "model")
         && hasString(value, "code") && hasString(value, "message");
     case "turn.outcome":
-      return value.outcome === "completed" || value.outcome === "model_gave_up" || value.outcome === "safety_limit";
+      return value.outcome === "completed" || value.outcome === "model_gave_up" || value.outcome === "safety_limit" || value.outcome === "aborted";
     case "required_tool.failed":
       return hasString(value, "requirement") && hasString(value, "reason") && hasStringArray(value, "requiredTools");
     default:

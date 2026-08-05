@@ -36,16 +36,52 @@ function scenarioName(encoded: string) {
   return scenarioTable.find(([, marker]) => encoded.includes(marker))?.[0] ?? "default";
 }
 
+/// Orient decisions keyed by explicit markers in the request text. Anything
+/// unmarked returns null so the default is the degraded path.
+function orientDecisionFor(requestText: string): { bucket: string; summarySentence: string | null } | null {
+  if (requestText.includes("ORIENT_DIRECT")) {
+    return { bucket: "direct_answer", summarySentence: null };
+  }
+  if (requestText.includes("ORIENT_GUIDED")) {
+    return { bucket: "debug_failure", summarySentence: "I'll inspect the failure path and isolate the cause." };
+  }
+  if (requestText.includes("ORIENT_BAD_SENTENCE")) {
+    return { bucket: "debug_failure", summarySentence: "Running deep_review now." };
+  }
+  return null;
+}
+
 export async function startProvider() {
   const requests: Array<{ path?: string; body: Record<string, unknown>; authorization?: string; contentType?: string }> = [];
+  // Orient is a preflight, not a generation. It is recorded separately so chat
+  // assertions still count only real model requests.
+  const orientRequests: Array<Record<string, unknown>> = [];
   const server = http.createServer(async (request, response) => {
     const body = await requestBody(request) as Record<string, unknown>;
-    requests.push({
-      path: request.url,
-      body,
-      authorization: request.headers.authorization,
-      contentType: request.headers["content-type"],
-    });
+    if (request.url === "/api/internal/orient") {
+      orientRequests.push(body);
+    } else {
+      requests.push({
+        path: request.url,
+        body,
+        authorization: request.headers.authorization,
+        contentType: request.headers["content-type"],
+      });
+    }
+    // By default orient fails, which exercises the silent-degradation path: the
+    // run then behaves exactly as it did before orient existed.
+    if (request.url === "/api/internal/orient") {
+      const requestText = String(body.requestText ?? "");
+      const decision = orientDecisionFor(requestText);
+      if (!decision) {
+        response.writeHead(502, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "no decision", code: "invalid_orient_decision" }));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(decision));
+      return;
+    }
     if (request.url === "/api/internal/context/compact") {
       const source = JSON.stringify(body.messages ?? []);
       const recalledFacts = Array.from(source.matchAll(/(?:PRIOR_FAILURE|CHANGED_FILE|LAST_VERIFICATION)_\d+/g), (match) => match[0]);
@@ -207,6 +243,7 @@ export async function startProvider() {
   return {
     url: `http://127.0.0.1:${address.port}`,
     requests,
+    orientRequests,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 }

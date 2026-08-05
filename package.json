@@ -51,7 +51,7 @@
     "source-size:check": "node scripts/check-source-size.ts",
     "quality:check": "npm run format:check && npm run lint:rust && npm run veil:vet && npm run veil-console:vet && npm run veil:race && npm run veil-console:race && npm run source-size:check",
     "verify:ci": "node scripts/verify-ci.ts",
-    "test:all": "npm run supply-chain:check && npm run quality:check && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test && npm run veil-console:test && npm run desktop:build",
+    "test:all": "npm run supply-chain:check && npm run quality:check && npm --workspace @umbratic/pdf run test:all && npm --workspace @umbratic/runner run test:all && npm --workspace @umbratic/desktop run test:all && npm run veil:test && npm run veil-console:test && npm run desktop:build",
     "release:check": "npm run test:all && npm run build"
   }
 }

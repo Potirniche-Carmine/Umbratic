@@ -164,7 +164,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Model work is refused while starting or draining; telemetry and control
 	// routes stay available so a restart is still observable.
 	switch r.URL.Path {
-	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat", "/api/internal/context/compact":
+	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat",
+		"/api/internal/context/compact", "/api/internal/orient":
 		if !s.guardLifecycle(w) {
 			return
 		}
@@ -181,6 +182,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleChat(prompts.SalesChat)(w, r)
 	case "/api/internal/context/compact":
 		s.handleContextCompact(w, r)
+	case "/api/internal/orient":
+		s.handleOrient(w, r)
 	case "/api/telemetry":
 		s.handleTelemetry(w, r)
 	default:
@@ -481,7 +484,7 @@ func writeIdentityError(w http.ResponseWriter, err error) {
 func isActivityProductRoute(path string) bool {
 	switch path {
 	case "/api/model/connect", "/api/model/context", "/api/engineering/chat", "/api/marketing/chat",
-		"/api/sales/chat", "/api/internal/context/compact", "/api/telemetry":
+		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry":
 		return true
 	default:
 		return false
@@ -558,7 +561,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		input, err := policy.DecodeChatInput(http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes))
+		input, err := policy.DecodeChatInput(http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes), route)
 		if err != nil {
 			if errors.Is(err, policy.ErrRequestTooLarge) {
 				writeJSONError(w, http.StatusRequestEntityTooLarge, "request too large")
@@ -576,7 +579,16 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			input.Messages,
 			s.templateData.RequestOverlay(string(route), input.Messages),
 		)
-		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, nil, prompts.RelevantSkills(input.Skills, input.Messages))
+		skills := prompts.RelevantSkills(input.Skills, input.Messages)
+		// The playbook is Veil-owned text rendered from the validated (route,
+		// bucket) pair. The client never supplies prompt text, only a selector,
+		// and the playbook lands after the skill catalog so everything before it
+		// stays byte-stable and prefix-cacheable.
+		var protectedMessages []model.Message
+		if playbook := prompts.PlaybookPrompt(route, input.HarnessBucket, skills); playbook != "" {
+			protectedMessages = []model.Message{{Role: "system", Content: playbook}}
+		}
+		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, protectedMessages, skills)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return
@@ -682,84 +694,6 @@ func finalRequestFits(req model.ChatRequest, contextLength int) (int, bool) {
 	}
 	estimated := len(req.Messages)*10 + estimatedValueTokens(req.Messages) + estimatedValueTokens(req.Tools) + req.MaxOutputTokens
 	return estimated, estimated <= contextLength
-}
-
-func validCompactionSummary(summary string) bool {
-	headings := []string{
-		"Goal and current request",
-		"Constraints and decisions",
-		"Work completed",
-		"Files and verification",
-		"Errors or blockers",
-		"Next work",
-	}
-	cursor := 0
-	for _, heading := range headings {
-		position := strings.Index(summary[cursor:], heading)
-		if position < 0 {
-			return false
-		}
-		cursor += position + len(heading)
-	}
-	return true
-}
-
-func (s *Server) handleContextCompact(w http.ResponseWriter, r *http.Request) {
-	const limit = 8 << 20
-	input, err := policy.DecodeCompactionInput(http.MaxBytesReader(w, r.Body, limit))
-	if err != nil {
-		if errors.Is(err, policy.ErrRequestTooLarge) {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "compaction request too large", "code": "compaction_input_overflow"})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "invalid_compaction_request"})
-		return
-	}
-	source, err := json.Marshal(input.Messages)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid compaction messages", "code": "invalid_compaction_request"})
-		return
-	}
-	profile := s.activeGenerationProfile()
-	req := model.ChatRequest{
-		Model:               s.cfg.DefaultModel,
-		Messages:            prompts.BuildCompaction(input.PreviousSummary, string(source)),
-		Stream:              false,
-		MaxOutputTokens:     input.MaxSummaryTokens,
-		Temperature:         profile.Temperature,
-		TopP:                profile.TopP,
-		ReasoningEffort:     profile.ReasoningEffort,
-		ThinkingTokenBudget: profile.ThinkingTokenBudget,
-		ParallelTools:       profile.ParallelToolCalls,
-	}
-	if _, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "compaction input exceeds context", "code": "compaction_input_overflow"})
-		return
-	}
-	lease, ok := s.admitModelWork(w, r)
-	if !ok {
-		return
-	}
-	defer lease.release()
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
-	defer cancel()
-	response, err := s.model.Chat(ctx, req)
-	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			s.admission.recordCancel()
-		}
-		failure := classifyModelFailure(err, 0)
-		s.noteModelFailure(failure)
-		writeModelFailure(w, failure)
-		return
-	}
-	summary, ok := response.Message.Content.(string)
-	summary = strings.TrimSpace(summary)
-	if !ok || len(summary) < 200 || len(summary) > 24_000 || len(summary) >= len(source)+len(input.PreviousSummary) || !validCompactionSummary(summary) {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "model returned an invalid compaction summary", "code": "invalid_compaction_summary"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"summary": summary, "sourceDigest": input.SourceDigest})
 }
 
 func effectiveMaxOutputTokens(requested int, configured int) int {

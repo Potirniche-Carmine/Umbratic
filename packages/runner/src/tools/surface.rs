@@ -69,7 +69,7 @@ fn command_description() -> String {
         "/bin/sh"
     };
     format!(
-        "Run a local workspace command in {shell} after policy and permission checks. Prefer read, ls, find, and grep for file inspection. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args."
+        "Run a local workspace command in {shell} after policy and permission checks. Prefer search to locate code, read to open it, and ls or find for listing; use grep only for exact regex or context lines. Do not shell out to ripgrep or find for routine search. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args."
     )
 }
 

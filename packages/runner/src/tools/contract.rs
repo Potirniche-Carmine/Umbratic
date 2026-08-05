@@ -158,7 +158,10 @@ mod tests {
         let surface = surface_for(directory.path());
         assert!(
             surface
-                .validate("search", json!({"query": "anything"}).as_object().unwrap())
+                .validate(
+                    "search_files",
+                    json!({"query": "anything"}).as_object().unwrap()
+                )
                 .is_err()
         );
     }

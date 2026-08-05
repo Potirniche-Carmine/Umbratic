@@ -41,6 +41,7 @@ mod error;
 mod patch;
 mod read;
 mod request;
+mod search;
 mod skill;
 mod surface;
 mod write;
@@ -63,6 +64,8 @@ use read::{read_attachment_tool, read_tool};
 use request::parse_arguments;
 pub use request::tool_capability_name;
 use request::{ToolRequest, command_display};
+pub use search::SearchIndex;
+use search::{note_mutation, search_tool};
 use skill::read_skill_tool;
 pub use surface::{ToolSurface, enabled_tool_specs, tool_surface};
 use write::{apply_patch_tool, edit_tool, write_tool};
@@ -135,5 +138,11 @@ fn should_skip(relative: &str) -> bool {
     relative.is_empty() || is_generated_runtime_path(relative) || is_blocked_path(relative)
 }
 
+#[cfg(test)]
+mod read_pdf_tests;
+#[cfg(test)]
+mod search_performance;
+#[cfg(test)]
+mod search_tests;
 #[cfg(test)]
 mod tests;

@@ -239,6 +239,14 @@ export type CommandClassification = {
   reason?: string;
 };
 
+/// The read-only workspace tools, listed once. A new locator tool that is not
+/// added here is classified as a shell command and prompts for permission.
+const workspaceReadPermissionKinds = new Set(["read", "ls", "find", "grep", "search"]);
+
+export function isWorkspaceReadPermission(permissionKind: string): boolean {
+  return workspaceReadPermissionKinds.has(permissionKind);
+}
+
 export function canAutoResolvePermission(
   mode: PermissionMode,
   permissionKind: string,
@@ -246,8 +254,7 @@ export function canAutoResolvePermission(
   safetyAction?: string,
 ): boolean {
   if (mode !== "auto_safe" || classification.risky) return false;
-  return permissionKind === "read"
-    || permissionKind === "ls" || permissionKind === "find" || permissionKind === "grep"
+  return isWorkspaceReadPermission(permissionKind)
     || permissionKind === "edit"
     || (permissionKind === "bash" && safetyAction === "allow");
 }
@@ -416,6 +423,7 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(provider.modelId === selectedModel.modelId, "provider model token must match the selected endpoint");
   assert(provider.baseURL === selectedModel.baseUrl, "provider URL must match the configured endpoint");
   assert(typeof provider.chatEndpointPath === "string", "provider must use an explicit Veil chat route");
+  assert(provider.mode === "server" || provider.mode === "local", "provider mode must be an explicit trusted server or local value");
   assert(
     isApprovedVeilChatRoute(configuredEndpointUrl(selectedModel.baseUrl, provider.chatEndpointPath)),
     "provider route must be an approved Veil chat API",

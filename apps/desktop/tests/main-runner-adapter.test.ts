@@ -141,6 +141,11 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   assert.equal(config.skills.every((skill) => typeof skill.name === "string" && typeof skill.description === "string"), true);
   assert.equal(config.skills.every((skill) => !("content" in skill) && !("fullContent" in skill)), true);
   assert.equal(config.provider.chatEndpointPath, "/api/sales/chat");
+  // Trusted mode, forwarded from endpoint settings rather than inferred.
+  assert.equal(config.provider.mode, "server");
+  // The bucket selector is a runtime decision; no bucket field is ever config.
+  assert.equal("harness_bucket" in config.provider, false);
+  assert.equal("harnessBucket" in config, false);
   assert.deepEqual(plain(config.provider.capabilities), {
     parallelToolCalls: false,
     vision: false,

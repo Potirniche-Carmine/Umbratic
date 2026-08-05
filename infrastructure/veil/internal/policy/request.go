@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/prompts"
@@ -95,12 +96,84 @@ func DecodeCompactionInput(r io.Reader) (CompactionInput, error) {
 	return CompactionInput{Route: req.Route, PreviousSummary: req.PreviousSummary, Messages: req.Messages, MaxSummaryTokens: req.MaxSummaryTokens, SourceDigest: req.SourceDigest}, nil
 }
 
+// MaxOrientRequestBytes bounds the classifier input. The runner already head-
+// and-tail truncates to this size, so a larger body is a protocol error.
+const MaxOrientRequestBytes = 32 * 1024
+
+// OrientInput is the strict classify-only request. It carries no messages,
+// no tools, and no client-supplied prompt text.
+type OrientInput struct {
+	// Route is the full route string, matching the prompts route constants
+	// rather than compaction's bare profile names.
+	Route prompts.Route
+	// RequestText is the current run's user text only.
+	RequestText string
+	// PreviousBucket is a continuity hint, validated against the route catalog.
+	PreviousBucket string
+}
+
+type orientRequest struct {
+	Route          string `json:"route"`
+	RequestText    string `json:"requestText"`
+	PreviousBucket string `json:"previousBucket"`
+}
+
+// DecodeOrientInput strictly decodes the orient request. Unknown fields, an
+// unknown route, or an out-of-range request text are all rejected outright.
+func DecodeOrientInput(r io.Reader) (OrientInput, error) {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			return OrientInput{}, ErrRequestTooLarge
+		}
+		return OrientInput{}, errors.New("invalid request body")
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(body, &raw) != nil {
+		return OrientInput{}, errors.New("invalid JSON request")
+	}
+	for field := range raw {
+		switch field {
+		case "route", "requestText", "previousBucket":
+		default:
+			return OrientInput{}, fmt.Errorf("field %q is not supported", field)
+		}
+	}
+	var req orientRequest
+	if json.Unmarshal(body, &req) != nil {
+		return OrientInput{}, errors.New("invalid JSON request")
+	}
+	route := prompts.Route(req.Route)
+	if _, ok := prompts.RouteBuckets(route); !ok {
+		return OrientInput{}, errors.New("unsupported orient route")
+	}
+	if strings.TrimSpace(req.RequestText) == "" {
+		return OrientInput{}, errors.New("requestText is required")
+	}
+	if len(req.RequestText) > MaxOrientRequestBytes {
+		return OrientInput{}, errors.New("requestText is too large")
+	}
+	if !utf8.ValidString(req.RequestText) {
+		return OrientInput{}, errors.New("requestText must be valid UTF-8")
+	}
+	// An unusable continuity hint is dropped rather than failing the request:
+	// it is only a hint, and orient must never block a run.
+	previous := req.PreviousBucket
+	if previous != "" && !prompts.KnownBucket(route, previous) {
+		previous = ""
+	}
+	return OrientInput{Route: route, RequestText: req.RequestText, PreviousBucket: previous}, nil
+}
+
 type ChatInput struct {
 	Messages        []model.Message
 	Stream          bool
 	Tools           any
 	Skills          []prompts.SkillMetadata
 	MaxOutputTokens int
+	// HarnessBucket is protected control metadata, not system text. A caller can
+	// select a catalog bucket for the endpoint's route and nothing else.
+	HarnessBucket string
 }
 
 type chatRequest struct {
@@ -110,9 +183,13 @@ type chatRequest struct {
 	Tools           any                     `json:"tools"`
 	Skills          []prompts.SkillMetadata `json:"skills"`
 	MaxOutputTokens int                     `json:"max_output_tokens"`
+	HarnessBucket   string                  `json:"harness_bucket"`
 }
 
-func DecodeChatInput(r io.Reader) (ChatInput, error) {
+// DecodeChatInput validates a chat request for a specific route. The route is
+// required because harness_bucket is a closed per-route enum: a selector that is
+// valid on another route must be rejected here, before prompt assembly.
+func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
 		if strings.Contains(err.Error(), "request body too large") {
@@ -127,7 +204,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "input", "messages", "stream", "tools", "skills", "max_output_tokens":
+		case "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket":
 		case "model", "system", "tool_choice", "parallel_tool_calls", "temperature", "top_p":
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		default:
@@ -174,6 +251,12 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 	if err != nil {
 		return ChatInput{}, err
 	}
+	// direct_answer never carries a playbook, so selecting it is meaningless and
+	// is rejected rather than silently ignored.
+	if req.HarnessBucket != "" &&
+		(req.HarnessBucket == prompts.DirectAnswerBucket || !prompts.KnownBucket(route, req.HarnessBucket)) {
+		return ChatInput{}, fmt.Errorf("harness_bucket %q is not valid for this route", req.HarnessBucket)
+	}
 
 	return ChatInput{
 		Messages:        req.Messages,
@@ -181,6 +264,7 @@ func DecodeChatInput(r io.Reader) (ChatInput, error) {
 		Tools:           req.Tools,
 		Skills:          skills,
 		MaxOutputTokens: req.MaxOutputTokens,
+		HarnessBucket:   req.HarnessBucket,
 	}, nil
 }
 

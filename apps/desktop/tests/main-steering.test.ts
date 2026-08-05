@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const source = fs.readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
+// The main process is split across modules; these ordering invariants are
+// about the code, not about which file it happens to live in.
+const source = ["main", "mainRuntime", "taskRunner", "taskActions"]
+  .map((name) => fs.readFileSync(new URL(`../src/main/${name}.ts`, import.meta.url), "utf8"))
+  .join("\n");
 
 function functionSource(name: string, nextName: string): string {
   const start = source.indexOf(`async function ${name}`);
