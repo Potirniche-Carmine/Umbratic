@@ -48,11 +48,14 @@ var engineeringBuckets = []Bucket{
 	},
 	{
 		ID:   "repo_orient",
-		When: "Map the repository, \"what is here\", a high-level tour.",
-		Playbook: `1. Run ls on "." and continue with nextOffset if the listing is partial.
+		When: "Map the repository, \"what is here\", \"tell me more about this folder\", a high-level tour.",
+		Playbook: `This is a read-only tour. Never create, edit, or write a file, and never fix a problem you notice; mention it in the map instead.
+1. Run ls on "." and continue with nextOffset if the listing is partial.
 2. Use search to locate manifests, READMEs, and main entrypoints. Use find only for an explicit glob.
-3. Read a few high-signal files. Do not recursively read everything.
-4. Return a short structured map: purpose, major directories, and how to run it if that is evident.`,
+3. Read a few high-signal files, roughly five to ten. Do not recursively read everything.
+4. Then stop exploring and return a short structured map: purpose, major directories, and how to run it if that is evident. A prompt map with named gaps beats more exploration.
+
+Anti-stuck: when a listing or search adds nothing new, or after roughly fifteen tool calls, synthesize the map from what you already have.`,
 		PreferredSkills: []string{"umbratic-markdown"},
 		Stop:            "the map is delivered. Do not write files unless the user asked for a durable map.",
 	},
@@ -383,7 +386,7 @@ Return exactly this JSON object and nothing else, with no code fence and no comm
 Rules:
 - bucket must be exactly one id from the list below. Do not invent an id.
 - If bucket is "direct_answer", summarySentence must be null.
-- Otherwise summarySentence must be one short, natural, plain sentence saying what you will do and why, ending in "." or "!", at most 240 characters, on a single line.
+- Otherwise summarySentence must restate the request as your plan, in your own words: one or two short, natural, plain sentences in the first person saying what you will do and, when it helps, the key consideration. For example: "I will map this folder's layout and read its key manifests. The goal is a short overview of what the project is and how it runs." End with "." or "!", at most 240 characters, on a single line.
 - The sentence is shown to the user. Never name a bucket id, a playbook, routing, or classification in it.
 - Choose "deep_review" only for security, vulnerability, or threat-modeling intent, or an explicit request to audit a named risk surface. A request to "think hard" or do "deep analysis" is NOT security intent; classify it by its actual task instead.
 - Choose "spec_discovery" only for planning, PRD, spec, RFC, or design-doc work whose requirements are still incomplete.

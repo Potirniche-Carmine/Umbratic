@@ -2,9 +2,10 @@
 //!
 //! Orient is a preflight, not a generation: it runs once per accepted run,
 //! before the tool loop, and every step of that run reuses its decision. The
-//! bucket id never reaches a broadcast runner event — it travels as a protected
-//! selector on chat requests, and is recorded only in local runner diagnostics
-//! so "which bucket fired?" is answerable when debugging a run.
+//! decision is broadcast as an `orient.decision` event so harness logs (runner
+//! diagnostics and the desktop's local event log) can answer "which bucket
+//! fired?"; the desktop records it as a diagnostic only and never renders it,
+//! so the bucket id still never appears in chat output.
 
 use std::sync::Arc;
 
@@ -46,7 +47,7 @@ pub(crate) async fn orient_once(
                 .previous_bucket
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-            sink.record_diagnostic(json!({
+            sink.emit(json!({
                 "type": "orient.decision",
                 "taskId": session.task_id,
                 "outcome": "degraded",
@@ -61,11 +62,14 @@ pub(crate) async fn orient_once(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(decision.bucket.clone());
     let guided = decision.bucket != DIRECT_ANSWER_BUCKET;
-    sink.record_diagnostic(json!({
+    sink.emit(json!({
         "type": "orient.decision",
         "taskId": session.task_id,
         "outcome": if guided { "guided" } else { "direct" },
         "bucket": decision.bucket,
+        // Distinguishes "the run opened with a status" from "the sentence was
+        // dropped as invalid", which are indistinguishable in the transcript.
+        "sentence": if decision.summary_sentence.is_some() { "emitted" } else { "missing" },
         "at": now_iso()
     }));
     if !guided {

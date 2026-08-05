@@ -480,6 +480,24 @@ export async function runRunnerTask(
           data: { code: invalid.code, type: invalid.type },
         });
       },
+      onOrientDecision: (decision) => {
+        // The local diagnostic store persists only warn and error rows, and
+        // this single row per run is the only place "which bucket guided the
+        // run, and did its status sentence reach the user?" is observable, so
+        // it is recorded at warn deliberately. It is never rendered in chat.
+        recordLocalDiagnostic({
+          level: "warn",
+          source: "runner",
+          event: "orient.decision",
+          taskId: task.id,
+          ...(decision.message ? { message: decision.message } : {}),
+          data: {
+            outcome: decision.outcome,
+            ...(decision.bucket ? { bucket: decision.bucket } : {}),
+            ...(decision.sentence ? { sentence: decision.sentence } : {}),
+          },
+        });
+      },
       onQueueUpdated: (queueEvent) => {
         if (queueEvent.disposition !== "dequeued") return;
         if (queueEvent.action !== "steer" && queueEvent.action !== "follow_up") return;

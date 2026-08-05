@@ -116,6 +116,32 @@ fn number_arg(input: &Map<String, Value>, name: &str, fallback: u64) -> u64 {
     input.get(name).and_then(Value::as_u64).unwrap_or(fallback)
 }
 
+/// Rejects a glob-like `path` argument before the filesystem sees it. On
+/// Windows a pattern in a path fails with a raw "The filename, directory name,
+/// or volume label syntax is incorrect" OS error that names no correction, so
+/// the model retries variations instead of moving the pattern where it belongs.
+// Only `*` and `?` are rejected: they are never legal in Windows filenames,
+// while `[` appears in real paths (Next.js route directories like `[id]`).
+fn glob_free_path(tool: &str, path: &str) -> Result<(), ToolError> {
+    if path.contains(['*', '?']) {
+        return Err(ToolError::validation(format!(
+            "{tool} path must be an exact file or directory, not a pattern. \
+             Scope by directory with path, put filename patterns in a glob argument \
+             (find or grep), and take paths from a listing or search result."
+        )));
+    }
+    Ok(())
+}
+
+/// Turns a non-NotFound metadata failure into a corrective validation error
+/// instead of a raw OS error string.
+fn unusable_path_error(tool: &str, relative: &str, error: &std::io::Error) -> ToolError {
+    ToolError::validation(format!(
+        "{tool} path {relative} is not a usable file or directory ({error}). \
+         Use an exact workspace path from a listing or search result."
+    ))
+}
+
 fn ensure_text_file(path: &Path) -> Result<String, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() {

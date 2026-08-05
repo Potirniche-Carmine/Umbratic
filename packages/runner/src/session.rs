@@ -44,14 +44,6 @@ impl EventSink {
         let _ = self.sender.send(event);
     }
 
-    /// Records an event in local runner diagnostics without broadcasting it.
-    /// For harness-internal facts — such as the orient bucket — that must stay
-    /// out of every user-visible event stream but still be observable when
-    /// debugging a run.
-    pub fn record_diagnostic(&self, event: RunnerEvent) {
-        self.diagnostics.record(&event);
-    }
-
     pub fn subscribe(&self) -> broadcast::Receiver<RunnerEvent> {
         self.sender.subscribe()
     }
@@ -401,21 +393,6 @@ mod tests {
         let next = first.try_begin_run().expect("next run after prior ends");
         assert!(!first.is_aborted());
         assert!(next.run_id().starts_with("run-"));
-    }
-
-    // The orient bucket is recorded through this path; if it ever reached the
-    // broadcast channel it would be one subscription away from the desktop.
-    #[test]
-    fn diagnostic_records_are_never_broadcast_to_subscribers() {
-        let directory = tempfile::tempdir().unwrap();
-        let sink = test_sink(directory.path());
-        let mut receiver = sink.subscribe();
-        sink.record_diagnostic(
-            json!({"type":"orient.decision","taskId":"t","bucket":"repo_orient"}),
-        );
-        assert!(receiver.try_recv().is_err());
-        sink.emit(json!({"type":"assistant.delta","taskId":"t","text":"hi"}));
-        assert!(receiver.try_recv().is_ok());
     }
 
     #[test]

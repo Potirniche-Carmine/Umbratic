@@ -143,6 +143,16 @@ export type RunnerEvent =
       errorCode: string | null;
     })
   | (RunnerEventBase & {
+      // Harness-internal classification for a run. Recorded to the local
+      // diagnostic log only; never forwarded to the renderer, so bucket ids
+      // stay out of chat output.
+      type: "orient.decision";
+      outcome: "guided" | "direct" | "degraded";
+      bucket?: string;
+      sentence?: "emitted" | "missing";
+      message?: string;
+    })
+  | (RunnerEventBase & {
       type: "run.queue.updated";
       sessionId: string;
       runId: string | null;
@@ -184,6 +194,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "step.settled",
   "run.settled",
   "run.queue.updated",
+  "orient.decision",
 ]);
 
 const ignoredTypes = new Set([
@@ -345,6 +356,13 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.category === undefined || typeof value.category === "string")
         && (value.code === undefined || typeof value.code === "string")
         && (value.detail === undefined || typeof value.detail === "string")
+      );
+    case "orient.decision":
+      return (
+        (value.outcome === "guided" || value.outcome === "direct" || value.outcome === "degraded")
+        && (value.bucket === undefined || typeof value.bucket === "string")
+        && (value.sentence === undefined || value.sentence === "emitted" || value.sentence === "missing")
+        && (value.message === undefined || typeof value.message === "string")
       );
     default: {
       const _exhaustive: never = type;

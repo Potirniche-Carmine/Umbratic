@@ -20,6 +20,7 @@ pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> To
         .unwrap_or(1)
         .max(1) as usize;
     let limit = number_arg(input, "limit", 100) as usize;
+    glob_free_path("ls", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -27,7 +28,7 @@ pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> To
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(ToolError::validation(format!("Path not found: {relative}")));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("ls", &relative, &error)),
     };
     if !metadata.is_dir() {
         return Err(ToolError::validation(
@@ -100,6 +101,7 @@ pub(super) async fn find_tool(
         return Err("find glob exceeds the bounded string limits".into());
     }
     let limit = number_arg(input, "limit", 100) as usize;
+    glob_free_path("find", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -107,7 +109,7 @@ pub(super) async fn find_tool(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(ToolError::validation(format!("Path not found: {relative}")));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("find", &relative, &error)),
     };
     if !metadata.is_dir() && !metadata.is_file() {
         return Err(ToolError::validation(
@@ -208,6 +210,7 @@ pub(super) async fn grep_tool(
         .unwrap_or(0)
         .min(5) as usize;
     let limit = number_arg(input, "limit", 50) as usize;
+    glob_free_path("grep", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -215,7 +218,7 @@ pub(super) async fn grep_tool(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(ToolError::validation(format!("Path not found: {relative}")));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("grep", &relative, &error)),
     };
     let regex = if mode == "regex" {
         Some(

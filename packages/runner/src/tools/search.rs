@@ -540,6 +540,7 @@ pub(super) async fn search_tool(
             DEFAULT_CONTENT_LIMIT
         },
     ) as usize;
+    glob_free_path("search", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -547,7 +548,7 @@ pub(super) async fn search_tool(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(ToolError::validation(format!("Path not found: {relative}")));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("search", &relative, &error)),
     };
     if !metadata.is_dir() && !metadata.is_file() {
         return Err(ToolError::validation(

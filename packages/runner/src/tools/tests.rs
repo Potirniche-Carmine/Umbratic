@@ -513,6 +513,45 @@ async fn exact_grep_contract_scopes_results_and_returns_path_line_text() {
     assert!(!finished.contains_key("response"));
 }
 
+// On Windows a glob in a path argument fails deep in the filesystem with "The
+// filename, directory name, or volume label syntax is incorrect", a raw OS
+// error that names no correction — observed sending a live run into a minute of
+// grep retries. The guard has to fire before the filesystem and say where the
+// pattern belongs.
+#[tokio::test]
+async fn path_arguments_reject_glob_patterns_with_a_corrective_message() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(directory.path().join("src")).unwrap();
+    std::fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+    let session = crate::session::test_session(directory.path());
+
+    let grep = grep_tool(
+        &session,
+        json!({"pattern":"main","mode":"literal","path":"src/**"})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(grep.message.contains("glob argument"), "{}", grep.message);
+    assert!(!grep.message.contains("os error"), "{}", grep.message);
+
+    let ls = ls_tool(&session, json!({"path":"src/*.rs"}).as_object().unwrap())
+        .await
+        .unwrap_err();
+    assert!(ls.message.contains("not a pattern"), "{}", ls.message);
+
+    // `[` stays legal: real projects use bracketed route directories.
+    std::fs::create_dir_all(directory.path().join("src/[id]")).unwrap();
+    std::fs::write(directory.path().join("src/[id]/page.tsx"), "export {}\n").unwrap();
+    read_tool(
+        &session,
+        json!({"path":"src/[id]/page.tsx"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn read_returns_raw_text_and_missing_paths_suggest_exact_entries() {
     let directory = tempfile::tempdir().unwrap();

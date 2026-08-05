@@ -104,6 +104,49 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	}
 }
 
+// repo_orient fired on a live "tell me more about this folder" run that tried a
+// drive-by Cargo.toml write and kept exploring for minutes. The bucket's body
+// has to carry the read-only rule and a budget as step text, not only as a
+// stop rule.
+func TestRepoOrientIsReadOnlyBudgetedAndSelfTerminating(t *testing.T) {
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil)
+	for _, want := range []string{
+		"read-only tour",
+		"Never create, edit, or write a file",
+		"never fix a problem you notice",
+		"roughly five to ten",
+		"Anti-stuck",
+		"synthesize the map from what you already have",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("repo_orient playbook is missing %q:\n%s", want, rendered)
+		}
+	}
+	bucket, _ := BucketFor(EngineeringChat, "repo_orient")
+	if !strings.Contains(bucket.When, "tell me more about this folder") {
+		t.Fatal("repo_orient must claim the folder-tour phrasing for the classifier")
+	}
+}
+
+// The status sentence is the user's opening progress line, so the classifier is
+// told to restate the request as a first-person plan rather than emit a label.
+func TestOrientPromptAsksForAFirstPersonPlanSentence(t *testing.T) {
+	messages, err := BuildOrient(EngineeringChat, "tell me more about this folder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := messages[0].Content.(string)
+	for _, want := range []string{
+		"restate the request as your plan",
+		"one or two short, natural, plain sentences in the first person",
+		`For example: "I will map this folder's layout`,
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("orient prompt missing %q", want)
+		}
+	}
+}
+
 func TestOrientPromptListsExactlyTheRouteCatalog(t *testing.T) {
 	messages, err := BuildOrient(EngineeringChat, "why is the auth test failing?", "code_change")
 	if err != nil {

@@ -228,6 +228,7 @@ pub(super) async fn read_tool(
         .get("limit")
         .and_then(Value::as_u64)
         .map(|value| value as usize);
+    glob_free_path("read", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -239,7 +240,7 @@ pub(super) async fn read_tool(
                 &relative,
             )));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("read", &relative, &error)),
     };
     if metadata.is_dir() {
         return Err(ToolError::validation(
