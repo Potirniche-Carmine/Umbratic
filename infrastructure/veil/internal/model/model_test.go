@@ -72,6 +72,8 @@ func TestOllamaClientChat(t *testing.T) {
 		Model    string    `json:"model"`
 		Messages []Message `json:"messages"`
 		Stream   bool      `json:"stream"`
+		Think    *bool     `json:"think"`
+		Format   any       `json:"format"`
 		Options  struct {
 			NumCtx int `json:"num_ctx"`
 		} `json:"options"`
@@ -118,6 +120,27 @@ func TestOllamaClientChat(t *testing.T) {
 	}
 	if resp.Message.Content != "ollama done" {
 		t.Fatalf("unexpected response: %#v", resp)
+	}
+	// Ordinary chat leaves thinking and output format alone.
+	if got.Think != nil || got.Format != nil {
+		t.Fatalf("plain chat must not constrain thinking or format: %#v", got)
+	}
+
+	// A classify-style request must disable thinking and grammar-constrain the
+	// reply: thinking-by-default models otherwise return an empty content.
+	if _, err := client.Chat(context.Background(), ChatRequest{
+		Model:           "llama3",
+		Messages:        []Message{{Role: "user", Content: "classify"}},
+		DisableThinking: true,
+		ResponseSchema:  map[string]any{"type": "object"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Think == nil || *got.Think {
+		t.Fatalf("classify chat must send think=false: %#v", got)
+	}
+	if format, ok := got.Format.(map[string]any); !ok || format["type"] != "object" {
+		t.Fatalf("classify chat must send the response schema as format: %#v", got.Format)
 	}
 }
 

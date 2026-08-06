@@ -33,6 +33,15 @@ type ChatRequest struct {
 	TopP                float64
 	ReasoningEffort     ReasoningEffort
 	ThinkingTokenBudget *int
+	// DisableThinking sends Ollama "think": false. Thinking-by-default local
+	// models otherwise spend a bounded output budget entirely on reasoning and
+	// return an empty content — observed with three different local models on
+	// the orient classify call. Local mode only; the server path ignores it.
+	DisableThinking bool
+	// ResponseSchema constrains local generation to this JSON schema via
+	// Ollama structured outputs. nil leaves generation unconstrained. Local
+	// mode only; the server path ignores it.
+	ResponseSchema map[string]any
 }
 
 type ChatResponse struct {
@@ -420,6 +429,12 @@ func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Respo
 		"messages":   ollamaMessages(req.Messages),
 		"stream":     req.Stream,
 		"keep_alive": ollamaKeepAlive,
+	}
+	if req.DisableThinking {
+		body["think"] = false
+	}
+	if req.ResponseSchema != nil {
+		body["format"] = req.ResponseSchema
 	}
 	if req.Tools != nil {
 		body["tools"] = req.Tools

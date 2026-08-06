@@ -395,6 +395,23 @@ Rules:
 
 Buckets for this route:`
 
+// OrientResponseSchema is the structured-output constraint for the classify
+// call. A local runtime grammar-constrains generation to this shape, so a
+// chatty or thinking-by-default model cannot spend the bounded decision budget
+// on prose. It must stay in lockstep with ParseOrientDecision's envelope:
+// exactly the two declared fields, nothing else.
+func OrientResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"bucket":          map[string]any{"type": "string"},
+			"summarySentence": map[string]any{"type": []string{"string", "null"}},
+		},
+		"required":             []string{"bucket", "summarySentence"},
+		"additionalProperties": false,
+	}
+}
+
 // BuildOrient assembles the classify-only request. The prompt is protected
 // server text; the caller's bounded input is the untrusted user turn.
 func BuildOrient(route Route, requestText string, previousBucket string) ([]model.Message, error) {

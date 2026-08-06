@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"strings"
 
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
@@ -48,6 +51,12 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		TopP:            1,
 		ReasoningEffort: model.ReasoningNone,
 		ParallelTools:   false,
+		// Both are required on local runtimes: thinking-by-default models
+		// otherwise reason until the output budget is gone and return an empty
+		// content, and the schema keeps the constrained reply exactly one
+		// decision object. Verified against three local models live.
+		DisableThinking: true,
+		ResponseSchema:  prompts.OrientResponseSchema(),
 	}
 	if _, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "orient input exceeds context", "code": "orient_input_overflow"})
@@ -75,13 +84,15 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 	raw, _ := response.Message.Content.(string)
 	decision, err := prompts.ParseOrientDecision(input.Route, raw)
 	if err != nil {
+		reason := prompts.OrientFailureReason(err)
+		recordOrientInvalidOutput(input.Route, reason, raw)
 		// The reason is a static classification of the failure, never model
 		// output. It travels to the runner's degraded diagnostic so "why did
 		// orient degrade?" is answerable from the log.
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"error":  "model returned an invalid orient decision",
 			"code":   "invalid_orient_decision",
-			"reason": prompts.OrientFailureReason(err),
+			"reason": reason,
 		})
 		return
 	}
@@ -91,4 +102,29 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		sentence = decision.SummarySentence
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"bucket": decision.Bucket, "summarySentence": sentence})
+}
+
+// recordOrientInvalidOutput logs a bounded sample of the unparseable classifier
+// output to local diagnostics. Three live sessions degraded with the same
+// static reason before the actual cause — thinking-by-default local models
+// returning an empty content — could only be found by reproducing the request
+// by hand. The sample is the operator's own model output about the user's own
+// request, whitespace-collapsed and capped, and it never reaches a client
+// response.
+func recordOrientInvalidOutput(route prompts.Route, reason string, raw string) {
+	sample := strings.Join(strings.Fields(raw), " ")
+	if runes := []rune(sample); len(runes) > 160 {
+		sample = string(runes[:160])
+	}
+	record := map[string]any{
+		"level":    "warn",
+		"event":    "orient.invalid_output",
+		"route":    string(route),
+		"reason":   reason,
+		"rawChars": len([]rune(raw)),
+		"sample":   sample,
+	}
+	if encoded, err := json.Marshal(record); err == nil {
+		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+	}
 }

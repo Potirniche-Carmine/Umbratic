@@ -47,6 +47,12 @@ func TestOrientRouteReturnsAValidatedDecisionWithADeterministicProfile(t *testin
 	if client.req.ReasoningEffort != model.ReasoningNone || client.req.ThinkingTokenBudget != nil || client.req.ParallelTools {
 		t.Fatalf("orient must not reason, think, or parallelize: %#v", client.req)
 	}
+	// Local thinking-by-default models spend the whole bounded budget on
+	// reasoning and return an empty content unless thinking is disabled and the
+	// reply is grammar-constrained to the decision object.
+	if !client.req.DisableThinking || client.req.ResponseSchema == nil {
+		t.Fatalf("orient must disable thinking and constrain the response schema: %#v", client.req)
+	}
 	if len(client.req.Messages) != 2 || client.req.Messages[0].Role != "system" {
 		t.Fatalf("orient must send exactly the server prompt plus the bounded input: %#v", client.req.Messages)
 	}
