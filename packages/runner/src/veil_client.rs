@@ -150,9 +150,13 @@ pub async fn orient_request(
         "requestText": request_text,
         "previousBucket": previous_bucket.unwrap_or(""),
     });
+    // Local orient must survive a cold model load: Ollama loading weights
+    // routinely takes tens of seconds, and the chat request after orient would
+    // block on the exact same load, so waiting here adds no end-to-end latency
+    // when cold and none when warm. 10s degraded a live run for no benefit.
     let timeout = match session.config.provider.mode {
         crate::config::ProviderMode::Server => std::time::Duration::from_secs(3),
-        crate::config::ProviderMode::Local => std::time::Duration::from_secs(10),
+        crate::config::ProviderMode::Local => std::time::Duration::from_secs(45),
     };
     let client = shared_client(&session.config.provider)?;
     let mut request = client

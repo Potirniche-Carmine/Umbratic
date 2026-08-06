@@ -967,3 +967,29 @@ func TestChatRouteRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("got status %d", rr.Code)
 	}
 }
+
+// A live outage produced only "model service could not be reached" with no way
+// to tell connection-refused from a hung runtime. The transport cause must
+// survive from the model client into the diagnostic detail, and the detail must
+// never reach the client payload.
+func TestClassifyModelFailureCarriesTransportDetailForDiagnosticsOnly(t *testing.T) {
+	cause := errors.New(`Post "http://127.0.0.1:11434/api/chat": dial tcp 127.0.0.1:11434: connection refused`)
+	failure := classifyModelFailure(model.ProviderError{Kind: model.ProviderFailureTransport, Cause: cause}, 0)
+	if failure.Code != "model_service_unavailable" {
+		t.Fatalf("got code %q", failure.Code)
+	}
+	if !strings.Contains(failure.Detail, "connection refused") {
+		t.Fatalf("detail must carry the transport cause, got %q", failure.Detail)
+	}
+
+	rr := httptest.NewRecorder()
+	writeModelFailure(rr, failure)
+	if strings.Contains(rr.Body.String(), "connection refused") {
+		t.Fatalf("detail must not reach the client payload: %s", rr.Body.String())
+	}
+
+	timedOut := classifyModelFailure(model.ProviderError{Kind: model.ProviderFailureTimeout, Cause: errors.New("context deadline exceeded")}, 0)
+	if timedOut.Code != "model_service_timeout" || !strings.Contains(timedOut.Detail, "deadline") {
+		t.Fatalf("timeout classification lost its detail: %+v", timedOut)
+	}
+}
