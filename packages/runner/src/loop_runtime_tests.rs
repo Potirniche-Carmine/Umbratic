@@ -656,3 +656,56 @@ fn the_compaction_source_carries_a_deterministic_file_list() {
     // A prefix with no tool calls contributes no file list at all.
     assert!(file_list_carrier(&[json!({"role":"user","content":"hello"})]).is_none());
 }
+
+// A guided tour can fill the whole window with tool results inside a single
+// turn, where the semantic tiers cannot cut (everything is in the protected
+// tail). After a provider 413, recovery must fold exchanges until the estimate
+// has real headroom — the old single-fold nibble lost its one retry and failed
+// the live run.
+#[tokio::test]
+async fn overflow_recovery_folds_exchanges_until_the_estimate_has_headroom() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = test_session(directory.path());
+    {
+        let mut messages = session.messages.lock().await;
+        messages.push(json!({"role":"user","content":"tell me more about this folder"}));
+        for index in 0..12 {
+            let id = format!("call-{index}");
+            messages.push(json!({
+                "role": "assistant",
+                "content": Value::Null,
+                "tool_calls": [{
+                    "id": id,
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{\"path\":\"big.rs\"}"}
+                }]
+            }));
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": format!("call-{index}"),
+                "content": "x".repeat(30_000)
+            }));
+        }
+    }
+
+    assert!(recover_from_overflow(&session, &[]).await);
+
+    let state = crate::context_events::estimate_state(&session).await;
+    let messages = session.messages.lock().await;
+    let estimate = crate::context_events::request_estimate(&session, &messages, &[], &state)
+        .0
+        .heuristic_prompt_tokens;
+    let target = crate::compaction::semantic_trigger_tokens(session.config.context_length);
+    assert!(
+        estimate <= target,
+        "estimate {estimate} still above the recovery target {target}"
+    );
+    // Oldest-first folding keeps the most recent evidence available to the
+    // model rather than erasing the whole turn.
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.get("role").and_then(Value::as_str) == Some("tool")),
+        "recovery must not fold every exchange when the target is already met"
+    );
+}

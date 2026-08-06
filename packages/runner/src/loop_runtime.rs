@@ -298,12 +298,27 @@ pub(crate) async fn prepared_messages(
 ///
 /// The provider has already refused this request, so recovery cannot depend on
 /// another model round-trip succeeding — a summarization call would be one more
-/// chance to fail at exactly the moment the session cannot afford one.
+/// chance to fail at exactly the moment the session cannot afford one. And the
+/// rejection has just proven every local estimate optimistic, so recovery does
+/// not stop at "changed something": it keeps folding whole tool exchanges,
+/// oldest first, until the heuristic estimate is back under the semantic
+/// trigger or nothing foldable remains. A guided tour can fill the window with
+/// tool results inside a single turn — where the semantic tiers cannot cut
+/// because everything is in the protected tail — and the previous single-fold
+/// recovery then lost its one retry and failed the whole run.
 async fn recover_from_overflow(session: &Session, tools: &[Value]) -> bool {
     let state = estimate_state(session).await;
     let mut messages = session.messages.lock().await;
-    let recovered = prune_stale_tool_results(session, &mut messages, tools, &state)
-        || compact_oldest_tool_exchange(&mut messages);
+    let mut recovered = prune_stale_tool_results(session, &mut messages, tools, &state);
+    let target = semantic_trigger_tokens(session.config.context_length);
+    while request_estimate(session, &messages, tools, &state)
+        .0
+        .heuristic_prompt_tokens
+        > target
+        && compact_oldest_tool_exchange(&mut messages)
+    {
+        recovered = true;
+    }
     drop(messages);
     if recovered {
         clear_usage_anchor(session).await;
