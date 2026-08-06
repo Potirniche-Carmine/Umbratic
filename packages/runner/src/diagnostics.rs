@@ -131,6 +131,7 @@ impl RunnerDiagnostics {
             "source",
             "confidence",
             "bucket",
+            "sentence",
         ] {
             if let Some(value) = event.get(key) {
                 data.insert(key.to_owned(), value.clone());
@@ -285,12 +286,14 @@ mod tests {
             "taskId":"task",
             "outcome":"guided",
             "bucket":"repo_orient",
+            "sentence":"emitted",
             "at":now_iso()
         }));
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("\"eventType\":\"orient.decision\""));
         assert!(content.contains("\"bucket\":\"repo_orient\""));
         assert!(content.contains("\"outcome\":\"guided\""));
+        assert!(content.contains("\"sentence\":\"emitted\""));
     }
 
     #[test]

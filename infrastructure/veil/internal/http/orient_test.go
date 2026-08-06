@@ -15,7 +15,7 @@ func TestOrientRouteReturnsAValidatedDecisionWithADeterministicProfile(t *testin
 	cfg.ContextLength = 64_000
 	client := &fakeModelClient{chatContent: `{"bucket":"debug_failure","summarySentence":"I'll inspect the failure path and isolate the cause."}`}
 	server := NewServer(cfg, client)
-	body := `{"route":"engineering/chat","requestText":"the auth test is failing","previousBucket":"code_change"}`
+	body := `{"route":"engineering/chat","requestText":"the auth test is failing","previousResponse":"I can make that change."}`
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/orient", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
@@ -41,11 +41,19 @@ func TestOrientRouteReturnsAValidatedDecisionWithADeterministicProfile(t *testin
 	if client.req.Temperature != 0 || client.req.TopP != 1 {
 		t.Fatalf("orient must be deterministic: %#v", client.req)
 	}
-	if client.req.MaxOutputTokens != orientMaxOutputTokens {
-		t.Fatalf("orient output must be capped at %d, got %d", orientMaxOutputTokens, client.req.MaxOutputTokens)
+	// No output cap and no forced reasoning effort: the model decides how much
+	// to think. Every cap tried was blown by a thinking-by-default model
+	// reasoning inside the budget and returning an empty content.
+	if client.req.MaxOutputTokens != 0 {
+		t.Fatalf("orient must not cap the output, got %d", client.req.MaxOutputTokens)
 	}
 	if client.req.ReasoningEffort != model.ReasoningNone || client.req.ThinkingTokenBudget != nil || client.req.ParallelTools {
-		t.Fatalf("orient must not reason, think, or parallelize: %#v", client.req)
+		t.Fatalf("orient must not force a reasoning effort or parallelize: %#v", client.req)
+	}
+	// The harness constrains the shape instead: whatever content arrives can
+	// only be one decision object.
+	if client.req.ResponseSchema == nil {
+		t.Fatalf("orient must constrain the response schema: %#v", client.req)
 	}
 	if len(client.req.Messages) != 2 || client.req.Messages[0].Role != "system" {
 		t.Fatalf("orient must send exactly the server prompt plus the bounded input: %#v", client.req.Messages)
@@ -93,10 +101,67 @@ func TestOrientRouteNullsTheSummaryForDirectAnswerAndInvalidSentences(t *testing
 		}
 	}
 
-	// A broken envelope still invalidates the whole decision.
+	// A fenced decision from a local model is normalized, not degraded.
+	fenced := post("```json\n{\"bucket\":\"code_change\",\"summarySentence\":\"I'll make the change and verify it.\"}\n```")
+	if fenced.Code != http.StatusOK || !strings.Contains(fenced.Body.String(), `"bucket":"code_change"`) {
+		t.Fatalf("fenced output must normalize: %d %s", fenced.Code, fenced.Body.String())
+	}
+
+	// A broken envelope still invalidates the whole decision, and the response
+	// names a static reason so the runner's degraded diagnostic can carry it.
 	bad := post("I think this is a code change.")
 	if bad.Code != http.StatusBadGateway || !strings.Contains(bad.Body.String(), "invalid_orient_decision") {
 		t.Fatalf("unparseable output must be rejected: %d %s", bad.Code, bad.Body.String())
+	}
+	if !strings.Contains(bad.Body.String(), `"reason":"output is not one JSON object`) {
+		t.Fatalf("rejection must name a reason: %s", bad.Body.String())
+	}
+}
+
+// The runner refuses a tool-less answer in buckets whose answer must rest on
+// tool results, but the catalog decides which those are. The flag has to travel
+// with the decision, resolved, so the runner never carries a second copy of the
+// catalog and the two can never disagree.
+func TestOrientRouteReportsTheBucketsEvidenceRequirement(t *testing.T) {
+	decide := func(content string) map[string]any {
+		cfg := testConfig()
+		cfg.ContextLength = 64_000
+		server := NewServer(cfg, &fakeModelClient{chatContent: content})
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/orient",
+			strings.NewReader(`{"route":"engineering/chat","requestText":"tell me about this codebase","previousResponse":""}`))
+		req.Header.Set("Authorization", "Bearer test-token")
+		rr := httptest.NewRecorder()
+		server.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+
+	guided := decide(`{"bucket":"repo_orient","summarySentence":"I will map this repository and read its docs."}`)
+	if guided["evidenceRequired"] != true {
+		t.Fatalf("repo_orient must require evidence: %v", guided)
+	}
+
+	// Ending on questions is the correct outcome here, so the rule stays off.
+	asking := decide(`{"bucket":"spec_discovery","summarySentence":"I will ask a few questions first."}`)
+	if asking["evidenceRequired"] != false {
+		t.Fatalf("spec_discovery must not require evidence: %v", asking)
+	}
+
+	direct := decide(`{"bucket":"direct_answer","summarySentence":null}`)
+	if direct["evidenceRequired"] != false {
+		t.Fatalf("direct_answer must not require evidence: %v", direct)
+	}
+
+	// The envelope stays closed: exactly these three keys, so the runner's
+	// strict key check keeps rejecting anything else.
+	if len(guided) != 3 {
+		t.Fatalf("orient response must carry exactly bucket, summarySentence, and evidenceRequired: %v", guided)
 	}
 }
 

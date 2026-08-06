@@ -160,6 +160,9 @@ pub(crate) fn observed_context_event(
         breakdown.system_prompt_tokens = system_prompt_tokens;
         breakdown.system_prompt_exact = result.system_prompt_tokens_exact;
     }
+    // The rows must sum to the measured prompt: a meter whose categories
+    // exceed its measured headline reads as broken.
+    let breakdown = breakdown.reconciled_to(prompt_tokens);
     Some(json!({
         "type": "context.usage",
         "taskId": session.task_id,
@@ -198,6 +201,38 @@ pub(crate) async fn record_system_prompt_size(session: &Session, result: &VeilCh
 /// Anchors the session to a completed response. `anchor_len` is the message
 /// count once the assistant turn has been appended, so everything the provider
 /// measured sits below it and only later messages are estimated.
+/// The smallest prompt size the runner is willing to believe.
+///
+/// Every request carries the protected prefix, so a reported prompt smaller
+/// than that prefix is not measuring the prompt. Runtimes with prefix caching
+/// report only the newly evaluated tokens, and a provider stub can report a
+/// constant; either way the number is real but answers a different question.
+///
+/// The consequence of believing it is severe and silent: the anchor replaces
+/// the heuristic outright, `calibrated_prompt_tokens` collapses to roughly the
+/// reported value plus the unsettled tail, the semantic trigger stops firing,
+/// and the context grows unchecked until the provider rejects the request.
+///
+/// Rejecting a low measurement only ever falls back to the heuristic, which
+/// over-counts, so the cost of being wrong here is an early compaction rather
+/// than an overflow. It also cannot misfire in the range that matters: near the
+/// trigger the prompt is many times any protected prefix.
+fn plausible_prompt_measurement(session: &Session, result: &VeilChatResult) -> bool {
+    let Some(prompt_tokens) = result.prompt_tokens else {
+        return false;
+    };
+    // Veil measures the protected prefix it owns. Until it reports one, use the
+    // same reserve the estimator itself substitutes, so the floor and the
+    // estimate always describe the same prefix.
+    let prefix = result.system_prompt_tokens.unwrap_or_else(|| {
+        session
+            .config
+            .protected_prompt_reserve_tokens
+            .min(session.config.context_length / 4)
+    });
+    prompt_tokens >= prefix
+}
+
 pub(crate) async fn set_usage_anchor(
     session: &Session,
     result: &VeilChatResult,
@@ -206,6 +241,18 @@ pub(crate) async fn set_usage_anchor(
     let Some(prompt_tokens) = result.prompt_tokens else {
         return;
     };
+    if !plausible_prompt_measurement(session, result) {
+        // No anchor: the estimate stays heuristic. The wait still ends, because
+        // the response the sentinel was waiting for has arrived — it simply did
+        // not carry a usable size. Leaving the sentinel set would block
+        // semantic compaction for the rest of the session on exactly the
+        // runtimes this guard exists to tolerate, which is the same silent
+        // "compaction never fires" failure by another route.
+        session
+            .awaiting_observed_usage
+            .store(false, Ordering::SeqCst);
+        return;
+    }
     *session.usage_anchor.lock().await = Some(UsageAnchor {
         prompt_tokens,
         completion_tokens: result.completion_tokens.unwrap_or(0),

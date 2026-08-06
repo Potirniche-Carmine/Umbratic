@@ -126,6 +126,25 @@ test("runner event adapter shows safe public progress in fast mode", () => {
   }]);
 });
 
+test("a status-typed assistant delta keeps its kind so the renderer can home it", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.delta",
+    kind: "status",
+    taskId: "task-1",
+    text: "I will map this folder's layout and read its key manifests.\n\n",
+    at: "2026-01-01T00:00:00.000Z",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "assistant.delta",
+    kind: "status",
+    taskId: "task-1",
+    text: "I will map this folder's layout and read its key manifests.\n\n",
+    at: "2026-01-01T00:00:00.000Z",
+  }]);
+});
+
 test("runner event adapter keeps run_program distinct and treats it as an executable action", () => {
   const harness = adapterHarness();
   harness.adapter.handle({

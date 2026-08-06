@@ -116,6 +116,70 @@ fn number_arg(input: &Map<String, Value>, name: &str, fallback: u64) -> u64 {
     input.get(name).and_then(Value::as_u64).unwrap_or(fallback)
 }
 
+/// Reports whether a path argument carries a filename pattern.
+// Only `*` and `?` count: they are never legal in Windows filenames, while `[`
+// appears in real paths (Next.js route directories like `[id]`).
+fn has_pattern(path: &str) -> bool {
+    path.contains(['*', '?'])
+}
+
+/// Rejects a glob-like `path` on a tool that has nowhere to put the pattern. On
+/// Windows a pattern in a path fails with a raw "The filename, directory name,
+/// or volume label syntax is incorrect" OS error that names no correction, so
+/// the message has to name the tool that does accept a pattern.
+fn glob_free_path(tool: &str, path: &str) -> Result<(), ToolError> {
+    if has_pattern(path) {
+        return Err(ToolError::validation(format!(
+            "{tool} path must be one exact file or directory, not a pattern, and {tool} has no \
+             glob argument. Resolve the pattern first with find: \
+             {{\"path\":\"<existing directory>\",\"glob\":\"{path}\"}}. \
+             Then call {tool} with an exact path from that result."
+        )));
+    }
+    Ok(())
+}
+
+/// Moves a filename pattern out of `path` and into `glob` for the tools whose
+/// contract already has a `glob` field.
+///
+/// The shell form (`internal/model/*.go`) is what a model reaches for first.
+/// Refusing it cost whole turns to retry variations, and the two forms mean the
+/// same thing here, so the pattern is relocated rather than rejected: the
+/// leading literal segments become the scope and the rest becomes the glob.
+/// Every one of these tools matches its glob against the basename as well as
+/// the workspace-relative path, so a relocated `*.go` still matches.
+fn split_pattern_path(tool: &str, path: &str, glob: &str) -> Result<(String, String), ToolError> {
+    if !has_pattern(path) {
+        return Ok((path.to_owned(), glob.to_owned()));
+    }
+    let segments = path.split(['/', '\\']).collect::<Vec<_>>();
+    let split_at = segments
+        .iter()
+        .position(|segment| has_pattern(segment))
+        .unwrap_or(segments.len());
+    let scope = segments[..split_at].join("/");
+    let pattern = segments[split_at..].join("/");
+    if !glob.is_empty() && glob != pattern {
+        return Err(ToolError::validation(format!(
+            "{tool} received one pattern in path ({path}) and a different one in glob ({glob}). \
+             Send an existing directory in path and exactly one pattern in glob."
+        )));
+    }
+    Ok((
+        if scope.is_empty() { ".".to_owned() } else { scope },
+        pattern,
+    ))
+}
+
+/// Turns a non-NotFound metadata failure into a corrective validation error
+/// instead of a raw OS error string.
+fn unusable_path_error(tool: &str, relative: &str, error: &std::io::Error) -> ToolError {
+    ToolError::validation(format!(
+        "{tool} path {relative} is not a usable file or directory ({error}). \
+         Use an exact workspace path from a listing or search result."
+    ))
+}
+
 fn ensure_text_file(path: &Path) -> Result<String, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() {

@@ -2,17 +2,23 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"strings"
 
 	"umbratic-veil/internal/model"
 	"umbratic-veil/internal/policy"
 	"umbratic-veil/internal/prompts"
 )
 
-// orientMaxOutputTokens bounds the classifier reply. The decision is one small
-// JSON object; anything longer is not a decision.
-const orientMaxOutputTokens = 96
+// Orient sets no output cap and does not suppress thinking: the model decides
+// how much to reason before answering. Every cap tried so far (96, then 256)
+// was blown by a thinking-by-default model reasoning inside the budget and
+// returning an empty content. The harness constrains the *shape* instead —
+// the response schema means whatever content arrives can only be one decision
+// object — and validation rejects anything else.
 
 // handleOrient classifies one request into a hidden intent bucket.
 //
@@ -30,20 +36,23 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "invalid_orient_request"})
 		return
 	}
-	messages, err := prompts.BuildOrient(input.Route, input.RequestText, input.PreviousBucket)
+	messages, err := prompts.BuildOrient(input.Route, input.RequestText, input.PreviousResponse)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 		return
 	}
 	req := model.ChatRequest{
-		Model:           s.cfg.DefaultModel,
-		Messages:        messages,
-		Stream:          false,
-		MaxOutputTokens: orientMaxOutputTokens,
+		Model:    s.cfg.DefaultModel,
+		Messages: messages,
+		Stream:   false,
+		// ReasoningNone means "do not force an effort level", not "forbid
+		// thinking": the local path leaves Ollama's thinking default alone and
+		// the server path omits reasoning_effort entirely.
 		Temperature:     0,
 		TopP:            1,
 		ReasoningEffort: model.ReasoningNone,
 		ParallelTools:   false,
+		ResponseSchema:  prompts.OrientResponseSchema(),
 	}
 	if _, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "orient input exceeds context", "code": "orient_input_overflow"})
@@ -71,7 +80,16 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 	raw, _ := response.Message.Content.(string)
 	decision, err := prompts.ParseOrientDecision(input.Route, raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "model returned an invalid orient decision", "code": "invalid_orient_decision"})
+		reason := prompts.OrientFailureReason(err)
+		recordOrientInvalidOutput(input.Route, reason, raw)
+		// The reason is a static classification of the failure, never model
+		// output. It travels to the runner's degraded diagnostic so "why did
+		// orient degrade?" is answerable from the log.
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":  "model returned an invalid orient decision",
+			"code":   "invalid_orient_decision",
+			"reason": reason,
+		})
 		return
 	}
 	// summarySentence is explicitly null for direct_answer.
@@ -79,5 +97,57 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 	if decision.SummarySentence != "" {
 		sentence = decision.SummarySentence
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bucket": decision.Bucket, "summarySentence": sentence})
+	if decision.SentenceDropped {
+		recordOrientSentenceDropped(input.Route, decision.Bucket)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bucket":          decision.Bucket,
+		"summarySentence": sentence,
+		// The catalog's answer to "may this turn end without a tool call?".
+		// Sent as a resolved boolean so the runner enforces the rule without
+		// holding a copy of the bucket catalog.
+		"evidenceRequired": prompts.RequiresEvidence(input.Route, decision.Bucket),
+	})
+}
+
+// recordOrientSentenceDropped logs that a guided run lost its status line to
+// validation rather than to an absent sentence. Without this the runner's
+// sentence:"missing" diagnostic covers both causes and neither is actionable.
+// The record carries no model output, only the static classification.
+func recordOrientSentenceDropped(route prompts.Route, bucket string) {
+	record := map[string]any{
+		"level":  "warn",
+		"event":  "orient.sentence_dropped",
+		"route":  string(route),
+		"bucket": bucket,
+		"reason": "sentence failed validation: needs one line ending in . or !, at most 240 runes, and no bucket id",
+	}
+	if encoded, err := json.Marshal(record); err == nil {
+		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+	}
+}
+
+// recordOrientInvalidOutput logs a bounded sample of the unparseable classifier
+// output to local diagnostics. Three live sessions degraded with the same
+// static reason before the actual cause — thinking-by-default local models
+// returning an empty content — could only be found by reproducing the request
+// by hand. The sample is the operator's own model output about the user's own
+// request, whitespace-collapsed and capped, and it never reaches a client
+// response.
+func recordOrientInvalidOutput(route prompts.Route, reason string, raw string) {
+	sample := strings.Join(strings.Fields(raw), " ")
+	if runes := []rune(sample); len(runes) > 160 {
+		sample = string(runes[:160])
+	}
+	record := map[string]any{
+		"level":    "warn",
+		"event":    "orient.invalid_output",
+		"route":    string(route),
+		"reason":   reason,
+		"rawChars": len([]rune(raw)),
+		"sample":   sample,
+	}
+	if encoded, err := json.Marshal(record); err == nil {
+		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+	}
 }

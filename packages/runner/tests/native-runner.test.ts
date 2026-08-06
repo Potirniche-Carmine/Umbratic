@@ -177,14 +177,28 @@ test("native runner semantically compacts a durable prefix and persists the vali
   });
   const events = await eventCollector(run);
   try {
+    // The durable prefix has to be built over several turns, and the newest
+    // request has to stay inside the protected-tail budget — at a 12K context
+    // that budget is 4,000 tokens. A single oversized latest message makes
+    // semantic_prefix_end refuse to cut at all, which is correct behavior but
+    // tests nothing: the run then simply sends a near-full request.
     const bootstrap = await createSession(run);
-    assert.equal((await prompt(run, bootstrap.id, `old context ${"x".repeat(12_000)}`)).status, 204);
-    const bootstrapSettled = await events.waitFor((event) =>
-      event.type === "step.settled" && event.sessionId === bootstrap.id
-    );
-    const conversationState = bootstrapSettled.conversationState;
+    let bootstrapTurns = 0;
+    for (const marker of ["old context one", "old context two", "old context three"]) {
+      assert.equal((await prompt(run, bootstrap.id, `${marker} ${"x".repeat(8_000)}`)).status, 204);
+      bootstrapTurns += 1;
+      await events.waitFor((event) =>
+        event.type === "run.settled"
+        && event.sessionId === bootstrap.id
+        && events.events.filter((seen) => seen.type === "run.settled" && seen.sessionId === bootstrap.id).length >= bootstrapTurns
+      );
+    }
+    const conversationState = events.events
+      .filter((event) => event.type === "step.settled" && event.sessionId === bootstrap.id)
+      .at(-1)?.conversationState;
+    assert.ok(conversationState);
     const session = await createSession(run, conversationState);
-    assert.equal((await prompt(run, session.id, `latest request ${"z".repeat(15_000)}`)).status, 204);
+    assert.equal((await prompt(run, session.id, `latest request ${"z".repeat(6_000)}`)).status, 204);
     await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
     assert.ok(provider.requests.some((request) => request.path === "/api/internal/context/compact"));
     const snapshot = events.events
@@ -797,12 +811,24 @@ test("native runner keeps its API password out of process arguments", async () =
   try {
     // Any local process can read argv via `ps` on macOS and Linux, and via WMI
     // on Windows. The credential belongs on the stdin channel instead.
+    // wmic was removed in Windows 11 24H2, where spawning it fails with ENOENT
+    // and never emits "exit" — which hung this whole file rather than failing
+    // it. CIM is the supported query, and the listener below settles on either
+    // outcome so a missing tool can only ever fail the assertion.
     const listing = process.platform === "win32"
-      ? spawn("wmic", ["process", "where", `ProcessId=${run.child.pid}`, "get", "CommandLine"])
+      ? spawn("powershell", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${run.child.pid}").CommandLine`,
+      ])
       : spawn("ps", ["-o", "args=", "-p", String(run.child.pid)]);
     let argv = "";
     listing.stdout.on("data", (chunk) => { argv += chunk.toString("utf8"); });
-    await new Promise((resolve) => listing.once("exit", resolve));
+    await new Promise<void>((resolve) => {
+      listing.once("exit", () => resolve());
+      listing.once("error", () => resolve());
+    });
     assert.match(argv, /umbratic-runner/);
     assert.doesNotMatch(argv, /password/i);
     assert.doesNotMatch(argv, /native-test-secret/);

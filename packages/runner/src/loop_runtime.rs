@@ -27,7 +27,7 @@ use crate::{
     tool_scheduling::execute_calls,
     tools::{ToolCall, ToolResult, tool_surface, validate_tool_call_batch},
     turn_snapshot::TurnSnapshot,
-    veil_client::{VeilChatResult, VeilRequestOptions, stream_veil_chat},
+    veil_client::{VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat},
 };
 
 const MAX_TOOL_TURNS: usize = 64;
@@ -298,12 +298,27 @@ pub(crate) async fn prepared_messages(
 ///
 /// The provider has already refused this request, so recovery cannot depend on
 /// another model round-trip succeeding — a summarization call would be one more
-/// chance to fail at exactly the moment the session cannot afford one.
+/// chance to fail at exactly the moment the session cannot afford one. And the
+/// rejection has just proven every local estimate optimistic, so recovery does
+/// not stop at "changed something": it keeps folding whole tool exchanges,
+/// oldest first, until the heuristic estimate is back under the semantic
+/// trigger or nothing foldable remains. A guided tour can fill the window with
+/// tool results inside a single turn — where the semantic tiers cannot cut
+/// because everything is in the protected tail — and the previous single-fold
+/// recovery then lost its one retry and failed the whole run.
 async fn recover_from_overflow(session: &Session, tools: &[Value]) -> bool {
     let state = estimate_state(session).await;
     let mut messages = session.messages.lock().await;
-    let recovered = prune_stale_tool_results(session, &mut messages, tools, &state)
-        || compact_oldest_tool_exchange(&mut messages);
+    let mut recovered = prune_stale_tool_results(session, &mut messages, tools, &state);
+    let target = semantic_trigger_tokens(session.config.context_length);
+    while request_estimate(session, &messages, tools, &state)
+        .0
+        .heuristic_prompt_tokens
+        > target
+        && compact_oldest_tool_exchange(&mut messages)
+    {
+        recovered = true;
+    }
     drop(messages);
     if recovered {
         clear_usage_anchor(session).await;
@@ -360,6 +375,9 @@ async fn final_without_tools(
             max_output_tokens: prepared.max_output_tokens,
             include_tools: false,
             harness_bucket: harness_bucket.map(str::to_owned),
+            // final_without_tools is the last word of the run; there is no
+            // later step that could refuse it, so nothing is held.
+            hold_assistant_text: false,
         },
     )
     .await;
@@ -379,6 +397,9 @@ async fn final_without_tools(
                 max_output_tokens: prepared.max_output_tokens,
                 include_tools: false,
                 harness_bucket: harness_bucket.map(str::to_owned),
+                // final_without_tools is the last word of the run; there is no
+                // later step that could refuse it, so nothing is held.
+                hold_assistant_text: false,
             },
         )
         .await;
@@ -502,12 +523,17 @@ pub async fn run_turn(
     // Orient runs exactly once per accepted run, after the current user message
     // is appended and before the tool loop. Every step of this run reuses the
     // decision, including compaction and context-overflow retries.
-    let harness_bucket = orient_once(&session, &sink, &explicit_text).await;
+    let orient = orient_once(&session, &sink, &explicit_text).await;
+    let harness_bucket = orient.bucket.clone();
 
     let mut summary = empty_summary();
     set_run_outcome(&mut summary, RunOutcome::Completed);
     let mut consecutive_failed = 0usize;
     let mut consecutive_invalid = 0usize;
+    // The evidence rule fires at most once per run. A model that answers from
+    // nothing twice is answering deliberately, and a second refusal would only
+    // spend the turn budget on the same argument.
+    let mut evidence_retried = false;
     let mut repeat_guard = RepeatGuard::default();
     let mut public_progress = PublicProgressSchedule::default();
     let mut step_index = 0_u32;
@@ -535,6 +561,15 @@ pub async fn run_turn(
             harness_bucket.clone(),
         ));
         sink.emit(context_event(&session, prepared.usage));
+        // On a guided run, hold the model's text until the step resolves, for as
+        // long as the run has no tool results. Text written before any evidence
+        // exists is the only text that can turn out to be unshowable, and the
+        // step's own outcome is what says whether it was a preamble, an answer,
+        // or a fabrication. Once a tool has run, everything streams live again:
+        // the model is free in the middle of its plan, and the final answer
+        // arrives token by token as always.
+        let hold_assistant_text =
+            harness_bucket.is_some() && summary["toolCalls"].as_u64().unwrap_or(0) == 0;
         let mut response = stream_veil_chat(
             &session,
             &sink,
@@ -544,6 +579,7 @@ pub async fn run_turn(
                 max_output_tokens: snapshot.max_output_tokens(),
                 include_tools: true,
                 harness_bucket: snapshot.harness_bucket().map(str::to_owned),
+                hold_assistant_text,
             },
         )
         .await;
@@ -572,12 +608,13 @@ pub async fn run_turn(
                         max_output_tokens: snapshot.max_output_tokens(),
                         include_tools: true,
                         harness_bucket: snapshot.harness_bucket().map(str::to_owned),
+                        hold_assistant_text,
                     },
                 )
                 .await;
             }
         }
-        let result = match response {
+        let mut result = match response {
             Ok(result) => result,
             Err(error) if error.to_ascii_lowercase().contains("aborted") => {
                 return Ok(reconcile_aborted_run(
@@ -605,6 +642,11 @@ pub async fn run_turn(
         }
         let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
+        if !calls.is_empty() {
+            // Tool calls settle the step as real work, so any held preamble is
+            // released now and reaches the user in the normal place.
+            release_held_text(&sink, &session, &mut result);
+        }
         if calls.is_empty() {
             if looks_like_unstructured_tool_call(&result.content) {
                 let call = ToolCall {
@@ -628,6 +670,49 @@ pub async fn run_turn(
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 continue;
             }
+            // An evidence-required bucket that produces a finished answer
+            // before any tool has run has described a workspace it never
+            // looked at. A live repo_orient run did exactly this: a confident,
+            // wholly invented architecture summary, zero tool calls, and
+            // nothing in the transcript marking it as unverified. The answer is
+            // refused once and the plan is restarted rather than shipped.
+            if orient.evidence_required
+                && !evidence_retried
+                && summary["toolCalls"].as_u64().unwrap_or(0) == 0
+                && !result.content.trim().is_empty()
+            {
+                evidence_retried = true;
+                let call = ToolCall {
+                    id: format!("missing-evidence-{}", summary["turns"].as_u64().unwrap_or(0)),
+                    name: "missing_workspace_evidence".into(),
+                    arguments: json!({}),
+                    index: 0,
+                };
+                let error = "That answer used no workspace evidence: this turn has run no tool, so nothing in it is verified. Discard it and start the playbook now with real tool calls. Describe only what a tool result actually shows.";
+                append_assistant_turn(
+                    &session,
+                    assistant_tool_message(std::slice::from_ref(&call)),
+                    &result,
+                )
+                .await;
+                session
+                    .messages
+                    .lock()
+                    .await
+                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
+                sink.emit(json!({
+                    "type": "orient.evidence_retry",
+                    "taskId": session.task_id,
+                    "bucket": orient.bucket(),
+                    "at": now_iso()
+                }));
+                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
+                continue;
+            }
+            // Neither refusal applied, so the step stands and anything held for
+            // it is shown. The two branches above return without releasing,
+            // which is what leaves a refused answer with no trace in the UI.
+            release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {
                 increment(
                     &mut summary,

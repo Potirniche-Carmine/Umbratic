@@ -328,3 +328,74 @@ fn retrieval_refreshes_lru_retention() {
     );
     assert!(store.retrieve(&oldest, None, Some(10)).is_some());
 }
+
+// A live session showed category rows summing to 23.8k under an 18.1k
+// headline: raw heuristic rows over a measured total read as a broken meter.
+// Rows must always sum to the reported headline, preserving proportions and
+// any exact system-prompt measurement.
+#[test]
+fn breakdown_rows_reconcile_to_the_reported_headline() {
+    let breakdown = ContextBreakdown {
+        system_prompt_tokens: 3_187,
+        system_prompt_exact: true,
+        tool_definition_tokens: 4_000,
+        skill_tokens: 2_000,
+        conversation_tokens: 10_000,
+        tool_result_tokens: 4_000,
+        image_tokens: 0,
+    };
+    let reconciled = breakdown.reconciled_to(13_187);
+    let sum = reconciled.system_prompt_tokens
+        + reconciled.tool_definition_tokens
+        + reconciled.skill_tokens
+        + reconciled.conversation_tokens
+        + reconciled.tool_result_tokens
+        + reconciled.image_tokens;
+    assert_eq!(sum, 13_187);
+    // The exact system measurement is preserved, not scaled.
+    assert_eq!(reconciled.system_prompt_tokens, 3_187);
+    // Estimated rows keep their proportions: conversation was half of the
+    // estimated mass, so it stays about half of what remains.
+    assert!(
+        (4_900..=5_100).contains(&reconciled.conversation_tokens),
+        "conversation share drifted: {}",
+        reconciled.conversation_tokens
+    );
+
+    // With nothing estimated, the unexplained remainder lands on the
+    // conversation row rather than vanishing.
+    let sparse = ContextBreakdown {
+        system_prompt_tokens: 500,
+        system_prompt_exact: true,
+        ..ContextBreakdown::default()
+    };
+    let filled = sparse.reconciled_to(2_000);
+    assert_eq!(filled.system_prompt_tokens, 500);
+    assert_eq!(filled.conversation_tokens, 1_500);
+
+    // The event path reports reconciled rows, so the meter's parts always sum
+    // to its headline.
+    let usage = estimate_context_usage(ContextEstimateInput {
+        messages: &[serde_json::json!({"role":"user","content":"hello there"})],
+        tools: &[],
+        skills: &[],
+        context_length: 64_000,
+        max_response_tokens: 4_096,
+        protected_prompt_reserve_tokens: 4_096,
+        system_prompt: None,
+        anchor: None,
+    });
+    let event = usage.event();
+    let rows = [
+        "systemPromptTokens",
+        "toolDefinitionTokens",
+        "skillTokens",
+        "conversationTokens",
+        "toolResultTokens",
+        "imageTokens",
+    ]
+    .iter()
+    .map(|key| event["breakdown"][key].as_u64().unwrap())
+    .sum::<u64>();
+    assert_eq!(rows, event["contentTokens"].as_u64().unwrap());
+}

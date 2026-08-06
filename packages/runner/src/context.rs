@@ -595,9 +595,12 @@ pub struct SystemPromptSize {
 
 /// Per-category estimates over the actually assembled request.
 ///
-/// Only the headline total is measured. These rows are deliberately *not*
-/// reconciled to sum to it: forcing them to agree would smear the estimator's
-/// error across every category and make each individual row less true.
+/// The raw rows are heuristic byte counts and share the estimator's bias, so
+/// before they are reported they are reconciled to the headline total with
+/// `reconciled_to`. The headline is the best-known size (heuristic, calibrated,
+/// anchored, or provider-measured); rows that sum past it are all wrong by the
+/// same shared bias, and a meter whose parts exceed its whole reads as broken —
+/// which is exactly how it was reported from a live session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ContextBreakdown {
     pub system_prompt_tokens: u64,
@@ -620,6 +623,64 @@ impl ContextBreakdown {
             "toolResultTokens": self.tool_result_tokens,
             "imageTokens": self.image_tokens,
         })
+    }
+
+    /// Rescales the estimated rows so they sum exactly to `content_tokens`.
+    ///
+    /// The rows keep their relative proportions; the shared bytes-to-tokens
+    /// bias is corrected by the known total, the same way calibration corrects
+    /// the headline. An exact system-prompt measurement is preserved rather
+    /// than scaled, and integer rounding lands on the conversation row so the
+    /// sum is exact.
+    pub fn reconciled_to(self, content_tokens: u64) -> ContextBreakdown {
+        let fixed = if self.system_prompt_exact {
+            self.system_prompt_tokens.min(content_tokens)
+        } else {
+            0
+        };
+        let available = content_tokens.saturating_sub(fixed);
+        let estimated_system = if self.system_prompt_exact {
+            0
+        } else {
+            self.system_prompt_tokens
+        };
+        let estimated = estimated_system
+            + self.tool_definition_tokens
+            + self.skill_tokens
+            + self.conversation_tokens
+            + self.tool_result_tokens
+            + self.image_tokens;
+        let scale = |row: u64| -> u64 {
+            if estimated == 0 {
+                0
+            } else {
+                (u128::from(row) * u128::from(available) / u128::from(estimated)) as u64
+            }
+        };
+        let mut reconciled = ContextBreakdown {
+            system_prompt_tokens: if self.system_prompt_exact {
+                fixed
+            } else {
+                scale(self.system_prompt_tokens)
+            },
+            system_prompt_exact: self.system_prompt_exact,
+            tool_definition_tokens: scale(self.tool_definition_tokens),
+            skill_tokens: scale(self.skill_tokens),
+            conversation_tokens: scale(self.conversation_tokens),
+            tool_result_tokens: scale(self.tool_result_tokens),
+            image_tokens: scale(self.image_tokens),
+        };
+        let allocated = if self.system_prompt_exact {
+            0
+        } else {
+            reconciled.system_prompt_tokens
+        } + reconciled.tool_definition_tokens
+            + reconciled.skill_tokens
+            + reconciled.conversation_tokens
+            + reconciled.tool_result_tokens
+            + reconciled.image_tokens;
+        reconciled.conversation_tokens += available.saturating_sub(allocated);
+        reconciled
     }
 }
 
@@ -690,7 +751,10 @@ impl ContextUsageEstimate {
             "source": if self.anchored { "provider" } else { "heuristic" },
             "confidence": if self.anchored { "high" } else { "low" },
             "anchored": self.anchored,
-            "breakdown": self.breakdown.event(),
+            "breakdown": self
+                .breakdown
+                .reconciled_to(self.calibrated_prompt_tokens)
+                .event(),
         })
     }
 }

@@ -15,12 +15,12 @@ import (
 const orientCaseFixture = "../../../../packages/runner/tests/fixtures/harness/orient-cases.json"
 
 type orientCase struct {
-	ID             string `json:"id"`
-	Route          string `json:"route"`
-	Request        string `json:"request"`
-	PreviousBucket string `json:"previousBucket"`
-	Bucket         string `json:"bucket"`
-	Note           string `json:"note"`
+	ID               string `json:"id"`
+	Route            string `json:"route"`
+	Request          string `json:"request"`
+	PreviousResponse string `json:"previousResponse"`
+	Bucket           string `json:"bucket"`
+	Note             string `json:"note"`
 }
 
 func loadOrientCases(t *testing.T) []orientCase {
@@ -60,9 +60,11 @@ func TestLabeledOrientCasesMatchTheRouteCatalogs(t *testing.T) {
 			t.Fatalf("case %s labels bucket %q, which is not in the %s catalog",
 				testCase.ID, testCase.Bucket, testCase.Route)
 		}
-		if testCase.PreviousBucket != "" && !KnownBucket(route, testCase.PreviousBucket) {
-			t.Fatalf("case %s has previousBucket %q, which is not in the %s catalog",
-				testCase.ID, testCase.PreviousBucket, testCase.Route)
+		// Context is free text, not a selector: the only thing it must not be is
+		// longer than the bound the classifier will actually receive.
+		if len([]rune(testCase.PreviousResponse)) > MaxOrientContextRunes {
+			t.Fatalf("case %s carries %d runes of context, over the %d bound",
+				testCase.ID, len([]rune(testCase.PreviousResponse)), MaxOrientContextRunes)
 		}
 	}
 }
@@ -112,7 +114,7 @@ func TestLabeledOrientCasesIncludeAdversarialAndReferentialCases(t *testing.T) {
 				t.Fatalf("case %s routes a think-hard request to deep_review", testCase.ID)
 			}
 		}
-		if testCase.PreviousBucket != "" {
+		if testCase.PreviousResponse != "" {
 			referential++
 		}
 	}
