@@ -160,6 +160,9 @@ pub(crate) fn observed_context_event(
         breakdown.system_prompt_tokens = system_prompt_tokens;
         breakdown.system_prompt_exact = result.system_prompt_tokens_exact;
     }
+    // The rows must sum to the measured prompt: a meter whose categories
+    // exceed its measured headline reads as broken.
+    let breakdown = breakdown.reconciled_to(prompt_tokens);
     Some(json!({
         "type": "context.usage",
         "taskId": session.task_id,

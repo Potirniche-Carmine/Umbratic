@@ -151,8 +151,16 @@ async fn observed_usage_does_not_double_count_protected_prompts_or_completion() 
     assert_eq!(usage["protectedTokens"], 3_187);
     assert_eq!(usage["breakdown"]["systemPromptTokens"], 3_187);
     assert_eq!(usage["breakdown"]["systemPromptExact"], true);
-    assert_eq!(usage["breakdown"]["conversationTokens"], 900);
-    assert_eq!(usage["breakdown"]["toolResultTokens"], 120);
+    // Estimated rows are reconciled to the measured total: the exact system
+    // row is preserved, the rest is apportioned by the rows' proportions, and
+    // the parts always sum to the headline the meter shows.
+    let conversation = usage["breakdown"]["conversationTokens"].as_u64().unwrap();
+    let tool_results = usage["breakdown"]["toolResultTokens"].as_u64().unwrap();
+    assert_eq!(3_187 + conversation + tool_results, 12_000);
+    assert!(
+        conversation > tool_results * 7,
+        "reconciliation lost the rows' proportions: {conversation} vs {tool_results}"
+    );
     assert_eq!(
         usage["estimatedTokens"].as_u64().unwrap(),
         usage["contentTokens"].as_u64().unwrap() + usage["reserveTokens"].as_u64().unwrap()
