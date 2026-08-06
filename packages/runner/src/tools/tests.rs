@@ -513,33 +513,74 @@ async fn exact_grep_contract_scopes_results_and_returns_path_line_text() {
     assert!(!finished.contains_key("response"));
 }
 
-// On Windows a glob in a path argument fails deep in the filesystem with "The
-// filename, directory name, or volume label syntax is incorrect", a raw OS
+// On Windows a glob in a path argument used to fail deep in the filesystem with
+// "The filename, directory name, or volume label syntax is incorrect", a raw OS
 // error that names no correction — observed sending a live run into a minute of
-// grep retries. The guard has to fire before the filesystem and say where the
-// pattern belongs.
+// grep retries. The shell form means the same thing as the two-argument form on
+// every tool that has a glob field, so it executes instead of failing.
 #[tokio::test]
-async fn path_arguments_reject_glob_patterns_with_a_corrective_message() {
+async fn glob_patterns_in_path_relocate_to_the_glob_argument() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(directory.path().join("src")).unwrap();
     std::fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(directory.path().join("src/notes.txt"), "fn main\n").unwrap();
     let session = crate::session::test_session(directory.path());
 
     let grep = grep_tool(
         &session,
-        json!({"pattern":"main","mode":"literal","path":"src/**"})
+        json!({"pattern":"main","mode":"literal","path":"src/*.rs"})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(grep.content.contains("src/main.rs:1:"), "{}", grep.content);
+    // The relocated pattern still filters: the .txt sibling also matches the
+    // text, so seeing it would mean the glob was dropped rather than moved.
+    assert!(!grep.content.contains("notes.txt"), "{}", grep.content);
+
+    let found = find_tool(&session, json!({"path":"src/*.rs"}).as_object().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(found.content, "src/main.rs");
+
+    let searched = search_tool(
+        crate::session::test_session(directory.path()),
+        json!({"query":"main","mode":"path","path":"src/*.rs"})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        searched.content.contains("src/main.rs"),
+        "{}",
+        searched.content
+    );
+
+    // Two different patterns is a genuine ambiguity, not a repair.
+    let conflict = grep_tool(
+        &session,
+        json!({"pattern":"main","mode":"literal","path":"src/*.rs","glob":"*.txt"})
             .as_object()
             .unwrap(),
     )
     .await
     .unwrap_err();
-    assert!(grep.message.contains("glob argument"), "{}", grep.message);
-    assert!(!grep.message.contains("os error"), "{}", grep.message);
+    assert!(
+        conflict.message.contains("exactly one pattern in glob"),
+        "{}",
+        conflict.message
+    );
 
+    // ls and read have nowhere to put a pattern, so they still refuse — and the
+    // refusal names the tool that does accept one.
     let ls = ls_tool(&session, json!({"path":"src/*.rs"}).as_object().unwrap())
         .await
         .unwrap_err();
     assert!(ls.message.contains("not a pattern"), "{}", ls.message);
+    assert!(ls.message.contains("find"), "{}", ls.message);
+    assert!(!ls.message.contains("os error"), "{}", ls.message);
 
     // `[` stays legal: real projects use bracketed route directories.
     std::fs::create_dir_all(directory.path().join("src/[id]")).unwrap();
@@ -609,6 +650,18 @@ async fn read_returns_raw_text_and_missing_paths_suggest_exact_entries() {
             .contains("Path not found: internal/auth/password.go")
     );
     assert!(missing.message.contains("internal/auth/auth.go"));
+    // The listing is stated as the complete set and the next guess is closed
+    // off: a live run answered this message with four more invented siblings.
+    assert!(
+        missing.message.contains("contains exactly these 2 entries"),
+        "{}",
+        missing.message
+    );
+    assert!(
+        missing.message.contains("Do not guess another name"),
+        "{}",
+        missing.message
+    );
     assert!(
         !missing
             .message
@@ -695,7 +748,6 @@ async fn disabled_and_aborted_calls_keep_complete_lifecycles() {
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     });
@@ -819,7 +871,6 @@ async fn attachment_reader_retrieves_every_utf8_byte_and_rejects_escape_paths() 
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
@@ -927,7 +978,6 @@ async fn read_skill_is_limited_to_enabled_skill_resources() {
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     });

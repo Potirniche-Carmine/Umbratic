@@ -106,16 +106,18 @@ type OrientInput struct {
 	// Route is the full route string, matching the prompts route constants
 	// rather than compaction's bare profile names.
 	Route prompts.Route
-	// RequestText is the current run's user text only.
+	// RequestText is the current run's user text, and the only thing classified.
 	RequestText string
-	// PreviousBucket is a continuity hint, validated against the route catalog.
-	PreviousBucket string
+	// PreviousResponse is the tail of the assistant's last reply, carried as
+	// context so a short follow-up can be resolved. No bucket travels with it:
+	// the classifier reads what was offered and judges the answer on merit.
+	PreviousResponse string
 }
 
 type orientRequest struct {
-	Route          string `json:"route"`
-	RequestText    string `json:"requestText"`
-	PreviousBucket string `json:"previousBucket"`
+	Route            string `json:"route"`
+	RequestText      string `json:"requestText"`
+	PreviousResponse string `json:"previousResponse"`
 }
 
 // DecodeOrientInput strictly decodes the orient request. Unknown fields, an
@@ -134,7 +136,7 @@ func DecodeOrientInput(r io.Reader) (OrientInput, error) {
 	}
 	for field := range raw {
 		switch field {
-		case "route", "requestText", "previousBucket":
+		case "route", "requestText", "previousResponse":
 		default:
 			return OrientInput{}, fmt.Errorf("field %q is not supported", field)
 		}
@@ -156,13 +158,13 @@ func DecodeOrientInput(r io.Reader) (OrientInput, error) {
 	if !utf8.ValidString(req.RequestText) {
 		return OrientInput{}, errors.New("requestText must be valid UTF-8")
 	}
-	// An unusable continuity hint is dropped rather than failing the request:
-	// it is only a hint, and orient must never block a run.
-	previous := req.PreviousBucket
-	if previous != "" && !prompts.KnownBucket(route, previous) {
+	// Context is a convenience, never a reason to fail a run: anything oversized
+	// or not valid UTF-8 is dropped and the request classifies without it.
+	previous := req.PreviousResponse
+	if len(previous) > MaxOrientRequestBytes || !utf8.ValidString(previous) {
 		previous = ""
 	}
-	return OrientInput{Route: route, RequestText: req.RequestText, PreviousBucket: previous}, nil
+	return OrientInput{Route: route, RequestText: req.RequestText, PreviousResponse: previous}, nil
 }
 
 type ChatInput struct {

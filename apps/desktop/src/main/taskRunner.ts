@@ -481,21 +481,30 @@ export async function runRunnerTask(
         });
       },
       onOrientDecision: (decision) => {
-        // The local diagnostic store persists only warn and error rows, and
-        // this single row per run is the only place "which bucket guided the
-        // run, and did its status sentence reach the user?" is observable, so
-        // it is recorded at warn deliberately. It is never rendered in chat.
+        // A successful classification is routine and was only ever recorded to
+        // watch the feature land — one warn row per run, on every run, for
+        // something that went right. Only the degraded outcome is kept: that is
+        // orient actually failing, and the run silently losing its playbook.
+        if (decision.outcome !== "degraded") return;
         recordLocalDiagnostic({
           level: "warn",
           source: "runner",
-          event: "orient.decision",
+          event: "orient.degraded",
           taskId: task.id,
-          ...(decision.message ? { message: decision.message } : {}),
-          data: {
-            outcome: decision.outcome,
-            ...(decision.bucket ? { bucket: decision.bucket } : {}),
-            ...(decision.sentence ? { sentence: decision.sentence } : {}),
-          },
+          message: decision.message ?? "Orient failed; the run continued without a playbook.",
+          data: {},
+        });
+      },
+      onOrientEvidenceRetry: (retry) => {
+        // Kept: this is the model answering a workspace question without
+        // looking at the workspace, which is a fault, not a milestone.
+        recordLocalDiagnostic({
+          level: "warn",
+          source: "runner",
+          event: "orient.evidence_retry",
+          taskId: task.id,
+          message: "The model answered before calling any tool; the answer was refused once.",
+          data: { ...(retry.bucket ? { bucket: retry.bucket } : {}) },
         });
       },
       onQueueUpdated: (queueEvent) => {

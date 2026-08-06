@@ -265,7 +265,6 @@ async fn preflight_compacts_complete_tool_lifecycles_until_the_request_fits() {
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
@@ -316,7 +315,6 @@ async fn preflight_rejects_an_oversized_atomic_user_request() {
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
@@ -423,7 +421,6 @@ fn session_with(config: crate::config::RunnerConfig, messages: Vec<Value>) -> Se
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     }
@@ -493,6 +490,80 @@ async fn a_response_anchors_the_session_and_a_prefix_rewrite_invalidates_it() {
     assert!(!cleared.anchored);
     assert_eq!(context_event(&session, cleared)["source"], "heuristic");
     assert!(session.awaiting_observed_usage.load(Ordering::SeqCst));
+}
+
+// Every request carries the protected prefix, so a reported prompt smaller than
+// that prefix is measuring something else — a prefix-caching runtime reporting
+// only newly evaluated tokens, say. Believing it replaced the whole estimate
+// with a near-zero number, which silently disabled the semantic trigger and let
+// the context grow until the provider rejected the request. The integration
+// suite reproduced exactly that: 40 turns of 7,000 characters at a 32K context
+// with zero compactions.
+#[tokio::test]
+async fn an_implausibly_small_prompt_measurement_never_becomes_the_anchor() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = (*test_config(directory.path())).clone();
+    config.context_length = 32_000;
+    config.protected_prompt_reserve_tokens = 2_048;
+    let protected_floor = config
+        .protected_prompt_reserve_tokens
+        .min(config.context_length / 4);
+    let session = session_with(
+        config,
+        vec![json!({"role":"user","content":"x".repeat(120_000)})],
+    );
+
+    let heuristic = {
+        let messages = session.messages.lock().await.clone();
+        let state = estimate_state(&session).await;
+        request_estimate(&session, &messages, &[], &state).0
+    };
+    assert!(heuristic.heuristic_prompt_tokens > protected_floor);
+
+    // Below the protected prefix: rejected, and the estimate stays heuristic,
+    // which is what keeps the semantic trigger reachable.
+    append_assistant_turn(
+        &session,
+        json!({"role":"assistant","content":"done"}),
+        &measured(16, 4),
+    )
+    .await;
+    let messages = session.messages.lock().await.clone();
+    let state = estimate_state(&session).await;
+    let rejected = request_estimate(&session, &messages, &[], &state).0;
+    assert!(!rejected.anchored, "an implausible measurement anchored");
+    assert_eq!(context_event(&session, rejected.clone())["source"], "heuristic");
+    assert!(
+        rejected.calibrated_prompt_tokens
+            >= crate::compaction::semantic_trigger_tokens(session.config.context_length),
+        "the rejected anchor must leave the trigger reachable",
+    );
+
+    // At or above the protected prefix it is a real measurement again.
+    append_assistant_turn(
+        &session,
+        json!({"role":"assistant","content":"done"}),
+        &measured(protected_floor + 1, 10),
+    )
+    .await;
+    let messages = session.messages.lock().await.clone();
+    let state = estimate_state(&session).await;
+    let accepted = request_estimate(&session, &messages, &[], &state).0;
+    assert!(accepted.anchored, "a plausible measurement was refused");
+    assert_eq!(accepted.calibrated_prompt_tokens, protected_floor + 11);
+
+    // Rejecting the size must not leave the session waiting forever. The
+    // sentinel exists to stop a heuristic estimate from compacting twice before
+    // the next response; that response has now arrived either way, and holding
+    // the sentinel would block compaction for the rest of the session.
+    clear_usage_anchor(&session).await;
+    assert!(!semantic_compaction_allowed(&session, false));
+    set_usage_anchor(&session, &measured(16, 4), 0).await;
+    assert!(
+        semantic_compaction_allowed(&session, false),
+        "an implausible measurement must still end the wait",
+    );
+    assert!(session.usage_anchor.lock().await.is_none());
 }
 
 #[tokio::test]

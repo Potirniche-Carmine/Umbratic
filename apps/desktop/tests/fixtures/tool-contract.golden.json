@@ -1,7 +1,7 @@
 [
   {
     "function": {
-      "description": "Read one UTF-8 workspace text file. Send exactly one JSON object with path and optional one-based line offset and limit. Returns raw file text with original line endings and no line-number prefixes. Never list directories; use ls. If a result is partial, continue with the reported nextOffset.",
+      "description": "Read one UTF-8 workspace text file. Send exactly one JSON object with path and optional one-based line offset and limit. path must be a real file you have already seen in an ls, find, grep, or search result; read never accepts a directory, a glob, or a filename you inferred from a language or framework convention. Returns raw file text with original line endings and no line-number prefixes. If a result is partial, continue with the reported nextOffset.",
       "name": "read",
       "parameters": {
         "additionalProperties": false,
@@ -18,7 +18,7 @@
             "type": "integer"
           },
           "path": {
-            "description": "Workspace-relative file path.",
+            "description": "One exact workspace-relative file path, copied character for character from a listing or search result. Not a directory, not a pattern, never a guessed name.",
             "minLength": 1,
             "type": "string"
           }
@@ -50,7 +50,7 @@
             "type": "integer"
           },
           "path": {
-            "description": "Workspace-relative directory path. Use \".\" for the workspace root.",
+            "description": "One exact workspace-relative directory path, or \".\" for the workspace root. Not a file and not a pattern; ls has no glob argument.",
             "minLength": 1,
             "type": "string"
           }
@@ -65,13 +65,13 @@
   },
   {
     "function": {
-      "description": "Find workspace paths by one explicit glob under path. Returns stable sorted relative paths. No fuzzy query language.",
+      "description": "Find workspace paths by one explicit glob under path. The two arguments split the shell form: the directory goes in path and the pattern goes in glob, so docs/*.md is {\"path\":\"docs\",\"glob\":\"*.md\"}. Returns stable sorted relative paths. No fuzzy query language.",
       "name": "find",
       "parameters": {
         "additionalProperties": false,
         "properties": {
           "glob": {
-            "description": "One include glob, such as **/*.rs.",
+            "description": "One include glob, matched against both the workspace-relative path and the file name. Examples: **/*.rs, *.md, README*.",
             "maxLength": 512,
             "minLength": 1,
             "type": "string"
@@ -83,7 +83,7 @@
             "type": "integer"
           },
           "path": {
-            "description": "Workspace-relative directory or file scope.",
+            "description": "Existing workspace-relative directory to search under. Use \".\" for the workspace root. The pattern belongs in glob, never here.",
             "minLength": 1,
             "type": "string"
           }
@@ -99,7 +99,7 @@
   },
   {
     "function": {
-      "description": "Search text with one pattern in literal or regex mode under path. Optional glob, caseSensitive, context lines, and limit. Returns path:line: text rows.",
+      "description": "Search text with one pattern in literal or regex mode under path. path is the directory scope and glob is the optional filename filter, so \"grep foo in internal/model/*.go\" is {\"pattern\":\"foo\",\"mode\":\"literal\",\"path\":\"internal/model\",\"glob\":\"*.go\"}. Optional caseSensitive, context lines, and limit. Returns path:line: text rows.",
       "name": "grep",
       "parameters": {
         "additionalProperties": false,
@@ -115,7 +115,7 @@
             "type": "integer"
           },
           "glob": {
-            "description": "Optional include glob.",
+            "description": "Optional include glob such as *.go, matched against both the workspace-relative path and the file name.",
             "maxLength": 512,
             "minLength": 0,
             "type": "string"
@@ -135,7 +135,7 @@
             "type": "string"
           },
           "path": {
-            "description": "Workspace-relative file or directory scope.",
+            "description": "Existing workspace-relative file or directory to search under. Use \".\" for the workspace root. The filename pattern belongs in glob, never here.",
             "minLength": 1,
             "type": "string"
           },
@@ -164,7 +164,7 @@
         "additionalProperties": false,
         "properties": {
           "glob": {
-            "description": "Optional include glob.",
+            "description": "Optional include glob such as *.md, matched against both the workspace-relative path and the file name.",
             "maxLength": 512,
             "minLength": 0,
             "type": "string"
@@ -184,7 +184,7 @@
             "type": "string"
           },
           "path": {
-            "description": "Workspace-relative file or directory scope. Use \".\" for the workspace root.",
+            "description": "Existing workspace-relative file or directory to search under. Use \".\" for the workspace root. The filename pattern belongs in glob, never here.",
             "minLength": 1,
             "type": "string"
           },

@@ -307,6 +307,11 @@ export function localVeilEnvironment(
     VEIL_ADDR: address,
     VEIL_AUTH_TOKEN: authToken,
     VEIL_ENV_FILE: "-",
+    // Exit when this process does. before-quit only runs when Electron is asked
+    // to quit; a force-kill from a dev script skips it and leaves Veil holding a
+    // port forever. The inherited stdin pipe closes on every exit path, so Veil
+    // watches it for EOF and drains itself.
+    VEIL_PARENT_STDIN_WATCH: "1",
     VEIL_MODE: "local",
     VEIL_MODEL: settings.modelId.trim(),
     // Large local-document prompts can spend more than a minute in prompt
@@ -367,10 +372,16 @@ async function startLocalVeil(
     env: localVeilEnvironment(settings, "127.0.0.1:0", authToken, contextLength, {
       includeGoToolchain: launch.command === "go",
     }),
-    stdio: ["ignore", "pipe", "pipe"],
+    // stdin is a pipe this process holds open and never writes to. It is the
+    // liveness channel: when Electron exits for any reason, the write end
+    // closes, Veil reads EOF, and it shuts itself down. `go run` forwards stdin
+    // to the binary it builds, so this works from source as well as packaged.
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   launchingChild = child;
+  // Never end() this stream: closing it early would tell Veil to quit.
+  child.stdin?.on("error", () => {});
 
   let output = "";
   let baseUrl = "";

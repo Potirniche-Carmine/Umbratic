@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,27 +105,301 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	}
 }
 
-// repo_orient fired on a live "tell me more about this folder" run that tried a
-// drive-by Cargo.toml write and kept exploring for minutes. The bucket's body
-// has to carry the read-only rule and a budget as step text, not only as a
-// stop rule.
-func TestRepoOrientIsReadOnlyBudgetedAndSelfTerminating(t *testing.T) {
+// Every rule repo_orient earned from a live failure, in one place. Each line
+// here cost a bad run: a drive-by write during a read-only tour, a wholly
+// invented architecture answered before any tool ran, a tour that skipped the
+// project's own documentation and guessed filenames instead, and a dozen files
+// read then summarized in two lines.
+func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil)
-	for _, want := range []string{
-		"read-only tour",
-		"Never create, edit, or write a file",
-		"never fix a problem you notice",
-		"roughly five to ten",
-		"Anti-stuck",
-		"synthesize the map from what you already have",
+	for name, want := range map[string]string{
+		"read-only":            "Never create, edit, or write a file",
+		"no drive-by fixes":    "never fix a problem you notice",
+		"first move is a tool": "Your first action is a tool call, never prose",
+		"docs before source":   "Read the documentation before the source",
+		"no guessed paths":     "Read only paths you have actually seen",
+		"answer is unbounded":  "Length is yours to judge",
+		"self-terminating":     "stop exploring and write the answer from what you have",
 	} {
 		if !strings.Contains(rendered, want) {
-			t.Fatalf("repo_orient playbook is missing %q:\n%s", want, rendered)
+			t.Fatalf("repo_orient lost its %s rule (%q):\n%s", name, want, rendered)
 		}
+	}
+	// The exploration budget may never be read as a budget on the answer.
+	if !strings.Contains(rendered, "never a licence to answer before you have looked") {
+		t.Fatalf("the anti-stuck rule must not license an early exit:\n%s", rendered)
 	}
 	bucket, _ := BucketFor(EngineeringChat, "repo_orient")
 	if !strings.Contains(bucket.When, "tell me more about this folder") {
 		t.Fatal("repo_orient must claim the folder-tour phrasing for the classifier")
+	}
+}
+
+// A playbook is a plan, not a map of one project. Naming an ecosystem's files
+// sends the model looking for them in projects that have none — a live tour
+// read package.json on a static site because the playbook listed it — and
+// hardcoding tool-call JSON pins the plan to today's tool schema. Direction
+// belongs here; specifics belong in whatever the listing actually returns.
+func TestPlaybooksStayProjectAgnostic(t *testing.T) {
+	banned := []string{
+		"package.json", "Cargo.toml", "go.mod", "pyproject.toml", "requirements.txt",
+		"CMakeLists", "Makefile", "AGENTS.md", "CONTRIBUTING", "CHANGELOG",
+		".claude", "node_modules", "src/", "tsconfig",
+		// Raw tool-call JSON: the schema is the tools' business, not a plan's.
+		`{"path"`, `"glob":`,
+	}
+	for _, route := range allRoutes() {
+		buckets, _ := RouteBuckets(route)
+		for _, bucket := range buckets {
+			for _, name := range banned {
+				if strings.Contains(bucket.Playbook, name) {
+					t.Fatalf("%s/%s names %q; playbooks must work on any project:\n%s",
+						route, bucket.ID, name, bucket.Playbook)
+				}
+			}
+			// Generic documentation words stay allowed — that is direction, not
+			// a filename — but the plan should not run past a screen.
+			if lines := strings.Count(bucket.Playbook, "\n"); lines > 16 {
+				t.Fatalf("%s/%s playbook is %d lines; keep it a plan, not a manual",
+					route, bucket.ID, lines)
+			}
+		}
+	}
+}
+
+// A live second turn — "can you tell me more about it? Like not just one
+// sentence" — classified as direct_answer, so the run lost its playbook and its
+// status line while still needing the workspace. It then called four tools
+// anyway. The fix is not continuity, which would make a light follow-up inherit
+// a heavy plan; it is that direct_answer means "no file could change this".
+func TestAWorkspaceFollowUpIsNotADirectAnswer(t *testing.T) {
+	messages, err := BuildOrient(EngineeringChat, "can you tell me more about it ? Like not just one sentence", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := messages[0].Content.(string)
+	for _, want := range []string{
+		"ask whether reading a file could change the answer",
+		"not just one sentence",
+		"Classify only the CURRENT USER REQUEST",
+		"Carry no plan forward",
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("orient prompt is missing %q", want)
+		}
+	}
+	// Inheriting a bucket is explicitly not the mechanism.
+	if strings.Contains(system, "reuse the previous bucket") {
+		t.Fatalf("orient must not carry a bucket between turns:\n%s", system)
+	}
+	// direct_answer's own description has to turn the follow-up away on the
+	// request's own words, with no knowledge of what came before it.
+	direct, _ := BucketFor(EngineeringChat, DirectAnswerBucket)
+	if !strings.Contains(direct.When, "not just one sentence") {
+		t.Fatalf("direct_answer must exclude workspace follow-ups: %q", direct.When)
+	}
+}
+
+// "yes, go ahead" means nothing on its own, so the classifier is given the tail
+// of its own last reply. It is context, never the thing being classified, and
+// the two are labelled apart so a model cannot classify the wrong one. What is
+// deliberately absent is any bucket: the offer is re-judged on merit rather
+// than inherited.
+func TestOrientSeparatesItsContextFromTheRequest(t *testing.T) {
+	offer := "I can add the retry wrapper to the http client and update its tests. Want me to make that change?"
+	messages, err := BuildOrient(EngineeringChat, "yes, go ahead", offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := messages[1].Content.(string)
+	contextAt := strings.Index(user, "CONTEXT — the end of your own previous reply")
+	requestAt := strings.Index(user, "CURRENT USER REQUEST — this is what you classify")
+	if contextAt < 0 || requestAt < 0 || contextAt > requestAt {
+		t.Fatalf("context must be labelled and precede the request:\n%s", user)
+	}
+	if !strings.Contains(user, offer) || !strings.Contains(user, "yes, go ahead") {
+		t.Fatalf("both halves must survive:\n%s", user)
+	}
+	if strings.Contains(user, "Previous bucket") {
+		t.Fatalf("no bucket may travel with the context:\n%s", user)
+	}
+
+	// A first turn carries no context block at all.
+	first, err := BuildOrient(EngineeringChat, "tell me about this project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(first[1].Content.(string), "CONTEXT") {
+		t.Fatalf("an opening turn must carry no context block:\n%s", first[1].Content)
+	}
+
+	// A long answer is truncated to its tail, which is where the offer lives.
+	long := strings.Repeat("earlier detail. ", 400) + "Want me to make that change?"
+	bounded, err := BuildOrient(EngineeringChat, "yes", long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := bounded[1].Content.(string)
+	if !strings.Contains(rendered, "Want me to make that change?") {
+		t.Fatal("truncation must keep the end of the reply, not the start")
+	}
+	if len([]rune(rendered)) > MaxOrientContextRunes+len([]rune("yes"))+400 {
+		t.Fatalf("context was not bounded: %d runes", len([]rune(rendered)))
+	}
+}
+
+// The runner enforces "no answer without tool results", but the catalog decides
+// which buckets that applies to. A bucket that legitimately ends on questions or
+// on supplied context alone must never be marked, or the runner will refuse a
+// correct answer.
+func TestOnlyEvidenceBackedBucketsRequireEvidence(t *testing.T) {
+	required := map[string]bool{
+		"repo_orient": true, "code_explain": true, "debug_failure": true,
+		"code_change": true, "review_audit": true, "deep_review": true,
+		"test_verify": true, "refactor_migrate": true, "docs_change": true,
+	}
+	buckets, _ := RouteBuckets(EngineeringChat)
+	for _, bucket := range buckets {
+		if got := bucket.RequiresEvidence; got != required[bucket.ID] {
+			t.Fatalf("engineering bucket %q RequiresEvidence = %v, want %v", bucket.ID, got, required[bucket.ID])
+		}
+		if !RequiresEvidence(EngineeringChat, bucket.ID) == bucket.RequiresEvidence {
+			t.Fatalf("RequiresEvidence disagrees with the catalog for %q", bucket.ID)
+		}
+	}
+	// Asking instead of acting is the correct outcome for these, so neither may
+	// be held to the evidence rule.
+	for _, id := range []string{DirectAnswerBucket, "spec_discovery", OpenTaskBucket} {
+		if RequiresEvidence(EngineeringChat, id) {
+			t.Fatalf("%q must not require evidence", id)
+		}
+	}
+	// Marketing and sales deliverables come from supplied context, not tools.
+	for _, route := range []Route{MarketingChat, SalesChat} {
+		buckets, _ := RouteBuckets(route)
+		for _, bucket := range buckets {
+			if bucket.RequiresEvidence {
+				t.Fatalf("%s bucket %q must not require evidence", route, bucket.ID)
+			}
+		}
+	}
+	// An unknown selector can never turn the rule on.
+	if RequiresEvidence(EngineeringChat, "not_a_bucket") {
+		t.Fatal("an unknown bucket must not require evidence")
+	}
+}
+
+// "sentence: missing" in the runner log covered both "the classifier returned
+// none" and "the one it returned was rejected", which made a live run's absent
+// status line unexplainable. The two are now distinguishable.
+func TestADroppedSentenceIsDistinguishableFromAnAbsentOne(t *testing.T) {
+	// Rejected: no terminal punctuation.
+	dropped, err := ParseOrientDecision(EngineeringChat, `{"bucket":"repo_orient","summarySentence":"I will map this repository"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropped.SummarySentence != "" || !dropped.SentenceDropped {
+		t.Fatalf("a rejected sentence must be reported as dropped: %+v", dropped)
+	}
+
+	// Absent: the classifier returned null.
+	absent, err := ParseOrientDecision(EngineeringChat, `{"bucket":"repo_orient","summarySentence":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent.SentenceDropped {
+		t.Fatalf("an absent sentence is not a dropped one: %+v", absent)
+	}
+
+	// A valid sentence is neither.
+	kept, err := ParseOrientDecision(EngineeringChat, `{"bucket":"repo_orient","summarySentence":"I will map this repository."}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.SummarySentence == "" || kept.SentenceDropped {
+		t.Fatalf("a valid sentence must survive undropped: %+v", kept)
+	}
+
+	// direct_answer carries no sentence and reports no drop.
+	direct, err := ParseOrientDecision(EngineeringChat, `{"bucket":"direct_answer","summarySentence":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if direct.SentenceDropped {
+		t.Fatalf("direct_answer must never report a dropped sentence: %+v", direct)
+	}
+}
+
+// A live status line read "I will map out Umbratic's hybrid architecture —
+// Electron frontend, Rust backend, and Go security layer — so you can navigate
+// the codebase." Two faults in one sentence: it stated an architecture the
+// classifier cannot have seen, and it turned to address the reader. The line is
+// the assistant narrating its own next action, so second person is rejected.
+func TestAStatusSentenceNarratesItsOwnWorkInFirstPerson(t *testing.T) {
+	decide := func(sentence string) OrientDecision {
+		raw := `{"bucket":"repo_orient","summarySentence":` + strconv.Quote(sentence) + `}`
+		decision, err := ParseOrientDecision(EngineeringChat, raw)
+		if err != nil {
+			t.Fatalf("%q: %v", sentence, err)
+		}
+		return decision
+	}
+
+	for _, rejected := range []string{
+		"I will map this repository so you can navigate the codebase.",
+		"I will read the docs and summarize them for your review.",
+		"Here is what you asked for.",
+	} {
+		got := decide(rejected)
+		if got.SummarySentence != "" || !got.SentenceDropped {
+			t.Fatalf("a second-person sentence must be dropped: %q -> %+v", rejected, got)
+		}
+		if got.Bucket != "repo_orient" {
+			t.Fatalf("dropping the sentence must not drop the bucket: %+v", got)
+		}
+	}
+
+	for _, kept := range []string{
+		"I will map this project's layout and read its documentation.",
+		"I will start with the repository's own docs, then confirm them against the code.",
+		// "young" contains "you" but is not a pronoun; only whole tokens count.
+		"I will review the youngest commits first.",
+	} {
+		got := decide(kept)
+		if got.SummarySentence != kept || got.SentenceDropped {
+			t.Fatalf("a first-person plan sentence must survive: %q -> %+v", kept, got)
+		}
+	}
+
+	// The rule the classifier is given has to say both halves out loud.
+	messages, err := BuildOrient(EngineeringChat, "tell me about this codebase", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := messages[0].Content.(string)
+	for _, want := range []string{
+		"the sentence may state no fact about it",
+		"Never name a language, framework, service, component, architecture, directory, or file",
+		`no "so you can ..."`,
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("orient prompt is missing %q", want)
+		}
+	}
+}
+
+// code_explain produced the guessed-sibling read loop: four invented filenames in
+// one directory, each answered with that directory's real listing. The rule that
+// stops it belongs in the bucket that does the reading.
+func TestCodeExplainForbidsGuessedPaths(t *testing.T) {
+	rendered := PlaybookPrompt(EngineeringChat, "code_explain", nil)
+	for _, want := range []string{
+		"Read only paths you have actually seen",
+		"never answer a miss by inventing another name beside it",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("code_explain playbook is missing %q:\n%s", want, rendered)
+		}
 	}
 }
 
@@ -148,7 +423,7 @@ func TestOrientPromptAsksForAFirstPersonPlanSentence(t *testing.T) {
 }
 
 func TestOrientPromptListsExactlyTheRouteCatalog(t *testing.T) {
-	messages, err := BuildOrient(EngineeringChat, "why is the auth test failing?", "code_change")
+	messages, err := BuildOrient(EngineeringChat, "why is the auth test failing?", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,21 +444,14 @@ func TestOrientPromptListsExactlyTheRouteCatalog(t *testing.T) {
 	if !strings.Contains(system, `"think hard"`) {
 		t.Fatal("orient prompt must exclude think-hard from security routing")
 	}
+	// The user message is the request and nothing else: no carried-over bucket,
+	// so a light follow-up can never inherit the previous turn's heavy plan.
 	user := messages[1].Content.(string)
-	if !strings.Contains(user, "Previous bucket for this conversation: code_change") {
-		t.Fatal("a valid previous bucket must travel as a continuity hint")
-	}
 	if !strings.Contains(user, "why is the auth test failing?") {
 		t.Fatal("orient must carry the request text")
 	}
-
-	// A hint from another route is not a hint here.
-	crossRoute, err := BuildOrient(EngineeringChat, "yes, draft it", "campaign_plan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(crossRoute[1].Content.(string), "campaign_plan") {
-		t.Fatal("a cross-route previous bucket must be dropped")
+	if strings.Contains(user, "Previous bucket") {
+		t.Fatalf("orient must classify each request on its own words:\n%s", user)
 	}
 
 	if _, err := BuildOrient(Route("nope/chat"), "hello", ""); err == nil {

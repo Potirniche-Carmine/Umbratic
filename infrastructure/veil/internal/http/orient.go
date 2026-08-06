@@ -36,7 +36,7 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "invalid_orient_request"})
 		return
 	}
-	messages, err := prompts.BuildOrient(input.Route, input.RequestText, input.PreviousBucket)
+	messages, err := prompts.BuildOrient(input.Route, input.RequestText, input.PreviousResponse)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 		return
@@ -97,7 +97,34 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 	if decision.SummarySentence != "" {
 		sentence = decision.SummarySentence
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bucket": decision.Bucket, "summarySentence": sentence})
+	if decision.SentenceDropped {
+		recordOrientSentenceDropped(input.Route, decision.Bucket)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bucket":          decision.Bucket,
+		"summarySentence": sentence,
+		// The catalog's answer to "may this turn end without a tool call?".
+		// Sent as a resolved boolean so the runner enforces the rule without
+		// holding a copy of the bucket catalog.
+		"evidenceRequired": prompts.RequiresEvidence(input.Route, decision.Bucket),
+	})
+}
+
+// recordOrientSentenceDropped logs that a guided run lost its status line to
+// validation rather than to an absent sentence. Without this the runner's
+// sentence:"missing" diagnostic covers both causes and neither is actionable.
+// The record carries no model output, only the static classification.
+func recordOrientSentenceDropped(route prompts.Route, bucket string) {
+	record := map[string]any{
+		"level":  "warn",
+		"event":  "orient.sentence_dropped",
+		"route":  string(route),
+		"bucket": bucket,
+		"reason": "sentence failed validation: needs one line ending in . or !, at most 240 runes, and no bucket id",
+	}
+	if encoded, err := json.Marshal(record); err == nil {
+		log.Printf("VEIL_DIAGNOSTIC %s", encoded)
+	}
 }
 
 // recordOrientInvalidOutput logs a bounded sample of the unparseable classifier

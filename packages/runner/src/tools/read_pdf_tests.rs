@@ -115,7 +115,6 @@ async fn attachment_reader_serves_pdf_markdown_in_bounded_chunks() {
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
     };
 
     let mut offset = 0usize;

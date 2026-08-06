@@ -85,10 +85,22 @@ export async function startRunner(
   };
   return {
     child, url, request,
+    // A runner that outlives its test holds target/debug/umbratic-runner.exe
+    // open, and the next `cargo build` fails with "Access is denied" — which
+    // reads as a stale binary rather than a leaked process, and has already
+    // sent one debugging session down the wrong path. Never return while the
+    // child might still be alive: escalate to SIGKILL if the polite signal is
+    // not honoured promptly.
     async close() {
       if (child.exitCode !== null) return;
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
       child.kill("SIGTERM");
-      await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }

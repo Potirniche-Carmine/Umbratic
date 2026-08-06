@@ -21,6 +21,7 @@ use std::{
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde_json::json;
 
+use super::read::missing_path_message;
 use super::*;
 
 /// Refuse to publish a partial index rather than silently answer from one.
@@ -523,14 +524,17 @@ pub(super) async fn search_tool(
 ) -> ToolExecutionResult {
     let query = string_arg(input, &["query"]);
     let mode = string_arg(input, &["mode"]);
-    let path = string_arg(input, &["path"]);
+    let (path, glob) = split_pattern_path(
+        "search",
+        &string_arg(input, &["path"]),
+        &string_arg(input, &["glob"]),
+    )?;
     if query.is_empty() || path.is_empty() {
         return Err("search requires string arguments query, mode, and path".into());
     }
     if mode != "path" && mode != "content" {
         return Err("search mode must be path or content".into());
     }
-    let glob = string_arg(input, &["glob"]);
     let limit = number_arg(
         input,
         "limit",
@@ -540,13 +544,16 @@ pub(super) async fn search_tool(
             DEFAULT_CONTENT_LIMIT
         },
     ) as usize;
-    glob_free_path("search", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ToolError::validation(format!("Path not found: {relative}")));
+            return Err(ToolError::validation(missing_path_message(
+                &session.config.cwd,
+                &absolute,
+                &relative,
+            )));
         }
         Err(error) => return Err(unusable_path_error("search", &relative, &error)),
     };

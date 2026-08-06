@@ -61,6 +61,7 @@ export type RunnerEventAdapterOptions = {
   onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
   /** Diagnostic-only: the run's hidden intent classification. Never rendered. */
   onOrientDecision?(event: Extract<RunnerEvent, { type: "orient.decision" }>): void;
+  onOrientEvidenceRetry?(event: Extract<RunnerEvent, { type: "orient.evidence_retry" }>): void;
 };
 
 function eventAt(event: RunnerEvent): string | undefined {
@@ -237,6 +238,10 @@ export class RunnerEventAdapter {
         // Deliberately no emit: the bucket id goes to the diagnostic log only
         // and must never reach the renderer.
         this.options.onOrientDecision?.(event);
+        return;
+      case "orient.evidence_retry":
+        // Same rule as the decision it follows: diagnostics only.
+        this.options.onOrientEvidenceRetry?.(event);
         return;
     }
   };

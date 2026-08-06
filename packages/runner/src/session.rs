@@ -82,7 +82,6 @@ pub struct Session {
     /// The last valid orient bucket for this session. A continuity hint only,
     /// for referential follow-ups such as "yes, draft it". It is cleared on any
     /// orient failure so a stale playbook can never be reused.
-    pub previous_bucket: std::sync::Mutex<Option<String>>,
     /// The tool contract presented to the model, frozen on first use and reused
     /// for every step of the task.
     pub(crate) tool_surface: OnceLock<Arc<ToolSurface>>,
@@ -243,7 +242,6 @@ impl SessionStore {
             workspace_graph,
             skill_cache: SharedSkillCache::default(),
             search_index: Arc::new(SearchIndex::default()),
-            previous_bucket: std::sync::Mutex::new(None),
             tool_surface: OnceLock::new(),
             run: std::sync::Mutex::new(None),
             queue: Mutex::new(RunQueue::default()),
@@ -367,7 +365,6 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         workspace_graph: None,
         skill_cache: SharedSkillCache::default(),
         search_index: Arc::new(SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: OnceLock::new(),
         run: std::sync::Mutex::new(None),
         queue: Mutex::new(RunQueue::default()),
