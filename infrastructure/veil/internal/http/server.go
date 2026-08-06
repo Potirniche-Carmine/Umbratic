@@ -823,9 +823,30 @@ type modelFailure struct {
 	Code           string
 	Message        string
 	UpstreamStatus int
+	// Detail is Veil's own transport-level error text (a Go http client error,
+	// never model output), bounded for local diagnostics. It is recorded in the
+	// VEIL_DIAGNOSTIC event only and never sent to clients — "model service
+	// could not be reached" alone proved undebuggable in a live run.
+	Detail string
 }
 
 func classifyModelFailure(err error, upstreamStatus int) modelFailure {
+	failure := classifyModelFailureKind(err, upstreamStatus)
+	if err != nil {
+		failure.Detail = boundedFailureDetail(err)
+	}
+	return failure
+}
+
+func boundedFailureDetail(err error) string {
+	detail := strings.Join(strings.Fields(err.Error()), " ")
+	if runes := []rune(detail); len(runes) > 300 {
+		return string(runes[:300])
+	}
+	return detail
+}
+
+func classifyModelFailureKind(err error, upstreamStatus int) modelFailure {
 	if upstreamStatus > 0 {
 		if upstreamStatus == http.StatusRequestEntityTooLarge {
 			return modelFailure{Status: http.StatusRequestEntityTooLarge, Code: "context_overflow_upstream", Message: "model service rejected the assembled context", UpstreamStatus: upstreamStatus}
@@ -874,6 +895,9 @@ func recordModelFailure(route prompts.Route, phase string, failure modelFailure,
 	}
 	if failure.UpstreamStatus > 0 {
 		record["upstreamStatus"] = failure.UpstreamStatus
+	}
+	if failure.Detail != "" {
+		record["detail"] = failure.Detail
 	}
 	if encoded, err := json.Marshal(record); err == nil {
 		log.Printf("VEIL_DIAGNOSTIC %s", encoded)

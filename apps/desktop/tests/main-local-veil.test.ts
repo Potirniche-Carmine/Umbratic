@@ -84,6 +84,12 @@ test("managed local Veil source keeps readiness independent of go run output and
   const source = fs.readFileSync(new URL("../src/main/localVeil.ts", import.meta.url), "utf8");
   assert.match(source, /probeLocalVeil\(baseUrl, authToken/);
   assert.match(source, /response\.statusCode === 200/);
+  // The listen deadline and the health deadline are separate: `go run` compile
+  // time must not eat the health probe's window, and a health timeout must
+  // blame the model runtime, not Veil.
+  assert.match(source, /Timed out waiting for local Veil to report its listening address/);
+  assert.match(source, /listening at \$\{baseUrl\} but its health check did not pass/);
+  assert.match(source, /model runtime at \$\{runtimeBaseUrl\} to answer/);
   assert.match(source, /VEIL_ADDR.*127\.0\.0\.1:0|127\.0\.0\.1:0/);
   assert.match(source, /VEIL_ENV_FILE: "-"/);
   assert.match(source, /spawn\("taskkill", \["\/pid", String\(child\.pid\), "\/t", "\/f"\]/);

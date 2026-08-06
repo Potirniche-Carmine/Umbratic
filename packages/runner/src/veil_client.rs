@@ -13,6 +13,24 @@ use crate::{
     veil_tls::{expected_pin, pinned_tls_config, resolve_server_name, verify_certificate_pin},
 };
 
+/// reqwest's Display hides the useful cause — "error sending request for url
+/// (...)" says nothing about *why*. The distinction between "operation timed
+/// out" and "connection refused" lives in the error source chain, and a live
+/// degraded-orient diagnostic proved useless without it.
+fn describe_request_error(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        source = cause.source();
+    }
+    message
+}
+
 fn provider_bearer(provider: &ProviderConfig) -> String {
     provider
         .api_key
@@ -155,13 +173,13 @@ pub async fn orient_request(
         .json(&body)
         .send()
         .await
-        .map_err(|error| format!("orient failed: {error}"))?;
+        .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
     verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|error| format!("orient failed: {error}"))?;
+        .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
     if bytes.len() > 8 * 1024 {
         return Err("orient returned an oversized response".into());
     }
@@ -259,17 +277,20 @@ pub async fn compact_context(
     for (name, value) in &session.config.provider.headers {
         request = request.header(name, value);
     }
-    let response = request
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("context compaction failed: {error}"))?;
+    let response = request.json(&body).send().await.map_err(|error| {
+        format!(
+            "context compaction failed: {}",
+            describe_request_error(&error)
+        )
+    })?;
     verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| format!("context compaction failed: {error}"))?;
+    let bytes = response.bytes().await.map_err(|error| {
+        format!(
+            "context compaction failed: {}",
+            describe_request_error(&error)
+        )
+    })?;
     if bytes.len() > 64 * 1024 {
         return Err("context compaction returned an oversized response".into());
     }
@@ -709,7 +730,7 @@ pub async fn stream_veil_chat(
         }
         tokio::select! {
             result = &mut send_future => {
-                break result.map_err(|error| format!("model request failed: {error}"))?;
+                break result.map_err(|error| format!("model request failed: {}", describe_request_error(&error)))?;
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
         }
@@ -741,7 +762,7 @@ pub async fn stream_veil_chat(
                 Ok(None) => break,
                 Err(_) => continue,
             };
-        let chunk = chunk.map_err(|error| error.to_string())?;
+        let chunk = chunk.map_err(|error| describe_request_error(&error))?;
         for line in complete_utf8_lines(&mut buffer, &chunk)? {
             if let Some(error) = veil_stream_error(&line) {
                 return Err(error);
