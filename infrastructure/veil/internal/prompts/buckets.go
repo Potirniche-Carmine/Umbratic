@@ -51,7 +51,7 @@ var engineeringBuckets = []Bucket{
 		When: "Map the repository, \"what is here\", a high-level tour.",
 		Playbook: `1. Run ls on "." and continue with nextOffset if the listing is partial.
 2. Use search to locate manifests, READMEs, and main entrypoints. Use find only for an explicit glob.
-3. Read a few high-signal files. Do not recursively read everything.
+3. Read a few high-signal files, and only as far into each as the map needs. Do not recursively read everything.
 4. In your final response, return a short structured map: purpose, major directories, and how to run it if that is evident. Build no part of that map in a response that also calls tools.`,
 		PreferredSkills: []string{"umbratic-markdown"},
 		Stop:            "the map is delivered. Do not write files unless the user asked for a durable map.",
@@ -60,15 +60,16 @@ var engineeringBuckets = []Bucket{
 		ID:   "code_explain",
 		When: "How does X work, explain this module, trace a data flow.",
 		Playbook: `1. Use search to find the symbols and paths named in the request. Use find when an explicit glob is enough.
-2. Read the owning files and follow only the references you actually need.
-3. In your final response, explain using exact paths and symbols. No speculative architecture.`,
+2. Search content with context first; when the surrounding lines already answer the question, do not open the file at all.
+3. Where they do not, read a window around the hit with line, and widen only where the shape of the code demands it. Follow only the references you actually need.
+4. In your final response, explain using exact paths and symbols. No speculative architecture.`,
 		Stop: "the explanation is clear. Make no edits.",
 	},
 	{
 		ID:   "debug_failure",
 		When: "A crash, exception, failing test, or \"why is this broken\".",
 		Playbook: `1. Gather the failure evidence: message, log, failing test name, from the request or the workspace.
-2. Locate the likely code with search and read. Use grep only when an exact regex is needed.
+2. Locate the likely code with search, using context to see the lines around each hit, and read a window where more is needed. Use grep only when an exact regex is needed.
 3. Reproduce with command or run_program when it is safe and useful.
 4. Fix only if the user asked for a fix. Otherwise report the root cause in your final response.
 5. Re-run the failing check after any fix.`,
@@ -78,8 +79,8 @@ var engineeringBuckets = []Bucket{
 	{
 		ID:   "code_change",
 		When: "Implement, add a feature, or fix a bug with actual code changes.",
-		Playbook: `1. Gather evidence with search and read before any write.
-2. Prefer edit or apply_patch over rewriting a file. Match the surrounding style.
+		Playbook: `1. Gather evidence with search before any write, then read the regions you will actually change. Open a whole file only when the change genuinely spans it.
+2. Prefer edit or apply_patch over rewriting a file. Match the surrounding style. Copy oldText from a read that covered those exact lines.
 3. Verify with the narrowest relevant command or test.
 4. In your final response, report briefly: paths changed and the verification result. Do not dump file contents.`,
 		PreferredSkills: []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
@@ -89,7 +90,7 @@ var engineeringBuckets = []Bucket{
 		ID:   "review_audit",
 		When: "A normal code review, quality pass, or a light \"any issues here?\".",
 		Playbook: `1. Determine the scope: a diff, named paths, or the area the user named. Read-only git commands are fine.
-2. Use search and read across the scoped files. Track what you did and did not cover.
+2. Use search across the scoped files, with context lines where the match alone is not conclusive, and read windows where it is not. Track what you did and did not cover.
 3. In your final response, order findings by severity with path and symbol evidence.
 4. Make no writes unless the user asked you to fix the findings.`,
 		PreferredSkills: []string{"umbratic-git-worktree", "umbratic-security-review"},
@@ -107,7 +108,7 @@ Scope gate, before any heavy tool use:
 
 Then:
 1. If umbratic-security-review is in the enabled skill catalog, read it completely and follow its checklist for the chosen surface.
-2. Run search in targeted waves (auth, tokens, secrets, exec, deserialize, SQL, path joins, outbound HTTP, permissions, CORS), then read only the top hits.
+2. Run search in targeted waves (auth, tokens, secrets, exec, deserialize, SQL, path joins, outbound HTTP, permissions, CORS) with context lines, then read windows around only the top hits.
 3. Use grep only for precise confirmation patterns.
 4. Respect a read budget of roughly 25 to 40 substantive reads, then synthesize.
 5. In your final response, report Confirmed, Needs validation, and Not covered as separate sections.
@@ -134,7 +135,7 @@ Anti-stuck rules:
 	{
 		ID:   "refactor_migrate",
 		When: "Restructure, migrate, compare two module versions, or a multi-file redesign with implementation.",
-		Playbook: `1. Scope both sides. Use search and read to compare actual behavior.
+		Playbook: `1. Scope both sides. Use search to locate the differing regions, then read those windows to compare actual behavior.
 2. Decide a short internal sequence for the edits.
 3. Apply edits in dependency order and verify after meaningful chunks.
 4. In your final response, summarize migration risks and leftover work.`,

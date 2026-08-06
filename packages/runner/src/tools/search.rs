@@ -13,6 +13,7 @@
 //! invalidating any build already in flight.
 
 use std::{
+    collections::VecDeque,
     io::{BufRead, BufReader},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -417,9 +418,17 @@ fn search_path_mode(
 
 struct ContentOutcome {
     rows: Vec<String>,
+    /// Matching lines, which `limit` bounds. `rows` also carries context lines.
+    matches: usize,
     truncated: bool,
     files_scanned: usize,
     files_skipped: usize,
+}
+
+/// One output row. `:` marks the matching line and `-` a context line, matching
+/// what `grep` emits, so the two tools read the same way.
+fn content_row(path: &str, number: usize, marker: char, line: &str) -> String {
+    format!("{path}:{number}{marker} {}", clip_line(line))
 }
 
 fn search_content_mode(
@@ -427,11 +436,13 @@ fn search_content_mode(
     entries: &[IndexEntry],
     scope: &SearchScope,
     query: &str,
+    context: usize,
     limit: usize,
 ) -> Result<ContentOutcome, ToolError> {
     let case_sensitive = is_case_sensitive(query);
     let needle = fold(query, case_sensitive);
     let mut rows: Vec<String> = Vec::new();
+    let mut matches = 0usize;
     let mut truncated = false;
     let mut files_scanned = 0usize;
     let mut files_skipped = 0usize;
@@ -467,7 +478,17 @@ fn search_content_mode(
         files_scanned += 1;
         let reader = BufReader::new(handle);
         let mut binary = false;
-        let mut matched = Vec::new();
+        // Rows are held per file so that a file revealed as binary partway
+        // through contributes nothing, exactly as it did before context existed.
+        let mut file_rows: Vec<String> = Vec::new();
+        let mut file_matches = 0usize;
+        // The trailing `context` lines, kept as a ring rather than buffering the
+        // whole file, so a `context: 0` search costs what it always has.
+        let mut preceding: VecDeque<(usize, String)> = VecDeque::with_capacity(context);
+        let mut following = 0usize;
+        // Guards against emitting a line twice when two matches sit close enough
+        // for their context windows to overlap.
+        let mut last_emitted = 0usize;
         for (index, line) in reader.lines().enumerate() {
             let Ok(line) = line else {
                 binary = true;
@@ -477,9 +498,34 @@ fn search_content_mode(
                 binary = true;
                 break;
             }
-            let hay = fold(&line, case_sensitive);
-            if hay.contains(&needle) {
-                matched.push((index + 1, clip_line(&line)));
+            let number = index + 1;
+            if fold(&line, case_sensitive).contains(&needle) {
+                if matches + file_matches >= limit {
+                    truncated = true;
+                    break;
+                }
+                for (preceding_number, text) in preceding.drain(..) {
+                    if preceding_number > last_emitted {
+                        file_rows.push(content_row(&entry.relative, preceding_number, '-', &text));
+                        last_emitted = preceding_number;
+                    }
+                }
+                file_rows.push(content_row(&entry.relative, number, ':', &line));
+                last_emitted = number;
+                file_matches += 1;
+                following = context;
+                continue;
+            }
+            if following > 0 {
+                file_rows.push(content_row(&entry.relative, number, '-', &line));
+                last_emitted = number;
+                following -= 1;
+            }
+            if context > 0 {
+                if preceding.len() == context {
+                    preceding.pop_front();
+                }
+                preceding.push_back((number, line));
             }
         }
         if binary {
@@ -487,19 +533,15 @@ fn search_content_mode(
             files_skipped += 1;
             continue;
         }
-        for (number, text) in matched {
-            if rows.len() >= limit {
-                truncated = true;
-                break;
-            }
-            rows.push(format!("{}:{number}: {text}", entry.relative));
-        }
+        rows.append(&mut file_rows);
+        matches += file_matches;
         if truncated {
             break;
         }
     }
     Ok(ContentOutcome {
         rows,
+        matches,
         truncated,
         files_scanned,
         files_skipped,
@@ -531,6 +573,7 @@ pub(super) async fn search_tool(
         return Err("search mode must be path or content".into());
     }
     let glob = string_arg(input, &["glob"]);
+    let context = number_arg(input, "context", 0) as usize;
     let limit = number_arg(
         input,
         "limit",
@@ -571,11 +614,14 @@ pub(super) async fn search_tool(
         let entries = entries_for(&session, &scope.root)?;
         if mode_owned == "path" {
             let (paths, truncated) = search_path_mode(&entries, &scope, &query_owned, limit);
-            Ok::<_, ToolError>((paths, truncated, None))
+            let count = paths.len();
+            Ok::<_, ToolError>((paths, count, truncated, None))
         } else {
-            let content = search_content_mode(&session, &entries, &scope, &query_owned, limit)?;
+            let content =
+                search_content_mode(&session, &entries, &scope, &query_owned, context, limit)?;
             Ok((
                 content.rows,
+                content.matches,
                 content.truncated,
                 Some((content.files_scanned, content.files_skipped)),
             ))
@@ -583,7 +629,7 @@ pub(super) async fn search_tool(
     })
     .await
     .map_err(|_| ToolError::runtime("Search did not complete."))?;
-    let (rows, truncated, counts) = outcome?;
+    let (rows, result_count, truncated, counts) = outcome?;
     let scope_label = if relative.is_empty() {
         ".".to_owned()
     } else {
@@ -598,11 +644,14 @@ pub(super) async fn search_tool(
     } else {
         rows.join("\n")
     };
+    // resultCount counts paths in path mode and matching lines in content mode,
+    // which is what `limit` bounds. Context lines ride along in `rows` without
+    // inflating the number the model reasons about.
     let mut details = json!({
         "mode": mode,
         "path": scope_label,
         "query": query,
-        "resultCount": rows.len(),
+        "resultCount": result_count,
         "truncated": truncated,
     });
     if let Some((scanned, skipped)) = counts {

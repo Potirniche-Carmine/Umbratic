@@ -3,7 +3,40 @@ use std::io::{BufRead, BufReader};
 use serde_json::json;
 use umbratic_pdf::{InspectError, InspectOptions, PdfType, inspect_file};
 
+use super::catalog::{DEFAULT_READ_LINES, DEFAULT_READ_RADIUS};
 use super::*;
+
+/// The line range a read should cover, resolved from already-validated input.
+///
+/// `line` centres `radius` lines on one line; otherwise `offset` and `limit`
+/// page through the file. A call that sets neither still gets a bound, so the
+/// cheapest thing to type is no longer a whole-file read.
+fn read_window(input: &Map<String, Value>) -> (usize, usize) {
+    let Some(line) = input.get("line").and_then(Value::as_u64) else {
+        let offset = number_arg(input, "offset", 1).max(1);
+        return (
+            offset as usize,
+            number_arg(input, "limit", DEFAULT_READ_LINES as u64) as usize,
+        );
+    };
+    let radius = number_arg(input, "radius", DEFAULT_READ_RADIUS as u64);
+    let offset = line.saturating_sub(radius).max(1);
+    // Measured from `line` rather than from `offset`, so a window centred near
+    // the top of a file keeps its full reach below `line` after clamping. The
+    // result cannot exceed 2 * radius + 1, which the declared radius bound
+    // already holds under the flat line cap.
+    let limit = line + radius - offset + 1;
+    (offset as usize, limit as usize)
+}
+
+/// The model-facing coordinates for a read. Reported for every read, not only
+/// truncated ones: a window is unusable without knowing where it sits.
+fn read_location(relative: &str, shown_start: usize, shown_end: usize, total: usize) -> String {
+    if shown_start == 0 {
+        return format!("{relative}: no lines in range; the file has {total} lines.");
+    }
+    format!("{relative} lines {shown_start}-{shown_end} of {total}.")
+}
 
 /// True when the path both claims to be and actually starts like a PDF, so
 /// misnamed binaries still hit the regular binary refusal.
@@ -89,7 +122,7 @@ fn read_pdf_tool(
     absolute: &Path,
     relative: &str,
     offset: usize,
-    line_limit: Option<usize>,
+    line_limit: usize,
 ) -> ToolExecutionResult {
     let (inspection, markdown) = pdf_markdown(absolute, relative)?;
     let lines: Vec<&str> = markdown.lines().collect();
@@ -97,7 +130,7 @@ fn read_pdf_tool(
     let mut selected: Vec<&str> = Vec::new();
     let mut selected_bytes = 0usize;
     for line in lines.iter().skip(offset.saturating_sub(1)) {
-        if line_limit.is_some_and(|limit| selected.len() >= limit) {
+        if selected.len() >= line_limit {
             break;
         }
         let joiner = usize::from(!selected.is_empty());
@@ -134,12 +167,11 @@ fn read_pdf_tool(
         "totalLines": total_lines,
     });
     let continuation = next_offset.map(|value| json!({ "nextOffset": value }));
-    Ok(ToolResult::success_detailed(
-        relative.to_owned(),
-        content,
-        Some(details),
-        continuation,
-    ))
+    let location = read_location(relative, shown_start, shown_end, total_lines);
+    Ok(
+        ToolResult::success_detailed(relative.to_owned(), content, Some(details), continuation)
+            .at(location),
+    )
 }
 
 fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
@@ -219,15 +251,7 @@ pub(super) async fn read_tool(
     if path.is_empty() {
         return Err("read requires string argument path".into());
     }
-    let offset = input
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .max(1) as usize;
-    let line_limit = input
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize);
+    let (offset, line_limit) = read_window(input);
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -285,7 +309,7 @@ pub(super) async fn read_tool(
         if !collecting || total_lines < offset {
             continue;
         }
-        if line_limit.is_some_and(|limit| selected.len() >= limit) {
+        if selected.len() >= line_limit {
             collecting = false;
             continue;
         }
@@ -338,12 +362,8 @@ pub(super) async fn read_tool(
         "bytes": content.len(),
     });
     let continuation = next_offset.map(|value| json!({ "nextOffset": value }));
-    Ok(ToolResult::success_detailed(
-        relative,
-        content,
-        Some(details),
-        continuation,
-    ))
+    let location = read_location(&relative, shown_start, shown_end, total_lines);
+    Ok(ToolResult::success_detailed(relative, content, Some(details), continuation).at(location))
 }
 
 /// Serves the extracted Markdown of a PDF attachment through the same byte

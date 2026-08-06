@@ -249,6 +249,7 @@ pub(super) async fn command_tool(
     let body = body_parts.join("\n");
     Ok(ToolResult {
         summary: redact_text(&command, 320),
+        location: None,
         content: body,
         status: if aborted {
             "aborted"

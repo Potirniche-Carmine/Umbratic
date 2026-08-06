@@ -305,3 +305,137 @@ async fn search_settles_without_results_when_the_run_is_aborted() {
     let next = run_search(&session, json!({"query":"main","mode":"path","path":"."})).await;
     assert_eq!(next.status, "success", "{:?}", next.error_message);
 }
+
+#[tokio::test]
+async fn content_search_shows_the_lines_around_a_match_without_opening_the_file() {
+    // The point of context here: a search that already shows the surrounding
+    // code removes the read that would otherwise pull in the whole file.
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("app.rs"),
+        "alpha\nbravo\ncharlie\nNEEDLE\ndelta\necho\nfoxtrot\n",
+    )
+    .unwrap();
+    let session = crate::session::test_session(directory.path());
+
+    let bare = run_search(
+        &session,
+        json!({"query":"NEEDLE","mode":"content","path":"."}),
+    )
+    .await;
+    assert_eq!(bare.status, "success", "{:?}", bare.error_message);
+    assert_eq!(bare.content, "app.rs:4: NEEDLE", "context defaults to none");
+
+    let with_context = run_search(
+        &session,
+        json!({"query":"NEEDLE","mode":"content","path":".","context":2}),
+    )
+    .await;
+    assert_eq!(
+        with_context.content,
+        // ':' marks the match and '-' the context, exactly as grep renders it.
+        "app.rs:2- bravo\napp.rs:3- charlie\napp.rs:4: NEEDLE\napp.rs:5- delta\napp.rs:6- echo"
+    );
+    // limit bounds matches; the context lines ride along without inflating the
+    // count the model reasons about.
+    assert_eq!(
+        with_context
+            .details
+            .as_ref()
+            .and_then(|value| value.get("resultCount"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn overlapping_context_windows_never_repeat_a_line() {
+    let directory = tempfile::tempdir().unwrap();
+    // Matches two lines apart, so their context windows overlap in both
+    // directions and the shared line must appear exactly once.
+    std::fs::write(
+        directory.path().join("app.rs"),
+        "one\nHIT\nthree\nHIT\nfive\n",
+    )
+    .unwrap();
+    let session = crate::session::test_session(directory.path());
+    let result = run_search(
+        &session,
+        json!({"query":"HIT","mode":"content","path":".","context":2}),
+    )
+    .await;
+    assert_eq!(
+        result.content,
+        "app.rs:1- one\napp.rs:2: HIT\napp.rs:3- three\napp.rs:4: HIT\napp.rs:5- five"
+    );
+    let numbers = result
+        .content
+        .lines()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(numbers.len(), result.content.lines().count());
+}
+
+#[tokio::test]
+async fn a_content_limit_bounds_matches_and_reports_truncation() {
+    let directory = tempfile::tempdir().unwrap();
+    let body = (1..=10)
+        .map(|number| format!("pad {number}\nHIT {number}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(directory.path().join("app.rs"), body + "\n").unwrap();
+    let session = crate::session::test_session(directory.path());
+    let result = run_search(
+        &session,
+        json!({"query":"HIT","mode":"content","path":".","context":1,"limit":3}),
+    )
+    .await;
+    assert_eq!(result.status, "success", "{:?}", result.error_message);
+    let matches = result
+        .content
+        .lines()
+        .filter(|line| line.contains(": HIT"))
+        .count();
+    assert_eq!(matches, 3, "limit bounds matching lines, not rows");
+    assert!(
+        result.content.lines().count() > matches,
+        "context accompanied them"
+    );
+    let details = result.details.as_ref().unwrap();
+    assert_eq!(details.get("resultCount").and_then(Value::as_u64), Some(3));
+    assert_eq!(
+        details.get("truncated").and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn a_file_revealed_as_binary_contributes_no_context_rows() {
+    // Context rows are held per file, so a file that turns out to be binary
+    // after a match still contributes nothing at all.
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("clean.txt"), "pre\nMARK\npost\n").unwrap();
+    std::fs::write(
+        directory.path().join("mixed.bin"),
+        b"pre\nMARK\npost\n\0binary\n".as_slice(),
+    )
+    .unwrap();
+    let session = crate::session::test_session(directory.path());
+    let result = run_search(
+        &session,
+        json!({"query":"MARK","mode":"content","path":".","context":1}),
+    )
+    .await;
+    assert!(!result.content.contains("mixed.bin"), "{}", result.content);
+    assert_eq!(
+        result.content,
+        "clean.txt:1- pre\nclean.txt:2: MARK\nclean.txt:3- post"
+    );
+    assert_eq!(
+        result
+            .details
+            .as_ref()
+            .and_then(|value| value.get("filesSkipped"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+}

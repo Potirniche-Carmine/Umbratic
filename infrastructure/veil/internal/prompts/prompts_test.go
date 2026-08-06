@@ -35,11 +35,16 @@ func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
 	}
-	// search is the warm primary locator; grep stays the exact escape hatch.
+	// search is the warm primary locator; grep stays the exact-regex escape
+	// hatch. Locating must beat opening, and an open must be a window: those two
+	// rules are what keep whole-file reads out of the transcript.
 	for _, want := range []string{
 		"use search to locate code or content by name or literal text",
-		"grep only when you need an exact regex or context lines",
+		"grep only when you need an exact regex",
 		"never use command to run ripgrep, grep, or find for routine search",
+		"a content search with context often shows enough of the surrounding code to answer without a read at all",
+		"read a window around them rather than the whole file",
+		"send line with the reported line number",
 	} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing search-first guidance %q", want)

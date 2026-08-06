@@ -1,19 +1,24 @@
 [
   {
     "function": {
-      "description": "Read one UTF-8 workspace text file. Send exactly one JSON object with path and optional one-based line offset and limit. Returns raw file text with original line endings and no line-number prefixes. Never list directories; use ls. If a result is partial, continue with the reported nextOffset.",
+      "description": "Read part of one UTF-8 workspace text file. Returns raw file text with original line endings and no line-number prefixes; the covered line range is reported separately. Read a window, not a whole file: when a search or grep hit already tells you where to look, send line with that line number to open a window around it, and raise radius only when the window proves too narrow. Send offset and limit instead to page through a file from a known point, continuing with the reported nextOffset. A call that sets neither returns the first lines of the file and reports its total length. Never list directories; use ls.",
       "name": "read",
       "parameters": {
         "additionalProperties": false,
         "properties": {
           "limit": {
-            "description": "Maximum number of lines to return.",
+            "description": "Maximum number of lines to return. Cannot be combined with line.",
             "maximum": 2000,
             "minimum": 1,
             "type": "integer"
           },
+          "line": {
+            "description": "One-based line to centre a window on, such as the line a search or grep hit reported. Cannot be combined with offset or limit.",
+            "minimum": 1,
+            "type": "integer"
+          },
           "offset": {
-            "description": "One-based line offset to begin reading.",
+            "description": "One-based line offset to begin reading. Cannot be combined with line.",
             "minimum": 1,
             "type": "integer"
           },
@@ -21,6 +26,12 @@
             "description": "Workspace-relative file path.",
             "minLength": 1,
             "type": "string"
+          },
+          "radius": {
+            "description": "Lines to show above and below line. Requires line.",
+            "maximum": 999,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
@@ -158,11 +169,17 @@
   },
   {
     "function": {
-      "description": "Locate workspace paths or content from a warm index. Prefer this over grep for finding where something lives. path mode ranks files and directories by name; content mode returns path:line: text rows for a literal match. Matching is case-insensitive unless query contains an uppercase character. Use grep for regex or context lines. Narrow path, glob, or query when a result is truncated.",
+      "description": "Locate workspace paths or content from a warm index. Prefer this over grep for finding where something lives. path mode ranks files and directories by name; content mode returns path:line: text rows for a literal match, with path:line- rows around each match when context is set. Matching is case-insensitive unless query contains an uppercase character. Use grep for regex. Set context to read the code around a match here instead of opening the file, and reserve read for the cases the surrounding lines do not settle. Narrow path, glob, or query when a result is truncated.",
       "name": "search",
       "parameters": {
         "additionalProperties": false,
         "properties": {
+          "context": {
+            "description": "Lines of surrounding code to show around each content match.",
+            "maximum": 5,
+            "minimum": 0,
+            "type": "integer"
+          },
           "glob": {
             "description": "Optional include glob.",
             "maxLength": 512,
@@ -170,7 +187,7 @@
             "type": "string"
           },
           "limit": {
-            "description": "Maximum results to return. Defaults to 100 for path and 50 for content.",
+            "description": "Maximum paths in path mode, or matches in content mode. Defaults to 100 for path and 50 for content.",
             "maximum": 200,
             "minimum": 1,
             "type": "integer"
@@ -302,7 +319,7 @@
   },
   {
     "function": {
-      "description": "Run a local workspace command in /bin/sh after policy and permission checks. Prefer search to locate code, read to open it, and ls or find for listing; use grep only for exact regex or context lines. Do not shell out to ripgrep or find for routine search. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args.",
+      "description": "Run a local workspace command in /bin/sh after policy and permission checks. Prefer search to locate code and to show the lines around a match, read to open a window on a file, and ls or find for listing; use grep only for exact regex. Do not shell out to ripgrep or find for routine search. Optional timeoutMs has a bounded default and maximum. Output progress is coalesced; large output keeps the useful tail and remains retrievable by context hash. Send exactly command and optional timeoutMs. Do not send programId or args.",
       "name": "command",
       "parameters": {
         "additionalProperties": false,

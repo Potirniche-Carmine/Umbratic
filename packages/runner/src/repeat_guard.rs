@@ -88,6 +88,7 @@ mod tests {
     fn result(output: &str, status: &str) -> Vec<ToolResult> {
         vec![ToolResult {
             summary: "README.md".into(),
+            location: None,
             content: output.into(),
             status: status.into(),
             code: (status != "success").then(|| "invalid_arguments".into()),

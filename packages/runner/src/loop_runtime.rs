@@ -103,6 +103,7 @@ fn aborted_tool_result_content(tool_name: &str) -> String {
         },
         &ToolResult {
             summary: "aborted".into(),
+            location: None,
             content: String::new(),
             status: "aborted".into(),
             code: Some("aborted".into()),

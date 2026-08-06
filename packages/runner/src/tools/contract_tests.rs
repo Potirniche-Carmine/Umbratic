@@ -261,3 +261,216 @@ async fn the_generated_tool_contract_matches_the_shared_fixture() {
          confirm the Veil consumer test still accepts it",
     );
 }
+
+/// A file long enough that an unqualified read must bound itself, with every
+/// line self-identifying so a window can be checked exactly.
+fn numbered_workspace(lines: usize) -> (tempfile::TempDir, String) {
+    let directory = tempfile::tempdir().unwrap();
+    let body = (1..=lines)
+        .map(|number| format!("line {number}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(directory.path().join("long.rs"), &body).unwrap();
+    (directory, body)
+}
+
+#[tokio::test]
+async fn a_centred_read_returns_the_window_around_one_line_and_reports_where_it_is() {
+    let (directory, _) = numbered_workspace(1_000);
+    let session = crate::session::test_session(directory.path());
+
+    // The default radius, and the exact window the model asked for.
+    let centred = read_tool(
+        &session,
+        json!({"path":"long.rs","line":120}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    let rows = centred.content.lines().collect::<Vec<_>>();
+    assert_eq!(
+        rows.first(),
+        Some(&"line 100"),
+        "window starts at line - radius"
+    );
+    assert_eq!(
+        rows.last(),
+        Some(&"line 140"),
+        "window ends at line + radius"
+    );
+    assert_eq!(rows.len(), 41, "a radius of 20 covers 2 * 20 + 1 lines");
+    // Raw text with no line-number prefixes; coordinates travel beside it, so
+    // the content stays an exact slice that edit can copy from.
+    assert!(centred.content.contains("line 120"));
+    assert_eq!(
+        centred.location.as_deref(),
+        Some("long.rs lines 100-140 of 1000.")
+    );
+    assert!(
+        centred
+            .model_text("read")
+            .contains("long.rs lines 100-140 of 1000.")
+    );
+
+    // A window clamped at the top of the file keeps its full reach below `line`,
+    // so the caller still sees `radius` lines after the line it asked about.
+    let clamped = read_tool(
+        &session,
+        json!({"path":"long.rs","line":5,"radius":20})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let rows = clamped.content.lines().collect::<Vec<_>>();
+    assert_eq!(rows.first(), Some(&"line 1"));
+    assert_eq!(rows.last(), Some(&"line 25"));
+
+    // A window past the end of the file is empty rather than an error, and says so.
+    let beyond = read_tool(
+        &session,
+        json!({"path":"long.rs","line":5_000,"radius":2})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(beyond.content.is_empty());
+    assert_eq!(
+        beyond.location.as_deref(),
+        Some("long.rs: no lines in range; the file has 1000 lines.")
+    );
+}
+
+#[tokio::test]
+async fn an_unqualified_read_is_bounded_and_the_rest_stays_reachable() {
+    // The whole point of the change: the cheapest call to type no longer costs
+    // the whole file, but nothing becomes unreachable.
+    let (directory, body) = numbered_workspace(1_000);
+    let session = crate::session::test_session(directory.path());
+
+    let bare = read_tool(&session, json!({"path":"long.rs"}).as_object().unwrap())
+        .await
+        .unwrap();
+    let rows = bare.content.lines().collect::<Vec<_>>();
+    assert_eq!(rows.len(), catalog::DEFAULT_READ_LINES as usize);
+    assert_eq!(rows.first(), Some(&"line 1"));
+    assert_eq!(
+        bare.location.as_deref(),
+        Some("long.rs lines 1-400 of 1000.")
+    );
+    let next = bare
+        .continuation
+        .as_ref()
+        .and_then(|value| value.get("nextOffset"))
+        .and_then(Value::as_u64)
+        .expect("a bounded read reports where to continue");
+    assert_eq!(next, 401);
+
+    // An explicit limit still reaches the whole file, so the bound is a default
+    // and not a ceiling.
+    let whole = read_tool(
+        &session,
+        json!({"path":"long.rs","limit":catalog::MAX_READ_LINES})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(whole.content.lines().count(), 1_000);
+    assert!(whole.continuation.is_none());
+    assert!(body.contains(&whole.content));
+
+    // A file inside the default budget is unchanged: no truncation, no continuation.
+    let (small, small_body) = numbered_workspace(40);
+    let small_session = crate::session::test_session(small.path());
+    let short = read_tool(
+        &small_session,
+        json!({"path":"long.rs"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(small_body.contains(&short.content));
+    assert!(short.continuation.is_none());
+}
+
+#[tokio::test]
+async fn a_window_read_still_feeds_a_byte_exact_edit() {
+    // Gate A again, but for the windowed form: coordinates live beside the
+    // content, so what the model copies is still an exact slice of the file.
+    let directory = tempfile::tempdir().unwrap();
+    let original = "alpha\r\nbravo\r\ncharlie\r\ndelta\r\n";
+    std::fs::write(directory.path().join("crlf.txt"), original).unwrap();
+    let session = crate::session::test_session(directory.path());
+
+    let read = read_tool(
+        &session,
+        json!({"path":"crlf.txt","line":2,"radius":1})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        original.contains(&read.content),
+        "windowed read {:?} is not an exact slice",
+        read.content
+    );
+    let result = execute_tool(
+        session,
+        crate::session::test_sink(directory.path()),
+        Arc::new(crate::permission::PermissionBroker::default()),
+        ToolCall {
+            id: "window-edit".into(),
+            name: "edit".into(),
+            arguments: json!({
+                "path": "crlf.txt",
+                "edits": [{"oldText": read.content, "newText": read.content.replace("bravo", "BRAVO")}],
+            }),
+            index: 0,
+        },
+    )
+    .await;
+    assert_eq!(result.status, "success", "{}", result.content);
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("crlf.txt")).unwrap(),
+        original.replace("bravo", "BRAVO")
+    );
+}
+
+#[tokio::test]
+async fn a_read_cannot_mix_a_centred_window_with_paging() {
+    // Individually valid fields that mean two different things together are
+    // rejected with the field named, rather than resolved by silent precedence.
+    let (directory, _) = numbered_workspace(100);
+    let session = crate::session::test_session(directory.path());
+    let surface = tool_surface(&session);
+    for invalid in [
+        json!({"path":"long.rs","line":10,"offset":5}),
+        json!({"path":"long.rs","line":10,"limit":5}),
+        // radius is meaningless on its own: it centres nothing.
+        json!({"path":"long.rs","radius":5}),
+        json!({"path":"long.rs","radius":5,"offset":2}),
+    ] {
+        let violation = surface
+            .validate("read", invalid.as_object().unwrap())
+            .expect_err(&format!("read accepted {invalid}"));
+        assert_eq!(violation.code, "invalid_arguments");
+        assert!(
+            matches!(violation.field.as_deref(), Some("line" | "radius")),
+            "{invalid} blamed {:?}",
+            violation.field
+        );
+    }
+    for valid in [
+        json!({"path":"long.rs","line":10}),
+        json!({"path":"long.rs","line":10,"radius":0}),
+        json!({"path":"long.rs","offset":5,"limit":5}),
+        json!({"path":"long.rs"}),
+    ] {
+        assert!(
+            surface.validate("read", valid.as_object().unwrap()).is_ok(),
+            "read rejected {valid}"
+        );
+    }
+}

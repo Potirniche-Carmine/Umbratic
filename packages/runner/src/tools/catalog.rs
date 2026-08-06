@@ -98,8 +98,33 @@ const fn choice(
     }
 }
 
+/// A cross-field rule. Argument shapes that are individually valid but
+/// meaningless together are rejected here rather than resolved by silent
+/// precedence in an executor, so the model gets a typed reason instead of a
+/// window it did not ask for.
+///
+/// JSON Schema can express this only through `oneOf`, which is not portable
+/// across the strict-mode dialects Veil targets. The rule is therefore stated in
+/// the model-facing field descriptions and enforced by the generated validator.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FieldRule {
+    /// The field this rule constrains. Inert when the field is absent.
+    pub(super) field: &'static str,
+    /// Fields that must accompany it.
+    pub(super) requires: &'static [&'static str],
+    /// Fields it may never accompany.
+    pub(super) conflicts: &'static [&'static str],
+}
+
 /// Every limit in the contract, declared once.
 pub(super) const MAX_READ_LINES: i64 = 2_000;
+/// What an unqualified `read` returns. A whole file is still reachable through
+/// an explicit `limit`, but it is no longer what a bare call costs.
+pub(super) const DEFAULT_READ_LINES: i64 = 400;
+/// Lines above and below `line` when `radius` is omitted.
+pub(super) const DEFAULT_READ_RADIUS: i64 = 20;
+/// Derived so a centred window can never exceed the flat line cap.
+pub(super) const MAX_READ_RADIUS: i64 = (MAX_READ_LINES - 1) / 2;
 pub(super) const MAX_LISTING_ITEMS: i64 = 200;
 pub(super) const MAX_EDITS_PER_CALL: u64 = 64;
 pub(super) const MAX_PROGRAM_ARGS: u64 = 128;
@@ -107,7 +132,8 @@ pub(super) const MAX_PROGRAM_ARG_LEN: u64 = 4_096;
 pub(super) const MIN_TIMEOUT_MS: i64 = 100;
 pub(super) const MAX_TIMEOUT_MS: i64 = 1_800_000;
 pub(super) const MAX_PATTERN_LEN: u64 = 512;
-pub(super) const MAX_GREP_CONTEXT: i64 = 5;
+/// Shared by `grep` and `search` so a match row costs the same either way.
+pub(super) const MAX_CONTEXT_LINES: i64 = 5;
 pub(super) const MAX_SKILL_CHUNK: i64 = 8 * 1024;
 pub(super) const MAX_ATTACHMENT_CHUNK: i64 = 64 * 1024;
 pub(super) const MAX_CONTEXT_CHUNK: i64 = 64 * 1024;
@@ -140,6 +166,8 @@ pub(super) struct ToolDefinition {
     pub(super) kind: &'static str,
     pub(super) description: &'static str,
     pub(super) fields: &'static [ToolField],
+    /// Cross-field rules, applied after every field validates on its own.
+    pub(super) rules: &'static [FieldRule],
 }
 
 pub(super) const TOOLS: &[ToolDefinition] = &[
@@ -147,21 +175,45 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "read",
         kind: "file",
         gate: Gate::Capability("read"),
-        description: "Read one UTF-8 workspace text file. Send exactly one JSON object with path and optional one-based line offset and limit. Returns raw file text with original line endings and no line-number prefixes. Never list directories; use ls. If a result is partial, continue with the reported nextOffset.",
+        description: "Read part of one UTF-8 workspace text file. Returns raw file text with original line endings and no line-number prefixes; the covered line range is reported separately. Read a window, not a whole file: when a search or grep hit already tells you where to look, send line with that line number to open a window around it, and raise radius only when the window proves too narrow. Send offset and limit instead to page through a file from a known point, continuing with the reported nextOffset. A call that sets neither returns the first lines of the file and reports its total length. Never list directories; use ls.",
         fields: &[
             text("path", true, "Workspace-relative file path."),
+            integer(
+                "line",
+                1,
+                i64::MAX,
+                "One-based line to centre a window on, such as the line a search or grep hit reported. Cannot be combined with offset or limit.",
+            ),
+            integer(
+                "radius",
+                0,
+                MAX_READ_RADIUS,
+                "Lines to show above and below line. Requires line.",
+            ),
             integer(
                 "offset",
                 1,
                 i64::MAX,
-                "One-based line offset to begin reading.",
+                "One-based line offset to begin reading. Cannot be combined with line.",
             ),
             integer(
                 "limit",
                 1,
                 MAX_READ_LINES,
-                "Maximum number of lines to return.",
+                "Maximum number of lines to return. Cannot be combined with line.",
             ),
+        ],
+        rules: &[
+            FieldRule {
+                field: "line",
+                requires: &[],
+                conflicts: &["offset", "limit"],
+            },
+            FieldRule {
+                field: "radius",
+                requires: &["line"],
+                conflicts: &["offset", "limit"],
+            },
         ],
     },
     ToolDefinition {
@@ -178,6 +230,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             integer("offset", 1, i64::MAX, "One-based entry offset."),
             integer("limit", 1, MAX_LISTING_ITEMS, "Maximum entries to return."),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "find",
@@ -195,6 +248,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             ),
             integer("limit", 1, MAX_LISTING_ITEMS, "Maximum paths to return."),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "grep",
@@ -226,17 +280,18 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             integer(
                 "context",
                 0,
-                MAX_GREP_CONTEXT,
+                MAX_CONTEXT_LINES,
                 "Context lines around each match.",
             ),
             integer("limit", 1, MAX_LISTING_ITEMS, "Maximum rows to return."),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "search",
         kind: "search",
         gate: Gate::Capability("search"),
-        description: "Locate workspace paths or content from a warm index. Prefer this over grep for finding where something lives. path mode ranks files and directories by name; content mode returns path:line: text rows for a literal match. Matching is case-insensitive unless query contains an uppercase character. Use grep for regex or context lines. Narrow path, glob, or query when a result is truncated.",
+        description: "Locate workspace paths or content from a warm index. Prefer this over grep for finding where something lives. path mode ranks files and directories by name; content mode returns path:line: text rows for a literal match, with path:line- rows around each match when context is set. Matching is case-insensitive unless query contains an uppercase character. Use grep for regex. Set context to read the code around a match here instead of opening the file, and reserve read for the cases the surrounding lines do not settle. Narrow path, glob, or query when a result is truncated.",
         fields: &[
             bounded_text(
                 "query",
@@ -258,12 +313,19 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             ),
             bounded_text("glob", false, 0, MAX_PATTERN_LEN, "Optional include glob."),
             integer(
+                "context",
+                0,
+                MAX_CONTEXT_LINES,
+                "Lines of surrounding code to show around each content match.",
+            ),
+            integer(
                 "limit",
                 1,
                 MAX_LISTING_ITEMS,
-                "Maximum results to return. Defaults to 100 for path and 50 for content.",
+                "Maximum paths in path mode, or matches in content mode. Defaults to 100 for path and 50 for content.",
             ),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "write",
@@ -282,6 +344,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 description: "Complete UTF-8 file content.",
             },
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "edit",
@@ -299,6 +362,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 description: "Exact replacements to apply to one original snapshot.",
             },
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "apply_patch",
@@ -310,6 +374,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             true,
             "A complete *** Begin Patch through *** End Patch document.",
         )],
+        rules: &[],
     },
     ToolDefinition {
         name: "lsp",
@@ -334,6 +399,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 "Maximum locations to return.",
             ),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "workspace_graph",
@@ -379,6 +445,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 "Edge direction.",
             ),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "command",
@@ -394,6 +461,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 "Bounded execution timeout.",
             ),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "run_program",
@@ -423,6 +491,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 "Bounded execution timeout.",
             ),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "read_skill",
@@ -435,6 +504,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             integer("offset", 0, i64::MAX, "Zero-based byte offset."),
             integer("limit", 1, MAX_SKILL_CHUNK, "Maximum bytes to return."),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "read_attachment",
@@ -450,6 +520,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             integer("offset", 0, i64::MAX, "Zero-based byte offset."),
             integer("limit", 1, MAX_ATTACHMENT_CHUNK, "Maximum bytes to return."),
         ],
+        rules: &[],
     },
     ToolDefinition {
         name: "retrieve_context",
@@ -465,6 +536,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             integer("offset", 0, i64::MAX, "Zero-based byte offset."),
             integer("limit", 1, MAX_CONTEXT_CHUNK, "Maximum bytes to return."),
         ],
+        rules: &[],
     },
 ];
 
@@ -575,6 +647,31 @@ impl ToolDefinition {
         for field in self.fields {
             if field.required && !arguments.contains_key(field.name) {
                 return Err(self.violation(Some(field.name), "a required value"));
+            }
+        }
+        for rule in self.rules {
+            if !arguments.contains_key(rule.field) {
+                continue;
+            }
+            if let Some(missing) = rule
+                .requires
+                .iter()
+                .find(|name| !arguments.contains_key(**name))
+            {
+                return Err(self.violation(
+                    Some(rule.field),
+                    format!("{missing} to be sent with {}", rule.field),
+                ));
+            }
+            if let Some(present) = rule
+                .conflicts
+                .iter()
+                .find(|name| arguments.contains_key(**name))
+            {
+                return Err(self.violation(
+                    Some(rule.field),
+                    format!("{} without {present}", rule.field),
+                ));
             }
         }
         Ok(())

@@ -7,6 +7,10 @@ pub struct ToolResult {
     pub status: String,
     pub code: Option<String>,
     pub summary: String,
+    /// Where in the source `content` came from, such as the line range a
+    /// windowed read covered. Kept beside the content rather than inside it so
+    /// the content stays a byte-exact slice for `edit` to copy `oldText` from.
+    pub location: Option<String>,
     pub content: String,
     pub details: Option<Value>,
     pub continuation: Option<Value>,
@@ -20,6 +24,7 @@ impl ToolResult {
             status: "success".into(),
             code: None,
             summary: summary.into(),
+            location: None,
             content: content.into(),
             details: None,
             continuation: None,
@@ -38,6 +43,7 @@ impl ToolResult {
             status: "success".into(),
             code: None,
             summary: summary.into(),
+            location: None,
             content: content.into(),
             details,
             continuation,
@@ -46,12 +52,20 @@ impl ToolResult {
         }
     }
 
+    /// Records the range `content` covers. The model needs this to work with a
+    /// window: without it a slice of a file is indistinguishable from the file.
+    pub(super) fn at(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
+    }
+
     pub(super) fn failure(status: &str, code: &str, message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
             status: status.into(),
             code: Some(code.into()),
             summary: "tool".into(),
+            location: None,
             content: redact_text(&format!("Tool failed: {message}"), 600),
             details: None,
             continuation: None,
@@ -73,6 +87,9 @@ impl ToolResult {
         )];
         if let Some(code) = &self.code {
             lines.push(format!("Error code: {code}"));
+        }
+        if let Some(location) = &self.location {
+            lines.push(location.clone());
         }
         if !self.content.trim().is_empty() {
             lines.push(self.content.clone());
