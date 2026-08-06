@@ -78,12 +78,16 @@ pub(crate) async fn orient_once(
     if let Some(sentence) = decision.summary_sentence
         && !session.is_aborted()
     {
-        // The renderer concatenates consecutive deltas with no separator, so an
-        // unterminated sentence would glue to the model's first token. This is
-        // UI output only and is never appended as an assistant conversation
-        // message.
+        // kind:"status" types this delta as work narration: the desktop
+        // renders it inside the working timeline from the first token instead
+        // of guessing from tool order, so it can neither flash as a response
+        // nor merge into a tool-less answer. The trailing newlines keep an
+        // older renderer (which ignores kind and concatenates deltas) from
+        // gluing the sentence to the model's first token. This is UI output
+        // only and is never appended as an assistant conversation message.
         sink.emit(json!({
             "type": "assistant.delta",
+            "kind": "status",
             "taskId": session.task_id,
             "text": format!("{sentence}\n\n"),
             "at": now_iso()

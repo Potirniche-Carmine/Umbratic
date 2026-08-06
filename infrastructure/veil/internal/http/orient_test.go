@@ -41,17 +41,19 @@ func TestOrientRouteReturnsAValidatedDecisionWithADeterministicProfile(t *testin
 	if client.req.Temperature != 0 || client.req.TopP != 1 {
 		t.Fatalf("orient must be deterministic: %#v", client.req)
 	}
-	if client.req.MaxOutputTokens != orientMaxOutputTokens {
-		t.Fatalf("orient output must be capped at %d, got %d", orientMaxOutputTokens, client.req.MaxOutputTokens)
+	// No output cap and no forced reasoning effort: the model decides how much
+	// to think. Every cap tried was blown by a thinking-by-default model
+	// reasoning inside the budget and returning an empty content.
+	if client.req.MaxOutputTokens != 0 {
+		t.Fatalf("orient must not cap the output, got %d", client.req.MaxOutputTokens)
 	}
 	if client.req.ReasoningEffort != model.ReasoningNone || client.req.ThinkingTokenBudget != nil || client.req.ParallelTools {
-		t.Fatalf("orient must not reason, think, or parallelize: %#v", client.req)
+		t.Fatalf("orient must not force a reasoning effort or parallelize: %#v", client.req)
 	}
-	// Local thinking-by-default models spend the whole bounded budget on
-	// reasoning and return an empty content unless thinking is disabled and the
-	// reply is grammar-constrained to the decision object.
-	if !client.req.DisableThinking || client.req.ResponseSchema == nil {
-		t.Fatalf("orient must disable thinking and constrain the response schema: %#v", client.req)
+	// The harness constrains the shape instead: whatever content arrives can
+	// only be one decision object.
+	if client.req.ResponseSchema == nil {
+		t.Fatalf("orient must constrain the response schema: %#v", client.req)
 	}
 	if len(client.req.Messages) != 2 || client.req.Messages[0].Role != "system" {
 		t.Fatalf("orient must send exactly the server prompt plus the bounded input: %#v", client.req.Messages)

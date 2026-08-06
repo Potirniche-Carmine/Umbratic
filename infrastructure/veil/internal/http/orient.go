@@ -13,13 +13,12 @@ import (
 	"umbratic-veil/internal/prompts"
 )
 
-// orientMaxOutputTokens bounds the classifier reply. The decision is one small
-// JSON object, but the budget must fit a two-sentence status (up to 240
-// characters), the JSON scaffolding, and a stray reasoning preamble from a
-// local model that ignores the no-reasoning request. 96 proved too tight in a
-// live run — the reply truncated mid-object and orient degraded. Validation,
-// not this cap, is what rejects non-decisions.
-const orientMaxOutputTokens = 256
+// Orient sets no output cap and does not suppress thinking: the model decides
+// how much to reason before answering. Every cap tried so far (96, then 256)
+// was blown by a thinking-by-default model reasoning inside the budget and
+// returning an empty content. The harness constrains the *shape* instead —
+// the response schema means whatever content arrives can only be one decision
+// object — and validation rejects anything else.
 
 // handleOrient classifies one request into a hidden intent bucket.
 //
@@ -43,19 +42,16 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := model.ChatRequest{
-		Model:           s.cfg.DefaultModel,
-		Messages:        messages,
-		Stream:          false,
-		MaxOutputTokens: orientMaxOutputTokens,
+		Model:    s.cfg.DefaultModel,
+		Messages: messages,
+		Stream:   false,
+		// ReasoningNone means "do not force an effort level", not "forbid
+		// thinking": the local path leaves Ollama's thinking default alone and
+		// the server path omits reasoning_effort entirely.
 		Temperature:     0,
 		TopP:            1,
 		ReasoningEffort: model.ReasoningNone,
 		ParallelTools:   false,
-		// Both are required on local runtimes: thinking-by-default models
-		// otherwise reason until the output budget is gone and return an empty
-		// content, and the schema keeps the constrained reply exactly one
-		// decision object. Verified against three local models live.
-		DisableThinking: true,
 		ResponseSchema:  prompts.OrientResponseSchema(),
 	}
 	if _, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {

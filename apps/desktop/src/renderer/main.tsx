@@ -160,7 +160,7 @@ import {
   type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { activityCarriesStatus, activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -970,8 +970,10 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       activityEndedAt = undefined;
       return;
     }
-    // Thinking-only turns (no tools/skills) never settle into a timed Working block.
-    if (finished && !activityHasTools(activitySegments)) {
+    // Thinking-only turns (no tools/skills) never settle into a timed Working
+    // block — but a harness-typed status line is declared narration, so a
+    // block carrying one settles even when the model answered without tools.
+    if (finished && !activityHasTools(activitySegments) && !activityCarriesStatus(activitySegments)) {
       activitySegments = [];
       activityStartedAt = undefined;
       activityEndedAt = undefined;
@@ -1060,6 +1062,26 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
+      if (event.kind === "status") {
+        // Harness-typed work narration: it belongs to the working timeline
+        // from its first token. Routing it by type (not by whether tools have
+        // appeared yet) is what keeps it from flashing as a response before
+        // the first tool call, and from merging into a tool-less answer.
+        const status = event.text.trim();
+        if (status) {
+          flushReasoning();
+          reasoningIndex += 1;
+          activitySegments.push({
+            type: "reasoning",
+            id: `status-${reasoningIndex}`,
+            text: status,
+            durationMs: null,
+            finished: true,
+            statusLine: true,
+          });
+        }
+        continue;
+      }
       flushReasoning();
       // The work is over once the model starts speaking, so the first token of a
       // burst closes the elapsed window. Later tokens of the same answer must not
@@ -1308,14 +1330,14 @@ export function reconcileActivityDisclosureState(
 
   for (const activity of activities) {
     const key = activityKey(activity.id);
-    const hasTools = activityHasTools(activity.segments);
-    if (!activity.finished && hasTools && !nextAutoOpenedKeys.has(key)) {
+    const opensLive = activityHasTools(activity.segments) || activityCarriesStatus(activity.segments);
+    if (!activity.finished && opensLive && !nextAutoOpenedKeys.has(key)) {
       nextAutoOpenedKeys.add(key);
       nextExpandedIds.add(activity.id);
       newlyOpenedIds.push(activity.id);
       continue;
     }
-    if ((!hasTools || activity.finished) && nextAutoOpenedKeys.delete(key)) {
+    if ((!opensLive || activity.finished) && nextAutoOpenedKeys.delete(key)) {
       nextExpandedIds.delete(activity.id);
     }
   }
@@ -5042,7 +5064,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       })()
                     ) : (
                       (() => {
-                        const hasTools = activityHasTools(item.segments);
+                        const hasTools = activityHasTools(item.segments)
+                          || activityCarriesStatus(item.segments);
                         if (!item.finished && !hasTools) {
                           return (
                             <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>

@@ -17,6 +17,25 @@ test("runner event decoder accepts handled events and marks internal events as i
   assert.equal(assistant.ignored, false);
   assert.equal(assistant.event.text, "hello");
 
+  // The harness-typed opening status line keeps its kind; anything else in
+  // that field is an invalid payload rather than silently untyped text.
+  const status = decoder.decodeRunnerEvent({
+    type: "assistant.delta",
+    kind: "status",
+    taskId: "task-1",
+    text: "I will map this folder.",
+  });
+  assert.equal(status.ok, true);
+  assert.equal(status.event.kind, "status");
+  const badKind = decoder.decodeRunnerEvent({
+    type: "assistant.delta",
+    kind: "banner",
+    taskId: "task-1",
+    text: "hello",
+  });
+  assert.equal(badKind.ok, false);
+  assert.equal(badKind.code, "invalid_payload");
+
   const legacyFinished = decoder.decodeRunnerEvent({
     type: "tool.finished",
     taskId: "task-1",
