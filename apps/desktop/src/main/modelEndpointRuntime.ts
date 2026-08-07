@@ -3,6 +3,7 @@ import { getProviderJson } from "./providerClient";
 import { readContextLengthSetting } from "./storage";
 import type { LocalModelInfo, ServiceStatus } from "./types";
 import { probeVeilContextLength } from "./veilContext";
+import { parseVeilFeatures } from "./veilFeatures";
 import type { TelemetryUploadEndpoint } from "./telemetrySync";
 
 type EndpointProvider = ReturnType<typeof endpointProvider>;
@@ -28,6 +29,7 @@ export async function checkEndpointHealth(provider: EndpointProvider): Promise<{
   status: ServiceStatus;
   message?: string;
   capabilities?: NonNullable<LocalModelInfo["capabilities"]>;
+  features?: string[];
 }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
@@ -59,6 +61,9 @@ export async function checkEndpointHealth(provider: EndpointProvider): Promise<{
         vision: raw.vision === true,
         reasoning: raw.reasoning === true,
       },
+      // A server too old to advertise features reports none, which is what an
+      // empty list already means. There is no third "unknown" state to handle.
+      features: parseVeilFeatures(payload),
     };
   } catch (error) {
     return {

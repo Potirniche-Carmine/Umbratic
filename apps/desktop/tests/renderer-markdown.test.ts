@@ -657,7 +657,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     JSON.parse(JSON.stringify(composerTimelineFromEvents([
       { type: "assistant.delta", taskId: "task-1", text: "Streaming now", at: "2026-01-01T00:00:05.000Z" },
     ], undefined, "running"))),
-    [{ type: "assistant", id: "assistant-1", text: "Streaming now", streaming: true }],
+    // A lone streaming message has nothing after it, so it is already the
+    // turn's answer and renders at full strength from its first token.
+    [{ type: "assistant", id: "assistant-1", text: "Streaming now", streaming: true, final: true }],
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(composerTimelineFromEvents([
@@ -666,7 +668,8 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     ], undefined, "failed"))),
     [
       { type: "user", id: "user-0-11", text: "Do the work", rawText: "Do the work", reviewFeedback: [], attachedFiles: [] },
-      { type: "assistant", id: "assistant-1", text: "I couldn't complete this request.\n\nRunner turn failed." },
+      // A failure notice is how the turn ended, so it takes the closing slot.
+      { type: "assistant", id: "assistant-1", text: "I couldn't complete this request.\n\nRunner turn failed.", final: true },
     ],
   );
 
@@ -913,4 +916,43 @@ test("a dropped connection reports its retries and never outlives the outage", (
 
   // A healthy turn never shows it at all.
   assert.equal(providerReconnectFromEvents([dropped[0]]), null);
+});
+
+test("only the prose nothing follows is the turn's answer", () => {
+  const { composerTimelineFromEvents } = loadRenderer();
+  const at = (seconds) => `2026-01-01T00:00:0${seconds}.000Z`;
+
+  // The shape the user actually sees: an opening sentence, a round of work,
+  // then the reply.
+  const turn = [
+    { type: "user.message", taskId: "task-1", text: "tell me about this folder", at: at(0) },
+    { type: "assistant.delta", taskId: "task-1", text: "I will explore the project layout.", at: at(1) },
+    { type: "command.started", taskId: "task-1", id: "c1", command: "ls", cwd: ".", at: at(2) },
+    { type: "command.finished", taskId: "task-1", id: "c1", exitCode: 0, at: at(3) },
+    { type: "assistant.delta", taskId: "task-1", text: "This is a website project.", at: at(4) },
+  ];
+  const settled = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn, undefined, "completed")));
+  const assistants = settled.filter((item) => item.type === "assistant");
+  assert.equal(assistants.length, 2);
+  // The opening sentence is narration, however much it reads like a reply.
+  assert.equal(assistants[0].final, undefined);
+  assert.equal(assistants[1].final, true);
+
+  // Finality is decided by position, so the answer is already the answer while
+  // it is still streaming — it never restyles once the run settles.
+  const midStream = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn, undefined, "running")));
+  assert.equal(midStream.filter((item) => item.type === "assistant").at(-1).final, true);
+
+  // And a turn that answers without doing any work has an answer, not an
+  // opening sentence.
+  const direct = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    { type: "user.message", taskId: "task-1", text: "hi", at: at(0) },
+    { type: "assistant.delta", taskId: "task-1", text: "Hello.", at: at(1) },
+  ], undefined, "completed")));
+  assert.equal(direct.at(-1).final, true);
+
+  // An opening sentence with the work still open is not promoted by the work
+  // being unfinished: something follows it either way.
+  const working = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn.slice(0, 3), undefined, "running")));
+  assert.equal(working.filter((item) => item.type === "assistant")[0].final, undefined);
 });

@@ -5,7 +5,6 @@ use uuid::Uuid;
 use super::{patch, *};
 
 const MAX_DIFF_BYTES: usize = 8 * 1024;
-const MAX_EDITS_PER_CALL: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FileSnapshot {
@@ -203,51 +202,33 @@ pub(super) async fn apply_patch_tool(
     ))
 }
 
+/// Extraction, not validation. The catalog has already checked that `edits` is a
+/// non-empty array within its item cap, that each entry carries only `oldText`
+/// and `newText`, that `oldText` is a non-empty string and `newText` is a
+/// string. Re-checking here only created a second place for those rules to live.
+///
+/// The one rule that is genuinely this executor's is `old == new`: it is about
+/// what an edit *does*, not what the arguments look like, and the catalog has no
+/// business knowing it.
 fn parse_edits(input: &Map<String, Value>) -> Result<Vec<(String, String)>, ToolError> {
-    let Some(Value::Array(edits)) = input.get("edits") else {
-        return Err(ToolError::validation(
-            "edit requires edits as a non-empty array",
-        ));
-    };
-    if edits.is_empty() {
-        return Err(ToolError::validation(
-            "edit requires at least one entry in edits",
-        ));
-    }
-    if edits.len() > MAX_EDITS_PER_CALL {
-        return Err(ToolError::validation(format!(
-            "edit accepts at most {MAX_EDITS_PER_CALL} replacements"
-        )));
-    }
+    let edits = input
+        .get("edits")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let mut parsed = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {
-        let Some(object) = edit.as_object() else {
-            return Err(ToolError::validation(format!(
-                "edits[{index}] must be an object"
-            )));
-        };
-        for key in object.keys() {
-            if key != "oldText" && key != "newText" {
-                return Err(ToolError::validation(format!(
-                    "edits[{index}] received undeclared field {key}"
-                )));
-            }
-        }
-        let Some(old) = object.get("oldText").and_then(Value::as_str) else {
-            return Err(ToolError::validation(format!(
-                "edits[{index}].oldText must be a non-empty string"
-            )));
-        };
-        let Some(new) = object.get("newText").and_then(Value::as_str) else {
-            return Err(ToolError::validation(format!(
-                "edits[{index}].newText must be a string"
-            )));
-        };
-        if old.is_empty() {
-            return Err(ToolError::validation(format!(
-                "edits[{index}].oldText must be non-empty"
-            )));
-        }
+        let object = edit
+            .as_object()
+            .ok_or_else(|| ToolError::validation(format!("edits[{index}] must be an object")))?;
+        let old = object
+            .get("oldText")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let new = object
+            .get("newText")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if old == new {
             return Err(ToolError::validation(format!(
                 "edits[{index}] must change the matched text"

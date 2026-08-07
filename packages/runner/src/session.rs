@@ -304,7 +304,6 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
         max_response_tokens: 4_096,
         protected_prompt_reserve_tokens: 4_096,
         attachment_directory: None,
-        workspace_mode: "local".into(),
         skills: Vec::new(),
         permission_mode: crate::config::PermissionMode::AutoSafe,
         enabled_tools: crate::config::RUNNER_TOOL_NAMES
@@ -328,9 +327,6 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
-            parallel_tool_calls: false,
-            vision: false,
-            reasoning: false,
             headers: std::collections::BTreeMap::new(),
             mtls: None,
         },

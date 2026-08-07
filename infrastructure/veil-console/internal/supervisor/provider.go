@@ -173,15 +173,6 @@ func validModelID(value string) bool {
 	return value != "" && len(value) <= 256 && !strings.ContainsAny(value, "\r\n\x00")
 }
 
-func containsModel(payload []byte, selected string) bool {
-	for _, model := range collectModels(payload) {
-		if model == selected {
-			return true
-		}
-	}
-	return false
-}
-
 func allowedProviderIP(ip net.IP) bool {
 	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false

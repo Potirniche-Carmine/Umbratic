@@ -1,50 +1,23 @@
-import { app } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
-  defaultEndpointApiKey,
-  defaultEndpointBaseUrlForMode,
-  defaultEndpointModelId,
-  defaultHarnessProfileId,
-  defaultLocalModelId,
-  defaultModelEndpointMode,
-  endpointEditingAllowed,
-  isHarnessProfileId,
   isModelEndpointMode,
-  localEndpointForced,
-  managedModelEndpointDefaults,
 } from "./config";
-import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
+import { isRunnerToolId } from "./toolSettings";
 import { normalizeReviewFile } from "../shared/reviewDiff";
-import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
-import type { DesktopStartupSettings } from "../shared/desktopApi";
-import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
-import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
-import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
-import { activeStoredEndpoint, endpointModesWithNext, storedEndpointForMode, type RawModelEndpointSettings } from "./endpointModeStorage";
-import { appDatabaseFile, chatsDatabaseFile } from "./appPaths";
 import type {
   CapabilityProbeCategory,
   CapabilityProbeImportance,
   CapabilityProbeStatus,
   CapabilityTelemetryProbe,
   ChatRecord,
-  HarnessProfileId,
-  LocalDiagnosticInfo,
-  LocalDiagnosticLevel,
-  LocalDiagnosticRecord,
-  ModelEndpointMode,
-  ActiveModelEndpointSettings,
-  PermissionMode,
-  ProductTelemetryEvent,
   RepositoryInfo,
   RunnerToolId,
   TaskRecord,
   TaskCheckpoint,
   TaskWorkspace,
-  UserNotes,
 } from "./types";
 
 import {

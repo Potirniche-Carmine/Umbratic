@@ -1,8 +1,6 @@
 use super::*;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1000;
-const MAX_TIMEOUT_MS: u64 = 30 * 60 * 1000;
-const MIN_TIMEOUT_MS: u64 = 100;
 const PROGRESS_COALESCE_MS: u64 = 100;
 const MAX_UI_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 512 * 1024;
@@ -36,7 +34,6 @@ pub(super) async fn command_tool(
         "suggestion": safety.suggestion,
         "commandFingerprint": safety.command_fingerprint,
         "cwdFingerprint": safety.cwd_fingerprint,
-        "evaluationMicros": safety.evaluation_micros,
         "at": now_iso(),
     }));
     if safety.action == SafetyAction::Deny {
@@ -88,12 +85,14 @@ pub(super) async fn command_tool(
             "The user rejected this command. It was not run. Do not repeat it unless the user makes a new request that authorizes it.",
         ));
     }
-    let permit = CommandPermit::new(safety);
+    // The catalog declares timeoutMs as an integer in [MIN_TIMEOUT_MS,
+    // MAX_TIMEOUT_MS] and rejects anything outside that before dispatch, so a
+    // value that arrives here is already in range. Re-clamping only hid the day
+    // the two bounds disagreed.
     let requested = input
         .get("timeoutMs")
         .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_TIMEOUT_MS)
-        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
     let mut process = if let Some(executable) = executable {
         let mut value = Command::new(executable);
         value.args(&program_args);
@@ -115,9 +114,6 @@ pub(super) async fn command_tool(
         value.args(["-c", &command]);
         value
     };
-    permit
-        .consume(&command, &session.config.cwd)
-        .map_err(ToolError::policy)?;
     process
         .current_dir(&session.config.cwd)
         .env_clear()

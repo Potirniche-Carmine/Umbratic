@@ -45,8 +45,21 @@ type SkillManifestEntry = {
   recordedAt: string;
 };
 
+/**
+ * The checksum of the bundled copy that was last written to disk for a system
+ * skill. It is what makes "the user edited this" answerable: if the file on disk
+ * still hashes to what we installed, nobody has touched it and a newer bundled
+ * version can replace it. If it does not, the edit is the user's and only an
+ * explicit reset may discard it.
+ */
+type SystemSkillInstallRecord = {
+  installedChecksum: string;
+  installedAt: string;
+};
+
 type SkillManifest = {
   skills: Record<string, SkillManifestEntry>;
+  systemSkills: Record<string, SystemSkillInstallRecord>;
 };
 
 const skillFileByteLimit = 512 * 1024;
@@ -136,7 +149,7 @@ function readSkillManifest(directory: string): SkillManifest {
   try {
     const parsed = JSON.parse(fs.readFileSync(manifestPath(directory), "utf8")) as unknown;
     if (!isRecord(parsed) || !isRecord(parsed.skills)) {
-      return { skills: {} };
+      return { skills: {}, systemSkills: {} };
     }
     const skills: Record<string, SkillManifestEntry> = {};
     for (const [id, value] of Object.entries(parsed.skills)) {
@@ -155,9 +168,26 @@ function readSkillManifest(directory: string): SkillManifest {
         };
       }
     }
-    return { skills };
+    const systemSkills: Record<string, SystemSkillInstallRecord> = {};
+    if (isRecord(parsed.systemSkills)) {
+      for (const [id, value] of Object.entries(parsed.systemSkills)) {
+        if (
+          isValidSkillId(id) &&
+          isRecord(value) &&
+          typeof value.installedChecksum === "string" &&
+          /^sha256:[a-f0-9]{64}$/i.test(value.installedChecksum) &&
+          typeof value.installedAt === "string"
+        ) {
+          systemSkills[id] = {
+            installedChecksum: value.installedChecksum.toLowerCase(),
+            installedAt: value.installedAt,
+          };
+        }
+      }
+    }
+    return { skills, systemSkills };
   } catch {
-    return { skills: {} };
+    return { skills: {}, systemSkills: {} };
   }
 }
 
@@ -310,17 +340,57 @@ function isReservedSkillId(id: string): boolean {
   return id === "system" || systemSkillDefinitions.some((skill) => skill.id === id);
 }
 
+/**
+ * Writes any missing system skill, and refreshes any whose on-disk copy is still
+ * byte-for-byte the one we installed. Without the refresh, a user who installed
+ * the app once kept the original wording of every system skill forever, and an
+ * improved skill only ever reached new installs.
+ *
+ * A copy the user has edited is never touched — the install record no longer
+ * matches, so the file is theirs. `resetSystemSkill` remains the way to discard
+ * such an edit deliberately.
+ */
 function ensureSystemSkillFiles(directory = skillsDirectoryPath()) {
   const root = path.resolve(directory);
   fs.mkdirSync(systemSkillsDirectory(root), { recursive: true });
+  const manifest = readSkillManifest(root);
+  let manifestChanged = false;
+
   for (const skill of systemSkillDefinitions) {
     const skillDir = systemSkillDirectory(skill, root);
     const skillFile = systemSkillFilePath(skill, root);
     fs.mkdirSync(skillDir, { recursive: true });
-    if (!fs.existsSync(skillFile)) {
-      fs.writeFileSync(skillFile, bundledSystemSkillContent(skill.id), "utf8");
+
+    const bundled = bundledSystemSkillContent(skill.id);
+    const bundledChecksum = sha256Hex(bundled);
+    const onDisk = fs.existsSync(skillFile) ? readTextFileIfSafe(skillFile) : null;
+
+    if (onDisk === null) {
+      fs.writeFileSync(skillFile, bundled, "utf8");
+      manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
+      manifestChanged = true;
+      continue;
     }
+    if (sha256Hex(onDisk) === bundledChecksum) {
+      // Already current. Record it if this install predates the record, so the
+      // next bundled change can tell an untouched copy from an edited one.
+      if (manifest.systemSkills[skill.id]?.installedChecksum !== bundledChecksum) {
+        manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
+        manifestChanged = true;
+      }
+      continue;
+    }
+    const installed = manifest.systemSkills[skill.id]?.installedChecksum;
+    if (installed && sha256Hex(onDisk) === installed) {
+      fs.writeFileSync(skillFile, bundled, "utf8");
+      manifest.systemSkills[skill.id] = { installedChecksum: bundledChecksum, installedAt: new Date().toISOString() };
+      manifestChanged = true;
+    }
+    // Otherwise the copy differs from both the bundle and what we installed:
+    // the user edited it, and it stays until they reset it.
   }
+
+  if (manifestChanged) writeSkillManifest(root, manifest);
 }
 
 export function installBundledSystemSkills(directory = skillsDirectoryPath()): string {

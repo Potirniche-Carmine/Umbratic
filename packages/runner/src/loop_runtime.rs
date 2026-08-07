@@ -10,8 +10,8 @@ use crate::{
     },
     context_events::{
         clear_usage_anchor, compaction_blocked_reason, context_event, estimate_state,
-        observed_context_event, record_system_prompt_size, request_estimate, session_route,
-        set_usage_anchor, skill_profile,
+        observed_context_event, record_system_prompt_size, request_estimate, set_usage_anchor,
+        skill_profile,
     },
     conversation_state::{ConversationStateSnapshotInput, snapshot_conversation_state},
     events::{empty_summary, increment, now_iso, step_settled_event},
@@ -229,18 +229,14 @@ async fn record_compaction_verdict(session: &Session, result: &VeilChatResult) {
 
 /// Captures the immutable inputs to one provider request.
 fn turn_snapshot(
-    session: &Session,
     surface: std::sync::Arc<crate::tools::ToolSurface>,
     prepared: &PreparedRequest,
     harness_bucket: Option<String>,
 ) -> TurnSnapshot {
     TurnSnapshot::new(
-        session,
         surface,
         prepared.messages.clone(),
         prepared.max_output_tokens,
-        &skill_profile(session),
-        session_route(session),
         harness_bucket,
     )
 }
@@ -614,7 +610,6 @@ pub async fn run_turn(
         let tools = surface.specs().to_vec();
         let mut prepared = prepared_messages(&session, &tools, &sink).await?;
         let mut snapshot = Arc::new(turn_snapshot(
-            &session,
             surface.clone(),
             &prepared,
             harness_bucket.clone(),
@@ -652,7 +647,6 @@ pub async fn run_turn(
                 // Compaction replaced the conversation state, so the turn is
                 // re-snapshotted rather than reusing stale prompt assembly.
                 snapshot = Arc::new(turn_snapshot(
-                    &session,
                     surface.clone(),
                     &prepared,
                     harness_bucket.clone(),

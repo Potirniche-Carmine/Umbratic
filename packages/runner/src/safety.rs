@@ -1,7 +1,4 @@
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::path::Path;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -59,7 +56,6 @@ pub struct SafetyDecision {
     pub suggestion: Option<String>,
     pub command_fingerprint: String,
     pub cwd_fingerprint: String,
-    pub evaluation_micros: u64,
 }
 
 fn fingerprint(value: &[u8]) -> String {
@@ -118,7 +114,7 @@ struct DecisionSpec {
     suggestion: Option<&'static str>,
 }
 
-fn decision(command: &str, cwd: &Path, spec: DecisionSpec, started: Instant) -> SafetyDecision {
+fn decision(command: &str, cwd: &Path, spec: DecisionSpec) -> SafetyDecision {
     SafetyDecision {
         policy_version: COMMAND_POLICY_VERSION,
         action: spec.action,
@@ -135,12 +131,10 @@ fn decision(command: &str, cwd: &Path, spec: DecisionSpec, started: Instant) -> 
         suggestion: spec.suggestion.map(str::to_owned),
         command_fingerprint: fingerprint(command.as_bytes()),
         cwd_fingerprint: fingerprint(cwd.to_string_lossy().as_bytes()),
-        evaluation_micros: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
     }
 }
 
 pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
-    let started = Instant::now();
     let trimmed = command.trim();
     if trimmed.is_empty() || command.len() > MAX_COMMAND_BYTES {
         return decision(
@@ -159,7 +153,6 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 explanation: "The command is empty or exceeds the bounded policy input.",
                 suggestion: None,
             },
-            started,
         );
     }
     let lower = trimmed.to_ascii_lowercase();
@@ -187,7 +180,6 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 explanation: "The command contains a path expansion that cannot be proved to stay in the workspace.",
                 suggestion: Some("Use a workspace-relative path or a structured workspace tool."),
             },
-            started,
         );
     }
     let destructive_root = lower.contains("rm -rf /")
@@ -209,7 +201,6 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 explanation: "Deletion of a filesystem root or the complete active workspace is blocked.",
                 suggestion: Some("Remove only explicitly reviewed workspace-relative paths."),
             },
-            started,
         );
     }
     let dynamic = lower.contains("$((")
@@ -233,7 +224,6 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                     explanation: "Dynamic or unusually complex shell syntax requires confirmation.",
                     suggestion: None,
                 },
-                started,
             );
         }
     };
@@ -338,39 +328,7 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
         explanation: "The command requires approval.",
         suggestion: None,
     });
-    decision(command, cwd, spec, started)
-}
-
-#[derive(Debug)]
-pub struct CommandPermit {
-    command_fingerprint: String,
-    cwd_fingerprint: String,
-    policy_version: &'static str,
-    expires_at: Instant,
-}
-
-impl CommandPermit {
-    pub fn new(decision: &SafetyDecision) -> Self {
-        Self {
-            command_fingerprint: decision.command_fingerprint.clone(),
-            cwd_fingerprint: decision.cwd_fingerprint.clone(),
-            policy_version: decision.policy_version,
-            expires_at: Instant::now() + Duration::from_secs(60),
-        }
-    }
-
-    pub fn consume(self, command: &str, cwd: &Path) -> Result<(), &'static str> {
-        if Instant::now() > self.expires_at {
-            return Err("command permit expired");
-        }
-        if self.policy_version != COMMAND_POLICY_VERSION
-            || self.command_fingerprint != fingerprint(command.as_bytes())
-            || self.cwd_fingerprint != fingerprint(cwd.to_string_lossy().as_bytes())
-        {
-            return Err("command permit does not match command and workspace");
-        }
-        Ok(())
-    }
+    decision(command, cwd, spec)
 }
 
 #[cfg(test)]
@@ -485,38 +443,5 @@ mod tests {
             assert_eq!(decision.action, SafetyAction::Allow, "{command}");
             assert_eq!(decision.rule_id, "audited_read_only", "{command}");
         }
-    }
-
-    #[test]
-    fn permit_is_exact_and_single_use_by_ownership() {
-        let cwd = Path::new("/workspace");
-        let decision = evaluate_command("git status", cwd);
-        assert!(
-            CommandPermit::new(&decision)
-                .consume("git status", cwd)
-                .is_ok()
-        );
-        assert!(
-            CommandPermit::new(&decision)
-                .consume("git diff", cwd)
-                .is_err()
-        );
-        assert!(
-            CommandPermit::new(&decision)
-                .consume("git status", Path::new("/other"))
-                .is_err()
-        );
-        let mut expired = CommandPermit::new(&decision);
-        expired.expires_at = Instant::now() - Duration::from_millis(1);
-        assert_eq!(
-            expired.consume("git status", cwd),
-            Err("command permit expired")
-        );
-        let mut stale_policy = CommandPermit::new(&decision);
-        stale_policy.policy_version = "obsolete-policy";
-        assert_eq!(
-            stale_policy.consume("git status", cwd),
-            Err("command permit does not match command and workspace")
-        );
     }
 }

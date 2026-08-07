@@ -99,10 +99,6 @@ impl RunQueue {
         self.follow_ups.len()
     }
 
-    pub fn has_work(&self) -> bool {
-        self.pending_steer.is_some() || !self.follow_ups.is_empty()
-    }
-
     fn snapshot_counts(&self) -> (bool, usize) {
         (self.pending_steer.is_some(), self.follow_ups.len())
     }

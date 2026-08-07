@@ -477,6 +477,27 @@ async function startLocalVeil(
   return { baseUrl, authToken, runtimeBaseUrl, modelId };
 }
 
+/**
+ * Backoff for a local Veil that will not stay up.
+ *
+ * ensureLocalVeil runs on every status poll, so a Veil that crashes on start
+ * used to be respawned several times a second for as long as the app was open —
+ * burning CPU and filling the diagnostics log with the same failure. Each
+ * consecutive failure pushes the next attempt further out; one success clears it.
+ */
+const veilRespawnBaseDelayMs = 1_000;
+const veilRespawnMaxDelayMs = 30_000;
+let respawn: { key: string; failures: number; nextAttemptAt: number } | null = null;
+
+function veilRespawnDelayMs(failures: number): number {
+  return Math.min(veilRespawnBaseDelayMs * 2 ** (failures - 1), veilRespawnMaxDelayMs);
+}
+
+function noteVeilStartFailed(key: string) {
+  const failures = respawn?.key === key ? respawn.failures + 1 : 1;
+  respawn = { key, failures, nextAttemptAt: Date.now() + veilRespawnDelayMs(failures) };
+}
+
 export async function ensureLocalVeil(
   settings: ActiveModelEndpointSettings,
   configuredContextLength = DEFAULT_CONTEXT_LENGTH,
@@ -489,11 +510,20 @@ export async function ensureLocalVeil(
   if (current && running?.key === key) return current;
   if (starting?.key === key) return starting.promise;
   if (starting) await starting.promise.catch(() => undefined);
+  if (respawn?.key === key && Date.now() < respawn.nextAttemptAt) {
+    const seconds = Math.ceil((respawn.nextAttemptAt - Date.now()) / 1000);
+    throw new Error(`Local Veil failed to start ${respawn.failures} times. Retrying in ${seconds}s.`);
+  }
   stopLocalVeil();
   const promise = startLocalVeil(settings, contextLength, key, onDiagnostic);
   starting = { key, promise };
   try {
-    return await promise;
+    const connection = await promise;
+    respawn = null;
+    return connection;
+  } catch (cause) {
+    noteVeilStartFailed(key);
+    throw cause;
   } finally {
     if (starting?.promise === promise) starting = null;
   }

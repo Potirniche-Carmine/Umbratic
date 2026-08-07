@@ -23,6 +23,7 @@ import type {
   RepositoryInfo,
   SkillInfo,
   TaskInfo,
+  UnsavedChatDraft,
   UserNotes,
 } from "../shared/desktopApi";
 
@@ -436,6 +437,7 @@ const composerTestTask: TaskInfo = {
 function createPreviewApi(): DesktopApi {
   let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   let previewCompanySessionConnected = false;
+  const previewUnsavedDrafts = new Map<string, UnsavedChatDraft>();
   const previewApi: DesktopApi = {
   listProjects: async () => readPreviewProjects(),
   listChats: async () => readPreviewChats(),
@@ -454,6 +456,20 @@ function createPreviewApi(): DesktopApi {
     };
     writePreviewChats([chat, ...readPreviewChats().filter((row) => row.id !== chat.id)]);
     return chat;
+  },
+  // The preview harness runs without a main process, so the unsaved draft lives
+  // in this module for the life of the page — same lifetime guarantee as the
+  // real thing, one process down.
+  getUnsavedDraft: async (input) => previewUnsavedDrafts.get(input.scope) ?? { draftPrompt: "", attachedFiles: [] },
+  setUnsavedDraft: async (input) => {
+    const draft = { draftPrompt: input.draftPrompt, attachedFiles: input.attachedFiles };
+    if (!draft.draftPrompt && draft.attachedFiles.length === 0) previewUnsavedDrafts.delete(input.scope);
+    else previewUnsavedDrafts.set(input.scope, draft);
+    return draft;
+  },
+  clearUnsavedDraft: async (input) => {
+    previewUnsavedDrafts.delete(input.scope);
+    return { ok: true };
   },
   updateChatDraft: async (input) => {
     const chats = readPreviewChats();

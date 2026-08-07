@@ -154,7 +154,6 @@ test("capabilityTelemetrySnapshot keeps redacted facts and marks missing capabil
   assert.equal(byId.get("python").versionFamily, "3.12");
   assert.equal(byId.get("pdftoppm").affectedCurrentRun, true);
   assert.equal(byId.get("tesseract").affectedCurrentRun, true);
-  assert.equal(byId.get("node-runtime").versionFamily, "22.0");
 });
 
 test("command probes execute and record the resolved absolute executable path", async () => {

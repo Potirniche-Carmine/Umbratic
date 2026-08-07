@@ -519,7 +519,6 @@ func decodeOllamaChat(r io.Reader) (ChatResponse, error) {
 	return ChatResponse{Message: decoded.Message}, nil
 }
 
-
 func runtimeTokenCount(value any) (int, bool) {
 	count, ok := value.(float64)
 	if !ok || count < 0 || count != float64(int(count)) {
@@ -783,15 +782,6 @@ func modelInfosFromPayload(payload any) []ModelInfo {
 		models = append(models, ModelInfo{ID: id, ContextLength: contextLength})
 	}
 	return models
-}
-
-func modelIDsFromPayload(payload any) []string {
-	models := modelInfosFromPayload(payload)
-	ids := make([]string, 0, len(models))
-	for _, available := range models {
-		ids = append(ids, available.ID)
-	}
-	return ids
 }
 
 func positiveJSONInt(value any) int {

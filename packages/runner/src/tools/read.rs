@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use serde_json::json;
 use umbratic_pdf::{InspectError, InspectOptions, PdfType, inspect_file};
 
-use super::catalog::{DEFAULT_READ_LINES, DEFAULT_READ_RADIUS};
+use super::catalog::{DEFAULT_READ_LINES, DEFAULT_READ_RADIUS, MAX_ATTACHMENT_CHUNK};
 use super::*;
 
 /// The line range a read should cover, resolved from already-validated input.
@@ -411,8 +411,7 @@ fn read_pdf_attachment(
     let limit = input
         .get("limit")
         .and_then(Value::as_u64)
-        .unwrap_or(MAX_ATTACHMENT_CHUNK_BYTES as u64)
-        .clamp(1, MAX_ATTACHMENT_CHUNK_BYTES as u64) as usize;
+        .unwrap_or(MAX_ATTACHMENT_CHUNK as u64) as usize;
     let mut start = requested_offset;
     while !markdown.is_char_boundary(start) {
         start += 1;
@@ -492,8 +491,7 @@ pub(super) fn read_attachment_tool(
     let limit = input
         .get("limit")
         .and_then(Value::as_u64)
-        .unwrap_or(MAX_ATTACHMENT_CHUNK_BYTES as u64)
-        .clamp(1, MAX_ATTACHMENT_CHUNK_BYTES as u64) as usize;
+        .unwrap_or(MAX_ATTACHMENT_CHUNK as u64) as usize;
     let mut file = fs::File::open(&canonical).map_err(|error| error.to_string())?;
     file.seek(SeekFrom::Start(requested_offset as u64))
         .map_err(|error| error.to_string())?;

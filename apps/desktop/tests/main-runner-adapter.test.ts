@@ -24,7 +24,7 @@ function loadRunnerAdapter(userData) {
   process.env.UMBRATIC_ALLOW_ENDPOINT_EDIT = "true";
   delete process.env.UMBRATIC_MANAGED_ENDPOINT_MODE;
   delete process.env.UMBRATIC_MANAGED_MODEL_API_KEY;
-  delete process.env.UMBRATIC_MANAGED_MODEL_BASE_URL;
+  delete process.env.UMBRATIC_VEIL_BASE_URL;
   const cache = new Map();
   const electron = electronMock(userData);
   const mocks = { electron, "node:os": { ...os, homedir: () => path.join(userData, "home") } };

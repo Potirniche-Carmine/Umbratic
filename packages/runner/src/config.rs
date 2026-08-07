@@ -84,9 +84,6 @@ pub struct ProviderConfig {
     pub chat_endpoint_path: Option<String>,
     pub api_key: Arc<RwLock<String>>,
     pub model_id: String,
-    pub parallel_tool_calls: bool,
-    pub vision: bool,
-    pub reasoning: bool,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
 }
@@ -116,7 +113,6 @@ pub struct RunnerConfig {
     pub max_response_tokens: u64,
     pub protected_prompt_reserve_tokens: u64,
     pub attachment_directory: Option<PathBuf>,
-    pub workspace_mode: String,
     pub skills: Vec<RunnerSkillConfig>,
     pub permission_mode: PermissionMode,
     pub enabled_tools: Vec<String>,
@@ -520,24 +516,6 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
                 .to_owned(),
         )),
         model_id: string_value(provider_object.get("modelId"), "provider.modelId")?,
-        parallel_tool_calls: provider_object
-            .get("capabilities")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("parallelToolCalls"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        vision: provider_object
-            .get("capabilities")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("vision"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        reasoning: provider_object
-            .get("capabilities")
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("reasoning"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
         headers,
         mtls,
     };
@@ -569,13 +547,6 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             DEFAULT_PROTECTED_PROMPT_RESERVE_TOKENS,
         ),
         attachment_directory: optional_string(config.get("attachmentDirectory")).map(PathBuf::from),
-        workspace_mode:
-            if config.get("workspaceMode").and_then(Value::as_str) == Some("worktree") {
-                "worktree"
-            } else {
-                "local"
-            }
-            .to_owned(),
         skills: parse_skills(config.get("skills")),
         permission_mode: if matches!(
             config.get("permissionMode").and_then(Value::as_str),
@@ -638,9 +609,6 @@ mod tests {
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
-            parallel_tool_calls: false,
-            vision: false,
-            reasoning: false,
             headers: BTreeMap::new(),
             mtls: None,
         };
@@ -659,9 +627,6 @@ mod tests {
             chat_endpoint_path: Some(endpoint.into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
-            parallel_tool_calls: false,
-            vision: false,
-            reasoning: false,
             headers: BTreeMap::new(),
             mtls: None,
         }

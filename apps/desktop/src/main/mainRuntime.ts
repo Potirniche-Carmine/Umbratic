@@ -1,209 +1,43 @@
 import { scheduleManagedTelemetrySync } from "./backendSettings";
 import { updateChatFromTask } from "./chatStore";
 import {
-  app,
   BrowserWindow,
-  dialog,
-  IpcMainInvokeEvent,
-  Menu,
-  MenuItemConstructorOptions,
   nativeImage,
-  OpenDialogOptions,
-  shell,
-  session,
 } from "electron";
-import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
-import {
-  attachmentPromptTokenBudget,
-  attachmentTextExcerpt,
-  estimateTextTokens,
-} from "../shared/contextWindow";
 
-import {
-  endpointEditingAllowed,
-  managedModelEndpointDefaults,
-  taskStatesThatCanOpen,
-} from "./config";
-import {
-  capabilityPromptGuidance,
-  capabilityTelemetrySnapshot,
-  probeLocalCapabilities,
-  type CapabilityPromptNeeds,
-} from "./capabilities";
-import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
-import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
-import {
-  beginRunnerEventStream,
-  runnerRequest,
-  runnerBinaryPath,
-  runnerDiagnosticsDirectory,
-  replyRunnerPermission,
-  setRunnerProviderSession,
-  startUmbraticRunnerServer,
-  stopRunnerProcess,
-} from "./runnerAdapter";
 import {
   umbraticPolicyVersion,
-  umbraticRunnerContractVersion,
   umbraticRunnerName,
   umbraticRunnerVersion,
-  allowedLocalProviderIds,
   baseUrlHost,
-  canAutoResolvePermission,
-  classifyCommandText,
-  isBlockedPath,
-  isGeneratedRuntimePath,
-  isLocalhostUrl,
-  isWorkspaceReadPermission,
-  promptLooksLikeCmakeTask,
-  promptLooksLikePythonTask,
-  runtimeDiagnostics,
-  telemetryPolicyForMode,
 } from "./policy";
 import {
-  connectCompanySession,
-  companyConnectionStatus,
-  disconnectCompanyDevice,
-  disconnectCompanySession,
-  enrollCompanyDevice,
-  ensureCompanySession,
-  renewCompanySession,
-} from "./companyIdentity";
-import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
-import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
-import { loadWindowWithModelWarmup } from "./modelWarmup";
-import { shouldProbeVeilContext } from "./veilContext";
-import {
-  readChat,
-  readChats,
-  hasStoredModelEndpointSettings,
-  readContextLengthSetting,
-  readCachedLocalModels,
-  readLocalDiagnosticInfo,
-  readLocalDiagnostics,
-  readHarnessProfileSetting,
-  readModelEndpointSettings,
-  readModelEndpointSettingsForMode,
-  publicModelEndpointSettings,
-  readNotes,
   readPermissionModeSetting,
-  readProjects,
-  readProductTelemetryEvents,
-  readStartupSettings, readTask,
-  readTaskCheckpoints,
+  readTask,
   readTasks,
-  clearLocalDiagnostics,
-  writeHarnessProfileSetting,
-  writeCachedLocalModels,
-  writeContextLengthSetting,
-  writeModelEndpointSettings,
   writeChat,
-  writeChats,
-  writeJsonFile,
-  writeNotes,
-  writePermissionModeSetting,
-  writeProjects,
   writeProductTelemetryEvent,
   writeTask,
   writeTasks,
-  closeStorageDatabases,
-  normalizeConversationState,
 } from "./storage";
-import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
-import { buildRedactedTelemetryBundle } from "./telemetry";
-import {
-  syncTelemetryBundle,
-  telemetrySpoolDirectory,
-  uploadTelemetrySpool,
-} from "./telemetrySync";
-import { checkEndpointHealth, modelWithFreshContextLength as refreshModelContextLength, telemetryUploadEndpoint } from "./modelEndpointRuntime";
-import { commandAvailable, execFileOutput, execFileResult, gitOutput, gitResult } from "./processCommands";
-import { searchRepositoryFiles } from "./repositorySearch";
-import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
-import { RunnerEventAdapter } from "./runnerEventAdapter";
+import { recordBackendEventDiagnostic, recordLocalDiagnostic } from "./diagnostics";
 import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
-import {
-  applyHarnessSystemSkillSettings,
-  createSkill as createSkillService,
-  getSkillDocument as getSkillDocumentService,
-  importSkill as importSkillService,
-  installBundledSystemSkills as installBundledSystemSkillsService,
-  listSkills as listSkillsService,
-  resetSystemSkill as resetSystemSkillService,
-  saveSkillDocument as saveSkillDocumentService,
-  saveSkillSettings as saveSkillSettingsService,
-  skillsDirectoryPath as skillsDirectoryPathService,
-} from "./skills";
 import type {
-  ApproveResult,
-  BackendStatus,
   BackendUiEvent,
-  CapabilityProbeReport,
   ChatAttachment,
   ChatRecord,
-  CommandClass,
-  CommandOutput,
-  CommandResult,
-  HarnessProfileId,
-  IdeInfo,
-  IdeOpenResult,
-  LocalModelInfo,
-  LocalModelProvider,
-  LocalDiagnosticInfo,
   ProductTelemetryEventType,
   RunnerProcess,
-  RunnerToolId,
   PendingPermission,
   PermissionMode,
-  PermissionRequest,
-  PastedAttachmentInput,
-  ReasoningMode,
-  RepositoryInfo,
-  ReviewFile,
-  ServiceStatus,
-  TelemetrySyncResult,
   TaskInfo,
-  TaskCheckpoint,
   TaskRecord,
-  TaskState,
-  UserNotes,
-  WorkspaceKind,
-  WorkspaceMode,
 } from "./types";
-import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
-import {
-  registerDesktopIpcHandlers,
-  type DesktopIpcHandlers,
-} from "./ipcRegistry";
-import { readTaskDocumentReview } from "./documentReview";
-import {
-  assertFolderRejectBaseline,
-  createTaskCheckpoint,
-  createTurnCheckpoint,
-  forkTaskFromCheckpoint,
-  removeTaskCheckpoint,
-  restoreIsolatedWorktreeForReject,
-  restoreTaskCheckpoint,
-  setTaskCheckpointPinned,
-} from "./checkpoints/service";
-import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
-import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
-import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
-import * as appPaths from "./appPaths";
-import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
+import { type ContextPromptPart } from "./promptContext";
 import {
   appendTaskEvent,
   compactTaskEvents,
@@ -212,7 +46,6 @@ import {
   isReviewReadyAssistantEvent,
   mergeTaskEvents,
   rendererReviewFiles,
-  visibleTaskEvents,
 } from "./taskReviewPresentation";
 
 export type RunnerPromptPart = ContextPromptPart;
@@ -552,22 +385,14 @@ export function dispatchRendererEvent(event: BackendUiEvent) {
   }
 }
 
-export function validatedBackendEvent(value: unknown): BackendUiEvent | null {
-  const parsed = parseBackendUiEvent(value);
-  if (parsed.ok) return parsed.event;
-  recordLocalDiagnostic({
-    level: "warn",
-    source: "runner",
-    event: "backend.event.invalid",
-    message: backendEventDiagnostic(parsed),
-    data: { code: parsed.code, type: parsed.type },
-  });
-  return null;
-}
-
-export function persistBackendEvent(value: unknown): BackendUiEvent | null {
-  const event = validatedBackendEvent(value);
-  if (!event) return null;
+/**
+ * Events reaching here are constructed by this process against the
+ * `BackendUiEvent` type, so their shape is a compile-time fact. The runtime
+ * boundary that needs a decoder is the runner's stream, and `decodeRunnerEvent`
+ * is that decoder. Re-parsing our own typed values here only meant a shape bug
+ * became a silently dropped event instead of a type error.
+ */
+export function persistBackendEvent(event: BackendUiEvent): BackendUiEvent {
   recordBackendEventDiagnostic(event);
   recordTaskEvent(event);
   dispatchRendererEvent(event);
@@ -610,7 +435,6 @@ export function emit(event: BackendUiEvent) {
     ...event,
     at: event.at ?? new Date().toISOString(),
   });
-  if (!stampedEvent) return;
   if (stampedEvent.type === "context.usage") {
     for (const thresholdEvent of contextThresholdEvents(stampedEvent)) {
       persistBackendEvent(thresholdEvent);
@@ -619,16 +443,13 @@ export function emit(event: BackendUiEvent) {
 }
 
 export function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAttachment[]) {
-  const event = validatedBackendEvent({
+  const event: BackendUiEvent = {
     type: "user.message",
     taskId: task.id,
     text,
     attachedFiles,
     at: new Date().toISOString(),
-  } satisfies BackendUiEvent);
-  if (!event) {
-    throw new Error("The user message event did not match the desktop event contract.");
-  }
+  };
   task.events = appendTaskEvent(task.events ?? [], event, 500);
   saveTask(task);
   dispatchRendererEvent(event);

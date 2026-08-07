@@ -303,17 +303,3 @@ func exactOptionalTime(value *time.Time) string {
 func formatExactTime(value time.Time) string {
 	return value.UTC().Format("2006-01-02 15:04 UTC")
 }
-
-func titleStatus(value string) string {
-	if value == "" {
-		return ""
-	}
-	return strings.ToUpper(value[:1]) + strings.ReplaceAll(value[1:], "_", " ")
-}
-
-func shortUID(value string) string {
-	if len(value) <= 13 {
-		return value
-	}
-	return value[:4] + "…" + value[len(value)-5:]
-}

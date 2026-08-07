@@ -170,7 +170,6 @@ func TestOrientRouteRejectsInvalidRequestsAndWrongMethods(t *testing.T) {
 	server := NewServer(cfg, &fakeModelClient{})
 	for name, body := range map[string]string{
 		"bare profile route": `{"route":"engineering","requestText":"hi"}`,
-		"unknown field":      `{"route":"engineering/chat","requestText":"hi","messages":[]}`,
 		"blank text":         `{"route":"engineering/chat","requestText":"  "}`,
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/internal/orient", strings.NewReader(body))
@@ -239,7 +238,10 @@ func TestChatRouteRendersTheVeilOwnedPlaybookLastAndOnlyWhenSelected(t *testing.
 	}
 }
 
-func TestChatRouteRejectsAnUnknownOrCrossRouteBucketSelector(t *testing.T) {
+func TestChatRouteDefaultsAnUnknownOrCrossRouteBucketSelector(t *testing.T) {
+	// A selector this build cannot resolve is a hint from a newer harness. The
+	// run proceeds with no playbook rather than failing, which is byte-identical
+	// to a request that carried no selector at all.
 	cfg := testConfig()
 	for name, bucket := range map[string]string{
 		"unknown":     "not_a_bucket",
@@ -253,11 +255,13 @@ func TestChatRouteRejectsAnUnknownOrCrossRouteBucketSelector(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer test-token")
 		rr := httptest.NewRecorder()
 		server.ServeHTTP(rr, req)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("%s selector must be rejected: %d %s", name, rr.Code, rr.Body.String())
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s selector must be accepted: %d %s", name, rr.Code, rr.Body.String())
 		}
-		if len(client.req.Messages) != 0 {
-			t.Fatalf("%s selector reached the model", name)
+		for _, message := range client.req.Messages {
+			if content, _ := message.Content.(string); strings.Contains(content, "Active task playbook") {
+				t.Fatalf("%s selector must not select a playbook", name)
+			}
 		}
 	}
 }

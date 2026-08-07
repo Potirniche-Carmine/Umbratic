@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"sync/atomic"
-	"time"
 )
 
 // lifecycle separates readiness from liveness.
@@ -18,7 +17,6 @@ import (
 type lifecycle struct {
 	ready    atomic.Bool
 	draining atomic.Bool
-	warmedAt atomic.Int64
 }
 
 var errModelUnavailable = errors.New("configured model is unavailable")
@@ -46,7 +44,6 @@ func (l *lifecycle) markReady() {
 	if l.draining.Load() {
 		return
 	}
-	l.warmedAt.CompareAndSwap(0, time.Now().UnixMilli())
 	l.ready.Store(true)
 }
 

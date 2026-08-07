@@ -58,7 +58,6 @@ type CommandProbeSpec = {
   id: string;
   label: string;
   category: CapabilityProbeCategory;
-  importance: CapabilityProbeImportance;
   commands: string[];
   versionArgs?: string[];
   purpose: string;
@@ -72,7 +71,6 @@ type NodePackageProbeSpec = {
   label: string;
   packageName: string;
   category: CapabilityProbeCategory;
-  importance: CapabilityProbeImportance;
   purpose: string;
   installHint: string;
   workflows: string[];
@@ -84,7 +82,6 @@ type PythonPackageProbeSpec = {
   moduleName: string;
   distributionName: string;
   category: CapabilityProbeCategory;
-  importance: CapabilityProbeImportance;
   purpose: string;
   installHint: string;
   workflows: string[];
@@ -103,8 +100,17 @@ function checkedAt(options: CapabilityProbeOptions): string {
   return (options.now?.() ?? new Date()).toISOString();
 }
 
+/**
+ * Importance is what `category` already says: the two were declared side by side
+ * on every probe, which only created a way for them to disagree.
+ */
+function capabilityImportance(category: CapabilityProbeCategory): CapabilityProbeImportance {
+  if (category === "required" || category === "recommended") return category;
+  return "optional";
+}
+
 function baseProbe(
-  spec: Pick<CapabilityProbeResult, "id" | "label" | "category" | "importance" | "purpose" | "installHint" | "workflows">,
+  spec: Pick<CapabilityProbeResult, "id" | "label" | "category" | "purpose" | "installHint" | "workflows">,
   status: CapabilityProbeStatus,
   at: string,
   extra: Partial<CapabilityProbeResult> = {},
@@ -113,7 +119,7 @@ function baseProbe(
     id: spec.id,
     label: spec.label,
     category: spec.category,
-    importance: spec.importance,
+    importance: capabilityImportance(spec.category),
     status,
     purpose: spec.purpose,
     installHint: spec.installHint,
@@ -339,32 +345,12 @@ async function probePythonPackage(
 }
 
 function staticProbe(
-  spec: Pick<CapabilityProbeResult, "id" | "label" | "category" | "importance" | "purpose" | "installHint" | "workflows">,
+  spec: Pick<CapabilityProbeResult, "id" | "label" | "category" | "purpose" | "installHint" | "workflows">,
   status: CapabilityProbeStatus,
   options: CapabilityProbeOptions,
   extra: Partial<CapabilityProbeResult> = {},
 ): CapabilityProbeResult {
   return baseProbe(spec, status, checkedAt(options), extra);
-}
-
-function nodeRuntimeProbe(options: CapabilityProbeOptions): CapabilityProbeResult {
-  return staticProbe(
-    {
-      id: "node-runtime",
-      label: "Node runtime",
-      category: "required",
-      importance: "required",
-      purpose: "Runs the Electron desktop process and local TypeScript/JavaScript harness code.",
-      installHint: "Use the bundled desktop runtime or install the supported Node version for development.",
-      workflows: ["desktop", "runner", "JavaScript"],
-    },
-    "available",
-    options,
-    {
-      version: `Node ${options.processVersion ?? process.version}`,
-      executablePath: options.processExecPath ?? process.execPath,
-    },
-  );
 }
 
 function runnerBinaryProbe(options: CapabilityProbeOptions): CapabilityProbeResult {
@@ -374,7 +360,6 @@ function runnerBinaryProbe(options: CapabilityProbeOptions): CapabilityProbeResu
       id: "runner-binary",
       label: "Umbratic runner",
       category: "required",
-      importance: "required",
       purpose: "Starts local workspace tools for read, find, search, write, edit, and command execution.",
       installHint: "Build the runner workspace before starting tasks.",
       workflows: ["runner", "workspace tools"],
@@ -395,7 +380,6 @@ function pdfInspectorProbe(options: CapabilityProbeOptions): CapabilityProbeResu
       id: "umbratic-pdf",
       label: "Umbratic PDF inspector",
       category: "recommended",
-      importance: "recommended",
       purpose: "Classifies PDF attachments and extracts native text so text PDFs skip page rasterization.",
       installHint: "Build the Rust workspace so the umbratic-pdf CLI is available.",
       workflows: ["PDF attachment", "PDF extraction", "context estimates"],
@@ -408,29 +392,11 @@ function pdfInspectorProbe(options: CapabilityProbeOptions): CapabilityProbeResu
   );
 }
 
-function workspaceToolsProbe(options: CapabilityProbeOptions): CapabilityProbeResult {
-  return staticProbe(
-    {
-      id: "workspace-tools",
-      label: "Workspace tool surface",
-      category: "required",
-      importance: "required",
-      purpose: "Provides the model-visible read, ls, find, search, write, edit, and command tools.",
-      installHint: "Build and start the runner if workspace tools are unavailable.",
-      workflows: ["read", "ls", "find", "search", "write", "edit", "command"],
-    },
-    "available",
-    options,
-    { version: "read/ls/find/search/write/edit/command" },
-  );
-}
-
 const commandProbeSpecs: CommandProbeSpec[] = [
   {
     id: "rg",
     label: "ripgrep",
     category: "recommended",
-    importance: "recommended",
     commands: ["rg"],
     purpose: "Fast text search in workspaces.",
     installHint: "Install ripgrep with your system package manager.",
@@ -440,7 +406,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "fd",
     label: "fd",
     category: "recommended",
-    importance: "recommended",
     commands: ["fd", "fdfind"],
     purpose: "Fast path discovery in workspaces.",
     installHint: "Install fd with your system package manager; some Linux distributions package it as fdfind.",
@@ -450,7 +415,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "git",
     label: "Git",
     category: "recommended",
-    importance: "recommended",
     commands: ["git"],
     purpose: "Reads repository status, diffs, branches, and worktree metadata.",
     installHint: "Install Git with your system package manager or platform developer tools.",
@@ -460,7 +424,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "npm",
     label: "npm",
     category: "recommended",
-    importance: "recommended",
     commands: ["npm"],
     purpose: "Runs the repository's declared Node scripts and verification gates.",
     installHint: "Install the supported Node.js release, which includes npm.",
@@ -471,7 +434,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "typescript-language-server",
     label: "TypeScript language server",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["typescript-language-server"],
     purpose: "Provides TypeScript and JavaScript definitions, references, hover information, and symbols.",
     installHint: "Install typescript-language-server and TypeScript, then make the command available on PATH.",
@@ -481,7 +443,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "rust-analyzer",
     label: "rust-analyzer",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["rust-analyzer"],
     purpose: "Provides Rust definitions, references, hover information, and symbols.",
     installHint: "Install rust-analyzer with rustup or your system package manager.",
@@ -491,7 +452,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "uv",
     label: "uv",
     category: "recommended",
-    importance: "recommended",
     commands: ["uv"],
     purpose: "Creates repeatable Python environments and runs dependency-heavy Python verification.",
     installHint: "Install uv from the uv installer or your system package manager.",
@@ -501,7 +461,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "python",
     label: "Python",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["python3", "python", "py"],
     purpose: "Supports simple Python inspection and package availability probes.",
     installHint: "Install Python with your platform package manager or through uv.",
@@ -511,7 +470,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "cmake",
     label: "CMake",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["cmake"],
     purpose: "Configures C and C++ projects when the workspace uses CMake.",
     installHint: "Install CMake with your system package manager or platform developer tools.",
@@ -521,7 +479,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "ninja",
     label: "Ninja",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["ninja", "ninja-build"],
     purpose: "Build backend commonly used with CMake.",
     installHint: "Install Ninja with your system package manager.",
@@ -531,7 +488,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "compiler",
     label: "Compiler toolchain",
     category: "optional-engineering",
-    importance: "optional",
     commands: process.platform === "win32" ? ["cl", "clang", "gcc"] : ["cc", "clang", "gcc"],
     purpose: "Compiles C and C++ code for build verification.",
     installHint: "Install platform developer tools or a C/C++ compiler package.",
@@ -542,7 +498,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "tree-sitter",
     label: "tree-sitter",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["tree-sitter"],
     purpose: "Enables syntax-aware source inspection when grammars are available.",
     installHint: "Install tree-sitter with your system package manager when syntax-aware inspection is useful.",
@@ -552,7 +507,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "bat",
     label: "bat",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["bat", "batcat"],
     purpose: "Readable file previews in local diagnostics.",
     installHint: "Install bat with your system package manager; some Linux distributions package it as batcat.",
@@ -562,7 +516,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "jq",
     label: "jq",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["jq"],
     purpose: "Inspects and transforms JSON from local files and command output.",
     installHint: "Install jq with your system package manager.",
@@ -572,7 +525,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "yq",
     label: "yq",
     category: "optional-engineering",
-    importance: "optional",
     commands: ["yq"],
     purpose: "Inspects and transforms YAML from local files and command output.",
     installHint: "Install yq with your system package manager.",
@@ -582,7 +534,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "pdftoppm",
     label: "Poppler pdftoppm",
     category: "optional-artifacts",
-    importance: "optional",
     commands: ["pdftoppm"],
     purpose: "Renders PDF pages to images for visual QA.",
     installHint: "Install Poppler with your system package manager.",
@@ -592,7 +543,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "tesseract",
     label: "Tesseract OCR",
     category: "optional-artifacts",
-    importance: "optional",
     commands: ["tesseract"],
     purpose: "Runs local OCR for image and scanned-PDF attachment digests.",
     installHint: "Install Tesseract OCR locally and make the tesseract command available on PATH.",
@@ -602,7 +552,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "pdfinfo",
     label: "Poppler pdfinfo",
     category: "optional-artifacts",
-    importance: "optional",
     commands: ["pdfinfo"],
     purpose: "Reads PDF metadata and page counts before rendering or extraction.",
     installHint: "Install Poppler with your system package manager.",
@@ -612,7 +561,6 @@ const commandProbeSpecs: CommandProbeSpec[] = [
     id: "libreoffice",
     label: "LibreOffice",
     category: "optional-artifacts",
-    importance: "optional",
     commands: ["soffice", "libreoffice"],
     purpose: "Renders or exports DOCX, PPTX, and spreadsheet artifacts for visual checks.",
     installHint: "Install LibreOffice or make soffice available on PATH.",
@@ -626,7 +574,6 @@ const nodePackageProbeSpecs: NodePackageProbeSpec[] = [
     label: "pdf-to-img",
     packageName: "pdf-to-img",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Renders PDF attachments to image input for vision-capable models.",
     installHint: "Install the desktop dependencies so pdf-to-img is available.",
     workflows: ["PDF attachment", "vision input"],
@@ -636,7 +583,6 @@ const nodePackageProbeSpecs: NodePackageProbeSpec[] = [
     label: "DOCX JS runtime",
     packageName: "docx",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Creates DOCX files through a deterministic JavaScript artifact runtime.",
     installHint: "Add the configured DOCX artifact package to the desktop runtime.",
     workflows: ["DOCX artifact"],
@@ -646,7 +592,6 @@ const nodePackageProbeSpecs: NodePackageProbeSpec[] = [
     label: "PPTX JS runtime",
     packageName: "pptxgenjs",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Creates PowerPoint files through a deterministic JavaScript artifact runtime.",
     installHint: "Add the configured PPTX artifact package to the desktop runtime.",
     workflows: ["PPTX artifact"],
@@ -656,7 +601,6 @@ const nodePackageProbeSpecs: NodePackageProbeSpec[] = [
     label: "XLSX JS runtime",
     packageName: "xlsx",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Creates and inspects spreadsheet workbooks through a JavaScript artifact runtime.",
     installHint: "Add the configured XLSX artifact package to the desktop runtime.",
     workflows: ["XLSX artifact"],
@@ -670,7 +614,6 @@ const pythonPackageProbeSpecs: PythonPackageProbeSpec[] = [
     moduleName: "reportlab",
     distributionName: "reportlab",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Generates PDF files locally.",
     installHint: "Install reportlab into the configured Python artifact environment.",
     workflows: ["PDF artifact"],
@@ -681,7 +624,6 @@ const pythonPackageProbeSpecs: PythonPackageProbeSpec[] = [
     moduleName: "pdfplumber",
     distributionName: "pdfplumber",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Extracts text and tables from PDFs for content checks.",
     installHint: "Install pdfplumber into the configured Python artifact environment.",
     workflows: ["PDF artifact", "PDF extraction"],
@@ -692,7 +634,6 @@ const pythonPackageProbeSpecs: PythonPackageProbeSpec[] = [
     moduleName: "pypdf",
     distributionName: "pypdf",
     category: "optional-artifacts",
-    importance: "optional",
     purpose: "Reads and manipulates PDFs for local artifact workflows.",
     installHint: "Install pypdf into the configured Python artifact environment.",
     workflows: ["PDF artifact", "PDF extraction"],
@@ -727,9 +668,7 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
     return cachedReport.report;
   }
 
-  const nodeProbe = nodeRuntimeProbe(options);
   const runnerProbe = runnerBinaryProbe(options);
-  const workspaceProbe = workspaceToolsProbe(options);
   const pdfProbe = pdfInspectorProbe(options);
   const pythonSpec = commandProbeSpecs.find((spec) => spec.id === "python");
   if (!pythonSpec) {
@@ -747,9 +686,7 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
   const commandProbes = await Promise.all(commandProbePromises);
 
   const probes = [
-    nodeProbe,
     runnerProbe,
-    workspaceProbe,
     pdfProbe,
     ...commandProbes.slice(0, 4),
     pythonProbe,

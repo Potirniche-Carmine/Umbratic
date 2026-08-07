@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { app } from "electron";
 
 import { runnerLogsDirectory, workspaceRuntimeDirectory } from "./appPaths";
-import { localProviderCatalog } from "./config";
+import { companyEndpoint } from "./config";
 import { probeLocalCapabilities } from "./capabilities";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
@@ -45,7 +45,6 @@ export function buildUmbraticRunnerConfig(
   attachmentDirectory?: string,
   capabilityReport?: CapabilityProbeReport,
 ): Record<string, unknown> {
-  const catalogProvider = localProviderCatalog.find((provider) => provider.providerId === selectedModel.providerId);
   const endpointSettings = readModelEndpointSettings();
   const localVeil = endpointSettings.mode === "local" ? currentLocalVeilConnection() : null;
   const harnessProfile = readHarnessProfileSetting();
@@ -101,7 +100,7 @@ export function buildUmbraticRunnerConfig(
           .filter((header) => header.name.trim().toLowerCase() !== "authorization" && header.value)
           .map((header) => [header.name.trim(), header.value]),
       ),
-      mtls: endpointSettings.mode === "server" ? catalogProvider?.mtls : undefined,
+      mtls: endpointSettings.mode === "server" ? companyEndpoint.mtls : undefined,
     },
   };
 }

@@ -18,7 +18,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 	if messages[0].Role != "system" || messages[0].Content != GlobalSystemPrompt {
 		t.Fatal("first message should be the global system prompt")
 	}
-	routePrompt, _ := RoutePrompt(EngineeringChat)
+	routePrompt := routePrompts[EngineeringChat]
 	if messages[1].Role != "system" || messages[1].Content != routePrompt {
 		t.Fatal("second message should be the route system prompt")
 	}
@@ -70,7 +70,7 @@ func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 			t.Fatalf("global prompt still contains removed guidance %q", gone)
 		}
 	}
-	route, _ := RoutePrompt(EngineeringChat)
+	route := routePrompts[EngineeringChat]
 	if !strings.Contains(strings.ToLower(route), "does not make you software-only") {
 		t.Fatalf("engineering route should preserve general scope: %q", route)
 	}

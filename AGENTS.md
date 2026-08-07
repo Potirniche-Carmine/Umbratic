@@ -41,6 +41,22 @@ Administrator browser -> Veil Console -> supervised Veil process
 - Veil Console: admin config and Veil process control only.
 - Desktop core: file search only. Do not grow it into a second runner.
 
+## Wire Compatibility
+
+Veil is released independently of the harness that calls it. The contract between them:
+
+- **Veil rejects on bounds and privacy only, never vocabulary.** Size caps, count caps, well-formedness, and the privacy deny-list are enforced. Unknown tool-schema keywords, unknown skill fields, unknown `harness_bucket` values, unknown telemetry event types, and unknown body fields are accepted — stripped or defaulted and counted, never rejected.
+- **Harness changes are additive.** A newer harness may send fields an older Veil has never seen; that request must still succeed.
+- **Capability discovery is by feature name, never by version.** `/api/health` returns `features: []string`. Clients gate server-cooperation features on membership in that list. A missing field means "no features"; a 404 means the capability is absent.
+- **A "major shift" — transport or auth change — is a coordinated server release**, not a field addition. Only these justify breaking older harnesses.
+
+Two disciplines follow from this and are not negotiable:
+
+1. **Security-semantic fields are never sent optimistically.** If a field changes authorization, redaction, or safety behavior, the client must confirm the server advertises the feature before sending it. Silent no-op on an older server is a security regression, not graceful degradation.
+2. **Bounds are never relaxed client-side to make a payload fit.** If a payload exceeds a cap, shrink the payload. Raising a limit is a server-side decision with its own review.
+
+The golden fixture suite in `infrastructure/veil/internal/policy` encodes this guarantee: "future harness" requests must pass. Every future harness change adds a fixture.
+
 ## Dependencies
 
 - Keep direct npm versions exact and Cargo builds locked.

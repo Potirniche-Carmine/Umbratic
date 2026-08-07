@@ -351,6 +351,7 @@ func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, ac
 	writeCodedError(w, http.StatusTooManyRequests, "rate_limited", "Try again later.")
 	return false
 }
+
 // clientAddress returns the address the rate limiter should key on. The shipped
 // deployment terminates TLS in Caddy and proxies to loopback, so RemoteAddr is
 // the proxy for every request and would make each limit organization-wide
@@ -603,8 +604,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// A successful health check is also the warm signal: the model answered.
 	s.lifecycle.markReady()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"state":  string(s.lifecycle.state()),
+		"status":   "ok",
+		"state":    string(s.lifecycle.state()),
+		"features": Features(),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,
@@ -782,7 +784,7 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = s.cfg.MaxBodyBytes
 	}
-	bundle, raw, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	bundle, raw, drops, err := telemetry.DecodeBundle(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		if errors.Is(err, telemetry.ErrInvalidBundle) {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -800,6 +802,7 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		"ok":             true,
 		"acceptedTasks":  len(bundle.Tasks),
 		"acceptedEvents": len(bundle.ProductEvents),
+		"droppedRecords": drops.Total(),
 		"retentionDays":  s.cfg.TelemetryRetentionDays,
 		"stored":         storedPath != "",
 	})
@@ -911,7 +914,6 @@ func writeModelFailure(w http.ResponseWriter, failure modelFailure) {
 	}
 	writeJSON(w, failure.Status, payload)
 }
-
 
 func (s *Server) authorized(header string) bool {
 	return tokenAuthorized(bearerToken(header), s.cfg.AuthToken)

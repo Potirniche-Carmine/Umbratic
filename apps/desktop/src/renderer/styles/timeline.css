@@ -247,6 +247,40 @@
   transform-origin: 50% 0;
 }
 
+/* The answer keeps the plain treatment every assistant message used to have —
+   it is what the reader came for and should be the least decorated thing on
+   screen. What changes is everything around it.
+
+   Narration is the run talking about itself: the opening sentence, the aside
+   between two rounds of work. It is not a message but a status line, so it drops
+   the assistant rail entirely and lines up with the Working block's own header,
+   which is the layer it actually belongs to. */
+/* The size and colour have to land on the markdown body, not the article:
+   `.markdownContent` sets its own 13.5px and its paragraphs set their own
+   colour, so styling only the wrapper left the visible text untouched. */
+.timelineMessage.assistantProgress,
+.timelineMessage.assistantProgress .markdownContent,
+.timelineMessage.assistantProgress .markdownContent p,
+.timelineMessage.assistantProgress .markdownContent li {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.timelineMessage.assistantProgress::before {
+  content: none;
+}
+
+/* Prose that leads straight into work reads as that work's opening line.
+   It cannot move inside the Working block: whether more tools are coming is
+   unknowable at the first streamed token, so classifying prose that early means
+   sometimes relocating it afterwards — and relocating settled text is what made
+   the answer arrive as a jump before. Instead it stays exactly where it streamed
+   and the grid gap beneath it closes, so the two read as one section and nothing
+   ever moves. */
+.timelineMessage.assistantProgress:has(+ .timelineActivity) {
+  margin-bottom: calc(0px - clamp(20px, 3vh, 34px) + 9px);
+}
+
 .timelineActivity {
   position: relative;
   width: min(calc(100% - 18px), 980px);

@@ -1,5 +1,5 @@
 import type { LocalModelInfo } from "../shared/desktopApi";
-import { localProviderCatalog } from "./config";
+import { companyEndpoint } from "./config";
 import { currentCompanySessionToken } from "./companyIdentity";
 import { currentLocalVeilConnection } from "./localVeil";
 import { readModelEndpointSettings } from "./storage";
@@ -22,11 +22,11 @@ function endpointHeaders(
   return next;
 }
 
-export function endpointProvider(): (typeof localProviderCatalog)[number] & {
+export function endpointProvider(): typeof companyEndpoint & {
   baseUrl: string;
   headers: Record<string, string>;
 } {
-  const provider = localProviderCatalog[0];
+  const provider = companyEndpoint;
   const settings = readModelEndpointSettings();
   const localConnection = settings.mode === "local" ? currentLocalVeilConnection() : null;
   return {
@@ -51,6 +51,15 @@ export function configuredEndpointModel(): LocalModelInfo {
   };
 }
 
+/**
+ * Joins a route onto the configured base URL, absorbing the two ways they
+ * overlap in practice: a base that already ends in /vN, and a base whose last
+ * segment repeats the route's first.
+ *
+ * This existed twice, byte for byte, and one copy fed the assertion that a
+ * runner is only ever pointed at an approved Veil chat route. Two copies of the
+ * function deciding what "approved" means is one copy too many.
+ */
 export function configuredEndpointRoute(baseUrl: string, route: string): string {
   if (/^https?:\/\//i.test(route)) return route;
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
@@ -79,11 +88,11 @@ export function endpointRequestHeaders(provider: ReturnType<typeof endpointProvi
 
 export function companyTransportOptions(): {
   headers: Record<string, string>;
-  mtls: (typeof localProviderCatalog)[number]["mtls"];
+  mtls: typeof companyEndpoint["mtls"];
 } {
   const settings = readModelEndpointSettings();
   return {
     headers: endpointHeaders(settings.headers),
-    mtls: localProviderCatalog[0].mtls,
+    mtls: companyEndpoint.mtls,
   };
 }
