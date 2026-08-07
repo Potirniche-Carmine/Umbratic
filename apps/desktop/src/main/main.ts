@@ -7,7 +7,7 @@ import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLaun
 import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
 import { checkoutRepositoryBranch, getRepository, listRepositoryBranches, openChatAttachment, pickAttachmentFiles, pickRepository, savePastedAttachments } from "./repositoryOps";
 import { refreshTaskReview, refreshWorkspaceReview } from "./reviewFiles";
-import { approveTaskMerge, approveWorktreeCreation, cancelTask, keepWorktree, rejectTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
+import { approveTaskMerge, approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, rejectTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
 import { worktreeRootForRepo } from "./worktreeOps";
 import {
@@ -551,6 +551,9 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     openRepositoryInIde: (input) => openRepositoryInIde(input),
     startTask: (input) => startTask(input),
     steerTask: (input) => steerTask(input),
+    queueFollowUpTask: (input) => queueFollowUpTask(input),
+    dropQueuedTaskPrompt: (input) => dropQueuedTaskPrompt(input),
+    listQueuedTaskPrompts: (input) => listQueuedTaskPrompts(input),
     approveWorktreeCreation: (input) => approveWorktreeCreation(input),
     respondToToolPermission: (input) => respondToToolPermission(input),
     openTaskInIde: (input) => openTaskInIde(input),

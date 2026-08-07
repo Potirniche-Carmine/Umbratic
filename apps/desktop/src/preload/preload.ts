@@ -115,6 +115,12 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:start-task", input),
   steerTask: (input: { taskId: string; prompt: string; attachedFiles?: ChatAttachment[] }) =>
     ipcRenderer.invoke("umbratic:steer-task", input),
+  queueFollowUpTask: (input: { taskId: string; prompt: string; attachedFiles?: ChatAttachment[] }) =>
+    ipcRenderer.invoke("umbratic:queue-follow-up-task", input),
+  dropQueuedTaskPrompt: (input: { taskId: string; actionId: string }) =>
+    ipcRenderer.invoke("umbratic:drop-queued-task-prompt", input),
+  listQueuedTaskPrompts: (input: { taskId: string }) =>
+    ipcRenderer.invoke("umbratic:list-queued-task-prompts", input),
   approveWorktreeCreation: (input: { taskId: string; approved: boolean }) =>
     ipcRenderer.invoke("umbratic:approve-worktree-creation", input),
   respondToToolPermission: (input: { taskId: string; id: string; decision: "allow" | "deny" }) =>

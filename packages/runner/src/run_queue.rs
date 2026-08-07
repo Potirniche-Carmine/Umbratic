@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::events::run_queue_updated_event;
+use crate::{events::run_queue_updated_event, session::InputPart};
 
 pub const FOLLOW_UP_CAPACITY: usize = 8;
 
@@ -8,6 +8,9 @@ pub const FOLLOW_UP_CAPACITY: usize = 8;
 pub enum QueueAction {
     Steer,
     FollowUp,
+    /// Removes one queued item by id. Editing a queued message is a drop plus a
+    /// fresh enqueue, so the client never has to reconcile an id it changed.
+    Drop,
     Cancel,
 }
 
@@ -16,6 +19,7 @@ impl QueueAction {
         match self {
             Self::Steer => "steer",
             Self::FollowUp => "follow_up",
+            Self::Drop => "drop",
             Self::Cancel => "cancel",
         }
     }
@@ -24,6 +28,7 @@ impl QueueAction {
         match value {
             "steer" => Some(Self::Steer),
             "follow_up" => Some(Self::FollowUp),
+            "drop" => Some(Self::Drop),
             "cancel" => Some(Self::Cancel),
             _ => None,
         }
@@ -34,6 +39,11 @@ impl QueueAction {
 pub enum QueueDisposition {
     Accepted,
     Rejected,
+    /// The running turn absorbed a steer at a step boundary. The client has
+    /// nothing to launch: the prompt is already in the conversation.
+    Applied,
+    /// The client owns what happens next. A follow-up becomes a fresh turn, and
+    /// so does a steer that outlived the run it was meant for.
     Dequeued,
     Cleared,
 }
@@ -43,6 +53,7 @@ impl QueueDisposition {
         match self {
             Self::Accepted => "accepted",
             Self::Rejected => "rejected",
+            Self::Applied => "applied",
             Self::Dequeued => "dequeued",
             Self::Cleared => "cleared",
         }
@@ -53,7 +64,13 @@ impl QueueDisposition {
 pub struct QueuedAction {
     pub action_id: String,
     pub action: QueueAction,
-    pub prompt: String,
+    /// A steer's prompt, which the running turn injects itself. A follow-up
+    /// carries none: it becomes a new turn, and its per-turn context (workspace
+    /// preview, capability probe, attachment staging) is only correct when
+    /// rebuilt at the moment that turn actually starts, so the client supplies
+    /// it then. Storing a copy the runner would never read is what made the
+    /// previous queue look functional while doing nothing.
+    pub parts: Vec<InputPart>,
 }
 
 #[derive(Debug, Default)]
@@ -131,9 +148,29 @@ impl RunQueue {
         run_id: Option<&str>,
         action: QueueAction,
         action_id: &str,
-        prompt: Option<String>,
+        parts: Vec<InputPart>,
     ) -> QueueUpdate {
         match action {
+            QueueAction::Drop => {
+                let dropped = self
+                    .pending_steer
+                    .as_ref()
+                    .is_some_and(|steer| steer.action_id == action_id);
+                if dropped {
+                    self.pending_steer = None;
+                } else {
+                    self.follow_ups.retain(|item| item.action_id != action_id);
+                }
+                self.make_update(
+                    task_id,
+                    session_id,
+                    run_id,
+                    action_id,
+                    action,
+                    QueueDisposition::Cleared,
+                    None,
+                )
+            }
             QueueAction::Cancel => self.make_update(
                 task_id,
                 session_id,
@@ -155,11 +192,10 @@ impl RunQueue {
                         Some("steer_already_pending"),
                     );
                 }
-                let prompt = prompt.unwrap_or_default();
                 self.pending_steer = Some(QueuedAction {
                     action_id: action_id.to_owned(),
                     action: QueueAction::Steer,
-                    prompt,
+                    parts,
                 });
                 self.make_update(
                     task_id,
@@ -183,11 +219,10 @@ impl RunQueue {
                         Some("follow_up_capacity_exceeded"),
                     );
                 }
-                let prompt = prompt.unwrap_or_default();
                 self.follow_ups.push(QueuedAction {
                     action_id: action_id.to_owned(),
                     action: QueueAction::FollowUp,
-                    prompt,
+                    parts,
                 });
                 self.make_update(
                     task_id,
@@ -200,6 +235,28 @@ impl RunQueue {
                 )
             }
         }
+    }
+
+    /// Takes a pending steer for the running turn to inject. Follow-ups are
+    /// deliberately not reachable here: they are new requests, and a new request
+    /// belongs after the final answer, not in the middle of the work.
+    pub fn take_steer(
+        &mut self,
+        task_id: &str,
+        session_id: &str,
+        run_id: Option<&str>,
+    ) -> Option<(QueuedAction, QueueUpdate)> {
+        let steer = self.pending_steer.take()?;
+        let update = self.make_update(
+            task_id,
+            session_id,
+            run_id,
+            &steer.action_id,
+            QueueAction::Steer,
+            QueueDisposition::Applied,
+            None,
+        );
+        Some((steer, update))
     }
 
     pub fn dequeue_next(
@@ -275,7 +332,9 @@ mod tests {
             Some("run-1"),
             QueueAction::Steer,
             "steer-1",
-            Some("redirect".into()),
+            vec![InputPart::Text {
+                text: "redirect".into(),
+            }],
         );
         assert_eq!(accepted.disposition, QueueDisposition::Accepted);
         assert!(accepted.pending_steer);
@@ -285,7 +344,9 @@ mod tests {
             Some("run-1"),
             QueueAction::Steer,
             "steer-2",
-            Some("other".into()),
+            vec![InputPart::Text {
+                text: "other".into(),
+            }],
         );
         assert_eq!(rejected.disposition, QueueDisposition::Rejected);
         assert_eq!(rejected.reason_code, Some("steer_already_pending"));
@@ -297,7 +358,7 @@ mod tests {
                 None,
                 QueueAction::FollowUp,
                 &format!("follow-{index}"),
-                Some(format!("prompt {index}")),
+                Vec::new(),
             );
             assert_eq!(update.disposition, QueueDisposition::Accepted);
         }
@@ -307,7 +368,7 @@ mod tests {
             None,
             QueueAction::FollowUp,
             "follow-overflow",
-            Some("too many".into()),
+            Vec::new(),
         );
         assert_eq!(overflow.disposition, QueueDisposition::Rejected);
         assert_eq!(overflow.reason_code, Some("follow_up_capacity_exceeded"));
@@ -322,7 +383,7 @@ mod tests {
             None,
             QueueAction::FollowUp,
             "follow-1",
-            Some("later".into()),
+            Vec::new(),
         );
         queue.enqueue(
             "task",
@@ -330,7 +391,7 @@ mod tests {
             None,
             QueueAction::Steer,
             "steer-1",
-            Some("now".into()),
+            vec![InputPart::Text { text: "now".into() }],
         );
         let (next, update) = queue
             .dequeue_next("task", "session", Some("run-1"))
@@ -342,5 +403,79 @@ mod tests {
         assert_eq!(update.follow_up_count, 1);
         assert_eq!(update.event["type"], "run.queue.updated");
         assert!(!update.event["at"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dropping_removes_one_queued_item_and_leaves_the_rest() {
+        // Editing a queued message drops it and enqueues the replacement, so a
+        // drop must be precise: clearing the whole queue would silently discard
+        // messages the user never touched.
+        let mut queue = RunQueue::default();
+        for id in ["follow-1", "follow-2", "follow-3"] {
+            queue.enqueue(
+                "task",
+                "session",
+                None,
+                QueueAction::FollowUp,
+                id,
+                Vec::new(),
+            );
+        }
+        queue.enqueue(
+            "task",
+            "session",
+            None,
+            QueueAction::Steer,
+            "steer-1",
+            vec![InputPart::Text { text: "now".into() }],
+        );
+
+        let update = queue.enqueue(
+            "task",
+            "session",
+            None,
+            QueueAction::Drop,
+            "follow-2",
+            Vec::new(),
+        );
+        assert_eq!(update.disposition, QueueDisposition::Cleared);
+        assert_eq!(update.follow_up_count, 2);
+        assert!(
+            update.pending_steer,
+            "dropping a follow-up leaves the steer"
+        );
+
+        let dropped_steer = queue.enqueue(
+            "task",
+            "session",
+            None,
+            QueueAction::Drop,
+            "steer-1",
+            Vec::new(),
+        );
+        assert!(!dropped_steer.pending_steer);
+        assert_eq!(dropped_steer.follow_up_count, 2);
+
+        // Release order is preserved around the hole the drop left.
+        let (first, _) = queue.dequeue_next("task", "session", None).unwrap();
+        assert_eq!(first.action_id, "follow-1");
+        let (second, _) = queue.dequeue_next("task", "session", None).unwrap();
+        assert_eq!(second.action_id, "follow-3");
+        assert!(queue.dequeue_next("task", "session", None).is_none());
+    }
+
+    #[test]
+    fn taking_a_steer_never_reaches_a_follow_up() {
+        let mut queue = RunQueue::default();
+        queue.enqueue(
+            "task",
+            "session",
+            None,
+            QueueAction::FollowUp,
+            "follow-1",
+            Vec::new(),
+        );
+        assert!(queue.take_steer("task", "session", Some("run-1")).is_none());
+        assert_eq!(queue.follow_up_count(), 1);
     }
 }

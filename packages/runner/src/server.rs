@@ -465,6 +465,11 @@ async fn prompt(
             permissions,
         )
         .await;
+        let reached_final_answer = matches!(&result, Ok(summary) if summary
+            .get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or("completed")
+            == "completed");
         match result {
             Ok(summary) => {
                 let outcome = summary
@@ -516,11 +521,18 @@ async fn prompt(
         // Keep the busy guard until terminal events are emitted so clients never see
         // a free slot while this run's settled event is still in flight.
         drop(run);
-        let mut queue = session.queue.lock().await;
-        if let Some((_queued, update)) =
-            queue.dequeue_next(&session.task_id, &session.id, Some(&run_id))
-        {
-            sink.emit(update.event);
+        // Queued work is released only by a turn that actually answered. A run
+        // that aborted, failed, or stopped at a safety limit leaves the queue
+        // intact: launching the next request on top of a failure is how a queued
+        // message used to land in a conversation that had just gone wrong. The
+        // items stay visible and the user decides.
+        if reached_final_answer {
+            let mut queue = session.queue.lock().await;
+            if let Some((_queued, update)) =
+                queue.dequeue_next(&session.task_id, &session.id, Some(&run_id))
+            {
+                sink.emit(update.event);
+            }
         }
     });
     StatusCode::NO_CONTENT.into_response()
@@ -609,7 +621,7 @@ async fn queue_action(
         return error_response(
             StatusCode::BAD_REQUEST,
             "invalid_queue_action",
-            "Queue action must be steer, follow_up, or cancel.",
+            "Queue action must be steer, follow_up, drop, or cancel.",
         );
     };
     let Some(action_id) = body
@@ -623,19 +635,25 @@ async fn queue_action(
             "Queue actionId is required.",
         );
     };
-    let prompt = body
-        .get("prompt")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    if matches!(action, QueueAction::Steer | QueueAction::FollowUp)
-        && prompt.as_ref().is_none_or(|value| value.trim().is_empty())
-    {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_prompt",
-            "Steer and follow_up require a prompt.",
-        );
-    }
+    // A steer is applied by the running turn itself, so it must arrive as the
+    // same parts a prompt would. A follow-up carries none: the client rebuilds
+    // its prompt when the turn starts, so a copy here would only go stale.
+    let parts = if matches!(action, QueueAction::Steer) {
+        let parts = input_parts(&body);
+        if parts.iter().all(|part| match part {
+            InputPart::Text { text } => text.trim().is_empty(),
+            InputPart::Image { .. } => false,
+        }) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_prompt",
+                "A steer requires prompt parts.",
+            );
+        }
+        parts
+    } else {
+        Vec::new()
+    };
     let run_id = session.active_run_id();
     let update = {
         let mut queue = session.queue.lock().await;
@@ -645,7 +663,7 @@ async fn queue_action(
             run_id.as_deref(),
             action,
             action_id,
-            prompt,
+            parts,
         )
     };
     state.store.sink.emit(update.event.clone());
@@ -661,10 +679,12 @@ async fn queue_action(
                 }
                 let _ = state.store.abort(&id).await;
             }
-            QueueAction::Steer => {
-                let _ = state.store.abort(&id).await;
-            }
-            QueueAction::FollowUp => {}
+            // A steer no longer aborts. Aborting discarded the in-flight step,
+            // crossed a run boundary, and made the client race the busy guard to
+            // resubmit; the running turn now absorbs the steer at its next step
+            // boundary instead, keeping one run, one orientation, and whatever
+            // the current tool call was in the middle of doing.
+            QueueAction::Steer | QueueAction::FollowUp | QueueAction::Drop => {}
         }
     }
     json_response(

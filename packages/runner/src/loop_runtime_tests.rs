@@ -349,3 +349,102 @@ fn a_persisted_tool_step_never_carries_the_preamble_back_into_context() {
     assert_eq!(message["tool_calls"][0]["id"], "call-1");
     assert_eq!(message["tool_calls"][0]["function"]["name"], "ls");
 }
+
+#[tokio::test]
+async fn a_steer_joins_the_running_turn_instead_of_restarting_it() {
+    // The step boundary is the contract: whatever the model was doing has
+    // already landed in the conversation, and the steer reads as the next thing
+    // the user said rather than as a new run.
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+
+    session.messages.lock().await.extend([
+        json!({"role":"user","content":"find the bug"}),
+        json!({"role":"assistant","content":"","tool_calls":[]}),
+        json!({"role":"tool","tool_call_id":"call-1","content":"search: ok"}),
+    ]);
+    let accepted = {
+        let mut queue = session.queue.lock().await;
+        queue.enqueue(
+            &session.task_id,
+            &session.id,
+            Some("run-1"),
+            crate::run_queue::QueueAction::Steer,
+            "steer-1",
+            vec![crate::session::InputPart::Text {
+                text: "check the tests too".into(),
+            }],
+        )
+    };
+    assert_eq!(
+        accepted.disposition,
+        crate::run_queue::QueueDisposition::Accepted
+    );
+    // Accepting a steer must not abort: the run keeps going and the tool call
+    // that was in flight is never interrupted.
+    assert!(!session.is_aborted());
+
+    apply_pending_steer(&session, &sink, "run-1").await;
+
+    let messages = session.messages.lock().await.clone();
+    assert_eq!(messages.len(), 4, "the steer is appended, nothing replaced");
+    assert_eq!(messages[3]["role"], "user");
+    assert!(
+        messages[3]["content"]
+            .to_string()
+            .contains("check the tests too")
+    );
+    // Earlier evidence survives, which is the point of not restarting.
+    assert_eq!(messages[2]["content"], "search: ok");
+
+    let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+    let queue_events = observed
+        .iter()
+        .filter(|event| event["type"] == "run.queue.updated")
+        .collect::<Vec<_>>();
+    assert_eq!(queue_events.len(), 1);
+    // "applied" tells the client the runner already placed it; only "dequeued"
+    // asks the client to start a turn.
+    assert_eq!(queue_events[0]["disposition"], "applied");
+    assert_eq!(queue_events[0]["actionId"], "steer-1");
+    assert_eq!(queue_events[0]["pendingSteer"], false);
+    // Absorbing a steer is not the assistant speaking and not a new plan, so it
+    // produces no status sentence of its own.
+    assert!(
+        !observed
+            .iter()
+            .any(|event| event["type"] == "assistant.progress.delta"
+                || event["type"] == "assistant.delta"),
+        "a steer must not emit assistant or progress text"
+    );
+
+    // The steer is consumed exactly once.
+    apply_pending_steer(&session, &sink, "run-1").await;
+    assert_eq!(session.messages.lock().await.len(), 4);
+}
+
+#[tokio::test]
+async fn a_follow_up_never_joins_a_running_turn() {
+    // Follow-ups are new requests. Mid-run injection is reserved for steers, so
+    // take_steer must not reach past a queued follow-up.
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    {
+        let mut queue = session.queue.lock().await;
+        queue.enqueue(
+            &session.task_id,
+            &session.id,
+            Some("run-1"),
+            crate::run_queue::QueueAction::FollowUp,
+            "follow-1",
+            Vec::new(),
+        );
+    }
+    apply_pending_steer(&session, &sink, "run-1").await;
+    assert!(session.messages.lock().await.is_empty());
+    let queue = session.queue.lock().await;
+    assert_eq!(queue.follow_up_count(), 1, "the follow-up is still queued");
+}

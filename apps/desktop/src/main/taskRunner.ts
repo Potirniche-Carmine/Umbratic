@@ -1,7 +1,7 @@
 import { getPermissionMode } from "./mainRuntime";
 import { resolveSelectedModel, submitSteeredRunnerTurn } from "./backendSettings";
 import { chatAttachmentDirectory } from "./chatStore";
-import { PendingTaskSteer, RunnerPrompt, activeRunnerProcesses, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskSteers, recordProductTelemetry, saveTask, taskStillRunning } from "./mainRuntime";
+import { PendingTaskPrompt, RunnerPrompt, activeRunnerProcesses, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, recordProductTelemetry, saveTask, taskStillRunning } from "./mainRuntime";
 import { runnerPromptForTask, runnerPromptParts, runnerPromptText } from "./taskPromptContext";
 import { refreshReview, reviewPatchHash } from "./reviewFiles";
 import { prepareTaskTurnCheckpoint } from "./taskCommands";
@@ -222,6 +222,24 @@ import {
   visibleTaskEvents,
 } from "./taskReviewPresentation";
 
+
+/// Removes and returns a queued message the runner just released. A steer that
+/// outlives its run arrives here too: the running turn never reached a step
+/// boundary to absorb it, so it becomes the next turn instead of being lost.
+function takeQueuedPrompt(taskId: string, actionId: string): PendingTaskPrompt | undefined {
+  const steer = pendingTaskSteers.get(taskId);
+  if (steer?.actionId === actionId) {
+    pendingTaskSteers.delete(taskId);
+    return steer;
+  }
+  const queued = pendingTaskFollowUps.get(taskId) ?? [];
+  const index = queued.findIndex((item) => item.actionId === actionId);
+  if (index < 0) return undefined;
+  const [released] = queued.splice(index, 1);
+  if (queued.length === 0) pendingTaskFollowUps.delete(taskId);
+  return released;
+}
+
 export async function handleRunnerPermission(
   task: TaskRecord,
   run: RunnerProcess,
@@ -408,7 +426,11 @@ export async function runRunnerTask(
     };
 
     let session!: { id: string };
-    const launchPendingSteer = (pending: PendingTaskSteer) => {
+    // Starts a released queued message as its own turn. Its prompt context is
+    // built here rather than when the message was queued, because the workspace
+    // preview, capability probe, and attachment staging describe the moment the
+    // turn begins, not the moment the user typed.
+    const launchQueuedPrompt = (pending: PendingTaskPrompt) => {
       appendUserMessage(task, pending.prompt, pending.attachments);
       void runnerPromptForTask(task, pending.prompt, pending.attachments,
         selectedForRun.contextLength ?? readContextLengthSetting(), { useDurableContext: true })
@@ -418,13 +440,8 @@ export async function runRunnerTask(
           promptParts = parts;
           return submitSteeredRunnerTurn(run as RunnerProcess, session.id, parts, selectedForRun);
         })
-        .then(() => {
-          pending.resolve();
-        })
         .catch((cause) => {
-          const message = String(cause instanceof Error ? cause.message : cause);
-          pending.reject(new Error(message));
-          fail(message);
+          fail(String(cause instanceof Error ? cause.message : cause));
         });
     };
 
@@ -455,18 +472,12 @@ export async function runRunnerTask(
       },
       onFinish: finish,
       onAborted: () => {
-        // A steer aborts the current run to replace it; the queue dequeue event
-        // launches the next turn, so the task must not settle here. A user
-        // cancel ends the turn quietly with no error and no retry banner.
-        if (pendingTaskSteers.has(task.id)) return;
+        // A steer no longer aborts, so an abort here is always a real stop: the
+        // turn ends quietly with no error and no retry banner.
         emit({ type: "turn.outcome", taskId: task.id, outcome: "aborted" });
         finish();
       },
       onFailure: (message, details) => {
-        if (pendingTaskSteers.has(task.id)) {
-          if (details) runnerFailureDetails = details;
-          return;
-        }
         if (details) runnerFailureDetails = details;
         fail(message);
       },
@@ -481,13 +492,21 @@ export async function runRunnerTask(
         });
       },
       onQueueUpdated: (queueEvent) => {
+        // "applied" means the running turn already absorbed the steer at a step
+        // boundary; the conversation has it and there is nothing to launch.
+        if (queueEvent.disposition === "applied") {
+          if (pendingTaskSteers.get(task.id)?.actionId === queueEvent.actionId) {
+            pendingTaskSteers.delete(task.id);
+          }
+          return;
+        }
+        // "dequeued" only ever follows a turn that answered, so this is the
+        // queued message becoming the next turn.
         if (queueEvent.disposition !== "dequeued") return;
-        if (queueEvent.action !== "steer" && queueEvent.action !== "follow_up") return;
-        const pending = pendingTaskSteers.get(task.id);
-        if (!pending || pending.actionId !== queueEvent.actionId) return;
-        pendingTaskSteers.delete(task.id);
+        const released = takeQueuedPrompt(task.id, queueEvent.actionId);
+        if (!released) return;
         if (completed) armCompletion();
-        launchPendingSteer(pending);
+        launchQueuedPrompt(released);
       },
     });
 
@@ -614,11 +633,8 @@ export async function runRunnerTask(
   } finally {
     clearPendingPermissionsForTask(task.id);
     activeRunnerProcesses.delete(task.id);
-    const pendingSteer = pendingTaskSteers.get(task.id);
-    if (pendingSteer) {
-      pendingTaskSteers.delete(task.id);
-      pendingSteer.reject(new Error("The task stopped before Umbratic could steer it."));
-    }
+    pendingTaskSteers.delete(task.id);
+    pendingTaskFollowUps.delete(task.id);
     if (run) {
       stopRunnerProcess(run);
     }

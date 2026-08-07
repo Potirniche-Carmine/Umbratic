@@ -49,6 +49,10 @@ export type ComposerSubmission = {
 export type QueuedComposerPrompt = ComposerSubmission & {
   id: string;
   taskId: string;
+  /// The runner's id for this queued message. The runner holds the queue and
+  /// releases it only after a turn delivers its final answer, so this list is
+  /// for display and editing, never for deciding when a message runs.
+  actionId: string;
 };
 
 export type AppearanceSettings = {

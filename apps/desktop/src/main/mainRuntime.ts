@@ -218,12 +218,14 @@ import {
 
 export type RunnerPromptPart = ContextPromptPart;
 export type RunnerPrompt = string | RunnerPromptPart[];
-export type PendingTaskSteer = {
+/// A queued message the runner is holding. A steer is applied by the running
+/// turn itself, so the client only tracks it to reconcile the transcript; a
+/// follow-up is launched here once the runner releases it, which is why its
+/// prompt and attachments have to survive until then.
+export type PendingTaskPrompt = {
   actionId: string;
   prompt: string;
   attachments: ChatAttachment[];
-  resolve: () => void;
-  reject: (error: Error) => void;
 };
 export type PdfRenderWorkerResult =
   | { ok: true; pageCount: number; pages: Array<{ pageNumber: number; filePath: string }> }
@@ -232,7 +234,9 @@ export const activeRunnerProcesses = new Map<string, RunnerProcess>();
 export const activeStartTaskRequests = new Map<string, Promise<TaskInfo>>();
 export const recentStartTaskRequests = new Map<string, { taskId: string; expiresAt: number }>();
 export const pendingRunnerPrompts = new Map<string, RunnerPromptPart[]>();
-export const pendingTaskSteers = new Map<string, PendingTaskSteer>();
+export const pendingTaskSteers = new Map<string, PendingTaskPrompt>();
+/// Queued follow-ups per task, in the order the runner holds them.
+export const pendingTaskFollowUps = new Map<string, PendingTaskPrompt[]>();
 export const pendingTaskCancelWaits = new Map<string, () => void>();
 export const runnerGracefulCancelDeadlineMs = 2_000;
 export const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");

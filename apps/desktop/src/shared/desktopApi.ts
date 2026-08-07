@@ -592,6 +592,17 @@ export type DesktopApi = {
     prompt: string;
     attachedFiles?: ChatAttachment[];
   }): Promise<void>;
+  queueFollowUpTask(input: {
+    taskId: string;
+    prompt: string;
+    attachedFiles?: ChatAttachment[];
+  }): Promise<{ actionId: string }>;
+  dropQueuedTaskPrompt(input: { taskId: string; actionId: string }): Promise<void>;
+  listQueuedTaskPrompts(input: { taskId: string }): Promise<Array<{
+    actionId: string;
+    prompt: string;
+    attachedFiles: ChatAttachment[];
+  }>>;
   approveWorktreeCreation(input: {
     taskId: string;
     approved: boolean;
@@ -697,6 +708,9 @@ export const desktopIpcChannels = {
   listAvailableIdes: "umbratic:list-available-ides",
   startTask: "umbratic:start-task",
   steerTask: "umbratic:steer-task",
+  queueFollowUpTask: "umbratic:queue-follow-up-task",
+  dropQueuedTaskPrompt: "umbratic:drop-queued-task-prompt",
+  listQueuedTaskPrompts: "umbratic:list-queued-task-prompts",
   approveWorktreeCreation: "umbratic:approve-worktree-creation",
   respondToToolPermission: "umbratic:respond-tool-permission",
   openRepositoryInIde: "umbratic:open-repository-in-ide",

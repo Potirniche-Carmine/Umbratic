@@ -62,6 +62,7 @@ import type {
   RequiredToolContractReason, RequiredToolContractRequirement, ResponseFeedbackDialogState,
   ReviewFile, RunnerToolId, SkillSourceFilter, ToolErrorCode, ToolResultStatus,
 } from "./rendererTypes";
+import { readQueuedPrompts } from "./queuedPrompts";
 import {
   CONTEXT_LENGTH_OPTIONS,
   DEFAULT_CONTEXT_LENGTH,
@@ -1911,7 +1912,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
   const startTaskInFlightRef = useRef(false);
-  const queueLaunchInFlightRef = useRef(false);
   const chatSelectionSequenceRef = useRef(0);
   const focusRefreshTimerRef = useRef<number | null>(null);
   const followComposerScrollRef = useRef(true);
@@ -3466,27 +3466,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     noteActivityScrollInput(id, event.currentTarget, true);
   }
 
-  useEffect(() => {
-    if (
-      !task
-      || task.state === "running"
-      || task.state === "awaiting_worktree_approval"
-      || task.state === "approving"
-      || busy
-      || queueLaunchInFlightRef.current
-    ) return;
-    const next = queuedPrompts.find((item) => item.taskId === task.id);
-    if (!next) return;
-    queueLaunchInFlightRef.current = true;
-    void startTask(next).then((started) => {
-      if (started) {
-        setQueuedPrompts((current) => current.filter((item) => item.id !== next.id));
-      }
-    }).finally(() => {
-      queueLaunchInFlightRef.current = false;
-    });
-  }, [busy, queuedPrompts, task?.id, task?.state]);
-
   async function startTask(submission?: ComposerSubmission): Promise<boolean> {
     if (closedChatNotice) {
       setError(closedChatNotice);
@@ -3598,15 +3577,29 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (activeChatId) void persistDraft(activeChatId, "", []);
   }
 
-  function queueCurrentPrompt() {
+  // The runner releases a queued message only after a turn answers, so the
+  // mirror is re-read whenever the task settles or changes.
+  useEffect(() => { void syncQueuedPrompts(task?.id); }, [task?.id, task?.state]);
+
+  async function syncQueuedPrompts(taskId: string | undefined) {
+    setQueuedPrompts(taskId ? await readQueuedPrompts(api, taskId).catch(() => []) : []);
+  }
+
+  async function queueCurrentPrompt() {
     if (!task || !canQueue) return;
     const submission = currentComposerSubmission();
     if (!submission) return;
-    setQueuedPrompts((current) => [
-      ...current,
-      { ...submission, id: `queued-${Date.now().toString(36)}-${current.length}`, taskId: task.id },
-    ]);
-    clearComposerInput();
+    const taskId = task.id;
+    // The runner owns the ordering and the release, so a rejection here (queue
+    // full, or the turn already ended) must not leave a phantom row behind.
+    try {
+      const { prompt, attachedFiles } = submission;
+      await api.queueFollowUpTask({ taskId, prompt, attachedFiles });
+      clearComposerInput();
+      await syncQueuedPrompts(taskId);
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
   }
 
   async function steerSubmission(submission: ComposerSubmission, queuedId?: string) {
@@ -3621,11 +3614,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         prompt: steeredPrompt,
         attachedFiles: submission.attachedFiles,
       });
-      if (queuedId) {
-        setQueuedPrompts((current) => current.filter((item) => item.id !== queuedId));
-      } else {
-        clearComposerInput();
-      }
+      // Sending a queued message now must also retract it from the runner's
+      // queue, or it would run a second time once the turn answers.
+      if (queuedId) removeQueuedPrompt(queuedId);
+      else clearComposerInput();
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -3634,7 +3626,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function removeQueuedPrompt(id: string) {
-    setQueuedPrompts((current) => current.filter((item) => item.id !== id));
+    const item = queuedPrompts.find((queued) => queued.id === id);
+    setQueuedPrompts((current) => current.filter((queued) => queued.id !== id));
+    if (!item) return;
+    void api.dropQueuedTaskPrompt({ taskId: item.taskId, actionId: item.actionId })
+      .then(() => syncQueuedPrompts(item.taskId));
   }
 
   function editQueuedPrompt(item: QueuedComposerPrompt) {

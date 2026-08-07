@@ -524,6 +524,27 @@ async fn publish_step_settled(
     ));
 }
 
+/// Injects a pending steer into the running turn as the next user message.
+///
+/// The steer is appended to the same conversation the loop is already working
+/// through, so nothing about the run resets: the orient decision, the run id,
+/// and every tool result collected so far all survive.
+async fn apply_pending_steer(session: &Arc<Session>, sink: &EventSink, run_id: &str) {
+    let taken = {
+        let mut queue = session.queue.lock().await;
+        queue.take_steer(&session.task_id, &session.id, Some(run_id))
+    };
+    let Some((steer, update)) = taken else {
+        return;
+    };
+    session
+        .messages
+        .lock()
+        .await
+        .push(json!({ "role": "user", "content": message_content(steer.parts) }));
+    sink.emit(update.event);
+}
+
 pub async fn run_turn(
     session: Arc<Session>,
     run_id: String,
@@ -582,6 +603,13 @@ pub async fn run_turn(
             )
             .await);
         }
+        // A steer lands here, between one step settling and the next request
+        // going out, so the tool call that was running finished normally and its
+        // result is already in the conversation. Injecting rather than aborting
+        // keeps one run, which means one orientation and one status sentence:
+        // the model reads the new instruction as the next thing the user said,
+        // with everything it has already learned still in front of it.
+        apply_pending_steer(&session, &sink, &run_id).await;
         // Everything this request depends on is captured once, before it goes
         // out. A deferred change landing mid-request cannot reach the in-flight
         // turn, because the turn no longer reads session state.

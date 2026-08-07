@@ -139,8 +139,8 @@ export type RunnerEvent =
       sessionId: string;
       runId: string | null;
       actionId: string;
-      action: "steer" | "follow_up" | "cancel";
-      disposition: "accepted" | "rejected" | "dequeued" | "cleared";
+      action: "steer" | "follow_up" | "drop" | "cancel";
+      disposition: "accepted" | "rejected" | "applied" | "dequeued" | "cleared";
       pendingSteer: boolean;
       followUpCount: number;
       followUpCapacity: number;
@@ -228,9 +228,11 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
       return hasString(value, "sessionId")
         && (value.runId === null || typeof value.runId === "string")
         && hasString(value, "actionId")
-        && (value.action === "steer" || value.action === "follow_up" || value.action === "cancel")
+        && (value.action === "steer" || value.action === "follow_up"
+          || value.action === "drop" || value.action === "cancel")
         && (value.disposition === "accepted"
           || value.disposition === "rejected"
+          || value.disposition === "applied"
           || value.disposition === "dequeued"
           || value.disposition === "cleared")
         && typeof value.pendingSteer === "boolean"

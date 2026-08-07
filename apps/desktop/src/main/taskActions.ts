@@ -1,8 +1,8 @@
 import { getPermissionMode } from "./mainRuntime";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, parseReasoningMode, taskId } from "./chatStore";
-import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, failTask, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
-import { capabilityNeedsForPrompt } from "./taskPromptContext";
+import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, failTask, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
+import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
 import { emitReviewChangedSinceReady, refreshReview } from "./reviewFiles";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
@@ -804,6 +804,7 @@ export async function cancelTask(input: unknown): Promise<void> {
   }
   pendingRunnerPrompts.delete(task.id);
   pendingTaskSteers.delete(task.id);
+  pendingTaskFollowUps.delete(task.id);
   clearPendingPermissionsForTask(task.id);
   // Stopping a turn is a user decision, not a failure: the transcript keeps
   // whatever streamed and ends quietly with no error message.
@@ -826,22 +827,93 @@ export async function steerTask(input: unknown): Promise<void> {
   }
   const attachments = sanitizeAttachments(input.attachedFiles, task.originalRepoPath, task.chatId ?? task.id);
   const actionId = `steer-${crypto.randomUUID()}`;
-  await new Promise<void>((resolve, reject) => {
-    pendingTaskSteers.set(task.id, { actionId, prompt, attachments, resolve, reject });
-    void runnerRequest<{ disposition?: string; reasonCode?: string | null }>(
+  // The running turn applies the steer itself, so it has to arrive as prompt
+  // parts rather than bare text. They are built now because the steer lands
+  // within a step or two; a follow-up waits long enough that its context has to
+  // be rebuilt at launch instead.
+  const parts = await runnerPromptForTask(
+    task,
+    prompt,
+    attachments,
+    task.model.contextLength ?? readContextLengthSetting(),
+    { useDurableContext: true },
+  );
+  pendingTaskSteers.set(task.id, { actionId, prompt, attachments });
+  try {
+    await runnerRequest<{ disposition?: string; reasonCode?: string | null }>(
       run,
       `/session/${encodeURIComponent(run.sessionId as string)}/queue`,
-      {
-        method: "POST",
-        body: { action: "steer", actionId, prompt },
-      },
-    ).catch((cause) => {
-      const pending = pendingTaskSteers.get(task.id);
-      if (!pending || pending.actionId !== actionId) return;
+      { method: "POST", body: { action: "steer", actionId, parts } },
+    );
+  } catch (cause) {
+    if (pendingTaskSteers.get(task.id)?.actionId === actionId) {
       pendingTaskSteers.delete(task.id);
-      pending.reject(new Error(String(cause instanceof Error ? cause.message : cause)));
-    });
-  });
+    }
+    throw new Error(String(cause instanceof Error ? cause.message : cause));
+  }
+  // The message is the user's the moment they send it, so it joins the
+  // transcript on acceptance rather than when the turn happens to absorb it.
+  appendUserMessage(task, prompt, attachments);
+}
+
+/// Queues a message to run after the current turn delivers its final answer.
+/// The runner owns the ordering and the release, so a turn that aborts or fails
+/// leaves the queue untouched instead of launching into a broken conversation.
+export async function queueFollowUpTask(input: unknown): Promise<{ actionId: string }> {
+  if (!isRecord(input)) throw new Error("Invalid follow-up input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const prompt = requiredString(input.prompt, "prompt");
+  const run = activeRunnerProcesses.get(task.id);
+  if (task.state !== "running" || !run?.sessionId) {
+    throw new Error("This task is not ready for queued messages.");
+  }
+  const attachments = sanitizeAttachments(input.attachedFiles, task.originalRepoPath, task.chatId ?? task.id);
+  const actionId = `follow-${crypto.randomUUID()}`;
+  const response = await runnerRequest<{ disposition?: string; reasonCode?: string | null }>(
+    run,
+    `/session/${encodeURIComponent(run.sessionId as string)}/queue`,
+    { method: "POST", body: { action: "follow_up", actionId } },
+  );
+  if (response?.disposition === "rejected") {
+    throw new Error(response.reasonCode === "follow_up_capacity_exceeded"
+      ? "Too many queued messages. Wait for one to run before adding another."
+      : "Umbratic could not queue that message.");
+  }
+  const queued = pendingTaskFollowUps.get(task.id) ?? [];
+  queued.push({ actionId, prompt, attachments });
+  pendingTaskFollowUps.set(task.id, queued);
+  return { actionId };
+}
+
+/// The queued messages the runner is still holding for this task, in release
+/// order. The renderer reads this rather than tracking its own copy, so a
+/// message released while the window was closed or reloaded does not linger as a
+/// row that will never run.
+export async function listQueuedTaskPrompts(input: unknown): Promise<Array<{ actionId: string; prompt: string; attachedFiles: ChatAttachment[] }>> {
+  if (!isRecord(input)) throw new Error("Invalid queued message input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  return (pendingTaskFollowUps.get(task.id) ?? []).map((item) => ({
+    actionId: item.actionId,
+    prompt: item.prompt,
+    attachedFiles: item.attachments,
+  }));
+}
+
+/// Removes one queued message. Editing a queued message drops it and enqueues
+/// the replacement, so an id never refers to text the user has changed.
+export async function dropQueuedTaskPrompt(input: unknown): Promise<void> {
+  if (!isRecord(input)) throw new Error("Invalid queued message input.");
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const actionId = requiredString(input.actionId, "actionId");
+  const queued = (pendingTaskFollowUps.get(task.id) ?? []).filter((item) => item.actionId !== actionId);
+  if (queued.length === 0) pendingTaskFollowUps.delete(task.id);
+  else pendingTaskFollowUps.set(task.id, queued);
+  const run = activeRunnerProcesses.get(task.id);
+  if (!run?.sessionId) return;
+  await runnerRequest<void>(run, `/session/${encodeURIComponent(run.sessionId)}/queue`, {
+    method: "POST",
+    body: { action: "drop", actionId },
+  }).catch(() => undefined);
 }
 
 export async function setResponseFeedback(input: unknown): Promise<void> {
