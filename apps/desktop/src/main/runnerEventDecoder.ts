@@ -7,9 +7,7 @@ type RunnerEventBase = {
 };
 
 export type RunnerEvent =
-  // kind "status" marks harness-emitted work narration (the run's opening
-  // status line): rendered inside the working timeline, never as answer text.
-  | (RunnerEventBase & { type: "assistant.delta"; text: string; kind?: "status" })
+  | (RunnerEventBase & { type: "assistant.delta"; text: string })
   | (RunnerEventBase & { type: "assistant.progress.delta"; text: string })
   | (RunnerEventBase & {
       type: "tool.requested";
@@ -255,7 +253,10 @@ function validTimestamps(value: Record<string, unknown>): boolean {
 function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"]): boolean {
   switch (type) {
     case "assistant.delta":
-      return hasString(value, "text") && (value.kind === undefined || value.kind === "status");
+      // A `kind` from an older runner is ignored rather than rejected: the
+      // field no longer changes where the delta renders, and dropping the text
+      // over a leftover tag would lose the run's opening sentence.
+      return hasString(value, "text");
     case "assistant.progress.delta":
       return hasString(value, "text");
     case "command.safety.decision":

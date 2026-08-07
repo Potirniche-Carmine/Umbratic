@@ -89,7 +89,7 @@ export class RunnerEventAdapter {
 
     switch (event.type) {
       case "assistant.delta":
-        this.emitAssistant(event.text, eventAt(event), eventEndedAt(event), event.kind);
+        this.emitAssistant(event.text, eventAt(event), eventEndedAt(event));
         return;
       case "assistant.progress.delta":
         this.emitProgress(event.text, eventAt(event), eventEndedAt(event));
@@ -295,13 +295,12 @@ export class RunnerEventAdapter {
     this.options.onFailure(message);
   }
 
-  private emitAssistant(text: string, at?: string, endedAt?: string, kind?: "status"): void {
+  private emitAssistant(text: string, at?: string, endedAt?: string): void {
     if (!text || text.trim() === "Ready for review.") return;
     this.options.emit({
       type: "assistant.delta",
       taskId: this.options.task.id,
       text,
-      ...(kind ? { kind } : {}),
       at,
       endedAt,
     });
