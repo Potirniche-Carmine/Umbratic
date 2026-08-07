@@ -1,7 +1,7 @@
 use globset::{GlobBuilder, GlobSetBuilder};
 use serde_json::json;
 
-use super::read::list_entries;
+use super::read::{list_entries, missing_path_message};
 use super::*;
 
 pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> ToolExecutionResult {
@@ -15,14 +15,19 @@ pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> To
         .unwrap_or(1)
         .max(1) as usize;
     let limit = number_arg(input, "limit", 100) as usize;
+    glob_free_path("ls", &path)?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ToolError::validation(format!("Path not found: {relative}")));
+            return Err(ToolError::validation(missing_path_message(
+                &session.config.cwd,
+                &absolute,
+                &relative,
+            )));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("ls", &relative, &error)),
     };
     if !metadata.is_dir() {
         return Err(ToolError::validation(
@@ -86,8 +91,11 @@ pub(super) async fn find_tool(
     session: &Session,
     input: &Map<String, Value>,
 ) -> ToolExecutionResult {
-    let path = string_arg(input, &["path"]);
-    let glob = string_arg(input, &["glob"]);
+    let (path, glob) = split_pattern_path(
+        "find",
+        &string_arg(input, &["path"]),
+        &string_arg(input, &["glob"]),
+    )?;
     if path.is_empty() || glob.is_empty() {
         return Err("find requires string arguments path and glob".into());
     }
@@ -100,9 +108,13 @@ pub(super) async fn find_tool(
     let metadata = match fs::metadata(&absolute) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ToolError::validation(format!("Path not found: {relative}")));
+            return Err(ToolError::validation(missing_path_message(
+                &session.config.cwd,
+                &absolute,
+                &relative,
+            )));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("find", &relative, &error)),
     };
     if !metadata.is_dir() && !metadata.is_file() {
         return Err(ToolError::validation(

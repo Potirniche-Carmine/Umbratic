@@ -152,3 +152,32 @@ test("PDF attachments without a measured inspection estimate as a page image, no
   // route-aware inspection estimate instead of the 512 file stub.
   assert.equal(estimate.contentTokens, 2048 + 2 + 10 + 1600 + 9000);
 });
+
+test("the meter only claims a measurement when the runner says so", () => {
+  assert.equal(contextWindow.contextMeterState(null), "estimated");
+  assert.equal(contextWindow.contextMeterState({ anchored: true }), "measured");
+  assert.equal(contextWindow.contextMeterState({ anchored: false }), "estimated");
+  assert.equal(
+    contextWindow.contextMeterState({ anchored: false, awaitingMeasurement: true }),
+    "recalculating",
+  );
+  // A conversation resumed in a fresh runner session is unanchored without
+  // anything having been compacted, so it must not claim a rewrite.
+  assert.equal(
+    contextWindow.contextMeterState({ anchored: false, awaitingMeasurement: false }),
+    "estimated",
+  );
+  // A measurement outranks a stale sentinel.
+  assert.equal(
+    contextWindow.contextMeterState({ anchored: true, awaitingMeasurement: true }),
+    "measured",
+  );
+});
+
+test("an unsent draft still layers on top of a measured base", () => {
+  const measured = contextWindow.estimateContextUsage([{ text: "12345" }], 64000, { contentTokens: 12000, protectedTokens: 3187 });
+  assert.equal(measured.contentTokens, 12012);
+  assert.equal(measured.protectedTokens, 3187);
+  // The draft delta is what the meter attributes to the composer.
+  assert.equal(measured.contentTokens - 12000, 12);
+});

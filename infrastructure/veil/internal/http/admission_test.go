@@ -180,3 +180,7 @@ func TestAdmissionEvictsIdleUserBucketsAndCountsDoubleRelease(t *testing.T) {
 		t.Fatalf("expected a counted double release, got %d", got)
 	}
 }
+
+func (c *blockingModelClient) PrefixTokens(context.Context, string, string, []model.Message) model.UsageAnnotation {
+	return model.UsageAnnotation{}
+}

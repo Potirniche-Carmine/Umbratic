@@ -126,6 +126,25 @@ test("runner event adapter shows safe public progress in fast mode", () => {
   }]);
 });
 
+test("a status-typed assistant delta keeps its kind so the renderer can home it", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({
+    type: "assistant.delta",
+    kind: "status",
+    taskId: "task-1",
+    text: "I will map this folder's layout and read its key manifests.\n\n",
+    at: "2026-01-01T00:00:00.000Z",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "assistant.delta",
+    kind: "status",
+    taskId: "task-1",
+    text: "I will map this folder's layout and read its key manifests.\n\n",
+    at: "2026-01-01T00:00:00.000Z",
+  }]);
+});
+
 test("runner event adapter keeps run_program distinct and treats it as an executable action", () => {
   const harness = adapterHarness();
   harness.adapter.handle({
@@ -397,4 +416,63 @@ test("runner event adapter forwards run.queue.updated to the queue callback", ()
   assert.equal(queueEvents.length, 1);
   assert.equal(queueEvents[0]?.disposition, "dequeued");
   assert.equal(queueEvents[0]?.actionId, "steer-1");
+});
+
+test("runner event adapter forwards the anchor and the category rows intact", () => {
+  const harness = adapterHarness();
+  const breakdown = {
+    systemPromptTokens: 3187, systemPromptExact: true, toolDefinitionTokens: 2100,
+    skillTokens: 320, conversationTokens: 4200, toolResultTokens: 1900, imageTokens: 1600,
+  };
+  harness.adapter.handle({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 12000,
+    completionTokens: 256,
+    reserveTokens: 4096,
+    protectedTokens: 3187,
+    estimatedTokens: 16096,
+    anchored: true,
+    compactionBlocked: true,
+    breakdown,
+    phase: "observed",
+    source: "provider",
+    confidence: "high",
+  });
+
+  assert.deepEqual(plain(harness.emitted), [{
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 12000,
+    completionTokens: 256,
+    reserveTokens: 4096,
+    protectedTokens: 3187,
+    estimatedTokens: 16096,
+    anchored: true,
+    compactionBlocked: true,
+    breakdown,
+    phase: "observed",
+    source: "provider",
+    confidence: "high",
+  }]);
+});
+
+test("runner event adapter drops a usage event whose two names disagree", () => {
+  const harness = adapterHarness();
+  // promptTokens and contentTokens are the same measurement under two names.
+  // A runner emitting them differently has broken the contract, and a broken
+  // meter must not be presented as a working one.
+  harness.adapter.handle({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 900,
+    reserveTokens: 4096,
+  });
+  assert.deepEqual(plain(harness.emitted), []);
 });

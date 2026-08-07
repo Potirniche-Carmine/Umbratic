@@ -29,6 +29,7 @@ const scenarioTable = [
   ["missing-done", "MISSING_DONE"],
   ["done-without-newline", "DONE_WITHOUT_NEWLINE"],
   ["split-utf8", "SPLIT_UTF8"],
+  ["evidence-required", "ORIENT_EVIDENCE"],
 ] as const;
 
 function scenarioName(encoded: string) {
@@ -38,9 +39,19 @@ function scenarioName(encoded: string) {
 
 /// Orient decisions keyed by explicit markers in the request text. Anything
 /// unmarked returns null so the default is the degraded path.
-function orientDecisionFor(requestText: string): { bucket: string; summarySentence: string | null } | null {
+///
+/// Only the evidence scenario sends `evidenceRequired`; the others omit it, so
+/// every run through this provider also covers a Veil that predates the field.
+function orientDecisionFor(requestText: string): Record<string, unknown> | null {
   if (requestText.includes("ORIENT_DIRECT")) {
     return { bucket: "direct_answer", summarySentence: null };
+  }
+  if (requestText.includes("ORIENT_EVIDENCE")) {
+    return {
+      bucket: "repo_orient",
+      summarySentence: "I will map this repository and read what it documents.",
+      evidenceRequired: true,
+    };
   }
   if (requestText.includes("ORIENT_GUIDED")) {
     return { bucket: "debug_failure", summarySentence: "I'll inspect the failure path and isolate the cause." };
@@ -106,7 +117,15 @@ export async function startProvider() {
       "Content-Type": "text/event-stream",
       "X-Umbratic-Stream-Version": "2",
     });
-    if (scenario === "required-inspection") {
+    if (scenario === "evidence-required" && !encoded.includes("used no workspace evidence")) {
+      // The regression: a confident architecture summary with no tool calls, on
+      // a bucket that may not answer without evidence.
+      response.end(sse({ choices: [{ delta: { content: "This project is a three-layer monorepo with a desktop shell, a Go gateway, and a Rust sidecar." } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "evidence-required" && !encoded.includes("ls: . (ok)")) {
+      response.end(sse({ choices: [{ delta: { content: "Listing the workspace root now.", tool_calls: [{ index: 0, id: "evidence-ls", function: { name: "ls", arguments: "{\"path\":\".\"}" } }] } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "evidence-required") {
+      response.end(sse({ choices: [{ delta: { content: "The workspace root holds README.md." } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "required-inspection") {
       response.end(sse({ choices: [{ delta: { content: "I can explain this directly without changing or inspecting the workspace." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "lsp-degraded" && !encoded.includes("freshness")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{

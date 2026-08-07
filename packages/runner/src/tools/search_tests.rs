@@ -517,3 +517,148 @@ async fn an_unusable_regex_fails_before_any_scanning() {
     .await;
     assert_eq!(literal.status, "success");
 }
+
+// Locator contract tests. These moved here when grep was merged into search:
+// search is now the only tool that answers them.
+#[tokio::test]
+async fn exact_search_contract_scopes_results_and_returns_path_line_text() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(directory.path().join("src/renderer")).unwrap();
+    std::fs::create_dir_all(directory.path().join("other")).unwrap();
+    std::fs::write(
+        directory.path().join("src/renderer/main.tsx"),
+        "<span>Auto-run low risk</span>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("other/main.tsx"),
+        "<span>Auto-run low risk</span>\n",
+    )
+    .unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+    let result = execute_tool(
+        session,
+        sink,
+        Arc::new(crate::permission::PermissionBroker::default()),
+        ToolCall {
+            id: "search-exact".into(),
+            name: "search".into(),
+            arguments: json!({
+                "query":"Auto-run low risk",
+                "mode":"content",
+                "path":"src/renderer",
+                "glob":"*.tsx",
+                "limit":10
+            }),
+            index: 0,
+        },
+    )
+    .await;
+    assert_eq!(result.status, "success", "{:?}", result.error_message);
+    assert!(
+        result
+            .content
+            .contains("src/renderer/main.tsx:1: <span>Auto-run low risk</span>")
+    );
+    assert!(!result.content.contains("other/main.tsx"));
+    let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+    let finished = observed
+        .iter()
+        .find(|event| event["type"] == "tool.finished")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert!(!finished.contains_key("errorCode"));
+    assert!(!finished.contains_key("errorMessage"));
+    assert!(!finished.contains_key("response"));
+}
+
+// On Windows a glob in a path argument used to fail deep in the filesystem with
+// "The filename, directory name, or volume label syntax is incorrect", a raw OS
+// error that names no correction — observed sending a live run into a minute of
+// search retries. The shell form means the same thing as the two-argument form
+// on every tool that has a glob field, so it executes instead of failing.
+#[tokio::test]
+async fn glob_patterns_in_path_relocate_to_the_glob_argument() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(directory.path().join("src")).unwrap();
+    std::fs::write(directory.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(directory.path().join("src/notes.txt"), "fn main\n").unwrap();
+    let session = crate::session::test_session(directory.path());
+
+    let matched = search_tool(
+        crate::session::test_session(directory.path()),
+        json!({"query":"main","mode":"content","path":"src/*.rs"})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matched.content.contains("src/main.rs:1:"),
+        "{}",
+        matched.content
+    );
+    // The relocated pattern still filters: the .txt sibling also matches the
+    // text, so seeing it would mean the glob was dropped rather than moved.
+    assert!(
+        !matched.content.contains("notes.txt"),
+        "{}",
+        matched.content
+    );
+
+    let found = find_tool(&session, json!({"path":"src/*.rs"}).as_object().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(found.content, "src/main.rs");
+
+    let searched = search_tool(
+        crate::session::test_session(directory.path()),
+        json!({"query":"main","mode":"path","path":"src/*.rs"})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        searched.content.contains("src/main.rs"),
+        "{}",
+        searched.content
+    );
+
+    // Two different patterns is a genuine ambiguity, not a repair.
+    let conflict = search_tool(
+        crate::session::test_session(directory.path()),
+        json!({"query":"main","mode":"content","path":"src/*.rs","glob":"*.txt"})
+            .as_object()
+            .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        conflict.message.contains("exactly one pattern in glob"),
+        "{}",
+        conflict.message
+    );
+
+    // ls and read have nowhere to put a pattern, so they still refuse — and the
+    // refusal names the tool that does accept one.
+    let ls = ls_tool(&session, json!({"path":"src/*.rs"}).as_object().unwrap())
+        .await
+        .unwrap_err();
+    assert!(ls.message.contains("not a pattern"), "{}", ls.message);
+    assert!(ls.message.contains("find"), "{}", ls.message);
+    assert!(!ls.message.contains("os error"), "{}", ls.message);
+
+    // `[` stays legal: real projects use bracketed route directories.
+    std::fs::create_dir_all(directory.path().join("src/[id]")).unwrap();
+    std::fs::write(directory.path().join("src/[id]/page.tsx"), "export {}\n").unwrap();
+    read_tool(
+        &session,
+        json!({"path":"src/[id]/page.tsx"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+}

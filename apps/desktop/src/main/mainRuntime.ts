@@ -283,9 +283,15 @@ export function getMainWindow(): BrowserWindow | null {
 export function setMainWindow(window: BrowserWindow | null): void {
   mainWindow = window;
 }
-let permissionMode: PermissionMode = readPermissionModeSetting();
+// Read lazily, never at import time: this module loads at process start,
+// before Electron is ready, and a settings read that fails there would
+// silently pin the session to "normal" while SQLite says auto_safe — every
+// status push and new task reads this value, so the saved choice would be
+// overridden for the whole session.
+let permissionMode: PermissionMode | null = null;
 
 export function getPermissionMode(): PermissionMode {
+  permissionMode ??= readPermissionModeSetting();
   return permissionMode;
 }
 

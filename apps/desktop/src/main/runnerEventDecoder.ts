@@ -1,3 +1,5 @@
+import { isContextBreakdown, type BackendContextBreakdown } from "../shared/backendEvents";
+
 type RunnerEventBase = {
   taskId: string;
   at?: string;
@@ -5,7 +7,9 @@ type RunnerEventBase = {
 };
 
 export type RunnerEvent =
-  | (RunnerEventBase & { type: "assistant.delta"; text: string })
+  // kind "status" marks harness-emitted work narration (the run's opening
+  // status line): rendered inside the working timeline, never as answer text.
+  | (RunnerEventBase & { type: "assistant.delta"; text: string; kind?: "status" })
   | (RunnerEventBase & { type: "assistant.progress.delta"; text: string })
   | (RunnerEventBase & {
       type: "tool.requested";
@@ -55,6 +59,12 @@ export type RunnerEvent =
       promptTokens?: number;
       completionTokens?: number;
       reserveTokens: number;
+      protectedTokens?: number;
+      estimatedTokens?: number;
+      anchored?: boolean;
+      compactionBlocked?: boolean;
+      awaitingMeasurement?: boolean;
+      breakdown?: BackendContextBreakdown;
       phase?: unknown;
       source?: unknown;
       confidence?: unknown;
@@ -135,6 +145,24 @@ export type RunnerEvent =
       errorCode: string | null;
     })
   | (RunnerEventBase & {
+      // Harness-internal classification for a run. Recorded to the local
+      // diagnostic log only; never forwarded to the renderer, so bucket ids
+      // stay out of chat output.
+      type: "orient.decision";
+      outcome: "guided" | "direct" | "degraded";
+      bucket?: string;
+      sentence?: "emitted" | "missing";
+      evidenceRequired?: boolean;
+      message?: string;
+    })
+  | (RunnerEventBase & {
+      // The run answered before calling any tool in a bucket that may not, so
+      // the runner refused that answer once. Diagnostic only, like the
+      // decision it follows; the bucket id never reaches the renderer.
+      type: "orient.evidence_retry";
+      bucket?: string;
+    })
+  | (RunnerEventBase & {
       type: "run.queue.updated";
       sessionId: string;
       runId: string | null;
@@ -176,6 +204,8 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "step.settled",
   "run.settled",
   "run.queue.updated",
+  "orient.decision",
+  "orient.evidence_retry",
 ]);
 
 const ignoredTypes = new Set([
@@ -208,6 +238,7 @@ function validTimestamps(value: Record<string, unknown>): boolean {
 function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"]): boolean {
   switch (type) {
     case "assistant.delta":
+      return hasString(value, "text") && (value.kind === undefined || value.kind === "status");
     case "assistant.progress.delta":
       return hasString(value, "text");
     case "command.safety.decision":
@@ -312,6 +343,12 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && hasNonNegativeNumber(value, "reserveTokens")
         && (value.promptTokens === undefined || hasNonNegativeNumber(value, "promptTokens"))
         && (value.completionTokens === undefined || hasNonNegativeNumber(value, "completionTokens"))
+        && (value.protectedTokens === undefined || hasNonNegativeNumber(value, "protectedTokens"))
+        && (value.estimatedTokens === undefined || hasNonNegativeNumber(value, "estimatedTokens"))
+        && (value.anchored === undefined || typeof value.anchored === "boolean")
+        && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
+        && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
+        && (value.breakdown === undefined || isContextBreakdown(value.breakdown))
       );
     case "context.retrieved":
       return (
@@ -334,6 +371,16 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.code === undefined || typeof value.code === "string")
         && (value.detail === undefined || typeof value.detail === "string")
       );
+    case "orient.decision":
+      return (
+        (value.outcome === "guided" || value.outcome === "direct" || value.outcome === "degraded")
+        && (value.bucket === undefined || typeof value.bucket === "string")
+        && (value.sentence === undefined || value.sentence === "emitted" || value.sentence === "missing")
+        && (value.evidenceRequired === undefined || typeof value.evidenceRequired === "boolean")
+        && (value.message === undefined || typeof value.message === "string")
+      );
+    case "orient.evidence_retry":
+      return value.bucket === undefined || typeof value.bucket === "string";
     default: {
       const _exhaustive: never = type;
       return _exhaustive;

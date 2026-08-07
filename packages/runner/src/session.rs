@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     config::{RunnerConfig, load_runner_config},
-    context::{ContextCalibration, SessionContextStore},
+    context::{ContextCalibration, SessionContextStore, SystemPromptSize, UsageAnchor},
     conversation_state::ConversationState,
     diagnostics::RunnerDiagnostics,
     events::RunnerEvent,
@@ -57,7 +57,20 @@ pub struct Session {
     pub durable_summary: Mutex<Option<String>>,
     pub failed_compaction_digest: Mutex<Option<String>>,
     pub compaction_count: AtomicU32,
+    /// Consecutive semantic compactions that a later *measured* prompt size
+    /// proved did not get the context below the trigger.
+    pub compaction_strikes: AtomicU32,
+    /// Set when a compaction invalidated the anchor. While set, a merely
+    /// heuristic estimate may not re-trigger semantic compaction, so a
+    /// pessimistic guess cannot compact twice before the next measurement.
+    pub awaiting_observed_usage: AtomicBool,
     pub context_calibration: Mutex<Option<ContextCalibration>>,
+    /// The last response's measured prompt size, anchoring every estimate until
+    /// the settled prefix is mutated.
+    pub usage_anchor: Mutex<Option<UsageAnchor>>,
+    /// Veil's measurement of the protected prefix it owns and the runner never
+    /// sees. Stable for the session unless the route or skill catalog changes.
+    pub system_prompt_size: Mutex<Option<SystemPromptSize>>,
     pub context_store: Mutex<SessionContextStore>,
     pub lsp: Option<LspService>,
     pub workspace_graph: Option<WorkspaceGraphService>,
@@ -69,7 +82,6 @@ pub struct Session {
     /// The last valid orient bucket for this session. A continuity hint only,
     /// for referential follow-ups such as "yes, draft it". It is cleared on any
     /// orient failure so a stale playbook can never be reused.
-    pub previous_bucket: std::sync::Mutex<Option<String>>,
     /// The tool contract presented to the model, frozen on first use and reused
     /// for every step of the task.
     pub(crate) tool_surface: OnceLock<Arc<ToolSurface>>,
@@ -217,13 +229,19 @@ impl SessionStore {
             durable_summary: Mutex::new(durable_summary),
             failed_compaction_digest: Mutex::new(None),
             compaction_count: AtomicU32::new(0),
+            compaction_strikes: AtomicU32::new(0),
+            // A seeded session starts from a summary plus a tail, which no
+            // past measurement describes, so it starts unanchored exactly like
+            // a session whose prefix was just compacted.
+            awaiting_observed_usage: AtomicBool::new(false),
             context_calibration: Mutex::new(None),
+            usage_anchor: Mutex::new(None),
+            system_prompt_size: Mutex::new(None),
             context_store: Mutex::new(SessionContextStore::default()),
             lsp,
             workspace_graph,
             skill_cache: SharedSkillCache::default(),
             search_index: Arc::new(SearchIndex::default()),
-            previous_bucket: std::sync::Mutex::new(None),
             tool_surface: OnceLock::new(),
             run: std::sync::Mutex::new(None),
             queue: Mutex::new(RunQueue::default()),
@@ -337,13 +355,16 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         durable_summary: Mutex::new(None),
         failed_compaction_digest: Mutex::new(None),
         compaction_count: AtomicU32::new(0),
+        compaction_strikes: AtomicU32::new(0),
+        awaiting_observed_usage: AtomicBool::new(false),
         context_calibration: Mutex::new(None),
+        usage_anchor: Mutex::new(None),
+        system_prompt_size: Mutex::new(None),
         context_store: Mutex::new(SessionContextStore::default()),
         lsp: None,
         workspace_graph: None,
         skill_cache: SharedSkillCache::default(),
         search_index: Arc::new(SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: OnceLock::new(),
         run: std::sync::Mutex::new(None),
         queue: Mutex::new(RunQueue::default()),

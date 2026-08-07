@@ -1,7 +1,6 @@
 package prompts
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
@@ -30,7 +29,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "exactly one sentence, never two", "belongs in the final response", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
+	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "should normally begin with a preamble", "exactly one sentence, never two", "belongs in the final response", "do not provide a complete answer and tool calls", "do not encode the preamble as json", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
@@ -164,19 +163,22 @@ func TestRelevantSkillsHidesPathScopedEntriesUntilToolTouch(t *testing.T) {
 	}
 }
 
-// The step-level playbook is the nearest instruction the model sees before each
-// tool call, and the global prompt is the farthest. If those two ever describe
-// the preamble differently, the model resolves the conflict on its own and
-// preamble length stops being predictable. They must be the same bytes.
-func TestThePreambleRuleIsStatedIdenticallyEverywhereItAppears(t *testing.T) {
+// Conduct is stated once, at the global tier. The playbook header is re-sent on
+// every step of the turn and is the nearest instruction the model sees before
+// each tool call; repeating the preamble rule there made formatting, not the
+// plan, the dominant instruction. The global prompt embeds the rule verbatim
+// and the playbook header must not restate it in any form.
+func TestThePreambleRuleLivesOnlyInTheGlobalPrompt(t *testing.T) {
 	if !strings.Contains(GlobalSystemPrompt, PreambleRule) {
 		t.Fatal("the global prompt must embed PreambleRule verbatim, not paraphrase it")
 	}
-	if !strings.Contains(playbookHeader, PreambleRule) {
-		t.Fatal("the playbook header must embed PreambleRule verbatim, not paraphrase it")
+	if strings.Contains(playbookHeader, PreambleRule) {
+		t.Fatal("the playbook header must not duplicate PreambleRule per step")
 	}
-	// The old header asserted a preamble had already been shown, which
-	// contradicted the global prompt's allowance from the second step onward.
+	if strings.Contains(strings.ToLower(playbookHeader), "preamble") {
+		t.Fatal("the playbook header must not paraphrase preamble conduct; that is global-prompt territory")
+	}
+	// Old header wordings that contradicted the global rule must stay gone.
 	for _, gone := range []string{
 		"already been shown to the user",
 		"second status preamble",
@@ -188,20 +190,35 @@ func TestThePreambleRuleIsStatedIdenticallyEverywhereItAppears(t *testing.T) {
 	}
 }
 
-// A playbook step that says to report or return something is a deliverable
-// instruction re-sent on every step of the turn. Unscoped, it invites the model
-// to deliver part of the answer alongside tool calls, which is exactly the
-// mid-turn recap the preamble rule forbids.
-func TestEngineeringPlaybookDeliverablesAreScopedToTheFinalResponse(t *testing.T) {
-	reporting := regexp.MustCompile(`(?mi)^\d+\. .*\b(report|return|explain|summarize|order findings)\b`)
-	for _, bucket := range engineeringBuckets {
-		for _, line := range strings.Split(bucket.Playbook, "\n") {
-			if !reporting.MatchString(line) {
-				continue
-			}
-			if !strings.Contains(strings.ToLower(line), "final response") {
-				t.Errorf("%s has an unscoped deliverable step: %q", bucket.ID, line)
-			}
+// The global prompt owns identity, safety, and tool mechanics; the playbook
+// owns the workflow. A workflow directive in the global prompt re-litigates a
+// decision the classifier already made and competes with the playbook, so any
+// phrase that prescribes whether to use tools or a task recipe is banned here.
+func TestGlobalPromptCarriesNoWorkflowDirectives(t *testing.T) {
+	global := strings.ToLower(GlobalSystemPrompt)
+	for _, directive := range []string{
+		// Whether-to-use-tools heuristics: that decision belongs to orient.
+		"answer directly and do not call a tool",
+		"do not inspect the workspace only to fill a direct answer",
+		// Task recipes: repo_orient step 1 must not live in the global prompt.
+		"for an exhaustive folder overview",
+		"begin with ls",
+		"use find for recursion",
+		// Step-level deliverable anchoring is playbook territory too.
+		"in your final response",
+	} {
+		if strings.Contains(global, directive) {
+			t.Fatalf("global prompt contains workflow directive %q", directive)
+		}
+	}
+	// The precedence rule is what replaces those directives: the playbook
+	// defines the plan and the global prompt must say it does not compete.
+	for _, want := range []string{
+		"it defines the turn's plan",
+		"they do not override a present playbook's plan",
+	} {
+		if !strings.Contains(global, want) {
+			t.Fatalf("global prompt missing precedence statement %q", want)
 		}
 	}
 }

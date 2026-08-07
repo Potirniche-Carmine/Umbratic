@@ -59,6 +59,9 @@ export type RunnerEventAdapterOptions = {
   onFailure(message: string, details?: RunnerFailureDetails): void;
   onInvalid(input: { message: string; code: string; type?: string }): void;
   onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
+  /** Diagnostic-only: the run's hidden intent classification. Never rendered. */
+  onOrientDecision?(event: Extract<RunnerEvent, { type: "orient.decision" }>): void;
+  onOrientEvidenceRetry?(event: Extract<RunnerEvent, { type: "orient.evidence_retry" }>): void;
 };
 
 function eventAt(event: RunnerEvent): string | undefined {
@@ -86,7 +89,7 @@ export class RunnerEventAdapter {
 
     switch (event.type) {
       case "assistant.delta":
-        this.emitAssistant(event.text, eventAt(event), eventEndedAt(event));
+        this.emitAssistant(event.text, eventAt(event), eventEndedAt(event), event.kind);
         return;
       case "assistant.progress.delta":
         this.emitProgress(event.text, eventAt(event), eventEndedAt(event));
@@ -231,6 +234,15 @@ export class RunnerEventAdapter {
       case "run.queue.updated":
         this.options.onQueueUpdated?.(event);
         return;
+      case "orient.decision":
+        // Deliberately no emit: the bucket id goes to the diagnostic log only
+        // and must never reach the renderer.
+        this.options.onOrientDecision?.(event);
+        return;
+      case "orient.evidence_retry":
+        // Same rule as the decision it follows: diagnostics only.
+        this.options.onOrientEvidenceRetry?.(event);
+        return;
     }
   };
 
@@ -250,12 +262,13 @@ export class RunnerEventAdapter {
     this.options.onFailure(message);
   }
 
-  private emitAssistant(text: string, at?: string, endedAt?: string): void {
+  private emitAssistant(text: string, at?: string, endedAt?: string, kind?: "status"): void {
     if (!text || text.trim() === "Ready for review.") return;
     this.options.emit({
       type: "assistant.delta",
       taskId: this.options.task.id,
       text,
+      ...(kind ? { kind } : {}),
       at,
       endedAt,
     });
@@ -443,6 +456,11 @@ export class RunnerEventAdapter {
   private handleContextUsage(
     event: Extract<RunnerEvent, { type: "context.usage" }>,
   ): void {
+    // The contract pins `promptTokens === contentTokens`: they are the same
+    // measurement under two names. A runner that ever diverges has changed the
+    // contract, and the contract test is where that must be caught — dropping
+    // the event here keeps a broken meter from being presented as a working
+    // one in the meantime.
     if (
       event.promptTokens !== undefined
       && event.promptTokens !== event.contentTokens
@@ -461,7 +479,18 @@ export class RunnerEventAdapter {
         ? { completionTokens: event.completionTokens }
         : {}),
       reserveTokens: event.reserveTokens,
+      ...(event.protectedTokens !== undefined
+        ? { protectedTokens: event.protectedTokens }
+        : {}),
       estimatedTokens: event.contentTokens + event.reserveTokens,
+      ...(event.anchored !== undefined ? { anchored: event.anchored } : {}),
+      ...(event.compactionBlocked !== undefined
+        ? { compactionBlocked: event.compactionBlocked }
+        : {}),
+      ...(event.awaitingMeasurement !== undefined
+        ? { awaitingMeasurement: event.awaitingMeasurement }
+        : {}),
+      ...(event.breakdown !== undefined ? { breakdown: event.breakdown } : {}),
       ...(event.phase === "preflight" || event.phase === "observed"
         ? { phase: event.phase }
         : {}),

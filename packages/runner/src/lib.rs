@@ -1,6 +1,7 @@
 mod compaction;
 pub mod config;
 pub mod context;
+mod context_events;
 pub mod conversation_state;
 pub mod diagnostics;
 pub mod events;

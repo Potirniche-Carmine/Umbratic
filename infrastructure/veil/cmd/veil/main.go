@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -66,6 +67,7 @@ func main() {
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+	watchParentStdin(shutdown)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
@@ -89,6 +91,34 @@ func main() {
 }
 
 const drainTimeout = 30 * time.Second
+
+// ParentStdinWatchEnv opts this process into exiting when its launcher does.
+const ParentStdinWatchEnv = "VEIL_PARENT_STDIN_WATCH"
+
+// watchParentStdin drains stdin and requests shutdown when it reaches EOF.
+//
+// A signal is only delivered when the launcher gets to ask politely. Electron
+// force-killed by a dev script, or crashing, never runs its before-quit hook,
+// and the Veil it started keeps listening — observed as five orphaned instances
+// from five app launches, each holding its own port. An inherited stdin pipe
+// closes no matter how the parent dies, which makes EOF the one signal that
+// survives every exit path.
+//
+// Opt-in, because a Veil started by hand from a terminal has a stdin that never
+// reaches EOF, and one started with stdin at /dev/null reaches it immediately.
+// Only a launcher that actually holds the write end sets the variable.
+func watchParentStdin(shutdown chan<- os.Signal) {
+	if os.Getenv(ParentStdinWatchEnv) != "1" {
+		return
+	}
+	go func() {
+		// The launcher writes nothing; this blocks until the pipe closes.
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		log.Printf("umbratic veil launcher closed stdin; shutting down")
+		// Same path as a signal, so in-flight streams still drain.
+		shutdown <- syscall.SIGTERM
+	}()
+}
 
 func warmUp(api *httpapi.Server, timeout time.Duration) {
 	for attempt := 0; attempt < 30; attempt++ {

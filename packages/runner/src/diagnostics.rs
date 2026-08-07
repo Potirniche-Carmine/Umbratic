@@ -130,6 +130,8 @@ impl RunnerDiagnostics {
             "phase",
             "source",
             "confidence",
+            "bucket",
+            "sentence",
         ] {
             if let Some(value) = event.get(key) {
                 data.insert(key.to_owned(), value.clone());
@@ -269,6 +271,29 @@ mod tests {
         assert!(!content.contains("\"arguments\""));
         assert!(!content.contains("\"prompt\""));
         assert!(content.contains("\"status\":\"success\""));
+    }
+
+    // "Did repo_orient fire?" must be answerable from the log alone, so the
+    // orient decision's bucket is an allowlisted diagnostic field.
+    #[test]
+    fn orient_decisions_record_the_bucket() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("events.jsonl");
+        let diagnostics =
+            RunnerDiagnostics::new(config(path.clone(), "none"), directory.path(), Some("task"));
+        diagnostics.record(&json!({
+            "type":"orient.decision",
+            "taskId":"task",
+            "outcome":"guided",
+            "bucket":"repo_orient",
+            "sentence":"emitted",
+            "at":now_iso()
+        }));
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\"eventType\":\"orient.decision\""));
+        assert!(content.contains("\"bucket\":\"repo_orient\""));
+        assert!(content.contains("\"outcome\":\"guided\""));
+        assert!(content.contains("\"sentence\":\"emitted\""));
     }
 
     #[test]

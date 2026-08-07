@@ -206,41 +206,41 @@
     "id": "eng-followup-continue",
     "route": "engineering/chat",
     "request": "keep going",
-    "previousBucket": "deep_review",
     "bucket": "deep_review",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "I have covered the token issuer and the session store so far. Two areas remain unreviewed: the password reset flow and the OAuth callback handler. Shall I continue with those?"
   },
   {
     "id": "eng-followup-draft",
     "route": "engineering/chat",
     "request": "ok, draft it",
-    "previousBucket": "spec_discovery",
     "bucket": "spec_discovery",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "Before I draft the spec I need three things: the target user, the success metric, and whether offline mode is in scope. Once you confirm those I can write it."
   },
   {
     "id": "eng-followup-no",
     "route": "engineering/chat",
     "request": "actually, just explain it instead",
-    "previousBucket": "code_change",
     "bucket": "code_explain",
-    "note": "referential follow-up that changes intent"
+    "note": "referential follow-up that changes intent",
+    "previousResponse": "I can change the retry policy in the http client, or I can walk you through how the current backoff works. Which would you prefer?"
   },
   {
     "id": "eng-followup-scope",
     "route": "engineering/chat",
     "request": "narrow it to just the auth package",
-    "previousBucket": "deep_review",
     "bucket": "deep_review",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "The audit surface I proposed covers auth, storage, and the public HTTP handlers. That is a wide surface for one pass."
   },
   {
     "id": "eng-followup-yes",
     "route": "engineering/chat",
     "request": "yes, go ahead",
-    "previousBucket": "code_change",
     "bucket": "code_change",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "I can add the retry wrapper to the http client and update its unit tests to cover the new backoff. Want me to make that change?"
   },
   {
     "id": "eng-open",
@@ -542,33 +542,33 @@
     "id": "mkt-followup",
     "route": "marketing/chat",
     "request": "yes, write it",
-    "previousBucket": "copy_draft",
     "bucket": "copy_draft",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "I have the audience, the offer, and the tone. The next step is the landing page copy itself."
   },
   {
     "id": "mkt-followup-2",
     "route": "marketing/chat",
     "request": "yes, all defaults are fine",
-    "previousBucket": "campaign_plan",
     "bucket": "campaign_plan",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "I still need the channel mix and the budget band, or I can proceed with sensible defaults for both."
   },
   {
     "id": "mkt-followup-3",
     "route": "marketing/chat",
     "request": "go ahead and build it",
-    "previousBucket": "asset_build",
     "bucket": "asset_build",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "The one-pager outline is agreed: problem, proof, offer, and call to action. I can build the deck from it."
   },
   {
     "id": "mkt-followup-4",
     "route": "marketing/chat",
     "request": "make it shorter",
-    "previousBucket": "copy_draft",
     "bucket": "copy_draft",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "Here is the landing page copy. The hero section runs four sentences and the body runs three paragraphs."
   },
   {
     "id": "mkt-open",
@@ -888,33 +888,33 @@
     "id": "sales-followup",
     "route": "sales/chat",
     "request": "yes, draft it",
-    "previousBucket": "proposal_draft",
     "bucket": "proposal_draft",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "I have the buyer, the scope, and the timeline. The commercial narrative is the remaining piece."
   },
   {
     "id": "sales-followup-2",
     "route": "sales/chat",
     "request": "yes, use those assumptions",
-    "previousBucket": "proposal_draft",
     "bucket": "proposal_draft",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "I can proceed on the assumptions we discussed: a twelve month term, two environments, and standard support."
   },
   {
     "id": "sales-followup-3",
     "route": "sales/chat",
     "request": "add a section on onboarding",
-    "previousBucket": "proposal_draft",
     "bucket": "proposal_draft",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "The proposal now covers scope, timeline, and pricing posture. It has no onboarding section yet."
   },
   {
     "id": "sales-followup-4",
     "route": "sales/chat",
     "request": "shorter, and more direct",
-    "previousBucket": "objection_handling",
     "bucket": "objection_handling",
-    "note": "referential follow-up"
+    "note": "referential follow-up",
+    "previousResponse": "Here is the response to their pricing objection. It runs three paragraphs and opens with a concession."
   },
   {
     "id": "sales-objection",

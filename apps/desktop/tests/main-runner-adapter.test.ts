@@ -276,6 +276,15 @@ test("runtimeEnv keeps UV dirs but does not prepend workspace runtime onto PATH"
       else process.env.SystemDrive = previousSystemDrive;
     }
   })();
+  // Windows reports environment names in whatever case the system uses, and it
+  // is not consistent across installs: this machine exposes SYSTEMDRIVE while
+  // others expose SystemDrive. process.env hides that behind case-insensitive
+  // lookup, but runtimeEnv returns a plain object that does not, so the test
+  // has to look up the way it already does for PATH.
+  const lookup = (name: string) => {
+    const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+    return key === undefined ? undefined : env[key];
+  };
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 
   assert.equal(env[pathKey]?.includes(".umbratic"), false);
@@ -283,7 +292,7 @@ test("runtimeEnv keeps UV dirs but does not prepend workspace runtime onto PATH"
   assert.equal(path.basename(env.UV_INSTALL_DIR), "uv");
   assert.equal(env.UV_CACHE_DIR, path.join(path.dirname(env.UV_INSTALL_DIR), "uv-cache"));
   assert.equal(env.UV_NO_MODIFY_PATH, "1");
-  assert.equal(env.SystemDrive, "C:");
+  assert.equal(lookup("SystemDrive"), "C:");
   assert.equal("UMBRATIC_RUNNER_CONFIG" in env, false);
   assert.equal(Object.keys(env).some((name) => /token|secret|api[_-]?key|password/i.test(name)), false);
 });

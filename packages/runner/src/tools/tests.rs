@@ -455,61 +455,6 @@ async fn write_reports_created_or_replaced_effects() {
 }
 
 #[tokio::test]
-async fn exact_search_contract_scopes_results_and_returns_path_line_text() {
-    let directory = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(directory.path().join("src/renderer")).unwrap();
-    std::fs::create_dir_all(directory.path().join("other")).unwrap();
-    std::fs::write(
-        directory.path().join("src/renderer/main.tsx"),
-        "<span>Auto-run low risk</span>\n",
-    )
-    .unwrap();
-    std::fs::write(
-        directory.path().join("other/main.tsx"),
-        "<span>Auto-run low risk</span>\n",
-    )
-    .unwrap();
-    let session = crate::session::test_session(directory.path());
-    let sink = crate::session::test_sink(directory.path());
-    let mut events = sink.subscribe();
-    let result = execute_tool(
-        session,
-        sink,
-        Arc::new(crate::permission::PermissionBroker::default()),
-        ToolCall {
-            id: "search-exact".into(),
-            name: "search".into(),
-            arguments: json!({
-                "query":"Auto-run low risk",
-                "mode":"content",
-                "path":"src/renderer",
-                "glob":"*.tsx",
-                "limit":10
-            }),
-            index: 0,
-        },
-    )
-    .await;
-    assert_eq!(result.status, "success", "{:?}", result.error_message);
-    assert!(
-        result
-            .content
-            .contains("src/renderer/main.tsx:1: <span>Auto-run low risk</span>")
-    );
-    assert!(!result.content.contains("other/main.tsx"));
-    let observed = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
-    let finished = observed
-        .iter()
-        .find(|event| event["type"] == "tool.finished")
-        .unwrap()
-        .as_object()
-        .unwrap();
-    assert!(!finished.contains_key("errorCode"));
-    assert!(!finished.contains_key("errorMessage"));
-    assert!(!finished.contains_key("response"));
-}
-
-#[tokio::test]
 async fn read_returns_raw_text_and_missing_paths_suggest_exact_entries() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(directory.path().join("internal/auth")).unwrap();
@@ -566,6 +511,18 @@ async fn read_returns_raw_text_and_missing_paths_suggest_exact_entries() {
             .contains("Path not found: internal/auth/password.go")
     );
     assert!(missing.message.contains("internal/auth/auth.go"));
+    // The listing is stated as the complete set and the next guess is closed
+    // off: a live run answered this message with four more invented siblings.
+    assert!(
+        missing.message.contains("contains exactly these 2 entries"),
+        "{}",
+        missing.message
+    );
+    assert!(
+        missing.message.contains("Do not guess another name"),
+        "{}",
+        missing.message
+    );
     assert!(
         !missing
             .message
@@ -641,6 +598,10 @@ async fn disabled_and_aborted_calls_keep_complete_lifecycles() {
         durable_summary: tokio::sync::Mutex::new(None),
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
+        compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
+        usage_anchor: tokio::sync::Mutex::new(None),
+        system_prompt_size: tokio::sync::Mutex::new(None),
         context_calibration: tokio::sync::Mutex::new(None),
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
@@ -648,7 +609,6 @@ async fn disabled_and_aborted_calls_keep_complete_lifecycles() {
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     });
@@ -761,6 +721,10 @@ async fn attachment_reader_retrieves_every_utf8_byte_and_rejects_escape_paths() 
         durable_summary: tokio::sync::Mutex::new(None),
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
+        compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
+        usage_anchor: tokio::sync::Mutex::new(None),
+        system_prompt_size: tokio::sync::Mutex::new(None),
         context_calibration: tokio::sync::Mutex::new(None),
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
@@ -768,7 +732,6 @@ async fn attachment_reader_retrieves_every_utf8_byte_and_rejects_escape_paths() 
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
@@ -865,6 +828,10 @@ async fn read_skill_is_limited_to_enabled_skill_resources() {
         durable_summary: tokio::sync::Mutex::new(None),
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
+        compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
+        usage_anchor: tokio::sync::Mutex::new(None),
+        system_prompt_size: tokio::sync::Mutex::new(None),
         context_calibration: tokio::sync::Mutex::new(None),
         context_store: tokio::sync::Mutex::new(crate::context::SessionContextStore::default()),
         lsp: None,
@@ -872,7 +839,6 @@ async fn read_skill_is_limited_to_enabled_skill_resources() {
         skill_cache: crate::skill_preflight::SharedSkillCache::default(),
         run: std::sync::Mutex::new(None),
         search_index: std::sync::Arc::new(crate::tools::SearchIndex::default()),
-        previous_bucket: std::sync::Mutex::new(None),
         tool_surface: std::sync::OnceLock::new(),
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     });

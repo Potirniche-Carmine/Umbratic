@@ -11,7 +11,7 @@ const fixtures = [
   ["worktree.requested", { branch: "b", path: "p", baseCommit: "c" }], ["worktree.created", { branch: "b", path: "p" }],
   ["command.started", { id: "1", command: "npm test", cwd: "." }], ["command.output", { id: "1", stream: "stdout", text: "ok" }],
   ["command.finished", { id: "1", exitCode: 0 }],
-  ["context.usage", { contextLength: 64000, contentTokens: 12000, promptTokens: 12000, completionTokens: 256, reserveTokens: 4096, estimatedTokens: 16096, phase: "observed", source: "provider", confidence: "high" }],
+  ["context.usage", { contextLength: 64000, contentTokens: 12000, promptTokens: 12000, completionTokens: 256, reserveTokens: 4096, protectedTokens: 3187, estimatedTokens: 16096, phase: "observed", source: "provider", confidence: "high", anchored: true, compactionBlocked: false, breakdown: { systemPromptTokens: 3187, systemPromptExact: true, toolDefinitionTokens: 2100, skillTokens: 320, conversationTokens: 4200, toolResultTokens: 1900, imageTokens: 0 } }],
   ["context.threshold", { threshold: 75, contextLength: 64000, estimatedTokens: 48000 }],
   ["context.compressed", { toolCallId: "1", toolKind: "read", kind: "file", strategy: "text_head_tail", originalBytes: 2, outputBytes: 1 }],
   ["context.retrieved", { toolCallId: "1", hash: "abc", offset: 0, bytesShown: 1, totalBytes: 1 }],
@@ -61,7 +61,41 @@ test("malformed, unknown, and future backend events are quarantined", () => {
     { contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 99999 },
     { contextLength: 0, contentTokens: 0, reserveTokens: 0, estimatedTokens: 0 },
     { contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 16096, phase: "guess" },
+    { contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 16096, anchored: "yes" },
+    {
+      contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 16096,
+      breakdown: { systemPromptTokens: -1, systemPromptExact: true, toolDefinitionTokens: 0, skillTokens: 0, conversationTokens: 0, toolResultTokens: 0, imageTokens: 0 },
+    },
+    {
+      contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 16096,
+      breakdown: { systemPromptTokens: 10, toolDefinitionTokens: 0, skillTokens: 0, conversationTokens: 0, toolResultTokens: 0, imageTokens: 0 },
+    },
   ]) {
     assert.equal(contract.parseBackendUiEvent({ type: "context.usage", taskId: "t", ...payload }).code, "invalid_field");
   }
+});
+
+test("category rows are accepted without being reconciled to the measured headline", () => {
+  // Only the headline is measured. Requiring the rows to add up to it would
+  // spread the estimator's error across every category, so the contract
+  // deliberately does not.
+  const event = {
+    type: "context.usage",
+    taskId: "t",
+    contextLength: 64000,
+    contentTokens: 12000,
+    reserveTokens: 4096,
+    estimatedTokens: 16096,
+    anchored: true,
+    breakdown: {
+      systemPromptTokens: 1, systemPromptExact: false, toolDefinitionTokens: 1, skillTokens: 1,
+      conversationTokens: 1, toolResultTokens: 1, imageTokens: 1,
+    },
+  };
+  assert.equal(contract.parseBackendUiEvent(event).ok, true);
+
+  // A runner that has not been told the prefix size, or a stored event from
+  // before the meter reported one, is still a valid event.
+  const bare = { type: "context.usage", taskId: "t", contextLength: 64000, contentTokens: 12000, reserveTokens: 4096, estimatedTokens: 16096 };
+  assert.equal(contract.parseBackendUiEvent(bare).ok, true);
 });

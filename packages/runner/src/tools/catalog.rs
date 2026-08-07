@@ -174,9 +174,13 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "read",
         kind: "file",
         gate: Gate::Capability("read"),
-        description: "Read part of one UTF-8 workspace text file. Returns raw file text with original line endings and no line-number prefixes; the covered line range is reported separately. Read a window, not a whole file: when a search hit already tells you where to look, send line with that line number to open a window around it, and raise radius only when the window proves too narrow. Send offset and limit instead to page through a file from a known point, continuing with the reported nextOffset. A call that sets neither returns the first lines of the file and reports its total length. Never list directories; use ls.",
+        description: "Read part of one UTF-8 workspace text file. path must be a real file you have already seen in an ls, find, or search result; read never accepts a directory, a glob, or a filename you inferred from a language or framework convention. Returns raw file text with original line endings and no line-number prefixes; the covered line range is reported separately. Read a window, not a whole file: when a search hit already tells you where to look, send line with that line number to open a window around it, and raise radius only when the window proves too narrow. Send offset and limit instead to page through a file from a known point, continuing with the reported nextOffset. A call that sets neither returns the first lines of the file and reports its total length. Never list directories; use ls.",
         fields: &[
-            text("path", true, "Workspace-relative file path."),
+            text(
+                "path",
+                true,
+                "One exact workspace-relative file path, copied character for character from a listing or search result. Not a directory, not a pattern, never a guessed name.",
+            ),
             integer(
                 "line",
                 1,
@@ -224,7 +228,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             text(
                 "path",
                 true,
-                "Workspace-relative directory path. Use \".\" for the workspace root.",
+                "One exact workspace-relative directory path, or \".\" for the workspace root. Not a file and not a pattern; ls has no glob argument.",
             ),
             integer("offset", 1, i64::MAX, "One-based entry offset."),
             integer("limit", 1, MAX_LISTING_ITEMS, "Maximum entries to return."),
@@ -235,15 +239,19 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "find",
         kind: "search",
         gate: Gate::Capability("find"),
-        description: "Find workspace paths by one explicit glob under path. Returns stable sorted relative paths. No fuzzy query language.",
+        description: "Find workspace paths by one explicit glob under path. The two arguments split the shell form: the directory goes in path and the pattern goes in glob, so docs/*.md is {\"path\":\"docs\",\"glob\":\"*.md\"}. Returns stable sorted relative paths. No fuzzy query language.",
         fields: &[
-            text("path", true, "Workspace-relative directory or file scope."),
+            text(
+                "path",
+                true,
+                "Existing workspace-relative directory to search under. Use \".\" for the workspace root. The pattern belongs in glob, never here.",
+            ),
             bounded_text(
                 "glob",
                 true,
                 1,
                 MAX_PATTERN_LEN,
-                "One include glob, such as **/*.rs.",
+                "One include glob, matched against both the workspace-relative path and the file name. Examples: **/*.rs, *.md, README*.",
             ),
             integer("limit", 1, MAX_LISTING_ITEMS, "Maximum paths to return."),
         ],
@@ -253,7 +261,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "search",
         kind: "search",
         gate: Gate::Capability("search"),
-        description: "Find workspace paths or text. This is the only text-search tool; do not shell out to ripgrep, grep, or find. path mode ranks files and directories by name. content mode matches exact literal text, and regex mode matches a regular expression; both return path:line: rows for each match, plus path:line- rows around them when context is set. Matching is case-insensitive unless query contains an uppercase character, which in regex mode an inline (?i) overrides. Set context to see the code around a match here instead of opening the file, and reserve read for what the surrounding lines do not settle. Narrow path, glob, or query when a result is truncated.",
+        description: "Find workspace paths or text. This is the only text-search tool; do not shell out to ripgrep, grep, or find. path mode ranks files and directories by name. content mode matches exact literal text, and regex mode matches a regular expression; both return path:line: rows for each match, plus path:line- rows around them when context is set. Matching is case-insensitive unless query contains an uppercase character, which in regex mode an inline (?i) overrides. Set context to see the code around a match here instead of opening the file, and reserve read for what the surrounding lines do not settle. path is the directory scope and glob is the optional filename filter, so \"find foo in internal/model/*.go\" is {\"query\":\"foo\",\"mode\":\"content\",\"path\":\"internal/model\",\"glob\":\"*.go\"}. Narrow path, glob, or query when a result is truncated.",
         fields: &[
             bounded_text(
                 "query",
@@ -271,9 +279,15 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             text(
                 "path",
                 true,
-                "Workspace-relative file or directory scope. Use \".\" for the workspace root.",
+                "Existing workspace-relative file or directory to search under. Use \".\" for the workspace root. The filename pattern belongs in glob, never here.",
             ),
-            bounded_text("glob", false, 0, MAX_PATTERN_LEN, "Optional include glob."),
+            bounded_text(
+                "glob",
+                false,
+                0,
+                MAX_PATTERN_LEN,
+                "Optional include glob such as *.md, matched against both the workspace-relative path and the file name.",
+            ),
             integer(
                 "context",
                 0,

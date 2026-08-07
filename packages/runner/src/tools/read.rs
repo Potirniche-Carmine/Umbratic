@@ -174,7 +174,7 @@ fn read_pdf_tool(
     )
 }
 
-fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
+pub(super) fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
     let workspace_root = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let mut directory = absolute.parent().unwrap_or(&workspace_root);
     while !directory.is_dir() && directory.starts_with(&workspace_root) {
@@ -185,7 +185,9 @@ fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
         .unwrap_or(directory)
         .to_string_lossy()
         .replace('\\', "/");
-    let nearby = list_entries(directory)
+    let all = list_entries(directory);
+    let total = all.len();
+    let nearby = all
         .into_iter()
         .take(12)
         .map(|entry| {
@@ -196,13 +198,37 @@ fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
             }
         })
         .collect::<Vec<_>>();
+    // A guessed name is answered with the real contents of the nearest existing
+    // directory, stated as the complete set when it is complete. A live run
+    // guessed four sibling filenames in a row against this listing, so the
+    // message has to close the door on a fifth guess instead of only offering an
+    // alternative.
     let guidance = if nearby.is_empty() {
         "Use ls or find to locate an existing workspace path.".to_owned()
     } else {
-        format!(
-            "Nearby workspace entries:\n- {}\nUse an exact listed path, or use search or find with a broader scope.",
-            nearby.join("\n- ")
-        )
+        let label = if base.is_empty() {
+            "The workspace root".to_owned()
+        } else {
+            base.clone()
+        };
+        let (heading, closing) = if total > nearby.len() {
+            (
+                format!(
+                    "{label} contains {total} entries, the first {} being:",
+                    nearby.len()
+                ),
+                "Read one of these exact paths, or call ls on that directory for the rest. \
+                 Do not guess another name.",
+            )
+        } else {
+            (
+                format!("{label} contains exactly these {total} entries:"),
+                "Read one of these exact paths. Do not guess another name in this directory: \
+                 every name that exists here is listed above. If what you want is not here, \
+                 call search or find to locate it first.",
+            )
+        };
+        format!("{heading}\n- {}\n{closing}", nearby.join("\n- "))
     };
     format!("Path not found: {relative}.\n{guidance}")
 }
@@ -251,6 +277,7 @@ pub(super) async fn read_tool(
     if path.is_empty() {
         return Err("read requires string argument path".into());
     }
+    glob_free_path("read", &path)?;
     let (offset, line_limit) = read_window(input);
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
@@ -263,7 +290,7 @@ pub(super) async fn read_tool(
                 &relative,
             )));
         }
-        Err(error) => return Err(ToolError::runtime(error.to_string())),
+        Err(error) => return Err(unusable_path_error("read", &relative, &error)),
     };
     if metadata.is_dir() {
         return Err(ToolError::validation(

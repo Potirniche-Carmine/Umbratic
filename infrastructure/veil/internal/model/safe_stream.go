@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func writeVLLMAsSafeOpenAIChatSSE(dst io.Writer, src io.Reader) error {
+func writeVLLMAsSafeOpenAIChatSSE(dst io.Writer, src io.Reader, annotation UsageAnnotation) error {
 	scanner := bufio.NewScanner(src)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	sentDone := false
@@ -35,6 +35,7 @@ func writeVLLMAsSafeOpenAIChatSSE(dst io.Writer, src io.Reader) error {
 			return ProviderError{Kind: ProviderFailureInvalidResponse}
 		}
 		stripPrivateReasoning(payload)
+		annotateUsage(payload, annotation)
 		if err := writeSSEData(dst, payload); err != nil {
 			return err
 		}

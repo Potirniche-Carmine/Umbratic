@@ -40,11 +40,27 @@ export type BackendTestResult = {
   completedAt: string;
 };
 
+/// Per-category estimates over the assembled request. Only the headline total
+/// is measured, so these rows are deliberately not required to sum to
+/// `contentTokens` — reconciling them would spread the estimator's error across
+/// every category instead of leaving each row as true as it can be.
+export type BackendContextBreakdown = {
+  systemPromptTokens: number;
+  systemPromptExact: boolean;
+  toolDefinitionTokens: number;
+  skillTokens: number;
+  conversationTokens: number;
+  toolResultTokens: number;
+  imageTokens: number;
+};
+
 type BackendEventMeta = { at?: string; endedAt?: string };
 
 export type BackendUiEvent = BackendEventMeta & (
   | { type: "user.message"; taskId: string; text: string; attachedFiles?: BackendChatAttachment[] }
-  | { type: "assistant.delta"; taskId: string; text: string }
+  // kind "status" is harness-emitted work narration (the run's opening status
+  // line); it renders inside the working timeline, never as answer text.
+  | { type: "assistant.delta"; taskId: string; text: string; kind?: "status" }
   | { type: "assistant.progress.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
@@ -52,7 +68,7 @@ export type BackendUiEvent = BackendEventMeta & (
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass; toolKind?: string; input?: unknown }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number; details?: Record<string, unknown>; continuation?: Record<string, unknown> }
-  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; promptTokens?: number; completionTokens?: number; reserveTokens: number; protectedTokens?: number; estimatedTokens: number; phase?: "preflight" | "observed"; source?: "heuristic" | "provider"; confidence?: "low" | "high" }
+  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; promptTokens?: number; completionTokens?: number; reserveTokens: number; protectedTokens?: number; estimatedTokens: number; phase?: "preflight" | "observed"; source?: "heuristic" | "provider"; confidence?: "low" | "high"; anchored?: boolean; compactionBlocked?: boolean; awaitingMeasurement?: boolean; breakdown?: BackendContextBreakdown }
   | { type: "context.threshold"; taskId: string; threshold: 75 | 90; contextLength: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
@@ -141,6 +157,20 @@ function hasStringArray(value: Record<string, unknown>, key: string): boolean {
   return Array.isArray(value[key]) && (value[key] as unknown[]).every((item) => typeof item === "string");
 }
 
+const breakdownTokenFields = [
+  "systemPromptTokens", "toolDefinitionTokens", "skillTokens",
+  "conversationTokens", "toolResultTokens", "imageTokens",
+] as const;
+
+// Every row is a non-negative token count and the exactness claim is a
+// boolean. Nothing here requires the rows to add up to the headline: they are
+// per-category estimates over a measured total, by design.
+export function isContextBreakdown(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.systemPromptExact === "boolean"
+    && breakdownTokenFields.every((field) => hasNonNegativeNumber(value, field));
+}
+
 function validPayload(value: Record<string, unknown>, type: string): boolean {
   switch (type) {
     case "user.message":
@@ -176,7 +206,11 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
         && (value.completionTokens === undefined || hasNonNegativeNumber(value, "completionTokens"))
         && (value.phase === undefined || value.phase === "preflight" || value.phase === "observed")
         && (value.source === undefined || value.source === "heuristic" || value.source === "provider")
-        && (value.confidence === undefined || value.confidence === "low" || value.confidence === "high");
+        && (value.confidence === undefined || value.confidence === "low" || value.confidence === "high")
+        && (value.anchored === undefined || typeof value.anchored === "boolean")
+        && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
+        && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
+        && (value.breakdown === undefined || isContextBreakdown(value.breakdown));
     case "context.threshold":
       return (value.threshold === 75 || value.threshold === 90)
         && hasNumber(value, "contextLength") && hasNumber(value, "estimatedTokens");

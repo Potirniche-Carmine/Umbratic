@@ -13,6 +13,24 @@ use crate::{
     veil_tls::{expected_pin, pinned_tls_config, resolve_server_name, verify_certificate_pin},
 };
 
+/// reqwest's Display hides the useful cause — "error sending request for url
+/// (...)" says nothing about *why*. The distinction between "operation timed
+/// out" and "connection refused" lives in the error source chain, and a live
+/// degraded-orient diagnostic proved useless without it.
+fn describe_request_error(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        source = cause.source();
+    }
+    message
+}
+
 fn provider_bearer(provider: &ProviderConfig) -> String {
     provider
         .api_key
@@ -30,7 +48,17 @@ pub struct VeilChatResult {
     pub tool_calls: Vec<ToolCall>,
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
+    /// Veil's size for the protected prefix it prepends. The runner strips
+    /// system messages before sending, so this is the only way it can know.
+    pub system_prompt_tokens: Option<u64>,
+    /// False when the runtime has no tokenize endpoint and Veil fell back to a
+    /// byte-length estimate.
+    pub system_prompt_tokens_exact: bool,
     pub truncated_tool_arguments: bool,
+    /// Redaction-safe assistant text that was withheld from the event stream
+    /// because `hold_assistant_text` was set. Empty on every ordinary request.
+    /// The caller either releases it with `release_held_text` or drops it.
+    pub held_text: String,
 }
 
 pub struct VeilRequestOptions {
@@ -39,14 +67,28 @@ pub struct VeilRequestOptions {
     /// The run's validated bucket selector. Protected control metadata, not
     /// prompt text: Veil renders the playbook from its own catalog.
     pub harness_bucket: Option<String>,
+    /// Withhold assistant text from the event stream and return it on the
+    /// result instead, so the caller can decide whether it is fit to show.
+    ///
+    /// Streaming commits to text before the harness knows what the step turned
+    /// out to be. A live run streamed a wholly invented architecture summary,
+    /// which the evidence rule then refused — correctly, but far too late: the
+    /// user had already read it. On the one step that can be refused, the text
+    /// waits until the step resolves. Nothing else streams differently.
+    pub hold_assistant_text: bool,
 }
 
 /// A validated classifier decision for the active run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrientDecision {
     pub bucket: String,
-    /// `None` exactly when `bucket` is `direct_answer`.
+    /// `None` for `direct_answer`, and for a guided bucket whose sentence
+    /// failed validation — the sentence is the optional part of the decision.
     pub summary_sentence: Option<String>,
+    /// Veil's resolved answer to "may this turn end without calling a tool?".
+    /// It arrives with the decision rather than being derived here, because the
+    /// bucket catalog lives in Veil and a second copy would drift.
+    pub evidence_required: bool,
 }
 
 /// The bucket that suppresses the playbook and the status sentence entirely.
@@ -55,6 +97,8 @@ pub const DIRECT_ANSWER_BUCKET: &str = "direct_answer";
 const MAX_ORIENT_REQUEST_BYTES: usize = 32 * 1024;
 const ORIENT_HEAD_TAIL_BYTES: usize = 16 * 1024;
 const MAX_SUMMARY_SENTENCE_RUNES: usize = 240;
+/// Matches prompts.MaxOrientContextRunes in Veil.
+const MAX_ORIENT_CONTEXT_RUNES: usize = 600;
 const ORIENT_OMISSION_MARKER: &str = "\n[... request text omitted ...]\n";
 
 /// Truncates to a UTF-8-safe head and tail so a long paste still classifies on
@@ -81,14 +125,31 @@ fn bounded_request_text(text: &str) -> String {
     )
 }
 
+/// Keeps the end of the previous reply, which is where an offer or a question a
+/// follow-up answers actually lives. Rune-bounded, so a long answer cannot
+/// inflate a classification request.
+fn bounded_context_tail(response: &str) -> String {
+    let trimmed = response.trim();
+    let runes = trimmed.chars().count();
+    if runes <= MAX_ORIENT_CONTEXT_RUNES {
+        return trimmed.to_owned();
+    }
+    let tail = trimmed
+        .chars()
+        .skip(runes - MAX_ORIENT_CONTEXT_RUNES)
+        .collect::<String>();
+    format!("…{tail}")
+}
+
 /// The runner-side check on the status sentence.
 ///
 /// Veil owns the bucket catalog and does the precise "no bucket id as a
 /// standalone token" check. The runner cannot repeat that check without the
 /// catalog, so it enforces a strict superset instead: every bucket id contains
 /// an underscore, so rejecting any sentence containing one guarantees no id can
-/// reach a user-visible event. The sentence goes into exported telemetry, so
-/// this is a hard reject rather than a lossy scrub.
+/// reach a user-visible event. The sentence goes into exported telemetry, so a
+/// failing sentence is dropped whole rather than scrubbed — but it costs only
+/// the sentence, never the bucket.
 fn valid_summary_sentence(sentence: &str) -> bool {
     !sentence.is_empty()
         && !sentence.contains('\n')
@@ -103,7 +164,7 @@ fn valid_summary_sentence(sentence: &str) -> bool {
 pub async fn orient_request(
     session: &Session,
     request_text: &str,
-    previous_bucket: Option<&str>,
+    previous_response: &str,
 ) -> Result<OrientDecision, String> {
     let request_text = bounded_request_text(request_text);
     if request_text.trim().is_empty() {
@@ -122,11 +183,19 @@ pub async fn orient_request(
     let body = json!({
         "route": route,
         "requestText": request_text,
-        "previousBucket": previous_bucket.unwrap_or(""),
+        // Bounded here as well as in Veil: a long answer must never be the
+        // reason a classification request grows.
+        "previousResponse": bounded_context_tail(previous_response),
     });
+    // Local orient must survive a cold model load plus however long the model
+    // chooses to think: Ollama loading weights routinely takes tens of
+    // seconds, thinking is deliberately uncapped, and the chat request after
+    // orient would block on the same load anyway, so waiting here adds no
+    // end-to-end latency when cold and none when warm. 10s degraded a live
+    // run for no benefit.
     let timeout = match session.config.provider.mode {
         crate::config::ProviderMode::Server => std::time::Duration::from_secs(3),
-        crate::config::ProviderMode::Local => std::time::Duration::from_secs(10),
+        crate::config::ProviderMode::Local => std::time::Duration::from_secs(120),
     };
     let client = shared_client(&session.config.provider)?;
     let mut request = client
@@ -147,31 +216,51 @@ pub async fn orient_request(
         .json(&body)
         .send()
         .await
-        .map_err(|error| format!("orient failed: {error}"))?;
+        .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
     verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|error| format!("orient failed: {error}"))?;
+        .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
     if bytes.len() > 8 * 1024 {
         return Err("orient returned an oversized response".into());
     }
     let payload: Value =
         serde_json::from_slice(&bytes).map_err(|_| "orient returned invalid JSON".to_owned())?;
     if !status.is_success() {
-        return Err(payload
+        let code = payload
             .get("code")
             .and_then(Value::as_str)
-            .unwrap_or("invalid_orient_decision")
-            .to_owned());
+            .unwrap_or("invalid_orient_decision");
+        // Veil attaches a static failure reason (never model output); carry it
+        // into the degraded diagnostic so the log says why orient degraded.
+        return Err(
+            match payload
+                .get("reason")
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.trim().is_empty())
+            {
+                Some(reason) => format!("{code}: {reason}"),
+                None => code.to_owned(),
+            },
+        );
     }
+    parse_orient_payload(&payload)
+}
+
+/// Validates one successful orient response body.
+///
+/// Split from the transport so the envelope rules — the closed key set, the
+/// required bucket, the optional sentence, the optional evidence flag — are
+/// testable without standing up an HTTP server.
+fn parse_orient_payload(payload: &Value) -> Result<OrientDecision, String> {
     let Some(object) = payload.as_object() else {
         return Err("invalid_orient_decision".into());
     };
     if object
         .keys()
-        .any(|key| key != "bucket" && key != "summarySentence")
+        .any(|key| key != "bucket" && key != "summarySentence" && key != "evidenceRequired")
     {
         return Err("invalid_orient_decision".into());
     }
@@ -185,18 +274,28 @@ pub async fn orient_request(
         return Ok(OrientDecision {
             bucket,
             summary_sentence: None,
+            evidence_required: false,
         });
     }
+    // Absent or non-boolean means "not required": the flag can only add a
+    // check, so an older Veil that does not send it degrades to today's path.
+    let evidence_required = object
+        .get("evidenceRequired")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // The sentence is optional: a missing or invalid one is dropped and the
+    // validated bucket still guides the run.
     let sentence = match object.get("summarySentence") {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        _ => return Err("invalid_orient_decision".into()),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            valid_summary_sentence(trimmed).then(|| trimmed.to_owned())
+        }
+        _ => None,
     };
-    if !valid_summary_sentence(&sentence) {
-        return Err("invalid_orient_decision".into());
-    }
     Ok(OrientDecision {
         bucket,
-        summary_sentence: Some(sentence),
+        summary_sentence: sentence,
+        evidence_required,
     })
 }
 
@@ -238,17 +337,20 @@ pub async fn compact_context(
     for (name, value) in &session.config.provider.headers {
         request = request.header(name, value);
     }
-    let response = request
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("context compaction failed: {error}"))?;
+    let response = request.json(&body).send().await.map_err(|error| {
+        format!(
+            "context compaction failed: {}",
+            describe_request_error(&error)
+        )
+    })?;
     verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| format!("context compaction failed: {error}"))?;
+    let bytes = response.bytes().await.map_err(|error| {
+        format!(
+            "context compaction failed: {}",
+            describe_request_error(&error)
+        )
+    })?;
     if bytes.len() > 64 * 1024 {
         return Err("context compaction returned an oversized response".into());
     }
@@ -390,16 +492,18 @@ fn append_content(result: &mut VeilChatResult, text: String) {
 fn emit_completed_output(
     sink: &EventSink,
     session: &Session,
-    result: &VeilChatResult,
+    result: &mut VeilChatResult,
     text_streamed: bool,
+    hold: bool,
 ) {
-    if text_streamed || result.content.is_empty() {
+    if text_streamed || result.content.is_empty() || !result.held_text.is_empty() {
         return;
     }
     if looks_like_unstructured_tool_call(&result.content) {
         return;
     }
-    emit_delta(sink, session, &result.content);
+    let content = result.content.clone();
+    stream_or_hold(sink, session, result, content, hold);
 }
 
 fn append_veil_delta(
@@ -497,6 +601,13 @@ fn update_usage(result: &mut VeilChatResult, usage: &Value) {
         });
     result.prompt_tokens = prompt.or(result.prompt_tokens);
     result.completion_tokens = completion.or(result.completion_tokens);
+    if let Some(system_prompt_tokens) = usage.get("system_prompt_tokens").and_then(Value::as_u64) {
+        result.system_prompt_tokens = Some(system_prompt_tokens);
+        result.system_prompt_tokens_exact = usage
+            .get("system_prompt_tokens_exact")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
 }
 
 fn complete_utf8_lines(buffer: &mut Vec<u8>, chunk: &[u8]) -> Result<Vec<String>, String> {
@@ -602,6 +713,31 @@ fn emit_delta(sink: &EventSink, session: &Session, text: &str) -> bool {
     true
 }
 
+/// Emits text that a held request withheld, once the caller has decided the step
+/// is fit to show. Dropping the held text instead is how a refused step leaves
+/// nothing behind.
+pub fn release_held_text(sink: &EventSink, session: &Session, result: &mut VeilChatResult) {
+    let held = std::mem::take(&mut result.held_text);
+    emit_delta(sink, session, &held);
+}
+
+/// Routes one chunk of already-redacted assistant text to the event stream or to
+/// the hold buffer. Returns whether anything reached the stream, which is what
+/// `emit_completed_output` uses to avoid emitting the message twice.
+fn stream_or_hold(
+    sink: &EventSink,
+    session: &Session,
+    result: &mut VeilChatResult,
+    text: String,
+    hold: bool,
+) -> bool {
+    if !hold {
+        return emit_delta(sink, session, &text);
+    }
+    result.held_text.push_str(&text);
+    false
+}
+
 fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {
     for call in calls {
         let id = if call.id.trim().is_empty() {
@@ -632,6 +768,7 @@ pub async fn stream_veil_chat(
         max_output_tokens,
         include_tools,
         harness_bucket,
+        hold_assistant_text,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -681,7 +818,7 @@ pub async fn stream_veil_chat(
         }
         tokio::select! {
             result = &mut send_future => {
-                break result.map_err(|error| format!("model request failed: {error}"))?;
+                break result.map_err(|error| format!("model request failed: {}", describe_request_error(&error)))?;
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
         }
@@ -713,13 +850,14 @@ pub async fn stream_veil_chat(
                 Ok(None) => break,
                 Err(_) => continue,
             };
-        let chunk = chunk.map_err(|error| error.to_string())?;
+        let chunk = chunk.map_err(|error| describe_request_error(&error))?;
         for line in complete_utf8_lines(&mut buffer, &chunk)? {
             if let Some(error) = veil_stream_error(&line) {
                 return Err(error);
             }
             let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)?;
-            text_streamed |= emit_delta(sink, session, &safe_output.push(&content));
+            let safe = safe_output.push(&content);
+            text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold_assistant_text);
             if line_completed {
                 completed = true;
             }
@@ -733,7 +871,8 @@ pub async fn stream_veil_chat(
             return Err(error);
         }
         let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)?;
-        text_streamed |= emit_delta(sink, session, &safe_output.push(&content));
+        let safe = safe_output.push(&content);
+        text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold_assistant_text);
         if line_completed {
             completed = true;
         }
@@ -741,191 +880,24 @@ pub async fn stream_veil_chat(
     if !completed {
         return Err("model stream ended before the completion marker".into());
     }
-    text_streamed |= emit_delta(sink, session, &safe_output.finish());
+    let tail = safe_output.finish();
+    text_streamed |= stream_or_hold(sink, session, &mut result, tail, hold_assistant_text);
     fill_missing_tool_call_ids(&mut result.tool_calls);
     if result.truncated_tool_arguments {
         for call in &mut result.tool_calls {
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
-    emit_completed_output(sink, session, &result, text_streamed);
+    emit_completed_output(
+        sink,
+        session,
+        &mut result,
+        text_streamed,
+        hold_assistant_text,
+    );
     Ok(result)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::MtlsConfig;
-    #[test]
-    fn tool_deltas_accumulate_by_index() {
-        let mut result = VeilChatResult::default();
-        let mut calls = BTreeMap::new();
-        append_veil_delta(&mut result, json!({"tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{\"pa"}}]}).as_object().unwrap(), &mut calls);
-        append_veil_delta(
-            &mut result,
-            json!({"tool_calls":[{"index":0,"function":{"arguments":"th\":\"README.md\"}"}}]})
-                .as_object()
-                .unwrap(),
-            &mut calls,
-        );
-        assert_eq!(
-            result.tool_calls[0].arguments.as_str(),
-            Some("{\"path\":\"README.md\"}")
-        );
-    }
-    #[test]
-    fn split_multibyte_utf8_is_preserved_until_a_complete_line() {
-        let source = "data: {\"choices\":[{\"delta\":{\"content\":\"café\"}}]}\n";
-        let bytes = source.as_bytes();
-        let split = source.find('é').unwrap() + 1;
-        let mut buffer = Vec::new();
-        assert!(
-            complete_utf8_lines(&mut buffer, &bytes[..split])
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            complete_utf8_lines(&mut buffer, &bytes[split..]).unwrap(),
-            [source.trim_end()]
-        );
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn sse_data_accepts_optional_space_after_field_name() {
-        assert_eq!(sse_data("data: [DONE]"), Some("[DONE]"));
-        assert_eq!(sse_data("data:[DONE]"), Some("[DONE]"));
-        assert_eq!(sse_data("event: error"), None);
-    }
-
-    #[test]
-    fn veil_failures_are_specific_without_echoing_untrusted_response_bodies() {
-        let payload = json!({
-            "error": "provider leaked prompt content",
-            "code": "model_service_rejected",
-            "upstreamStatus": 500
-        });
-        let message = veil_failure_message(Some(502), Some(&payload));
-        assert_eq!(
-            message,
-            "the model service rejected the request (upstream status 500, Veil status 502)"
-        );
-        assert!(!message.contains("leaked"));
-
-        let stream =
-            "data: {\"error\":\"hidden detail\",\"code\":\"model_service_stream_incomplete\"}";
-        assert_eq!(
-            veil_stream_error(stream).as_deref(),
-            Some("model request failed: the model service stream ended unexpectedly")
-        );
-    }
-
-    #[test]
-    fn total_only_usage_completes_a_partial_provider_measurement() {
-        let mut result = VeilChatResult {
-            prompt_tokens: Some(1200),
-            ..VeilChatResult::default()
-        };
-        update_usage(&mut result, &json!({"total_tokens": 1300}));
-        assert_eq!(result.prompt_tokens, Some(1200));
-        assert_eq!(result.completion_tokens, Some(100));
-
-        let mut result = VeilChatResult {
-            completion_tokens: Some(100),
-            ..VeilChatResult::default()
-        };
-        update_usage(&mut result, &json!({"total_tokens": 1300}));
-        assert_eq!(result.prompt_tokens, Some(1200));
-        assert_eq!(result.completion_tokens, Some(100));
-    }
-
-    #[test]
-    fn complete_stream_lines_reject_invalid_utf8() {
-        let mut buffer = Vec::new();
-        assert_eq!(
-            complete_utf8_lines(&mut buffer, b"data: \xff\n").unwrap_err(),
-            "model stream contained invalid UTF-8"
-        );
-    }
-
-    #[test]
-    fn stream_lines_and_json_are_bounded_and_strict() {
-        let mut buffer = Vec::new();
-        assert!(
-            complete_utf8_lines(&mut buffer, &vec![b'x'; 4 * 1024 * 1024 + 1])
-                .unwrap_err()
-                .contains("4 MiB")
-        );
-        buffer.clear();
-        let mut complete_oversized = vec![b'x'; 4 * 1024 * 1024 + 1];
-        complete_oversized.push(b'\n');
-        assert!(
-            complete_utf8_lines(&mut buffer, &complete_oversized)
-                .unwrap_err()
-                .contains("4 MiB")
-        );
-        let mut result = VeilChatResult::default();
-        let mut partial = BTreeMap::new();
-        assert_eq!(
-            process_veil_line("data: not-json", &mut result, &mut partial).unwrap_err(),
-            "Veil stream contained invalid JSON"
-        );
-    }
-
-    #[test]
-    fn missing_tool_call_ids_are_created_without_hiding_duplicates() {
-        let mut calls = vec![
-            ToolCall {
-                id: "same".into(),
-                name: "read".into(),
-                arguments: json!({}),
-                index: 0,
-            },
-            ToolCall {
-                id: "same".into(),
-                name: "read".into(),
-                arguments: json!({}),
-                index: 1,
-            },
-            ToolCall {
-                id: "".into(),
-                name: "read".into(),
-                arguments: json!({}),
-                index: 2,
-            },
-        ];
-        fill_missing_tool_call_ids(&mut calls);
-        assert_eq!(calls[0].id, calls[1].id);
-        assert_eq!(calls[2].id, "tool-call-2");
-    }
-
-    fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
-        ProviderConfig {
-            id: "company-endpoint".into(),
-            name: "test".into(),
-            base_url: "https://127.0.0.1".into(),
-            mode: crate::config::ProviderMode::Local,
-            chat_endpoint_path: Some("/v1/chat/completions".into()),
-            api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
-            model_id: "test".into(),
-            parallel_tool_calls: false,
-            vision: false,
-            reasoning: false,
-            headers: BTreeMap::new(),
-            mtls: Some(mtls),
-        }
-    }
-
-    #[test]
-    fn mtls_pem_identity_requires_a_certificate_and_key_pair() {
-        let cert_only = provider_with_mtls(MtlsConfig {
-            cert_path: Some("client.pem".into()),
-            ..MtlsConfig::default()
-        });
-        assert!(
-            client_for(&cert_only)
-                .unwrap_err()
-                .contains("certPath and keyPath")
-        );
-    }
-}
+#[path = "veil_client_tests.rs"]
+mod tests;

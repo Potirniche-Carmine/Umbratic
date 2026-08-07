@@ -17,6 +17,25 @@ test("runner event decoder accepts handled events and marks internal events as i
   assert.equal(assistant.ignored, false);
   assert.equal(assistant.event.text, "hello");
 
+  // The harness-typed opening status line keeps its kind; anything else in
+  // that field is an invalid payload rather than silently untyped text.
+  const status = decoder.decodeRunnerEvent({
+    type: "assistant.delta",
+    kind: "status",
+    taskId: "task-1",
+    text: "I will map this folder.",
+  });
+  assert.equal(status.ok, true);
+  assert.equal(status.event.kind, "status");
+  const badKind = decoder.decodeRunnerEvent({
+    type: "assistant.delta",
+    kind: "banner",
+    taskId: "task-1",
+    text: "hello",
+  });
+  assert.equal(badKind.ok, false);
+  assert.equal(badKind.code, "invalid_payload");
+
   const legacyFinished = decoder.decodeRunnerEvent({
     type: "tool.finished",
     taskId: "task-1",
@@ -98,5 +117,49 @@ test("runner event decoder rejects malformed native events before translation", 
     { type: "future.event", taskId: "task-1" },
   ]) {
     assert.equal(decoder.decodeRunnerEvent(event).ok, false, JSON.stringify(event));
+  }
+});
+
+test("runner context usage decodes the anchor, the breakdown, and the protected prefix", () => {
+  const decoded = decoder.decodeRunnerEvent({
+    type: "context.usage",
+    taskId: "task-1",
+    contextLength: 64000,
+    contentTokens: 12000,
+    promptTokens: 12000,
+    completionTokens: 256,
+    reserveTokens: 4096,
+    protectedTokens: 3187,
+    estimatedTokens: 16096,
+    anchored: true,
+    compactionBlocked: false,
+    breakdown: {
+      systemPromptTokens: 3187, systemPromptExact: true, toolDefinitionTokens: 2100,
+      skillTokens: 320, conversationTokens: 4200, toolResultTokens: 1900, imageTokens: 1600,
+    },
+  });
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.event.anchored, true);
+  assert.equal(decoded.event.protectedTokens, 3187);
+  assert.equal(decoded.event.breakdown.systemPromptExact, true);
+  assert.equal(decoded.event.breakdown.imageTokens, 1600);
+
+  // A usage event that carries none of it is still a usage event.
+  assert.equal(
+    decoder.decodeRunnerEvent({ type: "context.usage", taskId: "task-1", contextLength: 64000, contentTokens: 1, reserveTokens: 1 }).ok,
+    true,
+  );
+
+  for (const invalid of [
+    { anchored: "yes" },
+    { breakdown: { systemPromptTokens: 1, systemPromptExact: true, toolDefinitionTokens: 1, skillTokens: 1, conversationTokens: 1, toolResultTokens: 1 } },
+    { breakdown: { systemPromptTokens: 1, systemPromptExact: "true", toolDefinitionTokens: 1, skillTokens: 1, conversationTokens: 1, toolResultTokens: 1, imageTokens: 1 } },
+    { protectedTokens: -4 },
+  ]) {
+    assert.equal(
+      decoder.decodeRunnerEvent({ type: "context.usage", taskId: "task-1", contextLength: 64000, contentTokens: 1, reserveTokens: 1, ...invalid }).ok,
+      false,
+      JSON.stringify(invalid),
+    );
   }
 });

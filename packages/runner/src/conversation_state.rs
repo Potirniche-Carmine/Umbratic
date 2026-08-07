@@ -321,7 +321,9 @@ pub fn snapshot_conversation_state(input: ConversationStateSnapshotInput<'_>) ->
     let mut used_bytes = 0_usize;
     for group in groups.into_iter().rev() {
         let encoded = serde_json::to_vec(&group).unwrap_or_default();
-        let tokens = (encoded.len() as u64).div_ceil(4);
+        // Same bytes/3 estimator as the preflight and compaction paths, so a
+        // restored session is sized by the same rule that sized it live.
+        let tokens = (encoded.len() as u64).div_ceil(3);
         if tokens > token_budget
             || encoded.len() > MAX_STATE_BYTES / 2
             || group.len() > MAX_TAIL_MESSAGES

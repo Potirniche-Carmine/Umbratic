@@ -239,19 +239,31 @@ export async function probeLocalModels(
   }
 }
 
-function probeLocalVeil(baseUrl: string, authToken: string, onReady: () => void): () => void {
+function probeLocalVeil(
+  baseUrl: string,
+  authToken: string,
+  onReady: () => void,
+  onObservation: (observation: string) => void = () => undefined,
+): () => void {
   const probe = () => {
     const request = http.get(`${baseUrl}/api/health`, {
       headers: { Authorization: `Bearer ${authToken}` },
       timeout: 1000,
     }, (response) => {
       response.resume();
+      // Health requires the model runtime to answer, so a non-200 here usually
+      // means the runtime, not Veil, is the problem; keep the last status for
+      // the timeout message.
+      onObservation(`last health response was status ${response.statusCode}`);
       // Require an authenticated healthy response. Any other status means the
       // bearer may have reached the wrong process or Veil is not ready yet.
       if (response.statusCode === 200) onReady();
     });
-    request.once("timeout", () => request.destroy());
-    request.once("error", () => undefined);
+    request.once("timeout", () => {
+      onObservation("the health probe timed out");
+      request.destroy();
+    });
+    request.once("error", (error) => onObservation(`the health probe failed (${error.message})`));
   };
   probe();
   const interval = setInterval(probe, 150);
@@ -295,6 +307,11 @@ export function localVeilEnvironment(
     VEIL_ADDR: address,
     VEIL_AUTH_TOKEN: authToken,
     VEIL_ENV_FILE: "-",
+    // Exit when this process does. before-quit only runs when Electron is asked
+    // to quit; a force-kill from a dev script skips it and leaves Veil holding a
+    // port forever. The inherited stdin pipe closes on every exit path, so Veil
+    // watches it for EOF and drains itself.
+    VEIL_PARENT_STDIN_WATCH: "1",
     VEIL_MODE: "local",
     VEIL_MODEL: settings.modelId.trim(),
     // Large local-document prompts can spend more than a minute in prompt
@@ -355,17 +372,28 @@ async function startLocalVeil(
     env: localVeilEnvironment(settings, "127.0.0.1:0", authToken, contextLength, {
       includeGoToolchain: launch.command === "go",
     }),
-    stdio: ["ignore", "pipe", "pipe"],
+    // stdin is a pipe this process holds open and never writes to. It is the
+    // liveness channel: when Electron exits for any reason, the write end
+    // closes, Veil reads EOF, and it shuts itself down. `go run` forwards stdin
+    // to the binary it builds, so this works from source as well as packaged.
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   launchingChild = child;
+  // Never end() this stream: closing it early would tell Veil to quit.
+  child.stdin?.on("error", () => {});
 
   let output = "";
   let baseUrl = "";
   let stopProbing: (() => void) | undefined;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => finish(new Error(`Timed out waiting for local Veil to start.${output.trim() ? ` ${output.trim()}` : ""}`)), 15000);
+    let lastHealthObservation = "";
+    // This first deadline covers only reaching the listen log line. When Veil
+    // runs from source, `go run` compiles first and previously consumed nearly
+    // the whole budget, so warmup timed out with "listening" already in the
+    // output — the health probe never got a fair window.
+    let timer = setTimeout(() => finish(new Error(`Timed out waiting for local Veil to report its listening address.${output.trim() ? ` ${output.trim()}` : ""}`)), 15000);
     const cleanup = () => {
       clearTimeout(timer);
       stopProbing?.();
@@ -384,7 +412,18 @@ async function startLocalVeil(
     const beginProbing = (listeningAddress: string) => {
       if (baseUrl) return;
       baseUrl = `http://${listeningAddress}`;
-      stopProbing = probeLocalVeil(baseUrl, authToken, () => finish());
+      // Veil is up; give the health probe its own full window. Health passes
+      // only once the model runtime answers, so name the runtime in the
+      // failure instead of blaming Veil.
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(new Error(
+        `Local Veil is listening at ${baseUrl} but its health check did not pass within 15 seconds`
+        + `${lastHealthObservation ? ` (${lastHealthObservation})` : ""}.`
+        + ` Health requires the model runtime at ${runtimeBaseUrl} to answer — check that it is running.`,
+      )), 15000);
+      stopProbing = probeLocalVeil(baseUrl, authToken, () => finish(), (observation) => {
+        lastHealthObservation = observation;
+      });
     };
     const onData = (chunk: Buffer | string) => {
       output = `${output}${chunk.toString()}`.slice(-4000);

@@ -27,7 +27,8 @@
     "postcss": "8.5.25"
   },
   "scripts": {
-    "build": "npm run desktop:build",
+    "build": "npm run desktop:build && npm run veil:build",
+    "veil:build": "node scripts/build-go-services.ts",
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
     "desktop:build": "npm --workspace @umbratic/desktop run build",
     "runner:build": "npm --workspace @umbratic/runner run build",

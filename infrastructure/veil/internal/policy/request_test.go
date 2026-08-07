@@ -284,15 +284,21 @@ func TestDecodeChatInputValidatesTheHarnessBucketSelector(t *testing.T) {
 }
 
 func TestDecodeOrientInputIsStrict(t *testing.T) {
-	input, err := DecodeOrientInput(strings.NewReader(`{"route":"engineering/chat","requestText":"fix the test","previousBucket":"code_change"}`))
-	if err != nil || input.Route != prompts.EngineeringChat || input.PreviousBucket != "code_change" {
+	input, err := DecodeOrientInput(strings.NewReader(`{"route":"engineering/chat","requestText":"yes, go ahead","previousResponse":"I can add the retry wrapper. Want me to make that change?"}`))
+	if err != nil || input.Route != prompts.EngineeringChat ||
+		input.PreviousResponse != "I can add the retry wrapper. Want me to make that change?" {
 		t.Fatalf("unexpected orient input %#v %v", input, err)
 	}
-	// A hint that is not valid for this route is dropped, never fatal: orient
-	// must not be able to fail a run.
-	dropped, err := DecodeOrientInput(strings.NewReader(`{"route":"engineering/chat","requestText":"yes, draft it","previousBucket":"campaign_plan"}`))
-	if err != nil || dropped.PreviousBucket != "" {
-		t.Fatalf("cross-route hint must be dropped: %#v %v", dropped, err)
+	// No bucket travels between turns, so a selector is simply an unknown field.
+	if _, err := DecodeOrientInput(strings.NewReader(`{"route":"engineering/chat","requestText":"hi","previousBucket":"code_change"}`)); err == nil {
+		t.Fatal("a carried-over bucket must no longer be accepted")
+	}
+	// Context is a convenience: oversized or invalid context is dropped rather
+	// than failing the request, because orient must not be able to fail a run.
+	oversized := `{"route":"engineering/chat","requestText":"yes","previousResponse":"` + strings.Repeat("x", MaxOrientRequestBytes+1) + `"}`
+	dropped, err := DecodeOrientInput(strings.NewReader(oversized))
+	if err != nil || dropped.PreviousResponse != "" || dropped.RequestText != "yes" {
+		t.Fatalf("oversized context must be dropped, not fatal: %#v %v", dropped, err)
 	}
 	for name, body := range map[string]string{
 		"unknown field":      `{"route":"engineering/chat","requestText":"hi","messages":[]}`,

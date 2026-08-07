@@ -1,7 +1,6 @@
 package model
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -34,6 +33,12 @@ type ChatRequest struct {
 	TopP                float64
 	ReasoningEffort     ReasoningEffort
 	ThinkingTokenBudget *int
+	// ResponseSchema constrains local generation to this JSON schema via
+	// Ollama structured outputs. nil leaves generation unconstrained. The
+	// model may still think freely first — Ollama carries thinking in its own
+	// channel — but the content it returns can only be this shape. Local mode
+	// only; the server path ignores it.
+	ResponseSchema map[string]any
 }
 
 type ChatResponse struct {
@@ -59,13 +64,20 @@ type Client struct {
 	metricsEndpoint  string
 	generateEndpoint string
 	showEndpoint     string
+	tokenizeEndpoint string
 	contextLength    int
 	client           *http.Client
+	prefixTokens     prefixTokenCache
 }
 
 type ProviderError struct {
 	StatusCode int
 	Kind       ProviderFailureKind
+	// Cause is the underlying transport error — Go http client text such as
+	// "dial tcp 127.0.0.1:11434: connectex: No connection could be made", never
+	// model output. Without it, every runtime outage reads as the same
+	// "model runtime request failed", which proved undebuggable in a live run.
+	Cause error
 }
 
 type ProviderFailureKind string
@@ -78,14 +90,20 @@ const (
 )
 
 func (e ProviderError) Error() string {
+	base := fmt.Sprintf("model runtime returned status %d", e.StatusCode)
 	if e.StatusCode == 0 {
+		base = "model runtime request failed"
 		if e.Kind == ProviderFailureTimeout {
-			return "model runtime request timed out"
+			base = "model runtime request timed out"
 		}
-		return "model runtime request failed"
 	}
-	return fmt.Sprintf("model runtime returned status %d", e.StatusCode)
+	if e.Cause != nil {
+		return base + ": " + e.Cause.Error()
+	}
+	return base
 }
+
+func (e ProviderError) Unwrap() error { return e.Cause }
 
 func NewClient(cfg ClientConfig) (*Client, error) {
 	mode := cfg.Mode
@@ -112,6 +130,16 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// vLLM exposes /tokenize at the server root. Ollama has no stable
+	// equivalent, so the local mode never resolves one and falls back to a
+	// flagged byte-length estimate.
+	tokenizeEndpoint := ""
+	if mode == ModeServer {
+		tokenizeEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "tokenize")
+		if err != nil {
+			return nil, err
+		}
+	}
 	generateEndpoint := ""
 	showEndpoint := ""
 	if mode == ModeLocal {
@@ -136,6 +164,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		metricsEndpoint:  metricsEndpoint,
 		generateEndpoint: generateEndpoint,
 		showEndpoint:     showEndpoint,
+		tokenizeEndpoint: tokenizeEndpoint,
 		contextLength:    cfg.ContextLength,
 		client:           hardenedHTTPClient(timeout),
 	}, nil
@@ -222,13 +251,21 @@ func ensurePrivateRemote(conn net.Conn) (net.Conn, error) {
 	return conn, nil
 }
 
+// ollamaKeepAlive keeps the loaded model resident between requests. Ollama's
+// default is five minutes, after which the next request pays the full cold
+// load — routinely tens of seconds, which is exactly what blew the runner's
+// orient timeout in a live run. Every request refreshes the window, so this
+// only needs to exceed ordinary thinking time between prompts.
+const ollamaKeepAlive = "60m"
+
 func (c *Client) ActivateModel(ctx context.Context, modelID string) error {
 	if c.mode != ModeLocal {
 		return nil
 	}
 	body := map[string]any{
-		"model":  modelID,
-		"stream": false,
+		"model":      modelID,
+		"stream":     false,
+		"keep_alive": ollamaKeepAlive,
 	}
 	if c.contextLength > 0 {
 		body["options"] = map[string]any{"num_ctx": c.contextLength}
@@ -278,13 +315,13 @@ func (c *Client) DoChat(ctx context.Context, req ChatRequest) (*http.Response, e
 	}
 }
 
-func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration) error {
+func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration, annotation UsageAnnotation) error {
 	src = withIdleAndCancel(ctx, src, idleTimeout)
 	switch mode {
 	case ModeServer:
-		return writeVLLMAsSafeOpenAIChatSSE(dst, src)
+		return writeVLLMAsSafeOpenAIChatSSE(dst, src, annotation)
 	case ModeLocal:
-		return writeOllamaAsOpenAIChatSSE(dst, src)
+		return writeOllamaAsOpenAIChatSSE(dst, src, annotation)
 	default:
 		return fmt.Errorf("unsupported Veil mode %q", mode)
 	}
@@ -299,7 +336,7 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, ProviderError{Kind: ProviderFailureTransport}
+		return nil, ProviderError{Kind: ProviderFailureTransport, Cause: err}
 	}
 	defer resp.Body.Close()
 
@@ -385,9 +422,13 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 
 func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
 	body := map[string]any{
-		"model":    req.Model,
-		"messages": ollamaMessages(req.Messages),
-		"stream":   req.Stream,
+		"model":      req.Model,
+		"messages":   ollamaMessages(req.Messages),
+		"stream":     req.Stream,
+		"keep_alive": ollamaKeepAlive,
+	}
+	if req.ResponseSchema != nil {
+		body["format"] = req.ResponseSchema
 	}
 	if req.Tools != nil {
 		body["tools"] = req.Tools
@@ -421,13 +462,13 @@ func (c *Client) postJSON(ctx context.Context, endpoint string, body any) (*http
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, ProviderError{Kind: ProviderFailureTimeout}
+			return nil, ProviderError{Kind: ProviderFailureTimeout, Cause: err}
 		}
 		var networkError net.Error
 		if errors.As(err, &networkError) && networkError.Timeout() {
-			return nil, ProviderError{Kind: ProviderFailureTimeout}
+			return nil, ProviderError{Kind: ProviderFailureTimeout, Cause: err}
 		}
-		return nil, ProviderError{Kind: ProviderFailureTransport}
+		return nil, ProviderError{Kind: ProviderFailureTransport, Cause: err}
 	}
 	return resp, nil
 }
@@ -478,122 +519,6 @@ func decodeOllamaChat(r io.Reader) (ChatResponse, error) {
 	return ChatResponse{Message: decoded.Message}, nil
 }
 
-func writeOllamaAsOpenAIChatSSE(dst io.Writer, src io.Reader) error {
-	scanner := bufio.NewScanner(src)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	sentRole := false
-	sentDone := false
-	var pendingToolCalls any
-
-	for scanner.Scan() {
-		trimmed := strings.TrimSpace(scanner.Text())
-		if trimmed == "" {
-			continue
-		}
-		done, roleSent, toolCalls, lineErr := writeOllamaLineAsOpenAIChatSSE(
-			dst,
-			trimmed,
-			sentRole,
-			pendingToolCalls,
-		)
-		if lineErr != nil {
-			return lineErr
-		}
-		if roleSent {
-			sentRole = true
-		}
-		pendingToolCalls = toolCalls
-		if done {
-			sentDone = true
-		}
-	}
-	if scanner.Err() != nil {
-		return ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-	if !sentDone {
-		return ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-	return nil
-}
-
-func writeOllamaLineAsOpenAIChatSSE(
-	dst io.Writer,
-	line string,
-	roleAlreadySent bool,
-	pendingToolCalls any,
-) (bool, bool, any, error) {
-	var row map[string]any
-	if err := json.Unmarshal([]byte(line), &row); err != nil {
-		return false, roleAlreadySent, pendingToolCalls, ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-
-	message, _ := row["message"].(map[string]any)
-	delta := make(map[string]any)
-	if !roleAlreadySent && message != nil {
-		role, _ := message["role"].(string)
-		if role == "" {
-			role = "assistant"
-		}
-		if role != "assistant" {
-			return false, roleAlreadySent, pendingToolCalls, errors.New("model runtime returned a non-assistant message")
-		}
-		delta["role"] = role
-		roleAlreadySent = true
-	}
-	if content := textFromRuntimeValue(message["content"]); content != "" {
-		delta["content"] = content
-	}
-	if message != nil {
-		if toolCalls, ok := message["tool_calls"]; ok && toolCalls != nil {
-			pendingToolCalls = toolCalls
-		}
-	}
-	if len(delta) > 0 {
-		if err := writeSSEData(dst, map[string]any{
-			"choices": []any{
-				map[string]any{"delta": delta},
-			},
-		}); err != nil {
-			return false, roleAlreadySent, pendingToolCalls, err
-		}
-	}
-
-	done, _ := row["done"].(bool)
-	if !done {
-		return false, roleAlreadySent, pendingToolCalls, nil
-	}
-
-	// Emit the final tool-call snapshot once before usage/DONE so the runner
-	// receives complete parallel calls with stable indexes instead of merging
-	// repeated Ollama stream chunks onto index 0.
-	if toolCalls := openAIToolCallDeltas(pendingToolCalls); len(toolCalls) > 0 {
-		if err := writeSSEData(dst, map[string]any{
-			"choices": []any{
-				map[string]any{"delta": map[string]any{"tool_calls": toolCalls}},
-			},
-		}); err != nil {
-			return false, roleAlreadySent, nil, err
-		}
-	}
-	promptTokens, promptOK := runtimeTokenCount(row["prompt_eval_count"])
-	completionTokens, completionOK := runtimeTokenCount(row["eval_count"])
-	if promptOK || completionOK {
-		if err := writeSSEData(dst, map[string]any{
-			"choices": []any{},
-			"usage": map[string]any{
-				"prompt_tokens":     promptTokens,
-				"completion_tokens": completionTokens,
-				"total_tokens":      promptTokens + completionTokens,
-			},
-		}); err != nil {
-			return false, roleAlreadySent, nil, err
-		}
-	}
-	if err := writeSSEDone(dst); err != nil {
-		return false, roleAlreadySent, nil, err
-	}
-	return true, roleAlreadySent, nil, nil
-}
 
 func runtimeTokenCount(value any) (int, bool) {
 	count, ok := value.(float64)

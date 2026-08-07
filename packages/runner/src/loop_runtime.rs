@@ -5,10 +5,13 @@ use serde_json::{Value, json};
 
 use crate::{
     compaction::*,
-    config::provider_endpoint_url,
     context::{
-        ContextCalibration, ContextUsageEstimate, adaptive_output_reserve, estimate_context_usage,
-        request_profile_fingerprint,
+        ContextCalibration, ContextEstimateInput, ContextUsageEstimate, estimate_context_usage,
+    },
+    context_events::{
+        MAX_COMPACTION_STRIKES, clear_usage_anchor, context_event, estimate_state,
+        observed_context_event, record_system_prompt_size, request_estimate, session_route,
+        set_usage_anchor, skill_profile,
     },
     conversation_state::{ConversationStateSnapshotInput, snapshot_conversation_state},
     events::{empty_summary, increment, now_iso, step_settled_event},
@@ -24,7 +27,7 @@ use crate::{
     tool_scheduling::execute_calls,
     tools::{ToolCall, ToolResult, tool_surface, validate_tool_call_batch},
     turn_snapshot::TurnSnapshot,
-    veil_client::{VeilChatResult, VeilRequestOptions, stream_veil_chat},
+    veil_client::{VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat},
 };
 
 const MAX_TOOL_TURNS: usize = 64;
@@ -184,119 +187,44 @@ async fn reconcile_aborted_run(
     summary.clone()
 }
 
-fn skill_profile(session: &Session) -> Vec<Value> {
-    session
-        .config
-        .skills
-        .iter()
-        .map(|skill| {
-            json!({
-                "id":skill.id,
-                "name":skill.name,
-                "description":skill.description,
-                "source":skill.source
-            })
-        })
-        .collect()
-}
-
-pub(crate) fn request_estimate(
-    session: &Session,
-    messages: &[Value],
-    tools: &[Value],
-    calibration: Option<&ContextCalibration>,
-) -> (ContextUsageEstimate, String) {
-    let skills = skill_profile(session);
-    let additional = if skills.is_empty() {
-        vec![]
-    } else {
-        vec![Value::Array(skills.clone())]
-    };
-    let mut usage = estimate_context_usage(
-        messages,
-        tools,
-        session.config.context_length,
-        session.config.max_response_tokens,
-        session.config.protected_prompt_reserve_tokens,
-        &additional,
-    );
-    let route = provider_endpoint_url(&session.config.provider)
-        .map(|url| url.path().to_owned())
-        .unwrap_or_else(|_| {
-            session
-                .config
-                .provider
-                .chat_endpoint_path
-                .clone()
-                .unwrap_or_default()
-        });
-    let profile_fingerprint = request_profile_fingerprint(
-        &session.config.provider.model_id,
-        &route,
-        session.config.context_length,
-        session.config.protected_prompt_reserve_tokens,
-        tools,
-        &skills,
-    );
-    if let Some(calibration) = calibration {
-        usage.calibrated_prompt_tokens =
-            calibration.apply(&profile_fingerprint, usage.heuristic_prompt_tokens);
-        usage.reserve_tokens = adaptive_output_reserve(
-            session.config.context_length,
-            session.config.max_response_tokens,
-            usage.calibrated_prompt_tokens,
-        );
-    }
-    (usage, profile_fingerprint)
-}
-
-fn context_event(session: &Session, usage: ContextUsageEstimate) -> Value {
-    let usage = usage.event();
-    json!({ "type": "context.usage", "taskId": session.task_id, "contextLength": usage["contextLength"], "contentTokens": usage["contentTokens"], "promptTokens": usage["promptTokens"], "completionTokens": usage["completionTokens"], "reserveTokens": usage["reserveTokens"], "protectedTokens": usage["protectedTokens"], "estimatedTokens": usage["estimatedTokens"], "phase": usage["phase"], "source": usage["source"], "confidence": usage["confidence"], "at": now_iso() })
-}
-
-fn observed_context_usage(
-    context_length: u64,
-    reserve_tokens: u64,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-) -> Value {
-    json!({
-        "contextLength": context_length,
-        "contentTokens": prompt_tokens,
-        "promptTokens": prompt_tokens,
-        "completionTokens": completion_tokens,
-        "reserveTokens": reserve_tokens,
-        "protectedTokens": 0,
-        "estimatedTokens": prompt_tokens + reserve_tokens,
-        "phase": "observed",
-        "source": "provider",
-        "confidence": "high"
-    })
-}
-
-fn observed_context_event(
-    session: &Session,
-    result: &VeilChatResult,
-    reserve_tokens: u64,
-) -> Option<Value> {
-    let usage = observed_context_usage(
-        session.config.context_length,
-        reserve_tokens,
-        result.prompt_tokens?,
-        result.completion_tokens.unwrap_or(0),
-    );
-    Some(
-        json!({ "type": "context.usage", "taskId": session.task_id, "contextLength": usage["contextLength"], "contentTokens": usage["contentTokens"], "promptTokens": usage["promptTokens"], "completionTokens": usage["completionTokens"], "reserveTokens": usage["reserveTokens"], "protectedTokens": usage["protectedTokens"], "estimatedTokens": usage["estimatedTokens"], "phase": usage["phase"], "source": usage["source"], "confidence": usage["confidence"], "at": now_iso() }),
-    )
-}
-
 #[derive(Debug)]
 pub(crate) struct PreparedRequest {
     pub(crate) messages: Vec<Value>,
     pub(crate) max_output_tokens: u64,
     usage: ContextUsageEstimate,
     profile_fingerprint: String,
+}
+
+/// Appends the assistant turn and re-anchors on it in one step, so the anchor
+/// can never describe a message count the conversation does not have.
+async fn append_assistant_turn(session: &Session, message: Value, result: &VeilChatResult) {
+    let anchor_len = {
+        let mut messages = session.messages.lock().await;
+        messages.push(message);
+        messages.len()
+    };
+    set_usage_anchor(session, result, anchor_len).await;
+}
+
+/// Renders the Hermes verdict on the previous compaction using the first
+/// measurement taken after it. A compaction that succeeded but left the
+/// context above the trigger earns a strike; two strikes mean the remaining
+/// context is the incompressible system-prompt-and-tools floor.
+async fn record_compaction_verdict(session: &Session, result: &VeilChatResult) {
+    if !session
+        .awaiting_observed_usage
+        .swap(false, Ordering::SeqCst)
+    {
+        return;
+    }
+    let Some(prompt_tokens) = result.prompt_tokens else {
+        return;
+    };
+    if prompt_tokens >= semantic_trigger_tokens(session.config.context_length) {
+        session.compaction_strikes.fetch_add(1, Ordering::SeqCst);
+    } else {
+        session.compaction_strikes.store(0, Ordering::SeqCst);
+    }
 }
 
 /// Captures the immutable inputs to one provider request.
@@ -306,25 +234,27 @@ fn turn_snapshot(
     prepared: &PreparedRequest,
     harness_bucket: Option<String>,
 ) -> TurnSnapshot {
-    let route = provider_endpoint_url(&session.config.provider)
-        .map(|url| url.path().to_owned())
-        .unwrap_or_else(|_| {
-            session
-                .config
-                .provider
-                .chat_endpoint_path
-                .clone()
-                .unwrap_or_default()
-        });
     TurnSnapshot::new(
         session,
         surface,
         prepared.messages.clone(),
         prepared.max_output_tokens,
         &skill_profile(session),
-        route,
+        session_route(session),
         harness_bucket,
     )
+}
+
+/// Whether a semantic compaction may be triggered by the current estimate.
+///
+/// Two guards, both about not acting on a number that is about to be replaced.
+/// An unanchored estimate taken right after a compaction may not compact again
+/// before the next response proves the real, smaller size; and a context that
+/// two measured verdicts have shown cannot get below the trigger is at its
+/// incompressible floor, where further summarization only burns tokens.
+fn semantic_compaction_allowed(session: &Session, anchored: bool) -> bool {
+    session.compaction_strikes.load(Ordering::SeqCst) < MAX_COMPACTION_STRIKES
+        && (anchored || !session.awaiting_observed_usage.load(Ordering::SeqCst))
 }
 
 pub(crate) async fn prepared_messages(
@@ -333,14 +263,16 @@ pub(crate) async fn prepared_messages(
 ) -> Result<PreparedRequest, String> {
     let mut messages = session.messages.lock().await;
     loop {
-        let calibration = session.context_calibration.lock().await.clone();
-        let (usage, profile_fingerprint) =
-            request_estimate(session, &messages, tools, calibration.as_ref());
-        let hard_input_limit = session.config.context_length.saturating_sub(1_000);
-        let semantic_trigger = hard_input_limit.saturating_mul(80) / 100;
-        if usage.calibrated_prompt_tokens >= semantic_trigger
-            && attempt_semantic_compaction(session, &mut messages, tools).await
+        let state = estimate_state(session).await;
+        let (usage, profile_fingerprint) = request_estimate(session, &messages, tools, &state);
+        if usage.calibrated_prompt_tokens >= semantic_trigger_tokens(session.config.context_length)
+            && semantic_compaction_allowed(session, usage.anchored)
+            // The cheap deterministic tier first; summarization only if
+            // folding stale exchanges could not get under the trigger.
+            && (prune_stale_tool_results(session, &mut messages, tools, &state)
+                || attempt_semantic_compaction(session, &mut messages, tools, &state).await)
         {
+            clear_usage_anchor(session).await;
             continue;
         }
         let fits_tokens = usage.estimated_tokens() <= session.config.context_length;
@@ -359,7 +291,40 @@ pub(crate) async fn prepared_messages(
                 session.config.context_length,
             ));
         }
+        clear_usage_anchor(session).await;
     }
+}
+
+/// Recovery from a provider rejection, using the deterministic tiers only.
+///
+/// The provider has already refused this request, so recovery cannot depend on
+/// another model round-trip succeeding — a summarization call would be one more
+/// chance to fail at exactly the moment the session cannot afford one. And the
+/// rejection has just proven every local estimate optimistic, so recovery does
+/// not stop at "changed something": it keeps folding whole tool exchanges,
+/// oldest first, until the heuristic estimate is back under the semantic
+/// trigger or nothing foldable remains. A guided tour can fill the window with
+/// tool results inside a single turn — where the semantic tiers cannot cut
+/// because everything is in the protected tail — and the previous single-fold
+/// recovery then lost its one retry and failed the whole run.
+async fn recover_from_overflow(session: &Session, tools: &[Value]) -> bool {
+    let state = estimate_state(session).await;
+    let mut messages = session.messages.lock().await;
+    let mut recovered = prune_stale_tool_results(session, &mut messages, tools, &state);
+    let target = semantic_trigger_tokens(session.config.context_length);
+    while request_estimate(session, &messages, tools, &state)
+        .0
+        .heuristic_prompt_tokens
+        > target
+        && compact_oldest_tool_exchange(&mut messages)
+    {
+        recovered = true;
+    }
+    drop(messages);
+    if recovered {
+        clear_usage_anchor(session).await;
+    }
+    recovered
 }
 
 /// Walks a proposed cut back to the nearest structurally safe boundary.
@@ -411,32 +376,34 @@ async fn final_without_tools(
             max_output_tokens: prepared.max_output_tokens,
             include_tools: false,
             harness_bucket: harness_bucket.map(str::to_owned),
+            // final_without_tools is the last word of the run; there is no
+            // later step that could refuse it, so nothing is held.
+            hold_assistant_text: false,
         },
     )
     .await;
     if response
         .as_ref()
         .is_err_and(|error| context_overflow(error))
+        && recover_from_overflow(session, &[]).await
+        && let Ok(retry) = prepared_messages(session, &[]).await
     {
-        let mut messages = session.messages.lock().await;
-        if attempt_semantic_compaction(session, &mut messages, &[]).await {
-            drop(messages);
-            if let Ok(retry) = prepared_messages(session, &[]).await {
-                prepared = retry;
-                response = stream_veil_chat(
-                    session,
-                    sink,
-                    &prepared.messages,
-                    &[],
-                    VeilRequestOptions {
-                        max_output_tokens: prepared.max_output_tokens,
-                        include_tools: false,
-                        harness_bucket: harness_bucket.map(str::to_owned),
-                    },
-                )
-                .await;
-            }
-        }
+        prepared = retry;
+        response = stream_veil_chat(
+            session,
+            sink,
+            &prepared.messages,
+            &[],
+            VeilRequestOptions {
+                max_output_tokens: prepared.max_output_tokens,
+                include_tools: false,
+                harness_bucket: harness_bucket.map(str::to_owned),
+                // final_without_tools is the last word of the run; there is no
+                // later step that could refuse it, so nothing is held.
+                hold_assistant_text: false,
+            },
+        )
+        .await;
     }
     match response {
         Ok(result)
@@ -444,13 +411,20 @@ async fn final_without_tools(
                 && !looks_like_unstructured_tool_call(&result.content) =>
         {
             update_context_calibration(session, &prepared, &result).await;
-            if let Some(event) =
-                observed_context_event(session, &result, prepared.max_output_tokens)
-            {
+            record_system_prompt_size(session, &result).await;
+            record_compaction_verdict(session, &result).await;
+            if let Some(event) = observed_context_event(
+                session,
+                &result,
+                prepared.max_output_tokens,
+                prepared.usage.breakdown,
+            ) {
                 sink.emit(event);
             }
             increment(summary, "turns", 1);
             record_answer(session, summary, &result.content).await;
+            let anchor_len = session.messages.lock().await.len();
+            set_usage_anchor(session, &result, anchor_len).await;
         }
         _ => {
             emit_fallback_answer(session, sink, summary, fallback).await;
@@ -470,24 +444,7 @@ async fn publish_step_settled(
     let messages = session.messages.lock().await.clone();
     let summary = session.durable_summary.lock().await.clone();
     let calibration = session.context_calibration.lock().await.clone();
-    let skills = session
-        .config
-        .skills
-        .iter()
-        .map(|skill| {
-            json!({
-                "id": skill.id,
-                "name": skill.name,
-                "description": skill.description,
-                "source": skill.source,
-            })
-        })
-        .collect::<Vec<_>>();
-    let additional = if skills.is_empty() {
-        vec![]
-    } else {
-        vec![Value::Array(skills)]
-    };
+    let skills = skill_profile(session);
     let mut state = snapshot_conversation_state(ConversationStateSnapshotInput {
         task_id: &session.task_id,
         updated_at: now_iso(),
@@ -499,14 +456,19 @@ async fn publish_step_settled(
         compaction_count: session.compaction_count.load(Ordering::SeqCst),
     });
     let rebuilt = state.seeded_messages();
-    let estimate = estimate_context_usage(
-        &rebuilt,
-        &[],
-        session.config.context_length,
-        session.config.max_response_tokens,
-        session.config.protected_prompt_reserve_tokens,
-        &additional,
-    );
+    // The persisted size describes the rebuilt state on its own terms, so it is
+    // deliberately unanchored: a measurement of the live conversation does not
+    // describe the summary-plus-tail a restored session would start from.
+    let estimate = estimate_context_usage(ContextEstimateInput {
+        messages: &rebuilt,
+        tools: &[],
+        skills: &skills,
+        context_length: session.config.context_length,
+        max_response_tokens: session.config.max_response_tokens,
+        protected_prompt_reserve_tokens: session.config.protected_prompt_reserve_tokens,
+        system_prompt: *session.system_prompt_size.lock().await,
+        anchor: None,
+    });
     state.usage.estimated_prompt_tokens = estimate.heuristic_prompt_tokens;
     let Ok(state) = state.validate() else {
         return;
@@ -583,12 +545,17 @@ pub async fn run_turn(
     // Orient runs exactly once per accepted run, after the current user message
     // is appended and before the tool loop. Every step of this run reuses the
     // decision, including compaction and context-overflow retries.
-    let harness_bucket = orient_once(&session, &sink, &explicit_text).await;
+    let orient = orient_once(&session, &sink, &explicit_text).await;
+    let harness_bucket = orient.bucket.clone();
 
     let mut summary = empty_summary();
     set_run_outcome(&mut summary, RunOutcome::Completed);
     let mut consecutive_failed = 0usize;
     let mut consecutive_invalid = 0usize;
+    // The evidence rule fires at most once per run. A model that answers from
+    // nothing twice is answering deliberately, and a second refusal would only
+    // spend the turn budget on the same argument.
+    let mut evidence_retried = false;
     let mut repeat_guard = RepeatGuard::default();
     let mut public_progress = PublicProgressSchedule::default();
     let mut step_index = 0_u32;
@@ -623,6 +590,15 @@ pub async fn run_turn(
             harness_bucket.clone(),
         ));
         sink.emit(context_event(&session, prepared.usage));
+        // On a guided run, hold the model's text until the step resolves, for as
+        // long as the run has no tool results. Text written before any evidence
+        // exists is the only text that can turn out to be unshowable, and the
+        // step's own outcome is what says whether it was a preamble, an answer,
+        // or a fabrication. Once a tool has run, everything streams live again:
+        // the model is free in the middle of its plan, and the final answer
+        // arrives token by token as always.
+        let hold_assistant_text =
+            harness_bucket.is_some() && summary["toolCalls"].as_u64().unwrap_or(0) == 0;
         let mut response = stream_veil_chat(
             &session,
             &sink,
@@ -632,6 +608,7 @@ pub async fn run_turn(
                 max_output_tokens: snapshot.max_output_tokens(),
                 include_tools: true,
                 harness_bucket: snapshot.harness_bucket().map(str::to_owned),
+                hold_assistant_text,
             },
         )
         .await;
@@ -640,9 +617,7 @@ pub async fn run_turn(
             .is_err_and(|error| context_overflow(error))
         {
             public_progress.before_context_recovery(&session, &sink, &mut summary);
-            let mut messages = session.messages.lock().await;
-            if attempt_semantic_compaction(&session, &mut messages, &tools).await {
-                drop(messages);
+            if recover_from_overflow(&session, &tools).await {
                 prepared = prepared_messages(&session, &tools).await?;
                 // Compaction replaced the conversation state, so the turn is
                 // re-snapshotted rather than reusing stale prompt assembly.
@@ -662,12 +637,13 @@ pub async fn run_turn(
                         max_output_tokens: snapshot.max_output_tokens(),
                         include_tools: true,
                         harness_bucket: snapshot.harness_bucket().map(str::to_owned),
+                        hold_assistant_text,
                     },
                 )
                 .await;
             }
         }
-        let result = match response {
+        let mut result = match response {
             Ok(result) => result,
             Err(error) if error.to_ascii_lowercase().contains("aborted") => {
                 return Ok(reconcile_aborted_run(
@@ -682,13 +658,24 @@ pub async fn run_turn(
             Err(error) => return Err(error),
         };
         update_context_calibration(&session, &prepared, &result).await;
+        record_system_prompt_size(&session, &result).await;
+        record_compaction_verdict(&session, &result).await;
         increment(&mut summary, "turns", 1);
-        if let Some(event) = observed_context_event(&session, &result, snapshot.max_output_tokens())
-        {
+        if let Some(event) = observed_context_event(
+            &session,
+            &result,
+            snapshot.max_output_tokens(),
+            prepared.usage.breakdown,
+        ) {
             sink.emit(event);
         }
         let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
+        if !calls.is_empty() {
+            // Tool calls settle the step as real work, so any held preamble is
+            // released now and reaches the user in the normal place.
+            release_held_text(&sink, &session, &mut result);
+        }
         if calls.is_empty() {
             if looks_like_unstructured_tool_call(&result.content) {
                 let call = ToolCall {
@@ -698,24 +685,78 @@ pub async fn run_turn(
                     index: 0,
                 };
                 let error = "Assistant text contained raw tool syntax. Use one available structured tool with its declared JSON schema.";
-                let mut messages = session.messages.lock().await;
-                messages.push(assistant_tool_message(std::slice::from_ref(&call)));
-                messages.push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
-                drop(messages);
+                append_assistant_turn(
+                    &session,
+                    assistant_tool_message(std::slice::from_ref(&call)),
+                    &result,
+                )
+                .await;
+                session
+                    .messages
+                    .lock()
+                    .await
+                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 continue;
             }
+            // An evidence-required bucket that produces a finished answer
+            // before any tool has run has described a workspace it never
+            // looked at. A live repo_orient run did exactly this: a confident,
+            // wholly invented architecture summary, zero tool calls, and
+            // nothing in the transcript marking it as unverified. The answer is
+            // refused once and the plan is restarted rather than shipped.
+            if orient.evidence_required
+                && !evidence_retried
+                && summary["toolCalls"].as_u64().unwrap_or(0) == 0
+                && !result.content.trim().is_empty()
+            {
+                evidence_retried = true;
+                let call = ToolCall {
+                    id: format!(
+                        "missing-evidence-{}",
+                        summary["turns"].as_u64().unwrap_or(0)
+                    ),
+                    name: "missing_workspace_evidence".into(),
+                    arguments: json!({}),
+                    index: 0,
+                };
+                let error = "That answer used no workspace evidence: this turn has run no tool, so nothing in it is verified. Discard it and start the playbook now with real tool calls. Describe only what a tool result actually shows.";
+                append_assistant_turn(
+                    &session,
+                    assistant_tool_message(std::slice::from_ref(&call)),
+                    &result,
+                )
+                .await;
+                session
+                    .messages
+                    .lock()
+                    .await
+                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
+                sink.emit(json!({
+                    "type": "orient.evidence_retry",
+                    "taskId": session.task_id,
+                    "bucket": orient.bucket(),
+                    "at": now_iso()
+                }));
+                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
+                continue;
+            }
+            // Neither refusal applied, so the step stands and anything held for
+            // it is shown. The two branches above return without releasing,
+            // which is what leaves a refused answer with no trace in the UI.
+            release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {
                 increment(
                     &mut summary,
                     "assistantTextChars",
                     result.content.len() as u64,
                 );
-                session
-                    .messages
-                    .lock()
-                    .await
-                    .push(json!({"role":"assistant","content":result.content}));
+                append_assistant_turn(
+                    &session,
+                    json!({"role":"assistant","content":result.content}),
+                    &result,
+                )
+                .await;
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 return Ok(summary);
             }
@@ -734,8 +775,8 @@ pub async fn run_turn(
         if let Err(violation) = validate_tool_call_batch(&session, &calls) {
             let error = violation.message();
             consecutive_invalid += 1;
+            append_assistant_turn(&session, assistant_tool_message(&calls), &result).await;
             let mut messages = session.messages.lock().await;
-            messages.push(assistant_tool_message(&calls));
             for call in &calls {
                 messages.push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
             }
@@ -749,11 +790,7 @@ pub async fn run_turn(
             }
             continue;
         }
-        session
-            .messages
-            .lock()
-            .await
-            .push(assistant_tool_message(&calls));
+        append_assistant_turn(&session, assistant_tool_message(&calls), &result).await;
         let results = execute_calls(
             session.clone(),
             sink.clone(),
