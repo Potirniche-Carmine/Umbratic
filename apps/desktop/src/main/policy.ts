@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 
+import { configuredEndpointRoute } from "./endpointConfig";
 import { isRunnerToolId } from "./toolSettings";
 import type {
   CommandClass,
@@ -17,7 +18,8 @@ export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
 export const umbraticRunnerName = "UmbraticRunner";
 export const umbraticRunnerVersion = "fork-1";
 export const umbraticRunnerContractVersion = "umbratic-runner-1";
-export const allowedLocalProviderIds: LocalProviderId[] = ["company-endpoint"];
+/** Veil is the only endpoint, so this is an identity check, not an allowlist. */
+export const companyEndpointProviderId: LocalProviderId = "company-endpoint";
 export const pythonRuntimeVersion = "python-uv-venv-1";
 export const cmakeRuntimeVersion = "cmake-umbratic-build-1";
 
@@ -406,22 +408,6 @@ export function isHttpModelUrl(value: string): boolean {
   }
 }
 
-export function configuredEndpointUrl(baseUrl: string, endpointPath?: string): string {
-  const base = baseUrl.replace(/\/+$/, "");
-  const defaultPath = base.endsWith("/v1") ? "chat/completions" : "v1/chat/completions";
-  const rawPath = endpointPath?.trim() ? endpointPath.trim() : defaultPath;
-  if (/^https?:\/\//i.test(rawPath)) return rawPath;
-  let normalizedPath = rawPath.replace(/^\/+/, "");
-  if (/\/v\d+$/i.test(new URL(base).pathname) && /^v\d+\//i.test(normalizedPath)) {
-    normalizedPath = normalizedPath.replace(/^v\d+\//i, "");
-  }
-  const baseSegment = new URL(base).pathname.replace(/\/+$/, "").split("/").filter(Boolean).at(-1);
-  const routeSegment = normalizedPath.split("/").filter(Boolean)[0];
-  if (baseSegment && baseSegment === routeSegment) {
-    normalizedPath = normalizedPath.split("/").filter(Boolean).slice(1).join("/");
-  }
-  return new URL(normalizedPath, `${base}/`).toString();
-}
 
 export function isApprovedVeilChatRoute(value: string): boolean {
   try {
@@ -473,7 +459,7 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
     !config.enabledTools.includes("lsp") || lspServers.length > 0,
     "LSP must not be enabled without an approved server",
   );
-  assert(allowedLocalProviderIds.includes(selectedModel.providerId), "provider must be on the Umbratic private endpoint allowlist");
+  assert(selectedModel.providerId === companyEndpointProviderId, "provider must be the Umbratic private endpoint");
 
   const provider = config.provider as Record<string, unknown> | undefined;
   assert(provider, "provider must be configured");
@@ -484,7 +470,7 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(typeof provider.chatEndpointPath === "string", "provider must use an explicit Veil chat route");
   assert(provider.mode === "server" || provider.mode === "local", "provider mode must be an explicit trusted server or local value");
   assert(
-    isApprovedVeilChatRoute(configuredEndpointUrl(selectedModel.baseUrl, provider.chatEndpointPath)),
+    isApprovedVeilChatRoute(configuredEndpointRoute(selectedModel.baseUrl, provider.chatEndpointPath)),
     "provider route must be an approved Veil chat API",
   );
   assert(!("system" in config), "protected system prompts must stay inside Veil");

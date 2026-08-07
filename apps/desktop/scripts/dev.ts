@@ -55,13 +55,13 @@ function devEndpointEnv(args) {
       throw new Error("--server requires a URL.");
     }
     env.UMBRATIC_MANAGED_ENDPOINT_MODE = "server";
-    env.UMBRATIC_MANAGED_MODEL_BASE_URL = server;
+    env.UMBRATIC_VEIL_BASE_URL = server;
   }
 
   if (apiKey && server !== undefined) {
     env.UMBRATIC_MANAGED_MODEL_API_KEY = apiKey;
   } else if (apiKey) {
-    env.UMBRATIC_MODEL_API_KEY = apiKey;
+    env.UMBRATIC_VEIL_TOKEN = apiKey;
   }
   return env;
 }

@@ -10,19 +10,17 @@ export type EndpointMtlsConfig = {
   pinnedServerCertificateSha256?: string;
 };
 
-const configuredEndpointBaseUrl =
-  env.UMBRATIC_VEIL_BASE_URL ||
-  env.UMBRATIC_MANAGED_MODEL_BASE_URL ||
-  env.UMBRATIC_MODEL_BASE_URL ||
-  "";
+// One name per setting. The alias chains meant three spellings could each be
+// the live value, and which one won depended on an ordering nobody could see
+// from the place the variable was set.
+const configuredEndpointBaseUrl = env.UMBRATIC_VEIL_BASE_URL || "";
 
 export const defaultEndpointBaseUrl =
   configuredEndpointBaseUrl ||
   "https://your-veil-server.example";
-export const defaultEndpointApiKey =
-  env.UMBRATIC_VEIL_TOKEN || env.UMBRATIC_MODEL_API_KEY || "";
+export const defaultEndpointApiKey = env.UMBRATIC_VEIL_TOKEN || "";
 export const defaultEndpointModelId = "veil-managed";
-export const defaultLocalModelId = env.UMBRATIC_LOCAL_MODEL_ID || env.VEIL_MODEL || "";
+export const defaultLocalModelId = env.UMBRATIC_LOCAL_MODEL_ID || "";
 
 export function isModelEndpointMode(value: unknown): value is ModelEndpointMode {
   return value === "local" || value === "server";
@@ -96,21 +94,25 @@ export const defaultEndpointMtlsConfig: EndpointMtlsConfig | undefined = (() => 
   return Object.values(mtls).some(Boolean) ? mtls : undefined;
 })();
 
-export const localProviderCatalog: Array<{
+/**
+ * The one endpoint this app talks to. It was a catalog with a find-by-id lookup
+ * and an allowlist alongside, all to arbitrate between a single entry — Veil is
+ * the only model-facing surface by design, so there was never a second one to
+ * choose between.
+ */
+export const companyEndpoint: {
   providerId: LocalProviderId;
   providerName: string;
   baseUrl: string;
   apiKey: string;
   headers?: Record<string, string>;
   mtls?: EndpointMtlsConfig;
-}> = [
-  {
-    providerId: "company-endpoint",
-    providerName: "Umbratic Veil",
-    baseUrl: defaultEndpointBaseUrl,
-    apiKey: defaultEndpointApiKey,
-    mtls: defaultEndpointMtlsConfig,
-  },
-];
+} = {
+  providerId: "company-endpoint",
+  providerName: "Umbratic Veil",
+  baseUrl: defaultEndpointBaseUrl,
+  apiKey: defaultEndpointApiKey,
+  mtls: defaultEndpointMtlsConfig,
+};
 
 export const taskStatesThatCanOpen = new Set<TaskState>(["running", "review_ready", "approving", "failed"]);

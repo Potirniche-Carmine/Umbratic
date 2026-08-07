@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
-import { parseBackendUiEvent, type BackendUiEvent } from "../shared/backendEvents";
+import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
   ChatAttachment,
   DesktopApi,
@@ -141,10 +141,9 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
-    const listener = (_event: IpcRendererEvent, value: unknown) => {
-      const parsed = parseBackendUiEvent(value);
-      if (parsed.ok) callback(parsed.event);
-    };
+    // The main process validates at the runner boundary and constructs the rest
+    // itself, so by the time an event reaches this channel its shape is settled.
+    const listener = (_event: IpcRendererEvent, value: BackendUiEvent) => callback(value);
     ipcRenderer.on("umbratic:backend-event", listener);
     return () => ipcRenderer.removeListener("umbratic:backend-event", listener);
   },

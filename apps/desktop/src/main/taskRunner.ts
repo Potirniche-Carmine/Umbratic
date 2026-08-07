@@ -28,7 +28,6 @@ import {
   renewCompanySession,
 } from "./companyIdentity";
 import { companyTransportOptions, endpointProvider } from "./endpointConfig";
-import { shouldProbeVeilContext } from "./veilContext";
 import {
   readChat,
   readContextLengthSetting,
@@ -185,9 +184,9 @@ export async function runRunnerTask(
       failTask(task, providers[0]?.message ?? "Veil health check is not ready.");
       return;
     }
-    const selectedForRun = shouldProbeVeilContext(task.model, selected)
-      ? await refreshModelContextLength(selected, endpointProvider())
-      : { ...selected, contextLength: task.model?.contextLength ?? readContextLengthSetting() };
+    // Every run re-probes: the context length is Veil's to report, and a stale
+    // one silently changes how much history a turn can carry.
+    const selectedForRun = await refreshModelContextLength(selected, endpointProvider());
     task.model = selectedForRun;
     applyTaskPolicyMetadata(task);
     saveTask(task);

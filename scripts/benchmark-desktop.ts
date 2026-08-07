@@ -127,7 +127,7 @@ async function sampleDesktop(index) {
       // Keep Veil out of the measured process tree. It is unchanged by this
       // benchmark and development mode otherwise compiles it with `go run`.
       UMBRATIC_MANAGED_ENDPOINT_MODE: "server",
-      UMBRATIC_MANAGED_MODEL_BASE_URL: "https://127.0.0.1:9",
+      UMBRATIC_VEIL_BASE_URL: "https://127.0.0.1:9",
     },
     stdio: ["ignore", "ignore", "pipe"],
   });

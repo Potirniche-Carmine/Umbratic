@@ -116,11 +116,16 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   const received = [];
   const unsubscribe = exposedApi.onBackendEvent((event) => received.push(event));
   assert.equal(listeners.has("umbratic:backend-event"), true);
+  // The preload is a delivery bridge, not a third validator. Runner events are
+  // decoded at the runner boundary and everything else is constructed in the
+  // main process against BackendUiEvent, so what arrives here is already settled
+  // and is handed to the renderer as-is.
   listeners.get("umbratic:backend-event")({}, { type: "assistant.done", taskId: "task-1" });
-  listeners.get("umbratic:backend-event")({}, { ["ver" + "sion"]: 1, type: "assistant.done", taskId: "task-1" });
-  listeners.get("umbratic:backend-event")({}, { type: "assistant.delta", taskId: "task-1", text: 42 });
-  listeners.get("umbratic:backend-event")({}, { type: "permission.resolved", taskId: "task-1", id: "p", decision: "later" });
-  assert.deepEqual(plain(received), [{ type: "assistant.done", taskId: "task-1" }]);
+  listeners.get("umbratic:backend-event")({}, { type: "assistant.delta", taskId: "task-1", text: "hi" });
+  assert.deepEqual(plain(received), [
+    { type: "assistant.done", taskId: "task-1" },
+    { type: "assistant.delta", taskId: "task-1", text: "hi" },
+  ]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);
 });

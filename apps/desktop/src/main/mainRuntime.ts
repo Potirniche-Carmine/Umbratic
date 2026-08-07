@@ -37,7 +37,6 @@ import type {
   TaskInfo,
   TaskRecord,
 } from "./types";
-import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
 import { type ContextPromptPart } from "./promptContext";
 import {
   appendTaskEvent,
@@ -386,22 +385,14 @@ export function dispatchRendererEvent(event: BackendUiEvent) {
   }
 }
 
-export function validatedBackendEvent(value: unknown): BackendUiEvent | null {
-  const parsed = parseBackendUiEvent(value);
-  if (parsed.ok) return parsed.event;
-  recordLocalDiagnostic({
-    level: "warn",
-    source: "runner",
-    event: "backend.event.invalid",
-    message: backendEventDiagnostic(parsed),
-    data: { code: parsed.code, type: parsed.type },
-  });
-  return null;
-}
-
-export function persistBackendEvent(value: unknown): BackendUiEvent | null {
-  const event = validatedBackendEvent(value);
-  if (!event) return null;
+/**
+ * Events reaching here are constructed by this process against the
+ * `BackendUiEvent` type, so their shape is a compile-time fact. The runtime
+ * boundary that needs a decoder is the runner's stream, and `decodeRunnerEvent`
+ * is that decoder. Re-parsing our own typed values here only meant a shape bug
+ * became a silently dropped event instead of a type error.
+ */
+export function persistBackendEvent(event: BackendUiEvent): BackendUiEvent {
   recordBackendEventDiagnostic(event);
   recordTaskEvent(event);
   dispatchRendererEvent(event);
@@ -444,7 +435,6 @@ export function emit(event: BackendUiEvent) {
     ...event,
     at: event.at ?? new Date().toISOString(),
   });
-  if (!stampedEvent) return;
   if (stampedEvent.type === "context.usage") {
     for (const thresholdEvent of contextThresholdEvents(stampedEvent)) {
       persistBackendEvent(thresholdEvent);
@@ -453,16 +443,13 @@ export function emit(event: BackendUiEvent) {
 }
 
 export function appendUserMessage(task: TaskRecord, text: string, attachedFiles: ChatAttachment[]) {
-  const event = validatedBackendEvent({
+  const event: BackendUiEvent = {
     type: "user.message",
     taskId: task.id,
     text,
     attachedFiles,
     at: new Date().toISOString(),
-  } satisfies BackendUiEvent);
-  if (!event) {
-    throw new Error("The user message event did not match the desktop event contract.");
-  }
+  };
   task.events = appendTaskEvent(task.events ?? [], event, 500);
   saveTask(task);
   dispatchRendererEvent(event);

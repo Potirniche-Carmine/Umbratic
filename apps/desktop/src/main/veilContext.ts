@@ -7,19 +7,6 @@ export type VeilContextEndpoint = {
   mtls?: EndpointMtlsConfig;
 };
 
-type ContextModelIdentity = {
-  baseUrl: string;
-  modelId: string;
-  contextLength?: number;
-};
-
-export function shouldProbeVeilContext(
-  _previous: ContextModelIdentity | null | undefined,
-  _selected: ContextModelIdentity,
-): boolean {
-  return true;
-}
-
 function contextRoute(baseUrl: string): string {
   const url = new URL(baseUrl);
   url.pathname = `${url.pathname.replace(/\/+$/, "").replace(/\/api$/i, "")}/api/model/context`;

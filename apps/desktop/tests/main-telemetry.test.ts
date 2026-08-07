@@ -374,9 +374,11 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
         { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:02.000Z" },
         { type: "response.feedback", taskId: "task-1", messageId: "assistant-1", rating: "bad", reason: "Missing details", comment: "Missed the edge case.", at: "2026-01-01T00:00:03.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 700, reserveTokens: 100, estimatedTokens: 800, at: "2026-01-01T00:00:04.000Z" },
+        { type: "context.threshold", taskId: "task-1", threshold: 75, contextLength: 1000, estimatedTokens: 800, at: "2026-01-01T00:00:04.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 850, reserveTokens: 100, estimatedTokens: 950, phase: "preflight", source: "heuristic", confidence: "low", at: "2026-01-01T00:00:05.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 400, reserveTokens: 100, estimatedTokens: 500, at: "2026-01-01T00:00:06.000Z" },
         { type: "context.usage", taskId: "task-1", contextLength: 1000, contentTokens: 660, reserveTokens: 100, estimatedTokens: 760, at: "2026-01-01T00:00:07.000Z" },
+        { type: "context.threshold", taskId: "task-1", threshold: 75, contextLength: 1000, estimatedTokens: 760, at: "2026-01-01T00:00:07.000Z" },
         {
           type: "tool.failed",
           taskId: "task-1",
@@ -507,9 +509,13 @@ test("telemetry sync uploads redacted spool files with endpoint auth and keeps f
 });
 
 test("anchoring a preflight estimate does not change which usage events trigger thresholds", () => {
-  const usage = (extra: Record<string, unknown>) => ({
+  const runtime = loadTypeScriptModule(new URL("../src/main/mainRuntime.ts", import.meta.url), {
+    cache: new Map(),
+    mocks: { electron: { app: { getPath: () => os.tmpdir(), on: () => {}, whenReady: async () => {} }, BrowserWindow: class {} } },
+  });
+  const usage = (extra) => ({
     type: "context.usage",
-    taskId: "task-1",
+    taskId: `task-${Math.random()}`,
     contextLength: 1000,
     contentTokens: 800,
     reserveTokens: 100,
@@ -517,21 +523,13 @@ test("anchoring a preflight estimate does not change which usage events trigger 
     at: "2026-01-01T00:00:00.000Z",
     ...extra,
   });
-  const triggersFrom = (events: unknown[]) =>
-    buildRedactedTelemetryBundle(
-      [{
-        id: "task-1", title: "t", createdAt: "2026-01-01T00:00:00.000Z", state: "done",
-        changedFiles: [], reviewFiles: [], prompt: "p", events,
-      }],
-      { installId: "install-1" },
-    ).tasks[0].contextTriggers ?? [];
 
   // A preflight is still a preflight, anchored or not: the settled prefix is
   // measured, but the request has not been sent.
-  assert.equal(triggersFrom([usage({ phase: "preflight", source: "provider", confidence: "high", anchored: true })]).length, 0);
-  assert.equal(triggersFrom([usage({ phase: "preflight", source: "heuristic", confidence: "low", anchored: false })]).length, 0);
+  assert.equal(runtime.contextThresholdEvents(usage({ phase: "preflight", source: "provider", confidence: "high", anchored: true })).length, 0);
+  assert.equal(runtime.contextThresholdEvents(usage({ phase: "preflight", source: "heuristic", confidence: "low", anchored: false })).length, 0);
 
-  const observed = triggersFrom([usage({ phase: "observed", source: "provider", confidence: "high", anchored: true })]);
+  const observed = runtime.contextThresholdEvents(usage({ phase: "observed", source: "provider", confidence: "high", anchored: true }));
   // 90% of the window crosses both marks at once.
-  assert.equal(Array.from(observed, (trigger) => trigger.threshold).join(","), "75,90");
+  assert.equal(Array.from(observed, (event) => event.threshold).join(","), "75,90");
 });

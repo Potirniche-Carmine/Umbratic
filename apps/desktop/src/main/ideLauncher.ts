@@ -32,9 +32,10 @@ export async function launchCommand(command: string, args: string[]): Promise<Id
   }
 }
 
+// Only the ids listAvailableIdes can return. Windsurf sat here with no detection
+// path, so it could never be the ideId openTaskInIde looked up.
 export const commandCandidatesByIde: Record<string, string[]> = {
   code: process.platform === "win32" ? ["code.cmd", "code"] : ["code"],
-  windsurf: process.platform === "win32" ? ["windsurf.cmd", "windsurf"] : ["windsurf"],
 };
 
 export function macApplicationExists(appName: string): boolean {

@@ -313,8 +313,13 @@ function failedToolTelemetry(task: TaskRecord) {
     });
 }
 
+/**
+ * Context thresholds are emitted as `context.threshold` events when they happen.
+ * This used to fall back to re-deriving them from `context.usage` for tasks that
+ * predated those events — backward compatibility the repo does not keep.
+ */
 function contextTriggerTelemetry(task: TaskRecord) {
-  const explicit = (task.events ?? [])
+  return (task.events ?? [])
     .filter((event): event is Extract<BackendUiEvent, { type: "context.threshold" }> => event.type === "context.threshold")
     .map((event) => ({
       threshold: event.threshold,
@@ -322,24 +327,6 @@ function contextTriggerTelemetry(task: TaskRecord) {
       estimatedTokens: event.estimatedTokens,
       contextLength: event.contextLength,
     }));
-  if (explicit.length) return explicit;
-  const triggers: Array<{ threshold: 75 | 90; at?: string; estimatedTokens: number; contextLength: number }> = [];
-  let above75 = false;
-  let above90 = false;
-  for (const event of task.events ?? []) {
-    if (event.type !== "context.usage" || event.contextLength <= 0) continue;
-    if (event.phase === "preflight" || event.source === "heuristic") continue;
-    const ratio = event.estimatedTokens / event.contextLength;
-    if (ratio >= 0.75 && !above75) {
-      triggers.push({ threshold: 75, at: event.at, estimatedTokens: event.estimatedTokens, contextLength: event.contextLength });
-    }
-    if (ratio >= 0.9 && !above90) {
-      triggers.push({ threshold: 90, at: event.at, estimatedTokens: event.estimatedTokens, contextLength: event.contextLength });
-    }
-    above75 = ratio >= 0.75;
-    above90 = ratio >= 0.9;
-  }
-  return triggers;
 }
 
 export function buildRedactedTelemetryBundle(

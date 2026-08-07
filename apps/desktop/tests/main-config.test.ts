@@ -7,8 +7,6 @@ test("desktop defaults to editable local settings unless an endpoint is explicit
   const names = [
     "UMBRATIC_ALLOW_ENDPOINT_EDIT",
     "UMBRATIC_DEFAULT_ENDPOINT_MODE",
-    "UMBRATIC_MANAGED_MODEL_BASE_URL",
-    "UMBRATIC_MODEL_BASE_URL",
     "UMBRATIC_VEIL_BASE_URL",
   ];
   const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
