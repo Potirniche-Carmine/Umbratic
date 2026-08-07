@@ -144,12 +144,28 @@ pub(crate) fn fold_oldest_tool_exchange_before(messages: &mut Vec<Value>, limit:
 /// that reclaims almost nothing costs more than it saves.
 pub(crate) const MIN_PRUNE_RECLAIM_TOKENS: u64 = 4_096;
 
+/// Headroom left below the window before compaction fires, following the shape
+/// the field converges on: pi cuts at `window − 16k`, Claude Code at
+/// `window − output_reserve − 13k`, OpenCode at `usable − min(20k, max_output)`.
+///
+/// It is deliberately an absolute amount rather than a percentage of the
+/// window. What the headroom has to cover — this turn's own output plus the
+/// slack the estimator may be wrong by — does not grow with the window, so a
+/// flat percentage is wrong at both ends: on a 256k window it compacts tens of
+/// thousands of tokens early, paying a prefix-cache break for nothing, and on a
+/// small window it leaves too little room for the turn to finish.
+const SEMANTIC_TRIGGER_HEADROOM_TOKENS: u64 = 13_000;
+
 /// The one definition of "the context is full enough to compact". Both the
 /// preflight trigger and the measured verdict on a past compaction read it, so
 /// a compaction can never be judged against a different bar than it was fired
 /// against.
 pub(crate) fn semantic_trigger_tokens(context_length: u64) -> u64 {
-    context_length.saturating_sub(1_000).saturating_mul(80) / 100
+    // A window too small to hold the full headroom still has to leave some, so
+    // the reserve falls back to a quarter of the window rather than swallowing
+    // it whole.
+    let headroom = SEMANTIC_TRIGGER_HEADROOM_TOKENS.min(context_length / 4);
+    context_length.saturating_sub(headroom.max(1_000))
 }
 
 /// The cheap deterministic tier, run before any summarization call.
@@ -416,14 +432,36 @@ pub(crate) fn valid_semantic_summary(summary: &str) -> bool {
     .is_some()
 }
 
+/// How an attempt ended, kept distinct because the three cases mean different
+/// things to both the backoff and the user.
+///
+/// `Refused` is the runner declining on its own terms — nothing to compact, a
+/// prefix already known bad, a result that would not shrink anything. It is a
+/// normal no-op and costs nothing to repeat. `Failed` is the summarization
+/// round-trip not producing something usable: the call errored, or it returned
+/// a summary that failed the contract. That one is worth backing off from,
+/// because repeating it spends a full model round-trip to fail again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompactionOutcome {
+    Compacted,
+    Refused,
+    Failed,
+}
+
+impl CompactionOutcome {
+    pub(crate) fn compacted(self) -> bool {
+        self == Self::Compacted
+    }
+}
+
 pub(crate) async fn attempt_semantic_compaction(
     session: &Session,
     messages: &mut Vec<Value>,
     tools: &[Value],
     state: &SessionEstimateState,
-) -> bool {
+) -> CompactionOutcome {
     let Some(mut prefix_end) = semantic_prefix_end(messages, session.config.context_length) else {
-        return false;
+        return CompactionOutcome::Refused;
     };
     let previous_summary = session.durable_summary.lock().await.clone();
     let mut prefix = messages[..prefix_end]
@@ -437,7 +475,7 @@ pub(crate) async fn attempt_semantic_compaction(
         .cloned()
         .collect::<Vec<_>>();
     if prefix.is_empty() {
-        return false;
+        return CompactionOutcome::Refused;
     }
     let (mut source, mut carriers) = compaction_source(&prefix);
     let mut encoded = serde_json::to_string(&source).unwrap_or_default();
@@ -447,7 +485,7 @@ pub(crate) async fn attempt_semantic_compaction(
         encoded
     ));
     if session.failed_compaction_digest.lock().await.as_deref() == Some(&digest) {
-        return false;
+        return CompactionOutcome::Refused;
     }
     let summary = match compact_context(
         session,
@@ -464,7 +502,7 @@ pub(crate) async fn attempt_semantic_compaction(
                 .and_then(|end| safe_cut_point(messages, end))
             else {
                 *session.failed_compaction_digest.lock().await = Some(digest);
-                return false;
+                return CompactionOutcome::Failed;
             };
             prefix_end = retry_end;
             prefix = messages[..prefix_end]
@@ -497,13 +535,13 @@ pub(crate) async fn attempt_semantic_compaction(
                 Ok(summary) => summary,
                 Err(_) => {
                     *session.failed_compaction_digest.lock().await = Some(digest);
-                    return false;
+                    return CompactionOutcome::Failed;
                 }
             }
         }
         Err(_) => {
             *session.failed_compaction_digest.lock().await = Some(digest);
-            return false;
+            return CompactionOutcome::Failed;
         }
     };
     if summary.chars().count() < 200
@@ -514,8 +552,10 @@ pub(crate) async fn attempt_semantic_compaction(
             .iter()
             .any(|marker| summary.contains(marker))
     {
+        // The round-trip happened and produced something unusable. That is a
+        // failure, not a refusal: repeating it spends another one to fail again.
         *session.failed_compaction_digest.lock().await = Some(digest);
-        return false;
+        return CompactionOutcome::Failed;
     }
     let mut rebuilt =
         vec![json!({"role":"user","content":format!("{SEMANTIC_SUMMARY_PREFIX}{summary}")})];
@@ -537,12 +577,14 @@ pub(crate) async fn attempt_semantic_compaction(
         .0
         .heuristic_prompt_tokens;
     if projected >= current || (projected > target && current.saturating_sub(projected) < 1_000) {
+        // A valid summary that would not shrink anything. The strike counter,
+        // not the failure backoff, is what judges repeated ineffectiveness.
         *session.failed_compaction_digest.lock().await = Some(digest);
-        return false;
+        return CompactionOutcome::Refused;
     }
     *messages = rebuilt;
     *session.durable_summary.lock().await = Some(summary);
     *session.failed_compaction_digest.lock().await = None;
     session.compaction_count.fetch_add(1, Ordering::SeqCst);
-    true
+    CompactionOutcome::Compacted
 }

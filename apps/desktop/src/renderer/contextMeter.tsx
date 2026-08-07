@@ -51,12 +51,19 @@ export function ContextMeter({
   breakdown,
   draftTokens,
   compactionBlocked,
+  compactionBlockedReason,
+  compacting,
 }: {
   estimate: ContextUsageEstimate;
   state: ContextMeterState;
   breakdown?: BackendContextBreakdown;
   draftTokens: number;
   compactionBlocked?: boolean;
+  compactionBlockedReason?: "floor" | "failing";
+  /// True while a summarization pass is rewriting the prefix. Everything on the
+  /// ring describes the conversation as it was before that pass, so the meter
+  /// says it is busy rather than presenting a number that is already stale.
+  compacting?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -87,8 +94,13 @@ export function ContextMeter({
     <div className="contextMeter" ref={container}>
       <button
         type="button"
-        className={`contextMeterButton is-${estimate.level}${state === "recalculating" ? " is-stale" : ""}`}
-        aria-label={`${stateLabel[state]} context use: ${used}, ${roundedPercentage}%.`}
+        className={`contextMeterButton is-${estimate.level}${state === "recalculating" ? " is-stale" : ""}${compacting ? " is-compacting" : ""}`}
+        aria-label={
+          compacting
+            ? `Compacting context. Last known use: ${used}, ${roundedPercentage}%.`
+            : `${stateLabel[state]} context use: ${used}, ${roundedPercentage}%.`
+        }
+        aria-busy={compacting || undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((current) => !current)}
@@ -117,11 +129,24 @@ export function ContextMeter({
               <i key={row.key} className={`is-${row.key}`} style={{ width: `${share(row.tokens)}%` }} />
             ))}
         </div>
-        {state === "recalculating" ? (
+        {/* While it runs, the in-flight notice is the whole story: the
+            "compacted, awaiting measurement" note describes the pass that
+            already finished and would contradict it. */}
+        {compacting ? (
+          <span className="contextMeterNotice is-busy">
+            Compacting earlier context. This takes a few seconds, and the next response starts from a cold prefix.
+          </span>
+        ) : state === "recalculating" ? (
           <span className="contextMeterNotice">Context was compacted. The next response re-measures it.</span>
         ) : null}
+        {/* The two reasons auto-compaction stops send the user to different
+            places, so they are never collapsed into one sentence. */}
         {compactionBlocked ? (
-          <span className="contextMeterNotice">Context is at its incompressible floor.</span>
+          <span className="contextMeterNotice">
+            {compactionBlockedReason === "failing"
+              ? "Compaction keeps failing, so it has been paused for this chat."
+              : "Context is at its incompressible floor."}
+          </span>
         ) : null}
         {/* Per-category estimates over a measured total. They are not
             reconciled to the headline, and the heading says so. */}

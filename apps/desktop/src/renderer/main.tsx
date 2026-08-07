@@ -161,7 +161,10 @@ import {
   type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activityCarriesStatus, activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { activityHasTools, activityIsWork, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { CompactionRow } from "./compactionRow";
+import { providerReconnectFromEvents } from "./connectionStatus";
+export { providerReconnectFromEvents } from "./connectionStatus";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -174,7 +177,7 @@ import {
   type CommandClass,
   type CommandRun,
 } from "./commandDisplay";
-export { activityHasTools, activitySummary } from "./activityTiming";
+export { activityHasTools, activitySummary, compactionElapsedLabel } from "./activityTiming";
 export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
 const appearanceSettingsKey = "umbratic-ui-appearance";
@@ -893,6 +896,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   let reasoningEndedAt: string | undefined;
   let reasoningIndex = 0;
   let skillIndex = 0;
+  let compactionIndex = 0;
   const prompt = taskPrompt?.trim();
   const hasUserMessages = events.some((event) => event.type === "user.message");
 
@@ -965,7 +969,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     // Thinking-only turns (no tools/skills) never settle into a timed Working
     // block — but a harness-typed status line is declared narration, so a
     // block carrying one settles even when the model answered without tools.
-    if (finished && !activityHasTools(activitySegments) && !activityCarriesStatus(activitySegments)) {
+    if (finished && !activityIsWork(activitySegments)) {
       activitySegments = [];
       activityStartedAt = undefined;
       activityEndedAt = undefined;
@@ -1073,6 +1077,35 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
         : "";
       assistantBuffer = `${assistantBuffer}${separator}${event.text}`;
       assistantNeedsSeparator = false;
+      continue;
+    }
+    if (event.type === "context.compaction") {
+      // Compaction happens between the model's turns, not inside its thinking,
+      // so it opens the Working block itself rather than waiting for a tool. A
+      // finish updates the row that started it: the elapsed time the user
+      // watched is the elapsed time that settles.
+      if (event.phase === "started") {
+        closeAssistantForActivity();
+        flushActivity();
+        compactionIndex += 1;
+        items.push({
+          type: "compaction",
+          id: `compaction-${compactionIndex}`,
+          status: "running",
+          startedAt: event.at,
+        });
+        continue;
+      }
+      const open = [...items].reverse().find(
+        (item): item is Extract<ComposerTimelineItem, { type: "compaction" }> =>
+          item.type === "compaction" && item.status === "running",
+      );
+      // A finish with no open marker means the start was never seen — a resumed
+      // chat replaying a truncated event log. Nothing is invented for it.
+      if (!open) continue;
+      open.status = event.outcome ?? "unchanged";
+      open.endedAt = event.at;
+      if (event.reclaimedTokens !== undefined) open.reclaimedTokens = event.reclaimedTokens;
       continue;
     }
     if (event.type === "assistant.progress.delta") {
@@ -1285,7 +1318,9 @@ export function reconcileActivityDisclosureState(
 
   for (const activity of activities) {
     const key = activityKey(activity.id);
-    const opensLive = activityHasTools(activity.segments) || activityCarriesStatus(activity.segments);
+    // A live compaction block auto-opens for the same reason a tool block does:
+    // the row explaining the pause is the point of showing the block at all.
+    const opensLive = activityIsWork(activity.segments);
     if (!activity.finished && opensLive && !nextAutoOpenedKeys.has(key)) {
       nextAutoOpenedKeys.add(key);
       nextExpandedIds.add(activity.id);
@@ -1990,11 +2025,28 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
     return null;
   }, [visibleEvents]);
+  // The meter's own busy state, read from the compaction lifecycle rather than
+  // inferred from a stale usage number: while the prefix is being rewritten the
+  // figure on the ring describes a conversation that no longer exists.
+  const contextCompacting = useMemo(() => {
+    for (let index = visibleEvents.length - 1; index >= 0; index -= 1) {
+      const event = visibleEvents[index];
+      if (event.type === "context.compaction") return event.phase === "started";
+    }
+    return false;
+  }, [visibleEvents]);
+  const providerReconnect = useMemo(
+    () => providerReconnectFromEvents(visibleEvents),
+    [visibleEvents],
+  );
   const contextMeterLabel = contextMeterState(runnerContextUsage);
   const contextEstimateMessages = useMemo<ContextEstimateMessage[]>(() => {
     const messages = runnerContextUsage ? [] : composerItems.map((item): ContextEstimateMessage => {
       if (item.type === "user") return { text: item.rawText, attachments: item.attachedFiles };
       if (item.type === "assistant") return { text: item.text };
+      // A compaction marker is UI, not conversation: it contributes no tokens
+      // to the context it is describing.
+      if (item.type === "compaction") return { text: "" };
       return {
         text: item.segments
           .map((segment) =>
@@ -4952,6 +5004,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                           </button>
                         </div>
                       </article>
+                    ) : item.type === "compaction" ? (
+                      <CompactionRow item={item} key={item.id} clock={activityClock} />
                     ) : item.type === "assistant" ? (
                       (() => {
                         const rating = responseFeedback.get(item.id);
@@ -5014,8 +5068,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       })()
                     ) : (
                       (() => {
-                        const hasTools = activityHasTools(item.segments)
-                          || activityCarriesStatus(item.segments);
+                        const hasTools = activityIsWork(item.segments);
                         if (!item.finished && !hasTools) {
                           return (
                             <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>
@@ -5399,6 +5452,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   state={contextMeterLabel}
                   breakdown={runnerContextUsage?.breakdown}
                   compactionBlocked={runnerContextUsage?.compactionBlocked}
+                  compactionBlockedReason={runnerContextUsage?.compactionBlockedReason}
+                  compacting={contextCompacting}
                   draftTokens={composerDraftTokens}
                 />
               ) : null}
@@ -5408,6 +5463,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             <div className="closedChatNotice">
               <CheckCircle2 size={15} />
               <span>{closedChatNotice}</span>
+            </div>
+          ) : null}
+          {providerReconnect ? (
+            <div className="connectionNotice" role="status" aria-live="polite">
+              <Loader2 className="connectionNoticeSpinner" size={14} aria-hidden="true" />
+              <span>Lost connection to the model server</span>
+              <b>Retry {providerReconnect.attempt}/{providerReconnect.maxAttempts}</b>
             </div>
           ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>

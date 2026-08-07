@@ -68,7 +68,18 @@ export type BackendUiEvent = BackendEventMeta & (
   | { type: "command.started"; taskId: string; id: string; command: string; cwd: string; kind?: BackendPermissionRequest["kind"]; commandClass?: BackendCommandClass; toolKind?: string; input?: unknown }
   | { type: "command.output"; taskId: string; id: string; stream: "stdout" | "stderr"; text: string }
   | { type: "command.finished"; taskId: string; id: string; exitCode: number | null; status?: string; errorCode?: string; errorMessage?: string; durationMs?: number; details?: Record<string, unknown>; continuation?: Record<string, unknown> }
-  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; promptTokens?: number; completionTokens?: number; reserveTokens: number; protectedTokens?: number; estimatedTokens: number; phase?: "preflight" | "observed"; source?: "heuristic" | "provider"; confidence?: "low" | "high"; anchored?: boolean; compactionBlocked?: boolean; awaitingMeasurement?: boolean; breakdown?: BackendContextBreakdown }
+  | { type: "context.usage"; taskId: string; contextLength: number; contentTokens: number; promptTokens?: number; completionTokens?: number; reserveTokens: number; protectedTokens?: number; estimatedTokens: number; phase?: "preflight" | "observed"; source?: "heuristic" | "provider"; confidence?: "low" | "high"; anchored?: boolean; compactionBlocked?: boolean; compactionBlockedReason?: "floor" | "failing"; awaitingMeasurement?: boolean; breakdown?: BackendContextBreakdown }
+  // The summarization tier of compaction, as a lifecycle. It blocks the turn on
+  // an extra model round-trip and then costs the provider's prefix cache, so it
+  // is the one piece of context bookkeeping the user waits on and therefore the
+  // one that gets a live status row rather than a note in a popover.
+  | { type: "context.compaction"; taskId: string; phase: "started" | "finished"; outcome?: "compacted" | "unchanged" | "failed"; reclaimedTokens?: number }
+  // Losing the model server is the one failure a turn can recover from on
+  // its own, so it is reported as it happens rather than only when it gives
+  // up: the user is looking at a stalled composer either way, and the two
+  // situations call for different patience.
+  | { type: "provider.reconnecting"; taskId: string; attempt: number; maxAttempts: number; delayMs: number }
+  | { type: "provider.reconnected"; taskId: string; attempt: number }
   | { type: "context.threshold"; taskId: string; threshold: 75 | 90; contextLength: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
@@ -114,6 +125,9 @@ const eventTypes = new Set([
   "command.output",
   "command.finished",
   "context.usage",
+  "context.compaction",
+  "provider.reconnecting",
+  "provider.reconnected",
   "context.threshold",
   "context.compressed",
   "context.retrieved",
@@ -209,8 +223,22 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
         && (value.confidence === undefined || value.confidence === "low" || value.confidence === "high")
         && (value.anchored === undefined || typeof value.anchored === "boolean")
         && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
+        && (value.compactionBlockedReason === undefined || value.compactionBlockedReason === "floor" || value.compactionBlockedReason === "failing")
         && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
         && (value.breakdown === undefined || isContextBreakdown(value.breakdown));
+    case "context.compaction":
+      // A finished phase must say how it ended: a status row that vanishes with
+      // no outcome reads as a crash, so an outcome-less finish is not accepted.
+      return (value.phase === "started" && value.outcome === undefined)
+        || (value.phase === "finished"
+          && ["compacted", "unchanged", "failed"].includes(String(value.outcome))
+          && (value.reclaimedTokens === undefined || hasNonNegativeNumber(value, "reclaimedTokens")));
+    case "provider.reconnecting":
+      return hasNumber(value, "attempt") && Number(value.attempt) >= 1
+        && hasNumber(value, "maxAttempts") && Number(value.maxAttempts) >= Number(value.attempt)
+        && hasNonNegativeNumber(value, "delayMs");
+    case "provider.reconnected":
+      return hasNumber(value, "attempt") && Number(value.attempt) >= 1;
     case "context.threshold":
       return (value.threshold === 75 || value.threshold === 90)
         && hasNumber(value, "contextLength") && hasNumber(value, "estimatedTokens");

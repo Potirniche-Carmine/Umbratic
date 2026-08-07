@@ -60,6 +60,12 @@ pub struct Session {
     /// Consecutive semantic compactions that a later *measured* prompt size
     /// proved did not get the context below the trigger.
     pub compaction_strikes: AtomicU32,
+    /// Consecutive summarization round-trips that errored or came back
+    /// unusable. `failed_compaction_digest` only refuses the *identical* prefix,
+    /// so without this a conversation that keeps growing presents a new digest
+    /// every turn and retries a failing call forever, each retry a full model
+    /// round-trip. Cleared by any successful compaction.
+    pub compaction_failures: AtomicU32,
     /// Set when a compaction invalidated the anchor. While set, a merely
     /// heuristic estimate may not re-trigger semantic compaction, so a
     /// pessimistic guess cannot compact twice before the next measurement.
@@ -230,6 +236,7 @@ impl SessionStore {
             failed_compaction_digest: Mutex::new(None),
             compaction_count: AtomicU32::new(0),
             compaction_strikes: AtomicU32::new(0),
+            compaction_failures: AtomicU32::new(0),
             // A seeded session starts from a summary plus a tail, which no
             // past measurement describes, so it starts unanchored exactly like
             // a session whose prefix was just compacted.
@@ -356,6 +363,7 @@ pub(crate) fn test_session(cwd: &std::path::Path) -> Arc<Session> {
         failed_compaction_digest: Mutex::new(None),
         compaction_count: AtomicU32::new(0),
         compaction_strikes: AtomicU32::new(0),
+        compaction_failures: AtomicU32::new(0),
         awaiting_observed_usage: AtomicBool::new(false),
         context_calibration: Mutex::new(None),
         usage_anchor: Mutex::new(None),

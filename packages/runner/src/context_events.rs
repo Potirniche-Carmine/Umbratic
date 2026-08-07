@@ -113,8 +113,26 @@ pub(crate) fn request_estimate(
     (usage, profile_fingerprint)
 }
 
+/// Claude Code's rule: stop auto-compacting after three consecutive failures
+/// rather than spending a model round-trip per turn to fail the same way.
+pub(crate) const MAX_COMPACTION_FAILURES: u32 = 3;
+
 pub(crate) fn compaction_blocked(session: &Session) -> bool {
-    session.compaction_strikes.load(Ordering::SeqCst) >= MAX_COMPACTION_STRIKES
+    compaction_blocked_reason(session).is_some()
+}
+
+/// Why auto-compaction is off, when it is.
+///
+/// The two causes need different words to the user: a context that cannot get
+/// any smaller is a fact about the conversation and there is nothing to retry,
+/// while a summarization call that keeps failing is a fault that may clear.
+/// Reporting one as the other would send the user looking in the wrong place.
+pub(crate) fn compaction_blocked_reason(session: &Session) -> Option<&'static str> {
+    if session.compaction_strikes.load(Ordering::SeqCst) >= MAX_COMPACTION_STRIKES {
+        return Some("floor");
+    }
+    (session.compaction_failures.load(Ordering::SeqCst) >= MAX_COMPACTION_FAILURES)
+        .then_some("failing")
 }
 
 /// Whether the settled prefix was rewritten and has not been re-measured yet.
@@ -138,6 +156,9 @@ pub(crate) fn context_event(session: &Session, usage: ContextUsageEstimate) -> V
         "compactionBlocked".into(),
         json!(compaction_blocked(session)),
     );
+    if let Some(reason) = compaction_blocked_reason(session) {
+        object.insert("compactionBlockedReason".into(), json!(reason));
+    }
     object.insert(
         "awaitingMeasurement".into(),
         json!(awaiting_measurement(session)),

@@ -12,6 +12,11 @@ const fixtures = [
   ["command.started", { id: "1", command: "npm test", cwd: "." }], ["command.output", { id: "1", stream: "stdout", text: "ok" }],
   ["command.finished", { id: "1", exitCode: 0 }],
   ["context.usage", { contextLength: 64000, contentTokens: 12000, promptTokens: 12000, completionTokens: 256, reserveTokens: 4096, protectedTokens: 3187, estimatedTokens: 16096, phase: "observed", source: "provider", confidence: "high", anchored: true, compactionBlocked: false, breakdown: { systemPromptTokens: 3187, systemPromptExact: true, toolDefinitionTokens: 2100, skillTokens: 320, conversationTokens: 4200, toolResultTokens: 1900, imageTokens: 0 } }],
+  ["context.compaction", { phase: "started" }],
+  ["context.compaction", { phase: "finished", outcome: "compacted", reclaimedTokens: 32000 }],
+  ["context.compaction", { phase: "finished", outcome: "failed", reclaimedTokens: 0 }],
+  ["provider.reconnecting", { attempt: 3, maxAttempts: 10, delayMs: 2000 }],
+  ["provider.reconnected", { attempt: 4 }],
   ["context.threshold", { threshold: 75, contextLength: 64000, estimatedTokens: 48000 }],
   ["context.compressed", { toolCallId: "1", toolKind: "read", kind: "file", strategy: "text_head_tail", originalBytes: 2, outputBytes: 1 }],
   ["context.retrieved", { toolCallId: "1", hash: "abc", offset: 0, bytesShown: 1, totalBytes: 1 }],
@@ -72,6 +77,29 @@ test("malformed, unknown, and future backend events are quarantined", () => {
     },
   ]) {
     assert.equal(contract.parseBackendUiEvent({ type: "context.usage", taskId: "t", ...payload }).code, "invalid_field");
+  }
+
+  // A compaction status row the UI cannot close is worse than no row at all, so
+  // a finish without an outcome — and a start that smuggles one — are rejected.
+  for (const payload of [
+    { phase: "finished" },
+    { phase: "finished", outcome: "maybe" },
+    { phase: "started", outcome: "compacted" },
+    { phase: "running" },
+    { phase: "finished", outcome: "compacted", reclaimedTokens: -1 },
+  ]) {
+    assert.equal(contract.parseBackendUiEvent({ type: "context.compaction", taskId: "t", ...payload }).code, "invalid_field");
+  }
+
+  // "Retry 0/10" and "Retry 11/10" are both nonsense to read, so neither is
+  // allowed to reach the composer.
+  for (const payload of [
+    { attempt: 0, maxAttempts: 10, delayMs: 500 },
+    { attempt: 11, maxAttempts: 10, delayMs: 500 },
+    { attempt: 1, maxAttempts: 10, delayMs: -1 },
+    { attempt: 1, maxAttempts: 10 },
+  ]) {
+    assert.equal(contract.parseBackendUiEvent({ type: "provider.reconnecting", taskId: "t", ...payload }).code, "invalid_field");
   }
 });
 

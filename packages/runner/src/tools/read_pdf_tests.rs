@@ -103,6 +103,7 @@ async fn attachment_reader_serves_pdf_markdown_in_bounded_chunks() {
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
         compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        compaction_failures: std::sync::atomic::AtomicU32::new(0),
         awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
         usage_anchor: tokio::sync::Mutex::new(None),
         system_prompt_size: tokio::sync::Mutex::new(None),

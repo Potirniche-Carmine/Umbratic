@@ -93,6 +93,19 @@ export type ComposerTimelineItem =
       endedAt?: string;
       finished: boolean;
     }
+  // Context compaction is a boundary in the conversation, not a step of the
+  // model's plan: it replaces the transcript the model is working from. So it
+  // sits at the top level of the timeline, in the open where nothing has to be
+  // expanded to see it, and it stays in scrollback afterwards marking where the
+  // earlier turns stopped being verbatim.
+  | {
+      type: "compaction";
+      id: string;
+      status: "running" | "compacted" | "unchanged" | "failed";
+      startedAt?: string;
+      endedAt?: string;
+      reclaimedTokens?: number;
+    }
   | { type: "assistant"; id: string; text: string; streaming?: boolean };
 
 export type SkillSourceFilter = "local" | "system";

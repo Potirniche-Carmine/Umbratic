@@ -63,12 +63,26 @@ export type RunnerEvent =
       estimatedTokens?: number;
       anchored?: boolean;
       compactionBlocked?: boolean;
+      compactionBlockedReason?: "floor" | "failing";
       awaitingMeasurement?: boolean;
       breakdown?: BackendContextBreakdown;
       phase?: unknown;
       source?: unknown;
       confidence?: unknown;
     })
+  | (RunnerEventBase & {
+      type: "context.compaction";
+      phase: "started" | "finished";
+      outcome?: "compacted" | "unchanged" | "failed";
+      reclaimedTokens?: number;
+    })
+  | (RunnerEventBase & {
+      type: "provider.reconnecting";
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+    })
+  | (RunnerEventBase & { type: "provider.reconnected"; attempt: number })
   | (RunnerEventBase & {
       type: "context.retrieved";
       toolCallId: string;
@@ -194,6 +208,9 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "tool.finished",
   "context.compressed",
   "context.usage",
+  "context.compaction",
+  "provider.reconnecting",
+  "provider.reconnected",
   "context.retrieved",
   "permission.requested",
   "runner.error",
@@ -347,9 +364,28 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.estimatedTokens === undefined || hasNonNegativeNumber(value, "estimatedTokens"))
         && (value.anchored === undefined || typeof value.anchored === "boolean")
         && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
+        && (value.compactionBlockedReason === undefined || value.compactionBlockedReason === "floor" || value.compactionBlockedReason === "failing")
         && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
         && (value.breakdown === undefined || isContextBreakdown(value.breakdown))
       );
+    case "context.compaction":
+      return (
+        (value.phase === "started" || value.phase === "finished")
+        && (value.outcome === undefined
+          || ["compacted", "unchanged", "failed"].includes(String(value.outcome)))
+        && (value.reclaimedTokens === undefined
+          || hasNonNegativeNumber(value, "reclaimedTokens"))
+      );
+    case "provider.reconnecting":
+      return (
+        hasNonNegativeNumber(value, "attempt")
+        && Number(value.attempt) >= 1
+        && hasNonNegativeNumber(value, "maxAttempts")
+        && Number(value.maxAttempts) >= Number(value.attempt)
+        && hasNonNegativeNumber(value, "delayMs")
+      );
+    case "provider.reconnected":
+      return hasNonNegativeNumber(value, "attempt") && Number(value.attempt) >= 1;
     case "context.retrieved":
       return (
         hasString(value, "toolCallId")

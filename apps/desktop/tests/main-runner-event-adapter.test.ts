@@ -476,3 +476,31 @@ test("runner event adapter drops a usage event whose two names disagree", () => 
   });
   assert.deepEqual(plain(harness.emitted), []);
 });
+
+test("runner event adapter forwards the compaction lifecycle and drops an unclosable finish", () => {
+  const harness = adapterHarness();
+  harness.adapter.handle({ type: "context.compaction", taskId: "task-1", phase: "started", at: "2026-01-01T00:00:01.000Z" });
+  harness.adapter.handle({
+    type: "context.compaction",
+    taskId: "task-1",
+    phase: "finished",
+    outcome: "compacted",
+    reclaimedTokens: 32000,
+    at: "2026-01-01T00:00:07.000Z",
+  });
+  // A finish with no outcome would leave the UI showing a spinner forever, so
+  // it never reaches the renderer.
+  harness.adapter.handle({ type: "context.compaction", taskId: "task-1", phase: "finished" });
+
+  assert.deepEqual(plain(harness.emitted), [
+    { type: "context.compaction", taskId: "task-1", phase: "started", at: "2026-01-01T00:00:01.000Z" },
+    {
+      type: "context.compaction",
+      taskId: "task-1",
+      phase: "finished",
+      outcome: "compacted",
+      reclaimedTokens: 32000,
+      at: "2026-01-01T00:00:07.000Z",
+    },
+  ]);
+});

@@ -824,3 +824,93 @@ test("unsupported inline math is left verbatim rather than half translated", () 
   );
   assert.ok(html.includes(String.raw`$\frac{a}{b}$`), html);
 });
+
+test("context compaction is a top-level transcript marker, not a hidden log line", () => {
+  const { compactionElapsedLabel, composerTimelineFromEvents } = loadRenderer();
+
+  const started = [
+    { type: "user.message", taskId: "task-1", text: "Keep going", at: "2026-01-01T00:00:00.000Z" },
+    { type: "context.compaction", taskId: "task-1", phase: "started", at: "2026-01-01T00:00:01.000Z" },
+  ];
+  // The marker sits beside the messages rather than inside a Working block, so
+  // nothing has to be expanded to see that the turn is waiting on compaction.
+  const live = JSON.parse(JSON.stringify(composerTimelineFromEvents(started, undefined, "running")));
+  assert.deepEqual(live.map((item) => item.type), ["user", "compaction"]);
+  assert.equal(live[1].status, "running");
+
+  const settled = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...started,
+    {
+      type: "context.compaction",
+      taskId: "task-1",
+      phase: "finished",
+      outcome: "compacted",
+      reclaimedTokens: 32_000,
+      at: "2026-01-01T00:00:07.000Z",
+    },
+    { type: "assistant.delta", taskId: "task-1", text: "Done", at: "2026-01-01T00:00:08.000Z" },
+  ])));
+  assert.deepEqual(settled.map((item) => item.type), ["user", "compaction", "assistant"]);
+  assert.equal(settled[1].status, "compacted");
+  assert.equal(settled[1].reclaimedTokens, 32_000);
+  // The elapsed time the user watched is the elapsed time that settles.
+  assert.equal(compactionElapsedLabel(settled[1]), "6 seconds");
+
+  // A pass that reclaimed nothing still cost the wait, so it stays on screen.
+  const refused = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...started,
+    { type: "context.compaction", taskId: "task-1", phase: "finished", outcome: "unchanged", reclaimedTokens: 0, at: "2026-01-01T00:00:05.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Done", at: "2026-01-01T00:00:06.000Z" },
+  ])));
+  assert.equal(refused[1].status, "unchanged");
+
+  // A summarization round-trip that came back unusable is its own state: the
+  // turn continued on the full context, and saying "unchanged" would hide it.
+  const failed = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...started,
+    { type: "context.compaction", taskId: "task-1", phase: "finished", outcome: "failed", reclaimedTokens: 0, at: "2026-01-01T00:00:05.000Z" },
+  ])));
+  assert.equal(failed[1].status, "failed");
+
+  // A finish with no start replays from a truncated log; nothing is invented.
+  const orphaned = composerTimelineFromEvents([
+    started[0],
+    { type: "context.compaction", taskId: "task-1", phase: "finished", outcome: "compacted", at: "2026-01-01T00:00:05.000Z" },
+  ]);
+  assert.equal(orphaned.some((item) => item.type === "compaction"), false);
+});
+
+test("a dropped connection reports its retries and never outlives the outage", () => {
+  const { providerReconnectFromEvents } = loadRenderer();
+
+  const dropped = [
+    { type: "user.message", taskId: "task-1", text: "go", at: "2026-01-01T00:00:00.000Z" },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 10, delayMs: 500, at: "2026-01-01T00:00:01.000Z" },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 2, maxAttempts: 10, delayMs: 1000, at: "2026-01-01T00:00:02.000Z" },
+  ];
+  // The composer shows the latest attempt, not the first one.
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(providerReconnectFromEvents(dropped))),
+    { attempt: 2, maxAttempts: 10 },
+  );
+
+  // An explicit reconnect clears it.
+  assert.equal(
+    providerReconnectFromEvents([...dropped, { type: "provider.reconnected", taskId: "task-1", attempt: 3 }]),
+    null,
+  );
+
+  // So does any evidence the turn resumed, which is what stops a missed
+  // reconnected event from stranding the banner on screen forever.
+  for (const resumed of [
+    { type: "assistant.delta", taskId: "task-1", text: "back" },
+    { type: "command.started", taskId: "task-1", id: "c1", command: "ls", cwd: "." },
+    { type: "task.error", taskId: "task-1", message: "gave up" },
+    { type: "turn.outcome", taskId: "task-1", outcome: "aborted" },
+  ]) {
+    assert.equal(providerReconnectFromEvents([...dropped, resumed]), null, resumed.type);
+  }
+
+  // A healthy turn never shows it at all.
+  assert.equal(providerReconnectFromEvents([dropped[0]]), null);
+});

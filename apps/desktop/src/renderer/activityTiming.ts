@@ -43,12 +43,33 @@ export function activityCarriesStatus(
   );
 }
 
+export function activityIsWork(
+  segments: ReadonlyArray<{ type: string; statusLine?: boolean }> | undefined,
+): boolean {
+  return activityHasTools(segments) || activityCarriesStatus(segments);
+}
+
+/// How long compaction has been running, or how long it took.
+///
+/// A running row is measured against the caller's clock rather than its own, so
+/// the elapsed time ticks with the Working header above it instead of drifting
+/// against it.
+export function compactionElapsedLabel(
+  segment: { startedAt?: string; endedAt?: string; status: string },
+  now = Date.now(),
+): string {
+  const start = eventTimeMs(segment.startedAt);
+  if (start === undefined) return "";
+  const end = segment.status === "running" ? now : eventTimeMs(segment.endedAt) ?? now;
+  return formatDuration(Math.max(0, end - start));
+}
+
 export function activitySummary(item: TimedActivity, now = Date.now()): string {
   const start = eventTimeMs(item.startedAt);
   const end = item.finished ? eventTimeMs(item.endedAt) ?? start : now;
   const duration = formatDuration(start === undefined || end === undefined ? null : Math.max(0, end - start));
   if (!item.finished) {
-    if (!activityHasTools(item.segments) && !activityCarriesStatus(item.segments)) return "Thinking";
+    if (!activityIsWork(item.segments)) return "Thinking";
     return ["Working", duration].filter(Boolean).join(" · ");
   }
   return duration ? `Worked for ${duration}` : "Work complete";

@@ -1,0 +1,98 @@
+/* The compaction marker sits at the top level of the transcript, between
+   messages, because compaction is a boundary in the conversation rather than a
+   step of the model's plan: it replaces the transcript the model reads from.
+   Rules on both sides make it read as that boundary, and nothing has to be
+   expanded to see it. */
+.compactionMarker {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 2px 0;
+}
+
+.compactionMarker::before,
+.compactionMarker::after {
+  content: "";
+  height: 1px;
+  background: color-mix(in srgb, var(--line-strong) 70%, transparent);
+}
+
+.compactionMarkerBody {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 70%, transparent);
+  border-radius: 999px;
+  background: var(--surface, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.compactionMarkerBody svg {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--accent) 72%, var(--muted));
+}
+
+.compactionMarkerBody strong {
+  color: color-mix(in srgb, var(--text) 76%, var(--muted));
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.compactionMarkerBody em {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Running is the state the user is actually waiting in, so it is the one state
+   that draws the eye; the settled marker recedes into scrollback. */
+.compactionMarker.is-running .compactionMarkerBody {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line-strong));
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+}
+
+.compactionMarker.is-running .compactionMarkerBody strong {
+  color: var(--text);
+}
+
+/* A pass that reclaimed nothing still happened and still cost the wait, so it
+   stays visible — dimmer, not hidden. */
+.compactionMarker.is-unchanged .compactionMarkerBody {
+  opacity: 0.78;
+}
+
+/* A failed summarization round-trip is a fault, not a quiet no-op: the turn
+   continues on the full context, and the user should be able to see why the
+   window stopped shrinking. */
+.compactionMarker.is-failed .compactionMarkerBody {
+  border-color: color-mix(in srgb, var(--amber) 46%, var(--line-strong));
+}
+
+.compactionMarker.is-failed .compactionMarkerBody svg,
+.compactionMarker.is-failed .compactionMarkerBody strong {
+  color: var(--amber);
+}
+
+.compactionSpinner {
+  animation: compactionSpin 1s linear infinite;
+}
+
+@keyframes compactionSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compactionSpinner {
+    animation: none;
+  }
+}

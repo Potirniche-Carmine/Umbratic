@@ -10,6 +10,11 @@ use crate::{
     response_output::{SafeAssistantText, looks_like_unstructured_tool_call},
     session::{EventSink, Session},
     tools::ToolCall,
+    veil_retry::{
+        MAX_CONNECT_ATTEMPTS, VeilAttemptError, VeilAttemptInput, committed_output,
+        emit_reconnected, emit_reconnecting, reconnect_delay_ms, retry_after_from,
+        retryable_status, sleep_unless_aborted,
+    },
     veil_tls::{expected_pin, pinned_tls_config, resolve_server_name, verify_certificate_pin},
 };
 
@@ -796,11 +801,67 @@ pub async fn stream_veil_chat(
     if let Some(bucket) = harness_bucket.as_deref().filter(|value| !value.is_empty()) {
         object.insert("harness_bucket".into(), Value::String(bucket.to_owned()));
     }
-    let client = shared_client(&session.config.provider)?;
+
+    let attempt_input = VeilAttemptInput {
+        endpoint,
+        host_header,
+        body,
+        hold_assistant_text,
+    };
+    let mut attempt = 1_u32;
+    loop {
+        match attempt_veil_chat(session, sink, &attempt_input).await {
+            Ok(result) => {
+                if attempt > 1 {
+                    emit_reconnected(session, sink, attempt);
+                }
+                return Ok(result);
+            }
+            Err(error) => {
+                // Three separate reasons not to try again, and they do not mean
+                // the same thing. Committed means the caller could already have
+                // acted on this turn, so repeating it would duplicate work
+                // rather than recover it. Not retryable means the failure will
+                // answer the same way next time. Out of attempts means the
+                // server is not coming back on a timescale anyone will wait for.
+                if error.committed
+                    || !error.retryable
+                    || attempt >= MAX_CONNECT_ATTEMPTS
+                    || session.is_aborted()
+                {
+                    return Err(error.message);
+                }
+                let delay_ms = reconnect_delay_ms(attempt, error.retry_after_ms);
+                emit_reconnecting(session, sink, attempt, delay_ms);
+                if !sleep_unless_aborted(session, delay_ms).await {
+                    return Err("model request aborted".into());
+                }
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// One request to Veil, from opening the connection to the completion marker.
+async fn attempt_veil_chat(
+    session: &Session,
+    sink: &EventSink,
+    input: &VeilAttemptInput,
+) -> Result<VeilChatResult, VeilAttemptError> {
+    let VeilAttemptInput {
+        endpoint,
+        host_header,
+        body,
+        hold_assistant_text,
+    } = input;
+    let hold_assistant_text = *hold_assistant_text;
+    // A misconfigured provider answers the same way every time.
+    let client =
+        shared_client(&session.config.provider).map_err(VeilAttemptError::final_failure)?;
     let mut request = client
         .post(endpoint.clone())
         .header("Content-Type", "application/json");
-    if let Some(host) = host_header {
+    if let Some(host) = host_header.as_deref() {
         request = request.header("Host", host);
     }
     let bearer = provider_bearer(&session.config.provider);
@@ -814,24 +875,39 @@ pub async fn stream_veil_chat(
     tokio::pin!(send_future);
     let response = loop {
         if session.is_aborted() {
-            return Err("model request aborted".into());
+            return Err(VeilAttemptError::final_failure("model request aborted"));
         }
         tokio::select! {
             result = &mut send_future => {
-                break result.map_err(|error| format!("model request failed: {}", describe_request_error(&error)))?;
+                // Never reaching the server is the case retrying exists for.
+                break result.map_err(|error| VeilAttemptError::retryable(format!(
+                    "model request failed: {}",
+                    describe_request_error(&error)
+                )))?;
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
         }
     };
-    verify_certificate_pin(&session.config.provider, &response)?;
+    // A pin mismatch is a security answer, not a transport hiccup. Repeating it
+    // would only be repeatedly refusing the same certificate.
+    verify_certificate_pin(&session.config.provider, &response)
+        .map_err(VeilAttemptError::final_failure)?;
     let status = response.status();
     if !status.is_success() {
+        // Read before the body is consumed: a loaded gateway answering 429 or
+        // 503 usually says when to come back, and that beats guessing.
+        let retry_after = retry_after_from(&response);
         let text = response.text().await.unwrap_or_default();
         let payload = serde_json::from_str::<Value>(&text).ok();
-        return Err(format!(
+        let message = format!(
             "model request failed: {}",
             veil_failure_message(Some(status.as_u16()), payload.as_ref())
-        ));
+        );
+        return Err(if retryable_status(status.as_u16()) {
+            VeilAttemptError::retryable(message).after(retry_after)
+        } else {
+            VeilAttemptError::final_failure(message)
+        });
     }
     let mut result = VeilChatResult::default();
     let mut partial = BTreeMap::new();
@@ -842,7 +918,7 @@ pub async fn stream_veil_chat(
     let mut stream = response.bytes_stream();
     loop {
         if session.is_aborted() {
-            return Err("model request aborted".into());
+            return Err(VeilAttemptError::final_failure("model request aborted"));
         }
         let chunk =
             match tokio::time::timeout(std::time::Duration::from_millis(25), stream.next()).await {
@@ -850,12 +926,21 @@ pub async fn stream_veil_chat(
                 Ok(None) => break,
                 Err(_) => continue,
             };
-        let chunk = chunk.map_err(|error| describe_request_error(&error))?;
-        for line in complete_utf8_lines(&mut buffer, &chunk)? {
+        // A connection dropped mid-stream is still recoverable for as long as
+        // the turn has produced nothing the caller could have acted on, so the
+        // question is asked again at every message rather than assumed once.
+        let committed = committed_output(&result, &partial, text_streamed);
+        let chunk = chunk.map_err(|error| {
+            VeilAttemptError::retryable(describe_request_error(&error)).committed_if(committed)
+        })?;
+        for line in complete_utf8_lines(&mut buffer, &chunk)
+            .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?
+        {
             if let Some(error) = veil_stream_error(&line) {
-                return Err(error);
+                return Err(VeilAttemptError::final_failure(error).committed_if(committed));
             }
-            let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)?;
+            let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)
+                .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
             let safe = safe_output.push(&content);
             text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold_assistant_text);
             if line_completed {
@@ -863,14 +948,18 @@ pub async fn stream_veil_chat(
             }
         }
     }
-    let trailing = std::str::from_utf8(&buffer)
-        .map_err(|_| "model stream ended with invalid UTF-8".to_owned())?;
+    let committed = committed_output(&result, &partial, text_streamed);
+    let trailing = std::str::from_utf8(&buffer).map_err(|_| {
+        VeilAttemptError::final_failure("model stream ended with invalid UTF-8")
+            .committed_if(committed)
+    })?;
     if !trailing.trim().is_empty() {
         let trailing = trailing.trim_end_matches(['\r', '\n']);
         if let Some(error) = veil_stream_error(trailing) {
-            return Err(error);
+            return Err(VeilAttemptError::final_failure(error).committed_if(committed));
         }
-        let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)?;
+        let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)
+            .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
         let safe = safe_output.push(&content);
         text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold_assistant_text);
         if line_completed {
@@ -878,7 +967,12 @@ pub async fn stream_veil_chat(
         }
     }
     if !completed {
-        return Err("model stream ended before the completion marker".into());
+        // A stream that stopped short of its marker having produced nothing is
+        // the server going away mid-answer, which is worth another attempt.
+        return Err(
+            VeilAttemptError::retryable("model stream ended before the completion marker")
+                .committed_if(committed_output(&result, &partial, text_streamed)),
+        );
     }
     let tail = safe_output.finish();
     text_streamed |= stream_or_hold(sink, session, &mut result, tail, hold_assistant_text);
