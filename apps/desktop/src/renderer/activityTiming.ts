@@ -43,19 +43,10 @@ export function activityCarriesStatus(
   );
 }
 
-// Compaction is runner work the user is waiting on, so a block carrying it is
-// real work even when the turn ran no tools: it reads "Working", it settles
-// into the timeline, and it never collapses away as a thinking-only block.
-export function activityCarriesCompaction(
-  segments: ReadonlyArray<{ type: string }> | undefined,
-): boolean {
-  return (segments ?? []).some((segment) => segment.type === "compaction");
-}
-
 export function activityIsWork(
   segments: ReadonlyArray<{ type: string; statusLine?: boolean }> | undefined,
 ): boolean {
-  return activityHasTools(segments) || activityCarriesStatus(segments) || activityCarriesCompaction(segments);
+  return activityHasTools(segments) || activityCarriesStatus(segments);
 }
 
 /// How long compaction has been running, or how long it took.

@@ -1084,9 +1084,9 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       // watched is the elapsed time that settles.
       if (event.phase === "started") {
         closeAssistantForActivity();
-        markActivityTime(event.at, undefined);
+        flushActivity();
         compactionIndex += 1;
-        activitySegments.push({
+        items.push({
           type: "compaction",
           id: `compaction-${compactionIndex}`,
           status: "running",
@@ -1094,17 +1094,16 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
         });
         continue;
       }
-      const open = [...activitySegments].reverse().find(
-        (segment): segment is Extract<ComposerActivitySegment, { type: "compaction" }> =>
-          segment.type === "compaction" && segment.status === "running",
+      const open = [...items].reverse().find(
+        (item): item is Extract<ComposerTimelineItem, { type: "compaction" }> =>
+          item.type === "compaction" && item.status === "running",
       );
-      // A finish with no open row means the start was never seen — a resumed
+      // A finish with no open marker means the start was never seen — a resumed
       // chat replaying a truncated event log. Nothing is invented for it.
       if (!open) continue;
       open.status = event.outcome === "compacted" ? "compacted" : "unchanged";
       open.endedAt = event.at;
       if (event.reclaimedTokens !== undefined) open.reclaimedTokens = event.reclaimedTokens;
-      markActivityTime(undefined, event.at);
       continue;
     }
     if (event.type === "assistant.progress.delta") {
@@ -2039,6 +2038,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const messages = runnerContextUsage ? [] : composerItems.map((item): ContextEstimateMessage => {
       if (item.type === "user") return { text: item.rawText, attachments: item.attachedFiles };
       if (item.type === "assistant") return { text: item.text };
+      // A compaction marker is UI, not conversation: it contributes no tokens
+      // to the context it is describing.
+      if (item.type === "compaction") return { text: "" };
       return {
         text: item.segments
           .map((segment) =>
@@ -2046,11 +2048,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               ? segment.text
               : segment.type === "skill"
                 ? segment.skillId
-                // A compaction row is UI, not conversation: it contributes no
-                // tokens to the context it is describing.
-                : segment.type === "compaction"
-                  ? ""
-                  : [segment.run.command, segment.run.stdout, segment.run.stderr].filter(Boolean).join("\n"),
+                : [segment.run.command, segment.run.stdout, segment.run.stderr].filter(Boolean).join("\n"),
           )
           .filter(Boolean)
           .join("\n"),
@@ -5000,6 +4998,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                           </button>
                         </div>
                       </article>
+                    ) : item.type === "compaction" ? (
+                      <CompactionRow item={item} key={item.id} clock={activityClock} />
                     ) : item.type === "assistant" ? (
                       (() => {
                         const rating = responseFeedback.get(item.id);
@@ -5138,9 +5138,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                           <WorkMarkdownContent content={segment.text.trim()} streaming={!segment.finished} />
                                         </section>
                                       );
-                                    }
-                                    if (segment.type === "compaction") {
-                                      return <CompactionRow key={segment.id} segment={segment} clock={activityClock} />;
                                     }
                                     if (segment.type === "skill") {
                                       const skillName = skills.find((skill) => skill.id === segment.skillId)?.name ?? segment.skillId;
