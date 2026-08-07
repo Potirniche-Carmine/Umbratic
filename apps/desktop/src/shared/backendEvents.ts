@@ -58,9 +58,7 @@ type BackendEventMeta = { at?: string; endedAt?: string };
 
 export type BackendUiEvent = BackendEventMeta & (
   | { type: "user.message"; taskId: string; text: string; attachedFiles?: BackendChatAttachment[] }
-  // kind "status" is harness-emitted work narration (the run's opening status
-  // line); it renders inside the working timeline, never as answer text.
-  | { type: "assistant.delta"; taskId: string; text: string; kind?: "status" }
+  | { type: "assistant.delta"; taskId: string; text: string }
   | { type: "assistant.progress.delta"; taskId: string; text: string }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }

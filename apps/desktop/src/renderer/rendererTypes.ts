@@ -64,10 +64,7 @@ export type AppearanceSettings = {
 export type PermissionRequest = TaskPermissionRequest;
 
 export type ComposerActivitySegment =
-  // `statusLine: true` marks the run's harness-typed opening status line. It
-  // is narration by declaration rather than by tool-order heuristics, and a
-  // block that carries one settles into the timeline even without tool rows.
-  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean; statusLine?: boolean }
+  | { type: "reasoning"; id: string; text: string; durationMs: number | null; finished: boolean }
   | {
       type: "skill";
       id: string;

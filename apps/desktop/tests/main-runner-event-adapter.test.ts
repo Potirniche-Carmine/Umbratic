@@ -126,7 +126,10 @@ test("runner event adapter shows safe public progress in fast mode", () => {
   }]);
 });
 
-test("a status-typed assistant delta keeps its kind so the renderer can home it", () => {
+// The run's opening orientation is ordinary assistant prose, so it reaches the
+// renderer untagged and settles above the working block like any other pre-tool
+// sentence. A `kind` from an older runner is dropped, never forwarded.
+test("the run's opening sentence is forwarded as plain assistant prose", () => {
   const harness = adapterHarness();
   harness.adapter.handle({
     type: "assistant.delta",
@@ -138,7 +141,6 @@ test("a status-typed assistant delta keeps its kind so the renderer can home it"
 
   assert.deepEqual(plain(harness.emitted), [{
     type: "assistant.delta",
-    kind: "status",
     taskId: "task-1",
     text: "I will map this folder's layout and read its key manifests.\n\n",
     at: "2026-01-01T00:00:00.000Z",

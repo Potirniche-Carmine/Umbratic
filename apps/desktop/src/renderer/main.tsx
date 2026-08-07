@@ -161,7 +161,7 @@ import {
   type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activityHasTools, activityIsWork, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 export { providerReconnectFromEvents } from "./connectionStatus";
@@ -967,9 +967,8 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       return;
     }
     // Thinking-only turns (no tools/skills) never settle into a timed Working
-    // block — but a harness-typed status line is declared narration, so a
-    // block carrying one settles even when the model answered without tools.
-    if (finished && !activityIsWork(activitySegments)) {
+    // block.
+    if (finished && !activityHasTools(activitySegments)) {
       activitySegments = [];
       activityStartedAt = undefined;
       activityEndedAt = undefined;
@@ -1039,26 +1038,6 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
-      if (event.kind === "status") {
-        // Harness-typed work narration: it belongs to the working timeline
-        // from its first token. Routing it by type (not by whether tools have
-        // appeared yet) is what keeps it from flashing as a response before
-        // the first tool call, and from merging into a tool-less answer.
-        const status = event.text.trim();
-        if (status) {
-          flushReasoning();
-          reasoningIndex += 1;
-          activitySegments.push({
-            type: "reasoning",
-            id: `status-${reasoningIndex}`,
-            text: status,
-            durationMs: null,
-            finished: true,
-            statusLine: true,
-          });
-        }
-        continue;
-      }
       flushReasoning();
       // The work is over once the model starts speaking, so the first token of a
       // burst closes the elapsed window. Later tokens of the same answer must not
@@ -1320,7 +1299,7 @@ export function reconcileActivityDisclosureState(
     const key = activityKey(activity.id);
     // A live compaction block auto-opens for the same reason a tool block does:
     // the row explaining the pause is the point of showing the block at all.
-    const opensLive = activityIsWork(activity.segments);
+    const opensLive = activityHasTools(activity.segments);
     if (!activity.finished && opensLive && !nextAutoOpenedKeys.has(key)) {
       nextAutoOpenedKeys.add(key);
       nextExpandedIds.add(activity.id);
@@ -5068,7 +5047,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       })()
                     ) : (
                       (() => {
-                        const hasTools = activityIsWork(item.segments);
+                        const hasTools = activityHasTools(item.segments);
                         if (!item.finished && !hasTools) {
                           return (
                             <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>

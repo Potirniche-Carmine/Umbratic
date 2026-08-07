@@ -17,24 +17,19 @@ test("runner event decoder accepts handled events and marks internal events as i
   assert.equal(assistant.ignored, false);
   assert.equal(assistant.event.text, "hello");
 
-  // The harness-typed opening status line keeps its kind; anything else in
-  // that field is an invalid payload rather than silently untyped text.
-  const status = decoder.decodeRunnerEvent({
-    type: "assistant.delta",
-    kind: "status",
-    taskId: "task-1",
-    text: "I will map this folder.",
-  });
-  assert.equal(status.ok, true);
-  assert.equal(status.event.kind, "status");
-  const badKind = decoder.decodeRunnerEvent({
-    type: "assistant.delta",
-    kind: "banner",
-    taskId: "task-1",
-    text: "hello",
-  });
-  assert.equal(badKind.ok, false);
-  assert.equal(badKind.code, "invalid_payload");
+  // `kind` no longer routes a delta anywhere, so a leftover tag from an older
+  // runner is accepted rather than rejected: failing the payload would drop the
+  // run's opening sentence outright. The adapter is what stops forwarding it.
+  for (const kind of ["status", "banner"]) {
+    const tagged = decoder.decodeRunnerEvent({
+      type: "assistant.delta",
+      kind,
+      taskId: "task-1",
+      text: "I will map this folder.",
+    });
+    assert.equal(tagged.ok, true, kind);
+    assert.equal(tagged.event.text, "I will map this folder.", kind);
+  }
 
   const legacyFinished = decoder.decodeRunnerEvent({
     type: "tool.finished",
