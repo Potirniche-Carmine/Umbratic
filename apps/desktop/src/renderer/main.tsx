@@ -142,6 +142,7 @@ import {
   type MarkdownBlock,
 } from "./composerText";
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
+import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
 import { appendTaskEvent, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
@@ -1276,6 +1277,16 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   flushReasoning(taskState !== "running");
   flushActivity(taskState !== "running");
   flushAssistant(taskState === "running");
+
+  // The turn's answer is the prose nothing follows. Deciding it by position
+  // rather than by the run having settled is what keeps it stable: a message
+  // stops being the answer the moment work opens beneath it, and the real
+  // answer is the answer from its first streamed token — it never restyles
+  // under the reader.
+  const closing = items.at(-1);
+  if (closing?.type === "assistant") {
+    closing.final = true;
+  }
 
   return items;
 }
@@ -5009,65 +5020,38 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     ) : item.type === "compaction" ? (
                       <CompactionRow item={item} key={item.id} clock={activityClock} />
                     ) : item.type === "assistant" ? (
-                      (() => {
-                        const rating = responseFeedback.get(item.id);
-                        return (
-                          <article className="timelineMessage assistantMessage" key={item.id}>
-                            {item.streaming ? (
-                              <StreamingTextContent content={item.text} />
-                            ) : (
-                              <LongMarkdownContent
-                                content={item.text}
-                                onReviewFileClick={openReviewReference}
-                                reviewFiles={reviewFiles}
-                              />
-                            )}
-                            {item.id === lastAssistantItemId && reviewReadyForDisplay && documentReviewFiles.length ? (
-                              <div className="documentResponseLinks" aria-label="Generated documents">
-                                {documentReviewFiles.map((file) => (
-                                  <DocumentReviewResponseLink
-                                    file={file}
-                                    key={file.path}
-                                    onOpenReview={openReviewPanel}
-                                  />
-                                ))}
-                              </div>
-                            ) : null}
-                            <div className="responseFeedbackControls">
-                              <div className="messageActions">
-                                <button
-                                  className="messageAction"
-                                  type="button"
-                                  onClick={() => void copyText(assistantCopyText || item.text)}
-                                  title="Copy response"
-                                >
-                                  <Copy size={14} />
-                                </button>
-                                <button
-                                  className={`messageAction feedbackGood ${rating === "good" ? "active" : ""}`}
-                                  type="button"
-                                  onClick={(event) => openResponseFeedbackDialog(item.id, "good", event.currentTarget)}
-                                  aria-pressed={rating === "good"}
-                                  title={rating === "good" ? "Edit good response feedback" : "Good response"}
-                                  aria-haspopup="dialog"
-                                >
-                                  <ThumbsUp size={14} />
-                                </button>
-                                <button
-                                  className={`messageAction feedbackBad ${rating === "bad" ? "active" : ""}`}
-                                  type="button"
-                                  onClick={(event) => openResponseFeedbackDialog(item.id, "bad", event.currentTarget)}
-                                  aria-pressed={rating === "bad"}
-                                  title={rating === "bad" ? "Edit bad response feedback" : "Bad response"}
-                                  aria-haspopup="dialog"
-                                >
-                                  <ThumbsDown size={14} />
-                                </button>
-                              </div>
+                      <AssistantMessage
+                        key={item.id}
+                        item={item}
+                        settled={!isGenerating}
+                        rating={responseFeedback.get(item.id)}
+                        copyText={assistantCopyText}
+                        onCopy={(text) => void copyText(text)}
+                        onRate={openResponseFeedbackDialog}
+                        documents={
+                          item.final && reviewReadyForDisplay && documentReviewFiles.length ? (
+                            <div className="documentResponseLinks" aria-label="Generated documents">
+                              {documentReviewFiles.map((file) => (
+                                <DocumentReviewResponseLink
+                                  file={file}
+                                  key={file.path}
+                                  onOpenReview={openReviewPanel}
+                                />
+                              ))}
                             </div>
-                          </article>
-                        );
-                      })()
+                          ) : null
+                        }
+                      >
+                        {item.streaming ? (
+                          <StreamingTextContent content={item.text} />
+                        ) : (
+                          <LongMarkdownContent
+                            content={item.text}
+                            onReviewFileClick={openReviewReference}
+                            reviewFiles={reviewFiles}
+                          />
+                        )}
+                      </AssistantMessage>
                     ) : (
                       (() => {
                         const hasTools = activityHasTools(item.segments);

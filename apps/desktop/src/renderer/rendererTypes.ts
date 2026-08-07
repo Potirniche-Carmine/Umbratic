@@ -103,7 +103,12 @@ export type ComposerTimelineItem =
       endedAt?: string;
       reclaimedTokens?: number;
     }
-  | { type: "assistant"; id: string; text: string; streaming?: boolean };
+  // `final` marks the prose nothing follows: the turn's answer. Everything
+  // earlier — the opening sentence, narration between rounds of work — is
+  // progress, and reads that way. It is decided by position rather than by the
+  // run being over, so it is settled the moment a Working block opens beneath a
+  // message and never changes back.
+  | { type: "assistant"; id: string; text: string; streaming?: boolean; final?: boolean };
 
 export type SkillSourceFilter = "local" | "system";
 export type PromptMention = { kind: "file" | "skill"; query: string; start: number; end: number };

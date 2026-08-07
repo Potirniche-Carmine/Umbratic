@@ -247,6 +247,42 @@
   transform-origin: 50% 0;
 }
 
+/* A turn is one answer surrounded by narration. Progress messages — the opening
+   sentence, the aside between two rounds of work — take the same recessive
+   weight as the Working blocks they sit between, so the eye lands on the answer
+   and not on whichever prose happens to be at the top of the viewport. */
+.timelineMessage.assistantProgress {
+  color: var(--muted);
+  font-size: 0.94em;
+}
+
+.timelineMessage.assistantProgress::before {
+  opacity: 0.28;
+}
+
+/* Full-strength text plus the only actions in the turn: between them, which
+   message is the reply stops being a guess. */
+.timelineMessage.assistantAnswer {
+  color: var(--text);
+}
+
+.timelineMessage.assistantAnswer::before {
+  width: 2px;
+  opacity: 1;
+}
+
+.answerBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding-right: 4px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .timelineActivity {
   position: relative;
   width: min(calc(100% - 18px), 980px);
