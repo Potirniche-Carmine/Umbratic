@@ -881,18 +881,24 @@ test("context compaction is a top-level transcript marker, not a hidden log line
 });
 
 test("a dropped connection reports its retries and never outlives the outage", () => {
-  const { providerReconnectFromEvents } = loadRenderer();
+  const { providerReconnectFromEvents, reconnectElapsedLabel } = loadRenderer();
 
   const dropped = [
     { type: "user.message", taskId: "task-1", text: "go", at: "2026-01-01T00:00:00.000Z" },
-    { type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 10, delayMs: 500 },
-    { type: "provider.reconnecting", taskId: "task-1", attempt: 2, maxAttempts: 10, delayMs: 1000 },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 24, delayMs: 500, at: "2026-01-01T00:00:01.000Z" },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 2, maxAttempts: 24, delayMs: 1000, at: "2026-01-01T00:00:02.000Z" },
   ];
-  // The composer shows the latest attempt, not the first one.
+  // The composer shows the latest attempt, timed from when the outage began
+  // rather than from the attempt currently in flight.
   assert.deepEqual(
     JSON.parse(JSON.stringify(providerReconnectFromEvents(dropped))),
-    { attempt: 2, maxAttempts: 10 },
+    { attempt: 2, maxAttempts: 24, since: "2026-01-01T00:00:01.000Z" },
   );
+  // Seconds while it is short, then whole minutes: the banner is glanced at,
+  // and a ticking seconds counter past the first minute only draws the eye.
+  assert.equal(reconnectElapsedLabel("2026-01-01T00:00:01.000Z", Date.parse("2026-01-01T00:00:09.000Z")), "8s");
+  assert.equal(reconnectElapsedLabel("2026-01-01T00:00:01.000Z", Date.parse("2026-01-01T00:03:31.000Z")), "3m");
+  assert.equal(reconnectElapsedLabel(undefined, Date.now()), "");
 
   // An explicit reconnect clears it.
   assert.equal(

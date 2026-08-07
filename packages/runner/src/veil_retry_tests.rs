@@ -4,18 +4,35 @@ use serde_json::json;
 use crate::tools::ToolCall;
 
 #[test]
-fn the_backoff_grows_but_is_capped_so_a_recovered_server_is_noticed() {
-    // Doubling, then a ceiling: a server that comes back should be used again
-    // within seconds of doing so, not after a minute of unbounded backoff.
+fn the_backoff_covers_a_restart_without_stalling_on_a_recovered_server() {
+    // Doubling at first, so a blip costs half a second rather than fifteen.
     assert_eq!(reconnect_delay_ms(1), 500);
     assert_eq!(reconnect_delay_ms(2), 1_000);
     assert_eq!(reconnect_delay_ms(4), 4_000);
-    for attempt in 5..=MAX_CONNECT_ATTEMPTS {
+    // Then a ceiling, which is what bounds how long a server that has already
+    // come back waits to be noticed.
+    for attempt in 6..=MAX_CONNECT_ATTEMPTS {
         assert_eq!(reconnect_delay_ms(attempt), RECONNECT_MAX_DELAY_MS);
     }
-    // The whole ladder is a wait a person will sit through, not an afternoon.
-    let total: u64 = (1..MAX_CONNECT_ATTEMPTS).map(reconnect_delay_ms).sum();
-    assert!(total < 60_000, "the retry ladder spans {total}ms");
+    // The budget is reached by many moderate waits rather than a few long
+    // ones, which is the whole reason the ceiling is separate from the total.
+    let at_ceiling = (1..MAX_CONNECT_ATTEMPTS)
+        .filter(|attempt| reconnect_delay_ms(*attempt) == RECONNECT_MAX_DELAY_MS)
+        .count();
+    assert!(
+        at_ceiling >= 15,
+        "only {at_ceiling} waits sit at the ceiling, so the ladder is a handful \
+         of long sleeps rather than a steady poll",
+    );
+
+    // The whole ladder covers a restart or a model reload — around five
+    // minutes — and then stops. Holding a turn open longer than that is not
+    // patience, it is a hang.
+    let budget = reconnect_budget_ms();
+    assert!(
+        (4 * 60_000..=5 * 60_000).contains(&budget),
+        "the retry ladder spans {budget}ms",
+    );
 }
 
 #[test]

@@ -17,21 +17,36 @@ use crate::{
 
 /// How many times a request that has committed nothing may be re-sent.
 ///
-/// The window this covers is a server that is restarting or briefly
-/// unreachable, not one that is down for the afternoon: ten attempts on the
-/// backoff below spans under a minute, after which the honest answer is to fail
-/// the turn rather than keep a person watching a spinner.
-pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 10;
+/// The window this covers is a server that is restarting, reloading a model, or
+/// otherwise away for a few minutes — long enough to sit through a `docker
+/// compose up` or a machine waking, and it costs the user nothing to wait
+/// because Stop remains live the whole time. Past roughly five minutes the
+/// honest answer is that the server is not coming back on its own, and failing
+/// the turn beats holding it open indefinitely.
+pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 24;
 pub(crate) const RECONNECT_BASE_DELAY_MS: u64 = 500;
-pub(crate) const RECONNECT_MAX_DELAY_MS: u64 = 8_000;
+/// The ceiling on a single wait, which is a different question from the total.
+///
+/// It is what decides how long a *recovered* server sits unused, so it is kept
+/// well below the budget on purpose: the ladder reaches five minutes by taking
+/// more attempts at a moderate delay rather than fewer at a long one. A 30s
+/// ceiling would halve the request count and double the worst-case delay
+/// between a server coming back and the turn noticing — the wrong trade against
+/// a local server that costs nothing to poll.
+pub(crate) const RECONNECT_MAX_DELAY_MS: u64 = 15_000;
 
-/// Exponential backoff, capped. The cap matters more than the growth: a server
-/// that comes back should be used again within seconds of doing so, and
-/// doubling without a ceiling would leave a recovered server idle for a minute.
+/// Exponential backoff, capped.
 pub(crate) fn reconnect_delay_ms(attempt: u32) -> u64 {
     RECONNECT_BASE_DELAY_MS
         .saturating_mul(1_u64 << attempt.saturating_sub(1).min(6))
         .min(RECONNECT_MAX_DELAY_MS)
+}
+
+/// What the whole ladder adds up to, so the budget is a stated number rather
+/// than an emergent property of two constants.
+#[cfg(test)]
+pub(crate) fn reconnect_budget_ms() -> u64 {
+    (1..MAX_CONNECT_ATTEMPTS).map(reconnect_delay_ms).sum()
 }
 
 /// Statuses worth repeating. A gateway with no upstream right now, a loaded
