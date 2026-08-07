@@ -137,6 +137,11 @@ pub(super) const MAX_SKILL_CHUNK: i64 = 8 * 1024;
 pub(super) const MAX_ATTACHMENT_CHUNK: i64 = 64 * 1024;
 pub(super) const MAX_CONTEXT_CHUNK: i64 = 64 * 1024;
 pub(super) const MAX_GRAPH_DEPTH: i64 = 8;
+/// The one bound on how many results an `lsp` query returns. Locations and
+/// symbols used to cap at 40 and 50 while the catalog advertised 200, so the
+/// model asked for a number it could never get. One value, declared where the
+/// model reads it.
+pub(crate) const MAX_LSP_RESULTS: i64 = 50;
 
 /// What gates a tool's presence on the frozen surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -368,12 +373,7 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             integer("line", 1, i64::MAX, "One-based line."),
             integer("character", 1, i64::MAX, "One-based character."),
             text("query", false, "Symbol query for the symbols action."),
-            integer(
-                "limit",
-                1,
-                MAX_LISTING_ITEMS,
-                "Maximum locations to return.",
-            ),
+            integer("limit", 1, MAX_LSP_RESULTS, "Maximum results to return."),
         ],
         rules: &[],
     },
@@ -393,27 +393,8 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
             text("symbol", false, "Symbol name for the explain action."),
             text("from", false, "Start node for the path action."),
             text("to", false, "End node for the path action."),
-            ToolField {
-                name: "files",
-                kind: FieldKind::TextArray {
-                    max_items: MAX_LISTING_ITEMS as u64,
-                    max_len: MAX_PATTERN_LEN,
-                },
-                required: false,
-                description: "Workspace-relative files.",
-            },
-            ToolField {
-                name: "symbols",
-                kind: FieldKind::TextArray {
-                    max_items: MAX_LISTING_ITEMS as u64,
-                    max_len: MAX_PATTERN_LEN,
-                },
-                required: false,
-                description: "Symbol names.",
-            },
             integer("depth", 1, MAX_GRAPH_DEPTH, "Traversal depth."),
             integer("limit", 1, MAX_LISTING_ITEMS, "Maximum nodes to return."),
-            integer("maxDepth", 1, MAX_GRAPH_DEPTH, "Maximum traversal depth."),
             choice(
                 "direction",
                 false,

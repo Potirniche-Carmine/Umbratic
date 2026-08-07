@@ -22,308 +22,408 @@ type Bundle struct {
 	Tasks            []map[string]any `json:"tasks"`
 }
 
-// bundleFields is the exact top-level shape of a telemetry bundle. A bundle
-// with any other key set is rejected: there is no version negotiation.
+// bundleFields is the top-level shape a bundle must carry. Extra top-level keys
+// are stripped and counted: a newer harness may export sections this build has
+// no reader for, and that is not a reason to lose the sections it does read.
 var bundleFields = []string{"exportedAt", "productEvents", "localDiagnostics", "tasks"}
 
 var ErrInvalidBundle = errors.New("invalid telemetry bundle")
 
-func DecodeBundle(reader io.Reader) (Bundle, []byte, error) {
+// Drops reports what a bundle carried that this build could not store. Records
+// are dropped one at a time rather than failing the bundle: a single malformed
+// task must not cost an operator the other nine hundred.
+type Drops struct {
+	Tasks           int
+	ProductEvents   int
+	Feedback        int
+	FailedTools     int
+	ContextTriggers int
+	EventFields     int
+	UnknownSections int
+}
+
+func (d Drops) Total() int {
+	return d.Tasks + d.ProductEvents + d.Feedback + d.FailedTools +
+		d.ContextTriggers + d.EventFields + d.UnknownSections
+}
+
+func DecodeBundle(reader io.Reader) (Bundle, []byte, Drops, error) {
+	var drops Drops
 	raw, err := io.ReadAll(reader)
 	if err != nil {
-		return Bundle{}, nil, err
+		return Bundle{}, nil, drops, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var fields map[string]json.RawMessage
 	if err := decoder.Decode(&fields); err != nil {
-		return Bundle{}, nil, fmt.Errorf("%w: malformed json", ErrInvalidBundle)
+		return Bundle{}, nil, drops, fmt.Errorf("%w: malformed json", ErrInvalidBundle)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return Bundle{}, nil, fmt.Errorf("%w: trailing json", ErrInvalidBundle)
+		return Bundle{}, nil, drops, fmt.Errorf("%w: trailing json", ErrInvalidBundle)
 	}
-	if err := checkBundleFields(fields); err != nil {
-		return Bundle{}, nil, err
+	if err := checkBundleFields(fields, &drops); err != nil {
+		return Bundle{}, nil, drops, err
 	}
 	strict := json.NewDecoder(bytes.NewReader(raw))
 	strict.UseNumber()
 	var bundle Bundle
 	if err := strict.Decode(&bundle); err != nil {
-		return Bundle{}, nil, fmt.Errorf("%w: malformed json", ErrInvalidBundle)
+		return Bundle{}, nil, drops, fmt.Errorf("%w: malformed json", ErrInvalidBundle)
 	}
-	if err := validateBundle(bundle); err != nil {
-		return Bundle{}, nil, err
+	if err := sanitizeBundle(&bundle, &drops); err != nil {
+		return Bundle{}, nil, drops, err
 	}
 	sanitized, err := json.Marshal(bundle)
 	if err != nil {
-		return Bundle{}, nil, fmt.Errorf("%w: cannot encode bundle", ErrInvalidBundle)
+		return Bundle{}, nil, drops, fmt.Errorf("%w: cannot encode bundle", ErrInvalidBundle)
 	}
-	return bundle, sanitized, nil
+	noteDrops(drops)
+	return bundle, sanitized, drops, nil
 }
 
-func checkBundleFields(fields map[string]json.RawMessage) error {
+func checkBundleFields(fields map[string]json.RawMessage, drops *Drops) error {
 	for _, name := range bundleFields {
 		if _, exists := fields[name]; !exists {
 			return fmt.Errorf("%w: %s is required", ErrInvalidBundle, name)
 		}
 	}
-	if len(fields) != len(bundleFields) {
-		for name := range fields {
-			if !slices.Contains(bundleFields, name) {
-				return fmt.Errorf("%w: unknown field %q", ErrInvalidBundle, name)
-			}
+	for name := range fields {
+		if !slices.Contains(bundleFields, name) {
+			drops.UnknownSections++
 		}
 	}
 	return nil
 }
 
-func validateBundle(bundle Bundle) error {
+// sanitizeBundle keeps every record this build can store and drops the rest.
+// Only the two conditions that make a bundle meaningless as a whole — an
+// untrustworthy export timestamp, or more records than the caps allow — fail it.
+func sanitizeBundle(bundle *Bundle, drops *Drops) error {
 	if _, err := time.Parse(time.RFC3339Nano, bundle.ExportedAt); err != nil {
 		return fmt.Errorf("%w: exportedAt must be RFC3339", ErrInvalidBundle)
 	}
-	if len(bundle.Tasks) > 1000 {
+	if len(bundle.Tasks) > maxTasks {
 		return fmt.Errorf("%w: too many tasks", ErrInvalidBundle)
 	}
-	for _, task := range bundle.Tasks {
-		if err := validateTask(task); err != nil {
-			return err
-		}
-	}
-	if len(bundle.ProductEvents) > 100000 {
+	if len(bundle.ProductEvents) > maxProductEvents {
 		return fmt.Errorf("%w: too many product events", ErrInvalidBundle)
 	}
-	for _, event := range bundle.ProductEvents {
-		if err := validateProductEvent(event); err != nil {
-			return err
-		}
-	}
-	return validateLocalDiagnostics(bundle.LocalDiagnostics)
-}
 
-func validateLocalDiagnostics(summary map[string]any) error {
-	if summary == nil {
-		return fmt.Errorf("%w: localDiagnostics must be an object", ErrInvalidBundle)
-	}
-	counts := []string{"total", "warnings", "errors"}
-	buckets := []string{"bySource", "byEvent"}
-	if len(summary) != len(counts)+len(buckets) {
-		return fmt.Errorf("%w: localDiagnostics has an unexpected shape", ErrInvalidBundle)
-	}
-	for _, key := range counts {
-		if err := nonNegativeCount(summary, key); err != nil {
-			return err
-		}
-	}
-	for _, key := range buckets {
-		bucket, ok := summary[key].(map[string]any)
-		if !ok {
-			return fmt.Errorf("%w: localDiagnostics %s must be an object", ErrInvalidBundle, key)
-		}
-		if len(bucket) > 200 {
-			return fmt.Errorf("%w: localDiagnostics %s has too many entries", ErrInvalidBundle, key)
-		}
-		for name := range bucket {
-			if strings.TrimSpace(name) == "" || len(name) > 128 {
-				return fmt.Errorf("%w: localDiagnostics %s key is invalid", ErrInvalidBundle, key)
-			}
-			if err := nonNegativeCount(bucket, name); err != nil {
+	tasks := bundle.Tasks[:0]
+	for _, task := range bundle.Tasks {
+		if err := sanitizeTask(task, drops); err != nil {
+			if isPrivacyViolation(err) {
 				return err
 			}
+			drops.Tasks++
+			continue
 		}
+		tasks = append(tasks, task)
 	}
+	bundle.Tasks = tasks
+
+	events := bundle.ProductEvents[:0]
+	for _, event := range bundle.ProductEvents {
+		if err := sanitizeProductEvent(event, drops); err != nil {
+			drops.ProductEvents++
+			continue
+		}
+		events = append(events, event)
+	}
+	bundle.ProductEvents = events
+
+	sanitizeLocalDiagnostics(bundle.LocalDiagnostics)
 	return nil
 }
 
-func nonNegativeCount(value map[string]any, key string) error {
-	number, ok := value[key].(json.Number)
-	if !ok {
-		return fmt.Errorf("%w: %s must be a number", ErrInvalidBundle, key)
-	}
-	parsed, err := number.Int64()
-	if err != nil || parsed < 0 {
-		return fmt.Errorf("%w: %s must be a number", ErrInvalidBundle, key)
-	}
-	return nil
+const (
+	maxTasks         = 1000
+	maxProductEvents = 100000
+	// maxEventFieldChars bounds a free-form event field. Anything longer is prose,
+	// and prose is what the privacy rules exist to keep out of telemetry.
+	maxEventFieldChars = 200
+	maxEventFields     = 32
+)
+
+// privacyError marks a violation of the deny-list. Privacy is one of the two
+// things Veil still rejects on, so it fails the whole bundle rather than quietly
+// costing the caller one record — a harness leaking raw prompts has to find out.
+type privacyError struct{ error }
+
+// Unwrap keeps errors.Is(err, ErrInvalidBundle) true, so the route still reports
+// the specific denied field rather than a generic failure.
+func (e privacyError) Unwrap() error { return e.error }
+
+func privacyViolation(format string, args ...any) error {
+	return privacyError{fmt.Errorf(format, args...)}
 }
 
-func validateTask(task map[string]any) error {
-	id, ok := task["id"].(string)
-	if !ok || strings.TrimSpace(id) == "" || len(id) > 128 {
-		return fmt.Errorf("%w: task id is required", ErrInvalidBundle)
+func isPrivacyViolation(err error) bool {
+	var violation privacyError
+	return errors.As(err, &violation)
+}
+
+// privacyDeniedTaskFields never travel, whatever the harness calls itself.
+// This list is the privacy contract and is the one thing that still rejects.
+var privacyDeniedTaskFields = []string{
+	"prompt", "originalRepoPath", "worktreePath", "baselineFiles", "reviewFiles", "events",
+}
+
+func sanitizeTask(task map[string]any, drops *Drops) error {
+	if err := requiredString(task, "id", 128); err != nil {
+		return err
 	}
-	for _, blocked := range []string{"prompt", "originalRepoPath", "worktreePath", "baselineFiles", "reviewFiles"} {
+	for _, blocked := range privacyDeniedTaskFields {
 		if _, exists := task[blocked]; exists {
-			return fmt.Errorf("%w: raw task field %q is not allowed", ErrInvalidBundle, blocked)
+			return privacyViolation("%w: raw task field %q is not allowed", ErrInvalidBundle, blocked)
 		}
 	}
-	if _, exists := task["events"]; exists {
-		return fmt.Errorf("%w: raw task events are not allowed", ErrInvalidBundle)
+	if value, exists := task["feedback"]; exists {
+		kept, err := sanitizeFeedback(value, drops)
+		if err != nil {
+			return err
+		}
+		task["feedback"] = kept
 	}
-	if err := validateFeedback(task["feedback"]); err != nil {
-		return err
+	if value, exists := task["failedTools"]; exists {
+		kept, err := sanitizeFailedTools(value, drops)
+		if err != nil {
+			return err
+		}
+		task["failedTools"] = kept
 	}
-	if err := validateFailedTools(task["failedTools"]); err != nil {
-		return err
-	}
-	if err := validateContextTriggers(task["contextTriggers"]); err != nil {
-		return err
+	if value, exists := task["contextTriggers"]; exists {
+		kept, err := sanitizeContextTriggers(value, drops)
+		if err != nil {
+			return err
+		}
+		task["contextTriggers"] = kept
 	}
 	return nil
 }
 
-func validateFeedback(value any) error {
+func sanitizeFeedback(value any, drops *Drops) ([]any, error) {
 	feedback, ok := value.([]any)
 	if !ok {
-		return fmt.Errorf("%w: feedback must be an array", ErrInvalidBundle)
+		return nil, fmt.Errorf("%w: feedback must be an array", ErrInvalidBundle)
 	}
 	if len(feedback) > 100 {
-		return fmt.Errorf("%w: too many feedback records", ErrInvalidBundle)
+		return nil, fmt.Errorf("%w: too many feedback records", ErrInvalidBundle)
 	}
+	kept := make([]any, 0, len(feedback))
 	for _, item := range feedback {
 		record, ok := item.(map[string]any)
 		if !ok {
-			return fmt.Errorf("%w: feedback record must be an object", ErrInvalidBundle)
+			drops.Feedback++
+			continue
 		}
 		if err := requiredString(record, "messageId", 128); err != nil {
-			return err
-		}
-		rating, _ := record["rating"].(string)
-		if rating != "good" && rating != "bad" {
-			return fmt.Errorf("%w: invalid feedback rating", ErrInvalidBundle)
-		}
-		if comment, exists := record["comment"]; exists {
-			if text, ok := comment.(string); !ok || len(text) > 4000 {
-				return fmt.Errorf("%w: invalid feedback comment", ErrInvalidBundle)
-			}
+			drops.Feedback++
+			continue
 		}
 		conversation, ok := record["conversation"].([]any)
 		if !ok || len(conversation) > 2000 {
-			return fmt.Errorf("%w: invalid feedback conversation", ErrInvalidBundle)
+			drops.Feedback++
+			continue
 		}
+		if comment, exists := record["comment"]; exists {
+			if text, ok := comment.(string); !ok || len(text) > 4000 {
+				drops.Feedback++
+				continue
+			}
+		}
+		malformed := false
 		for _, message := range conversation {
 			entry, ok := message.(map[string]any)
 			if !ok {
-				return fmt.Errorf("%w: conversation message must be an object", ErrInvalidBundle)
+				malformed = true
+				break
 			}
-			role, _ := entry["role"].(string)
-			if role != "user" && role != "assistant" {
-				return fmt.Errorf("%w: invalid conversation role", ErrInvalidBundle)
-			}
-			if err := requiredString(entry, "content", 4<<20); err != nil {
-				return err
-			}
-			if err := requiredString(entry, "taskId", 128); err != nil {
-				return err
+			if requiredString(entry, "content", 4<<20) != nil || requiredString(entry, "taskId", 128) != nil {
+				malformed = true
+				break
 			}
 		}
+		if malformed {
+			drops.Feedback++
+			continue
+		}
+		kept = append(kept, record)
 	}
-	return nil
+	return kept, nil
 }
 
-func validateFailedTools(value any) error {
+func sanitizeFailedTools(value any, drops *Drops) ([]any, error) {
 	tools, ok := value.([]any)
 	if !ok {
-		return fmt.Errorf("%w: failedTools must be an array", ErrInvalidBundle)
+		return nil, fmt.Errorf("%w: failedTools must be an array", ErrInvalidBundle)
 	}
 	if len(tools) > 2000 {
-		return fmt.Errorf("%w: too many failed tools", ErrInvalidBundle)
+		return nil, fmt.Errorf("%w: too many failed tools", ErrInvalidBundle)
 	}
+	kept := make([]any, 0, len(tools))
 	for _, item := range tools {
 		record, ok := item.(map[string]any)
 		if !ok {
-			return fmt.Errorf("%w: failed tool must be an object", ErrInvalidBundle)
+			drops.FailedTools++
+			continue
 		}
-		if err := requiredString(record, "id", 160); err != nil {
-			return err
-		}
-		if err := requiredString(record, "toolKind", 80); err != nil {
-			return err
-		}
+		// Privacy, not vocabulary: a raw input or response dump fails the whole
+		// bundle rather than being quietly discarded, so the harness bug is seen.
 		if _, exists := record["input"]; exists {
-			return fmt.Errorf("%w: failed tool input dumps are not allowed", ErrInvalidBundle)
+			return nil, privacyViolation("%w: failed tool input dumps are not allowed", ErrInvalidBundle)
 		}
 		if _, exists := record["response"]; exists {
-			return fmt.Errorf("%w: failed tool response dumps are not allowed", ErrInvalidBundle)
+			return nil, privacyViolation("%w: failed tool response dumps are not allowed", ErrInvalidBundle)
 		}
-		inputMeta, ok := record["inputMeta"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("%w: failed tool inputMeta is required", ErrInvalidBundle)
+		if requiredString(record, "id", 160) != nil || requiredString(record, "toolKind", 80) != nil {
+			drops.FailedTools++
+			continue
 		}
-		if keys, exists := inputMeta["argKeys"]; exists {
-			list, ok := keys.([]any)
-			if !ok || len(list) > 40 {
-				return fmt.Errorf("%w: failed tool argKeys are invalid", ErrInvalidBundle)
-			}
-		}
-		responseMeta, ok := record["responseMeta"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("%w: failed tool responseMeta is required", ErrInvalidBundle)
-		}
-		for _, key := range []string{"stdoutChars", "stderrChars", "toolResponseChars"} {
-			if value, exists := responseMeta[key]; exists {
-				switch typed := value.(type) {
-				case float64:
-					if typed < 0 {
-						return fmt.Errorf("%w: failed tool %s must be a number", ErrInvalidBundle, key)
-					}
-				case json.Number:
-					parsed, err := typed.Int64()
-					if err != nil || parsed < 0 {
-						return fmt.Errorf("%w: failed tool %s must be a number", ErrInvalidBundle, key)
-					}
-				default:
-					return fmt.Errorf("%w: failed tool %s must be a number", ErrInvalidBundle, key)
+		if meta, ok := record["responseMeta"].(map[string]any); ok {
+			if message, exists := meta["errorMessage"]; exists {
+				if text, ok := message.(string); !ok || len(text) > 400 {
+					drops.FailedTools++
+					continue
 				}
 			}
 		}
-		if message, exists := responseMeta["errorMessage"]; exists {
-			text, ok := message.(string)
-			if !ok || len(text) > 400 {
-				return fmt.Errorf("%w: failed tool errorMessage is invalid", ErrInvalidBundle)
-			}
-		}
+		kept = append(kept, record)
 	}
-	return nil
+	return kept, nil
 }
 
-func validateContextTriggers(value any) error {
+// sanitizeContextTriggers bounds the list and keeps whatever thresholds the
+// harness reports. The thresholds are a product decision that changes without
+// a Veil release, so pinning them here only guaranteed drift.
+func sanitizeContextTriggers(value any, drops *Drops) ([]any, error) {
 	triggers, ok := value.([]any)
 	if !ok || len(triggers) > 10000 {
-		return fmt.Errorf("%w: invalid context triggers", ErrInvalidBundle)
+		return nil, fmt.Errorf("%w: invalid context triggers", ErrInvalidBundle)
 	}
+	kept := make([]any, 0, len(triggers))
 	for _, item := range triggers {
 		trigger, ok := item.(map[string]any)
 		if !ok {
-			return fmt.Errorf("%w: context trigger must be an object", ErrInvalidBundle)
+			drops.ContextTriggers++
+			continue
 		}
-		threshold := fmt.Sprint(trigger["threshold"])
-		if threshold != "75" && threshold != "90" {
-			return fmt.Errorf("%w: invalid context threshold", ErrInvalidBundle)
+		if !isBoundedScalar(trigger["threshold"]) {
+			drops.ContextTriggers++
+			continue
 		}
+		kept = append(kept, trigger)
 	}
-	return nil
+	return kept, nil
 }
 
-func validateProductEvent(event map[string]any) error {
+// sanitizeProductEvent accepts any event type. What a product event may contain
+// is what stays enforced: an id, a real timestamp, a bounded number of fields,
+// and no field big enough to smuggle prose.
+func sanitizeProductEvent(event map[string]any, drops *Drops) error {
 	if err := requiredString(event, "id", 128); err != nil {
 		return err
 	}
-	eventType, _ := event["type"].(string)
-	allowed := map[string]bool{
-		"review.opened": true, "ide.selected": true, "ide.opened": true,
-		"task.accepted": true, "task.undone": true, "worktree.requested": true,
-		"worktree.approved": true, "worktree.denied": true, "worktree.created": true,
-		"worktree.kept": true,
-	}
-	if !allowed[eventType] {
-		return fmt.Errorf("%w: invalid product event type", ErrInvalidBundle)
+	eventType, ok := event["type"].(string)
+	if !ok || strings.TrimSpace(eventType) == "" || len(eventType) > 128 {
+		return fmt.Errorf("%w: product event type is required", ErrInvalidBundle)
 	}
 	at, _ := event["at"].(string)
 	if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
 		return fmt.Errorf("%w: product event timestamp is invalid", ErrInvalidBundle)
 	}
+	if len(event) > maxEventFields {
+		return fmt.Errorf("%w: product event has too many fields", ErrInvalidBundle)
+	}
+	for name, value := range event {
+		if name == "id" || name == "type" || name == "at" {
+			continue
+		}
+		if !isBoundedScalar(value) {
+			delete(event, name)
+			drops.EventFields++
+		}
+	}
 	return nil
+}
+
+// isBoundedScalar is the privacy bound on free-form telemetry values: numbers,
+// booleans, and strings too short to carry a prompt, a path, or a diff. Events
+// group related values, so a shallow object or array of those is allowed too —
+// the depth limit is what stops an arbitrary payload from riding along inside.
+func isBoundedScalar(value any) bool {
+	return isBoundedEventValue(value, 0)
+}
+
+const maxEventValueDepth = 2
+
+func isBoundedEventValue(value any, depth int) bool {
+	switch typed := value.(type) {
+	case nil, bool, float64, json.Number:
+		return true
+	case string:
+		return len(typed) <= maxEventFieldChars
+	case []any:
+		if depth >= maxEventValueDepth || len(typed) > maxEventFields {
+			return false
+		}
+		for _, item := range typed {
+			if !isBoundedEventValue(item, depth+1) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		if depth >= maxEventValueDepth || len(typed) > maxEventFields {
+			return false
+		}
+		for name, item := range typed {
+			if len(name) > 128 || !isBoundedEventValue(item, depth+1) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// sanitizeLocalDiagnostics keeps the counters it recognizes and discards the
+// rest. The summary is a convenience for an operator, never a reason to lose a
+// bundle, so nothing here returns an error.
+func sanitizeLocalDiagnostics(summary map[string]any) {
+	if summary == nil {
+		return
+	}
+	for key, value := range summary {
+		bucket, isBucket := value.(map[string]any)
+		if !isBucket {
+			if !isNonNegativeCount(value) {
+				delete(summary, key)
+			}
+			continue
+		}
+		if len(bucket) > 200 {
+			delete(summary, key)
+			continue
+		}
+		for name, count := range bucket {
+			if strings.TrimSpace(name) == "" || len(name) > 128 || !isNonNegativeCount(count) {
+				delete(bucket, name)
+			}
+		}
+	}
+}
+
+func isNonNegativeCount(value any) bool {
+	number, ok := value.(json.Number)
+	if !ok {
+		return false
+	}
+	parsed, err := number.Int64()
+	return err == nil && parsed >= 0
 }
 
 func requiredString(value map[string]any, key string, limit int) error {

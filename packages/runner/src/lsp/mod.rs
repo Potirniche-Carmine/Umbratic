@@ -17,13 +17,13 @@ use crate::{
     config::LspServerConfig,
     policy::{is_generated_runtime_path, resolve_workspace_path},
     session::Session,
+    tools::catalog::MAX_LSP_RESULTS,
 };
 
 const MAX_PROTOCOL_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_HOVER_BYTES: usize = 8 * 1024;
-const MAX_LOCATIONS: usize = 40;
-const MAX_SYMBOLS: usize = 50;
+const MAX_RESULTS: usize = MAX_LSP_RESULTS as usize;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 const SHORT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const LONG_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -162,12 +162,6 @@ impl LspQuery {
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if !matches!(
-            action.as_str(),
-            "definition" | "references" | "hover" | "symbols"
-        ) {
-            return Err("lsp action must be definition, references, hover, or symbols.".to_owned());
-        }
         let file_text = input
             .get("path")
             .and_then(Value::as_str)
@@ -205,41 +199,20 @@ impl LspQuery {
         if action == "symbols" && file.is_none() && query.is_empty() {
             return Err("lsp workspace symbols require query.".to_owned());
         }
-        for name in ["line", "character", "limit"] {
-            if input.contains_key(name)
-                && input
-                    .get(name)
-                    .and_then(Value::as_u64)
-                    .is_none_or(|value| value == 0)
-            {
-                return Err(format!("lsp {name} must be a positive integer."));
-            }
-        }
-        let default_limit = if action == "symbols" {
-            MAX_SYMBOLS
-        } else {
-            MAX_LOCATIONS
-        };
-        let max_limit = default_limit;
+        // The catalog validates action against its enum and line, character, and
+        // limit against their declared ranges before dispatch. What is left here
+        // is what the catalog cannot know: whether the path resolves, whether the
+        // file is readable, and whether the action has the arguments it needs.
         let limit = input
             .get("limit")
             .and_then(Value::as_u64)
-            .unwrap_or(default_limit as u64)
-            .clamp(1, max_limit as u64) as usize;
+            .unwrap_or(MAX_RESULTS as u64) as usize;
         Ok(Self {
             action,
             file,
             language_id,
-            line: input
-                .get("line")
-                .and_then(Value::as_u64)
-                .unwrap_or(1)
-                .max(1),
-            character: input
-                .get("character")
-                .and_then(Value::as_u64)
-                .unwrap_or(1)
-                .max(1),
+            line: input.get("line").and_then(Value::as_u64).unwrap_or(1),
+            character: input.get("character").and_then(Value::as_u64).unwrap_or(1),
             query,
             limit,
         })
@@ -597,7 +570,7 @@ mod tests {
             &value,
             None,
             None,
-            MAX_LOCATIONS,
+            MAX_RESULTS,
             &mut locations,
         );
         assert_eq!(locations.len(), 1);
@@ -605,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn query_validation_rejects_bad_actions_positions_and_paths() {
+    fn query_validation_rejects_what_the_catalog_cannot_check() {
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join("main.ts"), "export const x = 1;").unwrap();
         let valid = json!({
@@ -615,10 +588,13 @@ mod tests {
             "character": 1
         });
         assert!(LspQuery::parse(workspace.path(), valid.as_object().unwrap()).is_ok());
+        // The action enum and the one-based line and character ranges are the
+        // catalog's to enforce, and it does so before dispatch. What is left here
+        // needs the filesystem or the shape of the whole call.
         for invalid in [
-            json!({"action":"rename","path":"main.ts"}),
-            json!({"action":"definition","path":"main.ts","line":0}),
             json!({"action":"definition","path":"../outside.ts"}),
+            json!({"action":"definition","path":"missing.ts"}),
+            json!({"action":"definition"}),
             json!({"action":"symbols","query":""}),
         ] {
             assert!(

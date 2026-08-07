@@ -9,11 +9,8 @@ pub(super) async fn ls_tool(session: &Session, input: &Map<String, Value>) -> To
     if path.is_empty() {
         return Err("ls requires string argument path".into());
     }
-    let offset = input
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .max(1) as usize;
+    // The catalog declares offset as one-based and rejects 0 before dispatch.
+    let offset = input.get("offset").and_then(Value::as_u64).unwrap_or(1) as usize;
     let limit = number_arg(input, "limit", 100) as usize;
     glob_free_path("ls", &path)?;
     let (absolute, relative) =

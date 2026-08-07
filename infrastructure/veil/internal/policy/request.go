@@ -22,6 +22,21 @@ const (
 	MaxOutputTokens     = 32 * 1024
 	MaxSkills           = 128
 	MaxTools            = 32
+	// MaxToolBytes and MaxSkillBytes are the real limits now that neither payload
+	// is inspected field by field: what matters is that they fit the prompt.
+	MaxToolBytes  = 128 * 1024
+	MaxSkillBytes = 64 * 1024
+	// MaxHarnessBucketBytes bounds a free-form selector; a longer one is a bug.
+	MaxHarnessBucketBytes = 64
+)
+
+const (
+	maxSkillIDBytes          = 96
+	maxSkillNameBytes        = 160
+	maxSkillDescriptionBytes = 1000
+	maxSkillSourceBytes      = 32
+	maxSkillPaths            = 32
+	maxSkillPathBytes        = 240
 )
 
 var ErrRequestTooLarge = errors.New("request body too large")
@@ -54,13 +69,7 @@ func DecodeCompactionInput(r io.Reader) (CompactionInput, error) {
 	if json.Unmarshal(body, &raw) != nil {
 		return CompactionInput{}, errors.New("invalid JSON request")
 	}
-	for field := range raw {
-		switch field {
-		case "route", "previousSummary", "messages", "maxSummaryTokens", "sourceDigest":
-		default:
-			return CompactionInput{}, fmt.Errorf("field %q is not supported", field)
-		}
-	}
+	stripUnknownFields(raw, "route", "previousSummary", "messages", "maxSummaryTokens", "sourceDigest")
 	var req compactionRequest
 	if json.Unmarshal(body, &req) != nil {
 		return CompactionInput{}, errors.New("invalid JSON request")
@@ -120,8 +129,10 @@ type orientRequest struct {
 	PreviousResponse string `json:"previousResponse"`
 }
 
-// DecodeOrientInput strictly decodes the orient request. Unknown fields, an
-// unknown route, or an out-of-range request text are all rejected outright.
+// DecodeOrientInput decodes the orient request. An unknown route or an
+// out-of-range request text are rejected; unknown fields are stripped and
+// counted, because a newer harness may carry classifier hints this build has
+// never seen.
 func DecodeOrientInput(r io.Reader) (OrientInput, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -134,13 +145,7 @@ func DecodeOrientInput(r io.Reader) (OrientInput, error) {
 	if json.Unmarshal(body, &raw) != nil {
 		return OrientInput{}, errors.New("invalid JSON request")
 	}
-	for field := range raw {
-		switch field {
-		case "route", "requestText", "previousResponse":
-		default:
-			return OrientInput{}, fmt.Errorf("field %q is not supported", field)
-		}
-	}
+	stripUnknownFields(raw, "route", "requestText", "previousResponse")
 	var req orientRequest
 	if json.Unmarshal(body, &req) != nil {
 		return OrientInput{}, errors.New("invalid JSON request")
@@ -188,9 +193,11 @@ type chatRequest struct {
 	HarnessBucket   string                  `json:"harness_bucket"`
 }
 
-// DecodeChatInput validates a chat request for a specific route. The route is
-// required because harness_bucket is a closed per-route enum: a selector that is
-// valid on another route must be rejected here, before prompt assembly.
+// DecodeChatInput validates a chat request for a specific route. Validation is
+// bounds and authority only: sizes and counts are enforced, client attempts to
+// write system text or pick the model are rejected, and everything else the
+// harness sends is passed through or stripped. The route is still required
+// because harness_bucket selects a playbook from that route's catalog.
 func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -204,15 +211,17 @@ func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return ChatInput{}, errors.New("invalid JSON request")
 	}
-	for field := range raw {
-		switch field {
-		case "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket":
-		case "model", "system", "tool_choice", "parallel_tool_calls", "temperature", "top_p":
+	// Authority, not vocabulary: a client that writes system text or names the
+	// model is refused loudly rather than silently ignored, because silently
+	// ignoring it would let the caller believe it took effect. Sampling and
+	// tool-choice knobs are the admin's to set, so they are stripped like any
+	// other unrecognized field.
+	for _, field := range []string{"model", "system"} {
+		if _, present := raw[field]; present {
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
-		default:
-			return ChatInput{}, fmt.Errorf("field %q is not supported", field)
 		}
 	}
+	stripUnknownFields(raw, "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket")
 
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -253,11 +262,16 @@ func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 	if err != nil {
 		return ChatInput{}, err
 	}
-	// direct_answer never carries a playbook, so selecting it is meaningless and
-	// is rejected rather than silently ignored.
-	if req.HarnessBucket != "" &&
-		(req.HarnessBucket == prompts.DirectAnswerBucket || !prompts.KnownBucket(route, req.HarnessBucket)) {
-		return ChatInput{}, fmt.Errorf("harness_bucket %q is not valid for this route", req.HarnessBucket)
+	// harness_bucket is a hint, not an enum. A value this build knows selects its
+	// playbook; anything else is counted and falls through to the same assembly a
+	// request with no bucket gets, so a harness that learns a new bucket before
+	// Veil does still runs.
+	bucket := strings.TrimSpace(req.HarnessBucket)
+	if len(bucket) > MaxHarnessBucketBytes {
+		bucket = ""
+	}
+	if bucket != "" && !prompts.KnownBucket(route, bucket) {
+		noteUnknownHarnessBucket()
 	}
 
 	return ChatInput{
@@ -266,10 +280,16 @@ func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 		Tools:           req.Tools,
 		Skills:          skills,
 		MaxOutputTokens: req.MaxOutputTokens,
-		HarnessBucket:   req.HarnessBucket,
+		HarnessBucket:   bucket,
 	}, nil
 }
 
+// validateToolContract is bounds-only. Veil does not arbitrate tool schemas:
+// the admin controls the runtime, so a construct the provider cannot handle is
+// the provider's error to raise as a failed turn, not Veil's to pre-guess. What
+// is enforced here is that the payload is well-formed, bounded, and names its
+// functions — everything a newer harness invents inside a definition passes
+// through untouched.
 func validateToolContract(tools any) error {
 	if tools == nil {
 		return nil
@@ -278,257 +298,29 @@ func validateToolContract(tools any) error {
 	if !ok || len(rows) == 0 || len(rows) > MaxTools {
 		return fmt.Errorf("tools must contain between 1 and %d function definitions", MaxTools)
 	}
-	seen := make(map[string]bool, len(rows))
+	if encodedSize(tools) > MaxToolBytes {
+		return fmt.Errorf("tools are larger than %d bytes", MaxToolBytes)
+	}
 	for index, raw := range rows {
 		tool, ok := raw.(map[string]any)
-		if !ok || len(tool) != 2 || tool["type"] != "function" {
-			return fmt.Errorf("tool %d must be one exact function definition", index)
+		if !ok {
+			return fmt.Errorf("tool %d must be an object", index)
 		}
 		function, ok := tool["function"].(map[string]any)
-		if !ok || len(function) != 3 {
-			return fmt.Errorf("tool %d function must contain name, description, and parameters", index)
-		}
-		name, _ := function["name"].(string)
-		description, _ := function["description"].(string)
-		if !validToolName(name) || strings.TrimSpace(description) == "" || len(description) > 2000 {
-			return fmt.Errorf("tool %d has an invalid name or description", index)
-		}
-		if seen[name] {
-			return fmt.Errorf("tool %d duplicates function name %q", index, name)
-		}
-		seen[name] = true
-		parameters, ok := function["parameters"].(map[string]any)
-		if !ok || len(parameters) != 4 || parameters["type"] != "object" || parameters["additionalProperties"] != false {
-			return fmt.Errorf("tool %q parameters must be one closed object schema", name)
-		}
-		properties, ok := parameters["properties"].(map[string]any)
 		if !ok {
-			return fmt.Errorf("tool %q properties must be an object", name)
+			return fmt.Errorf("tool %d must carry a function definition", index)
 		}
-		for field, definition := range properties {
-			if !validToolPropertyName(field) {
-				return fmt.Errorf("tool %q has an invalid property name", name)
-			}
-			schema, ok := definition.(map[string]any)
-			if !ok {
-				return fmt.Errorf("tool %q property %q must be a schema object", name, field)
-			}
-			if err := validateToolPropertySchema(name, field, schema); err != nil {
-				return err
-			}
-		}
-		required, ok := parameters["required"].([]any)
-		if !ok {
-			return fmt.Errorf("tool %q required must be an array", name)
-		}
-		requiredSeen := make(map[string]bool, len(required))
-		for _, rawField := range required {
-			field, ok := rawField.(string)
-			if !ok || requiredSeen[field] {
-				return fmt.Errorf("tool %q required fields must be unique strings", name)
-			}
-			if _, exists := properties[field]; !exists {
-				return fmt.Errorf("tool %q requires undeclared property %q", name, field)
-			}
-			requiredSeen[field] = true
+		if name, _ := function["name"].(string); strings.TrimSpace(name) == "" {
+			return fmt.Errorf("tool %d must have a name", index)
 		}
 	}
 	return nil
 }
 
-func validateToolPropertySchema(toolName, field string, schema map[string]any) error {
-	return validateToolPropertySchemaAtDepth(toolName, field, schema, 1)
-}
-
-const maxToolSchemaDepth = 3
-
-func validateToolPropertySchemaAtDepth(toolName, field string, schema map[string]any, depth int) error {
-	if depth > maxToolSchemaDepth {
-		return fmt.Errorf("tool %q property %q nests too deeply", toolName, field)
-	}
-	typeName, ok := schema["type"].(string)
-	if !ok {
-		return fmt.Errorf("tool %q property %q has an unsupported type", toolName, field)
-	}
-	allowed := map[string]bool{
-		"type": true, "description": true, "enum": true, "items": true,
-		"minLength": true, "maxLength": true, "minimum": true, "maximum": true,
-		"minItems": true, "maxItems": true,
-	}
-	if typeName == "object" {
-		allowed["properties"] = true
-		allowed["required"] = true
-		allowed["additionalProperties"] = true
-	}
-	for keyword := range schema {
-		if !allowed[keyword] {
-			return fmt.Errorf("tool %q property %q has unsupported schema keyword %q", toolName, field, keyword)
-		}
-	}
-	switch typeName {
-	case "string", "integer", "number", "boolean", "array", "object":
-	default:
-		return fmt.Errorf("tool %q property %q has an unsupported type", toolName, field)
-	}
-	if description, exists := schema["description"]; exists {
-		text, ok := description.(string)
-		if !ok || len(text) > 2000 {
-			return fmt.Errorf("tool %q property %q has an invalid description", toolName, field)
-		}
-	}
-	for _, keyword := range []string{"minLength", "maxLength", "minItems", "maxItems"} {
-		if value, exists := schema[keyword]; exists {
-			number, ok := value.(float64)
-			if !ok || number < 0 || number != float64(int64(number)) {
-				return fmt.Errorf("tool %q property %q has an invalid %s", toolName, field, keyword)
-			}
-		}
-	}
-	for _, keyword := range []string{"minimum", "maximum"} {
-		if value, exists := schema[keyword]; exists {
-			if _, ok := value.(float64); !ok {
-				return fmt.Errorf("tool %q property %q has an invalid %s", toolName, field, keyword)
-			}
-		}
-	}
-	if enum, exists := schema["enum"]; exists {
-		if typeName == "object" || typeName == "array" {
-			return fmt.Errorf("tool %q property %q enum does not match its type", toolName, field)
-		}
-		values, ok := enum.([]any)
-		if !ok || len(values) == 0 || len(values) > 128 {
-			return fmt.Errorf("tool %q property %q has an invalid enum", toolName, field)
-		}
-		seen := make(map[string]bool, len(values))
-		for _, value := range values {
-			if !schemaValueHasType(value, typeName) {
-				return fmt.Errorf("tool %q property %q enum does not match its type", toolName, field)
-			}
-			encoded, _ := json.Marshal(value)
-			if seen[string(encoded)] {
-				return fmt.Errorf("tool %q property %q enum values must be unique", toolName, field)
-			}
-			seen[string(encoded)] = true
-		}
-	}
-	items, hasItems := schema["items"]
-	properties, hasProperties := schema["properties"]
-	required, hasRequired := schema["required"]
-	additionalProperties, hasAdditionalProperties := schema["additionalProperties"]
-	switch typeName {
-	case "array":
-		itemSchema, ok := items.(map[string]any)
-		if !hasItems || !ok {
-			return fmt.Errorf("tool %q property %q array items must be a schema object", toolName, field)
-		}
-		if hasProperties || hasRequired || hasAdditionalProperties {
-			return fmt.Errorf("tool %q property %q uses object keywords with a non-object type", toolName, field)
-		}
-		return validateToolPropertySchemaAtDepth(toolName, field+"[]", itemSchema, depth+1)
-	case "object":
-		if hasItems {
-			return fmt.Errorf("tool %q property %q uses items with a non-array type", toolName, field)
-		}
-		if !hasAdditionalProperties || additionalProperties != false {
-			return fmt.Errorf("tool %q property %q must be a closed object schema", toolName, field)
-		}
-		nestedProperties, ok := properties.(map[string]any)
-		if !hasProperties || !ok || len(nestedProperties) == 0 {
-			return fmt.Errorf("tool %q property %q properties must be a non-empty object", toolName, field)
-		}
-		if len(nestedProperties) > 32 {
-			return fmt.Errorf("tool %q property %q declares too many nested properties", toolName, field)
-		}
-		for nestedField, definition := range nestedProperties {
-			if !validToolPropertyName(nestedField) {
-				return fmt.Errorf("tool %q property %q has an invalid nested property name", toolName, field)
-			}
-			nestedSchema, ok := definition.(map[string]any)
-			if !ok {
-				return fmt.Errorf("tool %q property %q.%s must be a schema object", toolName, field, nestedField)
-			}
-			if err := validateToolPropertySchemaAtDepth(toolName, field+"."+nestedField, nestedSchema, depth+1); err != nil {
-				return err
-			}
-		}
-		if !hasRequired {
-			return fmt.Errorf("tool %q property %q required must be an array", toolName, field)
-		}
-		requiredFields, ok := required.([]any)
-		if !ok {
-			return fmt.Errorf("tool %q property %q required must be an array", toolName, field)
-		}
-		requiredSeen := make(map[string]bool, len(requiredFields))
-		for _, rawField := range requiredFields {
-			nestedField, ok := rawField.(string)
-			if !ok || requiredSeen[nestedField] {
-				return fmt.Errorf("tool %q property %q required fields must be unique strings", toolName, field)
-			}
-			if _, exists := nestedProperties[nestedField]; !exists {
-				return fmt.Errorf("tool %q property %q requires undeclared nested property %q", toolName, field, nestedField)
-			}
-			requiredSeen[nestedField] = true
-		}
-		return nil
-	default:
-		if hasItems {
-			return fmt.Errorf("tool %q property %q uses items with a non-array type", toolName, field)
-		}
-		if hasProperties || hasRequired || hasAdditionalProperties {
-			return fmt.Errorf("tool %q property %q uses object keywords with a non-object type", toolName, field)
-		}
-		return nil
-	}
-}
-
-func schemaValueHasType(value any, typeName string) bool {
-	switch typeName {
-	case "string":
-		_, ok := value.(string)
-		return ok
-	case "integer":
-		number, ok := value.(float64)
-		return ok && number == float64(int64(number))
-	case "number":
-		_, ok := value.(float64)
-		return ok
-	case "boolean":
-		_, ok := value.(bool)
-		return ok
-	case "array":
-		_, ok := value.([]any)
-		return ok
-	default:
-		return false
-	}
-}
-
-func validToolName(value string) bool {
-	if value == "" || len(value) > 64 {
-		return false
-	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validToolPropertyName(value string) bool {
-	if value == "" || len(value) > 64 {
-		return false
-	}
-	for index, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_' || (index > 0 && char >= '0' && char <= '9') {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
+// skillCatalog is bounds-only. Skill entries are untrusted metadata that ends up
+// as catalog prose, so what matters is that there are not too many, that they do
+// not blow the prompt budget, and that each is short enough to render — not that
+// the harness described them with the fields this build happens to know.
 func skillCatalog(values []prompts.SkillMetadata) ([]prompts.SkillMetadata, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -536,55 +328,49 @@ func skillCatalog(values []prompts.SkillMetadata) ([]prompts.SkillMetadata, erro
 	if len(values) > MaxSkills {
 		return nil, fmt.Errorf("too many skills; maximum is %d", MaxSkills)
 	}
+	if encodedSize(values) > MaxSkillBytes {
+		return nil, fmt.Errorf("skills are larger than %d bytes", MaxSkillBytes)
+	}
 	result := make([]prompts.SkillMetadata, 0, len(values))
 	seen := make(map[string]bool, len(values))
-	for index, value := range values {
-		value.ID = strings.TrimSpace(value.ID)
-		value.Name = strings.Join(strings.Fields(value.Name), " ")
-		value.Description = strings.Join(strings.Fields(value.Description), " ")
-		value.Source = strings.TrimSpace(value.Source)
-		if len(value.Paths) > 32 {
-			return nil, fmt.Errorf("skill %q has too many path globs", value.ID)
-		}
-		for pathIndex, skillPath := range value.Paths {
-			skillPath = strings.TrimSpace(skillPath)
-			if skillPath == "" || len(skillPath) > 240 || strings.Contains(skillPath, "\x00") {
-				return nil, fmt.Errorf("skill %q has invalid path glob", value.ID)
-			}
-			value.Paths[pathIndex] = skillPath
-		}
-		if !validSkillID(value.ID) {
-			return nil, fmt.Errorf("skill %d has invalid id", index)
-		}
-		if value.Name == "" || len(value.Name) > 160 {
-			return nil, fmt.Errorf("skill %q has invalid name", value.ID)
-		}
-		if len(value.Description) > 1000 {
-			return nil, fmt.Errorf("skill %q description is too long", value.ID)
-		}
-		if value.Source != "system" && value.Source != "local" {
-			return nil, fmt.Errorf("skill %q has invalid source", value.ID)
-		}
-		if seen[value.ID] {
+	for _, value := range values {
+		value.ID = clamp(strings.TrimSpace(value.ID), maxSkillIDBytes)
+		value.Name = clamp(strings.Join(strings.Fields(value.Name), " "), maxSkillNameBytes)
+		value.Description = clamp(strings.Join(strings.Fields(value.Description), " "), maxSkillDescriptionBytes)
+		value.Source = clamp(strings.TrimSpace(value.Source), maxSkillSourceBytes)
+		// An entry with no id cannot be referenced or deduplicated, so it is the
+		// one shape that is dropped rather than clamped.
+		if value.ID == "" || seen[value.ID] {
 			continue
 		}
+		if len(value.Paths) > maxSkillPaths {
+			value.Paths = value.Paths[:maxSkillPaths]
+		}
+		paths := make([]string, 0, len(value.Paths))
+		for _, skillPath := range value.Paths {
+			skillPath = strings.TrimSpace(strings.ReplaceAll(skillPath, "\x00", ""))
+			if skillPath == "" {
+				continue
+			}
+			paths = append(paths, clamp(skillPath, maxSkillPathBytes))
+		}
+		value.Paths = paths
 		seen[value.ID] = true
 		result = append(result, value)
 	}
 	return result, nil
 }
 
-func validSkillID(value string) bool {
-	if value == "" || len(value) > 96 {
-		return false
+// clamp truncates on a rune boundary so a clamped string stays valid UTF-8.
+func clamp(value string, limit int) string {
+	if len(value) <= limit {
+		return value
 	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '-' {
-			continue
-		}
-		return false
+	truncated := value[:limit]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
 	}
-	return true
+	return truncated
 }
 
 func contentIsBlank(content any) bool {

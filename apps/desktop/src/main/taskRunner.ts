@@ -6,219 +6,45 @@ import { runnerPromptForTask, runnerPromptParts, runnerPromptText } from "./task
 import { refreshReview, reviewPatchHash } from "./reviewFiles";
 import { prepareTaskTurnCheckpoint } from "./taskCommands";
 import { worktreeRootForRepo } from "./worktreeOps";
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  IpcMainInvokeEvent,
-  Menu,
-  MenuItemConstructorOptions,
-  nativeImage,
-  OpenDialogOptions,
-  shell,
-  session,
-} from "electron";
-import { spawn } from "node:child_process";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
-import {
-  attachmentPromptTokenBudget,
-  attachmentTextExcerpt,
-  estimateTextTokens,
-} from "../shared/contextWindow";
 
-import {
-  endpointEditingAllowed,
-  managedModelEndpointDefaults,
-  taskStatesThatCanOpen,
-} from "./config";
-import {
-  capabilityPromptGuidance,
-  capabilityTelemetrySnapshot,
-  probeLocalCapabilities,
-  type CapabilityPromptNeeds,
-} from "./capabilities";
-import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
-import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
   beginRunnerEventStream,
   runnerRequest,
-  runnerBinaryPath,
-  runnerDiagnosticsDirectory,
   replyRunnerPermission,
   setRunnerProviderSession,
   startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
 import {
-  umbraticPolicyVersion,
-  umbraticRunnerContractVersion,
-  umbraticRunnerName,
-  umbraticRunnerVersion,
-  allowedLocalProviderIds,
-  baseUrlHost,
   canAutoResolvePermission,
   classifyCommandText,
-  isBlockedPath,
-  isGeneratedRuntimePath,
-  isLocalhostUrl,
   isWorkspaceReadPermission,
-  promptLooksLikeCmakeTask,
-  promptLooksLikePythonTask,
-  runtimeDiagnostics,
-  telemetryPolicyForMode,
 } from "./policy";
 import {
-  connectCompanySession,
-  companyConnectionStatus,
-  disconnectCompanyDevice,
-  disconnectCompanySession,
-  enrollCompanyDevice,
   ensureCompanySession,
   renewCompanySession,
 } from "./companyIdentity";
-import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
-import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
-import { loadWindowWithModelWarmup } from "./modelWarmup";
+import { companyTransportOptions, endpointProvider } from "./endpointConfig";
 import { shouldProbeVeilContext } from "./veilContext";
 import {
   readChat,
-  readChats,
-  hasStoredModelEndpointSettings,
   readContextLengthSetting,
-  readCachedLocalModels,
-  readLocalDiagnosticInfo,
-  readLocalDiagnostics,
-  readHarnessProfileSetting,
   readModelEndpointSettings,
-  readModelEndpointSettingsForMode,
-  publicModelEndpointSettings,
-  readNotes,
-  readPermissionModeSetting,
-  readProjects,
-  readProductTelemetryEvents,
-  readStartupSettings, readTask,
-  readTaskCheckpoints,
-  readTasks,
-  clearLocalDiagnostics,
-  writeHarnessProfileSetting,
-  writeCachedLocalModels,
-  writeContextLengthSetting,
-  writeModelEndpointSettings,
   writeChat,
-  writeChats,
-  writeJsonFile,
-  writeNotes,
-  writePermissionModeSetting,
-  writeProjects,
-  writeProductTelemetryEvent,
-  writeTask,
-  writeTasks,
-  closeStorageDatabases,
   normalizeConversationState,
 } from "./storage";
-import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
-import { buildRedactedTelemetryBundle } from "./telemetry";
-import {
-  syncTelemetryBundle,
-  telemetrySpoolDirectory,
-  uploadTelemetrySpool,
-} from "./telemetrySync";
-import { checkEndpointHealth, modelWithFreshContextLength as refreshModelContextLength, telemetryUploadEndpoint } from "./modelEndpointRuntime";
-import { commandAvailable, execFileOutput, execFileResult, gitOutput, gitResult } from "./processCommands";
-import { searchRepositoryFiles } from "./repositorySearch";
-import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
+import { recordLocalDiagnostic } from "./diagnostics";
+import { modelWithFreshContextLength as refreshModelContextLength } from "./modelEndpointRuntime";
+import { execFileOutput } from "./processCommands";
 import { RunnerEventAdapter } from "./runnerEventAdapter";
-import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
+import type { ChatAttachment, CommandClass, RunnerProcess, PermissionRequest, TaskRecord } from "./types";
+import { isRecord, slugify } from "./utils";
 import {
-  applyHarnessSystemSkillSettings,
-  createSkill as createSkillService,
-  getSkillDocument as getSkillDocumentService,
-  importSkill as importSkillService,
-  installBundledSystemSkills as installBundledSystemSkillsService,
-  listSkills as listSkillsService,
-  resetSystemSkill as resetSystemSkillService,
-  saveSkillDocument as saveSkillDocumentService,
-  saveSkillSettings as saveSkillSettingsService,
-  skillsDirectoryPath as skillsDirectoryPathService,
-} from "./skills";
-import type {
-  ApproveResult,
-  BackendStatus,
-  BackendUiEvent,
-  CapabilityProbeReport,
-  ChatAttachment,
-  ChatRecord,
-  CommandClass,
-  CommandOutput,
-  CommandResult,
-  HarnessProfileId,
-  IdeInfo,
-  IdeOpenResult,
-  LocalModelInfo,
-  LocalModelProvider,
-  LocalDiagnosticInfo,
-  ProductTelemetryEventType,
-  RunnerProcess,
-  RunnerToolId,
-  PendingPermission,
-  PermissionMode,
-  PermissionRequest,
-  PastedAttachmentInput,
-  ReasoningMode,
-  RepositoryInfo,
-  ReviewFile,
-  ServiceStatus,
-  TelemetrySyncResult,
-  TaskInfo,
-  TaskCheckpoint,
-  TaskRecord,
-  TaskState,
-  UserNotes,
-  WorkspaceKind,
-  WorkspaceMode,
-} from "./types";
-import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
-import {
-  registerDesktopIpcHandlers,
-  type DesktopIpcHandlers,
-} from "./ipcRegistry";
-import { readTaskDocumentReview } from "./documentReview";
-import {
-  assertFolderRejectBaseline,
-  createTaskCheckpoint,
-  createTurnCheckpoint,
-  forkTaskFromCheckpoint,
-  removeTaskCheckpoint,
-  restoreIsolatedWorktreeForReject,
-  restoreTaskCheckpoint,
-  setTaskCheckpointPinned,
-} from "./checkpoints/service";
-import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
-import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
-import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
-import * as appPaths from "./appPaths";
-import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
-import {
-  appendTaskEvent,
-  compactTaskEvents,
-  filterReviewPaths,
   hiddenRendererReviewPaths,
-  isReviewReadyAssistantEvent,
-  mergeTaskEvents,
   rendererReviewFiles,
-  visibleTaskEvents,
 } from "./taskReviewPresentation";
 
 
@@ -379,6 +205,11 @@ export async function runRunnerTask(
       selectedForRun,
       task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
     );
+    // Register the moment the process exists. Session setup below awaits the
+    // network, and anything that happened in that window — a cancel, a model
+    // settings change — used to act as if no run were in flight, because the
+    // registry did not know about this one yet.
+    activeRunnerProcesses.set(task.id, run);
     if (readModelEndpointSettings().mode === "server") {
       const sessionToken = await ensureCompanySession(companyTransportOptions());
       await setRunnerProviderSession(run, sessionToken);
@@ -394,7 +225,6 @@ export async function runRunnerTask(
     if (!taskStillRunning(task)) {
       return;
     }
-    activeRunnerProcesses.set(task.id, run);
     task.diagnosticLogPath = run.diagnosticLogPath;
     saveTask(task);
 

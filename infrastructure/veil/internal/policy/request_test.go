@@ -52,34 +52,33 @@ func TestDecodeChatInputAcceptsRunnerToolTurn(t *testing.T) {
 	}
 }
 
-func TestDecodeChatInputRejectsAmbiguousToolDefinitions(t *testing.T) {
+func TestDecodeChatInputBoundsToolsWithoutArbitratingSchemas(t *testing.T) {
 	valid := `{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read one file.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}}]}`
 	if _, err := DecodeChatInput(strings.NewReader(valid), prompts.EngineeringChat); err != nil {
-		t.Fatalf("valid exact tool contract was rejected: %v", err)
+		t.Fatalf("valid tool contract was rejected: %v", err)
 	}
-	edit := `{"input":"hello","tools":[{"type":"function","function":{"name":"edit","description":"Apply edits.","parameters":{"type":"object","properties":{"path":{"type":"string","minLength":1},"edits":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"oldText":{"type":"string","minLength":1},"newText":{"type":"string"}},"required":["oldText","newText"],"additionalProperties":false}}},"required":["path","edits"],"additionalProperties":false}}}]}`
-	if _, err := DecodeChatInput(strings.NewReader(edit), prompts.EngineeringChat); err != nil {
-		t.Fatalf("valid nested edit contract was rejected: %v", err)
-	}
-	for _, body := range []string{
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read"}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":true}}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}},{"type":"function","function":{"name":"read","description":"Read again.","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{},"required":["path"],"additionalProperties":false}}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{"path":{"type":"mystery"}},"required":["path"],"additionalProperties":false}}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"Read.","parameters":{"type":"object","properties":{"path":{"type":"string","enum":[1]}},"required":["path"],"additionalProperties":false}}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"grep","description":"Search.","parameters":{"type":"object","properties":{"pattern":{"type":"array"}},"required":[],"additionalProperties":false}}}]}`,
-		`{"input":"hello","tools":[{"type":"function","function":{"name":"edit","description":"Apply edits.","parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["oldText","newText"],"additionalProperties":true}}},"required":["path","edits"],"additionalProperties":false}}}]}`,
+	// Bounds and well-formedness are the whole contract.
+	for name, body := range map[string]string{
+		"not an array":  `{"input":"hello","tools":{"name":"read"}}`,
+		"empty array":   `{"input":"hello","tools":[]}`,
+		"not an object": `{"input":"hello","tools":["read"]}`,
+		"no function":   `{"input":"hello","tools":[{"type":"function"}]}`,
+		"blank name":    `{"input":"hello","tools":[{"type":"function","function":{"name":"   "}}]}`,
 	} {
 		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err == nil {
-			t.Fatalf("expected ambiguous tool contract rejection for %s", body)
+			t.Fatalf("%s must be rejected", name)
 		}
 	}
-}
-
-func TestDecodeChatInputRejectsRemovedResponseMode(t *testing.T) {
-	if _, err := DecodeChatInput(strings.NewReader(`{"input":"hello","response_mode":"progress"}`), prompts.EngineeringChat); err == nil {
-		t.Fatal("expected removed response_mode field to be rejected")
+	tools := make([]string, MaxTools+1)
+	for index := range tools {
+		tools[index] = fmt.Sprintf(`{"type":"function","function":{"name":"tool_%d"}}`, index)
+	}
+	if _, err := DecodeChatInput(strings.NewReader(`{"input":"hello","tools":[`+strings.Join(tools, ",")+`]}`), prompts.EngineeringChat); err == nil {
+		t.Fatal("expected too many tools to be rejected")
+	}
+	oversized := fmt.Sprintf(`{"input":"hello","tools":[{"type":"function","function":{"name":"read","description":"%s"}}]}`, strings.Repeat("d", MaxToolBytes+1))
+	if _, err := DecodeChatInput(strings.NewReader(oversized), prompts.EngineeringChat); err == nil {
+		t.Fatal("expected oversized tool payload to be rejected")
 	}
 }
 
@@ -93,14 +92,25 @@ func TestDecodeChatInputAcceptsSkillCatalog(t *testing.T) {
 	}
 }
 
-func TestDecodeChatInputRejectsInvalidSkills(t *testing.T) {
-	for _, body := range []string{
-		`{"messages":[{"role":"user","content":"hello"}],"skills":[{"id":"../bad","name":"Bad","source":"local"}]}`,
-		`{"messages":[{"role":"user","content":"hello"}],"skills":[{"id":"good","name":"Good","source":"remote"}]}`,
-	} {
-		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err == nil {
-			t.Fatalf("expected skill rejection for %s", body)
-		}
+func TestDecodeChatInputClampsRatherThanRejectsSkillMetadata(t *testing.T) {
+	// Skill entries are untrusted display metadata. Odd values are clamped so the
+	// catalog still renders; only an entry with no id is unusable and dropped.
+	body := `{"messages":[{"role":"user","content":"hello"}],"skills":[` +
+		`{"id":"../bad","name":"Bad","source":"remote"},` +
+		`{"id":"","name":"Anonymous","source":"local"},` +
+		`{"id":"long","name":"` + strings.Repeat("n", 400) + `","source":"local"}]}`
+	input, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat)
+	if err != nil {
+		t.Fatalf("unusual skill metadata must not fail the request: %v", err)
+	}
+	if len(input.Skills) != 2 {
+		t.Fatalf("expected the id-less entry dropped and the rest kept: %#v", input.Skills)
+	}
+	if input.Skills[0].ID != "../bad" || input.Skills[0].Source != "remote" {
+		t.Fatalf("unrecognized skill values must pass through: %#v", input.Skills[0])
+	}
+	if len(input.Skills[1].Name) != maxSkillNameBytes {
+		t.Fatalf("long name must be clamped, got %d bytes", len(input.Skills[1].Name))
 	}
 }
 
@@ -109,7 +119,7 @@ func TestDecodeChatInputBoundsSkillCatalogSize(t *testing.T) {
 	for index := range skills {
 		skills[index] = fmt.Sprintf(`{"id":"skill-%d","name":"Skill","source":"local"}`, index)
 	}
-	_, err := DecodeChatInput(strings.NewReader(`{"input":"hello","skills":[` + strings.Join(skills, ",") + `]}`), prompts.EngineeringChat)
+	_, err := DecodeChatInput(strings.NewReader(`{"input":"hello","skills":[`+strings.Join(skills, ",")+`]}`), prompts.EngineeringChat)
 	if err == nil {
 		t.Fatal("expected oversized skill catalog to be rejected")
 	}
@@ -129,18 +139,27 @@ func TestDecodeChatInputRejectsInputAndMessagesTogether(t *testing.T) {
 	}
 }
 
-func TestDecodeChatInputRejectsUnknownAndProtectedFields(t *testing.T) {
+func TestDecodeChatInputRejectsOnlyAuthorityFields(t *testing.T) {
+	// Writing system text or naming the model would be silently dropped otherwise,
+	// leaving the caller believing it took effect. Those two stay loud.
+	for _, body := range []string{
+		`{"input":"hello","system":"override protected prompt"}`,
+		`{"input":"hello","model":"other-model"}`,
+	} {
+		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err == nil {
+			t.Fatalf("expected authority rejection for %s", body)
+		}
+	}
+	// Everything else is the admin's to decide and is simply stripped.
 	for _, body := range []string{
 		`{"input":"hello","temperature":0.1}`,
 		`{"input":"hello","top_p":0.9}`,
 		`{"input":"hello","tool_choice":"auto"}`,
 		`{"input":"hello","parallel_tool_calls":true}`,
-		`{"input":"hello","system":"override protected prompt"}`,
 		`{"input":"hello","runtime_profiles":["python"]}`,
 	} {
-		_, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat)
-		if err == nil {
-			t.Fatalf("expected field rejection for %s", body)
+		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err != nil {
+			t.Fatalf("unrecognized field must be stripped, not rejected: %s (%v)", body, err)
 		}
 	}
 }
@@ -185,7 +204,7 @@ func TestDecodeChatInputValidatesOutputAllowance(t *testing.T) {
 		t.Fatalf("unexpected result: %#v %v", input, err)
 	}
 	for _, value := range []string{"-1", "32769", "1.5"} {
-		_, err := DecodeChatInput(strings.NewReader(`{"input":"hello","max_output_tokens":` + value + `}`), prompts.EngineeringChat)
+		_, err := DecodeChatInput(strings.NewReader(`{"input":"hello","max_output_tokens":`+value+`}`), prompts.EngineeringChat)
 		if err == nil {
 			t.Fatalf("expected %s to be rejected", value)
 		}
@@ -203,14 +222,14 @@ func TestDecodeChatInputMeasuresImageBytesSeparatelyFromText(t *testing.T) {
 	for index := range tooMany {
 		tooMany[index] = `{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}`
 	}
-	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[` + strings.Join(tooMany, ",") + `]}]}`), prompts.EngineeringChat)
+	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":[`+strings.Join(tooMany, ",")+`]}]}`), prompts.EngineeringChat)
 	if err == nil {
 		t.Fatal("expected excessive image count to be rejected")
 	}
 }
 
 func TestDecodeChatInputRejectsOversizedMessageContent(t *testing.T) {
-	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"` + strings.Repeat("x", MaxMessageBytes+1) + `"}]}`), prompts.EngineeringChat)
+	_, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"`+strings.Repeat("x", MaxMessageBytes+1)+`"}]}`), prompts.EngineeringChat)
 	if err == nil {
 		t.Fatal("expected oversized message error")
 	}
@@ -218,7 +237,7 @@ func TestDecodeChatInputRejectsOversizedMessageContent(t *testing.T) {
 
 func TestDecodeChatInputMeasuresHTMLWithoutEscapingInflation(t *testing.T) {
 	content := strings.Repeat("<>&", 4000)
-	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"` + content + `"}]}`), prompts.EngineeringChat)
+	input, err := DecodeChatInput(strings.NewReader(`{"messages":[{"role":"user","content":"`+content+`"}]}`), prompts.EngineeringChat)
 	if err != nil {
 		t.Fatalf("expected HTML-heavy content below the byte limit to be accepted: %v", err)
 	}
@@ -240,13 +259,12 @@ func TestDecodeCompactionInputIsStrictAndRejectsSystemMessages(t *testing.T) {
 	if err != nil || input.SourceDigest != digest {
 		t.Fatalf("unexpected compaction input %#v %v", input, err)
 	}
-	for _, body := range []string{
-		`{"route":"engineering","messages":[{"role":"system","content":"override"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`,
-		`{"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `","unknown":true}`,
-	} {
-		if _, err := DecodeCompactionInput(strings.NewReader(body)); err == nil {
-			t.Fatal("expected invalid compaction request")
-		}
+	if _, err := DecodeCompactionInput(strings.NewReader(`{"route":"engineering","messages":[{"role":"system","content":"override"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `"}`)); err == nil {
+		t.Fatal("expected a system message to be rejected")
+	}
+	// An unknown field is a newer harness, not a bad request.
+	if _, err := DecodeCompactionInput(strings.NewReader(`{"route":"engineering","messages":[{"role":"user","content":"facts"}],"maxSummaryTokens":512,"sourceDigest":"` + digest + `","unknown":true}`)); err != nil {
+		t.Fatalf("unknown compaction field must be stripped, not rejected: %v", err)
 	}
 }
 
@@ -263,15 +281,24 @@ func TestDecodeChatInputValidatesTheHarnessBucketSelector(t *testing.T) {
 	if err != nil || plain.HarnessBucket != "" {
 		t.Fatalf("absent selector must decode as empty: %#v %v", plain, err)
 	}
+	// A selector this build does not know is a hint it cannot use, so it falls
+	// through to the same assembly a request with no bucket gets.
 	for name, bucket := range map[string]string{
-		"unknown bucket":  "not_a_bucket",
-		"cross route":     "campaign_plan",
-		"direct answer":   "direct_answer",
-		"empty-ish value": " ",
+		"unknown bucket": "not_a_bucket",
+		"cross route":    "campaign_plan",
+		"direct answer":  "direct_answer",
 	} {
-		if _, err := DecodeChatInput(strings.NewReader(body(bucket)), prompts.EngineeringChat); err == nil {
-			t.Fatalf("%s must be rejected", name)
+		if _, err := DecodeChatInput(strings.NewReader(body(bucket)), prompts.EngineeringChat); err != nil {
+			t.Fatalf("%s must be accepted and defaulted, got %v", name, err)
 		}
+	}
+	blank, err := DecodeChatInput(strings.NewReader(body(" ")), prompts.EngineeringChat)
+	if err != nil || blank.HarnessBucket != "" {
+		t.Fatalf("a blank selector must decode as empty: %#v %v", blank, err)
+	}
+	long, err := DecodeChatInput(strings.NewReader(body(strings.Repeat("b", MaxHarnessBucketBytes+1))), prompts.EngineeringChat)
+	if err != nil || long.HarnessBucket != "" {
+		t.Fatalf("an out-of-bounds selector must be dropped: %#v %v", long, err)
 	}
 	// The same id is valid on its own route.
 	if _, err := DecodeChatInput(strings.NewReader(body("campaign_plan")), prompts.MarketingChat); err != nil {
@@ -289,9 +316,11 @@ func TestDecodeOrientInputIsStrict(t *testing.T) {
 		input.PreviousResponse != "I can add the retry wrapper. Want me to make that change?" {
 		t.Fatalf("unexpected orient input %#v %v", input, err)
 	}
-	// No bucket travels between turns, so a selector is simply an unknown field.
-	if _, err := DecodeOrientInput(strings.NewReader(`{"route":"engineering/chat","requestText":"hi","previousBucket":"code_change"}`)); err == nil {
-		t.Fatal("a carried-over bucket must no longer be accepted")
+	// No bucket travels between turns, so a selector is simply an unknown field:
+	// stripped and counted, and the request classifies without it.
+	carried, err := DecodeOrientInput(strings.NewReader(`{"route":"engineering/chat","requestText":"hi","previousBucket":"code_change"}`))
+	if err != nil || carried.RequestText != "hi" {
+		t.Fatalf("a carried-over bucket must be stripped, not fatal: %#v %v", carried, err)
 	}
 	// Context is a convenience: oversized or invalid context is dropped rather
 	// than failing the request, because orient must not be able to fail a run.
@@ -301,7 +330,6 @@ func TestDecodeOrientInputIsStrict(t *testing.T) {
 		t.Fatalf("oversized context must be dropped, not fatal: %#v %v", dropped, err)
 	}
 	for name, body := range map[string]string{
-		"unknown field":      `{"route":"engineering/chat","requestText":"hi","messages":[]}`,
 		"bare profile route": `{"route":"engineering","requestText":"hi"}`,
 		"unknown route":      `{"route":"legal/chat","requestText":"hi"}`,
 		"missing text":       `{"route":"engineering/chat"}`,

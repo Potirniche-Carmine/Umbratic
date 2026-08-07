@@ -28,7 +28,7 @@ use crate::{
     session::{EventSink, Session},
 };
 
-mod catalog;
+pub(crate) mod catalog;
 mod command;
 #[cfg(test)]
 mod command_tests;
@@ -76,7 +76,6 @@ const MAX_READ_OUTPUT_BYTES: usize = 60 * 1024;
 /// bound — large enough for real source files, and named in the typed error when
 /// it is exceeded rather than left as a silent mismatch with `read`.
 const MAX_MUTABLE_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_ATTACHMENT_CHUNK_BYTES: usize = 12 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ToolCall {

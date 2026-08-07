@@ -19,6 +19,10 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:update-chat-draft", input),
   updateChatProject: (input: { chatId: string; repositoryName: string; repositoryPath: string }) =>
     ipcRenderer.invoke("umbratic:update-chat-project", input),
+  getUnsavedDraft: (input: { scope: string }) => ipcRenderer.invoke("umbratic:get-unsaved-draft", input),
+  setUnsavedDraft: (input: { scope: string; draftPrompt: string; attachedFiles: ChatAttachment[] }) =>
+    ipcRenderer.invoke("umbratic:set-unsaved-draft", input),
+  clearUnsavedDraft: (input: { scope: string }) => ipcRenderer.invoke("umbratic:clear-unsaved-draft", input),
   deleteChat: (input: { chatId: string }) => ipcRenderer.invoke("umbratic:delete-chat", input),
   deleteProjectChats: (input: { projectId: string }) => ipcRenderer.invoke("umbratic:delete-project-chats", input),
   deleteProject: (input: { projectId: string }) => ipcRenderer.invoke("umbratic:delete-project", input),

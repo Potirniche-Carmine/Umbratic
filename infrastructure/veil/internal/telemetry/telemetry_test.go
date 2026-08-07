@@ -24,9 +24,12 @@ func goldenBundle(t *testing.T) []byte {
 
 func TestDecodeBundleAcceptsGoldenFixture(t *testing.T) {
 	raw := goldenBundle(t)
-	bundle, sanitized, err := DecodeBundle(bytes.NewReader(raw))
+	bundle, sanitized, drops, err := DecodeBundle(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("golden bundle rejected: %v", err)
+	}
+	if drops.Total() != 0 {
+		t.Fatalf("the golden bundle must survive intact, dropped %#v", drops)
 	}
 	if bundle.ExportedAt == "" || len(bundle.Tasks) != 1 || len(bundle.ProductEvents) != 1 {
 		t.Fatalf("unexpected decoded bundle: %#v", bundle)
@@ -43,18 +46,33 @@ func TestDecodeBundleAcceptsGoldenFixture(t *testing.T) {
 	}
 }
 
-func TestDecodeBundleRejectsVersionField(t *testing.T) {
+func TestDecodeBundleStripsUnknownSectionsInsteadOfRejecting(t *testing.T) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(goldenBundle(t), &fields); err != nil {
 		t.Fatalf("parse golden bundle: %v", err)
 	}
 	fields["schemaVersion"] = json.RawMessage("6")
+	fields["runtimeSamples"] = json.RawMessage(`[{"ms":12}]`)
 	raw, err := json.Marshal(fields)
 	if err != nil {
 		t.Fatalf("encode bundle: %v", err)
 	}
-	if _, _, err := DecodeBundle(bytes.NewReader(raw)); !errors.Is(err, ErrInvalidBundle) {
-		t.Fatalf("expected a versioned bundle to be rejected, got %v", err)
+	bundle, sanitized, drops, err := DecodeBundle(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("a newer bundle must be accepted, got %v", err)
+	}
+	if drops.UnknownSections != 2 {
+		t.Fatalf("unknown sections must be counted, got %#v", drops)
+	}
+	if len(bundle.Tasks) != 1 || len(bundle.ProductEvents) != 1 {
+		t.Fatalf("known sections must survive: %#v", bundle)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(sanitized, &round); err != nil {
+		t.Fatalf("sanitized bundle is not json: %v", err)
+	}
+	if _, present := round["schemaVersion"]; present {
+		t.Fatal("unknown sections must not be stored")
 	}
 }
 
@@ -69,19 +87,21 @@ func TestDecodeBundleRejectsMissingField(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encode bundle: %v", err)
 		}
-		if _, _, err := DecodeBundle(bytes.NewReader(raw)); !errors.Is(err, ErrInvalidBundle) {
+		if _, _, _, err := DecodeBundle(bytes.NewReader(raw)); !errors.Is(err, ErrInvalidBundle) {
 			t.Fatalf("expected a bundle without %s to be rejected, got %v", name, err)
 		}
 	}
 }
 
-func TestDecodeBundleRejectsInvalidLocalDiagnostics(t *testing.T) {
+func TestDecodeBundleSanitizesLocalDiagnosticsInsteadOfRejecting(t *testing.T) {
+	// The summary is an operator convenience. A bad counter costs that counter,
+	// never the tasks and events in the same bundle.
 	for name, replacement := range map[string]string{
-		"not an object":     `[]`,
 		"missing counts":    `{"total":1}`,
 		"negative count":    `{"total":-1,"warnings":0,"errors":0,"bySource":{},"byEvent":{}}`,
 		"non-numeric count": `{"total":"1","warnings":0,"errors":0,"bySource":{},"byEvent":{}}`,
 		"bad bucket":        `{"total":0,"warnings":0,"errors":0,"bySource":{"a":"b"},"byEvent":{}}`,
+		"extra counter":     `{"total":0,"warnings":0,"errors":0,"bySource":{},"byEvent":{},"stalls":4}`,
 	} {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(goldenBundle(t), &fields); err != nil {
@@ -92,8 +112,27 @@ func TestDecodeBundleRejectsInvalidLocalDiagnostics(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encode bundle: %v", err)
 		}
-		if _, _, err := DecodeBundle(bytes.NewReader(raw)); !errors.Is(err, ErrInvalidBundle) {
-			t.Fatalf("expected %s localDiagnostics to be rejected, got %v", name, err)
+		bundle, _, _, err := DecodeBundle(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("%s localDiagnostics must not fail the bundle, got %v", name, err)
 		}
+		if len(bundle.Tasks) != 1 || len(bundle.ProductEvents) != 1 {
+			t.Fatalf("%s: the rest of the bundle must survive: %#v", name, bundle)
+		}
+	}
+
+	// A summary that is not an object at all is a malformed bundle, not a bad
+	// counter, and still fails.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(goldenBundle(t), &fields); err != nil {
+		t.Fatalf("parse golden bundle: %v", err)
+	}
+	fields["localDiagnostics"] = json.RawMessage(`[]`)
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("encode bundle: %v", err)
+	}
+	if _, _, _, err := DecodeBundle(bytes.NewReader(raw)); !errors.Is(err, ErrInvalidBundle) {
+		t.Fatalf("expected non-object localDiagnostics to be rejected, got %v", err)
 	}
 }

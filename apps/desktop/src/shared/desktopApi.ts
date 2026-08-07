@@ -210,6 +210,15 @@ export type PastedAttachmentInput = {
   dataUrl: string;
 };
 
+/**
+ * A draft for a chat that has not been created yet. Held in main-process memory,
+ * never written to disk: it survives moving between chats and is gone on restart.
+ */
+export type UnsavedChatDraft = {
+  draftPrompt: string;
+  attachedFiles: ChatAttachment[];
+};
+
 export type FileSearchResult = ChatAttachment & {
   kind: "file" | "folder";
 };
@@ -365,6 +374,18 @@ export type DesktopApi = {
     repositoryName: string;
     repositoryPath: string;
   }): Promise<ChatRecord>;
+  /**
+   * The draft for a chat that has not been created yet, held in main-process
+   * memory only. `scope` is the workspace path the new chat belongs to, or ""
+   * for none.
+   */
+  getUnsavedDraft(input: { scope: string }): Promise<UnsavedChatDraft>;
+  setUnsavedDraft(input: {
+    scope: string;
+    draftPrompt: string;
+    attachedFiles: ChatAttachment[];
+  }): Promise<UnsavedChatDraft>;
+  clearUnsavedDraft(input: { scope: string }): Promise<{ ok: true }>;
   deleteChat(input: { chatId: string }): Promise<{ ok: true }>;
   deleteProjectChats(input: {
     projectId: string;
@@ -651,6 +672,9 @@ export const desktopIpcChannels = {
   createChat: "umbratic:create-chat",
   updateChatDraft: "umbratic:update-chat-draft",
   updateChatProject: "umbratic:update-chat-project",
+  getUnsavedDraft: "umbratic:get-unsaved-draft",
+  setUnsavedDraft: "umbratic:set-unsaved-draft",
+  clearUnsavedDraft: "umbratic:clear-unsaved-draft",
   deleteChat: "umbratic:delete-chat",
   deleteProjectChats: "umbratic:delete-project-chats",
   deleteProject: "umbratic:delete-project",

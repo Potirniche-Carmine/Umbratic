@@ -1,7 +1,8 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, refreshLocalModels, retryTelemetrySpoolQueue, saveContextLengthSetting, saveHarnessProfileSetting, saveModelEndpointSettings } from "./backendSettings";
-import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, pathKey, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
+import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
+import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
 import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLauncher";
 import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
@@ -13,217 +14,63 @@ import { worktreeRootForRepo } from "./worktreeOps";
 import {
   app,
   BrowserWindow,
-  dialog,
   IpcMainInvokeEvent,
   Menu,
   MenuItemConstructorOptions,
-  nativeImage,
-  OpenDialogOptions,
-  shell,
   session,
 } from "electron";
-import { spawn } from "node:child_process";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
-import {
-  attachmentPromptTokenBudget,
-  attachmentTextExcerpt,
-  estimateTextTokens,
-} from "../shared/contextWindow";
 
 import {
-  endpointEditingAllowed,
-  managedModelEndpointDefaults,
-  taskStatesThatCanOpen,
-} from "./config";
-import {
-  capabilityPromptGuidance,
-  capabilityTelemetrySnapshot,
-  probeLocalCapabilities,
-  type CapabilityPromptNeeds,
-} from "./capabilities";
-import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
-import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
-import {
-  beginRunnerEventStream,
-  runnerRequest,
-  runnerBinaryPath,
-  runnerDiagnosticsDirectory,
-  replyRunnerPermission,
-  setRunnerProviderSession,
-  startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
 import {
-  umbraticPolicyVersion,
-  umbraticRunnerContractVersion,
-  umbraticRunnerName,
-  umbraticRunnerVersion,
-  allowedLocalProviderIds,
-  baseUrlHost,
-  canAutoResolvePermission,
-  classifyCommandText,
-  isBlockedPath,
-  isGeneratedRuntimePath,
-  isLocalhostUrl,
-  isWorkspaceReadPermission,
-  promptLooksLikeCmakeTask,
-  promptLooksLikePythonTask,
-  runtimeDiagnostics,
-  telemetryPolicyForMode,
-} from "./policy";
-import {
-  connectCompanySession,
   companyConnectionStatus,
-  disconnectCompanyDevice,
-  disconnectCompanySession,
-  enrollCompanyDevice,
-  ensureCompanySession,
   renewCompanySession,
 } from "./companyIdentity";
-import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
-import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
+import { companyTransportOptions } from "./endpointConfig";
+import { stopLocalVeil } from "./localVeil";
 import { loadWindowWithModelWarmup } from "./modelWarmup";
-import { shouldProbeVeilContext } from "./veilContext";
 import {
-  readChat,
   readChats,
-  hasStoredModelEndpointSettings,
   readContextLengthSetting,
   readCachedLocalModels,
-  readLocalDiagnosticInfo,
-  readLocalDiagnostics,
   readHarnessProfileSetting,
   readModelEndpointSettings,
   readModelEndpointSettingsForMode,
   publicModelEndpointSettings,
-  readNotes,
-  readPermissionModeSetting,
   readProjects,
-  readProductTelemetryEvents,
   readStartupSettings, readTask,
-  readTaskCheckpoints,
   readTasks,
-  clearLocalDiagnostics,
-  writeHarnessProfileSetting,
-  writeCachedLocalModels,
-  writeContextLengthSetting,
-  writeModelEndpointSettings,
-  writeChat,
-  writeChats,
-  writeJsonFile,
-  writeNotes,
   writePermissionModeSetting,
-  writeProjects,
-  writeProductTelemetryEvent,
-  writeTask,
   writeTasks,
   closeStorageDatabases,
-  normalizeConversationState,
 } from "./storage";
-import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
-import { buildRedactedTelemetryBundle } from "./telemetry";
-import {
-  syncTelemetryBundle,
-  telemetrySpoolDirectory,
-  uploadTelemetrySpool,
-} from "./telemetrySync";
-import { checkEndpointHealth, modelWithFreshContextLength as refreshModelContextLength, telemetryUploadEndpoint } from "./modelEndpointRuntime";
-import { commandAvailable, execFileOutput, execFileResult, gitOutput, gitResult } from "./processCommands";
+import { recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
 import { searchRepositoryFiles } from "./repositorySearch";
-import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
-import { RunnerEventAdapter } from "./runnerEventAdapter";
-import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
 import {
-  applyHarnessSystemSkillSettings,
   createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
-  importSkill as importSkillService,
   installBundledSystemSkills as installBundledSystemSkillsService,
   listSkills as listSkillsService,
   resetSystemSkill as resetSystemSkillService,
   saveSkillDocument as saveSkillDocumentService,
   saveSkillSettings as saveSkillSettingsService,
-  skillsDirectoryPath as skillsDirectoryPathService,
 } from "./skills";
-import type {
-  ApproveResult,
-  BackendStatus,
-  BackendUiEvent,
-  CapabilityProbeReport,
-  ChatAttachment,
-  ChatRecord,
-  CommandClass,
-  CommandOutput,
-  CommandResult,
-  HarnessProfileId,
-  IdeInfo,
-  IdeOpenResult,
-  LocalModelInfo,
-  LocalModelProvider,
-  LocalDiagnosticInfo,
-  ProductTelemetryEventType,
-  RunnerProcess,
-  RunnerToolId,
-  PendingPermission,
-  PermissionMode,
-  PermissionRequest,
-  PastedAttachmentInput,
-  ReasoningMode,
-  RepositoryInfo,
-  ReviewFile,
-  ServiceStatus,
-  TelemetrySyncResult,
-  TaskInfo,
-  TaskCheckpoint,
-  TaskRecord,
-  TaskState,
-  UserNotes,
-  WorkspaceKind,
-  WorkspaceMode,
-} from "./types";
-import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
+import type { PermissionMode, TaskInfo } from "./types";
+import { isRecord, requiredString } from "./utils";
 import {
   registerDesktopIpcHandlers,
   type DesktopIpcHandlers,
 } from "./ipcRegistry";
 import { readTaskDocumentReview } from "./documentReview";
-import {
-  assertFolderRejectBaseline,
-  createTaskCheckpoint,
-  createTurnCheckpoint,
-  forkTaskFromCheckpoint,
-  removeTaskCheckpoint,
-  restoreIsolatedWorktreeForReject,
-  restoreTaskCheckpoint,
-  setTaskCheckpointPinned,
-} from "./checkpoints/service";
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
-import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
-import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
-import {
-  appendTaskEvent,
-  compactTaskEvents,
-  filterReviewPaths,
-  hiddenRendererReviewPaths,
-  isReviewReadyAssistantEvent,
-  mergeTaskEvents,
-  rendererReviewFiles,
-  visibleTaskEvents,
-} from "./taskReviewPresentation";
 const isDev = !app.isPackaged;
 const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
@@ -281,10 +128,6 @@ function finishInterruptedRunningTasks() {
   if (changed) {
     writeTasks(repaired);
   }
-}
-
-function taskEnabledTools(task: TaskRecord): RunnerToolId[] {
-  return normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
 }
 
 function publicTaskById(input: unknown): TaskInfo | null {
@@ -479,6 +322,9 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     createChat: (input) => createChat(input),
     updateChatDraft: (input) => updateChatDraft(input),
     updateChatProject: (input) => updateChatProject(input),
+    getUnsavedDraft: (input) => readUnsavedDraft(input),
+    setUnsavedDraft: (input) => writeUnsavedDraft(input),
+    clearUnsavedDraft: (input) => clearUnsavedDraft(input),
     deleteChat: (input) => deleteChat(input),
     deleteProjectChats: (input) => deleteProjectChats(input),
     deleteProject: (input) => deleteProject(input),

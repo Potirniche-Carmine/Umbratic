@@ -227,3 +227,38 @@ fn mtls_pem_identity_requires_a_certificate_and_key_pair() {
             .contains("certPath and keyPath")
     );
 }
+
+// The other direction of the wire-compatibility contract in the root AGENTS.md:
+// a harness must survive a NEWER Veil. Veil responses are read field by field
+// off untyped JSON, and SSE lines that are not `data:` are skipped, so a server
+// that adds fields or event kinds cannot break a build that predates them.
+#[test]
+fn a_newer_veil_stream_does_not_break_this_runner() {
+    let mut result = VeilChatResult::default();
+    let mut calls = BTreeMap::new();
+
+    // Unknown SSE event kinds and comment lines are not `data:` and are skipped.
+    for line in [
+        "event: veil.checkpoint",
+        ": keep-alive",
+        "id: 42",
+        "retry: 1000",
+    ] {
+        let (done, content) = process_veil_line(line, &mut result, &mut calls).unwrap();
+        assert!(!done, "{line} must not end the stream");
+        assert!(content.is_empty(), "{line} must contribute no content");
+    }
+
+    // Unknown fields alongside the ones this build reads are ignored, and the
+    // content still arrives.
+    let (_, content) = process_veil_line(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\",\"annotations\":[{\"kind\":\"cite\"}]},\"logprobs\":null}],\"veilTrace\":{\"span\":\"abc\"},\"serverHints\":{\"cacheWarm\":true}}",
+        &mut result,
+        &mut calls,
+    )
+    .unwrap();
+    assert_eq!(content, "hi");
+
+    let (done, _) = process_veil_line("data: [DONE]", &mut result, &mut calls).unwrap();
+    assert!(done);
+}

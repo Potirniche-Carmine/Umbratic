@@ -4,54 +4,24 @@ let telemetrySyncTimer: NodeJS.Timeout | null = null;
 import { RunnerPromptPart, activeRunnerProcesses, recordProductTelemetry } from "./mainRuntime";
 import {
   app,
-  BrowserWindow,
   dialog,
-  IpcMainInvokeEvent,
-  Menu,
-  MenuItemConstructorOptions,
-  nativeImage,
-  OpenDialogOptions,
   shell,
-  session,
 } from "electron";
-import { spawn } from "node:child_process";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
-import {
-  attachmentPromptTokenBudget,
-  attachmentTextExcerpt,
-  estimateTextTokens,
-} from "../shared/contextWindow";
 
 import {
   endpointEditingAllowed,
   managedModelEndpointDefaults,
-  taskStatesThatCanOpen,
 } from "./config";
 import {
-  capabilityPromptGuidance,
-  capabilityTelemetrySnapshot,
   probeLocalCapabilities,
-  type CapabilityPromptNeeds,
 } from "./capabilities";
-import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
-import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
 import {
-  beginRunnerEventStream,
   runnerRequest,
   runnerBinaryPath,
   runnerDiagnosticsDirectory,
-  replyRunnerPermission,
-  setRunnerProviderSession,
-  startUmbraticRunnerServer,
-  stopRunnerProcess,
 } from "./runnerAdapter";
 import {
   umbraticPolicyVersion,
@@ -59,15 +29,7 @@ import {
   umbraticRunnerName,
   umbraticRunnerVersion,
   allowedLocalProviderIds,
-  baseUrlHost,
-  canAutoResolvePermission,
-  classifyCommandText,
-  isBlockedPath,
-  isGeneratedRuntimePath,
   isLocalhostUrl,
-  isWorkspaceReadPermission,
-  promptLooksLikeCmakeTask,
-  promptLooksLikePythonTask,
   runtimeDiagnostics,
   telemetryPolicyForMode,
 } from "./policy";
@@ -78,144 +40,52 @@ import {
   disconnectCompanySession,
   enrollCompanyDevice,
   ensureCompanySession,
-  renewCompanySession,
 } from "./companyIdentity";
 import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
 import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
-import { loadWindowWithModelWarmup } from "./modelWarmup";
-import { shouldProbeVeilContext } from "./veilContext";
 import {
-  readChat,
-  readChats,
   hasStoredModelEndpointSettings,
   readContextLengthSetting,
-  readCachedLocalModels,
   readLocalDiagnosticInfo,
   readLocalDiagnostics,
-  readHarnessProfileSetting,
   readModelEndpointSettings,
-  readModelEndpointSettingsForMode,
   publicModelEndpointSettings,
-  readNotes,
-  readPermissionModeSetting,
   readProjects,
   readProductTelemetryEvents,
-  readStartupSettings, readTask,
-  readTaskCheckpoints,
+  readTask,
   readTasks,
   clearLocalDiagnostics,
   writeHarnessProfileSetting,
   writeCachedLocalModels,
   writeContextLengthSetting,
   writeModelEndpointSettings,
-  writeChat,
-  writeChats,
-  writeJsonFile,
-  writeNotes,
-  writePermissionModeSetting,
-  writeProjects,
-  writeProductTelemetryEvent,
-  writeTask,
-  writeTasks,
-  closeStorageDatabases,
-  normalizeConversationState,
 } from "./storage";
-import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
+import { recordLocalDiagnostic } from "./diagnostics";
 import { buildRedactedTelemetryBundle } from "./telemetry";
 import {
   syncTelemetryBundle,
   telemetrySpoolDirectory,
   uploadTelemetrySpool,
 } from "./telemetrySync";
-import { checkEndpointHealth, modelWithFreshContextLength as refreshModelContextLength, telemetryUploadEndpoint } from "./modelEndpointRuntime";
-import { commandAvailable, execFileOutput, execFileResult, gitOutput, gitResult } from "./processCommands";
-import { searchRepositoryFiles } from "./repositorySearch";
-import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
-import { RunnerEventAdapter } from "./runnerEventAdapter";
-import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
+import { checkEndpointHealth, telemetryUploadEndpoint } from "./modelEndpointRuntime";
+import { recordVeilFeatures } from "./veilFeatures";
 import {
   applyHarnessSystemSkillSettings,
-  createSkill as createSkillService,
   getSkillDocument as getSkillDocumentService,
   importSkill as importSkillService,
-  installBundledSystemSkills as installBundledSystemSkillsService,
-  listSkills as listSkillsService,
-  resetSystemSkill as resetSystemSkillService,
-  saveSkillDocument as saveSkillDocumentService,
-  saveSkillSettings as saveSkillSettingsService,
   skillsDirectoryPath as skillsDirectoryPathService,
 } from "./skills";
 import type {
-  ApproveResult,
   BackendStatus,
-  BackendUiEvent,
   CapabilityProbeReport,
-  ChatAttachment,
-  ChatRecord,
-  CommandClass,
-  CommandOutput,
-  CommandResult,
   HarnessProfileId,
-  IdeInfo,
-  IdeOpenResult,
   LocalModelInfo,
   LocalModelProvider,
   LocalDiagnosticInfo,
-  ProductTelemetryEventType,
   RunnerProcess,
-  RunnerToolId,
-  PendingPermission,
-  PermissionMode,
-  PermissionRequest,
-  PastedAttachmentInput,
-  ReasoningMode,
-  RepositoryInfo,
-  ReviewFile,
-  ServiceStatus,
   TelemetrySyncResult,
-  TaskInfo,
-  TaskCheckpoint,
-  TaskRecord,
-  TaskState,
-  UserNotes,
-  WorkspaceKind,
-  WorkspaceMode,
 } from "./types";
-import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
-import {
-  registerDesktopIpcHandlers,
-  type DesktopIpcHandlers,
-} from "./ipcRegistry";
-import { readTaskDocumentReview } from "./documentReview";
-import {
-  assertFolderRejectBaseline,
-  createTaskCheckpoint,
-  createTurnCheckpoint,
-  forkTaskFromCheckpoint,
-  removeTaskCheckpoint,
-  restoreIsolatedWorktreeForReject,
-  restoreTaskCheckpoint,
-  setTaskCheckpointPinned,
-} from "./checkpoints/service";
-import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
-import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
-import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
-import * as appPaths from "./appPaths";
-import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
-import {
-  appendTaskEvent,
-  compactTaskEvents,
-  filterReviewPaths,
-  hiddenRendererReviewPaths,
-  isReviewReadyAssistantEvent,
-  mergeTaskEvents,
-  rendererReviewFiles,
-  visibleTaskEvents,
-} from "./taskReviewPresentation";
+import { isRecord, pathInside, requiredString } from "./utils";
 
 export async function saveModelEndpointSettings(input: Partial<ReturnType<typeof readModelEndpointSettings>>) {
   if (activeRunnerProcesses.size > 0) {
@@ -245,6 +115,11 @@ export async function saveModelEndpointSettings(input: Partial<ReturnType<typeof
       throw new Error("Use an Enrollment code to connect to a company server.");
     }
   }
+  // The running local Veil was spawned for the previous settings. Stop it here
+  // rather than relying on the next ensureLocalVeil to notice: switching to
+  // Server mode never calls that path at all, and the stale process would keep
+  // holding its port and its model.
+  stopLocalVeil();
   const settings = writeModelEndpointSettings(candidate);
   const status = await getBackendStatus();
   return { settings: publicModelEndpointSettings(settings), status };
@@ -330,6 +205,8 @@ export async function connectCompanyConnection() {
     return await Promise.race([
       (async () => {
         await connectCompanySession({ ...companyTransportOptions(), signal: controller.signal });
+        // Nothing routes to the local Veil once this succeeds.
+        stopLocalVeil();
         const settings = writeModelEndpointSettings({
           mode: "server",
           baseUrl: connection.baseUrl,
@@ -359,7 +236,7 @@ export async function disconnectCompanyServerSession() {
     throw new Error("Wait for the active run to finish before disconnecting from the company server.");
   }
   await disconnectCompanySession(companyTransportOptions());
-  const settings = readModelEndpointSettings();
+  const settings = revertToLocalMode();
   const status = await getBackendStatus();
   return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
 }
@@ -369,9 +246,20 @@ export async function disconnectCompanyConnection() {
     throw new Error("Wait for the active run to finish before disconnecting this device.");
   }
   await disconnectCompanyDevice(companyTransportOptions());
-  const settings = readModelEndpointSettings();
+  const settings = revertToLocalMode();
   const status = await getBackendStatus();
   return { connection: companyConnectionStatus(), settings: publicModelEndpointSettings(settings), status };
+}
+
+/**
+ * Disconnecting used to leave the app in Server mode pointing at a server it was
+ * no longer allowed to call, so every subsequent run failed with a confusing
+ * auth error. There is exactly one mode left that can work, so go there.
+ */
+function revertToLocalMode() {
+  const current = readModelEndpointSettings();
+  if (current.mode !== "server") return current;
+  return writeModelEndpointSettings({ ...current, mode: "local", secret: "" });
 }
 
 export async function saveHarnessProfileSetting(input: unknown) {
@@ -423,6 +311,7 @@ export async function resolveSelectedModel(): Promise<{ providers: LocalModelPro
   const configured = configuredEndpointModel();
   const providerConfig = endpointProvider();
   const health = await checkEndpointHealth(providerConfig);
+  recordVeilFeatures(health.features);
   const availableModel = { ...configured, capabilities: health.capabilities };
   const models: LocalModelInfo[] = health.status === "ready" ? [availableModel] : [];
   const selected = health.status === "ready" ? availableModel : null;

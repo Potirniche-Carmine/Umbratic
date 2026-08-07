@@ -141,6 +141,7 @@ import {
   stabilizeStreamingInlineText,
   type MarkdownBlock,
 } from "./composerText";
+import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
 import { appendTaskEvent, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
@@ -1747,6 +1748,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [task, setTask] = useState<TaskInfo | null>(previewEnvironment?.task ?? null);
   const [prompt, setPrompt] = useState(previewEnvironment?.prompt ?? initialPrompt);
   const [queuedPrompts, setQueuedPrompts] = useState<QueuedComposerPrompt[]>([]);
+  const unsavedDraftScope = unsavedDraftScopeFor(repository?.rootPath);
   const [steerPending, setSteerPending] = useState(false);
   const [reviewPromptFeedback, setReviewPromptFeedback] = useState<ReviewCommentDraft[]>([]);
   const [reviewFeedbackDialogOpen, setReviewFeedbackDialogOpen] = useState(false);
@@ -1864,6 +1866,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const skillsSaveSequenceRef = useRef(0);
   const skillsLoadedRef = useRef(false);
   const suppressDraftSaveRef = useRef(false);
+  // Read by the async unsaved-draft restore, which must see the live value
+  // rather than the one captured when it started.
+  const activeChatIdRef = useRef<string | null>(null);
+  activeChatIdRef.current = activeChatId;
   const reviewRefreshRef = useRef(false);
   const appBlurredRef = useRef(false);
   const startTaskInFlightRef = useRef(false);
@@ -2550,18 +2556,23 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }, []);
 
   useEffect(() => {
-    if (!activeChatId || suppressDraftSaveRef.current) return undefined;
+    if (suppressDraftSaveRef.current) return undefined;
     if (draftSaveRef.current) window.clearTimeout(draftSaveRef.current);
     const chatId = activeChatId;
+    const scope = unsavedDraftScope;
     const draftPrompt = prompt;
     const files = attachedFiles;
     draftSaveRef.current = window.setTimeout(() => {
-      void persistDraft(chatId, draftPrompt, files, { updateLocal: false });
+      // A chat that exists keeps its draft in its own row. One that does not
+      // exist yet has no row to keep it in, so it goes to main-process memory
+      // instead of being dropped on the next chat switch.
+      if (chatId) void persistDraft(chatId, draftPrompt, files, { updateLocal: false });
+      else void api.setUnsavedDraft({ scope, draftPrompt, attachedFiles: files }).catch(() => undefined);
     }, 250);
     return () => {
       if (draftSaveRef.current) window.clearTimeout(draftSaveRef.current);
     };
-  }, [activeChatId, prompt, attachedFiles]);
+  }, [activeChatId, unsavedDraftScope, prompt, attachedFiles]);
 
   useEffect(() => {
     if (!fileSearchKind || !repository) {
@@ -2857,8 +2868,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
   }
 
-  function resetUnsavedChat() {
+  /** `scope` of null clears the composer without restoring anything, for the
+   * callers that go straight on to create a real chat. */
+  function resetUnsavedChat(scope: string | null = unsavedDraftScope) {
     suppressDraftSaveBriefly();
+    if (scope !== null) {
+      void restoreUnsavedDraft(api, scope, { activeChatId: () => activeChatIdRef.current, setPrompt, setAttachedFiles });
+    }
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
@@ -3492,6 +3508,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         mergeChat(chat);
         chatId = chat.id;
         setActiveChatId(chat.id);
+        // The chat exists now and keeps its own draft, so the memory copy would
+        // only reappear the next time this workspace opened a new chat.
+        void api.clearUnsavedDraft({ scope: unsavedDraftScope }).catch(() => undefined);
       }
       const nextTask = await api.startTask({
         repositoryId: repository?.id,
@@ -4402,7 +4421,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
       setRepository(null);
-      resetUnsavedChat();
+      resetUnsavedChat("");
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -4415,7 +4434,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
       const result = await api.pickRepository();
       if (!result.canceled) {
-        resetUnsavedChat();
+        resetUnsavedChat(result.repository.rootPath);
         mergeProject(result.repository);
         setRepository(result.repository);
       }
@@ -4431,7 +4450,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setError(null);
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
-      resetUnsavedChat();
+      // Scoped to the folder being opened, not the one being left: the draft to
+      // restore belongs to the new chat's workspace.
+      resetUnsavedChat(project.path);
       const nextRepository = await api.getRepository({ repositoryPath: project.path });
       if (nextRepository) {
         mergeProject(nextRepository);
@@ -4447,7 +4468,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setError(null);
     try {
       if (activeChatId) await persistDraft(activeChatId, prompt, attachedFiles);
-      resetUnsavedChat();
+      // This path creates a real chat immediately, so there is no unsaved draft
+      // to restore into.
+      resetUnsavedChat(null);
       const nextRepository = await api.getRepository({ repositoryPath: project.path });
       if (nextRepository) {
         mergeProject(nextRepository);

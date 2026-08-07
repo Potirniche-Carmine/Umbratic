@@ -2,29 +2,11 @@ import { chatAttachmentRoot, isHiddenChatTask } from "./chatStore";
 import { RunnerPrompt, RunnerPromptPart, pdfAttachmentByteLimit, pdfImagePageLimit, promptImageCharacterLimit } from "./mainRuntime";
 import { inspectPdf } from "./pdfInspector";
 import { pdfAttachmentPromptSection } from "./pdfPrompt";
-import { ignoredSnapshotDirectories, imageDataUrlIfSafe, isBinarySnapshotValue, isPdfFile, ocrAttachmentArtifact, ocrInputKindForPath, ocrInputKindsForAttachments, ocrPromptDigest, pdfAttachmentImageParts, readTextFileIfSafe, relativeArtifactPath } from "./workspaceSnapshot";
+import { imageDataUrlIfSafe, isBinarySnapshotValue, isPdfFile, ocrAttachmentArtifact, ocrInputKindForPath, ocrInputKindsForAttachments, ocrPromptDigest, pdfAttachmentImageParts, readTextFileIfSafe, relativeArtifactPath } from "./workspaceSnapshot";
 import { directoryIsEmpty } from "./worktreeOps";
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  IpcMainInvokeEvent,
-  Menu,
-  MenuItemConstructorOptions,
-  nativeImage,
-  OpenDialogOptions,
-  shell,
-  session,
-} from "electron";
-import { spawn } from "node:child_process";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 
-import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   attachmentPromptTokenBudget,
   attachmentTextExcerpt,
@@ -32,190 +14,29 @@ import {
 } from "../shared/contextWindow";
 
 import {
-  endpointEditingAllowed,
-  managedModelEndpointDefaults,
-  taskStatesThatCanOpen,
-} from "./config";
-import {
   capabilityPromptGuidance,
-  capabilityTelemetrySnapshot,
   probeLocalCapabilities,
   type CapabilityPromptNeeds,
 } from "./capabilities";
-import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask, type OcrInputKind } from "./artifactRuntime";
-import { attachmentContextTokens, priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
-import { generateOcrDocument, writeOcrArtifacts, type OcrDocument, type OcrPageInput } from "./ocrRuntime";
+import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask } from "./artifactRuntime";
+import { priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
 import {
-  beginRunnerEventStream,
-  runnerRequest,
   runnerBinaryPath,
-  runnerDiagnosticsDirectory,
-  replyRunnerPermission,
-  setRunnerProviderSession,
-  startUmbraticRunnerServer,
-  stopRunnerProcess,
 } from "./runnerAdapter";
 import {
-  umbraticPolicyVersion,
-  umbraticRunnerContractVersion,
-  umbraticRunnerName,
-  umbraticRunnerVersion,
-  allowedLocalProviderIds,
-  baseUrlHost,
-  canAutoResolvePermission,
-  classifyCommandText,
-  isBlockedPath,
-  isGeneratedRuntimePath,
-  isLocalhostUrl,
   promptLooksLikeCmakeTask,
   promptLooksLikePythonTask,
-  runtimeDiagnostics,
-  telemetryPolicyForMode,
 } from "./policy";
 import {
-  connectCompanySession,
-  companyConnectionStatus,
-  disconnectCompanyDevice,
-  disconnectCompanySession,
-  enrollCompanyDevice,
-  ensureCompanySession,
-  renewCompanySession,
-} from "./companyIdentity";
-import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
-import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
-import { loadWindowWithModelWarmup } from "./modelWarmup";
-import { shouldProbeVeilContext } from "./veilContext";
-import {
   readChat,
-  readChats,
-  hasStoredModelEndpointSettings,
-  readContextLengthSetting,
-  readCachedLocalModels,
-  readLocalDiagnosticInfo,
-  readLocalDiagnostics,
-  readHarnessProfileSetting,
-  readModelEndpointSettings,
-  readModelEndpointSettingsForMode,
-  publicModelEndpointSettings,
-  readNotes,
-  readPermissionModeSetting,
-  readProjects,
-  readProductTelemetryEvents,
-  readStartupSettings, readTask,
-  readTaskCheckpoints,
-  readTasks,
-  clearLocalDiagnostics,
-  writeHarnessProfileSetting,
-  writeCachedLocalModels,
-  writeContextLengthSetting,
-  writeModelEndpointSettings,
-  writeChat,
-  writeChats,
-  writeJsonFile,
-  writeNotes,
-  writePermissionModeSetting,
-  writeProjects,
-  writeProductTelemetryEvent,
-  writeTask,
-  writeTasks,
-  closeStorageDatabases,
-  normalizeConversationState,
 } from "./storage";
-import { recordBackendEventDiagnostic, recordLocalDiagnostic, sanitizeDiagnosticValue } from "./diagnostics";
-import { buildRedactedTelemetryBundle } from "./telemetry";
-import {
-  syncTelemetryBundle,
-  telemetrySpoolDirectory,
-  uploadTelemetrySpool,
-} from "./telemetrySync";
-import { checkEndpointHealth, modelWithFreshContextLength as refreshModelContextLength, telemetryUploadEndpoint } from "./modelEndpointRuntime";
-import { commandAvailable, execFileOutput, execFileResult, gitOutput, gitResult } from "./processCommands";
-import { searchRepositoryFiles } from "./repositorySearch";
-import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
-import { RunnerEventAdapter } from "./runnerEventAdapter";
-import { appendBufferedBackendEvent, shouldBufferBackendEvent } from "./backendEventBuffer";
-import {
-  applyHarnessSystemSkillSettings,
-  createSkill as createSkillService,
-  getSkillDocument as getSkillDocumentService,
-  importSkill as importSkillService,
-  installBundledSystemSkills as installBundledSystemSkillsService,
-  listSkills as listSkillsService,
-  resetSystemSkill as resetSystemSkillService,
-  saveSkillDocument as saveSkillDocumentService,
-  saveSkillSettings as saveSkillSettingsService,
-  skillsDirectoryPath as skillsDirectoryPathService,
-} from "./skills";
-import type {
-  ApproveResult,
-  BackendStatus,
-  BackendUiEvent,
-  CapabilityProbeReport,
-  ChatAttachment,
-  ChatRecord,
-  CommandClass,
-  CommandOutput,
-  CommandResult,
-  HarnessProfileId,
-  IdeInfo,
-  IdeOpenResult,
-  LocalModelInfo,
-  LocalModelProvider,
-  LocalDiagnosticInfo,
-  ProductTelemetryEventType,
-  RunnerProcess,
-  RunnerToolId,
-  PendingPermission,
-  PermissionMode,
-  PermissionRequest,
-  PastedAttachmentInput,
-  ReasoningMode,
-  RepositoryInfo,
-  ReviewFile,
-  ServiceStatus,
-  TelemetrySyncResult,
-  TaskInfo,
-  TaskCheckpoint,
-  TaskRecord,
-  TaskState,
-  UserNotes,
-  WorkspaceKind,
-  WorkspaceMode,
-} from "./types";
-import { commandText, hasSymlinkComponent, isRecord, normalizeRelativePath, pathInside, requiredString, shortHash, slugify } from "./utils";
-import { normalizeReviewFile, parseGitPorcelainPaths, reviewContextLines, buildTextDiff } from "../shared/reviewDiff";
-import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
-import { backendEventDiagnostic, parseBackendUiEvent } from "../shared/backendEvents";
-import {
-  registerDesktopIpcHandlers,
-  type DesktopIpcHandlers,
-} from "./ipcRegistry";
-import { readTaskDocumentReview } from "./documentReview";
-import {
-  assertFolderRejectBaseline,
-  createTaskCheckpoint,
-  createTurnCheckpoint,
-  forkTaskFromCheckpoint,
-  removeTaskCheckpoint,
-  restoreIsolatedWorktreeForReject,
-  restoreTaskCheckpoint,
-  setTaskCheckpointPinned,
-} from "./checkpoints/service";
-import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
-import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
+import type { BackendUiEvent, CapabilityProbeReport, ChatAttachment, ReviewFile, TaskRecord } from "./types";
+import { pathInside } from "./utils";
+import { normalizeReviewFile, buildTextDiff } from "../shared/reviewDiff";
 import { boundedRecentLines } from "./historyContext";
-import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
+import { limitPromptImages, shouldIncludeWorkspaceContext } from "./promptContext";
 import { rootAgentInstructions } from "./repositoryInstructions";
-import * as appPaths from "./appPaths";
-import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
 import {
-  appendTaskEvent,
-  compactTaskEvents,
-  filterReviewPaths,
-  hiddenRendererReviewPaths,
-  isReviewReadyAssistantEvent,
-  mergeTaskEvents,
-  rendererReviewFiles,
   visibleTaskEvents,
 } from "./taskReviewPresentation";
 

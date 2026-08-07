@@ -1,8 +1,6 @@
 use super::*;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1000;
-const MAX_TIMEOUT_MS: u64 = 30 * 60 * 1000;
-const MIN_TIMEOUT_MS: u64 = 100;
 const PROGRESS_COALESCE_MS: u64 = 100;
 const MAX_UI_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 512 * 1024;
@@ -89,11 +87,14 @@ pub(super) async fn command_tool(
         ));
     }
     let permit = CommandPermit::new(safety);
+    // The catalog declares timeoutMs as an integer in [MIN_TIMEOUT_MS,
+    // MAX_TIMEOUT_MS] and rejects anything outside that before dispatch, so a
+    // value that arrives here is already in range. Re-clamping only hid the day
+    // the two bounds disagreed.
     let requested = input
         .get("timeoutMs")
         .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_TIMEOUT_MS)
-        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
     let mut process = if let Some(executable) = executable {
         let mut value = Command::new(executable);
         value.args(&program_args);
