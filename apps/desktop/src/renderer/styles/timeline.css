@@ -247,56 +247,32 @@
   transform-origin: 50% 0;
 }
 
-/* A turn is one answer surrounded by narration. Progress messages — the opening
-   sentence, the aside between two rounds of work — take the same recessive
-   weight as the Working blocks they sit between, so the eye lands on the answer
-   and not on whichever prose happens to be at the top of the viewport. */
+/* The answer keeps the plain treatment every assistant message used to have —
+   it is what the reader came for and should be the least decorated thing on
+   screen. What changes is everything around it.
+
+   Narration is the run talking about itself: the opening sentence, the aside
+   between two rounds of work. It is not a message but a status line, so it drops
+   the assistant rail entirely and lines up with the Working block's own header,
+   which is the layer it actually belongs to. */
 .timelineMessage.assistantProgress {
   color: var(--muted);
-  font-size: 0.94em;
+  font-size: 0.92em;
 }
 
 .timelineMessage.assistantProgress::before {
-  opacity: 0.28;
-}
-
-/* Prose that leads straight into work belongs to that work, and reads as its
-   opening line.
-   It cannot actually move into the Working block: whether more tools are coming
-   is unknowable at the first streamed token, so classifying prose that early
-   means sometimes relocating it afterwards — which is what made the answer
-   arrive as a jump before. Instead it stays exactly where it streamed and the
-   grid gap beneath it is closed, so the two read as one section and nothing
-   ever moves. */
-.timelineMessage.assistantProgress:has(+ .timelineActivity) {
-  margin-bottom: calc(0px - clamp(20px, 3vh, 34px) + 10px);
-}
-
-.timelineMessage.assistantProgress:has(+ .timelineActivity)::before {
-  bottom: -12px;
-}
-
-/* The answer is the one thing in a turn the user came for, so it is the one
-   thing that is an object rather than a passage: a surface with an edge, at full
-   strength, carrying the only actions in the turn. */
-.timelineMessage.assistantAnswer {
-  width: min(100%, 980px);
-  padding: 15px 18px 11px;
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--accent);
-  border-radius: 10px;
-  color: var(--text);
-  background: var(--panel-tint);
-}
-
-.timelineMessage.assistantAnswer::before {
   content: none;
 }
 
-/* The negative pull that tucks prose under a Working block would clip the
-   answer's own frame. */
-.timelineActivity + .timelineMessage.assistantAnswer {
-  margin-top: 0;
+/* Prose that leads straight into work reads as that work's opening line.
+   It cannot move inside the Working block: whether more tools are coming is
+   unknowable at the first streamed token, so classifying prose that early means
+   sometimes relocating it afterwards — and relocating settled text is what made
+   the answer arrive as a jump before. Instead it stays exactly where it streamed
+   and the grid gap beneath it closes, so the two read as one section and nothing
+   ever moves. */
+.timelineMessage.assistantProgress:has(+ .timelineActivity) {
+  margin-bottom: calc(0px - clamp(20px, 3vh, 34px) + 9px);
 }
 
 .timelineActivity {
