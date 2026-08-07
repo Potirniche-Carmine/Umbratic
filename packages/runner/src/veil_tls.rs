@@ -169,38 +169,6 @@ pub(crate) fn normalize_sha256_fingerprint(value: &str) -> String {
     normalized.chars().filter(char::is_ascii_hexdigit).collect()
 }
 
-pub(crate) fn verify_certificate_pin(
-    provider: &ProviderConfig,
-    response: &reqwest::Response,
-) -> Result<(), String> {
-    let Some(expected) = provider
-        .mtls
-        .as_ref()
-        .and_then(|mtls| mtls.pinned_server_certificate_sha256.as_deref())
-    else {
-        return Ok(());
-    };
-    let expected = normalize_sha256_fingerprint(expected);
-    if expected.len() != 64 {
-        return Err(
-            "Pinned server certificate SHA-256 must contain 64 hexadecimal characters.".into(),
-        );
-    }
-    let certificate = response
-        .extensions()
-        .get::<reqwest::tls::TlsInfo>()
-        .and_then(reqwest::tls::TlsInfo::peer_certificate)
-        .ok_or_else(|| {
-            "Pinned server certificate was unavailable from the TLS connection.".to_owned()
-        })?;
-    use sha2::Digest;
-    let actual = format!("{:x}", sha2::Sha256::digest(certificate));
-    if actual != expected {
-        return Err("Pinned server certificate mismatch.".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

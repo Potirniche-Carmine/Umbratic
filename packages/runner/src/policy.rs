@@ -8,8 +8,6 @@ use std::{
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
-pub const POLICY_VERSION: &str = "umbratic-enterprise-mvp-2";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandClassification {
     pub command_class: &'static str,

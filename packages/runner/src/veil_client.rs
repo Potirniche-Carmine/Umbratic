@@ -15,7 +15,7 @@ use crate::{
         emit_reconnected, emit_reconnecting, reconnect_delay_ms, retry_after_from,
         retryable_status, sleep_unless_aborted,
     },
-    veil_tls::{expected_pin, pinned_tls_config, resolve_server_name, verify_certificate_pin},
+    veil_tls::{expected_pin, pinned_tls_config, resolve_server_name},
 };
 
 /// reqwest's Display hides the useful cause — "error sending request for url
@@ -222,7 +222,6 @@ pub async fn orient_request(
         .send()
         .await
         .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
-    verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
     let bytes = response
         .bytes()
@@ -348,7 +347,6 @@ pub async fn compact_context(
             describe_request_error(&error)
         )
     })?;
-    verify_certificate_pin(&session.config.provider, &response)?;
     let status = response.status();
     let bytes = response.bytes().await.map_err(|error| {
         format!(
@@ -888,10 +886,6 @@ async fn attempt_veil_chat(
             _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
         }
     };
-    // A pin mismatch is a security answer, not a transport hiccup. Repeating it
-    // would only be repeatedly refusing the same certificate.
-    verify_certificate_pin(&session.config.provider, &response)
-        .map_err(VeilAttemptError::final_failure)?;
     let status = response.status();
     if !status.is_success() {
         // Read before the body is consumed: a loaded gateway answering 429 or

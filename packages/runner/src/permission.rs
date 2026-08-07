@@ -17,14 +17,6 @@ pub struct PermissionBroker {
 }
 
 impl PermissionBroker {
-    pub fn has_pending(&self, task_id: &str) -> bool {
-        self.pending
-            .lock()
-            .unwrap()
-            .values()
-            .any(|pending| pending.task_id == task_id)
-    }
-
     pub async fn request(
         &self,
         sink: &EventSink,
@@ -64,20 +56,6 @@ impl PermissionBroker {
         let _ = pending.sender.send(decision.clone());
         sink.emit(json!({ "type": "permission.resolved", "taskId": task_id, "permissionId": permission_id, "decision": decision, "at": now_iso() }));
         true
-    }
-
-    pub fn deny_all(&self, sink: &EventSink, task_id: &str) {
-        let ids: Vec<_> = self
-            .pending
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, pending)| pending.task_id == task_id)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in ids {
-            self.reply(sink, &id, "deny");
-        }
     }
 
     pub fn abort_all(&self, sink: &EventSink, task_id: &str) {
@@ -139,45 +117,13 @@ mod tests {
         };
         let event = events.recv().await.unwrap();
         let permission_id = event["permissionId"].as_str().unwrap();
-        assert!(broker.has_pending("task-a"));
-        assert!(!broker.has_pending("task-b"));
         assert!(broker.reply(&sink, permission_id, "allow"));
-        assert!(!broker.has_pending("task-a"));
+        // A resolved request is gone: the second reply finds nothing to resolve.
         assert!(!broker.reply(&sink, permission_id, "allow"));
         assert_eq!(request.await.unwrap(), "allow");
         let resolved = events.recv().await.unwrap();
         assert_eq!(resolved["taskId"], "task-a");
         assert_eq!(resolved["decision"], "allow");
-    }
-
-    #[tokio::test]
-    async fn deny_all_only_affects_the_requested_task() {
-        let directory = tempfile::tempdir().unwrap();
-        let sink = crate::session::test_sink(directory.path());
-        let mut events = sink.subscribe();
-        let broker = Arc::new(PermissionBroker::default());
-        let spawn_request = |task: &'static str| {
-            let broker = broker.clone();
-            let sink = sink.clone();
-            tokio::spawn(async move { broker.request(&sink, task, "edit", "write", false).await })
-        };
-        let first = spawn_request("task-a");
-        let second = spawn_request("task-b");
-        let first_event = events.recv().await.unwrap();
-        let second_event = events.recv().await.unwrap();
-        let task_b_id = [first_event, second_event]
-            .into_iter()
-            .find(|event| event["taskId"] == "task-b")
-            .unwrap()["permissionId"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-
-        broker.deny_all(&sink, "task-a");
-        assert!(broker.reply(&sink, &task_b_id, "allow"));
-        let mut decisions = vec![first.await.unwrap(), second.await.unwrap()];
-        decisions.sort();
-        assert_eq!(decisions, ["allow", "deny"]);
     }
 
     #[tokio::test]
@@ -200,6 +146,7 @@ mod tests {
         assert_eq!(request.await.unwrap(), "abort");
         let resolved = events.recv().await.unwrap();
         assert_eq!(resolved["decision"], "abort");
-        assert!(!broker.has_pending("task-a"));
+        // Nothing is left pending: a reply to the aborted id finds no request.
+        assert!(!broker.reply(&sink, resolved["permissionId"].as_str().unwrap(), "allow"));
     }
 }

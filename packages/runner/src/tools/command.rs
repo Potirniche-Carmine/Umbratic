@@ -34,7 +34,6 @@ pub(super) async fn command_tool(
         "suggestion": safety.suggestion,
         "commandFingerprint": safety.command_fingerprint,
         "cwdFingerprint": safety.cwd_fingerprint,
-        "evaluationMicros": safety.evaluation_micros,
         "at": now_iso(),
     }));
     if safety.action == SafetyAction::Deny {
@@ -86,7 +85,6 @@ pub(super) async fn command_tool(
             "The user rejected this command. It was not run. Do not repeat it unless the user makes a new request that authorizes it.",
         ));
     }
-    let permit = CommandPermit::new(safety);
     // The catalog declares timeoutMs as an integer in [MIN_TIMEOUT_MS,
     // MAX_TIMEOUT_MS] and rejects anything outside that before dispatch, so a
     // value that arrives here is already in range. Re-clamping only hid the day
@@ -116,9 +114,6 @@ pub(super) async fn command_tool(
         value.args(["-c", &command]);
         value
     };
-    permit
-        .consume(&command, &session.config.cwd)
-        .map_err(ToolError::policy)?;
     process
         .current_dir(&session.config.cwd)
         .env_clear()

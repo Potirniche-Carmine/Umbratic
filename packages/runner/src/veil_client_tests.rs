@@ -207,9 +207,6 @@ fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
         chat_endpoint_path: Some("/v1/chat/completions".into()),
         api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
         model_id: "test".into(),
-        parallel_tool_calls: false,
-        vision: false,
-        reasoning: false,
         headers: BTreeMap::new(),
         mtls: Some(mtls),
     }

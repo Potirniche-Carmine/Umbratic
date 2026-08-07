@@ -24,7 +24,7 @@ use crate::{
         confirm_workspace_write_path, is_blocked_path, is_generated_runtime_path,
         redact_stream_text, redact_text, resolve_workspace_path,
     },
-    safety::{CommandPermit, SafetyAction, SafetyDecision},
+    safety::{SafetyAction, SafetyDecision},
     session::{EventSink, Session},
 };
 
