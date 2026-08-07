@@ -283,8 +283,14 @@ export function historyLineForEvent(event: BackendUiEvent): string | null {
       return `Task error: ${compactHistoryText(event.message, 900)}`;
     case "context.usage":
     case "context.threshold":
+    case "context.compaction":
     case "context.compressed":
     case "context.retrieved":
+      return null;
+    // Losing and regaining the model server is a fact about the transport, not
+    // about the conversation, so it stays out of the history the model reads.
+    case "provider.reconnecting":
+    case "provider.reconnected":
       return null;
     case "assistant.done":
     case "assistant.progress.delta":
