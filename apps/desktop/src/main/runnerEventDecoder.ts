@@ -63,6 +63,7 @@ export type RunnerEvent =
       estimatedTokens?: number;
       anchored?: boolean;
       compactionBlocked?: boolean;
+      compactionBlockedReason?: "floor" | "failing";
       awaitingMeasurement?: boolean;
       breakdown?: BackendContextBreakdown;
       phase?: unknown;
@@ -72,7 +73,7 @@ export type RunnerEvent =
   | (RunnerEventBase & {
       type: "context.compaction";
       phase: "started" | "finished";
-      outcome?: "compacted" | "unchanged";
+      outcome?: "compacted" | "unchanged" | "failed";
       reclaimedTokens?: number;
     })
   | (RunnerEventBase & {
@@ -354,6 +355,7 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.estimatedTokens === undefined || hasNonNegativeNumber(value, "estimatedTokens"))
         && (value.anchored === undefined || typeof value.anchored === "boolean")
         && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
+        && (value.compactionBlockedReason === undefined || value.compactionBlockedReason === "floor" || value.compactionBlockedReason === "failing")
         && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
         && (value.breakdown === undefined || isContextBreakdown(value.breakdown))
       );
@@ -361,8 +363,7 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
       return (
         (value.phase === "started" || value.phase === "finished")
         && (value.outcome === undefined
-          || value.outcome === "compacted"
-          || value.outcome === "unchanged")
+          || ["compacted", "unchanged", "failed"].includes(String(value.outcome)))
         && (value.reclaimedTokens === undefined
           || hasNonNegativeNumber(value, "reclaimedTokens"))
       );

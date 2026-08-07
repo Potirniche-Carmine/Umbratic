@@ -1101,7 +1101,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       // A finish with no open marker means the start was never seen — a resumed
       // chat replaying a truncated event log. Nothing is invented for it.
       if (!open) continue;
-      open.status = event.outcome === "compacted" ? "compacted" : "unchanged";
+      open.status = event.outcome ?? "unchanged";
       open.endedAt = event.at;
       if (event.reclaimedTokens !== undefined) open.reclaimedTokens = event.reclaimedTokens;
       continue;
@@ -5446,6 +5446,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   state={contextMeterLabel}
                   breakdown={runnerContextUsage?.breakdown}
                   compactionBlocked={runnerContextUsage?.compactionBlocked}
+                  compactionBlockedReason={runnerContextUsage?.compactionBlockedReason}
                   compacting={contextCompacting}
                   draftTokens={composerDraftTokens}
                 />

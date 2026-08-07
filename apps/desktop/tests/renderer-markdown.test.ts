@@ -864,6 +864,14 @@ test("context compaction is a top-level transcript marker, not a hidden log line
   ])));
   assert.equal(refused[1].status, "unchanged");
 
+  // A summarization round-trip that came back unusable is its own state: the
+  // turn continued on the full context, and saying "unchanged" would hide it.
+  const failed = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...started,
+    { type: "context.compaction", taskId: "task-1", phase: "finished", outcome: "failed", reclaimedTokens: 0, at: "2026-01-01T00:00:05.000Z" },
+  ])));
+  assert.equal(failed[1].status, "failed");
+
   // A finish with no start replays from a truncated log; nothing is invented.
   const orphaned = composerTimelineFromEvents([
     started[0],

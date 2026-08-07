@@ -51,6 +51,7 @@ export function ContextMeter({
   breakdown,
   draftTokens,
   compactionBlocked,
+  compactionBlockedReason,
   compacting,
 }: {
   estimate: ContextUsageEstimate;
@@ -58,6 +59,7 @@ export function ContextMeter({
   breakdown?: BackendContextBreakdown;
   draftTokens: number;
   compactionBlocked?: boolean;
+  compactionBlockedReason?: "floor" | "failing";
   /// True while a summarization pass is rewriting the prefix. Everything on the
   /// ring describes the conversation as it was before that pass, so the meter
   /// says it is busy rather than presenting a number that is already stale.
@@ -137,8 +139,14 @@ export function ContextMeter({
         ) : state === "recalculating" ? (
           <span className="contextMeterNotice">Context was compacted. The next response re-measures it.</span>
         ) : null}
+        {/* The two reasons auto-compaction stops send the user to different
+            places, so they are never collapsed into one sentence. */}
         {compactionBlocked ? (
-          <span className="contextMeterNotice">Context is at its incompressible floor.</span>
+          <span className="contextMeterNotice">
+            {compactionBlockedReason === "failing"
+              ? "Compaction keeps failing, so it has been paused for this chat."
+              : "Context is at its incompressible floor."}
+          </span>
         ) : null}
         {/* Per-category estimates over a measured total. They are not
             reconciled to the headline, and the heading says so. */}

@@ -502,6 +502,9 @@ export class RunnerEventAdapter {
       ...(event.compactionBlocked !== undefined
         ? { compactionBlocked: event.compactionBlocked }
         : {}),
+      ...(event.compactionBlockedReason !== undefined
+        ? { compactionBlockedReason: event.compactionBlockedReason }
+        : {}),
       ...(event.awaitingMeasurement !== undefined
         ? { awaitingMeasurement: event.awaitingMeasurement }
         : {}),

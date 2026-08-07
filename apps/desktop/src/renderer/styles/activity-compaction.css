@@ -71,6 +71,18 @@
   opacity: 0.78;
 }
 
+/* A failed summarization round-trip is a fault, not a quiet no-op: the turn
+   continues on the full context, and the user should be able to see why the
+   window stopped shrinking. */
+.compactionMarker.is-failed .compactionMarkerBody {
+  border-color: color-mix(in srgb, var(--amber) 46%, var(--line-strong));
+}
+
+.compactionMarker.is-failed .compactionMarkerBody svg,
+.compactionMarker.is-failed .compactionMarkerBody strong {
+  color: var(--amber);
+}
+
 .compactionSpinner {
   animation: compactionSpin 1s linear infinite;
 }

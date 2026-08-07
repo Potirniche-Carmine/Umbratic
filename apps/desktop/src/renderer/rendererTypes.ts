@@ -101,7 +101,7 @@ export type ComposerTimelineItem =
   | {
       type: "compaction";
       id: string;
-      status: "running" | "compacted" | "unchanged";
+      status: "running" | "compacted" | "unchanged" | "failed";
       startedAt?: string;
       endedAt?: string;
       reclaimedTokens?: number;

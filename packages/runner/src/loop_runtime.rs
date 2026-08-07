@@ -9,7 +9,7 @@ use crate::{
         ContextCalibration, ContextEstimateInput, ContextUsageEstimate, estimate_context_usage,
     },
     context_events::{
-        MAX_COMPACTION_STRIKES, clear_usage_anchor, context_event, estimate_state,
+        clear_usage_anchor, compaction_blocked_reason, context_event, estimate_state,
         observed_context_event, record_system_prompt_size, request_estimate, session_route,
         set_usage_anchor, skill_profile,
     },
@@ -253,7 +253,7 @@ fn turn_snapshot(
 /// two measured verdicts have shown cannot get below the trigger is at its
 /// incompressible floor, where further summarization only burns tokens.
 fn semantic_compaction_allowed(session: &Session, anchored: bool) -> bool {
-    session.compaction_strikes.load(Ordering::SeqCst) < MAX_COMPACTION_STRIKES
+    compaction_blocked_reason(session).is_none()
         && (anchored || !session.awaiting_observed_usage.load(Ordering::SeqCst))
 }
 
@@ -278,18 +278,29 @@ pub(crate) async fn prepared_messages(
                 continue;
             }
             compaction_started(session, sink);
-            let compacted =
-                attempt_semantic_compaction(session, &mut messages, tools, &state).await;
+            let outcome = attempt_semantic_compaction(session, &mut messages, tools, &state).await;
+            // Only a round-trip that came back unusable counts toward the
+            // backoff. A refusal is the runner declining on its own terms and
+            // costs nothing to reach again.
+            match outcome {
+                CompactionOutcome::Compacted => {
+                    session.compaction_failures.store(0, Ordering::SeqCst);
+                }
+                CompactionOutcome::Failed => {
+                    session.compaction_failures.fetch_add(1, Ordering::SeqCst);
+                }
+                CompactionOutcome::Refused => {}
+            }
             compaction_finished(
                 session,
                 sink,
-                compacted,
+                outcome,
                 usage.calibrated_prompt_tokens,
                 request_estimate(session, &messages, tools, &state)
                     .0
                     .calibrated_prompt_tokens,
             );
-            if compacted {
+            if outcome.compacted() {
                 clear_usage_anchor(session).await;
                 continue;
             }

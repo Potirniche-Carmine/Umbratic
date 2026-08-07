@@ -26,15 +26,22 @@ export function CompactionRow({ item, clock }: { item: CompactionItem; clock: nu
     ? "Currently compacting context…"
     : item.status === "compacted"
       ? "Context compacted"
-      : "Context could not be compacted further";
+      // A summarization call that came back unusable is a fault; a pass that
+      // simply had nothing left to give is a fact about the conversation. They
+      // read differently because they send the user to different places.
+      : item.status === "failed"
+        ? "Compaction failed"
+        : "Context could not be compacted further";
   const detail = running
     ? "Summarizing the earlier conversation. This takes a few seconds."
-    : [
-        item.status === "compacted" && item.reclaimedTokens
-          ? `Freed about ${formatTokenCount(item.reclaimedTokens)} tokens`
-          : "",
-        elapsed,
-      ].filter(Boolean).join(" · ");
+    : item.status === "failed"
+      ? `The conversation is unchanged${elapsed ? ` · ${elapsed}` : ""}`
+      : [
+          item.status === "compacted" && item.reclaimedTokens
+            ? `Freed about ${formatTokenCount(item.reclaimedTokens)} tokens`
+            : "",
+          elapsed,
+        ].filter(Boolean).join(" · ");
   return (
     <div
       className={`compactionMarker is-${item.status}`}

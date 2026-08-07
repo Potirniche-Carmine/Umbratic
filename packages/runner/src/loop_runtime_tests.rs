@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use crate::{
     context::{ContextBreakdown, SessionContextStore},
-    context_events::SessionEstimateState,
+    context_events::{
+        MAX_COMPACTION_FAILURES, MAX_COMPACTION_STRIKES, SessionEstimateState,
+        compaction_blocked_reason,
+    },
     session::{test_config, test_session},
 };
 
@@ -261,6 +264,7 @@ async fn preflight_compacts_complete_tool_lifecycles_until_the_request_fits() {
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
         compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        compaction_failures: std::sync::atomic::AtomicU32::new(0),
         awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
         usage_anchor: tokio::sync::Mutex::new(None),
         system_prompt_size: tokio::sync::Mutex::new(None),
@@ -313,6 +317,7 @@ async fn preflight_rejects_an_oversized_atomic_user_request() {
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
         compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        compaction_failures: std::sync::atomic::AtomicU32::new(0),
         awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
         usage_anchor: tokio::sync::Mutex::new(None),
         system_prompt_size: tokio::sync::Mutex::new(None),
@@ -388,7 +393,8 @@ async fn compaction_refuses_while_a_tool_batch_is_unresolved() {
             &[],
             &SessionEstimateState::default()
         )
-        .await,
+        .await
+        .compacted(),
         "compaction must not run inside an active step",
     );
 }
@@ -421,6 +427,7 @@ fn session_with(config: crate::config::RunnerConfig, messages: Vec<Value>) -> Se
         failed_compaction_digest: tokio::sync::Mutex::new(None),
         compaction_count: std::sync::atomic::AtomicU32::new(0),
         compaction_strikes: std::sync::atomic::AtomicU32::new(0),
+        compaction_failures: std::sync::atomic::AtomicU32::new(0),
         awaiting_observed_usage: std::sync::atomic::AtomicBool::new(false),
         usage_anchor: tokio::sync::Mutex::new(None),
         system_prompt_size: tokio::sync::Mutex::new(None),
@@ -599,7 +606,7 @@ async fn two_measured_verdicts_stop_auto_compaction_and_the_event_says_so() {
     let mut config = (*test_config(directory.path())).clone();
     config.context_length = 10_000;
     let session = session_with(config, Vec::new());
-    // context_length 10_000 ⇒ the semantic trigger sits at 7_200 tokens.
+    // context_length 10_000 ⇒ a 2_500-token headroom ⇒ the trigger sits at 7_500.
     for _ in 0..MAX_COMPACTION_STRIKES {
         clear_usage_anchor(&session).await;
         record_compaction_verdict(&session, &measured(9_000, 10)).await;
@@ -627,6 +634,52 @@ async fn two_measured_verdicts_stop_auto_compaction_and_the_event_says_so() {
     // A verdict is only rendered against the compaction that is awaiting one.
     record_compaction_verdict(&session, &measured(9_000, 10)).await;
     assert_eq!(session.compaction_strikes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn the_trigger_leaves_absolute_headroom_rather_than_a_flat_percentage() {
+    // pi cuts at window − 16k, Claude Code at window − output_reserve − 13k,
+    // OpenCode at usable − min(20k, max_output): what the headroom has to cover
+    // does not scale with the window, so neither does this.
+    assert_eq!(semantic_trigger_tokens(64_000), 51_000);
+    assert_eq!(semantic_trigger_tokens(256_000), 243_000);
+    // A window too small for the full headroom still keeps a quarter of itself
+    // free, and never less than the minimum response allowance.
+    assert_eq!(semantic_trigger_tokens(10_000), 7_500);
+    assert_eq!(semantic_trigger_tokens(4_000), 3_000);
+    // The bar always leaves room to answer, at every window size.
+    for length in [4_000_u64, 8_000, 16_000, 32_000, 64_000, 128_000, 256_000] {
+        let headroom = length - semantic_trigger_tokens(length);
+        assert!(headroom >= 1_000, "{length} leaves only {headroom}");
+        assert!(headroom <= length / 4, "{length} reserves {headroom}");
+    }
+}
+
+#[tokio::test]
+async fn three_failed_summarization_round_trips_stop_auto_compaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = test_session(directory.path());
+    // failed_compaction_digest only refuses an identical prefix, so a growing
+    // conversation would otherwise retry a failing call every single turn.
+    for _ in 0..MAX_COMPACTION_FAILURES {
+        assert!(semantic_compaction_allowed(&session, true));
+        session.compaction_failures.fetch_add(1, Ordering::SeqCst);
+    }
+    assert!(!semantic_compaction_allowed(&session, true));
+    assert_eq!(compaction_blocked_reason(&session), Some("failing"));
+
+    // The two causes are reported apart: an incompressible floor is a fact
+    // about the conversation, a failing call is a fault that may clear.
+    session
+        .compaction_strikes
+        .store(MAX_COMPACTION_STRIKES, Ordering::SeqCst);
+    assert_eq!(compaction_blocked_reason(&session), Some("floor"));
+
+    // Any successful compaction clears the backoff.
+    session.compaction_strikes.store(0, Ordering::SeqCst);
+    session.compaction_failures.store(0, Ordering::SeqCst);
+    assert_eq!(compaction_blocked_reason(&session), None);
+    assert!(semantic_compaction_allowed(&session, true));
 }
 
 #[tokio::test]

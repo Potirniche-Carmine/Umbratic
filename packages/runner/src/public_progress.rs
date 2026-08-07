@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::{
+    compaction::CompactionOutcome,
     events::{increment, now_iso},
     session::{EventSink, Session},
 };
@@ -46,18 +47,26 @@ pub(crate) fn compaction_started(session: &Session, sink: &EventSink) {
 pub(crate) fn compaction_finished(
     session: &Session,
     sink: &EventSink,
-    compacted: bool,
+    outcome: CompactionOutcome,
     before_tokens: u64,
     after_tokens: u64,
 ) {
     if session.is_aborted() {
         return;
     }
+    let compacted = outcome.compacted();
     sink.emit(json!({
         "type": "context.compaction",
         "taskId": session.task_id,
         "phase": "finished",
-        "outcome": if compacted { "compacted" } else { "unchanged" },
+        // A round-trip that came back unusable is reported as such rather than
+        // as a no-op: the user waited for it either way, and only one of the two
+        // is a fault worth showing.
+        "outcome": match outcome {
+            CompactionOutcome::Compacted => "compacted",
+            CompactionOutcome::Refused => "unchanged",
+            CompactionOutcome::Failed => "failed",
+        },
         // Reclaim is only meaningful when the prefix was actually replaced, and
         // it is an estimate on both sides — the same heuristic that decided to
         // compact, never a measurement it does not have yet.
@@ -108,7 +117,7 @@ mod tests {
         let mut events = sink.subscribe();
 
         compaction_started(&session, &sink);
-        compaction_finished(&session, &sink, false, 50_000, 50_000);
+        compaction_finished(&session, &sink, CompactionOutcome::Refused, 50_000, 50_000);
 
         let observed = std::iter::from_fn(|| events.try_recv().ok())
             .filter(|event| event["type"] == "context.compaction")
@@ -128,7 +137,13 @@ mod tests {
         let sink = crate::session::test_sink(directory.path());
         let mut events = sink.subscribe();
 
-        compaction_finished(&session, &sink, true, 50_000, 18_000);
+        compaction_finished(
+            &session,
+            &sink,
+            CompactionOutcome::Compacted,
+            50_000,
+            18_000,
+        );
 
         let observed = std::iter::from_fn(|| events.try_recv().ok())
             .find(|event| event["type"] == "context.compaction")
@@ -147,7 +162,13 @@ mod tests {
         session.abort();
 
         compaction_started(&session, &sink);
-        compaction_finished(&session, &sink, true, 50_000, 18_000);
+        compaction_finished(
+            &session,
+            &sink,
+            CompactionOutcome::Compacted,
+            50_000,
+            18_000,
+        );
 
         assert!(
             !std::iter::from_fn(|| events.try_recv().ok())
