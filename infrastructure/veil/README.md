@@ -117,10 +117,13 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_STREAM_IDLE_TIMEOUT` | No | `60s` | Maximum idle gap between streamed model chunks. Separate from request and model timeouts. |
 | `VEIL_MAX_BODY_BYTES` | No | `67108864` | Positive maximum request-body size in bytes for bounded multimodal chat requests. Text and decoded image limits are enforced separately. |
 
-Chat policy accepts at most 64 client messages, 256 KiB of encoded text content
-per message, and 12 base64 image parts of at most 10 MiB decoded each. The overall
-request remains bounded by `VEIL_MAX_BODY_BYTES`. Clients cannot override generation
-settings, `tool_choice`, or `parallel_tool_calls`; Veil owns those values.
+Chat policy accepts at most 512 client messages, 256 KiB of encoded text content
+per message, and 12 base64 image parts of at most 10 MiB decoded each. Tool and
+skill payloads are bounded by count and total size but are not schema-checked;
+see "Wire Compatibility" in the root `AGENTS.md`. The overall request remains
+bounded by `VEIL_MAX_BODY_BYTES`. Clients cannot write system text or name the
+model, and generation settings, `tool_choice`, and `parallel_tool_calls` are
+Veil's to decide: a client that sends them is ignored, not obeyed.
 
 ### Local mode (Ollama)
 

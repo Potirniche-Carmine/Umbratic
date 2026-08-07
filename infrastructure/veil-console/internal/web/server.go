@@ -905,9 +905,10 @@ func absInt(value int) int {
 	return value
 }
 
+// The lockout is a flat delay, so an attempt only needs to say when the next
+// try is allowed. A failures counter was incremented here and never read.
 type attempt struct {
-	failures int
-	next     time.Time
+	next time.Time
 }
 
 type loginThrottle struct {
@@ -929,11 +930,7 @@ func (t *loginThrottle) Wait(key string, now time.Time) time.Duration {
 func (t *loginThrottle) Failed(key string, now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	value := t.attempts[key]
-	value.failures++
-	delay := 2 * time.Second
-	value.next = now.Add(delay)
-	t.attempts[key] = value
+	t.attempts[key] = attempt{next: now.Add(2 * time.Second)}
 	if len(t.attempts) > 2048 {
 		for candidate, record := range t.attempts {
 			if !record.next.After(now) {

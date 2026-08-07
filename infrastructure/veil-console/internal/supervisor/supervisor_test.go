@@ -79,11 +79,13 @@ func TestSafeBufferRedactsSecretSplitAcrossWrites(t *testing.T) {
 }
 
 func TestModelMatchIsExact(t *testing.T) {
-	if containsModel([]byte(`{"models":[{"name":"model-a-large"}]}`), "model-a") {
-		t.Fatal("partial model ID matched")
+	// The check that gates a configuration compares collected ids exactly, so a
+	// model whose name merely contains the selection must not satisfy it.
+	if got := collectModels([]byte(`{"models":[{"name":"model-a-large"}]}`)); len(got) != 1 || got[0] != "model-a-large" {
+		t.Fatalf("collected %#v", got)
 	}
-	if !containsModel([]byte(`{"data":[{"id":"model-a"}]}`), "model-a") {
-		t.Fatal("exact model ID did not match")
+	if got := collectModels([]byte(`{"data":[{"id":"model-a"}]}`)); len(got) != 1 || got[0] != "model-a" {
+		t.Fatalf("collected %#v", got)
 	}
 }
 

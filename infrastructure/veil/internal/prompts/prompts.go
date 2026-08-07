@@ -108,11 +108,6 @@ func BuildWithProtectedMessages(route Route, clientMessages []model.Message, pro
 	return append(messages, clientMessages...), nil
 }
 
-func RoutePrompt(route Route) (string, bool) {
-	prompt, ok := routePrompts[route]
-	return prompt, ok
-}
-
 func SkillCatalogPrompt(skills []SkillMetadata) string {
 	if len(skills) == 0 {
 		return ""

@@ -102,14 +102,6 @@ func supportedKind(kind string) bool {
 	}
 }
 
-func (r Registry) ProtectedContext(route string, messages []model.Message) []model.Message {
-	overlay := r.RequestOverlay(route, messages)
-	if overlay == "" {
-		return nil
-	}
-	return []model.Message{{Role: "system", Content: overlay}}
-}
-
 func (r Registry) RequestOverlay(route string, messages []model.Message) string {
 	selected := r.Select(route, messages)
 	if len(selected) == 0 {

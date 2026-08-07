@@ -52,7 +52,7 @@ func TestDecodeValidatesAndSelectsMatchingTemplates(t *testing.T) {
 	}
 }
 
-func TestProtectedContextContainsOnlySelectedTemplateMetadata(t *testing.T) {
+func TestRequestOverlayContainsOnlySelectedTemplateMetadata(t *testing.T) {
 	registry, err := Decode([]byte(`[{
 		"id": "sales-quarterly-review",
 		"kind": "powerpoint",
@@ -69,13 +69,9 @@ func TestProtectedContextContainsOnlySelectedTemplateMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	messages := registry.ProtectedContext("sales/chat", []model.Message{{Role: "user", Content: "Please build a sales deck."}})
-	if len(messages) != 1 {
-		t.Fatalf("got %d protected messages", len(messages))
-	}
-	content, ok := messages[0].Content.(string)
-	if !ok {
-		t.Fatalf("protected content was not a string: %#v", messages[0])
+	content := registry.RequestOverlay("sales/chat", []model.Message{{Role: "user", Content: "Please build a sales deck."}})
+	if content == "" {
+		t.Fatal("a matching route must produce a template overlay")
 	}
 	for _, want := range []string{"Server-managed artifact templates", "sales-quarterly-review", "templates/powerpoint/sales-quarterly-review", "sha256:abc", ".umbratic/templates/<kind>/<id>/"} {
 		if !strings.Contains(content, want) {
