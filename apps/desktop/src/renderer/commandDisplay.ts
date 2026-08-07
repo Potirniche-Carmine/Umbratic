@@ -46,7 +46,6 @@ const workspaceToolLabels: Record<string, string> = {
   read_skill: "Read skill",
   ls: "List directory",
   find: "Find paths",
-  grep: "Search text",
   search: "Search workspace",
   write: "Write file",
   edit: "Edit files",

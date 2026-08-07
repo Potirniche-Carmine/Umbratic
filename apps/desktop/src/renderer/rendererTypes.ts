@@ -9,7 +9,7 @@ import type { TaskPermissionRequest } from "./taskEventReducer";
 import type { ChatAttachment, IdeInfo } from "../shared/desktopApi";
 
 export type AppearanceTheme = "system" | "light" | "dark";
-export type RunnerToolId = "read" | "ls" | "find" | "grep" | "search" | "write" | "edit" | "lsp" | "command";
+export type RunnerToolId = "read" | "ls" | "find" | "search" | "write" | "edit" | "lsp" | "command";
 export type RequiredToolContractRequirement = "file_change";
 export type RequiredToolContractReason =
   | "file_tools_disabled"

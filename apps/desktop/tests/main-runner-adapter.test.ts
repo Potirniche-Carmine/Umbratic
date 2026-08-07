@@ -328,7 +328,7 @@ test("runner config enables LSP only for a successful approved probe", () => {
     prompt: "Find a definition",
     workspaceKind: "folder",
     workspaceMode: "local",
-    enabledTools: ["read", "grep", "lsp"],
+    enabledTools: ["read", "find", "lsp"],
     worktreePath: userData,
   };
   const baseReport = {
@@ -351,7 +351,7 @@ test("runner config enables LSP only for a successful approved probe", () => {
     }],
   };
   const enabled = adapter.buildUmbraticRunnerConfig(task, model, undefined, available);
-  assert.deepEqual(plain(enabled.enabledTools), ["read", "grep", "lsp"]);
+  assert.deepEqual(plain(enabled.enabledTools), ["read", "find", "lsp"]);
   assert.deepEqual(plain(enabled.lspServers), [{
     id: "typescript-language-server",
     command: fs.realpathSync(serverPath),
@@ -365,7 +365,7 @@ test("runner config enables LSP only for a successful approved probe", () => {
     summary: { ...baseReport.summary, available: 0, missing: 1, optionalMissing: 1 },
     probes: [{ ...available.probes[0], status: "missing", executablePath: undefined }],
   });
-  assert.deepEqual(plain(missing.enabledTools), ["read", "grep"]);
+  assert.deepEqual(plain(missing.enabledTools), ["read", "find"]);
   assert.deepEqual(plain(missing.lspServers), []);
 });
 

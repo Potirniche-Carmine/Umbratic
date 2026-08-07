@@ -10,11 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
-pub const RUNNER_TOOL_NAMES: [&str; 10] = [
+pub const RUNNER_TOOL_NAMES: [&str; 9] = [
     "read",
     "ls",
     "find",
-    "grep",
     "search",
     "write",
     "edit",

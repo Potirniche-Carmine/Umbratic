@@ -293,7 +293,7 @@ export type CommandClassification = {
 
 /// The read-only workspace tools, listed once. A new locator tool that is not
 /// added here is classified as a shell command and prompts for permission.
-const workspaceReadPermissionKinds = new Set(["read", "ls", "find", "grep", "search"]);
+const workspaceReadPermissionKinds = new Set(["read", "ls", "find", "search"]);
 
 export function isWorkspaceReadPermission(permissionKind: string): boolean {
   return workspaceReadPermissionKinds.has(permissionKind);

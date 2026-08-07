@@ -76,7 +76,7 @@ process.stdin.on("data", (chunk) => { buffer = Buffer.concat([buffer, chunk]); i
 `);
   const provider = await startProvider();
   const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"), {
-    enabledTools: ["read", "grep", "lsp"],
+    enabledTools: ["read", "find", "lsp"],
     lspServers: [{
       id: "typescript-language-server",
       command: process.execPath,
@@ -541,7 +541,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
       (firstRequest.body.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name).filter(Boolean).sort(),
       // retrieve_context is declared at task start and answers context_not_available
       // when nothing has been compacted, rather than appearing between steps.
-      ["apply_patch", "command", "edit", "find", "grep", "ls", "read", "retrieve_context", "run_program", "search", "write"],
+      ["apply_patch", "command", "edit", "find", "ls", "read", "retrieve_context", "run_program", "search", "write"],
     );
     assert.ok(
       provider.requests.some(({ body }) => {

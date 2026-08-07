@@ -56,7 +56,7 @@ use command::{
 };
 pub(crate) use contract::validate_tool_call_batch;
 pub use dispatch::execute_tool;
-use enumerate::{find_tool, grep_tool, ls_tool};
+use enumerate::{find_tool, ls_tool};
 pub use error::ToolResult;
 use error::{ToolError, ToolExecutionResult};
 use read::{read_attachment_tool, read_tool};

@@ -674,11 +674,18 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     ["Run tests", "Run tests"],
   );
 
+  // grep is no longer a runner tool, but a user can still run it through
+  // `command`, so the shell-command label must survive the merge.
+  assert.equal(commandLabel('grep "composer"'), "Search text");
+
+  // search is the workspace locator and a workspace read. Without its entry in
+  // the tool-label map it would fall through to shell rendering, which is a
+  // user-visible regression rather than a cosmetic one.
   const searchRun = {
     id: "tool-1",
-    command: 'grep "composer"',
+    command: "search composer",
     kind: "read",
-    toolKind: "grep",
+    toolKind: "search",
     commandClass: "read",
     cwd: "C:/repo",
     stdout: "apps/desktop/src/renderer/main.tsx: content\n",
@@ -686,21 +693,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     exitCode: 0,
     status: "passed",
   };
-  assert.equal(commandLabel(searchRun.command), "Search text");
-  assert.equal(commandDetailLabel(searchRun), "Search text results - read");
+  assert.equal(commandDetailLabel(searchRun), "Search workspace results - read");
+  assert.ok(!commandDetailLabel(searchRun).startsWith("Shell"));
   assert.equal(commandShellText(searchRun), "apps/desktop/src/renderer/main.tsx: content");
-
-  // The warm locator is a workspace read. Without its entry in the tool-label
-  // map it would fall through to shell rendering, which is a user-visible
-  // regression rather than a cosmetic one.
-  const warmSearchRun = {
-    ...searchRun,
-    toolKind: "search",
-    command: "search harnessRoute",
-    commandClass: "read",
-  };
-  assert.equal(commandDetailLabel(warmSearchRun), "Search workspace results - read");
-  assert.ok(!commandDetailLabel(warmSearchRun).startsWith("Shell"));
 
   // Every runner tool is rendered from its reported tool kind, so a tool whose
   // summary does not look like a known command is still not shown as a shell.
@@ -710,7 +705,6 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     "read_skill",
     "ls",
     "find",
-    "grep",
     "search",
     "write",
     "edit",

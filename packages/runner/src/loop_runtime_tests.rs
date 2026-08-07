@@ -68,10 +68,10 @@ fn pressure_compaction_removes_one_complete_parallel_exchange() {
     for index in 0..14 {
         messages.push(json!({"role":"assistant","content":null,"tool_calls":[
             {"id":format!("call-{index}-a"),"type":"function","function":{"name":"read","arguments":"{}"}},
-            {"id":format!("call-{index}-b"),"type":"function","function":{"name":"grep","arguments":"{}"}}
+            {"id":format!("call-{index}-b"),"type":"function","function":{"name":"search","arguments":"{}"}}
         ]}));
         messages.push(json!({"role":"tool","tool_call_id":format!("call-{index}-a"),"content":format!("read result {index}")}));
-        messages.push(json!({"role":"tool","tool_call_id":format!("call-{index}-b"),"content":format!("grep result {index}")}));
+        messages.push(json!({"role":"tool","tool_call_id":format!("call-{index}-b"),"content":format!("search result {index}")}));
     }
     assert!(compact_oldest_tool_exchange(&mut messages));
     assert_eq!(structured_tool_exchanges(&messages).len(), 13);
@@ -89,7 +89,7 @@ fn pressure_compaction_removes_one_complete_parallel_exchange() {
                 .filter(|content| content.starts_with(TOOL_HISTORY_SUMMARY_PREFIX))
         })
         .unwrap();
-    assert!(summary.contains("read result 0") && summary.contains("grep result 0"));
+    assert!(summary.contains("read result 0") && summary.contains("search result 0"));
 }
 
 #[test]

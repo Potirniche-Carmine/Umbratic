@@ -1,9 +1,10 @@
 //! Warm workspace `search`.
 //!
-//! `find` and `grep` walk the tree from scratch on every call. `search` walks it
-//! once per run and answers later queries in that run from memory. The index
-//! holds paths only: file contents are read live at query time, so editing a file
-//! can never serve a stale line.
+//! `find` walks the tree from scratch on every call. `search` walks it once per
+//! run and answers later queries in that run from memory. The index holds paths
+//! only: file contents are read live at query time, so editing a file can never
+//! serve a stale line. Literal and regex matching share this one scan; there is
+//! no second text-search tool.
 //!
 //! Freshness is a single monotonic generation counter. A rebuild captures the
 //! generation it started at and publishes only if that generation is still
@@ -20,15 +21,19 @@ use std::{
 };
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use regex::{Regex, RegexBuilder};
 use serde_json::json;
 
 use super::*;
 
 /// Refuse to publish a partial index rather than silently answer from one.
 const MAX_INDEX_ENTRIES: usize = 500_000;
-/// Content scanning skips anything larger; `read` and `grep` remain available.
+/// Content scanning skips anything larger; `read` still reaches such a file.
 const MAX_CONTENT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SEARCH_LINE_BYTES: usize = 8 * 1024;
+/// Caps the compiled size of a model-supplied pattern, so a pathological regex
+/// is a typed validation error rather than a memory spike mid-scan.
+const MAX_REGEX_SIZE: usize = 1024 * 1024;
 /// Matches the cadence the LSP client already uses to observe run abort.
 const ABORT_POLL: Duration = Duration::from_millis(25);
 const DEFAULT_PATH_LIMIT: u64 = 100;
@@ -232,7 +237,7 @@ fn index_too_large() -> ToolError {
         status: "validation_error",
         code: "search_index_too_large",
         message: format!(
-            "This workspace has more than {MAX_INDEX_ENTRIES} visible paths, which is too many to index. Use find or grep with a narrower path."
+            "This workspace has more than {MAX_INDEX_ENTRIES} visible paths, which is too many to index. Use ls or find to narrow the scope, then search inside it."
         ),
         details: Some(json!({ "maxEntries": MAX_INDEX_ENTRIES })),
     }
@@ -333,6 +338,52 @@ fn is_case_sensitive(query: &str) -> bool {
     query.chars().any(char::is_uppercase)
 }
 
+/// How a content line is tested. Both arms follow the same smart-case rule, so
+/// the case behavior does not change with the mode; a regex can still override
+/// it with an inline `(?i)`, which a literal has no need for.
+enum Matcher {
+    Literal {
+        needle: String,
+        case_sensitive: bool,
+    },
+    Pattern(Regex),
+}
+
+impl Matcher {
+    fn build(query: &str, regex: bool) -> Result<Self, ToolError> {
+        let case_sensitive = is_case_sensitive(query);
+        if !regex {
+            return Ok(Self::Literal {
+                needle: fold(query, case_sensitive),
+                case_sensitive,
+            });
+        }
+        RegexBuilder::new(query)
+            .case_insensitive(!case_sensitive)
+            .size_limit(MAX_REGEX_SIZE)
+            .build()
+            .map(Self::Pattern)
+            .map_err(|_| {
+                ToolError::validation_code(
+                    "invalid_regex",
+                    format!(
+                        "search regex is invalid or too complex: {query}. Use mode content for exact literal text."
+                    ),
+                )
+            })
+    }
+
+    fn matches(&self, line: &str) -> bool {
+        match self {
+            Self::Literal {
+                needle,
+                case_sensitive,
+            } => fold(line, *case_sensitive).contains(needle),
+            Self::Pattern(regex) => regex.is_match(line),
+        }
+    }
+}
+
 fn fold(value: &str, case_sensitive: bool) -> String {
     if case_sensitive {
         value.to_owned()
@@ -425,8 +476,8 @@ struct ContentOutcome {
     files_skipped: usize,
 }
 
-/// One output row. `:` marks the matching line and `-` a context line, matching
-/// what `grep` emits, so the two tools read the same way.
+/// One output row. `:` marks the matching line and `-` a context line, so a
+/// match stays distinguishable from the code shown around it.
 fn content_row(path: &str, number: usize, marker: char, line: &str) -> String {
     format!("{path}:{number}{marker} {}", clip_line(line))
 }
@@ -435,12 +486,10 @@ fn search_content_mode(
     session: &Session,
     entries: &[IndexEntry],
     scope: &SearchScope,
-    query: &str,
+    matcher: &Matcher,
     context: usize,
     limit: usize,
 ) -> Result<ContentOutcome, ToolError> {
-    let case_sensitive = is_case_sensitive(query);
-    let needle = fold(query, case_sensitive);
     let mut rows: Vec<String> = Vec::new();
     let mut matches = 0usize;
     let mut truncated = false;
@@ -499,7 +548,7 @@ fn search_content_mode(
                 break;
             }
             let number = index + 1;
-            if fold(&line, case_sensitive).contains(&needle) {
+            if matcher.matches(&line) {
                 if matches + file_matches >= limit {
                     truncated = true;
                     break;
@@ -569,8 +618,8 @@ pub(super) async fn search_tool(
     if query.is_empty() || path.is_empty() {
         return Err("search requires string arguments query, mode, and path".into());
     }
-    if mode != "path" && mode != "content" {
-        return Err("search mode must be path or content".into());
+    if mode != "path" && mode != "content" && mode != "regex" {
+        return Err("search mode must be path, content, or regex".into());
     }
     let glob = string_arg(input, &["glob"]);
     let context = number_arg(input, "context", 0) as usize;
@@ -583,6 +632,11 @@ pub(super) async fn search_tool(
             DEFAULT_CONTENT_LIMIT
         },
     ) as usize;
+    // Compiled before any filesystem work so an unusable pattern fails fast
+    // rather than after a full index build.
+    let matcher = (mode != "path")
+        .then(|| Matcher::build(&query, mode == "regex"))
+        .transpose()?;
     let (absolute, relative) =
         resolve_workspace_path(&session.config.cwd, &path).map_err(ToolError::policy)?;
     let metadata = match fs::metadata(&absolute) {
@@ -606,26 +660,23 @@ pub(super) async fn search_tool(
         relative: relative.clone(),
         matcher: glob_matcher(&glob)?,
     };
-    let mode_owned = mode.clone();
     let query_owned = query.clone();
     // Walking and scanning are blocking filesystem work; keep them off the async
     // executor and never hold the index lock across them.
     let outcome = tokio::task::spawn_blocking(move || {
         let entries = entries_for(&session, &scope.root)?;
-        if mode_owned == "path" {
+        let Some(matcher) = matcher else {
             let (paths, truncated) = search_path_mode(&entries, &scope, &query_owned, limit);
             let count = paths.len();
-            Ok::<_, ToolError>((paths, count, truncated, None))
-        } else {
-            let content =
-                search_content_mode(&session, &entries, &scope, &query_owned, context, limit)?;
-            Ok((
-                content.rows,
-                content.matches,
-                content.truncated,
-                Some((content.files_scanned, content.files_skipped)),
-            ))
-        }
+            return Ok::<_, ToolError>((paths, count, truncated, None));
+        };
+        let content = search_content_mode(&session, &entries, &scope, &matcher, context, limit)?;
+        Ok((
+            content.rows,
+            content.matches,
+            content.truncated,
+            Some((content.files_scanned, content.files_skipped)),
+        ))
     })
     .await
     .map_err(|_| ToolError::runtime("Search did not complete."))?;

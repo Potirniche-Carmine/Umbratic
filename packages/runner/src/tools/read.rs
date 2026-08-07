@@ -200,7 +200,7 @@ fn missing_path_message(cwd: &Path, absolute: &Path, relative: &str) -> String {
         "Use ls or find to locate an existing workspace path.".to_owned()
     } else {
         format!(
-            "Nearby workspace entries:\n- {}\nUse an exact listed path, or use find/grep with a broader scope.",
+            "Nearby workspace entries:\n- {}\nUse an exact listed path, or use search or find with a broader scope.",
             nearby.join("\n- ")
         )
     };

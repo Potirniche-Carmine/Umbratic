@@ -324,7 +324,7 @@ export class RunnerEventAdapter {
       toolKind === "command" || toolKind === "run_program"
         ? "bash"
         : toolKind === "read"
-            || toolKind === "ls" || toolKind === "find" || toolKind === "grep" || toolKind === "search"
+            || toolKind === "ls" || toolKind === "find" || toolKind === "search"
             || toolKind === "read_skill"
           ? "read"
           : "edit";

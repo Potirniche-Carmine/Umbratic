@@ -116,7 +116,6 @@ fn replace_text_requires_exact_unique_matches() {
 
 #[test]
 fn only_declared_tool_names_map_to_runner_capabilities() {
-    assert_eq!(tool_capability_name("grep"), Some("grep"));
     assert_eq!(tool_capability_name("ls"), Some("ls"));
     assert_eq!(tool_capability_name("find"), Some("find"));
     assert_eq!(tool_capability_name("apply_patch"), Some("edit"));
@@ -173,21 +172,18 @@ async fn tool_specs_offer_clear_replace_patch_and_readonly_shapes() {
         json!(["path", "glob"])
     );
     assert_eq!(
-        named("grep")["function"]["parameters"]["required"],
-        json!(["pattern", "mode", "path"])
-    );
-    assert_eq!(
         named("search")["function"]["parameters"]["required"],
         json!(["query", "mode", "path"])
     );
     assert_eq!(
         named("search")["function"]["parameters"]["properties"]["mode"]["enum"],
-        json!(["path", "content"])
+        json!(["path", "content", "regex"])
     );
-    // `search` is the warm locator, not a replacement for the regex escape hatch.
+    // `search` absorbed the regex escape hatch, so no second text-search tool
+    // is declared alongside it.
     assert!(
-        specs.iter().any(|spec| spec["function"]["name"] == "grep"),
-        "grep stays available for exact regex and context lines"
+        specs.iter().all(|spec| spec["function"]["name"] != "grep"),
+        "grep must not be declared; search mode regex replaced it"
     );
     assert!(
         specs.iter().all(|spec| spec["function"]["name"] != "lsp"),
@@ -459,7 +455,7 @@ async fn write_reports_created_or_replaced_effects() {
 }
 
 #[tokio::test]
-async fn exact_grep_contract_scopes_results_and_returns_path_line_text() {
+async fn exact_search_contract_scopes_results_and_returns_path_line_text() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(directory.path().join("src/renderer")).unwrap();
     std::fs::create_dir_all(directory.path().join("other")).unwrap();
@@ -481,11 +477,11 @@ async fn exact_grep_contract_scopes_results_and_returns_path_line_text() {
         sink,
         Arc::new(crate::permission::PermissionBroker::default()),
         ToolCall {
-            id: "grep-exact".into(),
-            name: "grep".into(),
+            id: "search-exact".into(),
+            name: "search".into(),
             arguments: json!({
-                "pattern":"Auto-run low risk",
-                "mode":"literal",
+                "query":"Auto-run low risk",
+                "mode":"content",
                 "path":"src/renderer",
                 "glob":"*.tsx",
                 "limit":10
@@ -546,15 +542,15 @@ async fn read_returns_raw_text_and_missing_paths_suggest_exact_entries() {
         Some(4)
     );
 
-    let grep = grep_tool(
-        &session,
-        json!({"pattern":"loginHandler","mode":"literal","path":"internal/auth"})
+    let located = search_tool(
+        session.clone(),
+        json!({"query":"loginHandler","mode":"content","path":"internal/auth"})
             .as_object()
             .unwrap(),
     )
     .await
     .unwrap();
-    assert!(grep.content.contains("internal/auth/auth.go:3:"));
+    assert!(located.content.contains("internal/auth/auth.go:3:"));
 
     let missing = read_tool(
         &session,

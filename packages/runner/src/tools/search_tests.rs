@@ -8,7 +8,7 @@ use super::*;
 // --- search: warm workspace locator -----------------------------------------
 
 /// Builds a workspace whose visible files exercise ordering, scoping, and the
-/// blocked/generated policy that `search` must inherit from `find`/`grep`.
+/// blocked/generated policy that `search` must inherit from `find`.
 fn search_workspace() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -333,7 +333,7 @@ async fn content_search_shows_the_lines_around_a_match_without_opening_the_file(
     .await;
     assert_eq!(
         with_context.content,
-        // ':' marks the match and '-' the context, exactly as grep renders it.
+        // ':' marks the match and '-' the context.
         "app.rs:2- bravo\napp.rs:3- charlie\napp.rs:4: NEEDLE\napp.rs:5- delta\napp.rs:6- echo"
     );
     // limit bounds matches; the context lines ride along without inflating the
@@ -438,4 +438,82 @@ async fn a_file_revealed_as_binary_contributes_no_context_rows() {
             .and_then(Value::as_u64),
         Some(1)
     );
+}
+
+#[tokio::test]
+async fn regex_mode_matches_patterns_and_shares_the_smart_case_rule() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("app.rs"),
+        "fn loginHandler() {}\nfn logoutHandler() {}\nfn helper() {}\nLOGIN\n",
+    )
+    .unwrap();
+    let session = crate::session::test_session(directory.path());
+
+    let matched = run_search(
+        &session,
+        json!({"query":r"fn log\w+Handler","mode":"regex","path":"."}),
+    )
+    .await;
+    assert_eq!(matched.status, "success", "{:?}", matched.error_message);
+    assert_eq!(
+        matched.content,
+        "app.rs:1: fn loginHandler() {}\napp.rs:2: fn logoutHandler() {}"
+    );
+
+    // Smart case is one rule across every mode: an all-lowercase pattern is
+    // insensitive, so it also reaches the uppercase line.
+    let insensitive =
+        run_search(&session, json!({"query":"login","mode":"regex","path":"."})).await;
+    assert!(insensitive.content.contains("app.rs:1:"));
+    assert!(insensitive.content.contains("app.rs:4: LOGIN"));
+
+    // An uppercase character in the pattern means the caller meant it.
+    let sensitive = run_search(&session, json!({"query":"LOGIN","mode":"regex","path":"."})).await;
+    assert_eq!(sensitive.content, "app.rs:4: LOGIN");
+
+    // The regex crate's inline flag is the documented override.
+    let forced = run_search(
+        &session,
+        json!({"query":"(?i)LOGIN","mode":"regex","path":"."}),
+    )
+    .await;
+    assert!(forced.content.contains("app.rs:1:"));
+
+    // Context and limit behave identically to content mode.
+    let with_context = run_search(
+        &session,
+        json!({"query":r"^fn helper","mode":"regex","path":".","context":1}),
+    )
+    .await;
+    assert_eq!(
+        with_context.content,
+        "app.rs:2- fn logoutHandler() {}\napp.rs:3: fn helper() {}\napp.rs:4- LOGIN"
+    );
+}
+
+#[tokio::test]
+async fn an_unusable_regex_fails_before_any_scanning() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("app.rs"), "anything\n").unwrap();
+    let session = crate::session::test_session(directory.path());
+    let result = run_search(
+        &session,
+        json!({"query":"fn (unclosed","mode":"regex","path":"."}),
+    )
+    .await;
+    assert_eq!(result.status, "validation_error");
+    assert_eq!(result.code.as_deref(), Some("invalid_regex"));
+    // The same string is a perfectly good literal, and the error says so.
+    assert!(
+        result.content.contains("mode content"),
+        "{}",
+        result.content
+    );
+    let literal = run_search(
+        &session,
+        json!({"query":"fn (unclosed","mode":"content","path":"."}),
+    )
+    .await;
+    assert_eq!(literal.status, "success");
 }

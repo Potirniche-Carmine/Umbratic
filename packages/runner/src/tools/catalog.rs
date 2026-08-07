@@ -17,7 +17,6 @@ pub(super) enum FieldKind {
         minimum: i64,
         maximum: i64,
     },
-    Boolean,
     /// A fixed set of allowed string values.
     Choice(&'static [&'static str]),
     /// The approved-executable ids, resolved once when the surface is frozen.
@@ -132,7 +131,7 @@ pub(super) const MAX_PROGRAM_ARG_LEN: u64 = 4_096;
 pub(super) const MIN_TIMEOUT_MS: i64 = 100;
 pub(super) const MAX_TIMEOUT_MS: i64 = 1_800_000;
 pub(super) const MAX_PATTERN_LEN: u64 = 512;
-/// Shared by `grep` and `search` so a match row costs the same either way.
+/// Context lines a single match may carry.
 pub(super) const MAX_CONTEXT_LINES: i64 = 5;
 pub(super) const MAX_SKILL_CHUNK: i64 = 8 * 1024;
 pub(super) const MAX_ATTACHMENT_CHUNK: i64 = 64 * 1024;
@@ -175,14 +174,14 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "read",
         kind: "file",
         gate: Gate::Capability("read"),
-        description: "Read part of one UTF-8 workspace text file. Returns raw file text with original line endings and no line-number prefixes; the covered line range is reported separately. Read a window, not a whole file: when a search or grep hit already tells you where to look, send line with that line number to open a window around it, and raise radius only when the window proves too narrow. Send offset and limit instead to page through a file from a known point, continuing with the reported nextOffset. A call that sets neither returns the first lines of the file and reports its total length. Never list directories; use ls.",
+        description: "Read part of one UTF-8 workspace text file. Returns raw file text with original line endings and no line-number prefixes; the covered line range is reported separately. Read a window, not a whole file: when a search hit already tells you where to look, send line with that line number to open a window around it, and raise radius only when the window proves too narrow. Send offset and limit instead to page through a file from a known point, continuing with the reported nextOffset. A call that sets neither returns the first lines of the file and reports its total length. Never list directories; use ls.",
         fields: &[
             text("path", true, "Workspace-relative file path."),
             integer(
                 "line",
                 1,
                 i64::MAX,
-                "One-based line to centre a window on, such as the line a search or grep hit reported. Cannot be combined with offset or limit.",
+                "One-based line to centre a window on, such as the line a search hit reported. Cannot be combined with offset or limit.",
             ),
             integer(
                 "radius",
@@ -251,60 +250,23 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         rules: &[],
     },
     ToolDefinition {
-        name: "grep",
-        kind: "search",
-        gate: Gate::Capability("grep"),
-        description: "Search text with one pattern in literal or regex mode under path. Optional glob, caseSensitive, context lines, and limit. Returns path:line: text rows.",
-        fields: &[
-            bounded_text(
-                "pattern",
-                true,
-                1,
-                MAX_PATTERN_LEN,
-                "Exact literal or regex pattern.",
-            ),
-            choice(
-                "mode",
-                true,
-                &["literal", "regex"],
-                "How pattern is interpreted.",
-            ),
-            text("path", true, "Workspace-relative file or directory scope."),
-            bounded_text("glob", false, 0, MAX_PATTERN_LEN, "Optional include glob."),
-            ToolField {
-                name: "caseSensitive",
-                kind: FieldKind::Boolean,
-                required: false,
-                description: "Match case exactly.",
-            },
-            integer(
-                "context",
-                0,
-                MAX_CONTEXT_LINES,
-                "Context lines around each match.",
-            ),
-            integer("limit", 1, MAX_LISTING_ITEMS, "Maximum rows to return."),
-        ],
-        rules: &[],
-    },
-    ToolDefinition {
         name: "search",
         kind: "search",
         gate: Gate::Capability("search"),
-        description: "Locate workspace paths or content from a warm index. Prefer this over grep for finding where something lives. path mode ranks files and directories by name; content mode returns path:line: text rows for a literal match, with path:line- rows around each match when context is set. Matching is case-insensitive unless query contains an uppercase character. Use grep for regex. Set context to read the code around a match here instead of opening the file, and reserve read for the cases the surrounding lines do not settle. Narrow path, glob, or query when a result is truncated.",
+        description: "Find workspace paths or text. This is the only text-search tool; do not shell out to ripgrep, grep, or find. path mode ranks files and directories by name. content mode matches exact literal text, and regex mode matches a regular expression; both return path:line: rows for each match, plus path:line- rows around them when context is set. Matching is case-insensitive unless query contains an uppercase character, which in regex mode an inline (?i) overrides. Set context to see the code around a match here instead of opening the file, and reserve read for what the surrounding lines do not settle. Narrow path, glob, or query when a result is truncated.",
         fields: &[
             bounded_text(
                 "query",
                 true,
                 1,
                 MAX_PATTERN_LEN,
-                "Name fragment for path mode, or exact literal text for content mode.",
+                "Name fragment for path mode, exact literal text for content mode, or a regular expression for regex mode.",
             ),
             choice(
                 "mode",
                 true,
-                &["path", "content"],
-                "path ranks file and directory names; content searches inside files.",
+                &["path", "content", "regex"],
+                "path ranks file and directory names; content and regex search inside files.",
             ),
             text(
                 "path",
@@ -316,13 +278,13 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
                 "context",
                 0,
                 MAX_CONTEXT_LINES,
-                "Lines of surrounding code to show around each content match.",
+                "Lines of surrounding code to show around each match. Ignored in path mode.",
             ),
             integer(
                 "limit",
                 1,
                 MAX_LISTING_ITEMS,
-                "Maximum paths in path mode, or matches in content mode. Defaults to 100 for path and 50 for content.",
+                "Maximum paths in path mode, or matches in content and regex mode. Defaults to 100 for path and 50 for the others.",
             ),
         ],
         rules: &[],
@@ -694,7 +656,6 @@ fn field_schema(field: &ToolField, programs: &[String]) -> Value {
             }
             value
         }
-        FieldKind::Boolean => json!({"type": "boolean"}),
         FieldKind::Choice(values) => json!({"type": "string", "enum": values}),
         FieldKind::ProgramId => json!({"type": "string", "enum": programs}),
         FieldKind::TextArray { max_items, max_len } => json!({
@@ -763,10 +724,6 @@ fn validate_field(
             }
             Ok(())
         }
-        FieldKind::Boolean => value
-            .as_bool()
-            .map(|_| ())
-            .ok_or_else(|| tool.violation(Some(field.name), "a boolean")),
         FieldKind::Choice(values) => {
             let text = value
                 .as_str()

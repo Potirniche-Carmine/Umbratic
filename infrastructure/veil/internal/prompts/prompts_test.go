@@ -35,19 +35,27 @@ func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
 	}
-	// search is the warm primary locator; grep stays the exact-regex escape
-	// hatch. Locating must beat opening, and an open must be a window: those two
+	// search is the single text-search tool, covering names, literals, and
+	// regex. Locating must beat opening, and an open must be a window: those two
 	// rules are what keep whole-file reads out of the transcript.
 	for _, want := range []string{
-		"use search to locate code or content by name or literal text",
-		"grep only when you need an exact regex",
+		"search is the only text-search tool",
+		"mode path to locate files by name, mode content for exact literal text, and mode regex for a pattern",
 		"never use command to run ripgrep, grep, or find for routine search",
-		"a content search with context often shows enough of the surrounding code to answer without a read at all",
+		"a content or regex search with context often shows enough of the surrounding code to answer without a read at all",
 		"read a window around them rather than the whole file",
 		"send line with the reported line number",
 	} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing search-first guidance %q", want)
+		}
+	}
+	// grep was merged into search. The prompt may still forbid shelling out to
+	// it, but it must never direct the model to call a grep tool, because the
+	// surface no longer declares one.
+	for _, line := range strings.Split(global, ". ") {
+		if strings.Contains(line, "grep") && !strings.Contains(line, "never use command to run ripgrep") {
+			t.Errorf("prompt still points at a grep tool that no longer exists: %q", line)
 		}
 	}
 	// The promise/tool sentence is deleted in full, including its colon clause.

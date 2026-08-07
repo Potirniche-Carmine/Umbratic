@@ -69,7 +69,7 @@ var engineeringBuckets = []Bucket{
 		ID:   "debug_failure",
 		When: "A crash, exception, failing test, or \"why is this broken\".",
 		Playbook: `1. Gather the failure evidence: message, log, failing test name, from the request or the workspace.
-2. Locate the likely code with search, using context to see the lines around each hit, and read a window where more is needed. Use grep only when an exact regex is needed.
+2. Locate the likely code with search, using context to see the lines around each hit, and read a window where more is needed. Use mode regex when a literal query cannot express the pattern.
 3. Reproduce with command or run_program when it is safe and useful.
 4. Fix only if the user asked for a fix. Otherwise report the root cause in your final response.
 5. Re-run the failing check after any fix.`,
@@ -109,7 +109,7 @@ Scope gate, before any heavy tool use:
 Then:
 1. If umbratic-security-review is in the enabled skill catalog, read it completely and follow its checklist for the chosen surface.
 2. Run search in targeted waves (auth, tokens, secrets, exec, deserialize, SQL, path joins, outbound HTTP, permissions, CORS) with context lines, then read windows around only the top hits.
-3. Use grep only for precise confirmation patterns.
+3. Use search mode regex for precise confirmation patterns.
 4. Respect a read budget of roughly 25 to 40 substantive reads, then synthesize.
 5. In your final response, report Confirmed, Needs validation, and Not covered as separate sections.
 6. Stay read-only unless the user asked for fixes.

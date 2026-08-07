@@ -1,12 +1,14 @@
 //! The `search` release performance gate.
 //!
-//! Two claims are measured against a synthetic workspace of at least 50,000
+//! Three claims are measured against a synthetic workspace of at least 50,000
 //! visible paths:
 //!
 //! 1. A warm path-mode query is at least 3x faster than one that has to rebuild
 //!    the index from a cold walk. This is the whole reason the index exists.
-//! 2. Literal content search is no more than 20% slower than `grep` over the
-//!    same candidate set. The index must not make content search worse.
+//! 2. A warm content query is at least 2x faster than a cold one, so the index
+//!    earns its keep for content scanning and not only for path ranking.
+//! 3. Regex mode stays in the same order of magnitude as literal mode over the
+//!    same candidate set, so absorbing the old `grep` did not add a slow path.
 //!
 //! First-build time and index memory are reported separately rather than folded
 //! into the warm number, so a warm win bought with an unacceptable build cost is
@@ -24,9 +26,9 @@ const MODULES_PER_PACKAGE: usize = 20;
 const FILES_PER_MODULE: usize = 50;
 /// Path-mode samples. Cheap enough to take a real median.
 const PATH_SAMPLES: usize = 9;
-/// Content samples are fewer because each iteration also runs a full cold `grep`
-/// over 50,000 files, which dominates the runtime. The measured gap is large
-/// enough that a 5-sample median is not the limiting factor.
+/// Content samples are fewer because each cold iteration rebuilds the index over
+/// 50,000 files, which dominates the runtime. The measured gap is large enough
+/// that a 5-sample median is not the limiting factor.
 const CONTENT_SAMPLES: usize = 5;
 
 fn median(mut values: Vec<Duration>) -> Duration {
@@ -72,7 +74,7 @@ async fn path_search(session: &Arc<Session>) -> ToolResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn warm_path_search_beats_a_cold_walk_and_content_search_matches_grep() {
+async fn a_warm_index_speeds_up_both_search_modes_and_regex_keeps_pace() {
     let directory = tempfile::tempdir().unwrap();
     let created = build_fixture(directory.path());
     assert!(
@@ -103,7 +105,7 @@ async fn warm_path_search_beats_a_cold_walk_and_content_search_matches_grep() {
     }
 
     // Cold: invalidate first, so each query pays for a full walk. This is what
-    // `find`/`grep` do on every single call today.
+    // `find` does on every single call today.
     let mut cold = Vec::with_capacity(PATH_SAMPLES);
     for _ in 0..PATH_SAMPLES {
         session.search_index.mark_stale();
@@ -129,47 +131,62 @@ async fn warm_path_search_beats_a_cold_walk_and_content_search_matches_grep() {
          warm median {warm_median:?}, cold median {cold_median:?}"
     );
 
-    // Content mode versus grep over the same candidate set and the same needle.
-    // The index must not make content search worse than the tool it replaces.
-    let mut content = Vec::with_capacity(CONTENT_SAMPLES);
-    let mut grep = Vec::with_capacity(CONTENT_SAMPLES);
+    // Content mode, warm against cold. The index is what removes the walk from
+    // every query after the first.
+    let content_query = |mode: &'static str, query: &'static str| {
+        let session = session.clone();
+        async move {
+            search_tool(
+                session,
+                json!({"query": query, "mode": mode, "path": ".", "limit": 50})
+                    .as_object()
+                    .unwrap(),
+            )
+            .await
+            .expect("content search succeeds")
+        }
+    };
+
+    let mut warm_content = Vec::with_capacity(CONTENT_SAMPLES);
+    let mut cold_content = Vec::with_capacity(CONTENT_SAMPLES);
+    let mut regex_content = Vec::with_capacity(CONTENT_SAMPLES);
     for _ in 0..CONTENT_SAMPLES {
         let started = Instant::now();
-        let result = search_tool(
-            session.clone(),
-            json!({"query":"RARE_NEEDLE_TOKEN","mode":"content","path":".","limit":50})
-                .as_object()
-                .unwrap(),
-        )
-        .await
-        .expect("content search succeeds");
-        content.push(started.elapsed());
-        assert_eq!(result.status, "success");
+        let result = content_query("content", "RARE_NEEDLE_TOKEN").await;
+        warm_content.push(started.elapsed());
         assert!(result.content.contains("RARE_NEEDLE_TOKEN"));
 
+        // The same needle as a pattern, so the two modes do identical work apart
+        // from how each line is tested.
         let started = Instant::now();
-        let result = grep_tool(
-            &session,
-            json!({"pattern":"RARE_NEEDLE_TOKEN","mode":"literal","path":".","limit":50})
-                .as_object()
-                .unwrap(),
-        )
-        .await
-        .expect("grep succeeds");
-        grep.push(started.elapsed());
-        assert_eq!(result.status, "success");
+        let result = content_query("regex", r"RARE_\w+_TOKEN").await;
+        regex_content.push(started.elapsed());
+        assert!(result.content.contains("RARE_NEEDLE_TOKEN"));
+
+        session.search_index.mark_stale();
+        let started = Instant::now();
+        let result = content_query("content", "RARE_NEEDLE_TOKEN").await;
+        cold_content.push(started.elapsed());
+        assert!(result.content.contains("RARE_NEEDLE_TOKEN"));
     }
 
-    let content_median = median(content);
-    let grep_median = median(grep);
+    let warm_content_median = median(warm_content);
+    let cold_content_median = median(cold_content);
+    let regex_median = median(regex_content);
     eprintln!(
-        "search content mode: {}us, grep: {}us",
-        content_median.as_micros(),
-        grep_median.as_micros(),
+        "search content mode: warm {}us, cold {}us, regex {}us",
+        warm_content_median.as_micros(),
+        cold_content_median.as_micros(),
+        regex_median.as_micros(),
     );
     assert!(
-        content_median.as_secs_f64() <= grep_median.as_secs_f64() * 1.2,
-        "content search must stay within 20% of grep; \
-         search median {content_median:?}, grep median {grep_median:?}"
+        warm_content_median * 2 <= cold_content_median,
+        "a warm content search must be at least 2x faster than a cold one; \
+         warm {warm_content_median:?}, cold {cold_content_median:?}"
+    );
+    assert!(
+        regex_median.as_secs_f64() <= warm_content_median.as_secs_f64() * 4.0,
+        "regex mode must stay in the same order as literal mode; \
+         regex {regex_median:?}, literal {warm_content_median:?}"
     );
 }

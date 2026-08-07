@@ -216,7 +216,7 @@ impl WorkspaceGraphService {
         for (relative, indexed) in &index.graph.files {
             let path = self.cwd.join(relative);
             let Ok(metadata) = fs::metadata(path) else {
-                return ("stale".into(), vec!["An indexed workspace file is missing. Verify with find/grep/read or refresh the graph.".into()]);
+                return ("stale".into(), vec!["An indexed workspace file is missing. Verify with search/find/read or refresh the graph.".into()]);
             };
             let modified = metadata
                 .modified()
@@ -229,7 +229,7 @@ impl WorkspaceGraphService {
                     .zip(modified)
                     .is_some_and(|(built, modified)| modified > built + 1000)
             {
-                return ("stale".into(), vec!["Workspace files changed after this graph revision. Verify with find/grep/read or refresh the graph.".into()]);
+                return ("stale".into(), vec!["Workspace files changed after this graph revision. Verify with search/find/read or refresh the graph.".into()]);
             }
         }
         ("fresh".into(), Vec::new())
@@ -327,7 +327,7 @@ impl WorkspaceGraphService {
                 .load()
                 .err()
                 .unwrap_or_else(|| "Workspace graph is unavailable".into());
-            return json!({ "graphRevision": "unavailable", "freshness": "degraded", "generatedAt": Utc::now().to_rfc3339(), "summary": "Workspace graph evidence is unavailable. Continue with find/grep/read as the source of truth.", "nodes": [], "edges": [], "warnings": [warning] });
+            return json!({ "graphRevision": "unavailable", "freshness": "degraded", "generatedAt": Utc::now().to_rfc3339(), "summary": "Workspace graph evidence is unavailable. Continue with search/find/read as the source of truth.", "nodes": [], "edges": [], "warnings": [warning] });
         };
         let action = args
             .get("action")

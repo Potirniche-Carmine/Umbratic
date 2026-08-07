@@ -37,7 +37,7 @@ export function config(
     cwd,
     workspaceMode: "local",
     permissionMode: "normal",
-    enabledTools: ["read", "ls", "find", "grep", "search", "write", "edit", "command"],
+    enabledTools: ["read", "ls", "find", "search", "write", "edit", "command"],
     diagnostics: { enabled: true, logPath: diagnosticLogPath, includeToolOutput: "stderr" },
     provider: {
       id: "company-endpoint",

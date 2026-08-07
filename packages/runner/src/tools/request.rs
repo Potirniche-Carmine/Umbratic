@@ -25,7 +25,6 @@ request_type!(EditRequest);
 request_type!(ApplyPatchRequest);
 request_type!(LsRequest);
 request_type!(FindRequest);
-request_type!(GrepRequest);
 request_type!(SearchRequest);
 request_type!(LspRequest);
 request_type!(WorkspaceGraphRequest);
@@ -48,7 +47,6 @@ pub(super) enum ToolRequest {
     ApplyPatch(ApplyPatchRequest),
     Ls(LsRequest),
     Find(FindRequest),
-    Grep(GrepRequest),
     Search(SearchRequest),
     Lsp(LspRequest),
     WorkspaceGraph(WorkspaceGraphRequest),
@@ -100,10 +98,6 @@ impl ToolRequest {
             }),
             "find" => Self::Find(FindRequest {
                 primary: string_arg(&arguments, &["glob"]),
-                arguments,
-            }),
-            "grep" => Self::Grep(GrepRequest {
-                primary: string_arg(&arguments, &["pattern"]),
                 arguments,
             }),
             "search" => Self::Search(SearchRequest {
@@ -163,7 +157,6 @@ impl ToolRequest {
             Self::ApplyPatch(request) => format!("edit {}", request.primary),
             Self::Ls(request) => format!("ls {}", request.primary),
             Self::Find(request) => format!("find {}", request.primary),
-            Self::Grep(request) => format!("grep {}", request.primary),
             Self::Search(request) => format!("search {}", request.primary),
             Self::Lsp(request) => format!("lsp {}", request.primary),
             Self::Command(request) => redact_text(&request.command, 320),
@@ -195,7 +188,6 @@ impl ToolRequest {
             Self::ApplyPatch(request) => &request.arguments,
             Self::Ls(request) => &request.arguments,
             Self::Find(request) => &request.arguments,
-            Self::Grep(request) => &request.arguments,
             Self::Search(request) => &request.arguments,
             Self::Lsp(request) => &request.arguments,
             Self::WorkspaceGraph(request) => &request.arguments,
@@ -227,7 +219,6 @@ pub fn tool_capability_name(name: &str) -> Option<&'static str> {
         "edit" | "apply_patch" => Some("edit"),
         "ls" => Some("ls"),
         "find" => Some("find"),
-        "grep" => Some("grep"),
         "search" => Some("search"),
         "lsp" => Some("lsp"),
         "workspace_graph" => Some("workspace_graph"),
