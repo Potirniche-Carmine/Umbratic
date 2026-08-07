@@ -58,7 +58,6 @@ export function AssistantMessage({
       {showActions ? (
         <div className="responseFeedbackControls">
           <div className="messageActions">
-            <span className="answerBadge">Answer</span>
             <button
               className="messageAction"
               type="button"

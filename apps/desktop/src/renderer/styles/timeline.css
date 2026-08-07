@@ -260,27 +260,43 @@
   opacity: 0.28;
 }
 
-/* Full-strength text plus the only actions in the turn: between them, which
-   message is the reply stops being a guess. */
+/* Prose that leads straight into work belongs to that work, and reads as its
+   opening line.
+   It cannot actually move into the Working block: whether more tools are coming
+   is unknowable at the first streamed token, so classifying prose that early
+   means sometimes relocating it afterwards — which is what made the answer
+   arrive as a jump before. Instead it stays exactly where it streamed and the
+   grid gap beneath it is closed, so the two read as one section and nothing
+   ever moves. */
+.timelineMessage.assistantProgress:has(+ .timelineActivity) {
+  margin-bottom: calc(0px - clamp(20px, 3vh, 34px) + 10px);
+}
+
+.timelineMessage.assistantProgress:has(+ .timelineActivity)::before {
+  bottom: -12px;
+}
+
+/* The answer is the one thing in a turn the user came for, so it is the one
+   thing that is an object rather than a passage: a surface with an edge, at full
+   strength, carrying the only actions in the turn. */
 .timelineMessage.assistantAnswer {
+  width: min(100%, 980px);
+  padding: 15px 18px 11px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 10px;
   color: var(--text);
+  background: var(--panel-tint);
 }
 
 .timelineMessage.assistantAnswer::before {
-  width: 2px;
-  opacity: 1;
+  content: none;
 }
 
-.answerBadge {
-  display: inline-flex;
-  align-items: center;
-  height: 26px;
-  padding-right: 4px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+/* The negative pull that tucks prose under a Working block would clip the
+   answer's own frame. */
+.timelineActivity + .timelineMessage.assistantAnswer {
+  margin-top: 0;
 }
 
 .timelineActivity {
