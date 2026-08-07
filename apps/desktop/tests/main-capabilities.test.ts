@@ -113,7 +113,11 @@ test("capability guidance degrades Python, CMake, and artifact workflows when pr
     ocr: true,
   });
   assert.match(promptGuidance, /Local capability facts/);
-  assert.match(promptGuidance, /search fallbacks are available when rg is missing/);
+  // rg and fd are never reported: the system prompt forbids shelling out to
+  // either, so their availability is not something the model may act on.
+  assert.doesNotMatch(promptGuidance, /\brg\b|\bfd\b|search fallbacks|path discovery/);
+  // The probe timestamp told the model nothing it could use.
+  assert.doesNotMatch(promptGuidance, /checked at/);
   assert.match(promptGuidance, /Python uv runtime: missing/);
   assert.match(promptGuidance, /CMake: missing; Ninja: missing; compiler: available/);
   assert.match(promptGuidance, /PDF render QA with Poppler: missing or incomplete/);

@@ -790,10 +790,7 @@ function artifactRequested(needs: CapabilityPromptNeeds): boolean {
 }
 
 export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: CapabilityPromptNeeds): string {
-  const lines = [
-    "Local capability facts:",
-    `- checked at ${report.checkedAt}`,
-  ];
+  const lines = ["Local capability facts:"];
   const requiredMissing = missingRequiredLabels(report);
   const languageServers = ["typescript-language-server", "rust-analyzer"]
     .map((id) => capabilityById(report, id))
@@ -804,17 +801,6 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
   }
   if (requiredMissing.length) {
     lines.push(`- setup problem: missing required capability ${requiredMissing.join(", ")}`);
-  }
-
-  const rg = capabilityById(report, "rg");
-  const fd = capabilityById(report, "fd");
-  lines.push(`- workspace text search helper: ${statusLabel(rg)}`);
-  lines.push(`- workspace path discovery helper: ${statusLabel(fd)}`);
-  if (rg?.status !== "available") {
-    lines.push("- search fallbacks are available when rg is missing.");
-  }
-  if (fd?.status !== "available") {
-    lines.push("- path discovery fallbacks are available when fd/fdfind is missing.");
   }
 
   if (needs.python) {
@@ -856,7 +842,7 @@ export function capabilityPromptGuidance(report: CapabilityProbeReport, needs: C
     }
   }
 
-  return lines.join("\n");
+  return lines.length > 1 ? lines.join("\n") : "";
 }
 
 function versionFamily(version: string | undefined): string | undefined {
