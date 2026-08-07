@@ -615,6 +615,25 @@ button.attachmentPreview:focus-visible {
   opacity: 0.55;
 }
 
+/* The ring breathes while the prefix is being rewritten, so the number on it
+   reads as in-flight rather than current. Motion only — the arc keeps showing
+   the last known figure, which is the only one the runner has. */
+.contextMeterButton.is-compacting {
+  animation: contextMeterCompacting 1.4s ease-in-out infinite;
+}
+
+@keyframes contextMeterCompacting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.42; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contextMeterButton.is-compacting {
+    animation: none;
+    opacity: 0.62;
+  }
+}
+
 .contextMeter svg {
   display: block;
   width: 18px;
@@ -797,6 +816,11 @@ button.attachmentPreview:focus-visible {
 .contextMeterNotice {
   color: var(--amber) !important;
   white-space: normal;
+}
+
+/* In-flight work is not a warning: it is neutral until it has an outcome. */
+.contextMeterNotice.is-busy {
+  color: var(--muted) !important;
 }
 
 .sendButton {

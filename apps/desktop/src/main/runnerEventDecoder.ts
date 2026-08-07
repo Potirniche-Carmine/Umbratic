@@ -70,6 +70,12 @@ export type RunnerEvent =
       confidence?: unknown;
     })
   | (RunnerEventBase & {
+      type: "context.compaction";
+      phase: "started" | "finished";
+      outcome?: "compacted" | "unchanged";
+      reclaimedTokens?: number;
+    })
+  | (RunnerEventBase & {
       type: "context.retrieved";
       toolCallId: string;
       hash: string;
@@ -194,6 +200,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "tool.finished",
   "context.compressed",
   "context.usage",
+  "context.compaction",
   "context.retrieved",
   "permission.requested",
   "runner.error",
@@ -349,6 +356,15 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.compactionBlocked === undefined || typeof value.compactionBlocked === "boolean")
         && (value.awaitingMeasurement === undefined || typeof value.awaitingMeasurement === "boolean")
         && (value.breakdown === undefined || isContextBreakdown(value.breakdown))
+      );
+    case "context.compaction":
+      return (
+        (value.phase === "started" || value.phase === "finished")
+        && (value.outcome === undefined
+          || value.outcome === "compacted"
+          || value.outcome === "unchanged")
+        && (value.reclaimedTokens === undefined
+          || hasNonNegativeNumber(value, "reclaimedTokens"))
       );
     case "context.retrieved":
       return (

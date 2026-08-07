@@ -62,7 +62,13 @@ async fn tool_history_stays_append_only_without_context_pressure() {
     }
     *session.messages.lock().await = messages.clone();
     let tools = crate::tools::tool_surface(&session).specs().to_vec();
-    let prepared = prepared_messages(&session, &tools).await.unwrap();
+    let prepared = prepared_messages(
+        &session,
+        &tools,
+        &crate::session::test_sink(directory.path()),
+    )
+    .await
+    .unwrap();
     assert_eq!(prepared.messages, messages);
 }
 
@@ -269,7 +275,9 @@ async fn preflight_compacts_complete_tool_lifecycles_until_the_request_fits() {
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
 
-    let prepared = prepared_messages(&session, &[]).await.unwrap();
+    let prepared = prepared_messages(&session, &[], &crate::session::test_sink(directory.path()))
+        .await
+        .unwrap();
     let usage = context_event(&session, prepared.usage);
     assert!(usage["estimatedTokens"].as_u64().unwrap() <= 4_000);
     assert!(prepared.max_output_tokens >= 1_000);
@@ -319,7 +327,9 @@ async fn preflight_rejects_an_oversized_atomic_user_request() {
         queue: tokio::sync::Mutex::new(crate::run_queue::RunQueue::default()),
     };
 
-    let error = prepared_messages(&session, &[]).await.unwrap_err();
+    let error = prepared_messages(&session, &[], &crate::session::test_sink(directory.path()))
+        .await
+        .unwrap_err();
     assert!(error.contains("Context window is full"));
     assert!(error.contains("4000"));
 }

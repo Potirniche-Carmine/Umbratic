@@ -1,0 +1,53 @@
+/* The compaction row inside the Working block. It sits at the same weight as a
+   skill row: this is runner bookkeeping the user is waiting on, not a step of
+   the model's plan, so it reads as a quiet status line rather than a tool. */
+.activityLogEntry.compactionLog {
+  display: grid;
+  grid-template-columns: 12px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding-top: 2px;
+  color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  font-size: 10px;
+}
+
+.compactionLog svg {
+  color: color-mix(in srgb, var(--accent) 72%, var(--reasoning-text));
+}
+
+.compactionLog span {
+  color: var(--faint);
+  font-weight: 620;
+}
+
+.compactionLog em {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.66;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A pass that reclaimed nothing still happened and still cost the wait, so it
+   stays visible — dimmer, not hidden. */
+.compactionLog.is-unchanged svg,
+.compactionLog.is-unchanged span {
+  color: var(--muted);
+}
+
+.compactionSpinner {
+  animation: compactionSpin 1s linear infinite;
+}
+
+@keyframes compactionSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compactionSpinner {
+    animation: none;
+  }
+}

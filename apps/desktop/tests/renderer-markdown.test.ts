@@ -824,3 +824,56 @@ test("unsupported inline math is left verbatim rather than half translated", () 
   );
   assert.ok(html.includes(String.raw`$\frac{a}{b}$`), html);
 });
+
+test("context compaction renders as a live row that settles into what it reclaimed", () => {
+  const { activitySummary, compactionElapsedLabel, composerTimelineFromEvents } = loadRenderer();
+
+  const started = [
+    { type: "user.message", taskId: "task-1", text: "Keep going", at: "2026-01-01T00:00:00.000Z" },
+    { type: "context.compaction", taskId: "task-1", phase: "started", at: "2026-01-01T00:00:01.000Z" },
+  ];
+  // While it runs the block is unfinished work, not thinking: the user is
+  // waiting on a model round-trip with no tool row to explain the pause.
+  const live = JSON.parse(JSON.stringify(composerTimelineFromEvents(started, undefined, "running")));
+  assert.deepEqual(live.map((item) => item.type), ["user", "activity"]);
+  assert.deepEqual(live[1].segments.map((segment) => segment.type), ["compaction"]);
+  assert.equal(live[1].segments[0].status, "running");
+  assert.equal(live[1].finished, false);
+  assert.match(activitySummary(live[1], Date.parse("2026-01-01T00:00:04.000Z")), /^Working/);
+
+  const settled = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...started,
+    {
+      type: "context.compaction",
+      taskId: "task-1",
+      phase: "finished",
+      outcome: "compacted",
+      reclaimedTokens: 32_000,
+      at: "2026-01-01T00:00:07.000Z",
+    },
+    { type: "assistant.delta", taskId: "task-1", text: "Done", at: "2026-01-01T00:00:08.000Z" },
+  ])));
+  const [segment] = settled[1].segments;
+  assert.equal(segment.status, "compacted");
+  assert.equal(segment.reclaimedTokens, 32_000);
+  // The elapsed time the user watched is the elapsed time that settles.
+  assert.equal(compactionElapsedLabel(segment), "6 seconds");
+  // A compaction-only block never collapses away as a thinking-only turn. Its
+  // window runs to the answer, while the row keeps its own shorter span.
+  assert.equal(activitySummary(settled[1]), "Worked for 8 seconds");
+
+  // A pass that reclaimed nothing still cost the wait, so it stays on screen.
+  const refused = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...started,
+    { type: "context.compaction", taskId: "task-1", phase: "finished", outcome: "unchanged", reclaimedTokens: 0, at: "2026-01-01T00:00:05.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Done", at: "2026-01-01T00:00:06.000Z" },
+  ])));
+  assert.equal(refused[1].segments[0].status, "unchanged");
+
+  // A finish with no start replays from a truncated log; nothing is invented.
+  const orphaned = composerTimelineFromEvents([
+    started[0],
+    { type: "context.compaction", taskId: "task-1", phase: "finished", outcome: "compacted", at: "2026-01-01T00:00:05.000Z" },
+  ]);
+  assert.equal(orphaned.some((item) => item.type === "activity"), false);
+});

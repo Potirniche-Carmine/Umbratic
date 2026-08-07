@@ -81,7 +81,18 @@ export type ComposerActivitySegment =
       code?: string;
       message?: string;
     }
-  | { type: "command"; id: string; run: CommandRun };
+  | { type: "command"; id: string; run: CommandRun }
+  // Context compaction, while the user is waiting on it. It is the only pause
+  // in a turn with no tool row to explain it, so it gets a row of its own that
+  // runs live and then settles into what it actually reclaimed.
+  | {
+      type: "compaction";
+      id: string;
+      status: "running" | "compacted" | "unchanged";
+      startedAt?: string;
+      endedAt?: string;
+      reclaimedTokens?: number;
+    };
 
 export type ComposerTimelineItem =
   | { type: "user"; id: string; text: string; rawText: string; reviewFeedback: ReviewFeedbackReference[]; attachedFiles: ChatAttachment[] }

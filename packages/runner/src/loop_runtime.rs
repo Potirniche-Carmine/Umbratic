@@ -17,7 +17,7 @@ use crate::{
     events::{empty_summary, increment, now_iso, step_settled_event},
     orient::orient_once,
     permission::PermissionBroker,
-    public_progress::PublicProgressSchedule,
+    public_progress::{PublicProgressSchedule, compaction_finished, compaction_started},
     repeat_guard::RepeatGuard,
     response_output::{emit_fallback_answer, looks_like_unstructured_tool_call, record_answer},
     session::{EventSink, InputPart, Session},
@@ -260,6 +260,7 @@ fn semantic_compaction_allowed(session: &Session, anchored: bool) -> bool {
 pub(crate) async fn prepared_messages(
     session: &Session,
     tools: &[Value],
+    sink: &EventSink,
 ) -> Result<PreparedRequest, String> {
     let mut messages = session.messages.lock().await;
     loop {
@@ -267,13 +268,31 @@ pub(crate) async fn prepared_messages(
         let (usage, profile_fingerprint) = request_estimate(session, &messages, tools, &state);
         if usage.calibrated_prompt_tokens >= semantic_trigger_tokens(session.config.context_length)
             && semantic_compaction_allowed(session, usage.anchored)
-            // The cheap deterministic tier first; summarization only if
-            // folding stale exchanges could not get under the trigger.
-            && (prune_stale_tool_results(session, &mut messages, tools, &state)
-                || attempt_semantic_compaction(session, &mut messages, tools, &state).await)
         {
-            clear_usage_anchor(session).await;
-            continue;
+            // The cheap deterministic tier first; summarization only if
+            // folding stale exchanges could not get under the trigger. Only the
+            // second tier is announced: the first is local and instant, while
+            // the second blocks the turn on another model round-trip.
+            if prune_stale_tool_results(session, &mut messages, tools, &state) {
+                clear_usage_anchor(session).await;
+                continue;
+            }
+            compaction_started(session, sink);
+            let compacted =
+                attempt_semantic_compaction(session, &mut messages, tools, &state).await;
+            compaction_finished(
+                session,
+                sink,
+                compacted,
+                usage.calibrated_prompt_tokens,
+                request_estimate(session, &messages, tools, &state)
+                    .0
+                    .calibrated_prompt_tokens,
+            );
+            if compacted {
+                clear_usage_anchor(session).await;
+                continue;
+            }
         }
         let fits_tokens = usage.estimated_tokens() <= session.config.context_length;
         if fits_tokens && messages.len() <= MAX_PROVIDER_MESSAGES {
@@ -362,7 +381,7 @@ async fn final_without_tools(
     fallback: &str,
     harness_bucket: Option<&str>,
 ) {
-    let Ok(mut prepared) = prepared_messages(session, &[]).await else {
+    let Ok(mut prepared) = prepared_messages(session, &[], sink).await else {
         emit_fallback_answer(session, sink, summary, fallback).await;
         return;
     };
@@ -386,7 +405,7 @@ async fn final_without_tools(
         .as_ref()
         .is_err_and(|error| context_overflow(error))
         && recover_from_overflow(session, &[]).await
-        && let Ok(retry) = prepared_messages(session, &[]).await
+        && let Ok(retry) = prepared_messages(session, &[], sink).await
     {
         prepared = retry;
         response = stream_veil_chat(
@@ -582,7 +601,7 @@ pub async fn run_turn(
         // turn, because the turn no longer reads session state.
         let surface = tool_surface(&session);
         let tools = surface.specs().to_vec();
-        let mut prepared = prepared_messages(&session, &tools).await?;
+        let mut prepared = prepared_messages(&session, &tools, &sink).await?;
         let mut snapshot = Arc::new(turn_snapshot(
             &session,
             surface.clone(),
@@ -618,7 +637,7 @@ pub async fn run_turn(
         {
             public_progress.before_context_recovery(&session, &sink, &mut summary);
             if recover_from_overflow(&session, &tools).await {
-                prepared = prepared_messages(&session, &tools).await?;
+                prepared = prepared_messages(&session, &tools, &sink).await?;
                 // Compaction replaced the conversation state, so the turn is
                 // re-snapshotted rather than reusing stale prompt assembly.
                 snapshot = Arc::new(turn_snapshot(

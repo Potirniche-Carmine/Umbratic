@@ -166,6 +166,21 @@ export class RunnerEventAdapter {
       case "context.usage":
         this.handleContextUsage(event);
         return;
+      case "context.compaction":
+        // A started phase carries no outcome, and a finished one without a
+        // decoded outcome would leave the UI with a status row it cannot close.
+        if (event.phase === "finished" && event.outcome === undefined) return;
+        this.options.emit({
+          type: "context.compaction",
+          taskId: this.options.task.id,
+          phase: event.phase,
+          ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+          ...(event.reclaimedTokens !== undefined
+            ? { reclaimedTokens: event.reclaimedTokens }
+            : {}),
+          at: eventAt(event),
+        });
+        return;
       case "context.retrieved":
         this.options.emit({
           type: "context.retrieved",

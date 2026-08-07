@@ -16,6 +16,56 @@ use crate::{
 // so it is noise in the activity log rather than information.
 const CONTEXT_RECOVERY_PROGRESS: &str = "Compacting earlier context to fit the request";
 
+/// Announces the summarization tier of compaction as a lifecycle, not a label.
+///
+/// The deterministic tier is local and finishes in milliseconds, so it is not
+/// worth interrupting the UI for. The semantic tier is a whole extra model
+/// round-trip taken *before* the turn's real request goes out, and rewriting
+/// the prefix also discards the provider's prefix cache, so the next response
+/// starts from a cold prefill. That is seconds of apparent silence with no tool
+/// row to explain it, which is exactly the case a status affordance exists for.
+///
+/// Started and finished are separate events because the UI has to show elapsed
+/// time while it runs; a single after-the-fact label cannot.
+pub(crate) fn compaction_started(session: &Session, sink: &EventSink) {
+    if session.is_aborted() {
+        return;
+    }
+    sink.emit(json!({
+        "type": "context.compaction",
+        "taskId": session.task_id,
+        "phase": "started",
+        "at": now_iso()
+    }));
+}
+
+/// Reports how the attempt ended, including when it changed nothing.
+///
+/// A refused compaction still costs the user the wait, so it is reported rather
+/// than left as a status line that silently disappears.
+pub(crate) fn compaction_finished(
+    session: &Session,
+    sink: &EventSink,
+    compacted: bool,
+    before_tokens: u64,
+    after_tokens: u64,
+) {
+    if session.is_aborted() {
+        return;
+    }
+    sink.emit(json!({
+        "type": "context.compaction",
+        "taskId": session.task_id,
+        "phase": "finished",
+        "outcome": if compacted { "compacted" } else { "unchanged" },
+        // Reclaim is only meaningful when the prefix was actually replaced, and
+        // it is an estimate on both sides — the same heuristic that decided to
+        // compact, never a measurement it does not have yet.
+        "reclaimedTokens": if compacted { before_tokens.saturating_sub(after_tokens) } else { 0 },
+        "at": now_iso()
+    }));
+}
+
 #[derive(Default)]
 pub(crate) struct PublicProgressSchedule {
     last_text: Option<String>,
@@ -49,6 +99,61 @@ impl PublicProgressSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_compaction_that_changed_nothing_still_reports_finishing() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = crate::session::test_session(directory.path());
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+
+        compaction_started(&session, &sink);
+        compaction_finished(&session, &sink, false, 50_000, 50_000);
+
+        let observed = std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| event["type"] == "context.compaction")
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0]["phase"], "started");
+        assert_eq!(observed[1]["phase"], "finished");
+        assert_eq!(observed[1]["outcome"], "unchanged");
+        // A refused compaction must never claim it freed anything.
+        assert_eq!(observed[1]["reclaimedTokens"], 0);
+    }
+
+    #[test]
+    fn a_successful_compaction_reports_what_it_reclaimed() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = crate::session::test_session(directory.path());
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+
+        compaction_finished(&session, &sink, true, 50_000, 18_000);
+
+        let observed = std::iter::from_fn(|| events.try_recv().ok())
+            .find(|event| event["type"] == "context.compaction")
+            .unwrap();
+        assert_eq!(observed["outcome"], "compacted");
+        assert_eq!(observed["reclaimedTokens"], 32_000);
+    }
+
+    #[test]
+    fn an_aborted_session_announces_no_compaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = crate::session::test_session(directory.path());
+        let sink = crate::session::test_sink(directory.path());
+        let mut events = sink.subscribe();
+        let _run = session.try_begin_run().unwrap();
+        session.abort();
+
+        compaction_started(&session, &sink);
+        compaction_finished(&session, &sink, true, 50_000, 18_000);
+
+        assert!(
+            !std::iter::from_fn(|| events.try_recv().ok())
+                .any(|event| event["type"] == "context.compaction")
+        );
+    }
 
     #[test]
     fn compaction_progress_never_speaks_in_the_assistant_voice() {
