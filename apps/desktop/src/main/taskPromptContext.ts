@@ -205,7 +205,7 @@ import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
-import { findAgentInstructionFiles } from "./repositoryInstructions";
+import { rootAgentInstructions } from "./repositoryInstructions";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
 import {
@@ -219,69 +219,20 @@ import {
   visibleTaskEvents,
 } from "./taskReviewPresentation";
 
-export function repositoryTreePreview(rootPath: string, maxEntries = 90): string[] {
-  const root = path.resolve(rootPath);
-  const rows: string[] = [];
-  const walk = (directory: string, depth: number) => {
-    if (rows.length >= maxEntries || depth > 2) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    entries
-      .filter((entry) => {
-        const relative = normalizeRelativePath(path.relative(root, path.join(directory, entry.name)));
-        return !isGeneratedRuntimePath(relative) && !isBlockedPath(relative) && !ignoredSnapshotDirectories.has(entry.name);
-      })
-      .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name))
-      .forEach((entry) => {
-        if (rows.length >= maxEntries) return;
-        const absolute = path.join(directory, entry.name);
-        const relative = normalizeRelativePath(path.relative(root, absolute));
-        rows.push(`${"  ".repeat(depth)}- ${relative}${entry.isDirectory() ? "/" : ""}`);
-        if (entry.isDirectory()) walk(absolute, depth + 1);
-      });
-  };
-  walk(root, 0);
-  return rows;
-}
-
-export function keyWorkspaceFiles(rootPath: string): Array<{ path: string; text: string }> {
-  const snippets: Array<{ path: string; text: string }> = [];
-  let remaining = 12000;
-  for (const relative of keyWorkspaceFileCandidates) {
-    const absolute = path.resolve(rootPath, relative);
-    if (!pathInside(rootPath, absolute) || !fs.existsSync(absolute)) continue;
-    const text = readTextFileIfSafe(absolute);
-    if (text === null) continue;
-    const snippet = text.slice(0, Math.max(0, remaining));
-    if (!snippet) break;
-    snippets.push({ path: normalizeRelativePath(relative), text: snippet });
-    remaining -= snippet.length;
-    if (remaining <= 0) break;
-  }
-  return snippets;
-}
-
-export const keyWorkspaceFileCandidates = ["README.md", "package.json", "apps/desktop/package.json", "src/package.json", "pyproject.toml"];
-
 export function pushAgentInstructionContext(lines: string[], rootPath: string) {
-  const files = findAgentInstructionFiles(rootPath, {
-    readTextFile: readTextFileIfSafe,
-    shouldSkipDirectory: ({ name, path: relative }) =>
-      ignoredSnapshotDirectories.has(name) || isGeneratedRuntimePath(relative) || isBlockedPath(relative),
-  });
-  if (!files.length) return;
+  const root = rootAgentInstructions(rootPath, { readTextFile: readTextFileIfSafe });
+  if (!root) return;
   lines.push(
     "",
-    "Repository instruction files, ordered from the workspace root to more specific directories:",
-    "Apply the root file to the full workspace. Apply each nested file to work inside its containing directory.",
+    // Only the file is supplied here. How a nested AGENTS.md is found and
+    // applied is a protected system-prompt rule, stated there once so the two
+    // cannot drift apart.
+    "Repository instructions for this workspace root:",
+    `\n### ${root.path}`,
+    "```",
+    root.text,
+    "```",
   );
-  for (const file of files) {
-    lines.push(`\n### ${file.path}`, "```", file.text, "```");
-  }
 }
 
 export function compactHistoryText(value: string, limit: number): string {
@@ -521,7 +472,6 @@ export async function runnerPromptForTask(
   contextLength: number,
   options: { useDurableContext?: boolean } = {},
 ): Promise<RunnerPromptPart[]> {
-  const repository = readProjects().find((project) => project.id === task.repositoryId);
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   const hiddenChat = isHiddenChatTask(task), historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
   if (!shouldIncludeWorkspaceContext({
@@ -532,9 +482,6 @@ export async function runnerPromptForTask(
   })) return [{ type: "text", text: userPrompt }];
   const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const capabilityNeeds = capabilityNeedsForPrompt(userPrompt, attachments);
-  const firstUserTurn = (task.events ?? []).filter((event) => event.type === "user.message").length <= 1;
-  const tree = firstUserTurn ? repositoryTreePreview(rootPath) : [];
-  const keyFiles = firstUserTurn && !hiddenChat ? keyWorkspaceFiles(rootPath) : [];
   const lines = hiddenChat
     ? [
         "Umbratic chat context:",
@@ -545,24 +492,9 @@ export async function runnerPromptForTask(
     : [
         "Umbratic workspace context:",
         `- opened folder: ${rootPath}`,
-        `- repository name: ${repository?.name ?? path.basename(rootPath)}`,
         `- workspace kind: ${task.workspaceKind}`,
-        `- branch/status: ${task.originalBranch} (${repository?.statusSummary ?? "unknown"})`,
       ];
   pushAgentInstructionContext(lines, rootPath);
-  if (firstUserTurn) {
-    lines.push(
-      "",
-      hiddenChat ? "Scratch workspace file preview (bounded, not exhaustive):" : "Visible workspace file preview (bounded, not exhaustive):",
-      tree.length ? tree.join("\n") : hiddenChat ? "- (empty)" : "- (no readable files found)",
-    );
-  }
-  if (keyFiles.length) {
-    lines.push("", "Key workspace files:");
-    for (const file of keyFiles) {
-      lines.push(`\n### ${file.path}`, "```", file.text, "```");
-    }
-  }
   const hasDurableContext = options.useDurableContext
     ?? Boolean(task.chatId && readChat(task.chatId)?.conversationState);
   const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);
@@ -573,7 +505,8 @@ export async function runnerPromptForTask(
       history,
     );
   }
-  lines.push("", capabilityPromptGuidance(capabilityReport, capabilityNeeds));
+  const capabilityGuidance = capabilityPromptGuidance(capabilityReport, capabilityNeeds);
+  if (capabilityGuidance) lines.push("", capabilityGuidance);
   const parts: RunnerPromptPart[] = [{ type: "text", text: lines.join("\n") }];
   const textBudget = { remainingTokens: attachmentPromptTokenBudget(contextLength) };
   parts.push(

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { normalizeRelativePath, pathInside } from "./utils";
+import { pathInside } from "./utils";
 
 export type AgentInstructionFile = {
   path: string;
@@ -10,54 +10,24 @@ export type AgentInstructionFile = {
 
 type AgentInstructionDiscoveryOptions = {
   readTextFile(filePath: string): string | null;
-  shouldSkipDirectory(input: { name: string; path: string }): boolean;
 };
 
-export function findAgentInstructionFiles(
+/// The workspace root's AGENTS.md, or null when there is none.
+///
+/// Only the root file is injected. A monorepo can hold a nested AGENTS.md in
+/// every package, and sending all of them costs the model a large block of
+/// instructions for directories the task will never touch — while burying the
+/// one file that governs the whole workspace. The nested files still apply;
+/// the model is told they exist and reads the one nearest its work, which is a
+/// single targeted read instead of a standing tax on every turn.
+export function rootAgentInstructions(
   rootPath: string,
   options: AgentInstructionDiscoveryOptions,
-): AgentInstructionFile[] {
+): AgentInstructionFile | null {
   const root = path.resolve(rootPath);
-  const files: AgentInstructionFile[] = [];
-  const seen = new Set<string>();
-
-  const addFile = (absolute: string) => {
-    const resolved = path.resolve(absolute);
-    if (!pathInside(root, resolved) || seen.has(resolved) || !fs.existsSync(resolved)) return;
-    const text = options.readTextFile(resolved);
-    if (text === null) return;
-    files.push({
-      path: normalizeRelativePath(path.relative(root, resolved)) || "AGENTS.md",
-      text,
-    });
-    seen.add(resolved);
-  };
-
-  addFile(path.join(root, "AGENTS.md"));
-
-  const walk = (directory: string) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      const absolute = path.join(directory, entry.name);
-      const relative = normalizeRelativePath(path.relative(root, absolute));
-      if (entry.isFile() && entry.name === "AGENTS.md") {
-        addFile(absolute);
-        continue;
-      }
-      if (entry.isDirectory() && !options.shouldSkipDirectory({ name: entry.name, path: relative })) {
-        walk(absolute);
-      }
-    }
-  };
-
-  walk(root);
-  return files.sort((left, right) => {
-    const depthDifference = left.path.split("/").length - right.path.split("/").length;
-    return depthDifference || left.path.localeCompare(right.path);
-  });
+  const absolute = path.join(root, "AGENTS.md");
+  if (!pathInside(root, absolute) || !fs.existsSync(absolute)) return null;
+  const text = options.readTextFile(absolute);
+  if (text === null) return null;
+  return { path: "AGENTS.md", text };
 }

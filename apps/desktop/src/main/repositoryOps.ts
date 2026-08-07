@@ -204,7 +204,6 @@ import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import { codeLikeIdeArgs, macCodeLikeIdeArgs } from "./ideLaunch";
 import { boundedRecentLines } from "./historyContext";
 import { limitPromptImages, shouldIncludeWorkspaceContext, type ContextPromptPart } from "./promptContext";
-import { findAgentInstructionFiles } from "./repositoryInstructions";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
 import {
