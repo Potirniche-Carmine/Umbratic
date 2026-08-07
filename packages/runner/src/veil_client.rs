@@ -12,8 +12,8 @@ use crate::{
     tools::ToolCall,
     veil_retry::{
         MAX_CONNECT_ATTEMPTS, VeilAttemptError, VeilAttemptInput, committed_output,
-        emit_reconnected, emit_reconnecting, reconnect_delay_ms, retryable_status,
-        sleep_unless_aborted,
+        emit_reconnected, emit_reconnecting, reconnect_delay_ms, retry_after_from,
+        retryable_status, sleep_unless_aborted,
     },
     veil_tls::{expected_pin, pinned_tls_config, resolve_server_name, verify_certificate_pin},
 };
@@ -831,7 +831,7 @@ pub async fn stream_veil_chat(
                 {
                     return Err(error.message);
                 }
-                let delay_ms = reconnect_delay_ms(attempt);
+                let delay_ms = reconnect_delay_ms(attempt, error.retry_after_ms);
                 emit_reconnecting(session, sink, attempt, delay_ms);
                 if !sleep_unless_aborted(session, delay_ms).await {
                     return Err("model request aborted".into());
@@ -894,6 +894,9 @@ async fn attempt_veil_chat(
         .map_err(VeilAttemptError::final_failure)?;
     let status = response.status();
     if !status.is_success() {
+        // Read before the body is consumed: a loaded gateway answering 429 or
+        // 503 usually says when to come back, and that beats guessing.
+        let retry_after = retry_after_from(&response);
         let text = response.text().await.unwrap_or_default();
         let payload = serde_json::from_str::<Value>(&text).ok();
         let message = format!(
@@ -901,7 +904,7 @@ async fn attempt_veil_chat(
             veil_failure_message(Some(status.as_u16()), payload.as_ref())
         );
         return Err(if retryable_status(status.as_u16()) {
-            VeilAttemptError::retryable(message)
+            VeilAttemptError::retryable(message).after(retry_after)
         } else {
             VeilAttemptError::final_failure(message)
         });

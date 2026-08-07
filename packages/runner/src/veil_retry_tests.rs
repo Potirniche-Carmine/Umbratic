@@ -4,35 +4,62 @@ use serde_json::json;
 use crate::tools::ToolCall;
 
 #[test]
-fn the_backoff_covers_a_restart_without_stalling_on_a_recovered_server() {
-    // Doubling at first, so a blip costs half a second rather than fifteen.
-    assert_eq!(reconnect_delay_ms(1), 500);
-    assert_eq!(reconnect_delay_ms(2), 1_000);
-    assert_eq!(reconnect_delay_ms(4), 4_000);
-    // Then a ceiling, which is what bounds how long a server that has already
-    // come back waits to be noticed.
-    for attempt in 6..=MAX_CONNECT_ATTEMPTS {
-        assert_eq!(reconnect_delay_ms(attempt), RECONNECT_MAX_DELAY_MS);
+fn the_backoff_is_capped_exponential_growth() {
+    assert_eq!(reconnect_window_ms(1), 500);
+    assert_eq!(reconnect_window_ms(2), 1_000);
+    assert_eq!(reconnect_window_ms(4), 4_000);
+    assert_eq!(reconnect_window_ms(7), 32_000);
+    for attempt in 8..=MAX_CONNECT_ATTEMPTS {
+        assert_eq!(reconnect_window_ms(attempt), RECONNECT_MAX_DELAY_MS);
     }
-    // The budget is reached by many moderate waits rather than a few long
-    // ones, which is the whole reason the ceiling is separate from the total.
-    let at_ceiling = (1..MAX_CONNECT_ATTEMPTS)
-        .filter(|attempt| reconnect_delay_ms(*attempt) == RECONNECT_MAX_DELAY_MS)
-        .count();
+    // Ten attempts covering a restart, and then it stops. Holding a turn open
+    // longer than that is not patience, it is a hang.
+    let budget: u64 = (1..MAX_CONNECT_ATTEMPTS).map(reconnect_window_ms).sum();
     assert!(
-        at_ceiling >= 15,
-        "only {at_ceiling} waits sit at the ceiling, so the ladder is a handful \
-         of long sleeps rather than a steady poll",
-    );
-
-    // The whole ladder covers a restart or a model reload — around five
-    // minutes — and then stops. Holding a turn open longer than that is not
-    // patience, it is a hang.
-    let budget = reconnect_budget_ms();
-    assert!(
-        (4 * 60_000..=5 * 60_000).contains(&budget),
+        (60_000..=5 * 60_000).contains(&budget),
         "the retry ladder spans {budget}ms",
     );
+}
+
+#[test]
+fn every_wait_is_jittered_within_the_upper_half_of_its_window() {
+    // Equal jitter: never below half the window, so a long outage cannot
+    // degenerate into a fast poll; never above it, so the ladder stays bounded.
+    for window in [500_u64, 4_000, 60_000] {
+        assert_eq!(jittered_delay_ms(window, 0.0), window / 2);
+        assert_eq!(jittered_delay_ms(window, 1.0), window);
+        for fraction in [0.01, 0.25, 0.5, 0.99] {
+            let delay = jittered_delay_ms(window, fraction);
+            assert!(
+                (window / 2..=window).contains(&delay),
+                "{window} {fraction}"
+            );
+        }
+    }
+    // A nonsense fraction cannot escape the window either.
+    assert_eq!(jittered_delay_ms(1_000, -5.0), 500);
+    assert_eq!(jittered_delay_ms(1_000, 5.0), 1_000);
+
+    // Two consecutive waits at the same attempt must not be identical, or the
+    // jitter is not doing the one job it exists for.
+    let draws = (0..24)
+        .map(|_| reconnect_delay_ms(8, None))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(draws.len() > 1, "the backoff is not actually jittered");
+}
+
+#[test]
+fn a_server_that_says_when_to_come_back_is_obeyed_within_reason() {
+    assert_eq!(retry_after_ms(Some("2")), Some(2_000));
+    assert_eq!(retry_after_ms(Some("  30 ")), Some(30_000));
+    // A header takes precedence over the computed backoff.
+    assert_eq!(reconnect_delay_ms(1, Some(9_000)), 9_000);
+    // A wrong or hostile value cannot park a turn for an hour.
+    assert_eq!(retry_after_ms(Some("86400")), Some(RECONNECT_MAX_DELAY_MS));
+    // The HTTP-date form and anything unparseable fall back to the backoff.
+    assert_eq!(retry_after_ms(Some("Wed, 21 Oct 2026 07:28:00 GMT")), None);
+    assert_eq!(retry_after_ms(Some("")), None);
+    assert_eq!(retry_after_ms(None), None);
 }
 
 #[test]

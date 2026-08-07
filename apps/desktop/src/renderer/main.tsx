@@ -163,8 +163,8 @@ import {
 } from "./taskEventReducer";
 import { activityHasTools, activityIsWork, activitySummary, thoughtDurationMs } from "./activityTiming";
 import { CompactionRow } from "./compactionRow";
-import { providerReconnectFromEvents, reconnectElapsedLabel } from "./connectionStatus";
-export { providerReconnectFromEvents, reconnectElapsedLabel } from "./connectionStatus";
+import { providerReconnectFromEvents } from "./connectionStatus";
+export { providerReconnectFromEvents } from "./connectionStatus";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -2273,11 +2273,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return () => media.removeEventListener("change", sync);
   }, []);
 
-  // A reconnect keeps the clock running on its own: an outage can outlast every
-  // open Working block, and a frozen "2m" would be worse than no elapsed time
-  // at all — it would read as a hang rather than a wait.
-  const hasRunningActivity = composerItems.some((item) => item.type === "activity" && !item.finished)
-    || !!providerReconnect;
+  const hasRunningActivity = composerItems.some((item) => item.type === "activity" && !item.finished);
 
   useEffect(() => {
     if (!hasRunningActivity) return undefined;
@@ -5473,12 +5469,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             <div className="connectionNotice" role="status" aria-live="polite">
               <Loader2 className="connectionNoticeSpinner" size={14} aria-hidden="true" />
               <span>Lost connection to the model server</span>
-              <b>
-                Retry {providerReconnect.attempt}/{providerReconnect.maxAttempts}
-                {reconnectElapsedLabel(providerReconnect.since, activityClock)
-                  ? ` · ${reconnectElapsedLabel(providerReconnect.since, activityClock)}`
-                  : ""}
-              </b>
+              <b>Retry {providerReconnect.attempt}/{providerReconnect.maxAttempts}</b>
             </div>
           ) : null}
           <div className="composer" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>

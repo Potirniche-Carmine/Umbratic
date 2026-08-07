@@ -17,36 +17,79 @@ use crate::{
 
 /// How many times a request that has committed nothing may be re-sent.
 ///
-/// The window this covers is a server that is restarting, reloading a model, or
-/// otherwise away for a few minutes — long enough to sit through a `docker
-/// compose up` or a machine waking, and it costs the user nothing to wait
-/// because Stop remains live the whole time. Past roughly five minutes the
-/// honest answer is that the server is not coming back on its own, and failing
-/// the turn beats holding it open indefinitely.
-pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 24;
+/// Ten, which with the ceiling below covers a server that is restarting or
+/// reloading a model — a few minutes — and then gives up. Stop stays live
+/// throughout, so the wait costs the user nothing they cannot interrupt.
+pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 10;
 pub(crate) const RECONNECT_BASE_DELAY_MS: u64 = 500;
-/// The ceiling on a single wait, which is a different question from the total.
-///
-/// It is what decides how long a *recovered* server sits unused, so it is kept
-/// well below the budget on purpose: the ladder reaches five minutes by taking
-/// more attempts at a moderate delay rather than fewer at a long one. A 30s
-/// ceiling would halve the request count and double the worst-case delay
-/// between a server coming back and the turn noticing — the wrong trade against
-/// a local server that costs nothing to poll.
-pub(crate) const RECONNECT_MAX_DELAY_MS: u64 = 15_000;
+/// The ceiling on a single wait. Ten attempts covering minutes forces a large
+/// one: the two numbers trade directly against each other, and this is the
+/// side of that trade the attempt count leaves.
+pub(crate) const RECONNECT_MAX_DELAY_MS: u64 = 60_000;
 
-/// Exponential backoff, capped.
-pub(crate) fn reconnect_delay_ms(attempt: u32) -> u64 {
+/// The unjittered ceiling for one attempt: plain capped exponential growth.
+pub(crate) fn reconnect_window_ms(attempt: u32) -> u64 {
     RECONNECT_BASE_DELAY_MS
-        .saturating_mul(1_u64 << attempt.saturating_sub(1).min(6))
+        .saturating_mul(1_u64 << attempt.saturating_sub(1).min(16))
         .min(RECONNECT_MAX_DELAY_MS)
 }
 
-/// What the whole ladder adds up to, so the budget is a stated number rather
-/// than an emergent property of two constants.
-#[cfg(test)]
-pub(crate) fn reconnect_budget_ms() -> u64 {
-    (1..MAX_CONNECT_ATTEMPTS).map(reconnect_delay_ms).sum()
+/// Equal jitter over that window: half the window, plus a uniform draw over the
+/// other half.
+///
+/// Jitter is the part of exponential backoff that is easiest to leave out and
+/// most worth keeping. Without it every chat that lost the same server retries
+/// in lockstep, so a server coming back is met by all of them at once and may
+/// go straight back down — and they stay synchronized on the next round.
+/// Halving rather than drawing over the whole window (full jitter) keeps a
+/// floor under the delay, so a long outage cannot degenerate into a fast poll.
+pub(crate) fn jittered_delay_ms(window_ms: u64, fraction: f64) -> u64 {
+    let half = window_ms / 2;
+    half + (half as f64 * fraction.clamp(0.0, 1.0)) as u64
+}
+
+/// A server that says when to come back is obeyed rather than guessed at.
+///
+/// `Retry-After` is the standard answer to a 429 or a 503, and ignoring it is
+/// the classic way a well-behaved client becomes the reason a loaded server
+/// stays loaded. Only the delta-seconds form is honoured; the HTTP-date form is
+/// rare from an inference gateway and falling back to the backoff is safe.
+/// Bounded by the same ceiling as everything else, so a wrong or hostile header
+/// cannot park a turn for an hour.
+pub(crate) fn retry_after_ms(header: Option<&str>) -> Option<u64> {
+    header?
+        .trim()
+        .parse::<u64>()
+        .ok()?
+        .saturating_mul(1_000)
+        .min(RECONNECT_MAX_DELAY_MS)
+        .into()
+}
+
+/// Reads the header off a response, before its body is consumed.
+pub(crate) fn retry_after_from(response: &reqwest::Response) -> Option<u64> {
+    retry_after_ms(
+        response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok()),
+    )
+}
+
+/// How long to wait before the next attempt.
+pub(crate) fn reconnect_delay_ms(attempt: u32, retry_after: Option<u64>) -> u64 {
+    retry_after
+        .unwrap_or_else(|| jittered_delay_ms(reconnect_window_ms(attempt), random_fraction()))
+}
+
+/// A uniform draw in [0, 1).
+///
+/// From `uuid`'s random bytes rather than a new dependency: this needs to
+/// decorrelate retries, not to be sound for anything that cares about the
+/// quality of its randomness.
+fn random_fraction() -> f64 {
+    let bytes = uuid::Uuid::new_v4().into_bytes();
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64 / (u32::MAX as f64 + 1.0)
 }
 
 /// Statuses worth repeating. A gateway with no upstream right now, a loaded
@@ -126,6 +169,8 @@ pub(crate) struct VeilAttemptError {
     pub(crate) message: String,
     pub(crate) retryable: bool,
     pub(crate) committed: bool,
+    /// The server's own instruction for when to come back, when it gave one.
+    pub(crate) retry_after_ms: Option<u64>,
 }
 
 impl VeilAttemptError {
@@ -134,6 +179,7 @@ impl VeilAttemptError {
             message: message.into(),
             retryable: true,
             committed: false,
+            retry_after_ms: None,
         }
     }
 
@@ -142,11 +188,17 @@ impl VeilAttemptError {
             message: message.into(),
             retryable: false,
             committed: false,
+            retry_after_ms: None,
         }
     }
 
     pub(crate) fn committed_if(mut self, committed: bool) -> Self {
         self.committed = committed;
+        self
+    }
+
+    pub(crate) fn after(mut self, retry_after_ms: Option<u64>) -> Self {
+        self.retry_after_ms = retry_after_ms;
         self
     }
 }
