@@ -879,3 +879,38 @@ test("context compaction is a top-level transcript marker, not a hidden log line
   ]);
   assert.equal(orphaned.some((item) => item.type === "compaction"), false);
 });
+
+test("a dropped connection reports its retries and never outlives the outage", () => {
+  const { providerReconnectFromEvents } = loadRenderer();
+
+  const dropped = [
+    { type: "user.message", taskId: "task-1", text: "go", at: "2026-01-01T00:00:00.000Z" },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 1, maxAttempts: 10, delayMs: 500 },
+    { type: "provider.reconnecting", taskId: "task-1", attempt: 2, maxAttempts: 10, delayMs: 1000 },
+  ];
+  // The composer shows the latest attempt, not the first one.
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(providerReconnectFromEvents(dropped))),
+    { attempt: 2, maxAttempts: 10 },
+  );
+
+  // An explicit reconnect clears it.
+  assert.equal(
+    providerReconnectFromEvents([...dropped, { type: "provider.reconnected", taskId: "task-1", attempt: 3 }]),
+    null,
+  );
+
+  // So does any evidence the turn resumed, which is what stops a missed
+  // reconnected event from stranding the banner on screen forever.
+  for (const resumed of [
+    { type: "assistant.delta", taskId: "task-1", text: "back" },
+    { type: "command.started", taskId: "task-1", id: "c1", command: "ls", cwd: "." },
+    { type: "task.error", taskId: "task-1", message: "gave up" },
+    { type: "turn.outcome", taskId: "task-1", outcome: "aborted" },
+  ]) {
+    assert.equal(providerReconnectFromEvents([...dropped, resumed]), null, resumed.type);
+  }
+
+  // A healthy turn never shows it at all.
+  assert.equal(providerReconnectFromEvents([dropped[0]]), null);
+});

@@ -15,6 +15,8 @@ const fixtures = [
   ["context.compaction", { phase: "started" }],
   ["context.compaction", { phase: "finished", outcome: "compacted", reclaimedTokens: 32000 }],
   ["context.compaction", { phase: "finished", outcome: "failed", reclaimedTokens: 0 }],
+  ["provider.reconnecting", { attempt: 3, maxAttempts: 10, delayMs: 2000 }],
+  ["provider.reconnected", { attempt: 4 }],
   ["context.threshold", { threshold: 75, contextLength: 64000, estimatedTokens: 48000 }],
   ["context.compressed", { toolCallId: "1", toolKind: "read", kind: "file", strategy: "text_head_tail", originalBytes: 2, outputBytes: 1 }],
   ["context.retrieved", { toolCallId: "1", hash: "abc", offset: 0, bytesShown: 1, totalBytes: 1 }],
@@ -87,6 +89,17 @@ test("malformed, unknown, and future backend events are quarantined", () => {
     { phase: "finished", outcome: "compacted", reclaimedTokens: -1 },
   ]) {
     assert.equal(contract.parseBackendUiEvent({ type: "context.compaction", taskId: "t", ...payload }).code, "invalid_field");
+  }
+
+  // "Retry 0/10" and "Retry 11/10" are both nonsense to read, so neither is
+  // allowed to reach the composer.
+  for (const payload of [
+    { attempt: 0, maxAttempts: 10, delayMs: 500 },
+    { attempt: 11, maxAttempts: 10, delayMs: 500 },
+    { attempt: 1, maxAttempts: 10, delayMs: -1 },
+    { attempt: 1, maxAttempts: 10 },
+  ]) {
+    assert.equal(contract.parseBackendUiEvent({ type: "provider.reconnecting", taskId: "t", ...payload }).code, "invalid_field");
   }
 });
 

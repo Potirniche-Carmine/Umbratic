@@ -77,6 +77,13 @@ export type RunnerEvent =
       reclaimedTokens?: number;
     })
   | (RunnerEventBase & {
+      type: "provider.reconnecting";
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+    })
+  | (RunnerEventBase & { type: "provider.reconnected"; attempt: number })
+  | (RunnerEventBase & {
       type: "context.retrieved";
       toolCallId: string;
       hash: string;
@@ -202,6 +209,8 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "context.compressed",
   "context.usage",
   "context.compaction",
+  "provider.reconnecting",
+  "provider.reconnected",
   "context.retrieved",
   "permission.requested",
   "runner.error",
@@ -367,6 +376,16 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.reclaimedTokens === undefined
           || hasNonNegativeNumber(value, "reclaimedTokens"))
       );
+    case "provider.reconnecting":
+      return (
+        hasNonNegativeNumber(value, "attempt")
+        && Number(value.attempt) >= 1
+        && hasNonNegativeNumber(value, "maxAttempts")
+        && Number(value.maxAttempts) >= Number(value.attempt)
+        && hasNonNegativeNumber(value, "delayMs")
+      );
+    case "provider.reconnected":
+      return hasNonNegativeNumber(value, "attempt") && Number(value.attempt) >= 1;
     case "context.retrieved":
       return (
         hasString(value, "toolCallId")

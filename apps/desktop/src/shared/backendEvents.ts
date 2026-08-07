@@ -74,6 +74,12 @@ export type BackendUiEvent = BackendEventMeta & (
   // is the one piece of context bookkeeping the user waits on and therefore the
   // one that gets a live status row rather than a note in a popover.
   | { type: "context.compaction"; taskId: string; phase: "started" | "finished"; outcome?: "compacted" | "unchanged" | "failed"; reclaimedTokens?: number }
+  // Losing the model server is the one failure a turn can recover from on
+  // its own, so it is reported as it happens rather than only when it gives
+  // up: the user is looking at a stalled composer either way, and the two
+  // situations call for different patience.
+  | { type: "provider.reconnecting"; taskId: string; attempt: number; maxAttempts: number; delayMs: number }
+  | { type: "provider.reconnected"; taskId: string; attempt: number }
   | { type: "context.threshold"; taskId: string; threshold: 75 | 90; contextLength: number; estimatedTokens: number }
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
@@ -120,6 +126,8 @@ const eventTypes = new Set([
   "command.finished",
   "context.usage",
   "context.compaction",
+  "provider.reconnecting",
+  "provider.reconnected",
   "context.threshold",
   "context.compressed",
   "context.retrieved",
@@ -225,6 +233,12 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
         || (value.phase === "finished"
           && ["compacted", "unchanged", "failed"].includes(String(value.outcome))
           && (value.reclaimedTokens === undefined || hasNonNegativeNumber(value, "reclaimedTokens")));
+    case "provider.reconnecting":
+      return hasNumber(value, "attempt") && Number(value.attempt) >= 1
+        && hasNumber(value, "maxAttempts") && Number(value.maxAttempts) >= Number(value.attempt)
+        && hasNonNegativeNumber(value, "delayMs");
+    case "provider.reconnected":
+      return hasNumber(value, "attempt") && Number(value.attempt) >= 1;
     case "context.threshold":
       return (value.threshold === 75 || value.threshold === 90)
         && hasNumber(value, "contextLength") && hasNumber(value, "estimatedTokens");

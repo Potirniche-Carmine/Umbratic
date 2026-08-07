@@ -166,6 +166,24 @@ export class RunnerEventAdapter {
       case "context.usage":
         this.handleContextUsage(event);
         return;
+      case "provider.reconnecting":
+        this.options.emit({
+          type: "provider.reconnecting",
+          taskId: this.options.task.id,
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+          at: eventAt(event),
+        });
+        return;
+      case "provider.reconnected":
+        this.options.emit({
+          type: "provider.reconnected",
+          taskId: this.options.task.id,
+          attempt: event.attempt,
+          at: eventAt(event),
+        });
+        return;
       case "context.compaction":
         // A started phase carries no outcome, and a finished one without a
         // decoded outcome would leave the UI with a status row it cannot close.

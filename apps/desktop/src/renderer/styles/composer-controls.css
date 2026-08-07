@@ -82,6 +82,58 @@
   white-space: nowrap;
 }
 
+/* Losing the server sits directly above the composer, where the user is
+   already looking at an input that has stopped responding. It is amber rather
+   than red: the turn is still trying, and nothing has been lost yet. */
+.connectionNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: var(--prompt-width);
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
+  border-radius: var(--radius);
+  color: color-mix(in srgb, var(--text) 84%, var(--amber));
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+}
+
+.connectionNotice svg {
+  flex: 0 0 auto;
+  color: var(--amber);
+}
+
+.connectionNotice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The attempt counter is the part that changes, so it holds its own column and
+   does not reflow the sentence beside it as the numbers climb. */
+.connectionNotice b {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+}
+
+.connectionNoticeSpinner {
+  animation: connectionNoticeSpin 1s linear infinite;
+}
+
+@keyframes connectionNoticeSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connectionNoticeSpinner {
+    animation: none;
+  }
+}
+
 .workspaceCluster {
   display: flex;
   align-items: center;
