@@ -140,6 +140,7 @@ const umbraticApi = {
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
+  openExternal: (input: { url: string }) => ipcRenderer.invoke("umbratic:open-external", input),
   onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
     // The main process validates at the runner boundary and constructs the rest
     // itself, so by the time an event reaches this channel its shape is settled.

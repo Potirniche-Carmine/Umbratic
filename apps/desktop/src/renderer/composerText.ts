@@ -442,3 +442,14 @@ export function markdownPreview(content: string, limit = 60000): { text: string;
         : limit;
   return { text: content.slice(0, cutoff).trimEnd(), truncated: true };
 }
+
+/// Whether the markdown character at `index` was escaped with a backslash.
+/// Counting the run matters: `\\*` is an escaped backslash followed by live
+/// emphasis, not an escaped asterisk.
+export function isEscapedMarkdownAt(text: string, index: number): boolean {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
