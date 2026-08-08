@@ -4,6 +4,7 @@ import {
 } from "../shared/contextWindow";
 import type { DocumentReviewSnapshot } from "../shared/documentReview";
 import {
+  buildTextDiff,
   normalizeReviewFile,
   type ReviewFile,
 } from "../shared/reviewDiff";
@@ -389,9 +390,35 @@ const composerTestDocumentFile = normalizeReviewFile({
     `Binary files /dev/null and b/${composerTestDocumentPath} differ`,
   ].join("\n"),
 });
-const composerTestReviewFiles: ReviewFile[] = composerTestParams.has("documents")
-  ? [composerTestDocumentFile, ...composerTestCodeReviewFiles]
-  : composerTestCodeReviewFiles;
+// `?perfDiff` adds a synthetic multi-thousand-line change so the review panel
+// can be exercised (and profiled) against a file the size of real refactors.
+function composerTestPerfDiffFile(): ReviewFile {
+  const before: string[] = [];
+  for (let index = 0; index < 4_200; index += 1) {
+    before.push(
+      index % 8 === 0
+        ? `export function previewCase${index}(input: PreviewInput): PreviewResult {`
+        : index % 8 === 7
+          ? "}"
+          : `  const derived${index} = refine(input.rows[${index % 37}], ${index});`,
+    );
+  }
+  const after = [...before];
+  for (let index = 12; index < after.length; index += 24) {
+    after[index] = after[index].replace("refine(", "refineWithPolicy(");
+  }
+  after.splice(1_400, 0, ...Array.from({ length: 80 }, (_, index) => `  const injected${index} = audit(rows[${index}]);`));
+  after.splice(600, 40);
+  const file = buildTextDiff("apps/desktop/src/renderer/perf-fixture.ts", `${before.join("\n")}\n`, `${after.join("\n")}\n`);
+  if (!file) throw new Error("perf fixture produced no diff");
+  return file;
+}
+
+const composerTestReviewFiles: ReviewFile[] = [
+  ...(composerTestParams.has("documents") ? [composerTestDocumentFile] : []),
+  ...(composerTestParams.has("perfDiff") ? [composerTestPerfDiffFile()] : []),
+  ...composerTestCodeReviewFiles,
+];
 
 const composerTestWholeDiffFiles: ReviewFile[] = [
   ...composerTestReviewFiles,
