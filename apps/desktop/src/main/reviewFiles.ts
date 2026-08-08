@@ -53,16 +53,33 @@ export function folderReviewFiles(task: TaskRecord): ReviewFile[] {
     .filter((file): file is ReviewFile => !!file);
 }
 
+/// Each changed file costs one or two git subprocesses. Reviews of large
+/// changesets spawn them with bounded parallelism instead of one at a time;
+/// results keep the input order so the file list stays sorted.
+const gitReviewConcurrency = 6;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex++;
+        results[index] = await run(items[index]);
+      }
+    }),
+  );
+  return results;
+}
+
 export async function gitWorkspaceReviewFiles(repositoryPath: string, baseline: string): Promise<ReviewFile[]> {
   const changed = (await getChangedFiles(repositoryPath, baseline))
     .filter((file) => !isGeneratedRuntimePath(file))
     .sort((a, b) => a.localeCompare(b));
-  const files: ReviewFile[] = [];
-  for (const file of changed) {
-    const review = await gitWorkspaceReviewFile(repositoryPath, baseline, file);
-    if (review) files.push(review);
-  }
-  return files;
+  const reviews = await mapWithConcurrency(changed, gitReviewConcurrency, (file) =>
+    gitWorkspaceReviewFile(repositoryPath, baseline, file),
+  );
+  return reviews.filter((review): review is ReviewFile => !!review);
 }
 
 export async function gitWorkspaceReviewFile(repositoryPath: string, baseline: string, file: string): Promise<ReviewFile | null> {
@@ -88,23 +105,19 @@ export async function gitLocalReviewFiles(task: TaskRecord): Promise<ReviewFile[
   const paths = Array.from(new Set([...baselinePaths, ...currentPaths]))
     .filter((file) => !isGeneratedRuntimePath(file))
     .sort((left, right) => left.localeCompare(right));
-  const files: ReviewFile[] = [];
-  for (const file of paths) {
-    let review: ReviewFile | null;
+  const reviews = await mapWithConcurrency(paths, gitReviewConcurrency, async (file) => {
     if (baselinePaths.has(file)) {
       const beforeValue = baselineFiles[file];
       const afterValue = snapshotFileValue(path.join(task.worktreePath, file));
-      review = buildSnapshotDiff(
+      return buildSnapshotDiff(
         file,
         beforeValue === missingSnapshotValue ? null : beforeValue,
         afterValue === missingSnapshotValue ? null : afterValue,
       );
-    } else {
-      review = await gitWorkspaceReviewFile(task.worktreePath, task.baseCommit, file);
     }
-    if (review) files.push(review);
-  }
-  return files;
+    return gitWorkspaceReviewFile(task.worktreePath, task.baseCommit, file);
+  });
+  return reviews.filter((review): review is ReviewFile => !!review);
 }
 
 export async function gitReviewFiles(task: TaskRecord, baseline = task.baseCommit, repositoryPath = task.worktreePath): Promise<ReviewFile[]> {

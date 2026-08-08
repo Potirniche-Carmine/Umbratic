@@ -35,6 +35,15 @@ function statusLabel(status: ReviewFile["status"]): string {
   return status === "binary" ? "Binary" : `${status[0].toUpperCase()}${status.slice(1)}`;
 }
 
+function splitReviewPath(filePath: string): { dir: string; name: string } {
+  const separatorIndex = filePath.lastIndexOf("/");
+  return separatorIndex < 0
+    ? { dir: "", name: filePath }
+    : { dir: filePath.slice(0, separatorIndex + 1), name: filePath.slice(separatorIndex + 1) };
+}
+
+const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
 export function ReviewPanel({
   files,
   initialSelectedPath,
@@ -261,10 +270,33 @@ export function ReviewPanel({
     }, 1800);
   };
   const hasSelection = selectedFileIsDocument ? documentSelection.length > 0 : !!selection;
+  const closeEditor = () => {
+    setEditorOpen(false);
+    setCommentBody("");
+  };
   const editor = hasSelection && editorOpen ? (
     <div className="inlineReviewComment">
-      <textarea ref={commentRef} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="Leave feedback for the next prompt…" aria-label="Review comment" />
-      <div className="inlineReviewCommentActions"><button type="button" onClick={() => { setEditorOpen(false); setCommentBody(""); }}>Cancel</button><button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button></div>
+      <textarea
+        ref={commentRef}
+        value={commentBody}
+        onChange={(event) => setCommentBody(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            saveComment();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            closeEditor();
+          }
+        }}
+        placeholder="Leave feedback for the next prompt…"
+        aria-label="Review comment"
+      />
+      <div className="inlineReviewCommentActions">
+        <span className="inlineReviewCommentHint" aria-hidden="true">{isMacPlatform ? "⌘↩ saves · esc cancels" : "Ctrl+Enter saves · Esc cancels"}</span>
+        <button type="button" onClick={closeEditor}>Cancel</button>
+        <button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button>
+      </div>
     </div>
   ) : null;
   const selectionCount = selectedFileIsDocument ? documentSelection.length : selection?.lines.length ?? 0;
@@ -298,12 +330,39 @@ export function ReviewPanel({
           {navigatorFiles.length ? (
             <aside className="reviewFileNavigator" aria-label="Changed files">
               <div className="reviewNavigatorSummary"><span>{navigatorFiles.length} file{navigatorFiles.length === 1 ? "" : "s"}</span><span className="additions">+{navigatorTotals.additions}</span><span className="deletions">-{navigatorTotals.deletions}</span></div>
-              <div className="reviewNavigatorList">{navigatorFiles.map((file) => <button type="button" className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`} onClick={() => { setSelectedPath(file.path); setSelection(null); }} key={file.path}><span>{file.path}</span><small><span>{statusLabel(file.status)}</span><span className="additions">+{file.additions}</span><span className="deletions">-{file.deletions}</span></small></button>)}</div>
+              <div className="reviewNavigatorList">{navigatorFiles.map((file) => {
+                const { dir, name } = splitReviewPath(file.path);
+                return (
+                  <button
+                    type="button"
+                    className={`reviewNavigatorFile status-${file.status} ${file.path === selectedFile.path ? "isActive" : ""}`}
+                    onClick={() => { setSelectedPath(file.path); setSelection(null); }}
+                    title={`${file.path} · ${statusLabel(file.status)}`}
+                    key={file.path}
+                  >
+                    <span className="reviewNavigatorRow">
+                      <span className="reviewNavigatorStatusDot" aria-hidden="true" />
+                      <span className="reviewNavigatorName">{name}</span>
+                      <span className="reviewNavigatorCounts" aria-label={`${statusLabel(file.status)}, ${file.additions} additions, ${file.deletions} deletions`}>
+                        <span className="additions">+{file.additions}</span>
+                        <span className="deletions">-{file.deletions}</span>
+                      </span>
+                    </span>
+                    {dir ? <small className="reviewNavigatorDir">{dir.replace(/\/$/, "")}</small> : null}
+                  </button>
+                );
+              })}</div>
             </aside>
           ) : null}
           <main className="reviewFileCanvas">
             <header className="reviewFileToolbar">
-              <span className="reviewSelectedFile"><strong title={selectedFile.path}>{selectedFile.path}</strong>{selectedFile.oldPath ? <small>from {selectedFile.oldPath}</small> : null}</span>
+              <span className="reviewSelectedFile">
+                <strong title={selectedFile.path}>
+                  <span className="reviewSelectedDir">{splitReviewPath(selectedFile.path).dir}</span>
+                  <span className="reviewSelectedName">{splitReviewPath(selectedFile.path).name}</span>
+                </strong>
+                {selectedFile.oldPath ? <small>from {selectedFile.oldPath}</small> : null}
+              </span>
               <div className="reviewFileActions">
                 <span className="reviewFeedbackSelectionControls">
                   <span className="reviewSelectionConfirmSlot">{selectionCount && !editorOpen ? <button className="reviewSelectionConfirm" type="button" onClick={() => setEditorOpen(true)} aria-label={`Write feedback for ${selectionCount} selected ${selectedFileIsDocument ? (selectionCount === 1 ? "sentence" : "sentences") : (selectionCount === 1 ? "line" : "lines")}`} title="Continue with selection"><Check size={14} /><span>{selectionCount}</span></button> : null}</span>

@@ -1,16 +1,46 @@
-import React, { useMemo } from "react";
-import type { DiffCell, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
+import React, { useEffect, useMemo, useState } from "react";
+import type { DiffCell, DiffSide, ReviewFile, SideBySideRow } from "../../shared/reviewDiff";
 import { alignHunk, hiddenLinesBeforeHunk } from "../../shared/reviewDiff";
 import { DiffRow, type ReviewLineSelection } from "./DiffRow";
 
 const diffRenderChunkSize = 80;
+// First paint mounts a bounded number of chunks; the rest stream in during
+// idle time so a five-thousand-line diff opens without a mount stall.
+const initialMountedChunks = 20;
+const mountedChunksPerIdleTick = 16;
+const diffRowEstimatedHeight = 22;
 
-function chunkRows(rows: SideBySideRow[]): SideBySideRow[][] {
-  const chunks: SideBySideRow[][] = [];
-  for (let index = 0; index < rows.length; index += diffRenderChunkSize) {
-    chunks.push(rows.slice(index, index + diffRenderChunkSize));
+type DiffRowEntry = {
+  key: string;
+  // The aligned row this entry came from, so the inline comment editor can be
+  // anchored under it in both layouts.
+  sourceRowId: string;
+  side: DiffSide | null;
+  row: SideBySideRow;
+};
+
+function chunkEntries(entries: DiffRowEntry[]): DiffRowEntry[][] {
+  const chunks: DiffRowEntry[][] = [];
+  for (let index = 0; index < entries.length; index += diffRenderChunkSize) {
+    chunks.push(entries.slice(index, index + diffRenderChunkSize));
   }
   return chunks;
+}
+
+function emptyCell(side: DiffSide): DiffCell {
+  return { side, line: null, content: "", origin: "empty" };
+}
+
+function unifiedEntries(row: SideBySideRow): DiffRowEntry[] {
+  const cells = row.kind === "context" ? [row.right] : [row.left, row.right].filter((cell) => cell.origin !== "empty");
+  return cells.map((cell) => ({
+    key: `${row.id}-${cell.side}`,
+    sourceRowId: row.id,
+    side: cell.side,
+    row: cell.side === "old"
+      ? { ...row, left: cell, right: emptyCell("new") }
+      : { ...row, left: emptyCell("old"), right: cell },
+  }));
 }
 
 export function DiffFileView({
@@ -30,10 +60,40 @@ export function DiffFileView({
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow): void;
   editor: React.ReactNode;
 }) {
-  const hunks = useMemo(() => file.hunks.map((hunk) => {
-    const rows = alignHunk(hunk);
-    return { hunk, rows, chunks: chunkRows(rows) };
-  }), [file]);
+  const aligned = useMemo(
+    () => file.hunks.map((hunk) => ({ hunk, rows: alignHunk(hunk) })),
+    [file],
+  );
+  // Rows are shaped for the active layout once, not on every render: stable row
+  // objects are what let React.memo skip unchanged DiffRows while scrolling or
+  // selecting lines, in unified mode as well as split.
+  const hunks = useMemo(() => {
+    let nextChunkIndex = 0;
+    return aligned.map(({ hunk, rows }) => {
+      const entries = viewMode === "split"
+        ? rows.map((row) => ({ key: row.id, sourceRowId: row.id, side: null, row }))
+        : rows.flatMap(unifiedEntries);
+      const chunks = chunkEntries(entries).map((chunk) => ({ chunk, index: nextChunkIndex++ }));
+      return { hunk, chunks };
+    });
+  }, [aligned, viewMode]);
+  const totalChunks = hunks.reduce((total, { chunks }) => total + chunks.length, 0);
+  const [mountedChunks, setMountedChunks] = useState(initialMountedChunks);
+
+  useEffect(() => {
+    setMountedChunks(initialMountedChunks);
+  }, [file]);
+
+  useEffect(() => {
+    if (mountedChunks >= totalChunks) return;
+    const requestIdle = window.requestIdleCallback ?? ((callback: () => void) => window.setTimeout(callback, 32));
+    const cancelIdle = window.cancelIdleCallback ?? window.clearTimeout;
+    const handle = requestIdle(() => {
+      setMountedChunks((current) => Math.min(totalChunks, current + mountedChunksPerIdleTick));
+    });
+    return () => cancelIdle(handle);
+  }, [mountedChunks, totalChunks]);
+
   if (file.binary || file.tooLarge || !file.hunks.length) {
     return (
       <div className="reviewDiffEmpty">
@@ -42,6 +102,8 @@ export function DiffFileView({
       </div>
     );
   }
+  const editorVisibleFor = (entry: DiffRowEntry) =>
+    selection?.rowId === entry.sourceRowId && (entry.side === null || selection.side === entry.side);
   return (
     <div className={`reviewDiffCanvas mode-${viewMode} ${wrap ? "isWrapped" : ""} ${commenting ? "isCommenting" : ""}`}>
       <div className="reviewDiffColumnHeaders" aria-hidden="true">
@@ -57,29 +119,28 @@ export function DiffFileView({
               </div>
             ) : null}
             <section className="reviewHunk" id={`review-hunk-${hunk.id}`}>
-              {chunks.map((rows, chunkIndex) => (
-                <div className="reviewDiffChunk" key={`${hunk.id}-chunk-${chunkIndex}`}>
-                  {viewMode === "split" ? rows.map((row) => (
-                    <React.Fragment key={row.id}>
-                      <DiffRow row={row} selection={selection} commenting={commenting} onSelect={onSelect} />
-                      {selection?.rowId === row.id ? editor : null}
-                    </React.Fragment>
-                  )) : rows.flatMap((row) => {
-                    const cells = row.kind === "context" ? [row.right] : [row.left, row.right].filter((cell) => cell.origin !== "empty");
-                    return cells.map((cell) => {
-                      const unifiedRow: SideBySideRow = cell.side === "old"
-                        ? { ...row, left: cell, right: { side: "new", line: null, content: "", origin: "empty" } }
-                        : { ...row, left: { side: "old", line: null, content: "", origin: "empty" }, right: cell };
-                      const key = `${row.id}-${cell.side}`;
-                      return (
-                        <React.Fragment key={key}>
-                          <DiffRow row={unifiedRow} selection={selection} commenting={commenting} onSelect={onSelect} />
-                          {selection?.rowId === row.id && selection.side === cell.side ? editor : null}
-                        </React.Fragment>
-                      );
-                    });
-                  })}
-                </div>
+              {chunks.map(({ chunk, index }) => (
+                index < mountedChunks ? (
+                  <div
+                    className="reviewDiffChunk"
+                    style={{ containIntrinsicSize: `auto ${chunk.length * diffRowEstimatedHeight}px` }}
+                    key={`${hunk.id}-chunk-${index}`}
+                  >
+                    {chunk.map((entry) => (
+                      <React.Fragment key={entry.key}>
+                        <DiffRow row={entry.row} selection={selection} commenting={commenting} onSelect={onSelect} />
+                        {editorVisibleFor(entry) ? editor : null}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    className="reviewDiffChunk isPending"
+                    style={{ height: `${chunk.length * diffRowEstimatedHeight}px` }}
+                    key={`${hunk.id}-chunk-${index}`}
+                    aria-hidden="true"
+                  />
+                )
               ))}
             </section>
           </React.Fragment>

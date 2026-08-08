@@ -497,16 +497,6 @@ function findClosingBacktickRun(text: string, startIndex: number, runLength: num
   return -1;
 }
 
-type DiffRow =
-  { kind: "add" | "remove" | "context"; content: string; oldLine: number | null; newLine: number | null; marker: "+" | "-" | "" };
-
-type ParsedDiff = {
-  additions: number;
-  deletions: number;
-  rows: DiffRow[];
-};
-
-const emptyParsedDiff: ParsedDiff = { additions: 0, deletions: 0, rows: [] };
 const sidebarDefaultWidth = 230;
 const sidebarMinWidth = 168;
 const sidebarMaxWidth = 230;
@@ -515,65 +505,6 @@ const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
 const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
-
-function parseHunkHeader(line: string): { oldStart: number; newStart: number } | null {
-  const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-  if (!match) return null;
-  return { oldStart: Number(match[1]), newStart: Number(match[2]) };
-}
-
-export function parseUnifiedDiff(diff: string): ParsedDiff {
-  const rows: DiffRow[] = [];
-  let additions = 0;
-  let deletions = 0;
-  let oldLine = 0;
-  let newLine = 0;
-  let insideHunk = false;
-
-  for (const line of diff.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")) {
-    if (line.startsWith("@@")) {
-      const hunk = parseHunkHeader(line);
-      if (!hunk) continue;
-      oldLine = hunk.oldStart;
-      newLine = hunk.newStart;
-      insideHunk = true;
-      continue;
-    }
-
-    if (!insideHunk || line.startsWith("\\ No newline")) {
-      continue;
-    }
-
-    if (line.startsWith("+") && !line.startsWith("+++ ")) {
-      rows.push({ kind: "add", content: line.slice(1), oldLine: null, newLine, marker: "+" });
-      additions += 1;
-      newLine += 1;
-      continue;
-    }
-
-    if (line.startsWith("-") && !line.startsWith("--- ")) {
-      rows.push({ kind: "remove", content: line.slice(1), oldLine, newLine: null, marker: "-" });
-      deletions += 1;
-      oldLine += 1;
-      continue;
-    }
-
-    if (line.startsWith(" ")) {
-      oldLine += 1;
-      newLine += 1;
-    }
-  }
-
-  if (rows.length === 0 && /Binary files|GIT binary patch/.test(diff)) {
-    rows.push({ kind: "context", content: "Binary file changed", oldLine: null, newLine: null, marker: "" });
-  }
-
-  return { additions, deletions, rows };
-}
-
-export function formatDiffStats(stats: ParsedDiff): string {
-  return `+${stats.additions} -${stats.deletions}`;
-}
 
 function AttachmentPreviewList({
   files,
@@ -1634,12 +1565,10 @@ function SkillGovernance({ skill }: { skill: SkillInfo }) {
 
 function ReviewSummaryCard({
   files,
-  diffs,
   onOpenReview,
   totals,
 }: {
   files: ReviewFile[];
-  diffs: Map<string, ParsedDiff>;
   onOpenReview(filePath?: string): void;
   totals: { additions: number; deletions: number };
 }) {
@@ -1661,25 +1590,22 @@ function ReviewSummaryCard({
         </span>
       </button>
       <div className="reviewSummaryFiles">
-        {files.map((file) => {
-          const stats = diffs.get(file.path) ?? emptyParsedDiff;
-          return (
-            <section className={`reviewSummaryFile status-${file.status}`} key={file.path}>
-              <button
-                className="reviewSummaryFileButton"
-                type="button"
-                onClick={() => onOpenReview(file.path)}
-              >
-                <span className="reviewSummaryPath">{file.path}</span>
-                <span className="changeStats" aria-label={formatDiffStats(stats)}>
-                  <span className="additions">+{stats.additions}</span>
-                  <span className="deletions">-{stats.deletions}</span>
-                </span>
-                <PanelRight className="reviewSummaryOpenIcon" size={14} />
-              </button>
-            </section>
-          );
-        })}
+        {files.map((file) => (
+          <section className={`reviewSummaryFile status-${file.status}`} key={file.path}>
+            <button
+              className="reviewSummaryFileButton"
+              type="button"
+              onClick={() => onOpenReview(file.path)}
+            >
+              <span className="reviewSummaryPath">{file.path}</span>
+              <span className="changeStats" aria-label={`+${file.additions} -${file.deletions}`}>
+                <span className="additions">+{file.additions}</span>
+                <span className="deletions">-{file.deletions}</span>
+              </span>
+              <PanelRight className="reviewSummaryOpenIcon" size={14} />
+            </button>
+          </section>
+        ))}
       </div>
     </article>
   );
@@ -1912,12 +1838,22 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   const latestTaskId = task?.id;
   const rawReviewFiles = task?.reviewFiles ?? workspaceReview?.reviewFiles ?? emptyReviewFiles;
+  // Review refreshes usually return byte-identical files. Reusing the previous
+  // object for an unchanged path keeps identity stable, so the open file's
+  // side-by-side alignment memo survives the refresh instead of recomputing.
+  const normalizedReviewFilesRef = useRef(new Map<string, ReviewFile>());
   const reviewFiles = useMemo(() => {
+    const previous = normalizedReviewFilesRef.current;
     const byPath = new Map<string, ReviewFile>();
     for (const file of rawReviewFiles) {
       const normalized = normalizeReviewFile(file);
-      byPath.set(normalized.path, normalized);
+      const cached = previous.get(normalized.path);
+      byPath.set(
+        normalized.path,
+        cached && cached.contentHash === normalized.contentHash ? cached : normalized,
+      );
     }
+    normalizedReviewFilesRef.current = byPath;
     return Array.from(byPath.values());
   }, [rawReviewFiles]);
   const documentReviewFiles = useMemo(
@@ -1928,22 +1864,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     () => reviewFiles.filter((file) => !isDocumentReviewArtifactPath(file.path)),
     [reviewFiles],
   );
-  const reviewDiffs = useMemo(
-    () => new Map(reviewFiles.map((file) => [file.path, parseUnifiedDiff(file.patch)])),
-    [reviewFiles],
-  );
   const codeReviewTotals = useMemo(
     () =>
       codeReviewFiles.reduce(
         (total, file) => {
-          const stats = reviewDiffs.get(file.path) ?? emptyParsedDiff;
-          total.additions += stats.additions;
-          total.deletions += stats.deletions;
+          total.additions += file.additions;
+          total.deletions += file.deletions;
           return total;
         },
         { additions: 0, deletions: 0 },
       ),
-    [codeReviewFiles, reviewDiffs],
+    [codeReviewFiles],
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
@@ -3612,8 +3543,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     // The runner owns the ordering and the release, so a rejection here (queue
     // full, or the turn already ended) must not leave a phantom row behind.
     try {
-      const { prompt, attachedFiles } = submission;
-      await api.queueFollowUpTask({ taskId, prompt, attachedFiles });
+      const { prompt, attachedFiles, reviewFeedback } = submission;
+      // The queue stores plain prompt text, so pending review comments travel
+      // inside it the same way startTask and steerTask send them. The queued
+      // row re-parses the block to display the clean text plus a feedback chip.
+      await api.queueFollowUpTask({ taskId, prompt: appendReviewFeedback(prompt, reviewFeedback).trim(), attachedFiles });
       clearComposerInput();
       await syncQueuedPrompts(taskId);
     } catch (cause) {
@@ -5223,7 +5157,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   )}
                   {codeReviewFiles.length && reviewReadyForDisplay ? (
                     <ReviewSummaryCard
-                      diffs={reviewDiffs}
                       files={codeReviewFiles}
                       onOpenReview={(filePath) => openReviewPanel(filePath)}
                       totals={codeReviewTotals}
@@ -5606,7 +5539,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             ) : null}
             {activeQueuedPrompts.length ? (
               <div className="queuedPromptList" aria-label="Queued prompts">
-                {activeQueuedPrompts.map((item, index) => (
+                {activeQueuedPrompts.map((item, index) => {
+                  const visiblePrompt = visibleReviewPrompt(item.prompt);
+                  return (
                   <div className="queuedPrompt" key={item.id}>
                     <button
                       className="queuedPromptEdit"
@@ -5617,9 +5552,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       title="Edit queued prompt"
                     >
                       <span className="queuedPromptOrder">{index + 1}</span>
-                      <span className="queuedPromptText">{item.prompt}</span>
+                      <span className="queuedPromptText">{visiblePrompt.text || item.prompt}</span>
                       <Pencil className="queuedPromptEditIcon" aria-hidden="true" size={13} />
                     </button>
+                    {visiblePrompt.feedback.length ? (
+                      <button
+                        className="queuedPromptFeedback"
+                        type="button"
+                        onClick={() => {
+                          setReviewFeedbackPreview(visiblePrompt.feedback);
+                          setReviewFeedbackDialogOpen(true);
+                        }}
+                        aria-haspopup="dialog"
+                        title={`${visiblePrompt.feedback.length} review comment${visiblePrompt.feedback.length === 1 ? "" : "s"} attached`}
+                      >
+                        <MessageSquareText size={12} />
+                        <span>{visiblePrompt.feedback.length}</span>
+                      </button>
+                    ) : null}
                     {isGenerating ? (
                       <button
                         className="queuedPromptSteer"
@@ -5643,7 +5593,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       <Trash2 aria-hidden="true" size={13} />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
             <div className="promptInputShell">

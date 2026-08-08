@@ -272,7 +272,7 @@ test("skill previews render markdown content and source filters split system fro
   );
 });
 
-test("diff parsing, command aggregation, pending permissions, and timelines reflect real event streams", () => {
+test("command aggregation, pending permissions, and timelines reflect real event streams", () => {
   const {
     activitySummary,
     activityToolGroups,
@@ -285,16 +285,9 @@ test("diff parsing, command aggregation, pending permissions, and timelines refl
     commandSummary,
     compactBackendEvents,
     composerTimelineFromEvents,
-    formatDiffStats,
-    parseUnifiedDiff,
     pendingPermissionFromEvents,
     reconcileActivityDisclosureState,
   } = loadRenderer();
-
-  const diff = ["diff --git a/src/app.ts b/src/app.ts", "@@ -2,2 +2,3 @@", " const a = 1;", "-old", "+new", "+next"].join("\n");
-  const parsed = parseUnifiedDiff(diff);
-  assert.equal(formatDiffStats(parsed), "+2 -1");
-  assert.deepEqual(JSON.parse(JSON.stringify(parsed.rows)).map((row) => row.kind), ["remove", "add", "add"]);
 
   const events = [
     { type: "user.message", taskId: "task-1", text: "Run tests", at: "2026-01-01T00:00:00.000Z" },

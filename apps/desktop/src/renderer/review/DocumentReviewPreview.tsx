@@ -72,10 +72,13 @@ export function DocumentReviewPreview({
     }
     return grouped;
   }, [sentences]);
-  const selectedBlockIndexes = sentences
-    .filter((sentence) => selected.has(sentence.id))
-    .map((sentence) => sentence.blockIndex);
-  const editorBlockIndex = selectedBlockIndexes.length ? Math.max(...selectedBlockIndexes) : -1;
+  const editorBlockIndex = useMemo(() => {
+    let latest = -1;
+    for (const sentence of sentences) {
+      if (selected.has(sentence.id) && sentence.blockIndex > latest) latest = sentence.blockIndex;
+    }
+    return latest;
+  }, [sentences, selected]);
   const toggleSentence = (id: string) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
