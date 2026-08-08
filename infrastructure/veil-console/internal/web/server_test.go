@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"umbratic-veil-console/internal/config"
+	"umbratic-veil-console/internal/rag"
 	"umbratic-veil-console/internal/state"
 	"umbratic-veil-console/internal/supervisor"
 )
@@ -43,7 +44,12 @@ func testServerWithTrustedOrigin(t *testing.T, trustedOrigin string) (*Server, f
 		store.Close()
 		t.Fatal(err)
 	}
-	server, err := New(startup, store, secrets, supervisor.New(binary, startup.VeilAddress))
+	corpus, err := rag.NewCorpus(store, filepath.Join(startup.StateDir, "documents"), "", config.DefaultRAG(), "")
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	server, err := New(startup, store, secrets, supervisor.New(binary, startup.VeilAddress), corpus)
 	if err != nil {
 		store.Close()
 		t.Fatal(err)

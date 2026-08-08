@@ -6,6 +6,7 @@
   <div class="nav-links">
     <a href="/" {{if eq .Title "Veil Console"}}aria-current="page"{{end}}>Overview</a>
     <a href="/access" {{if eq .Title "Management"}}aria-current="page"{{end}}>Management</a>
+    <a href="/documents" {{if eq .Title "Documents"}}aria-current="page"{{end}}>Documents</a>
     <a href="/settings" {{if eq .Title "Settings"}}aria-current="page"{{end}}>Settings</a>
   </div>
   <form class="signout" method="post" action="/logout" data-session-logout>

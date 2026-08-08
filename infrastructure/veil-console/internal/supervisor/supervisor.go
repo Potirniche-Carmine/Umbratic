@@ -56,6 +56,18 @@ type Supervisor struct {
 	entitlementPath   string
 	identityStorePath string
 	internalToken     string
+	rag               config.RAG
+	ragAPIKey         string
+}
+
+// SetRAG records the retrieval configuration handed to the next Veil start.
+// Retrieval settings reach Veil the same way every other setting does — through
+// the allowlisted child environment — so a change takes effect on restart and
+// nothing is written to disk for Veil to read.
+func (s *Supervisor) SetRAG(settings config.RAG, apiKey string) {
+	s.stateMu.Lock()
+	s.rag, s.ragAPIKey = settings, apiKey
+	s.stateMu.Unlock()
 }
 
 func New(binary, veilAddress string) *Supervisor {
@@ -102,7 +114,10 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	if running {
 		return errors.New("Veil is already running")
 	}
-	s.logs.SetSecrets(token, s.internalToken)
+	s.stateMu.RLock()
+	rag, ragAPIKey := s.rag, s.ragAPIKey
+	s.stateMu.RUnlock()
+	s.logs.SetSecrets(token, s.internalToken, ragAPIKey)
 	cmd := exec.Command(s.binary)
 	configureProcess(cmd)
 	healthToken := token
@@ -111,6 +126,7 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	} else {
 		cmd.Env = cfg.Environment(s.veilAddress, token)
 	}
+	cmd.Env = append(cmd.Env, rag.Environment(ragAPIKey)...)
 	cmd.Stdout, cmd.Stderr = s.logs, s.logs
 	if err := cmd.Start(); err != nil {
 		return errors.New("Veil did not start")

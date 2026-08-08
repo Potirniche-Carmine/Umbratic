@@ -27,7 +27,7 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run this installer with sudo." >&2
   exit 1
 fi
-for command in caddy systemctl install useradd; do
+for command in caddy systemctl install useradd curl sha256sum; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required command is missing: $command" >&2
     exit 1
@@ -41,10 +41,46 @@ trap 'rm -rf -- "$work_dir"' EXIT
 if ! id veil-console >/dev/null 2>&1; then
   useradd --system --home /var/lib/veil-console --shell /usr/sbin/nologin veil-console
 fi
+if ! id qdrant >/dev/null 2>&1; then
+  useradd --system --home /var/lib/qdrant --shell /usr/sbin/nologin qdrant
+fi
+
+# A re-run is an upgrade. Note what was already running so the new binaries
+# actually take over: `systemctl enable --now` starts a stopped unit and does
+# nothing at all to a running one, which used to leave the old process serving
+# from replaced binaries until someone rebooted.
+console_was_active=no
+if systemctl is-active --quiet veil-console 2>/dev/null; then
+  console_was_active=yes
+fi
 
 install -d -o root -g root -m 0755 /opt/umbratic/veil-console
 install -o root -g root -m 0755 "$script_dir/veil" "$script_dir/veil-console" /opt/umbratic/veil-console/
+install -o root -g root -m 0755 "$script_dir/umbratic-pdf" /opt/umbratic/veil-console/umbratic-pdf
 install -o root -g root -m 0644 "$script_dir/entitlement.json" /opt/umbratic/veil-console/entitlement.json
+install -o root -g root -m 0644 "$script_dir/VERSION" /opt/umbratic/veil-console/VERSION
+
+# Qdrant: the vector database behind the Documents tab. It ships in this zip
+# rather than being downloaded here, so an install is reproducible and works on
+# a box with no route to GitHub.
+install -d -o root -g root -m 0755 /opt/umbratic/qdrant
+install -o root -g root -m 0755 "$script_dir/qdrant" /opt/umbratic/qdrant/qdrant
+install -d -o qdrant -g qdrant -m 0700 /var/lib/qdrant
+install -d -o veil-console -g veil-console -m 0700 /var/lib/veil-console
+install -d -o root -g root -m 0755 /etc/qdrant
+
+qdrant_key_file=/var/lib/veil-console/qdrant-api-key
+if [[ ! -s "$qdrant_key_file" ]]; then
+  install -o veil-console -g veil-console -m 0600 /dev/null "$qdrant_key_file"
+  head -c 32 /dev/urandom | sha256sum | cut -d' ' -f1 >"$qdrant_key_file"
+fi
+chown veil-console:veil-console "$qdrant_key_file"
+chmod 600 "$qdrant_key_file"
+qdrant_api_key="$(cat "$qdrant_key_file")"
+sed -e "s|@@QDRANT_API_KEY@@|$qdrant_api_key|g" \
+  "$script_dir/qdrant-config.yaml.template" >"$work_dir/qdrant-config.yaml"
+install -o qdrant -g qdrant -m 0600 "$work_dir/qdrant-config.yaml" /etc/qdrant/config.yaml
+install -o root -g root -m 0644 "$script_dir/qdrant.service.template" /etc/systemd/system/qdrant.service
 
 bash "$script_dir/render-production-config.sh" \
   "$dns_name" "$work_dir" "$https_port" "$console_port" "$veil_port"
@@ -62,7 +98,25 @@ fi
 
 caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
+systemctl enable --now qdrant
+
+qdrant_ready=no
+for _ in $(seq 1 60); do
+  if curl --fail --silent --max-time 2 http://127.0.0.1:6333/readyz >/dev/null 2>&1; then
+    qdrant_ready=yes
+    break
+  fi
+  sleep 1
+done
+if [[ "$qdrant_ready" != yes ]]; then
+  echo "Qdrant did not become ready. Check: journalctl -u qdrant" >&2
+  exit 1
+fi
+
 systemctl enable --now veil-console
+if [[ "$console_was_active" == yes ]]; then
+  systemctl restart veil-console
+fi
 systemctl reload caddy
 
 if [[ "$https_port" == 443 ]]; then
@@ -77,6 +131,8 @@ printf '  ssh -N -L %s:127.0.0.1:%s USER@SERVER\n' "$console_port" "$console_por
 printf 'Then open: http://127.0.0.1:%s/setup\n' "$console_port"
 printf 'Read the one-time setup code with:\n  sudo cat /run/veil-console/setup-code\n'
 printf '\nOllama or vLLM must run locally before you configure Veil.\n'
+printf 'To answer from company documents, open Documents in Console, set an\n'
+printf 'embedding runtime, and upload files. Qdrant runs on 127.0.0.1:6333.\n'
 printf '\nSECURITY: This installer does not change your firewall or cloud security group.\n'
 printf 'Restrict the Veil HTTPS port to your VPN or approved desktop IP addresses.\n'
 printf 'Never publish the private Console, Veil, Ollama, or vLLM ports.\n'

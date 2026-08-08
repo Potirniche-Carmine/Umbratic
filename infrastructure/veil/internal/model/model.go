@@ -55,6 +55,12 @@ type ClientConfig struct {
 	BaseURL       string
 	ContextLength int
 	Timeout       time.Duration
+	// EmbeddingBaseURL points at the runtime that serves `/v1/embeddings`. It
+	// is a second instance rather than the chat one, because a vLLM process
+	// serves exactly one model. Empty means retrieval is not configured, and
+	// Embed refuses rather than guessing an endpoint.
+	EmbeddingBaseURL string
+	EmbeddingModel   string
 }
 
 type Client struct {
@@ -65,6 +71,8 @@ type Client struct {
 	generateEndpoint string
 	showEndpoint     string
 	tokenizeEndpoint string
+	embedEndpoint    string
+	embedModel       string
 	contextLength    int
 	client           *http.Client
 	prefixTokens     prefixTokenCache
@@ -153,6 +161,14 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		}
 	}
 
+	embedEndpoint := ""
+	if strings.TrimSpace(cfg.EmbeddingBaseURL) != "" {
+		embedEndpoint, err = providerEndpointURL(cfg.EmbeddingBaseURL, "", "v1/embeddings")
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 180 * time.Second
@@ -165,9 +181,52 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		generateEndpoint: generateEndpoint,
 		showEndpoint:     showEndpoint,
 		tokenizeEndpoint: tokenizeEndpoint,
+		embedEndpoint:    embedEndpoint,
+		embedModel:       strings.TrimSpace(cfg.EmbeddingModel),
 		contextLength:    cfg.ContextLength,
 		client:           hardenedHTTPClient(timeout),
 	}, nil
+}
+
+// Embed returns one vector for one query string. It exists for retrieval, which
+// runs inside a chat request under a short budget, so the caller's context
+// deadline — not the client timeout — is what bounds it in practice.
+func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	if c.embedEndpoint == "" || c.embedModel == "" {
+		return nil, errors.New("no embedding runtime is configured")
+	}
+	resp, err := c.postJSON(ctx, c.embedEndpoint, map[string]any{
+		"model": c.embedModel,
+		"input": []string{text},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
+	}
+	var decoded struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&decoded); err != nil {
+		return nil, ProviderError{Kind: ProviderFailureInvalidResponse}
+	}
+	if len(decoded.Data) == 0 || len(decoded.Data[0].Embedding) == 0 {
+		return nil, ProviderError{Kind: ProviderFailureInvalidResponse}
+	}
+	return decoded.Data[0].Embedding, nil
+}
+
+// HardenedHTTPClient is the only client shape Veil uses for outbound calls to
+// services on the box: no proxy, no redirects, and a dialer that refuses any
+// address outside loopback and private ranges. Retrieval reuses it so the
+// vector database is reached under exactly the same rules as the runtime.
+func HardenedHTTPClient(timeout time.Duration) *http.Client {
+	return hardenedHTTPClient(timeout)
 }
 
 func hardenedHTTPClient(timeout time.Duration) *http.Client {

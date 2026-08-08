@@ -38,6 +38,7 @@ type Config struct {
 	RequestTimeout         time.Duration
 	StreamIdleTimeout      time.Duration
 	MaxBodyBytes           int64
+	RAG                    RAG
 	// Networks whose X-Forwarded-For header may be believed. Empty by default,
 	// so an unconfigured deployment keys rate limits on the immediate peer
 	// rather than on a header any client can forge.
@@ -134,6 +135,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	ragConfig, err := loadRAG()
+	if err != nil {
+		return Config{}, err
+	}
+
 	var generation model.GenerationProfile
 	if mode == model.ModeLocal {
 		generation = model.LocalGenerationProfile(maxOutputTokens)
@@ -170,6 +176,7 @@ func Load() (Config, error) {
 		RequestTimeout:         requestTimeout,
 		StreamIdleTimeout:      streamIdleTimeout,
 		MaxBodyBytes:           maxBodyBytes,
+		RAG:                    ragConfig,
 	}
 
 	if cfg.AuthToken == "" {

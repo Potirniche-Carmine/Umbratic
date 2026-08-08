@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"umbratic-veil-console/internal/config"
 	"umbratic-veil-console/internal/entitlement"
+	"umbratic-veil-console/internal/rag"
 	"umbratic-veil-console/internal/state"
 	"umbratic-veil-console/internal/supervisor"
 	"umbratic-veil-console/internal/web"
@@ -68,7 +70,25 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	console, err := web.New(startup, store, secrets, process)
+	ragSettings, err := store.RAGSettings(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	// The Qdrant key is written by the installer into the Console state
+	// directory with 0600 permissions. It never enters console.db, and it
+	// reaches Veil only through the child environment.
+	corpus, err := rag.NewCorpus(
+		store,
+		filepath.Join(startup.StateDir, "documents"),
+		pdfExtractorPath(startup.VeilBinary),
+		ragSettings,
+		readQdrantAPIKey(startup.StateDir),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	process.SetRAG(ragSettings, readQdrantAPIKey(startup.StateDir))
+	console, err := web.New(startup, store, secrets, process, corpus)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -80,6 +100,7 @@ func main() {
 	shutdownSignal, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()
 	go console.StartLastKnownGood(shutdownSignal)
+	go corpus.Run(shutdownSignal)
 	go func() {
 		<-shutdownSignal.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -91,6 +112,26 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// pdfExtractorPath finds `umbratic-pdf` next to the Veil binary, which is where
+// the release zip installs it. An absent extractor is not fatal: every other
+// document type still indexes, and a PDF upload fails with a clear reason.
+func pdfExtractorPath(veilBinary string) string {
+	candidate := filepath.Join(filepath.Dir(veilBinary), "umbratic-pdf")
+	info, err := os.Lstat(candidate)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return candidate
+}
+
+func readQdrantAPIKey(stateDir string) string {
+	payload, err := os.ReadFile(filepath.Join(stateDir, "qdrant-api-key"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(payload))
 }
 
 func announceSetup(startup config.Startup, code string) {

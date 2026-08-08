@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -127,13 +128,31 @@ func providerRequest(ctx context.Context, cfg config.Veil, endpoint string, body
 	return payload, nil
 }
 
+// providerPath joins a configured base path with an endpoint path without
+// repeating the part they share. The overlap is measured in whole segments:
+// matching only the endpoint's parent directory meant a base of `/v1` joined
+// `/v1/models` correctly but turned `/v1/chat/completions` into
+// `/v1/v1/chat/completions`, so the generation probes 404'd on the default
+// configuration while the model listing looked fine.
 func providerPath(basePath, endpoint string) string {
-	basePath = strings.TrimRight(basePath, "/")
-	lastSlash := strings.LastIndex(endpoint, "/")
-	if lastSlash > 0 && strings.HasSuffix(basePath, endpoint[:lastSlash]) {
-		return basePath + endpoint[lastSlash:]
+	baseSegments := pathSegments(basePath)
+	endpointSegments := pathSegments(endpoint)
+	overlap := min(len(baseSegments), len(endpointSegments))
+	for ; overlap > 0; overlap-- {
+		if slices.Equal(baseSegments[len(baseSegments)-overlap:], endpointSegments[:overlap]) {
+			break
+		}
 	}
-	return basePath + endpoint
+	joined := append(baseSegments, endpointSegments[overlap:]...)
+	return "/" + strings.Join(joined, "/")
+}
+
+func pathSegments(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
 }
 
 func collectModels(payload []byte) []string {
