@@ -19,6 +19,14 @@ export const veilFeature = {
   tolerantBody: "chat.tolerant_body",
   telemetryOpenVocabulary: "telemetry.open_vocabulary",
   orientPreviousResponse: "orient.previous_response",
+  /**
+   * The server retrieves company documents for the request's route and injects
+   * them as cited untrusted context. Nothing is sent to earn this: it is
+   * entirely server-side, and the name exists so a desktop can say that answers
+   * may cite company documents on this server and stay silent on one where they
+   * cannot.
+   */
+  rag: "rag",
 } as const;
 
 export type VeilFeature = (typeof veilFeature)[keyof typeof veilFeature];

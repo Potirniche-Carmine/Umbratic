@@ -138,6 +138,7 @@ import {
   matchHighlightSegments,
   parseMarkdown,
   rankSkillMatches,
+  isEscapedMarkdownAt,
   stabilizeStreamingInlineText,
   type MarkdownBlock,
 } from "./composerText";
@@ -145,6 +146,8 @@ import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
+import { safeExternalUrl } from "../shared/externalLink";
+import { InlineLink, readMarkdownLink } from "./inlineLink";
 import { appendTaskEvent, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
 import {
   responseFeedbackReasons,
@@ -481,14 +484,6 @@ function renderPlainInlineText(text: string, keyPrefix: string, options?: Review
   return text
     .split(/(@[A-Za-z0-9][A-Za-z0-9._/-]*|(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})/g)
     .map((part, index) => renderReferenceToken(part, `${keyPrefix}-ref-${index}`, options));
-}
-
-function isEscapedMarkdownAt(text: string, index: number): boolean {
-  let slashCount = 0;
-  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
-    slashCount += 1;
-  }
-  return slashCount % 2 === 1;
 }
 
 function findClosingBacktickRun(text: string, startIndex: number, runLength: number): number {
@@ -1378,6 +1373,26 @@ export function renderInlineMarkdown(text: string, options?: ReviewReferenceOpti
       if (closingIndex >= 0) {
         pushCode(text.slice(endOfRun, closingIndex));
         index = closingIndex + runLength - 1;
+        continue;
+      }
+    }
+    if (char === "[" && !isEscapedMarkdownAt(text, index)) {
+      const link = readMarkdownLink(text, index);
+      if (link) {
+        const safeUrl = safeExternalUrl(link.url);
+        if (safeUrl) {
+          pushFormatted(
+            <InlineLink href={safeUrl} key={`link-${keyIndex}`}>
+              {renderInlineMarkdown(link.label, options)}
+            </InlineLink>,
+          );
+          index = link.end;
+          continue;
+        }
+        // An unsafe or unparseable URL is left exactly as written. Rendering
+        // just the label would hide where a hostile link points.
+        plain += text.slice(index, link.end + 1);
+        index = link.end;
         continue;
       }
     }

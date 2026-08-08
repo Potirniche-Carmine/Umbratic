@@ -663,6 +663,12 @@ export type DesktopApi = {
     comment?: string;
   }): Promise<void>;
   setWindowChromeTheme(theme: "dark" | "light"): Promise<{ ok: true }>;
+  /**
+   * Opens a link from a chat reply in the user's browser. The URL comes from
+   * model output, so the main process re-checks the scheme itself and answers
+   * `{ ok: false }` for anything it will not open.
+   */
+  openExternal(input: { url: string }): Promise<{ ok: boolean }>;
   onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
 };
 
@@ -745,6 +751,7 @@ export const desktopIpcChannels = {
   cancelTask: "umbratic:cancel-task",
   setResponseFeedback: "umbratic:set-response-feedback",
   setWindowChromeTheme: "umbratic:set-window-chrome-theme",
+  openExternal: "umbratic:open-external",
 } as const satisfies Record<Exclude<keyof DesktopApi, "onBackendEvent">, string>;
 
 type DesktopIpcMethod = keyof typeof desktopIpcChannels;

@@ -1,0 +1,153 @@
+.corpus-counts {
+  color: var(--faint);
+  font-size: 0.78rem;
+  font-weight: 560;
+}
+
+.route-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.upload-form {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.upload-form input[type="file"] {
+  flex: 1 1 18rem;
+  min-width: 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--control-radius);
+  color: var(--muted);
+  background: var(--control);
+  font-size: 0.78rem;
+}
+
+.document-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.document-table th {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 0.72rem;
+  font-weight: 620;
+  text-align: left;
+}
+
+.document-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.document-error {
+  display: block;
+  color: #ff9da6;
+  font-size: 0.7rem;
+  font-weight: 520;
+}
+
+.status {
+  padding: 0.14rem 0.5rem;
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 620;
+}
+
+.status-indexed {
+  color: var(--green);
+}
+
+.status-failed {
+  color: var(--red);
+}
+
+.status-processing {
+  color: var(--amber);
+}
+
+.document-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.document-actions form {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.document-actions select {
+  min-height: 32px;
+  padding: 0 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  color: var(--text);
+  background: var(--control);
+  font-size: 0.73rem;
+}
+
+.checkbox-field {
+  align-content: center;
+  grid-auto-flow: column;
+  grid-template-columns: auto 1fr;
+  justify-content: start;
+  gap: 0.6rem;
+}
+
+.checkbox-field input {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--blue);
+}
+
+.text-button {
+  min-height: 32px;
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.73rem;
+}
+
+.text-button:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.danger-text,
+.danger-text:hover {
+  color: #ff9da6;
+}
+
+@media (max-width: 720px) {
+  .document-table thead {
+    display: none;
+  }
+
+  .document-table,
+  .document-table tbody,
+  .document-table tr,
+  .document-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .document-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

@@ -19,6 +19,7 @@ import {
   MenuItemConstructorOptions,
   session,
 } from "electron";
+import { openExternalLink } from "./externalLinks";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -409,6 +410,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     setResponseFeedback: (input) => setResponseFeedback(input),
     setWindowChromeTheme: (input) =>
       setWindowChromeTheme(input === "light" ? "light" : "dark"),
+    openExternal: (input) => openExternalLink(input?.url),
   };
 }
 

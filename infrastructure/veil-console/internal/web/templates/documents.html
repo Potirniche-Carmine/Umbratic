@@ -1,0 +1,146 @@
+{{define "documents.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/favicon.ico?v=10">
+  <link rel="stylesheet" href="/assets/style.css?v=10">
+  <link rel="stylesheet" href="/assets/documents.css?v=1">
+  <script defer src="/assets/console.js?v=11"></script>
+</head>
+<body>
+<main class="app-shell">
+  {{template "topbar" .}}
+  <div class="page">
+    <header class="page-header">
+      <h1>Documents</h1>
+      <span class="corpus-counts">{{.Corpus.Documents}} of {{.Corpus.MaxDocs}} documents · {{.Corpus.Chunks}} of {{.Corpus.MaxChunks}} chunks</span>
+    </header>
+
+    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+    {{if not .Corpus.Configured}}<p class="banner notice" role="status">Set an embedding runtime below to index uploads.</p>{{end}}
+
+    {{range .Corpus.Sections}}
+    <section class="panel route-panel">
+      <div class="section-heading">
+        <h2>{{.Label}}</h2>
+        <span>{{len .Documents}} documents</span>
+      </div>
+
+      <form class="upload-form" method="post" action="/documents/upload" enctype="multipart/form-data">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="route" value="{{.Route}}">
+        <input type="file" name="document" accept=".pdf,.docx,.pptx,.xlsx,.md,.txt" required>
+        <button class="button secondary" type="submit">Upload</button>
+      </form>
+
+      {{if .Documents}}
+      <table class="document-table">
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Status</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
+        </thead>
+        <tbody>
+          {{range .Documents}}
+          <tr>
+            <td>{{.Name}}{{if .Error}}<small class="document-error">{{.Error}}</small>{{end}}</td>
+            <td>{{.Kind}}</td>
+            <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
+            <td>{{.ChunkCount}}</td>
+            <td>{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+            <td class="document-actions">
+              <form method="post" action="/documents/{{.ID}}/retag">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                <select name="route" aria-label="Route for {{.Name}}">
+                  {{$current := .Route}}
+                  {{range $.Routes}}<option value="{{.}}" {{if eq . $current}}selected{{end}}>{{.}}</option>{{end}}
+                </select>
+                <button class="text-button" type="submit">Move</button>
+              </form>
+              <form method="post" action="/documents/{{.ID}}/reindex">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                <button class="text-button" type="submit">Re-index</button>
+              </form>
+              <form method="post" action="/documents/{{.ID}}/delete">
+                <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                <button class="text-button danger-text" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{end}}
+    </section>
+    {{end}}
+
+    <form class="settings-form" method="post">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Retrieval</h2>
+          {{if gt .RAG.Dimension 0}}<span>{{.RAG.Dimension}} dimensions</span>{{end}}
+        </div>
+
+        <div class="field-grid">
+          <label class="field checkbox-field">
+            <input type="checkbox" name="rag_enabled" {{if .RAG.Enabled}}checked{{end}}>
+            <span>Answer with company documents</span>
+          </label>
+          <label class="field">
+            <span>Embedding runtime URL</span>
+            <input type="url" name="embedding_base_url" value="{{.RAG.EmbeddingBaseURL}}" required>
+          </label>
+          <label class="field">
+            <span>Embedding model</span>
+            <input name="embedding_model" value="{{.RAG.EmbeddingModel}}" maxlength="256" placeholder="Qwen/Qwen3-Embedding-0.6B">
+          </label>
+          <label class="field">
+            <span>Vector database URL</span>
+            <input type="url" name="vector_base_url" value="{{.RAG.VectorBaseURL}}" required>
+          </label>
+        </div>
+
+        <details class="disclosure">
+          <summary><strong>Advanced</strong><span class="disclosure-mark" aria-hidden="true"></span></summary>
+          <div class="field-grid advanced-grid">
+            <label class="field">
+              <span>Collection</span>
+              <input name="collection" value="{{.RAG.Collection}}" maxlength="64" required>
+            </label>
+            <label class="field">
+              <span>Results per request</span>
+              <input type="number" name="top_k" value="{{.RAG.TopK}}" min="1" max="32" required>
+            </label>
+            <label class="field">
+              <span>Injected context</span>
+              <div class="input-suffix">
+                <input type="number" name="max_injected_bytes" value="{{.RAG.MaxInjectedBytes}}" min="1024" max="262144" required>
+                <span>bytes</span>
+              </div>
+            </label>
+            <label class="field">
+              <span>Retrieval timeout</span>
+              <input name="rag_timeout" value="{{.RAG.Timeout}}" required>
+            </label>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel apply-panel">
+        <label class="field password-field">
+          <span>Owner password</span>
+          <input type="password" name="password" autocomplete="current-password" {{if .PasswordError}}aria-invalid="true" aria-describedby="password-error"{{end}}>
+          {{if .PasswordError}}<small class="field-error" id="password-error" role="alert">Owner password is incorrect.</small>{{end}}
+        </label>
+        <div class="apply-actions">
+          <button class="button secondary" formaction="/documents/settings/test" type="submit" formnovalidate>Test runtime</button>
+          <button class="button primary" formaction="/documents/settings" type="submit">Save and restart</button>
+        </div>
+      </section>
+    </form>
+  </div>
+</main>
+</body>
+</html>{{end}}

@@ -42,44 +42,6 @@ const (
 	SessionAbsoluteTimeout = time.Hour
 )
 
-const schema = `
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-CREATE TABLE IF NOT EXISTS owner (
-  id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT NOT NULL UNIQUE,
-  password_verifier TEXT NOT NULL, created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS setup (
-  id INTEGER PRIMARY KEY CHECK (id = 1), token_hash BLOB NOT NULL,
-  expires_at INTEGER NOT NULL, used_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token_hash BLOB PRIMARY KEY, username TEXT NOT NULL, csrf_hash BLOB NOT NULL,
-  created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL, expires_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS configurations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT NOT NULL,
-  provider_base_url TEXT NOT NULL, model TEXT NOT NULL,
-  context_length INTEGER NOT NULL, max_output_tokens INTEGER NOT NULL,
-  temperature REAL NOT NULL, top_p REAL NOT NULL,
-  reasoning_effort TEXT NOT NULL, thinking_token_budget INTEGER,
-  parallel_tool_calls INTEGER NOT NULL,
-  max_concurrent_requests INTEGER NOT NULL,
-  max_concurrent_requests_per_user INTEGER NOT NULL,
-  queue_timeout_ns INTEGER NOT NULL,
-  model_timeout_ns INTEGER NOT NULL, request_timeout_ns INTEGER NOT NULL,
-  max_body_bytes INTEGER NOT NULL, created_at INTEGER NOT NULL,
-  CHECK (status IN ('pending','current','previous'))
-);
-CREATE UNIQUE INDEX IF NOT EXISTS one_current_configuration ON configurations(status) WHERE status = 'current';
-CREATE UNIQUE INDEX IF NOT EXISTS one_pending_configuration ON configurations(status) WHERE status = 'pending';
-CREATE TABLE IF NOT EXISTS audit_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at INTEGER NOT NULL,
-  event TEXT NOT NULL, outcome TEXT NOT NULL
-);
-`
-
 func Open(dir string) (*Store, error) {
 	if err := secureDirectory(dir); err != nil {
 		return nil, err
@@ -97,11 +59,7 @@ func Open(dir string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	store := &Store{db: db, dir: dir, lockFile: lockFile}
-	if err := migrateConfigurations(db); err != nil {
-		store.Close()
-		return nil, fmt.Errorf("migrate Console configuration schema: %w", err)
-	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		store.Close()
 		return nil, fmt.Errorf("initialize Console database: %w", err)
 	}
@@ -112,32 +70,6 @@ func Open(dir string) (*Store, error) {
 		}
 	}
 	return store, nil
-}
-
-func migrateConfigurations(db *sql.DB) error {
-	var tableName string
-	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='configurations'`).Scan(&tableName)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var protocolCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('configurations') WHERE name='protocol'`).Scan(&protocolCount); err != nil {
-		return err
-	}
-	var temperatureCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('configurations') WHERE name='temperature'`).Scan(&temperatureCount); err != nil {
-		return err
-	}
-	if protocolCount == 0 && temperatureCount > 0 {
-		return nil
-	}
-	if _, err := db.Exec(`DROP TABLE IF EXISTS configurations`); err != nil {
-		return err
-	}
-	return nil
 }
 
 func secureDirectory(dir string) error {

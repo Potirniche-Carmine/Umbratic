@@ -314,6 +314,12 @@
   opacity: 1;
 }
 
+/* The Working header is the run narrating itself, exactly like the opening
+   sentence and the asides between rounds of work. It used to be set two steps
+   heavier and a shade brighter than that narration, so "Worked for 2 seconds"
+   read as a heading dropped between two quiet status lines. It now takes the
+   narration's own type — same size, same colour, same weight — and keeps only
+   what earns its place as a control: the chevron, and a brighter hover. */
 .activityHeader {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 14px;
@@ -322,16 +328,16 @@
   width: 100%;
   min-height: 29px;
   padding: 0;
-  color: color-mix(in srgb, var(--reasoning-text) 68%, var(--muted));
+  color: var(--faint);
   text-align: left;
-  font-size: 10.5px;
-  font-weight: 680;
+  font-size: 11px;
+  font-weight: 400;
   line-height: 1.4;
   letter-spacing: 0;
 }
 
 .activityHeader:hover {
-  color: color-mix(in srgb, var(--reasoning-text) 86%, var(--text));
+  color: color-mix(in srgb, var(--faint) 55%, var(--text));
 }
 
 .activityHeader:active,
@@ -354,11 +360,14 @@
   line-height: 1.4;
 }
 
+/* `strong` here is markup for the summary slot, not emphasis: the label is the
+   line's only content, so it inherits the header's weight rather than setting
+   its own. */
 .activityHeaderText strong {
   display: inline-flex;
   align-items: baseline;
   color: inherit;
-  font-weight: 720;
+  font-weight: inherit;
 }
 
 .activityDots {

@@ -23,6 +23,7 @@ import (
 	"umbratic-veil-console/internal/access"
 	"umbratic-veil-console/internal/auth"
 	"umbratic-veil-console/internal/config"
+	"umbratic-veil-console/internal/rag"
 	"umbratic-veil-console/internal/state"
 	"umbratic-veil-console/internal/supervisor"
 )
@@ -36,6 +37,7 @@ type Server struct {
 	secretsMu    sync.RWMutex
 	secrets      state.Secrets
 	supervisor   *supervisor.Supervisor
+	corpus       *rag.Corpus
 	access       *access.Client
 	templates    *template.Template
 	throttle     *loginThrottle
@@ -72,6 +74,9 @@ type pageData struct {
 	EnrollmentCode    string
 	EnrollmentExpires string
 	RetryAfterSeconds int
+	RAG               config.RAG
+	Corpus            documentsView
+	Routes            []string
 }
 
 type contextKey int
@@ -83,7 +88,7 @@ type requestSession struct {
 	Data  state.Session
 }
 
-func New(startup config.Startup, store *state.Store, secrets state.Secrets, process *supervisor.Supervisor) (*Server, error) {
+func New(startup config.Startup, store *state.Store, secrets state.Secrets, process *supervisor.Supervisor, corpus *rag.Corpus) (*Server, error) {
 	templates, err := template.ParseFS(content, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -107,11 +112,13 @@ func New(startup config.Startup, store *state.Store, secrets state.Secrets, proc
 		http.Error(w, "request origin is invalid", http.StatusForbidden)
 	}))
 	return &Server{
-		startup: startup, store: store, secrets: secrets, supervisor: process,
+		startup: startup, store: store, secrets: secrets, supervisor: process, corpus: corpus,
 		access:    access.NewClient(startup.VeilAddress, secrets.ControlToken),
 		templates: templates, throttle: newLoginThrottle(), crossOrigin: crossOrigin,
 	}, nil
 }
+
+func (s *Server) qdrantAPIKey() string { return s.corpus.VectorAPIKey() }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -119,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /assets/style.css", s.style)
 	mux.HandleFunc("GET /assets/access.css", s.accessStyle)
 	mux.HandleFunc("GET /assets/settings.css", s.settingsStyle)
+	mux.HandleFunc("GET /assets/documents.css", s.documentsStyle)
 	mux.HandleFunc("GET /assets/console.js", s.script)
 	mux.HandleFunc("GET /assets/umbratic-icon.png", s.logo)
 	mux.HandleFunc("GET /favicon.ico", s.favicon)
@@ -135,6 +143,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /veil/start", s.requireSession(http.HandlerFunc(s.veilStart)))
 	mux.Handle("POST /veil/stop", s.requireSession(http.HandlerFunc(s.veilStop)))
 	mux.Handle("POST /veil/restart", s.requireSession(http.HandlerFunc(s.veilRestart)))
+	mux.Handle("GET /documents", s.requireSession(http.HandlerFunc(s.documentsPage)))
+	mux.Handle("POST /documents/upload", s.requireSession(http.HandlerFunc(s.documentsUpload)))
+	mux.Handle("POST /documents/settings/test", s.requireSession(http.HandlerFunc(s.documentsSettingsTest)))
+	mux.Handle("POST /documents/settings", s.requireSession(http.HandlerFunc(s.documentsSettingsApply)))
+	mux.Handle("POST /documents/{document_id}/delete", s.requireSession(http.HandlerFunc(s.documentDelete)))
+	mux.Handle("POST /documents/{document_id}/retag", s.requireSession(http.HandlerFunc(s.documentRetag)))
+	mux.Handle("POST /documents/{document_id}/reindex", s.requireSession(http.HandlerFunc(s.documentReindex)))
 	mux.Handle("GET /access", s.requireSession(http.HandlerFunc(s.accessPage)))
 	mux.Handle("POST /access/organization", s.requireSession(http.HandlerFunc(s.accessOrganization)))
 	mux.Handle("POST /access/users", s.requireSession(http.HandlerFunc(s.accessCreateUser)))
@@ -154,7 +169,8 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		if r.URL.Path != "/healthz" && r.URL.Path != "/assets/style.css" &&
-			r.URL.Path != "/assets/access.css" && r.URL.Path != "/assets/settings.css" {
+			r.URL.Path != "/assets/access.css" && r.URL.Path != "/assets/settings.css" &&
+			r.URL.Path != "/assets/documents.css" {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
@@ -205,8 +221,23 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 	})
 }
 
+// validateFormRequest is the single gate every state change passes through.
+// Multipart is accepted only on the document upload route: it is the one place
+// a file is expected, and allowing it everywhere would raise the body cap for
+// handlers that have no reason to read one.
 func (s *Server) validateFormRequest(w http.ResponseWriter, r *http.Request) error {
-	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if r.URL.Path != "/documents/upload" {
+			return errors.New("form content type is required")
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return errors.New("upload is invalid or too large")
+		}
+		return nil
+	}
+	if !strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
 		return errors.New("form content type is required")
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
@@ -800,77 +831,6 @@ func contextPresentation(value int) (int, string) {
 		return nearest, fmt.Sprintf("%dK tokens", value/1024)
 	}
 	return nearest, fmt.Sprintf("%d tokens", value)
-}
-
-func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = io.WriteString(w, "ok\n")
-}
-
-func (s *Server) style(w http.ResponseWriter, _ *http.Request) {
-	payload, err := content.ReadFile("assets/style.css")
-	if err != nil {
-		http.Error(w, "asset unavailable", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(payload)
-}
-
-func (s *Server) accessStyle(w http.ResponseWriter, _ *http.Request) {
-	payload, err := content.ReadFile("assets/access.css")
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	_, _ = w.Write(payload)
-}
-
-func (s *Server) settingsStyle(w http.ResponseWriter, _ *http.Request) {
-	payload, err := content.ReadFile("assets/settings.css")
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	_, _ = w.Write(payload)
-}
-
-func (s *Server) script(w http.ResponseWriter, _ *http.Request) {
-	payload, err := content.ReadFile("assets/console.js")
-	if err != nil {
-		http.Error(w, "asset unavailable", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(payload)
-}
-
-func (s *Server) logo(w http.ResponseWriter, _ *http.Request) {
-	payload, err := content.ReadFile("assets/umbratic-icon.png")
-	if err != nil {
-		http.Error(w, "asset unavailable", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(payload)
-}
-
-func (s *Server) favicon(w http.ResponseWriter, _ *http.Request) {
-	payload, err := content.ReadFile("assets/favicon.ico")
-	if err != nil {
-		http.Error(w, "asset unavailable", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "image/x-icon")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(payload)
 }
 
 func bodySizePresentation(value int64) (int, string) {

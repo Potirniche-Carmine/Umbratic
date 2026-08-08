@@ -25,10 +25,19 @@ var serverFeatures = []string{
 	"orient.previous_response",
 }
 
-// Features returns the advertised capability list. The slice is copied so a
-// caller cannot rewrite what this server claims to support.
-func Features() []string {
-	names := make([]string, len(serverFeatures))
-	copy(names, serverFeatures)
+// ragFeature is advertised only while retrieval is actually configured and
+// enabled. A name is a promise about behavior, and a server with no corpus
+// wired up cannot keep this one — so it says nothing rather than advertising a
+// capability that would silently do nothing.
+const ragFeature = "rag"
+
+// Features returns the advertised capability list. The slice is built fresh so
+// a caller cannot rewrite what this server claims to support.
+func Features(ragEnabled bool) []string {
+	names := make([]string, 0, len(serverFeatures)+1)
+	names = append(names, serverFeatures...)
+	if ragEnabled {
+		names = append(names, ragFeature)
+	}
 	return names
 }

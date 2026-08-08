@@ -103,6 +103,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good", comment: "Useful." }], "umbratic:set-response-feedback"],
     ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: null }], "umbratic:set-response-feedback"],
     ["setWindowChromeTheme", ["dark"], "umbratic:set-window-chrome-theme"],
+    ["openExternal", [{ url: "https://example.com/" }], "umbratic:open-external"],
   ];
 
   for (const [method, args, channel, explicitInput] of cases) {

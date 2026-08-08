@@ -63,6 +63,9 @@
   animation: streamingCaretBlink 1s steps(2, start) infinite;
 }
 
+/* A tool row is the same register as the header above it and the narration
+   around the block: the run reporting on itself. Setting it heavier than that
+   narration made a list of file reads compete with the answer for attention. */
 .activityToolToggle {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr) 11px;
@@ -71,20 +74,20 @@
   width: 100%;
   min-height: 20px;
   padding: 0;
-  color: color-mix(in srgb, var(--text) 66%, var(--muted));
-  font-size: 10.5px;
-  line-height: 1.25;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.35;
   text-align: left;
 }
 
 .activityToolToggle:hover {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  color: color-mix(in srgb, var(--faint) 55%, var(--text));
 }
 
 .activityToolToggle span {
   min-width: 0;
   overflow: hidden;
-  font-weight: 660;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

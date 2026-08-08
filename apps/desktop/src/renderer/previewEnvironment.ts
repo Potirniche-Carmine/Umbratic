@@ -805,6 +805,9 @@ function createPreviewApi(): DesktopApi {
   cancelTask: async () => undefined,
   setResponseFeedback: async () => undefined,
   setWindowChromeTheme: async () => ({ ok: true }),
+  // The preview has no main process to hand a URL to, so a link click is a
+  // no-op rather than a broken promise.
+  openExternal: async () => ({ ok: false }),
   onBackendEvent: () => () => undefined,
   };
   return previewApi;

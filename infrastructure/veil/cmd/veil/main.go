@@ -24,10 +24,12 @@ func main() {
 	}
 
 	modelClient, err := model.NewClient(model.ClientConfig{
-		Mode:          cfg.Mode,
-		BaseURL:       cfg.ProviderBaseURL,
-		ContextLength: cfg.ContextLength,
-		Timeout:       cfg.ModelTimeout,
+		Mode:             cfg.Mode,
+		BaseURL:          cfg.ProviderBaseURL,
+		ContextLength:    cfg.ContextLength,
+		Timeout:          cfg.ModelTimeout,
+		EmbeddingBaseURL: cfg.RAG.EmbeddingBaseURL,
+		EmbeddingModel:   cfg.RAG.EmbeddingModel,
 	})
 	if err != nil {
 		log.Fatal(err)

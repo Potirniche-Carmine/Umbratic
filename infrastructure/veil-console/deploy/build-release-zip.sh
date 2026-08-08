@@ -86,12 +86,37 @@ entitlement_public_key="$(
   -ldflags "-X umbratic-veil-console/internal/entitlement.TrustedPublicKey=$entitlement_public_key" \
   -o "$bundle_dir/veil-console" ./cmd/veil-console)
 
+# The PDF extractor Console spawns for `.pdf` uploads. It is the same crate the
+# desktop already ships, built for the server target.
+(cd "$repo_root" && cargo build --locked --release --target x86_64-unknown-linux-gnu -p umbratic-pdf)
+install -m 0755 "$repo_root/target/x86_64-unknown-linux-gnu/release/umbratic-pdf" "$bundle_dir/umbratic-pdf"
+
+# Qdrant is fetched here, at build time, and verified against a pinned digest —
+# never downloaded by install.sh. That keeps an install reproducible, immune to
+# an upstream retag, and possible on a box with no route to GitHub.
+qdrant_version="1.19.0"
+qdrant_sha256="9ec667456443463eee390e43cd36988af6b730c6db807b4e39f57c303d0264a3"
+qdrant_archive="$work_dir/qdrant.tar.gz"
+curl --fail --location --silent --show-error --max-time 300 \
+  "https://github.com/qdrant/qdrant/releases/download/v${qdrant_version}/qdrant-x86_64-unknown-linux-musl.tar.gz" \
+  -o "$qdrant_archive"
+if ! echo "$qdrant_sha256  $qdrant_archive" | sha256sum --check --status; then
+  echo "The qdrant download does not match the pinned digest for ${qdrant_version}." >&2
+  exit 1
+fi
+tar -xzf "$qdrant_archive" -C "$work_dir" qdrant
+install -m 0755 "$work_dir/qdrant" "$bundle_dir/qdrant"
+install -m 0644 "$script_dir/qdrant-config.yaml.template" "$bundle_dir/qdrant-config.yaml.template"
+install -m 0644 "$script_dir/qdrant.service.template" "$bundle_dir/qdrant.service.template"
+
+printf '%s\n' "$version" >"$bundle_dir/VERSION"
 install -m 0755 "$script_dir/bundle/install.sh" "$bundle_dir/install.sh"
 install -m 0755 "$script_dir/render-production-config.sh" "$bundle_dir/render-production-config.sh"
 install -m 0644 "$script_dir/veil-console.production.service.template" "$bundle_dir/veil-console.production.service.template"
 install -m 0644 "$script_dir/Caddyfile.template" "$bundle_dir/Caddyfile.template"
 install -m 0644 "$repo_root/infrastructure/veil-console/README.md" "$bundle_dir/README.md"
 
-(cd "$bundle_dir" && sha256sum veil veil-console entitlement.json install.sh >SHA256SUMS)
+(cd "$bundle_dir" && sha256sum veil veil-console umbratic-pdf qdrant entitlement.json install.sh \
+  qdrant-config.yaml.template qdrant.service.template VERSION >SHA256SUMS)
 (cd "$repo_root/infrastructure/veil-console" && go run ./cmd/bundle-zip "$bundle_dir" "$output_dir/$bundle_name.zip")
 printf '%s\n' "$output_dir/$bundle_name.zip"

@@ -115,6 +115,41 @@ Console does not expose a shell or a generic environment editor. It does not rea
 
 The Overview page shows **Start** when the supervised process is stopped and **Restart** when it is running. Both actions require the owner password. Restart operations are serialized, perform the normal configuration and health checks, and have a five-second server-side cooldown. Console does not define a paused state. If the child process exits, the next page load shows **Start**.
 
+## Documents and retrieval
+
+The **Documents** tab holds the company corpus. An administrator uploads files
+into one of four route sections — Engineering, Sales, Marketing, or All routes —
+and the section is the tag that decides who can retrieve them: a request to
+`/api/sales/chat` retrieves sales-tagged and all-tagged chunks and nothing else.
+
+Console owns ingestion. It stores the original under
+`/var/lib/veil-console/documents/`, extracts text (`.md` and `.txt` directly,
+`.docx`/`.pptx`/`.xlsx` with `archive/zip` and `encoding/xml`, `.pdf` by
+spawning the bundled `umbratic-pdf`), chunks it, embeds each chunk through the
+configured embedding runtime, and upserts the vectors into Qdrant on
+`127.0.0.1:6333`. One worker goroutine indexes one document at a time. The type
+of an upload is decided by its bytes, never by its file name, and files are
+capped at 25 MiB.
+
+Veil owns retrieval. On a chat request it embeds the question, searches the
+collection with the route filter, and appends the top chunks with their
+citations to the request's untrusted-context block. This is best-effort by
+design: if Qdrant or the embedding runtime is down, or the budget is exceeded,
+the request is served without retrieval and a counter moves on
+`/api/runtime/metrics` (`rag_injected`, `rag_skipped_unavailable`,
+`rag_empty_results`). Veil advertises the `rag` feature name on `/api/health`
+only while retrieval is enabled.
+
+Retrieval settings reach Veil the same way every other setting does — through
+the allowlisted child environment — so saving them restarts Veil. Uploading a
+document does not: it is searchable on the next chat request. Changing the
+embedding model re-embeds the whole corpus from the stored originals.
+
+```text
+Browser -> Console -> extract -> embed -> Qdrant 127.0.0.1:6333
+Desktop -> Veil -> embed query -> Qdrant (route filter) -> untrusted overlay -> vLLM
+```
+
 For a remote server, keep port `8177` closed and use an SSH tunnel:
 
 ```sh

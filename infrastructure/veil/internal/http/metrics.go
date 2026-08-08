@@ -39,6 +39,9 @@ func (s *Server) handleRuntimeMetrics(w http.ResponseWriter, r *http.Request) {
 	for name, value := range telemetry.DropCounters() {
 		payload[name] = value
 	}
+	for name, value := range s.retriever.Counters() {
+		payload[name] = value
+	}
 	switch {
 	case err != nil:
 		payload["runtime_state"] = "degraded"
