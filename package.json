@@ -13,7 +13,7 @@
     "packages/*"
   ],
   "overrides": {
-    "@electron/asar": "4.2.0",
+    "@electron/asar": "4.2.1",
     "@electron/get": {
       "undici": "7.29.0"
     },

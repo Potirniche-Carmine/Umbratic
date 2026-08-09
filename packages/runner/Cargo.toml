@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 axum = { version = "0.8.4", default-features = false, features = ["http1", "tokio"] }
-base64 = "0.22.1"
+base64 = "0.23.0"
 chrono = { version = "0.4.41", default-features = false, features = ["now"] }
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }
 globset = "0.4.16"
