@@ -53,6 +53,84 @@ enum RunOutcome {
     SafetyLimit,
 }
 
+/// The last sentence of `text`.
+///
+/// A terminator only counts when whitespace or the end of the text follows it,
+/// because assistant prose is full of file names: splitting "assets/site.js."
+/// on every period leaves "js" as the final sentence and loses the clause that
+/// actually mattered.
+fn last_sentence(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    for (index, character) in text.char_indices() {
+        if !matches!(character, '.' | '!' | '?' | '\n') {
+            continue;
+        }
+        let next = index + character.len_utf8();
+        let terminates = bytes
+            .get(next)
+            .is_none_or(|byte| byte.is_ascii_whitespace());
+        if terminates && text[next..].trim().is_empty() {
+            break;
+        }
+        if terminates {
+            start = next;
+        }
+    }
+    text[start..].trim()
+}
+
+/// Does this final answer end by announcing a step it never took?
+///
+/// Deliberately narrow, because a false positive spends a whole round-trip
+/// arguing with a model that was already finished. Two independent signals must
+/// both appear **in the last sentence**: a first-person announcement of
+/// something still to come, and an inspection verb naming what that something
+/// is. "I am now confident the parser is correct." carries the first and not
+/// the second, so it is left alone; "I am now examining the main file." carries
+/// both.
+fn announces_unperformed_action(content: &str) -> bool {
+    const ANNOUNCEMENTS: [&str; 12] = [
+        "i will now",
+        "i'll now",
+        "i am now",
+        "i'm now",
+        "now i will",
+        "next, i will",
+        "next i will",
+        "i am going to",
+        "i'm going to",
+        "let me now",
+        "i will next",
+        "i will proceed",
+    ];
+    const INSPECTIONS: [&str; 14] = [
+        "examin",
+        "read",
+        "look",
+        "check",
+        "inspect",
+        "open",
+        "search",
+        "find",
+        "list",
+        "review",
+        "analyz",
+        "explor",
+        "verif",
+        "investigat",
+    ];
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // The announcement has to be how the answer *ends*. A plan stated up front
+    // and then carried out is exactly what a good turn looks like.
+    let last = last_sentence(trimmed).to_ascii_lowercase();
+    ANNOUNCEMENTS.iter().any(|phrase| last.contains(phrase))
+        && INSPECTIONS.iter().any(|verb| last.contains(verb))
+}
+
 fn set_run_outcome(summary: &mut Value, outcome: RunOutcome) {
     summary["outcome"] = serde_json::to_value(outcome).unwrap_or_else(|_| json!("completed"));
 }
@@ -585,6 +663,8 @@ pub async fn run_turn(
     // nothing twice is answering deliberately, and a second refusal would only
     // spend the turn budget on the same argument.
     let mut evidence_retried = false;
+    // Same once-only reasoning for the abandoned-plan refusal below.
+    let mut announcement_retried = false;
     let mut repeat_guard = RepeatGuard::default();
     let mut public_progress = PublicProgressSchedule::default();
     let mut step_index = 0_u32;
@@ -770,8 +850,47 @@ pub async fn run_turn(
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 continue;
             }
-            // Neither refusal applied, so the step stands and anything held for
-            // it is shown. The two branches above return without releasing,
+            // A turn that ends by announcing its next move never made it. A
+            // live repo_orient run stopped on "I am now examining the main
+            // JavaScript file", having called no tool for it — the user was
+            // left with a promise where the tour should have been. The plan is
+            // mid-flight rather than unstarted, so the fix is the opposite of
+            // the refusal above: finish it, do not restart it.
+            if orient.evidence_required
+                && !announcement_retried
+                && summary["toolCalls"].as_u64().unwrap_or(0) > 0
+                && announces_unperformed_action(&result.content)
+            {
+                announcement_retried = true;
+                let call = ToolCall {
+                    id: format!("abandoned-plan-{}", summary["turns"].as_u64().unwrap_or(0)),
+                    name: "announced_without_acting".into(),
+                    arguments: json!({}),
+                    index: 0,
+                };
+                let error = "That response ended by announcing a next step instead of taking it, and it carried no tool call, so the step never happened. Either call that tool now, or give the complete final answer from what the tools have already shown. Do not describe what you are about to do again.";
+                append_assistant_turn(
+                    &session,
+                    assistant_tool_message(std::slice::from_ref(&call)),
+                    &result,
+                )
+                .await;
+                session
+                    .messages
+                    .lock()
+                    .await
+                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
+                sink.emit(json!({
+                    "type": "orient.announcement_retry",
+                    "taskId": session.task_id,
+                    "bucket": orient.bucket(),
+                    "at": now_iso()
+                }));
+                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
+                continue;
+            }
+            // No refusal applied, so the step stands and anything held for
+            // it is shown. The branches above return without releasing,
             // which is what leaves a refused answer with no trace in the UI.
             release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {

@@ -950,3 +950,43 @@ async fn a_follow_up_never_joins_a_running_turn() {
     let queue = session.queue.lock().await;
     assert_eq!(queue.follow_up_count(), 1, "the follow-up is still queued");
 }
+
+/// The live failure: a repo_orient tour that ended on a promise. The user got
+/// "I am now examining the main JavaScript file" where the tour should have
+/// been, and the run settled as if that were the answer.
+#[test]
+fn an_answer_that_ends_on_an_announcement_is_recognized() {
+    assert!(announces_unperformed_action(
+        "The workspace is a simple static website. To provide more detail on how it is organized, \
+         I am now examining the main JavaScript file identified in the project graph, assets/site.js."
+    ));
+    assert!(announces_unperformed_action(
+        "I will now read src/store.ts."
+    ));
+    assert!(announces_unperformed_action(
+        "Next, I will search for the callers."
+    ));
+}
+
+/// A false positive costs a whole round-trip arguing with a model that had
+/// finished, so both signals must land in the final sentence.
+#[test]
+fn finished_answers_are_left_alone() {
+    // An announcement phrase with no inspection verb.
+    assert!(!announces_unperformed_action(
+        "I am now confident the parser handles every case."
+    ));
+    // An inspection verb with no announcement.
+    assert!(!announces_unperformed_action(
+        "The review found three issues worth checking."
+    ));
+    // A plan stated up front and then actually carried out: the answer ends on
+    // the finding, which is exactly the shape a good turn has.
+    assert!(!announces_unperformed_action(
+        "I will now read the store. The store keeps entries in memory and validates them on write."
+    ));
+    assert!(!announces_unperformed_action(""));
+    assert!(!announces_unperformed_action(
+        "This project is a static site with no build step."
+    ));
+}
