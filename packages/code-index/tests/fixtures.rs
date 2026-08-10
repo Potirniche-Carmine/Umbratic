@@ -164,3 +164,59 @@ fn windows_and_posix_builds_agree_on_path_identity() {
         assert!(!path.contains('\\'), "indexed path {path} must be POSIX");
     }
 }
+
+/// A file the turn created is part of the diff the review panel shows, but
+/// `git diff` says nothing about untracked files — so the highest-risk symbols
+/// in a brand new file were invisible to the ordering that exists to surface
+/// them. The index's own artifacts must stay out of that ordering.
+#[test]
+fn change_analysis_covers_new_files_but_not_the_index_it_writes() {
+    use std::process::Command;
+    use umbratic_code_index::analyze;
+
+    let directory = tempfile::tempdir().expect("temp dir");
+    let root = directory.path();
+    let git = |arguments: &[&str]| {
+        Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .output()
+            .expect("git runs")
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/store.ts"), "export function save() {}\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "base"]);
+
+    // An untracked new file, plus the artifact the producer itself writes.
+    fs::write(
+        root.join("src/auth.ts"),
+        "export function validateSessionToken(token: string) { return token.length > 8; }\n",
+    )
+    .unwrap();
+    let artifact = root.join(".umbratic/index/graph.json");
+    build::build(root, &artifact).expect("build succeeds");
+
+    let ranges = analyze::changed_ranges(root, "HEAD").expect("diff resolves");
+    assert!(
+        ranges.contains_key("src/auth.ts"),
+        "new file must be analyzed"
+    );
+    assert!(
+        !ranges.keys().any(|path| path.starts_with(".umbratic/")),
+        "the index must not rank its own artifacts: {:?}",
+        ranges.keys().collect::<Vec<_>>()
+    );
+
+    let graph: Graph = serde_json::from_slice(&fs::read(&artifact).unwrap()).unwrap();
+    let insights = analyze::insights(&graph, &ranges, "hash-1");
+    assert_eq!(insights.file_order, vec!["src/auth.ts".to_owned()]);
+    let first = insights.symbols.first().expect("a changed symbol");
+    assert_eq!(first.label, "validateSessionToken");
+    // Untested plus a security-shaped name is the top of the risk formula.
+    assert!(first.risk > 0.6, "risk was {}", first.risk);
+    assert!(!first.tested);
+}

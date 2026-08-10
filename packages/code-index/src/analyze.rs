@@ -11,7 +11,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    build::is_safe_git_ref,
+    build::{is_excluded_path, is_safe_git_ref},
     model::{Graph, write_atomic},
 };
 
@@ -85,7 +85,29 @@ pub fn changed_ranges(
     if !output.status.success() {
         return Err("git diff failed".to_owned());
     }
-    Ok(parse_diff(&String::from_utf8_lossy(&output.stdout)))
+    let mut ranges = parse_diff(&String::from_utf8_lossy(&output.stdout));
+    // `git diff` says nothing about untracked files, but a file the turn
+    // created is part of the diff the review panel shows — and a brand new
+    // file is exactly the one nobody has reviewed yet.
+    if let Ok(untracked) = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .current_dir(root)
+        .output()
+        && untracked.status.success()
+    {
+        for path in String::from_utf8_lossy(&untracked.stdout)
+            .split('\0')
+            // A workspace that has not gitignored `.umbratic/` would otherwise
+            // see the index's own files ranked into its review order.
+            .filter(|path| !path.is_empty() && !is_excluded_path(path))
+        {
+            ranges
+                .entry(path.to_owned())
+                .or_default()
+                .push((1, u64::MAX));
+        }
+    }
+    Ok(ranges)
 }
 
 pub fn parse_diff(diff: &str) -> BTreeMap<String, Vec<(u64, u64)>> {
