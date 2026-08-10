@@ -76,6 +76,70 @@ fn tool_finished_event(
     event
 }
 
+/// Enough to answer without a follow-up call, few enough that one evidence
+/// block cannot dominate the turn. Every truncation says so.
+const MAX_EVIDENCE_ITEMS: usize = 20;
+
+/// One compact line for an LSP location, a graph node, or a graph edge. The
+/// three shapes share a renderer because they share a purpose: name the thing
+/// and say where it is.
+fn evidence_item(item: &Value) -> String {
+    let text = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or_default();
+    // Graph edges: the relation and its evidence tier are the whole point.
+    if !text("relation").is_empty() {
+        // Node ids are long and structured; the last two segments (name and
+        // line) identify the endpoint without spending the turn's budget.
+        let trim = |id: &str| {
+            let mut tail: Vec<&str> = id.rsplit(':').take(2).collect();
+            tail.reverse();
+            tail.join(":")
+        };
+        return format!(
+            "{} {} -> {} ({})",
+            text("relation"),
+            trim(text("from")),
+            trim(text("to")),
+            text("confidence")
+        );
+    }
+    let location = item.get("location").unwrap_or(item);
+    let path = location
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let line = location
+        .get("startLine")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let name = [text("label"), text("name")]
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    let mut rendered = match (text("kind"), name) {
+        ("", "") => String::new(),
+        ("", name) => name.to_owned(),
+        (kind, "") => kind.to_owned(),
+        (kind, name) => format!("{kind} {name}"),
+    };
+    if !path.is_empty() {
+        if !rendered.is_empty() {
+            rendered.push_str(" — ");
+        }
+        rendered.push_str(path);
+        if line > 0 {
+            rendered.push_str(&format!(":{line}"));
+        }
+    }
+    if let Some(score) = item.get("score").and_then(Value::as_f64) {
+        rendered.push_str(&format!(" (score {score:.2})"));
+    }
+    if rendered.is_empty() {
+        "unnamed result".to_owned()
+    } else {
+        rendered
+    }
+}
+
 /// Renders structured evidence for the model. The typed payload stays in
 /// details; this is presentation only.
 fn evidence_text(evidence: &Value) -> String {
@@ -92,6 +156,18 @@ fn evidence_text(evidence: &Value) -> String {
             && !items.is_empty()
         {
             lines.push(format!("{label}: {}", items.len()));
+            // The count alone is not evidence. A model told "Locations: 1" has
+            // to go find the location itself, which is the tool chain these
+            // tools exist to remove — so render the items, bounded.
+            for item in items.iter().take(MAX_EVIDENCE_ITEMS) {
+                lines.push(format!("- {}", evidence_item(item)));
+            }
+            if items.len() > MAX_EVIDENCE_ITEMS {
+                lines.push(format!(
+                    "- … {} more not shown",
+                    items.len() - MAX_EVIDENCE_ITEMS
+                ));
+            }
         }
     }
     if let Some(markdown) = evidence.get("hoverMarkdown").and_then(Value::as_str) {
@@ -322,4 +398,67 @@ fn finish_failure_pending(name: &str, status: &str, code: &str, message: String)
     let mut result = ToolResult::failure(status, code, message);
     result.summary = name.to_owned();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // A count is not evidence. This is the regression that made the workspace
+    // graph useless in its first live run: the model was told "Nodes: 11" and
+    // nothing else, so it fell back to the ls-and-read chain the tool exists
+    // to replace.
+    #[test]
+    fn evidence_text_names_the_items_rather_than_only_counting_them() {
+        let rendered = evidence_text(&json!({
+            "summary": "Workspace graph contains 2 nodes.",
+            "nodes": [
+                {"id":"symbol:src/store.ts:function:save:5","kind":"function","label":"save",
+                 "location":{"path":"src/store.ts","startLine":5}},
+                {"id":"file:src/store.ts","kind":"file","label":"src/store.ts",
+                 "location":{"path":"src/store.ts","startLine":1}}
+            ],
+            "edges": [
+                {"id":"e1","from":"symbol:src/ledger.ts:function:recordEntry:5",
+                 "to":"symbol:src/store.ts:function:save:5","relation":"calls",
+                 "confidence":"inferred","evidence":"x",
+                 "source":{"path":"src/ledger.ts","startLine":6}}
+            ]
+        }));
+        assert!(rendered.contains("function save — src/store.ts:5"));
+        assert!(rendered.contains("calls recordEntry:5 -> save:5 (inferred)"));
+    }
+
+    #[test]
+    fn lsp_locations_render_their_paths_and_lines() {
+        let rendered = evidence_text(&json!({
+            "summary": "Found 1 definitions.",
+            "locations": [{"path":"src/a.ts","startLine":12,"kind":"function","name":"save"}]
+        }));
+        assert!(rendered.contains("function save — src/a.ts:12"));
+    }
+
+    #[test]
+    fn oversized_evidence_truncates_and_says_so() {
+        let nodes: Vec<Value> = (0..MAX_EVIDENCE_ITEMS + 5)
+            .map(|index| {
+                json!({"kind":"function","label":format!("f{index}"),
+                                "location":{"path":"src/a.ts","startLine":index + 1}})
+            })
+            .collect();
+        let rendered = evidence_text(&json!({"summary": "many", "nodes": nodes}));
+        assert!(rendered.contains("… 5 more not shown"));
+        assert!(!rendered.contains("f24 "));
+    }
+
+    #[test]
+    fn affected_scores_appear_on_the_rendered_line() {
+        let rendered = evidence_text(&json!({
+            "summary": "s",
+            "nodes": [{"kind":"function","label":"createUser","score":0.6,
+                       "location":{"path":"src/ledger.ts","startLine":5}}]
+        }));
+        assert!(rendered.contains("(score 0.60)"));
+    }
 }

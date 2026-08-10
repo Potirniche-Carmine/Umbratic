@@ -238,7 +238,13 @@ impl WorkspaceGraphService {
     }
 
     fn matching(index: &GraphIndex, query: &str, limit: usize) -> Vec<GraphNode> {
-        let query = query.to_ascii_lowercase();
+        let query = query.trim().to_ascii_lowercase();
+        // Substring matching against an empty term matches every node, which
+        // turns a malformed call into a dump of the whole graph presented as an
+        // answer. No term means no answer.
+        if query.is_empty() {
+            return Vec::new();
+        }
         let mut nodes: Vec<_> = index
             .graph
             .nodes
@@ -568,13 +574,15 @@ impl WorkspaceGraphService {
             };
             (found_nodes, found_edges)
         } else {
-            let query = args
-                .get(if action == "explain" {
-                    "symbol"
-                } else {
-                    "query"
-                })
-                .and_then(Value::as_str)
+            // Small models mix `query` and `symbol` up constantly, and the two
+            // mean the same thing to the matcher. Reading whichever arrived is
+            // the tolerant-reader discipline; the alternative is a repair round
+            // that costs a turn to learn nothing. An absent term stays empty
+            // rather than matching everything, so a malformed call returns no
+            // answer instead of the whole graph.
+            let query = ["query", "symbol", "from", "to"]
+                .iter()
+                .find_map(|key| args.get(*key).and_then(Value::as_str))
                 .unwrap_or("");
             let seeds = Self::matching(
                 &index,

@@ -217,3 +217,28 @@ fn build_and_update_meet_their_time_budgets() {
         incremental.as_millis()
     );
 }
+
+/// Small models mix `query` and `symbol` up constantly. Accepting whichever
+/// arrived costs nothing and saves a repair round; the observed live session
+/// that motivated this sent `{"action":"query","symbol":"recordEntry"}`.
+#[test]
+fn the_matcher_accepts_whichever_term_field_the_model_used() {
+    let service = service_for("typescript");
+    let by_query = service.query(&json!({"action": "query", "query": "save"}));
+    let by_symbol = service.query(&json!({"action": "query", "symbol": "save"}));
+    assert_eq!(labels(&by_query), labels(&by_symbol));
+    assert!(labels(&by_query).iter().any(|label| label == "save"));
+}
+
+/// A term-less call used to match every node, because substring matching
+/// against "" is always true — a malformed call dumped the whole graph and
+/// presented it as an answer.
+#[test]
+fn a_call_with_no_search_term_returns_no_answer_rather_than_everything() {
+    let service = service_for("typescript");
+    let response = service.query(&json!({"action": "query"}));
+    assert!(
+        labels(&response).is_empty(),
+        "a term-less query must not answer with the whole graph"
+    );
+}

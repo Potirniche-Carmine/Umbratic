@@ -75,8 +75,11 @@ var engineeringBuckets = []Bucket{
 Length is yours to judge. You have just read the project; a two-line reply throws that away and makes the user ask again for what they already asked for.
 
 Anti-stuck: once listings and searches stop telling you anything new, stop exploring and write the answer from what you have. That is a limit on exploring, never a licence to answer before you have looked.`,
-		PreferredSkills:  []string{"umbratic-markdown"},
-		GraphGuidance:    "Call workspace_graph with action summary before any broad ls or search sweep: it names this workspace's files and main symbols in one call. Use what it returns to choose what to read, then read.",
+		PreferredSkills: []string{"umbratic-markdown"},
+		// This one supersedes step 1 explicitly. Appending "consider the graph"
+		// after a numbered step that says "list the workspace root" loses every
+		// time: a small model follows the imperative it was given first.
+		GraphGuidance:    "This workspace has a prebuilt code map, so replace step 1: your first tool call is workspace_graph with action summary, which returns the files and the main symbols together. Use ls only to fill gaps it leaves, then continue at step 2.",
 		Stop:             "the map is delivered. Do not write files unless the user asked for a durable map.",
 		RequiresEvidence: true,
 	},
