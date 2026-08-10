@@ -30,8 +30,18 @@ func TestEveryRouteCatalogIsClosedAndComplete(t *testing.T) {
 				t.Fatalf("%s/%s has no classifier description", route, bucket.ID)
 			}
 			if bucket.ID != DirectAnswerBucket {
-				if strings.TrimSpace(bucket.Playbook) == "" {
+				// Either form renders a plan; a bucket that sets both has two
+				// sources for one fact and one of them is dead.
+				if strings.TrimSpace(bucket.Playbook) == "" && len(bucket.Steps) == 0 {
 					t.Fatalf("%s/%s has no playbook", route, bucket.ID)
+				}
+				if strings.TrimSpace(bucket.Playbook) != "" && len(bucket.Steps) > 0 {
+					t.Fatalf("%s/%s declares both a flat playbook and steps", route, bucket.ID)
+				}
+				for index := range bucket.GraphSteps {
+					if index < 1 || index > len(bucket.Steps) {
+						t.Fatalf("%s/%s overrides step %d, which does not exist", route, bucket.ID, index)
+					}
 				}
 				if strings.TrimSpace(bucket.Stop) == "" {
 					t.Fatalf("%s/%s has no stop rule", route, bucket.ID)
@@ -110,21 +120,30 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 // invented architecture answered before any tool ran, a tour that skipped the
 // project's own documentation and guessed filenames instead, and a dozen files
 // read then summarized in two lines.
+// Substituting a step is how the graph variant is built, so every rule below
+// has to survive substitution too — otherwise the tool's presence silently
+// buys back a failure this bucket already paid for.
 func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
-	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
-	for name, want := range map[string]string{
-		"read-only":            "Never create, edit, or write a file",
-		"no drive-by fixes":    "never fix a problem you notice",
-		"first move is a tool": "Your first action is a tool call, never prose",
-		"docs before source":   "Read the documentation before the source",
-		"no guessed paths":     "Read only paths you have actually seen",
-		"answer is unbounded":  "Length is yours to judge",
-		"self-terminating":     "stop exploring and write the answer from what you have",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("repo_orient lost its %s rule (%q):\n%s", name, want, rendered)
+	graphTools := []any{
+		map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}},
+	}
+	for _, tools := range []any{nil, graphTools} {
+		rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, tools)
+		for name, want := range map[string]string{
+			"read-only":            "Never create, edit, or write a file",
+			"no drive-by fixes":    "never fix a problem you notice",
+			"first move is a tool": "Your first action is a tool call, never prose",
+			"docs before source":   "Read the documentation before the source",
+			"no guessed paths":     "Read only paths you have actually seen",
+			"answer is unbounded":  "Length is yours to judge",
+			"self-terminating":     "stop exploring and write the answer from what you have",
+		} {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("repo_orient lost its %s rule (%q):\n%s", name, want, rendered)
+			}
 		}
 	}
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
 	// The exploration budget may never be read as a budget on the answer.
 	if !strings.Contains(rendered, "never a licence to answer before you have looked") {
 		t.Fatalf("the anti-stuck rule must not license an early exit:\n%s", rendered)
@@ -151,17 +170,21 @@ func TestPlaybooksStayProjectAgnostic(t *testing.T) {
 	for _, route := range allRoutes() {
 		buckets, _ := RouteBuckets(route)
 		for _, bucket := range buckets {
-			for _, name := range banned {
-				if strings.Contains(bucket.Playbook, name) {
-					t.Fatalf("%s/%s names %q; playbooks must work on any project:\n%s",
-						route, bucket.ID, name, bucket.Playbook)
+			// Both renderings: a structured bucket's steps never appear in
+			// Playbook, so checking that field alone would skip them entirely.
+			for _, body := range []string{bucket.body(false), bucket.body(true)} {
+				for _, name := range banned {
+					if strings.Contains(body, name) {
+						t.Fatalf("%s/%s names %q; playbooks must work on any project:\n%s",
+							route, bucket.ID, name, body)
+					}
 				}
-			}
-			// Generic documentation words stay allowed — that is direction, not
-			// a filename — but the plan should not run past a screen.
-			if lines := strings.Count(bucket.Playbook, "\n"); lines > 16 {
-				t.Fatalf("%s/%s playbook is %d lines; keep it a plan, not a manual",
-					route, bucket.ID, lines)
+				// Generic documentation words stay allowed — that is direction,
+				// not a filename — but the plan should not run past a screen.
+				if lines := strings.Count(body, "\n"); lines > 16 {
+					t.Fatalf("%s/%s playbook is %d lines; keep it a plan, not a manual",
+						route, bucket.ID, lines)
+				}
 			}
 		}
 	}
@@ -642,5 +665,59 @@ func TestHasToolIgnoresMalformedToolArrays(t *testing.T) {
 	}
 	if HasTool([]any{map[string]any{"function": "not-an-object"}, 7}, "workspace_graph") {
 		t.Fatal("malformed rows must not report a tool")
+	}
+}
+
+// The graph variant must read as one plan, not as a plan plus an amendment.
+// The first version of this shipped as "replace step 1" appended after the
+// list, and the model followed the original step 1 it had already read.
+func TestRepoOrientGraphVariantIsOneCoherentNumberedPlan(t *testing.T) {
+	tools := []any{
+		map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}},
+	}
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, tools)
+
+	if !strings.Contains(rendered, "1. Call workspace_graph with action summary.") {
+		t.Fatalf("step 1 must itself be the graph call:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "1. List the workspace root.") {
+		t.Fatalf("the listing imperative must be replaced, not accompanied:\n%s", rendered)
+	}
+	for _, patch := range []string{"replace step", "instead of step", "skip step"} {
+		if strings.Contains(strings.ToLower(rendered), patch) {
+			t.Fatalf("the plan must not ask the model to amend it (%q):\n%s", patch, rendered)
+		}
+	}
+	// Steps 3 and 4 gate what counts as a real path. If they still name only a
+	// listing, they contradict a step 1 that never lists anything.
+	if !strings.Contains(rendered, "Read only paths you have actually seen in the graph") {
+		t.Fatalf("step 4 must accept the graph as a source of real paths:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "directories the listing showed") {
+		t.Fatalf("step 3 must not depend on a listing that step 1 no longer does:\n%s", rendered)
+	}
+	// Numbering is generated, so it cannot drift out of order.
+	for number := 1; number <= 5; number++ {
+		if !strings.Contains(rendered, "\n"+strconv.Itoa(number)+". ") {
+			t.Fatalf("step %d is missing from the rendered plan:\n%s", number, rendered)
+		}
+	}
+	if strings.Contains(rendered, "\n6. ") {
+		t.Fatalf("substitution must not add a step:\n%s", rendered)
+	}
+}
+
+// Without the tool the rendered plan must be exactly what shipped before the
+// structured form existed: same words, same numbers, no trace of the variant.
+func TestRepoOrientWithoutTheGraphRendersTheOriginalPlan(t *testing.T) {
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
+	if strings.Contains(rendered, "workspace_graph") {
+		t.Fatalf("a harness without the tool must never be told to call it:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "1. List the workspace root.") {
+		t.Fatalf("the original step 1 must survive:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "3. Then read the entry points and directories the listing showed") {
+		t.Fatalf("the original step 3 must survive:\n%s", rendered)
 	}
 }

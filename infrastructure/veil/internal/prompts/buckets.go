@@ -32,8 +32,22 @@ type Bucket struct {
 	ID string
 	// When tells the classifier what belongs in this bucket.
 	When string
-	// Playbook is the soft plan injected as protected context.
+	// Playbook is the soft plan injected as protected context. A bucket sets
+	// either this or Steps, never both.
 	Playbook string
+	// Preamble, Steps, and Closing are the structured form, used by buckets
+	// whose plan changes with the available tools. Steps are numbered at render
+	// time so a substituted step cannot renumber the list or leave a later step
+	// pointing at one that no longer exists.
+	Preamble string
+	Steps    []string
+	Closing  string
+	// GraphSteps replaces individual steps, one-based, when the request carries
+	// workspace_graph. Substituting the step itself is what makes the rendered
+	// plan a single coherent list: telling a model to "replace step 1" asks it
+	// to do prompt arithmetic, and it reads the original imperative first
+	// anyway.
+	GraphSteps map[int]string
 	// PreferredSkills are intersected with the validated client catalog before
 	// rendering, so a disabled skill is simply omitted.
 	PreferredSkills []string
@@ -62,24 +76,28 @@ var engineeringBuckets = []Bucket{
 		When: "Chitchat, \"who are you\", \"what can you do\", or a general knowledge question that no file in this workspace could answer better. Not a request to say more about the workspace: \"tell me more\", \"go deeper\", and \"not just one sentence\" still need evidence.",
 	},
 	{
-		ID:   "repo_orient",
-		When: "Map the repository, \"what is here\", \"tell me more about this folder\", a high-level tour.",
-		Playbook: `A read-only tour, documentation first. Never create, edit, or write a file, and never fix a problem you notice; mention it instead.
-
-1. List the workspace root. Your first action is a tool call, never prose: until a tool tells you, you do not know what is here, and a tour written from the project's name is fabrication however plausible it sounds.
-2. Read the documentation before the source. Whatever the project wrote about itself — a readme, any other Markdown, any document file — outranks what you would infer from filenames.
-3. Then read the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs.
-4. Read only paths you have actually seen in a listing or search result. A file you expect to exist because similar projects have one is a guess, and guessed reads are how this stalls.
-5. Then stop exploring and answer: what the project is, how it is organized, how it runs when that is evident, and what you did not cover.
-
-Length is yours to judge. You have just read the project; a two-line reply throws that away and makes the user ask again for what they already asked for.
+		ID:       "repo_orient",
+		When:     "Map the repository, \"what is here\", \"tell me more about this folder\", a high-level tour.",
+		Preamble: "A read-only tour, documentation first. Never create, edit, or write a file, and never fix a problem you notice; mention it instead.",
+		Steps: []string{
+			"List the workspace root. Your first action is a tool call, never prose: until a tool tells you, you do not know what is here, and a tour written from the project's name is fabrication however plausible it sounds.",
+			"Read the documentation before the source. Whatever the project wrote about itself — a readme, any other Markdown, any document file — outranks what you would infer from filenames.",
+			"Then read the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs.",
+			"Read only paths you have actually seen in a listing or search result. A file you expect to exist because similar projects have one is a guess, and guessed reads are how this stalls.",
+			"Then stop exploring and answer: what the project is, how it is organized, how it runs when that is evident, and what you did not cover.",
+		},
+		// Steps 3 and 4 change too. They name a listing as the only thing that
+		// makes a path real, so leaving them alone would contradict a step 1
+		// that never lists anything.
+		GraphSteps: map[int]string{
+			1: "Call workspace_graph with action summary. Your first action is a tool call, never prose: until a tool tells you, you do not know what is here, and a tour written from the project's name is fabrication however plausible it sounds. The summary names this workspace's files and its main symbols together; list the workspace root only to fill gaps it leaves.",
+			3: "Then read the entry points the graph and any listing named, enough to say what each part is for, and only as far into each file as the map needs. The graph already gave you each symbol's name and location, so read for what the code does, not to rediscover what is there.",
+			4: "Read only paths you have actually seen in the graph, a listing, or a search result. A file you expect to exist because similar projects have one is a guess, and guessed reads are how this stalls.",
+		},
+		Closing: `Length is yours to judge. You have just read the project; a two-line reply throws that away and makes the user ask again for what they already asked for.
 
 Anti-stuck: once listings and searches stop telling you anything new, stop exploring and write the answer from what you have. That is a limit on exploring, never a licence to answer before you have looked.`,
-		PreferredSkills: []string{"umbratic-markdown"},
-		// This one supersedes step 1 explicitly. Appending "consider the graph"
-		// after a numbered step that says "list the workspace root" loses every
-		// time: a small model follows the imperative it was given first.
-		GraphGuidance:    "This workspace has a prebuilt code map, so replace step 1: your first tool call is workspace_graph with action summary, which returns the files and the main symbols together. Use ls only to fill gaps it leaves, then continue at step 2.",
+		PreferredSkills:  []string{"umbratic-markdown"},
 		Stop:             "the map is delivered. Do not write files unless the user asked for a durable map.",
 		RequiresEvidence: true,
 	},
@@ -703,11 +721,16 @@ const playbookAntiLoop = `Anti-loop: after a tool failure, change the approach; 
 // user disabled are simply omitted, and every playbook stands alone without one.
 func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadata, tools any) string {
 	bucket, ok := BucketFor(route, bucketID)
-	if !ok || bucket.ID == DirectAnswerBucket || strings.TrimSpace(bucket.Playbook) == "" {
+	if !ok || bucket.ID == DirectAnswerBucket {
 		return ""
 	}
-	sections := []string{playbookHeader, "", bucket.Playbook}
-	if strings.TrimSpace(bucket.GraphGuidance) != "" && HasTool(tools, "workspace_graph") {
+	withGraph := HasTool(tools, "workspace_graph")
+	body := bucket.body(withGraph)
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	sections := []string{playbookHeader, "", body}
+	if strings.TrimSpace(bucket.GraphGuidance) != "" && withGraph {
 		sections = append(sections, "", bucket.GraphGuidance)
 	}
 	if preferred := intersectSkills(bucket.PreferredSkills, availableSkills); len(preferred) > 0 {
@@ -721,6 +744,32 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 		sections = append(sections, "Stop when: "+bucket.Stop)
 	}
 	sections = append(sections, playbookAntiLoop)
+	return strings.Join(sections, "\n")
+}
+
+// body renders the bucket's plan. Buckets that state a flat Playbook return it
+// unchanged, so a run without structured steps assembles byte-identically to
+// today. Structured buckets number their steps here, which is what keeps a
+// substituted step from renumbering the list or stranding a later reference.
+func (b Bucket) body(withGraph bool) string {
+	if len(b.Steps) == 0 {
+		return b.Playbook
+	}
+	sections := make([]string, 0, len(b.Steps)+4)
+	if strings.TrimSpace(b.Preamble) != "" {
+		sections = append(sections, b.Preamble, "")
+	}
+	for index, step := range b.Steps {
+		if withGraph {
+			if replacement, ok := b.GraphSteps[index+1]; ok {
+				step = replacement
+			}
+		}
+		sections = append(sections, fmt.Sprintf("%d. %s", index+1, step))
+	}
+	if strings.TrimSpace(b.Closing) != "" {
+		sections = append(sections, "", b.Closing)
+	}
 	return strings.Join(sections, "\n")
 }
 
