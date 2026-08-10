@@ -3,10 +3,19 @@
   padding: 0 2px;
 }
 
+/* Narration now lands here rather than beside the block, so this is the only
+   place the run's account of itself is set. Being inside a block that collapses
+   is the demotion; the text itself does not need to be small on top of that, and
+   reading a paragraph of narration at a smaller size than the answer above it
+   was the part that felt broken. It matches the body size and stays a step
+   quieter than the answer, which sets its paragraphs at 90% toward `--muted`:
+   narration has to read as the lesser of the two, and mixing toward
+   `--reasoning-text` instead landed it *brighter* than the answer it
+   introduces. */
 .workMarkdownContent .markdownContent {
   max-width: 80ch;
-  color: color-mix(in srgb, var(--text) 88%, var(--reasoning-text));
-  font-size: 13px;
+  color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  font-size: 13.5px;
   line-height: 1.6;
 }
 
@@ -33,8 +42,8 @@
 .workMarkdownContent .markdownContent h3,
 .workMarkdownContent .markdownContent h4,
 .workMarkdownContent .markdownContent h5 {
-  color: color-mix(in srgb, var(--text) 94%, var(--reasoning-text));
-  font-size: 12.5px;
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  font-size: 13px;
   font-weight: 720;
 }
 
@@ -44,7 +53,7 @@
 }
 
 .workMarkdownContent .markdownContent code {
-  font-size: 11.25px;
+  font-size: 11.75px;
 }
 
 .workMarkdownContent .markdownCodeBlock {

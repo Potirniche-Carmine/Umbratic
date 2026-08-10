@@ -724,6 +724,34 @@ pub fn release_held_text(sink: &EventSink, session: &Session, result: &mut VeilC
     emit_delta(sink, session, &held);
 }
 
+/// The same release, for a step that turned out to be a preamble.
+///
+/// Holding is what makes this classification possible at all: the text has not
+/// been shown yet, so naming it narration now costs nothing, where deciding the
+/// same thing after it had streamed would mean moving text the user was already
+/// reading. Tool calls arriving on the step are the evidence — prose written
+/// ahead of work is describing that work, not answering.
+pub fn release_held_narration(sink: &EventSink, session: &Session, result: &mut VeilChatResult) {
+    let held = std::mem::take(&mut result.held_text);
+    emit_narration(sink, session, &held);
+}
+
+/// Run narration: prose the UI shows inside the working block rather than as an
+/// answer. It is display output only — `assistant.progress.delta` is dropped
+/// from the conversation history the model reads back.
+pub fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+    sink.emit(json!({
+        "type": "assistant.progress.delta",
+        "taskId": session.task_id,
+        "text": text.trim(),
+        "at": now_iso()
+    }));
+    true
+}
+
 /// Routes one chunk of already-redacted assistant text to the event stream or to
 /// the hold buffer. Returns whether anything reached the stream, which is what
 /// `emit_completed_output` uses to avoid emitting the message twice.

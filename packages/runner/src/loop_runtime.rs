@@ -27,7 +27,10 @@ use crate::{
     tool_scheduling::execute_calls,
     tools::{ToolCall, ToolResult, tool_surface, validate_tool_call_batch},
     turn_snapshot::TurnSnapshot,
-    veil_client::{VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat},
+    veil_client::{
+        VeilChatResult, VeilRequestOptions, release_held_narration, release_held_text,
+        stream_veil_chat,
+    },
 };
 
 const MAX_TOOL_TURNS: usize = 64;
@@ -697,8 +700,10 @@ pub async fn run_turn(
         increment(&mut summary, "toolCalls", calls.len() as u64);
         if !calls.is_empty() {
             // Tool calls settle the step as real work, so any held preamble is
-            // released now and reaches the user in the normal place.
-            release_held_text(&sink, &session, &mut result);
+            // released now — as narration, which is what it has just been shown
+            // to be. It goes inside the working block the tools are about to
+            // open, where the run's account of itself belongs.
+            release_held_narration(&sink, &session, &mut result);
         }
         if calls.is_empty() {
             if looks_like_unstructured_tool_call(&result.content) {

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::{
     events::now_iso,
     session::{EventSink, Session},
-    veil_client::{DIRECT_ANSWER_BUCKET, orient_request},
+    veil_client::{DIRECT_ANSWER_BUCKET, emit_narration, orient_request},
 };
 
 /// What one accepted run carries away from orient.
@@ -111,21 +111,20 @@ pub(crate) async fn orient_once(
     if let Some(sentence) = decision.summary_sentence
         && !session.is_aborted()
     {
-        // An ordinary assistant delta, deliberately: this sentence is the run's
-        // one orientation, so it reads as the opening of the answer rather than
-        // as machinery. The desktop settles pre-tool prose into its own message
-        // and opens the working block beneath it, which is where an orientation
-        // belongs — a sentence rendered *inside* that block described the same
-        // work as the model's own preamble at a different altitude, so the two
-        // landed on opposite sides of it. The trailing newlines keep it from
-        // gluing to the model's first token. This is UI output only and is
-        // never appended as an assistant conversation message.
-        sink.emit(json!({
-            "type": "assistant.delta",
-            "taskId": session.task_id,
-            "text": format!("{sentence}\n\n"),
-            "at": now_iso()
-        }));
+        // Narration, not an assistant delta: this sentence is the run saying
+        // what it is about to do, so it belongs inside the working block with
+        // the rest of that account.
+        //
+        // It used to ship as an ordinary delta so it would read as the opening
+        // of the answer, which put it *outside* the block while the model's own
+        // preamble — describing the same work — sometimes rendered inside one.
+        // Two sentences about one plan landing on opposite sides of the block is
+        // what made the layout look inconsistent from one turn to the next. Both
+        // are narration now and both sit in the same place. This has always been
+        // UI output only and is never appended as a conversation message; the
+        // progress event makes that explicit, since the desktop drops it from
+        // the history it reads back.
+        emit_narration(sink, session, sentence.as_str());
     }
     OrientOutcome {
         bucket: Some(decision.bucket),

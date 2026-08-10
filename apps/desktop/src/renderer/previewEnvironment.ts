@@ -79,6 +79,17 @@ const composerTestRunning = composerTestParams.get("composerTest") === "running"
 const composerTestDirectAnswer = composerTestParams.has("directAnswer");
 const composerTestWaitingOnly = composerTestParams.has("waitingOnly");
 const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
+// A conversation that has moved on. The answer to the first question has to
+// still read as an answer once the second one is asked.
+const composerTestTwoTurns = composerTestParams.has("twoTurns");
+// Three slices of one guided run, frozen mid-flight, so the live path can be
+// looked at rather than reasoned about: `?stage=orienting` before any tool,
+// `?stage=working` with a tool open, `?stage=answering` with the answer part
+// way through streaming. Each is a prefix of the same event list a real run
+// produces, in the order it produces it.
+const composerTestStage = ["orienting", "working", "answering"].includes(composerTestParams.get("stage") ?? "")
+  ? composerTestParams.get("stage") as "orienting" | "working" | "answering"
+  : null;
 const composerTestToolIssue = composerTestParams.has("toolIssue");
 const composerTestLiveWork = composerTestParams.has("liveWork");
 const composerTestTurnOutcome = ["model_gave_up", "safety_limit"].includes(composerTestParams.get("turnOutcome") ?? "")
@@ -107,11 +118,104 @@ const composerTestRepository: RepositoryInfo = {
   dirty: false,
   statusSummary: "preview",
 };
-const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
+// The reported shape: a model that writes a full summary, keeps working, writes
+// another, keeps working, and only then answers. Three rounds of tools with two
+// essays between them — the case that used to render as three separate Working
+// summaries with loose paragraphs stranded between them.
+const composerTestTourEvents: BackendUiEvent[] = [
+  { type: "user.message", taskId: "composer-test", text: "tell me more about this folder", at: new Date(Date.now() - 60_000).toISOString() },
+  { type: "assistant.progress.delta", taskId: "composer-test", text: "I'll map the workspace root and read the landing page before describing it.", at: new Date(Date.now() - 58_000).toISOString(), endedAt: new Date(Date.now() - 57_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "tour-ls", command: "list directory", cwd: "/workspace/Website", kind: "read", toolKind: "read", commandClass: "read", at: new Date(Date.now() - 56_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "tour-ls", exitCode: 0, at: new Date(Date.now() - 52_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "tour-readme", command: "read README.md", cwd: "/workspace/Website", kind: "read", toolKind: "read", commandClass: "read", at: new Date(Date.now() - 51_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "tour-readme", exitCode: 0, at: new Date(Date.now() - 48_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "I am starting a tour of the Umbratic Website project, which is a simple static site. I have reviewed the root directory and the main landing page (`index.html`) and found that it uses only HTML and CSS without any build steps.\n\nNext, I will examine the contents of the `brand/` directory to see what visual assets are available.", at: new Date(Date.now() - 44_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "tour-brand", command: "list brand/", cwd: "/workspace/Website", kind: "read", toolKind: "read", commandClass: "read", at: new Date(Date.now() - 40_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "tour-brand", exitCode: 0, at: new Date(Date.now() - 36_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "The folder is a static website for \"Umbratic AI\". Root files hold the entry point and navigation pages, `assets/` holds the styling, and `brand/` holds the logo icons.\n\nTo provide a complete tour, I will now examine the main informational pages and the `.agents/` directory.", at: new Date(Date.now() - 32_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "tour-agents", command: "list .agents/", cwd: "/workspace/Website", kind: "read", toolKind: "read", commandClass: "read", at: new Date(Date.now() - 28_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "tour-agents", exitCode: 0, at: new Date(Date.now() - 24_000).toISOString() },
+  { type: "command.started", taskId: "composer-test", id: "tour-how", command: "read how-it-works.html", cwd: "/workspace/Website", kind: "read", toolKind: "read", commandClass: "read", at: new Date(Date.now() - 23_000).toISOString() },
+  { type: "command.finished", taskId: "composer-test", id: "tour-how", exitCode: 0, at: new Date(Date.now() - 18_000).toISOString() },
+  {
+    type: "assistant.delta",
+    taskId: "composer-test",
+    text: [
+      "This folder is a static website project for Umbratic AI, marketing private AI infrastructure for businesses.",
+      "",
+      "### Project overview",
+      "",
+      "- **Purpose:** to explain how Umbratic runs confidential, customizable AI inside a company's own environment.",
+      "- **Technology:** HTML and CSS only — no build step, framework, or package manager.",
+      "",
+      "### Organization",
+      "",
+      "- **Root files:** `index.html` plus the informational pages, and a `README.md` confirming the dependency-free setup.",
+      "- **`assets/`:** the stylesheet, client-side JavaScript, and Open Graph images.",
+      "- **`brand/`:** logo files and icons used across the site.",
+    ].join("\n"),
+    at: new Date(Date.now() - 12_000).toISOString(),
+  },
+  { type: "assistant.done", taskId: "composer-test", at: new Date(Date.now() - 8_000).toISOString() },
+];
+const composerTestTour = composerTestParams.has("tour");
+
+const composerTestStagePrompt = "add a health check endpoint and make sure it responds";
+const composerTestStageEvents: BackendUiEvent[] = composerTestStage ? [
+  { type: "user.message", taskId: "composer-test", text: composerTestStagePrompt, at: new Date(Date.now() - 14_000).toISOString() },
+  // Orient's sentence, then the model's own preamble once its tool calls
+  // released it. Both are narration, both arrive before any tool row.
+  { type: "assistant.progress.delta", taskId: "composer-test", text: "I'll add the endpoint and then call it to confirm it answers.", at: new Date(Date.now() - 12_000).toISOString() },
+  ...(composerTestStage === "orienting" ? [] : [
+    { type: "assistant.progress.delta" as const, taskId: "composer-test", text: "Starting with the route file, then a request against the running server.", at: new Date(Date.now() - 9_000).toISOString() },
+    { type: "command.started" as const, taskId: "composer-test", id: "stage-edit", command: "write src/routes/health.ts", cwd: "/workspace/Umbratic", kind: "edit" as const, commandClass: "edit" as const, at: new Date(Date.now() - 8_000).toISOString() },
+  ]),
+  ...(composerTestStage === "answering" ? [
+    { type: "command.finished" as const, taskId: "composer-test", id: "stage-edit", exitCode: 0, at: new Date(Date.now() - 6_000).toISOString() },
+    { type: "command.started" as const, taskId: "composer-test", id: "stage-curl", command: "curl -s localhost:3000/health", cwd: "/workspace/Umbratic", kind: "bash" as const, commandClass: "network" as const, at: new Date(Date.now() - 5_000).toISOString() },
+    { type: "command.output" as const, taskId: "composer-test", id: "stage-curl", stream: "stdout" as const, text: "{\"status\":\"ok\"}\n", at: new Date(Date.now() - 4_000).toISOString() },
+    { type: "command.finished" as const, taskId: "composer-test", id: "stage-curl", exitCode: 0, at: new Date(Date.now() - 3_000).toISOString() },
+    // No `assistant.done`: the answer is still arriving, which is what puts the
+    // caret at the end of it and keeps the actions off it.
+    { type: "assistant.delta" as const, taskId: "composer-test", text: "The endpoint is live at `/health` and returns `{\"status\":\"ok\"}`.\n\nIt is registered before the auth middleware, so an uptime check can reach it without a", at: new Date(Date.now() - 1_000).toISOString() },
+  ] : []),
+] : [];
+const composerTestEvents: BackendUiEvent[] = composerTestTour ? composerTestTourEvents : composerTestStage ? composerTestStageEvents : composerTestTwoTurns ? [
+  { type: "user.message", taskId: "composer-test", text: "hey there", at: new Date(Date.now() - 60_000).toISOString() },
+  { type: "assistant.delta", taskId: "composer-test", text: "Hello! How can I help you today? Whether it’s debugging code, analyzing data, drafting documentation, or anything else, feel free to let me know what you need assistance with.", at: new Date(Date.now() - 58_000).toISOString() },
+  { type: "user.message", taskId: "composer-test", text: "tell me about C vs C# and the different industries they each apply to", at: new Date(Date.now() - 30_000).toISOString() },
+  // No orientation on either turn, because neither is a guided run: a question
+  // answered from knowledge never reaches orient's guided branch, so nothing
+  // narrates it and no working block opens.
+  {
+    type: "assistant.delta",
+    taskId: "composer-test",
+    text: [
+      "C and C# are both powerful programming languages, but they were designed with fundamentally different philosophies and target very different domains.",
+      "",
+      "### 1. Core Philosophy and Design",
+      "",
+      "**C (The Systems Language)**",
+      "",
+      "- **Philosophy:** C was designed to be \"portable\" and close to the hardware.",
+      "- **Memory Management:** Manual (using `malloc` and `free`).",
+      "",
+      "**C# (The Managed Language)**",
+      "",
+      "- **Philosophy:** A modern, object-oriented language that prioritizes developer productivity.",
+      "- **Memory Management:** Automatic via garbage collection.",
+    ].join("\n"),
+    at: new Date(Date.now() - 20_000).toISOString(),
+  },
+  { type: "assistant.done", taskId: "composer-test", at: new Date().toISOString() },
+] : composerTestWaitingOnly ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
 ] : composerTestEscapedPlan ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 11_000).toISOString() },
-  { type: "assistant.delta", taskId: "composer-test", text: "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.", at: new Date(Date.now() - 10_000).toISOString() },
+  // A guided run's pre-tool prose reaches the desktop as narration: orient's
+  // sentence is narration by construction, and the model's own preamble is held
+  // until the step's tool calls prove it was one.
+  { type: "assistant.progress.delta", taskId: "composer-test", text: "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.", at: new Date(Date.now() - 10_500).toISOString(), endedAt: new Date(Date.now() - 10_000).toISOString() },
   { type: "command.started", taskId: "composer-test", id: "write-bubble-sort", command: "write bubble_sort.py", cwd: "/workspace/Umbratic", kind: "edit", commandClass: "edit", at: new Date(Date.now() - 9_000).toISOString() },
   { type: "command.finished", taskId: "composer-test", id: "write-bubble-sort", exitCode: 0, at: new Date(Date.now() - 8_000).toISOString() },
   { type: "command.started", taskId: "composer-test", id: "run-bubble-sort", command: "uv run bubble_sort.py", cwd: "/workspace/Umbratic", kind: "bash", commandClass: "package-manager", at: new Date(Date.now() - 7_000).toISOString() },
@@ -197,8 +301,12 @@ const composerTestEvents: BackendUiEvent[] = composerTestWaitingOnly ? [
       errorMessage: "Path not found: infrastructure/veil/internal/prompt_skills.go.",
     } : {}),
   },
+  // Mid-plan prose, once a tool has already returned. It arrives as an ordinary
+  // delta because the runner cannot know yet whether it is the answer, and the
+  // tool below is what settles it as narration — so it joins this same block
+  // rather than closing it and starting another.
   {
-    type: "assistant.progress.delta",
+    type: "assistant.delta",
     taskId: "composer-test",
     text: "The message layout is clear. I will run the focused composer checks next.",
   },
@@ -442,10 +550,12 @@ const composerTestTask: TaskInfo = {
   id: "composer-test",
   chatId: "composer-test-chat",
   repositoryId: composerTestRepository.id,
-  prompt: composerTestVisiblePrompt,
+  prompt: composerTestTour ? "tell me more about this folder" : composerTestStage ? composerTestStagePrompt : composerTestVisiblePrompt,
   workspaceKind: "git",
   workspaceMode: "local",
-  state: composerTestTurnOutcome ? "failed" : composerTestRunning ? "running" : "review_ready",
+  // A frozen stage is a run in flight, so it carries the running state that
+  // drives the live block, the caret, and the withheld message actions.
+  state: composerTestTurnOutcome ? "failed" : composerTestRunning || composerTestStage ? "running" : "review_ready",
   originalBranch: "main",
   baseCommit: "preview",
   agentBranch: "preview",

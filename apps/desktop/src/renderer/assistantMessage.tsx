@@ -24,14 +24,15 @@ type AssistantMessageProps = {
 /**
  * One assistant message.
  *
- * A turn reads: opening sentence, Working, more narration, answer. Rendering all
- * of that prose identically — same weight, same copy and rating buttons on each
- * — left the opening sentence looking like the reply, with the real answer
- * further down past a collapsed Working block.
+ * A turn reads: Working (orientation and preamble inside it), answer. Rendering
+ * every assistant message identically — same weight, same copy and rating
+ * buttons on each — left an opening sentence looking like the reply, with the
+ * real answer further down past a collapsed Working block.
  *
  * So the answer is the only message at full strength, and the only one that
- * carries actions. Progress messages stay legible but recede, which is the same
- * standing the Working blocks they sit between already have.
+ * carries actions. What is left out here is mid-plan prose on a step that
+ * already has tool results: the runner cannot hold that without delaying the
+ * answer, so it streams in place and recedes if work opens beneath it.
  */
 export function AssistantMessage({
   item,

@@ -276,7 +276,6 @@ test("command aggregation, pending permissions, and timelines reflect real event
   const {
     activitySummary,
     activityToolGroups,
-    assistantTextFromEvents,
     commandDetailLabel,
     commandLabel,
     commandRunsFromEvents,
@@ -299,7 +298,6 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "permission.requested", taskId: "task-1", request: { id: "perm-1", kind: "bash", summary: "git commit", command: "git commit", cwd: "C:/repo" } },
   ];
 
-  assert.equal(assistantTextFromEvents(events), "Done");
   const [run] = commandRunsFromEvents(events);
   assert.equal(run.status, "passed");
   assert.equal(commandSummary(run), "ok");
@@ -395,37 +393,20 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
-  // Assistant prose renders where it appeared and never moves: the preamble
-  // settles as its own message, the tools that follow open a Working block
-  // beneath it, and the answer lands after that block. Progress deltas are
-  // still work narration and stay inside the block.
-  assert.deepEqual(interleavedTimeline.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
-  assert.equal(interleavedTimeline[1].text, "I’ll inspect the project.");
+  // One turn, one block. Prose with work after it is narration and joins the
+  // block already open — it does not close it and start another. Only the
+  // answer, which nothing follows, renders outside.
+  assert.deepEqual(interleavedTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
   assert.deepEqual(
-    interleavedTimeline[2].segments.map((segment) => segment.type),
-    ["command", "reasoning"],
+    interleavedTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "reasoning"],
   );
-  assert.equal(interleavedTimeline[2].segments[1].text, "Second step.");
-  assert.equal(interleavedTimeline[3].text, "Here is the complete answer.");
-  // Copying returns the answer, not the narration that introduced the work.
-  // Preambles are visible messages now, so this is the one place the two are
-  // still told apart: the closing message is the response.
-  assert.equal(assistantTextFromEvents([
-    events[0],
-    { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
-    events[2],
-    events[3],
-    events[4],
-    { type: "assistant.delta", taskId: "task-1", text: "Here is the complete answer.", at: "2026-01-01T00:00:06.000Z" },
-  ]), "Here is the complete answer.");
-  // A turn whose only message is a preamble still copies that message, so a
-  // turn is never uncopyable.
-  assert.equal(assistantTextFromEvents([
-    events[0],
-    { type: "assistant.delta", taskId: "task-1", text: "I’ll inspect the project.", at: "2026-01-01T00:00:02.000Z" },
-    events[2],
-    events[3],
-  ]), "I’ll inspect the project.");
+  // A preamble and the progress line before it are one voice, so they read as
+  // one passage rather than two stacked fragments.
+  assert.equal(interleavedTimeline[1].segments[0].text, "First step.\n\nI’ll inspect the project.");
+  assert.equal(interleavedTimeline[1].segments[2].text, "Second step.");
+  assert.equal(interleavedTimeline[2].text, "Here is the complete answer.");
+  assert.equal(interleavedTimeline[2].final, true);
 
   const progressOnlyAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Tell me about this project", at: "2026-01-01T00:00:00.000Z" },
@@ -446,12 +427,12 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "command.finished", taskId: "task-1", id: "search-1", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:04.000Z" },
   ], undefined, "completed")));
-  // The model said everything before the tool call and then fell silent. That
-  // text needs no rescuing now: it was already a message when it streamed, and
-  // the tool that followed simply opened a block under it.
-  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "assistant", "activity"]);
-  assert.equal(preToolOnlyAnswerTimeline[1].text, "# Umbratic Project Overview\n\nA private AI workbench.");
-  assert.deepEqual(preToolOnlyAnswerTimeline[2].segments.map((segment) => segment.type), ["command"]);
+  // The model said everything before the tool call and then fell silent. A tool
+  // followed it, so it was narration whatever it looked like, and the turn ends
+  // with no answer rather than promoting the preamble into one.
+  assert.deepEqual(preToolOnlyAnswerTimeline.map((item) => item.type), ["user", "activity"]);
+  assert.deepEqual(preToolOnlyAnswerTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  assert.equal(preToolOnlyAnswerTimeline[1].segments[0].text, "# Umbratic Project Overview\n\nA private AI workbench.");
 
   const escapedPlanTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "write me bubble sort algorithm in python and verify that it runs", at: "2026-01-01T00:00:00.000Z" },
@@ -463,15 +444,15 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.delta", taskId: "task-1", text: "Done — the script passed five test cases.", at: "2026-01-01T00:00:06.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:07.000Z" },
   ], undefined, "completed")));
-  // The plan preamble reads as what it is — a sentence before the work — and the
-  // two tools it introduced share one Working block underneath it.
-  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
-  assert.equal(escapedPlanTimeline[1].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
+  // The plan preamble reads as what it is — a sentence before the work — and it
+  // sits with the two tools it introduced in one Working block.
+  assert.deepEqual(escapedPlanTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
   assert.deepEqual(
-    escapedPlanTimeline[2].segments.map((segment) => segment.type),
-    ["command", "command"],
+    escapedPlanTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "command"],
   );
-  assert.equal(escapedPlanTimeline[3].text, "Done — the script passed five test cases.");
+  assert.equal(escapedPlanTimeline[1].segments[0].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
+  assert.equal(escapedPlanTimeline[2].text, "Done — the script passed five test cases.");
 
   // A multi-round turn alternates: each round of narration is its own message
   // and each tool batch its own Working block, in the order they happened.
@@ -486,15 +467,22 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.delta", taskId: "task-1", text: "This repository is a Next.js application.", at: "2026-01-01T00:00:07.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:08.000Z" },
   ], undefined, "completed")));
+  // Several rounds of work are still one stretch of work. Splitting on every
+  // paragraph produced a column of separate Working summaries with essays
+  // stranded between them; the turn is one block and one answer.
   assert.deepEqual(
     multiRoundTimeline.map((item) => item.type),
-    ["user", "assistant", "activity", "assistant", "activity", "assistant"],
+    ["user", "activity", "assistant"],
   );
-  assert.equal(multiRoundTimeline[1].text, "I'll start by listing all the contents of the root directory.");
-  assert.deepEqual(multiRoundTimeline[2].segments.map((segment) => segment.type), ["command"]);
-  assert.equal(multiRoundTimeline[3].text, "I have listed the root. Now I will list the main subdirectories.");
-  assert.deepEqual(multiRoundTimeline[4].segments.map((segment) => segment.type), ["command"]);
-  assert.equal(multiRoundTimeline[5].text, "This repository is a Next.js application.");
+  assert.deepEqual(
+    multiRoundTimeline[1].segments.map((segment) => segment.type),
+    ["reasoning", "command", "reasoning", "command"],
+  );
+  assert.equal(multiRoundTimeline[1].segments[0].text, "I'll start by listing all the contents of the root directory.");
+  assert.equal(multiRoundTimeline[1].segments[2].text, "I have listed the root. Now I will list the main subdirectories.");
+  assert.equal(multiRoundTimeline[2].text, "This repository is a Next.js application.");
+  // The block's clock spans the work, not the answer that follows it.
+  assert.equal(activitySummary(multiRoundTimeline[1]), "Worked for 7 seconds");
 
   // The reported regression: the answer used to stream inside the open Working
   // block and only move outside once the run settled, so it arrived as a jump
@@ -524,11 +512,13 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "turn.outcome", taskId: "task-1", outcome: "aborted", at: "2026-01-01T00:00:05.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:05.000Z" },
   ], undefined, "completed")));
-  assert.deepEqual(cancelledTurnTimeline.map((item) => item.type), ["user", "assistant", "activity", "assistant"]);
-  assert.equal(cancelledTurnTimeline[1].text, "I'll look at the invoice list.");
-  assert.equal(cancelledTurnTimeline[2].finished, true);
-  assert.deepEqual(cancelledTurnTimeline[2].segments.map((segment) => segment.type), ["command"]);
-  assert.equal(cancelledTurnTimeline[3].text, "* \n*");
+  assert.deepEqual(cancelledTurnTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(cancelledTurnTimeline[1].finished, true);
+  assert.deepEqual(cancelledTurnTimeline[1].segments.map((segment) => segment.type), ["reasoning", "command"]);
+  assert.equal(cancelledTurnTimeline[1].segments[0].text, "I'll look at the invoice list.");
+  // Whatever was streaming when the stop landed keeps its place as a message:
+  // nothing follows it, so it was the last thing the run said.
+  assert.equal(cancelledTurnTimeline[2].text, "* \n*");
 
   // Stopping a tool-less turn keeps the partial answer as the answer.
   const cancelledDirectAnswerTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
@@ -587,9 +577,30 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
   ], undefined, "running");
   assert.equal(activitySummary(preAnswerTimeline[1]), "Thinking");
+  // Narration opens the block before any tool exists. It is the only place that
+  // sentence renders now, so leaving the block shut would show the reader
+  // "Thinking" and nothing else while the run says what it is about to do.
   const openedDisclosure = reconcileActivityDisclosureState(new Set(), preAnswerTimeline, "task-1", new Set());
-  assert.deepEqual([...openedDisclosure.expandedIds], []);
-  assert.deepEqual([...openedDisclosure.autoOpenedKeys], []);
+  assert.deepEqual([...openedDisclosure.expandedIds], [preAnswerTimeline[1].id]);
+  assert.deepEqual([...openedDisclosure.autoOpenedKeys], [`task-1:${preAnswerTimeline[1].id}`]);
+
+  // It closes again on its own once the turn settles, exactly as an auto-opened
+  // tool block does: the account of the work stops competing with the answer.
+  const settledNarration = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    events[0],
+    { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
+    { type: "command.started", taskId: "task-1", id: "cmd-9", command: "npm test", cwd: "C:/repo", kind: "bash", commandClass: "package-manager", at: "2026-01-01T00:00:02.000Z" },
+    { type: "command.finished", taskId: "task-1", id: "cmd-9", exitCode: 0, at: "2026-01-01T00:00:03.000Z" },
+    { type: "assistant.delta", taskId: "task-1", text: "Tests pass.", at: "2026-01-01T00:00:04.000Z" },
+    { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:05.000Z" },
+  ], undefined, "completed")));
+  const settledDisclosure = reconcileActivityDisclosureState(
+    new Set(openedDisclosure.expandedIds),
+    settledNarration,
+    "task-1",
+    new Set(openedDisclosure.autoOpenedKeys),
+  );
+  assert.deepEqual([...settledDisclosure.expandedIds], []);
   const streamingToolsTimeline = composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "Working on it.", at: "2026-01-01T00:00:01.000Z" },
@@ -926,10 +937,13 @@ test("only the prose nothing follows is the turn's answer", () => {
   ];
   const settled = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn, undefined, "completed")));
   const assistants = settled.filter((item) => item.type === "assistant");
-  assert.equal(assistants.length, 2);
-  // The opening sentence is narration, however much it reads like a reply.
-  assert.equal(assistants[0].final, undefined);
-  assert.equal(assistants[1].final, true);
+  // The opening sentence is narration, however much it reads like a reply, so
+  // it is inside the block and the answer is the only message on the page.
+  assert.equal(assistants.length, 1);
+  assert.equal(assistants[0].text, "This is a website project.");
+  assert.equal(assistants[0].final, true);
+  assert.deepEqual(settled.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(settled[1].segments[0].text, "I will explore the project layout.");
 
   // Finality is decided by position, so the answer is already the answer while
   // it is still streaming — it never restyles once the run settles.
@@ -944,8 +958,21 @@ test("only the prose nothing follows is the turn's answer", () => {
   ], undefined, "completed")));
   assert.equal(direct.at(-1).final, true);
 
-  // An opening sentence with the work still open is not promoted by the work
-  // being unfinished: something follows it either way.
+  // An opening sentence with the work still open is inside that work, so there
+  // is no assistant message on the page yet at all.
   const working = JSON.parse(JSON.stringify(composerTimelineFromEvents(turn.slice(0, 3), undefined, "running")));
-  assert.equal(working.filter((item) => item.type === "assistant")[0].final, undefined);
+  assert.deepEqual(working.map((item) => item.type), ["user", "activity"]);
+  assert.equal(working[1].segments[0].text, "I will explore the project layout.");
+
+  // "Nothing follows" stops at the next user message. A finished answer stays
+  // the answer once the conversation moves on — it must not shrink into
+  // narration the moment the reader sends the next message.
+  const twoTurns = JSON.parse(JSON.stringify(composerTimelineFromEvents([
+    ...turn,
+    { type: "user.message", taskId: "task-1", text: "and the tests?", at: at(5) },
+    { type: "assistant.delta", taskId: "task-1", text: "There are none yet.", at: at(6) },
+  ], undefined, "completed")));
+  const answers = twoTurns.filter((item) => item.type === "assistant");
+  assert.deepEqual(answers.map((item) => item.final), [true, true]);
+  assert.equal(answers[0].text, "This is a website project.");
 });

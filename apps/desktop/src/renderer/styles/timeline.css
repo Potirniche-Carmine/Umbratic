@@ -255,15 +255,20 @@
    between two rounds of work. It is not a message but a status line, so it drops
    the assistant rail entirely and lines up with the Working block's own header,
    which is the layer it actually belongs to. */
-/* The size and colour have to land on the markdown body, not the article:
-   `.markdownContent` sets its own 13.5px and its paragraphs set their own
-   colour, so styling only the wrapper left the visible text untouched. */
+/* The colour has to land on the markdown body, not the article:
+   `.markdownContent` paragraphs set their own colour, so styling only the
+   wrapper left the visible text untouched.
+
+   Colour alone carries the demotion. Shrinking narration to 11px as well made
+   it a caption rather than a quieter voice — one sentence of ordinary prose set
+   two-and-a-half points below everything around it, which reads as a rendering
+   fault before it reads as a hierarchy. It keeps the body size and recedes by
+   being muted. */
 .timelineMessage.assistantProgress,
 .timelineMessage.assistantProgress .markdownContent,
 .timelineMessage.assistantProgress .markdownContent p,
 .timelineMessage.assistantProgress .markdownContent li {
   color: var(--faint);
-  font-size: 11px;
 }
 
 .timelineMessage.assistantProgress::before {

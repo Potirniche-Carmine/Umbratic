@@ -40,6 +40,44 @@ fn an_orient_decision_carries_veils_evidence_requirement() {
     assert!(parse_orient_payload(&json!({"bucket":"repo_orient","playbook":"do this"})).is_err());
 }
 
+// Holding text until the step resolves is what lets the runner say which kind
+// of prose it was without ever moving it after the fact. The two release sites
+// are the whole classification: tool calls mean the text was a preamble, no
+// tool calls mean it was the answer.
+#[test]
+fn a_released_step_says_whether_its_text_was_narration_or_the_answer() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+
+    let mut preamble = VeilChatResult {
+        held_text: "I'll read the config first.".into(),
+        ..VeilChatResult::default()
+    };
+    release_held_narration(&sink, &session, &mut preamble);
+    let narration = events.try_recv().unwrap();
+    assert_eq!(narration["type"], "assistant.progress.delta");
+    assert_eq!(narration["text"], "I'll read the config first.");
+    // Released means released: nothing is left to emit a second time.
+    assert!(preamble.held_text.is_empty());
+
+    let mut answer = VeilChatResult {
+        held_text: "The config sets three limits.".into(),
+        ..VeilChatResult::default()
+    };
+    release_held_text(&sink, &session, &mut answer);
+    let delta = events.try_recv().unwrap();
+    assert_eq!(delta["type"], "assistant.delta");
+    assert_eq!(delta["text"], "The config sets three limits.");
+
+    // A step that held nothing says nothing, so a refused step still leaves no
+    // trace in the UI.
+    let mut empty = VeilChatResult::default();
+    release_held_narration(&sink, &session, &mut empty);
+    assert!(events.try_recv().is_err());
+}
+
 #[test]
 fn tool_deltas_accumulate_by_index() {
     let mut result = VeilChatResult::default();

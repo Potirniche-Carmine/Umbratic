@@ -32,6 +32,19 @@ export function activityHasTools(segments: ReadonlyArray<{ type: string }> | und
   return (segments ?? []).some((segment) => segment.type === "command" || segment.type === "skill");
 }
 
+/// Whether the block is holding prose the run wrote for the reader.
+///
+/// This is the whole reason a block opens before its first tool: narration is
+/// written to be read while it is true. It used to render as a message outside
+/// the block, so a closed block cost nothing; now that it lives inside, a block
+/// that stays shut during orientation shows the reader a bare "Thinking" and
+/// hides the one sentence saying what is about to happen.
+export function activityHasNarration(
+  segments: ReadonlyArray<{ type: string; text?: string }> | undefined,
+): boolean {
+  return (segments ?? []).some((segment) => segment.type === "reasoning" && !!segment.text?.trim());
+}
+
 /// How long compaction has been running, or how long it took.
 ///
 /// A running row is measured against the caller's clock rather than its own, so

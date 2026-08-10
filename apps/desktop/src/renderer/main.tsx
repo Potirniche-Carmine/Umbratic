@@ -166,7 +166,7 @@ import {
   type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { activityHasNarration, activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
 export { providerReconnectFromEvents } from "./connectionStatus";
@@ -182,7 +182,7 @@ import {
   type CommandClass,
   type CommandRun,
 } from "./commandDisplay";
-export { activityHasTools, activitySummary, compactionElapsedLabel } from "./activityTiming";
+export { activityHasNarration, activityHasTools, activitySummary, compactionElapsedLabel } from "./activityTiming";
 export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
 const appearanceSettingsKey = "umbratic-ui-appearance";
@@ -795,19 +795,6 @@ function stripAssistantSpeakerPrefix(text: string): string {
   return text.replace(/^\s*(?:\*\*)?Umbratic(?: AI)?(?:\*\*)?\s*:\s*/i, "");
 }
 
-/// The answer, for copying: the last assistant message of the transcript.
-///
-/// Prose now renders in place rather than being demoted into the activity log,
-/// so a turn can show several assistant messages — the preambles that
-/// introduced each round of work, then the answer. Copying every one of them
-/// would hand back the narration too; the closing message is the response.
-export function assistantTextFromEvents(events: BackendUiEvent[]): string {
-  const answer = composerTimelineFromEvents(events)
-    .filter((item): item is Extract<ComposerTimelineItem, { type: "assistant" }> => item.type === "assistant")
-    .at(-1)?.text ?? "";
-  return stripAssistantSpeakerPrefix(answer.trim()).trim();
-}
-
 export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
   const runs = new Map<string, CommandRun>();
   const items: ComposerTimelineItem[] = [];
@@ -835,13 +822,21 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
 
   // Assistant prose renders where it first appeared and never moves again.
   //
-  // Classifying it required knowing whether another tool call was coming, which
-  // is unknowable at the first token — so the old rule streamed everything
-  // inside the open Working block and moved the answer out once the run
-  // settled. That move is exactly what made the final answer arrive as a jump
-  // instead of a stream. Text now closes the Working block and streams in
-  // place, so a turn reads Working → text → Working → answer, and nothing is
+  // Classifying it here required knowing whether another tool call was coming,
+  // which is unknowable at the first token — so the old rule streamed
+  // everything inside the open Working block and moved the answer out once the
+  // run settled. That move is exactly what made the final answer arrive as a
+  // jump instead of a stream. Text streams in place instead, and nothing is
   // ever relocated after the user has read it.
+  //
+  // The runner does the classifying now, because it is the side that can. Prose
+  // written before any tool has run is held there until the step resolves and
+  // arrives as `assistant.progress.delta` when tool calls prove it was a
+  // preamble, so orientation and preambles land inside the Working block from
+  // their first rendered token. What still reaches `assistant.delta` is the
+  // answer, plus mid-plan prose on a step that already has tool results — the
+  // one case nobody can classify early, since holding it would delay the
+  // answer.
   const flushAssistant = (streaming = false) => {
     const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
     if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
@@ -939,10 +934,26 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     reasoningEndedAt = undefined;
   };
 
-  // New workspace activity settles whatever prose preceded it: the text stays
-  // an assistant message, and the tools open a fresh Working block beneath it.
-  const closeAssistantForActivity = () => {
-    flushAssistant();
+  // New workspace activity turns whatever prose preceded it into narration
+  // inside the block that is already open.
+  //
+  // Prose used to close the block instead, which split one turn into a row of
+  // separate Working summaries with paragraphs stranded between them — three
+  // blocks and two loose essays for a single question. Work continuing is not a
+  // new activity; it is the same activity, still going. Only the answer ends it.
+  // Prose and progress lines are one voice once they are both narration, so
+  // they join the same passage in arrival order rather than stacking up as
+  // separate fragments of the same thought.
+  const foldProseIntoNarration = () => {
+    if (!assistantBuffer.trim()) return;
+    const separator = reasoningBuffer.trim() ? "\n\n" : "";
+    reasoningBuffer = `${reasoningBuffer}${separator}${stripAssistantSpeakerPrefix(assistantBuffer).trim()}`;
+    assistantBuffer = "";
+    assistantNeedsSeparator = false;
+  };
+
+  const narrateAssistantForActivity = () => {
+    foldProseIntoNarration();
     flushReasoning();
   };
 
@@ -966,16 +977,11 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     }
     if (event.type === "assistant.delta") {
       if (isReviewReadyText(event.text)) continue;
-      flushReasoning();
       // The work is over once the model starts speaking, so the first token of a
       // burst closes the elapsed window. Later tokens of the same answer must not
-      // keep inflating it.
+      // keep inflating it. A tool afterwards reopens it: the run was not done
+      // talking, and this prose was narration.
       if (!assistantBuffer) markActivityTime(undefined, event.at);
-      // Prose ends the Working block, always. A block with tools settles into a
-      // timed summary; a thinking-only block simply drops. Either way the text
-      // that follows streams outside it, which is what makes the final answer
-      // arrive live instead of surfacing after the run settles.
-      flushActivity();
       const separator = assistantNeedsSeparator
         && assistantBuffer.trim()
         && !/\s$/.test(assistantBuffer)
@@ -992,7 +998,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       // finish updates the row that started it: the elapsed time the user
       // watched is the elapsed time that settles.
       if (event.phase === "started") {
-        closeAssistantForActivity();
+        narrateAssistantForActivity();
         flushActivity();
         compactionIndex += 1;
         items.push({
@@ -1016,7 +1022,9 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "assistant.progress.delta") {
-      if (assistantBuffer.trim()) assistantNeedsSeparator = true;
+      // Prose already buffered came first and joins the passage ahead of this
+      // line, rather than being appended after it when the block closes.
+      foldProseIntoNarration();
       reasoningStartedAt = reasoningStartedAt ?? event.at;
       reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
       reasoningBuffer = `${reasoningBuffer}${reasoningBuffer ? "\n\n" : ""}${event.text}`;
@@ -1025,10 +1033,15 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     if (event.type === "turn.outcome") {
       // A stopped turn ends where it was: whatever had streamed stays exactly
       // where the user saw it, and the Working block settles around the tools
-      // that did run.
+      // that did run. Prose keeps its place as a message rather than being
+      // folded into the block — nothing follows it now, so it was the last
+      // thing the run said.
       if (event.outcome === "aborted" && activityHasTools(activitySegments)) {
-        closeAssistantForActivity();
+        // Block first, then the prose: the work came before the sentence that
+        // was still arriving when the stop landed.
+        flushReasoning();
         flushActivity();
+        flushAssistant();
       }
       continue;
     }
@@ -1042,7 +1055,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "skill.requested") {
-      closeAssistantForActivity();
+      narrateAssistantForActivity();
       skillIndex += 1;
       activitySegments.push({
         type: "skill",
@@ -1057,7 +1070,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "skill.loaded" || event.type === "skill.failed") {
-      closeAssistantForActivity();
+      narrateAssistantForActivity();
       const existing = [...activitySegments].reverse().find(
         (segment): segment is Extract<ComposerActivitySegment, { type: "skill" }> =>
           segment.type === "skill" && segment.requestId === event.requestId,
@@ -1090,7 +1103,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.started") {
-      closeAssistantForActivity();
+      narrateAssistantForActivity();
       const existingRun = runs.get(event.id);
       if (existingRun) {
         existingRun.command = event.command;
@@ -1126,7 +1139,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.output") {
-      closeAssistantForActivity();
+      narrateAssistantForActivity();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -1155,7 +1168,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "command.finished") {
-      closeAssistantForActivity();
+      narrateAssistantForActivity();
       let run = runs.get(event.id);
       if (!run) {
         run = {
@@ -1200,18 +1213,32 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   // Trailing text is flushed as an assistant message whether or not the run has
   // settled, so a streaming answer renders outside the Working block from its
   // first token rather than appearing there once the run finishes.
+  //
+  // An answer under way also settles the block above it. The work is what the
+  // block is timing, and the model has moved on from it — leaving a clock
+  // ticking on finished work while the reply streams underneath reads as though
+  // two things are happening at once.
+  const answering = assistantBuffer.trim().length > 0;
   flushReasoning(taskState !== "running");
-  flushActivity(taskState !== "running");
+  flushActivity(taskState !== "running" || answering);
   flushAssistant(taskState === "running");
 
-  // The turn's answer is the prose nothing follows. Deciding it by position
-  // rather than by the run having settled is what keeps it stable: a message
-  // stops being the answer the moment work opens beneath it, and the real
-  // answer is the answer from its first streamed token — it never restyles
-  // under the reader.
-  const closing = items.at(-1);
-  if (closing?.type === "assistant") {
-    closing.final = true;
+  // The turn's answer is the prose nothing follows *within its own turn*.
+  // Deciding it by position rather than by the run having settled is what keeps
+  // it stable: a message stops being the answer the moment work opens beneath
+  // it, and the real answer is the answer from its first streamed token — it
+  // never restyles under the reader.
+  //
+  // "Nothing follows" has to stop at the next user message. Marking only the
+  // last item of the whole transcript demoted every earlier turn's answer to
+  // narration the instant the next message was sent, so a finished reply shrank
+  // to muted 11px prose while the reader was looking at it.
+  for (const [index, item] of items.entries()) {
+    if (item.type !== "assistant") continue;
+    const next = items[index + 1];
+    if (!next || next.type === "user") {
+      item.final = true;
+    }
   }
 
   return items;
@@ -1237,7 +1264,9 @@ export function reconcileActivityDisclosureState(
     const key = activityKey(activity.id);
     // A live compaction block auto-opens for the same reason a tool block does:
     // the row explaining the pause is the point of showing the block at all.
-    const opensLive = activityHasTools(activity.segments);
+    // Narration opens it too, and often first — orientation arrives before any
+    // tool, and a block that stayed shut would replace it with "Thinking".
+    const opensLive = activityHasTools(activity.segments) || activityHasNarration(activity.segments);
     if (!activity.finished && opensLive && !nextAutoOpenedKeys.has(key)) {
       nextAutoOpenedKeys.add(key);
       nextExpandedIds.add(activity.id);
@@ -2033,7 +2062,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     prompt,
     attachmentCount: attachedFiles.length,
   });
-  const assistantCopyText = useMemo(() => assistantTextFromEvents(visibleEvents), [visibleEvents]);
   const chatProjectGroups = useMemo(() => {
     type ChatProjectGroupBuilder = ChatProjectGroup & { worktreeMap: Map<string, WorktreeChatGroup> };
     const groups = new Map<string, ChatProjectGroupBuilder>();
@@ -4972,13 +5000,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       <AssistantMessage
                         key={item.id}
                         item={item}
-                        settled={!isGenerating}
+                        settled={!isGenerating || item.id !== lastAssistantItemId}
                         rating={responseFeedback.get(item.id)}
-                        copyText={assistantCopyText}
+                        copyText={item.text}
                         onCopy={(text) => void copyText(text)}
                         onRate={openResponseFeedbackDialog}
                         documents={
-                          item.final && reviewReadyForDisplay && documentReviewFiles.length ? (
+                          // Every turn has an answer, but the documents a run
+                          // produced belong to the newest one — the review state
+                          // they link into is the task's current state, not a
+                          // snapshot of what scrollback said at the time.
+                          item.id === lastAssistantItemId && reviewReadyForDisplay && documentReviewFiles.length ? (
                             <div className="documentResponseLinks" aria-label="Generated documents">
                               {documentReviewFiles.map((file) => (
                                 <DocumentReviewResponseLink
@@ -5004,7 +5036,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     ) : (
                       (() => {
                         const hasTools = activityHasTools(item.segments);
-                        if (!item.finished && !hasTools) {
+                        // The bare status line is for a block with nothing in
+                        // it yet — the wait before the run has said anything.
+                        // Once it holds narration there is something to read,
+                        // so it takes the ordinary expandable shape instead of
+                        // throwing its own segments away.
+                        if (!item.finished && !hasTools && !activityHasNarration(item.segments)) {
                           return (
                             <article className="timelineActivity isGenerating isStatusOnly" key={item.id}>
                               <div className="activityHeader" role="status">
