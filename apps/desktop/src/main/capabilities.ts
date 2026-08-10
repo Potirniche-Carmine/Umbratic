@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { codeIndexBinaryPath } from "./indexerService";
 import { pdfInspectorBinaryPath } from "./pdfInspector";
 import type {
   CapabilityProbeCategory,
@@ -44,6 +45,8 @@ export type CapabilityProbeOptions = {
   runnerPath?: string | null;
   /** Overrides umbratic-pdf binary resolution; pass null to simulate absence. */
   pdfInspectorPath?: string | null;
+  /** Overrides umbratic-code-index binary resolution; pass null to simulate absence. */
+  codeIndexPath?: string | null;
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
   execFile?: ExecFileLike;
@@ -392,6 +395,30 @@ function pdfInspectorProbe(options: CapabilityProbeOptions): CapabilityProbeResu
   );
 }
 
+function codeIndexProbe(options: CapabilityProbeOptions): CapabilityProbeResult {
+  const indexerPath =
+    options.codeIndexPath !== undefined ? options.codeIndexPath : codeIndexBinaryPath();
+  return staticProbe(
+    {
+      id: "umbratic-code-index",
+      label: "Umbratic code index",
+      category: "recommended",
+      purpose:
+        "Builds the workspace code map that answers structural questions in one call and orders the review panel.",
+      installHint: "Build the Rust workspace so the umbratic-code-index CLI is available.",
+      workflows: ["workspace graph", "review priority"],
+    },
+    indexerPath ? "available" : "missing",
+    options,
+    indexerPath
+      ? { version: "built", executablePath: indexerPath }
+      : {
+          message:
+            "The umbratic-code-index CLI was not found; structural questions fall back to search and read.",
+        },
+  );
+}
+
 const commandProbeSpecs: CommandProbeSpec[] = [
   {
     id: "rg",
@@ -670,6 +697,7 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
 
   const runnerProbe = runnerBinaryProbe(options);
   const pdfProbe = pdfInspectorProbe(options);
+  const indexProbe = codeIndexProbe(options);
   const pythonSpec = commandProbeSpecs.find((spec) => spec.id === "python");
   if (!pythonSpec) {
     throw new Error("Python probe spec is missing.");
@@ -688,6 +716,7 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
   const probes = [
     runnerProbe,
     pdfProbe,
+    indexProbe,
     ...commandProbes.slice(0, 4),
     pythonProbe,
     ...commandProbes.slice(4),

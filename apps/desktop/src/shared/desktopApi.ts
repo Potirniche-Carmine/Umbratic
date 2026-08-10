@@ -273,6 +273,8 @@ export type TaskInfo = {
   events: BackendUiEvent[];
   latestTest?: TestResult;
   reviewPatchHash?: string;
+  /** Set when the review file order came from change analysis. */
+  reviewPrioritized?: boolean;
   reviewScope?: "task" | "worktree";
   reviewBaselineLabel?: string;
   reviewBaselineOid?: string;

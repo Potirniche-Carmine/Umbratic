@@ -14,6 +14,8 @@ files:
   - assets/**/*
   - package.json
 extraResources:
+  - from: .package/code-index
+    to: code-index
   - from: .package/desktop-core
     to: desktop-core
   - from: .package/pdf

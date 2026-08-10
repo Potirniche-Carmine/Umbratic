@@ -19,6 +19,7 @@ import {
   readProjects,
   writeProjects,
 } from "./storage";
+import { refreshWorkspaceGraph } from "./indexerService";
 import { gitOutput, gitResult } from "./processCommands";
 import type { ChatAttachment, PastedAttachmentInput, RepositoryInfo, WorkspaceKind } from "./types";
 import { isRecord, normalizeRelativePath, pathInside, requiredString } from "./utils";
@@ -57,6 +58,10 @@ export async function inspectRepository(selectedPath: string): Promise<Repositor
     statusSummary,
   };
   writeProjects([repository, ...readProjects().filter((project) => project.id !== repository.id)]);
+  // Start the code index in the background on open, so the first task finds it
+  // ready. Deliberately not awaited: opening a workspace must never wait on it,
+  // and until the artifact exists the graph tool simply does not admit.
+  void refreshWorkspaceGraph(root).catch(() => undefined);
   return repository;
 }
 

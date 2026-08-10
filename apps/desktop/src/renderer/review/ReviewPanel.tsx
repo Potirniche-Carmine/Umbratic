@@ -49,6 +49,7 @@ export function ReviewPanel({
   initialSelectedPath,
   taskId,
   patchHash,
+  prioritized,
   scope,
   canUseWorktreeScope,
   canOpenIde,
@@ -70,6 +71,8 @@ export function ReviewPanel({
   initialSelectedPath?: string;
   taskId: string;
   patchHash?: string;
+  /** The incoming file order came from change analysis, not from paths. */
+  prioritized?: boolean;
   scope: "task" | "worktree";
   canUseWorktreeScope: boolean;
   canOpenIde: boolean;
@@ -108,6 +111,7 @@ export function ReviewPanel({
   const [feedbackAdded, setFeedbackAdded] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const [comments, setComments] = useState<ReviewCommentDraft[]>([]);
+  const [sortByPath, setSortByPath] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [selectedScope, setSelectedScope] = useState(scope);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
@@ -117,10 +121,13 @@ export function ReviewPanel({
   const selectedIndex = Math.max(0, files.findIndex((file) => file.path === selectedPath));
   const selectedFile = files[selectedIndex] ?? files[0];
   const selectedFileIsDocument = !!selectedFile && isDocumentReviewArtifactPath(selectedFile.path);
-  const navigatorFiles = useMemo(
-    () => files.filter((file) => !isDocumentReviewArtifactPath(file.path)),
-    [files],
-  );
+  // The files arrive already ordered by review priority when analysis was
+  // available. Alphabetical stays one click away, because it is genuinely
+  // useful when scanning for a file you already have in mind.
+  const navigatorFiles = useMemo(() => {
+    const visible = files.filter((file) => !isDocumentReviewArtifactPath(file.path));
+    return sortByPath ? [...visible].sort((left, right) => left.path.localeCompare(right.path)) : visible;
+  }, [files, sortByPath]);
   const navigatorTotals = useMemo(
     () => navigatorFiles.reduce(
       (total, file) => ({
@@ -330,6 +337,14 @@ export function ReviewPanel({
           {navigatorFiles.length ? (
             <aside className="reviewFileNavigator" aria-label="Changed files">
               <div className="reviewNavigatorSummary"><span>{navigatorFiles.length} file{navigatorFiles.length === 1 ? "" : "s"}</span><span className="additions">+{navigatorTotals.additions}</span><span className="deletions">-{navigatorTotals.deletions}</span></div>
+              {prioritized ? (
+                <div className="reviewNavigatorOrder">
+                  <span>{sortByPath ? "Ordered by path." : "Ordered by review priority."}</span>
+                  <button type="button" onClick={() => setSortByPath((value) => !value)}>
+                    {sortByPath ? "by priority" : "by path"}
+                  </button>
+                </div>
+              ) : null}
               <div className="reviewNavigatorList">{navigatorFiles.map((file) => {
                 const { dir, name } = splitReviewPath(file.path);
                 return (

@@ -50,6 +50,7 @@ export function reduceVisibleTask(
         state: "review_ready",
         changedFiles: event.changedFiles,
         reviewFiles: event.reviewFiles,
+        reviewPrioritized: event.reviewPrioritized === true,
         latestTest: event.latestTest,
       };
     case "approval.completed":

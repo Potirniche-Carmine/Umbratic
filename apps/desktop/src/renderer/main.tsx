@@ -5697,6 +5697,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           initialSelectedPath={reviewTargetPath}
           taskId={task?.id ?? `workspace:${repository?.rootPath ?? "none"}`}
           patchHash={task?.reviewPatchHash}
+          prioritized={task?.reviewPrioritized === true}
           scope={task?.reviewScope ?? tasklessReviewScope}
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}

@@ -56,7 +56,7 @@ func TestDirectAnswerAndUnknownBucketsRenderNoPlaybook(t *testing.T) {
 			if id == "positioning" && route == MarketingChat {
 				continue
 			}
-			if got := PlaybookPrompt(route, id, skills); got != "" {
+			if got := PlaybookPrompt(route, id, skills, nil); got != "" {
 				t.Fatalf("%s/%q rendered a playbook: %q", route, id, got)
 			}
 		}
@@ -65,7 +65,7 @@ func TestDirectAnswerAndUnknownBucketsRenderNoPlaybook(t *testing.T) {
 
 func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	enabled := []SkillMetadata{{ID: "umbratic-security-review"}, {ID: "umbratic-markdown"}}
-	rendered := PlaybookPrompt(EngineeringChat, "deep_review", enabled)
+	rendered := PlaybookPrompt(EngineeringChat, "deep_review", enabled, nil)
 	if rendered == "" {
 		t.Fatal("deep_review must render a playbook")
 	}
@@ -96,7 +96,7 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	}
 
 	// With no catalog at all the playbook still carries its core rules.
-	bare := PlaybookPrompt(EngineeringChat, "deep_review", nil)
+	bare := PlaybookPrompt(EngineeringChat, "deep_review", nil, nil)
 	if bare == "" || strings.Contains(bare, "Preferred skills") {
 		t.Fatalf("playbook must stand alone without skills:\n%s", bare)
 	}
@@ -111,7 +111,7 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 // project's own documentation and guessed filenames instead, and a dozen files
 // read then summarized in two lines.
 func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
-	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil)
+	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
 	for name, want := range map[string]string{
 		"read-only":            "Never create, edit, or write a file",
 		"no drive-by fixes":    "never fix a problem you notice",
@@ -392,7 +392,7 @@ func TestAStatusSentenceNarratesItsOwnWorkInFirstPerson(t *testing.T) {
 // one directory, each answered with that directory's real listing. The rule that
 // stops it belongs in the bucket that does the reading.
 func TestCodeExplainForbidsGuessedPaths(t *testing.T) {
-	rendered := PlaybookPrompt(EngineeringChat, "code_explain", nil)
+	rendered := PlaybookPrompt(EngineeringChat, "code_explain", nil, nil)
 	for _, want := range []string{
 		"Read only paths you have actually seen",
 		"never answer a miss by inventing another name beside it",
@@ -559,7 +559,7 @@ func TestOrientDecisionValidationSeparatesTheBucketFromTheSentence(t *testing.T)
 func TestPlaybookIsTheLastProtectedSegment(t *testing.T) {
 	skills := []SkillMetadata{{ID: "umbratic-python"}}
 	client := []model.Message{{Role: "user", Content: "fix the failing test"}}
-	playbook := PlaybookPrompt(EngineeringChat, "debug_failure", skills)
+	playbook := PlaybookPrompt(EngineeringChat, "debug_failure", skills, nil)
 	if playbook == "" {
 		t.Fatal("debug_failure must render a playbook")
 	}
@@ -596,5 +596,51 @@ func TestPlaybookIsTheLastProtectedSegment(t *testing.T) {
 	}
 	if len(baseline) != 4 {
 		t.Fatalf("a run with no bucket must add no playbook, got %d segments", len(baseline))
+	}
+}
+
+// The graph guidance is conditional on the tool actually being in the request,
+// so a harness without the workspace graph assembles the same bytes it does
+// today and never reads an instruction to call a tool it does not have.
+func TestGraphGuidanceRendersOnlyWhenTheToolIsPresent(t *testing.T) {
+	tools := []any{
+		map[string]any{"type": "function", "function": map[string]any{"name": "read"}},
+		map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}},
+	}
+	without := []any{map[string]any{"type": "function", "function": map[string]any{"name": "read"}}}
+
+	for _, bucket := range []string{"repo_orient", "code_explain", "code_change", "review_audit"} {
+		absent := PlaybookPrompt(EngineeringChat, bucket, nil, without)
+		present := PlaybookPrompt(EngineeringChat, bucket, nil, tools)
+		if strings.Contains(absent, "workspace_graph") {
+			t.Fatalf("%s named workspace_graph without the tool:\n%s", bucket, absent)
+		}
+		if !strings.Contains(present, "workspace_graph") {
+			t.Fatalf("%s dropped its graph guidance with the tool present:\n%s", bucket, present)
+		}
+		if PlaybookPrompt(EngineeringChat, bucket, nil, nil) != absent {
+			t.Fatalf("%s: a nil tool array must render like an array without the tool", bucket)
+		}
+	}
+}
+
+// Review buckets carry the negative instruction on purpose: telling a small
+// model what not to re-read is what actually shortens the tool chain.
+func TestReviewBucketsTellTheModelWhatNotToReRead(t *testing.T) {
+	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}}}
+	for _, bucket := range []string{"review_audit", "deep_review"} {
+		rendered := PlaybookPrompt(EngineeringChat, bucket, nil, tools)
+		if !strings.Contains(rendered, "Do not re-read files the diff did not touch") {
+			t.Fatalf("%s lost its negative read instruction:\n%s", bucket, rendered)
+		}
+	}
+}
+
+func TestHasToolIgnoresMalformedToolArrays(t *testing.T) {
+	if HasTool(nil, "workspace_graph") || HasTool("tools", "workspace_graph") {
+		t.Fatal("a missing or non-array tool contract must not report a tool")
+	}
+	if HasTool([]any{map[string]any{"function": "not-an-object"}, 7}, "workspace_graph") {
+		t.Fatal("malformed rows must not report a tool")
 	}
 }

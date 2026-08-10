@@ -57,6 +57,8 @@ test("desktop packages the native Rust runner instead of a Node launcher", () =>
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-desktop-core\.exe" : "umbratic-desktop-core"/);
   assert.match(config, /- from: \.package\/pdf\r?\n\s+to: pdf/);
   assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-pdf\.exe" : "umbratic-pdf"/);
+  assert.match(config, /- from: \.package\/code-index\r?\n\s+to: code-index/);
+  assert.match(preparePackage, /process\.platform === "win32" \? "umbratic-code-index\.exe" : "umbratic-code-index"/);
   assert.doesNotMatch(preparePackage, /umbratic-runner\.cjs|dist["'], ["']cli\.js/);
 });
 

@@ -181,7 +181,9 @@ for (const block of cargoLock.split("[[package]]").slice(1)) {
 const cargoMetadata = spawnSync(
   "cargo",
   ["metadata", "--locked", "--format-version", "1"],
-  { cwd: root, encoding: "utf8" },
+  // The tree-sitter grammar crates pushed this output past Node's 1 MB default,
+  // which surfaced as an opaque ENOBUFS rather than a supply-chain finding.
+  { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 if (cargoMetadata.error || cargoMetadata.status !== 0) {
   fail(`Unable to validate locked Cargo metadata: ${cargoMetadata.error?.message ?? cargoMetadata.stderr.trim()}`);

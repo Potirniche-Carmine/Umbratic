@@ -23,7 +23,8 @@ fn graph_for(name: &str) -> Graph {
     let directory = tempfile::tempdir().expect("temp dir");
     let artifact = directory.path().join("graph.json");
     build::build(&fixture(name), &artifact).expect("build succeeds");
-    serde_json::from_slice(&fs::read(&artifact).expect("artifact written")).expect("artifact parses")
+    serde_json::from_slice(&fs::read(&artifact).expect("artifact written"))
+        .expect("artifact parses")
 }
 
 fn labels(graph: &Graph, kind: &str) -> Vec<String> {
@@ -118,10 +119,7 @@ fn cmake_fixture_extracts_targets_links_and_subdirectories() {
     let graph = graph_for("cmake");
     assert_eq!(labels(&graph, "target"), vec!["app", "core"]);
     assert!(
-        graph
-            .edges
-            .iter()
-            .any(|edge| edge.relation == "depends"),
+        graph.edges.iter().any(|edge| edge.relation == "depends"),
         "target_link_libraries should produce a depends edge"
     );
     assert!(

@@ -3,7 +3,9 @@ import { resolveSelectedModel, submitSteeredRunnerTurn } from "./backendSettings
 import { chatAttachmentDirectory } from "./chatStore";
 import { PendingTaskPrompt, RunnerPrompt, activeRunnerProcesses, appendUserMessage, applyTaskPolicyMetadata, clearPendingPermissionsForTask, emit, failTask, getTask, pendingPermissions, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, recordProductTelemetry, saveTask, taskStillRunning } from "./mainRuntime";
 import { runnerPromptForTask, runnerPromptParts, runnerPromptText } from "./taskPromptContext";
+import { refreshWorkspaceGraph } from "./indexerService";
 import { refreshReview, reviewPatchHash } from "./reviewFiles";
+import { prioritizedReviewFiles } from "./reviewInsights";
 import { prepareTaskTurnCheckpoint } from "./taskCommands";
 import { worktreeRootForRepo } from "./worktreeOps";
 import * as fs from "node:fs";
@@ -473,12 +475,24 @@ export async function runRunnerTask(
     task.state = "review_ready";
     task.reviewPatchHash = reviewPatchHash(reviewFiles);
     saveTask(task);
+    // Between-turn reindex, then insights for exactly this diff, both awaited
+    // so the panel's first render is already ordered. Each degrades to false
+    // rather than throwing when the indexer is absent, which leaves the panel
+    // on today's path ordering.
+    await refreshWorkspaceGraph(task.worktreePath);
+    const prioritized = await prioritizedReviewFiles(
+      task.worktreePath,
+      task.baseCommit,
+      task.reviewPatchHash,
+      reviewFiles,
+    );
     emit({ type: "assistant.done", taskId: task.id });
     emit({
       type: "review.ready",
       taskId: task.id,
       changedFiles: task.changedFiles,
-      reviewFiles: rendererReviewFiles(reviewFiles, hiddenRendererReviewPaths(task)),
+      reviewFiles: rendererReviewFiles(prioritized.files, hiddenRendererReviewPaths(task)),
+      reviewPrioritized: prioritized.prioritized,
       latestTest: task.latestTest,
     });
     run.abortController.abort();

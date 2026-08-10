@@ -37,6 +37,10 @@ type Bucket struct {
 	// PreferredSkills are intersected with the validated client catalog before
 	// rendering, so a disabled skill is simply omitted.
 	PreferredSkills []string
+	// GraphGuidance is rendered only when the request's tool array actually
+	// carries workspace_graph, the same conditional discipline RelevantSkills
+	// uses. A run without the tool assembles byte-identically to today.
+	GraphGuidance string
 	// Stop is the bucket's completion rule.
 	Stop string
 	// RequiresEvidence marks a bucket whose answer must rest on tool results.
@@ -72,6 +76,7 @@ Length is yours to judge. You have just read the project; a two-line reply throw
 
 Anti-stuck: once listings and searches stop telling you anything new, stop exploring and write the answer from what you have. That is a limit on exploring, never a licence to answer before you have looked.`,
 		PreferredSkills:  []string{"umbratic-markdown"},
+		GraphGuidance:    "Call workspace_graph with action summary before any broad ls or search sweep: it names this workspace's files and main symbols in one call. Use what it returns to choose what to read, then read.",
 		Stop:             "the map is delivered. Do not write files unless the user asked for a durable map.",
 		RequiresEvidence: true,
 	},
@@ -82,6 +87,7 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 2. Set context on that search: when the lines around a hit already answer the question, do not open the file at all. Where they do not, read a window around the hit and follow only the references you actually need.
 3. Read only paths you have actually seen in a listing or search result. When a read fails, the error says what is really there — pick from that, and never answer a miss by inventing another name beside it.
 4. Explain with exact paths and symbols. No speculative architecture.`,
+		GraphGuidance:    "Locate the symbol with workspace_graph query first, then read its callers from that result instead of grepping for them.",
 		Stop:             "the explanation is clear. Make no edits.",
 		RequiresEvidence: true,
 	},
@@ -93,6 +99,7 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 3. Fix only if the user asked for a fix; otherwise report the root cause.
 4. Re-run the failing check after any fix.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
+		GraphGuidance:    "Locate the failing symbol with workspace_graph query, then read its callers from that result before grepping for them.",
 		Stop:             "you have a verified fix or a concrete root-cause answer. Do not thrash on tools.",
 		RequiresEvidence: true,
 	},
@@ -104,6 +111,7 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 3. Verify with the narrowest check that proves the change works.
 4. Report the paths you changed and the verification result. Do not repeat the file contents back.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
+		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the change is made and verified, or a blocker needs the user.",
 		RequiresEvidence: true,
 	},
@@ -115,6 +123,7 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 3. Order findings by severity, each with the path and symbol that shows it.
 4. Make no changes unless the user asked you to fix what you find.`,
 		PreferredSkills:  []string{"umbratic-git-worktree", "umbratic-security-review"},
+		GraphGuidance:    "Call workspace_graph changes first and read only the highest-priority symbols it names. Do not re-read files the diff did not touch.",
 		Stop:             "the findings are reported, plus an optional fix pass if the user asked for one.",
 		RequiresEvidence: true,
 	},
@@ -130,6 +139,7 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 
 Anti-stuck: when several waves stop producing a new class of finding, stop and write it up. One honest pass with stated gaps beats an endless second one.`,
 		PreferredSkills:  []string{"umbratic-security-review", "umbratic-git-worktree"},
+		GraphGuidance:    "Call workspace_graph changes first and read only the highest-priority symbols it names. Do not re-read files the diff did not touch.",
 		Stop:             "the scoped deep report is delivered with explicit coverage limits.",
 		RequiresEvidence: true,
 	},
@@ -152,6 +162,7 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 3. Work in dependency order and verify after each meaningful chunk rather than at the end.
 4. Summarize the risks and whatever is left over.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
+		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the sequenced changes are made and verified, or the requested plan is delivered.",
 		RequiresEvidence: true,
 	},
@@ -687,12 +698,15 @@ const playbookAntiLoop = `Anti-loop: after a tool failure, change the approach; 
 // playbook body, so a degraded run assembles byte-identically to today.
 // availableSkills is the already-validated client catalog; preferred skills the
 // user disabled are simply omitted, and every playbook stands alone without one.
-func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadata) string {
+func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadata, tools any) string {
 	bucket, ok := BucketFor(route, bucketID)
 	if !ok || bucket.ID == DirectAnswerBucket || strings.TrimSpace(bucket.Playbook) == "" {
 		return ""
 	}
 	sections := []string{playbookHeader, "", bucket.Playbook}
+	if strings.TrimSpace(bucket.GraphGuidance) != "" && HasTool(tools, "workspace_graph") {
+		sections = append(sections, "", bucket.GraphGuidance)
+	}
 	if preferred := intersectSkills(bucket.PreferredSkills, availableSkills); len(preferred) > 0 {
 		sections = append(sections, "",
 			"Preferred skills (optional): "+strings.Join(preferred, ", "),
@@ -705,6 +719,31 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 	}
 	sections = append(sections, playbookAntiLoop)
 	return strings.Join(sections, "\n")
+}
+
+// HasTool reports whether the request's already-validated tool array carries a
+// function with this name. The array is untyped by design — Veil passes the
+// harness's tool contract through rather than modelling it — so this walks it
+// defensively and answers false for anything it does not recognize.
+func HasTool(tools any, name string) bool {
+	rows, ok := tools.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range rows {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		function, ok := tool["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value, _ := function["name"].(string); value == name {
+			return true
+		}
+	}
+	return false
 }
 
 func intersectSkills(preferred []string, available []SkillMetadata) []string {

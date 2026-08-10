@@ -14,6 +14,9 @@ const desktopCoreBinary = path.resolve(desktopRoot, "../../target/release", desk
 const pdfTarget = path.join(desktopRoot, ".package", "pdf");
 const pdfBinaryName = process.platform === "win32" ? "umbratic-pdf.exe" : "umbratic-pdf";
 const pdfBinary = path.resolve(desktopRoot, "../../target/release", pdfBinaryName);
+const codeIndexTarget = path.join(desktopRoot, ".package", "code-index");
+const codeIndexBinaryName = process.platform === "win32" ? "umbratic-code-index.exe" : "umbratic-code-index";
+const codeIndexBinary = path.resolve(desktopRoot, "../../target/release", codeIndexBinaryName);
 const veilRoot = path.resolve(desktopRoot, "../../infrastructure/veil");
 const veilTarget = path.join(desktopRoot, ".package", "veil");
 
@@ -50,6 +53,13 @@ const packagedPdfBinary = path.join(pdfTarget, pdfBinaryName);
 fs.copyFileSync(pdfBinary, packagedPdfBinary);
 if (process.platform !== "win32") fs.chmodSync(packagedPdfBinary, 0o755);
 console.log(`Prepared packaged PDF inspector at ${path.relative(desktopRoot, packagedPdfBinary)}`);
+
+fs.rmSync(codeIndexTarget, { recursive: true, force: true });
+fs.mkdirSync(codeIndexTarget, { recursive: true });
+const packagedCodeIndexBinary = path.join(codeIndexTarget, codeIndexBinaryName);
+fs.copyFileSync(codeIndexBinary, packagedCodeIndexBinary);
+if (process.platform !== "win32") fs.chmodSync(packagedCodeIndexBinary, 0o755);
+console.log(`Prepared packaged code index at ${path.relative(desktopRoot, packagedCodeIndexBinary)}`);
 
 fs.rmSync(veilTarget, { recursive: true, force: true });
 fs.mkdirSync(veilTarget, { recursive: true });

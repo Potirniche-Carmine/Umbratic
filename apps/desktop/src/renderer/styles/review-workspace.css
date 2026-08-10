@@ -175,6 +175,36 @@
   flex: 1 1 auto;
 }
 
+/* One quiet caption. The ordering is the whole surface: no badges, no scores,
+   no factor readouts — the user only needs to know the first file is first. */
+.reviewNavigatorOrder {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.reviewNavigatorOrder > span {
+  flex: 1 1 auto;
+}
+
+.reviewNavigatorOrder > button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--faint);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.reviewNavigatorOrder > button:hover {
+  color: var(--text);
+}
+
 .reviewNavigatorList {
   flex: 1 1 auto;
   min-height: 0;

@@ -83,7 +83,10 @@ export type BackendUiEvent = BackendEventMeta & (
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
   | { type: "permission.requested"; taskId: string; request: BackendPermissionRequest }
   | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; latestTest?: BackendTestResult }
+  // `reviewPrioritized` says the file order came from change analysis rather
+  // than from the path ordering. Optional and tolerated when absent, per the
+  // additive-only event contract.
+  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; reviewPrioritized?: boolean; latestTest?: BackendTestResult }
   | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }

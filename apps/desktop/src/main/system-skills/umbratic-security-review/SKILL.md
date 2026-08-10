@@ -21,7 +21,9 @@ Set a read budget before starting: roughly 25–40 substantive file reads per pa
 
 ## 2. Method
 
-Targeted `search` waves, then selective `read` of the highest-signal hits. Use `grep` only to confirm an exact pattern. Never enumerate the tree with recursive `ls`/`find` as a substitute for review.
+When `workspace_graph` is available, start there rather than with a manual sweep. `changes` names the changed symbols in priority order and flags which are untested; `affected` shows what a risky symbol reaches. Both return names and locations, so use them to pick the reads — and confirm every finding by reading the code, never from the graph alone.
+
+Then targeted `search` waves, and selective `read` of the highest-signal hits. Use `grep` only to confirm an exact pattern. Never enumerate the tree with recursive `ls`/`find` as a substitute for review.
 
 Rank hits before opening them. Do not open every result of a search.
 

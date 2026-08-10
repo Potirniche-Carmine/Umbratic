@@ -8,6 +8,7 @@ import { app } from "electron";
 import { runnerLogsDirectory, workspaceRuntimeDirectory } from "./appPaths";
 import { companyEndpoint } from "./config";
 import { probeLocalCapabilities } from "./capabilities";
+import { refreshWorkspaceGraph, workspaceGraphRunnerConfig } from "./indexerService";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { enabledPromptSkills } from "./skills";
@@ -52,9 +53,17 @@ export function buildUmbraticRunnerConfig(
   const requestedTools = normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
   const lspServers = approvedLspServers(capabilityReport);
   const approvedExecutables = approvedCommandExecutables(capabilityReport);
-  const enabledTools = requestedTools.filter((tool) => tool !== "lsp") as RunnerToolId[];
+  const workspaceGraph = workspaceGraphRunnerConfig(task.worktreePath);
+  const enabledTools = requestedTools.filter(
+    (tool) => tool !== "lsp" && tool !== "workspace_graph",
+  ) as RunnerToolId[];
   if (requestedTools.includes("lsp") && lspServers.length > 0) {
     enabledTools.splice(Math.min(4, enabledTools.length), 0, "lsp" as RunnerToolId);
+  }
+  // Same shape as LSP: requested plus available, never requested alone. Until
+  // the artifact exists the tool simply does not admit.
+  if (requestedTools.includes("workspace_graph") && workspaceGraph) {
+    enabledTools.splice(Math.min(5, enabledTools.length), 0, "workspace_graph" as RunnerToolId);
   }
   return {
     taskId: task.id,
@@ -77,6 +86,7 @@ export function buildUmbraticRunnerConfig(
     enabledTools,
     approvedExecutables,
     lspServers,
+    workspaceGraph,
     diagnostics: {
       enabled: false,
     },
@@ -307,6 +317,11 @@ export async function startUmbraticRunnerServer(
   const port = await freeLocalPort();
   const password = crypto.randomBytes(18).toString("base64url");
   const capabilityReport = await probeLocalCapabilities({ runnerPath: binaryPath });
+  // The config reads the artifact's existence, so the index has to settle
+  // before it is built. Opening the workspace already started this build and
+  // `refreshWorkspaceGraph` coalesces onto it, so the usual cost here is the
+  // incremental update. A failure resolves false and the tool stays absent.
+  await refreshWorkspaceGraph(task.worktreePath);
   const config = buildUmbraticRunnerConfig(task, model, attachmentDirectory, capabilityReport);
   const diagnostics = isRecord(config.diagnostics) && typeof config.diagnostics.logPath === "string"
     ? { diagnosticLogPath: config.diagnostics.logPath }

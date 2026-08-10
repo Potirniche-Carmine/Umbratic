@@ -12,7 +12,7 @@ import type {
   RuntimeDiagnostics,
   TelemetryPolicyInfo,
 } from "./types";
-import { normalizeRelativePath, pathInside } from "./utils";
+import { isRecord, normalizeRelativePath, pathInside } from "./utils";
 
 export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
 export const umbraticRunnerName = "UmbraticRunner";
@@ -49,6 +49,7 @@ const generatedRuntimePrefixes = [
   ".umbratic/runtime/",
   ".umbratic/build/",
   ".umbratic/tmp/",
+  ".umbratic/index/",
   ".venv/",
   "venv/",
   "node_modules/",
@@ -458,6 +459,23 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(
     !config.enabledTools.includes("lsp") || lspServers.length > 0,
     "LSP must not be enabled without an approved server",
+  );
+  const workspaceGraph = config.workspaceGraph;
+  assert(
+    workspaceGraph === undefined
+      || (isRecord(workspaceGraph)
+        && typeof workspaceGraph.artifactPath === "string"
+        && path.isAbsolute(workspaceGraph.artifactPath)),
+    "workspace graph must be an absolute artifact path when configured",
+  );
+  assert(
+    !isRecord(workspaceGraph)
+      || pathInside(String(config.cwd), String(workspaceGraph.artifactPath)),
+    "workspace graph artifact must live inside the workspace",
+  );
+  assert(
+    !config.enabledTools.includes("workspace_graph") || workspaceGraph !== undefined,
+    "the workspace graph tool must not be enabled without an artifact",
   );
   assert(selectedModel.providerId === companyEndpointProviderId, "provider must be the Umbratic private endpoint");
 
