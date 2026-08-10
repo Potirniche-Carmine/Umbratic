@@ -1,0 +1,1 @@
+int save(int value);

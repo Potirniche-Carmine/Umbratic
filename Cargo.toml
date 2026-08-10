@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/native", "packages/pdf", "packages/runner"]
+members = ["apps/desktop/native", "packages/code-index", "packages/pdf", "packages/runner"]
 resolver = "2"
 
 [workspace.package]
