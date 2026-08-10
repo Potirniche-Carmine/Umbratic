@@ -60,22 +60,25 @@ export function orderReviewFiles(files: ReviewFile[], insights: ReviewInsights |
 }
 
 /**
- * Runs the analysis for this patch and returns the ordered files. Keyed on the
- * patch hash by the analyzer itself, so a review refresh that changed nothing
- * re-reads rather than re-analyzes.
+ * Runs the analysis for this patch and returns the files in the order the
+ * panel should show them. Keyed on the patch hash by the analyzer itself, so a
+ * review refresh that changed nothing re-reads rather than re-analyzes.
+ *
+ * Whether the order came from analysis or from paths is deliberately not
+ * reported: the panel shows the order and says nothing about it, so a caller
+ * that wanted to caption the difference would have nothing to caption.
  */
 export async function prioritizedReviewFiles(
   workspacePath: string,
   baseCommit: string,
   patchHash: string,
   files: ReviewFile[],
-): Promise<{ files: ReviewFile[]; prioritized: boolean }> {
+): Promise<ReviewFile[]> {
   const existing = readReviewInsights(workspacePath, patchHash);
   const insights =
     existing
     ?? ((await analyzeWorkspaceChanges(workspacePath, baseCommit, patchHash))
       ? readReviewInsights(workspacePath, patchHash)
       : null);
-  if (!insights) return { files, prioritized: false };
-  return { files: orderReviewFiles(files, insights), prioritized: true };
+  return orderReviewFiles(files, insights);
 }

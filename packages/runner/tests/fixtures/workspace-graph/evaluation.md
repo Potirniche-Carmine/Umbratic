@@ -35,7 +35,7 @@ silently extracting nothing: `packages/code-index/tests/fixtures.rs` over
 | Artifact from another workspace | `freshness: degraded`, empty result, no graph data leaked. | `fingerprint_mismatch_degrades_without_exposing_graph_data` |
 | Files edited after the build | `freshness: stale` with a verify-with-read warning. | `changed_workspace_files_mark_graph_stale` |
 | Artifact over 32 MiB | Build fails toward no graph rather than writing a partial one. | `write_graph` budget check |
-| No insights for this diff | `changes` says so; the review panel keeps path ordering with no caption. | `changes_reports_absence…`, `prioritizedReviewFiles` |
+| No insights for this diff | `changes` says so; the review panel silently keeps path ordering. | `changes_reports_absence…`, `prioritizedReviewFiles` |
 
 ## Budgets
 

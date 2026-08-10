@@ -476,11 +476,11 @@ export async function runRunnerTask(
     task.reviewPatchHash = reviewPatchHash(reviewFiles);
     saveTask(task);
     // Between-turn reindex, then insights for exactly this diff, both awaited
-    // so the panel's first render is already ordered. Each degrades to false
-    // rather than throwing when the indexer is absent, which leaves the panel
+    // so the panel's first render is already ordered. Each degrades to absence
+    // rather than throwing when the indexer is missing, which leaves the panel
     // on today's path ordering.
     await refreshWorkspaceGraph(task.worktreePath);
-    const prioritized = await prioritizedReviewFiles(
+    const orderedReviewFiles = await prioritizedReviewFiles(
       task.worktreePath,
       task.baseCommit,
       task.reviewPatchHash,
@@ -491,8 +491,7 @@ export async function runRunnerTask(
       type: "review.ready",
       taskId: task.id,
       changedFiles: task.changedFiles,
-      reviewFiles: rendererReviewFiles(prioritized.files, hiddenRendererReviewPaths(task)),
-      reviewPrioritized: prioritized.prioritized,
+      reviewFiles: rendererReviewFiles(orderedReviewFiles, hiddenRendererReviewPaths(task)),
       latestTest: task.latestTest,
     });
     run.abortController.abort();

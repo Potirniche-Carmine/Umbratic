@@ -12,6 +12,7 @@ the plan could not have known.
 | A per-file extract cache (`.umbratic/index/extracts.json`) sits beside the graph | A6 wants parse-once-per-changed-file plus a full re-run of stage 3, but stage 3 is global and the binary is one-shot, so nothing survives between runs. Caching extracts is what makes "re-parse only what changed" and "resolve globally" both true. Measured: 5,000-file build 0.9s, single-file update 0.17s. |
 | `changes` returns its priorities in the envelope's `nodes` array with a `score`, plus a top-level `overallRisk` — not a separate `priorities` array (§6.3) | A second representation of the same fact is the thing §2.2 exists to prevent. They are graph nodes; the envelope already has a place for graph nodes. |
 | `evaluation-tasks.json` was rewritten from expected-id assertions into executable calls | The original rows named ids from the `graph-v1.json` fixture, which no producer output can match. They are now `{fixture, call, expect…}` rows driven through real tool dispatch, which is what §4.3 actually asked for. |
+| The review panel has **no caption and no sort toggle** (§6.1) | Built, then removed on review. A caption saying "Ordered by review priority" is a factor readout in prose: it tells the user there is a mechanism worth thinking about, which is exactly what §6.1 exists to prevent. The ordering ships; the explanation does not. |
 
 Three defects surfaced only in the live run against a local model
 (gemma e4b), all fixed here and all with regression tests:
@@ -267,13 +268,16 @@ be tuned by the Phase 4 eval, not inherited truths.
 
 ### 6.1 What the user sees (deliberately minimal)
 
-The review panel file list is **ordered by review priority, highest first**, with a
-single quiet caption: *"Ordered by review priority."* No badges, no scores, no
-factor breakdowns, no test-gap chips — the user should not need to care how the
-ordering is computed, only that the first file is the one to look at first. Falls
-back to today's path ordering when insights are unavailable. (A "by path" sort
-toggle stays, since alphabetical is genuinely useful when scanning for a known
-file.)
+The review panel file list is **ordered by review priority, highest first**, and
+that is the entire surface. No badges, no scores, no factor breakdowns, no
+test-gap chips, **and no caption** — the user should not need to care how the
+ordering is computed, only that the first file is the one to look at first.
+Falls back to today's path ordering when insights are unavailable, silently.
+
+*(Implementation note: a caption and a "by path" toggle were built and then
+removed. Saying "Ordered by review priority" is itself a factor readout — it
+tells the user there is a mechanism to think about, which is the thing this
+section exists to avoid. The panel shows the order and says nothing.)*
 
 ### 6.2 How it's computed (internal)
 
