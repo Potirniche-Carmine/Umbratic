@@ -1,6 +1,42 @@
 # Code intelligence plan — a native workspace graph for Umbratic
 
-Status: proposal v2 (2026-08-10). Supersedes v1 after review. Source analysis: the
+**Status: implemented 2026-08-10** on branch `code-intelligence`, phases 0–4.
+The sections below are the plan as approved; this block records where the
+implementation departed from it and why. Each departure was forced by something
+the plan could not have known.
+
+| Departure | Why |
+|---|---|
+| Unresolved calls are **dropped**, not emitted as edges pointing at a bare string (§A3 stage 3) | The runner's validator rejects the *whole artifact* for one edge referencing an unknown node. A bare-string target would cost the entire graph. Ambiguous calls that do have candidates still keep an edge, labeled `ambiguous`, pointing at the first candidate by id. |
+| Edge ids are hashed, not spelled out (`edge:calls:0009796779e05128`) | Spelling the natural key out in full cost ~20% of the artifact on this repository (9.4 MB → 7.5 MB for 488 files). Nothing reads an edge id for meaning; consumers traverse `from`/`to`. |
+| A per-file extract cache (`.umbratic/index/extracts.json`) sits beside the graph | A6 wants parse-once-per-changed-file plus a full re-run of stage 3, but stage 3 is global and the binary is one-shot, so nothing survives between runs. Caching extracts is what makes "re-parse only what changed" and "resolve globally" both true. Measured: 5,000-file build 0.9s, single-file update 0.17s. |
+| `changes` returns its priorities in the envelope's `nodes` array with a `score`, plus a top-level `overallRisk` — not a separate `priorities` array (§6.3) | A second representation of the same fact is the thing §2.2 exists to prevent. They are graph nodes; the envelope already has a place for graph nodes. |
+| `evaluation-tasks.json` was rewritten from expected-id assertions into executable calls | The original rows named ids from the `graph-v1.json` fixture, which no producer output can match. They are now `{fixture, call, expect…}` rows driven through real tool dispatch, which is what §4.3 actually asked for. |
+
+Three defects surfaced only in the live run against a local model
+(gemma e4b), all fixed here and all with regression tests:
+
+1. **The shared evidence renderer reported counts and nothing else.** A model
+   was told `Nodes: 11` and never told what or where, so it fell back to the
+   ls-and-read chain the tool exists to remove. This was never graph-specific —
+   LSP has been answering `Locations: 1` without saying where since it shipped.
+2. **The `repo_orient` graph guidance lost to the playbook's own step 1**, which
+   says to list the workspace root first. Appended advice does not beat a
+   numbered imperative; the guidance now supersedes step 1 explicitly.
+3. **The matcher read the search term from one field per action** while the
+   model sent `{"action":"query","symbol":"…"}`. It now reads whichever
+   arrived — and that exposed the worse half: an empty term matched every node
+   through substring matching, so a malformed call answered with the whole
+   graph presented as evidence. A term-less call now returns nothing.
+
+Not addressed, and pre-existing on `main`: `packages/runner/src/veil_client.rs`
+is 1,019 lines, over the 1,000-line source-size budget, so
+`npm run source-size:check` fails independently of this work. Two orient tests
+in `packages/runner/tests/native-runner-orient.test.ts` also fail on `main`.
+
+---
+
+Source analysis: the
 vendored third-party MIT project in `code-review-graph/` (techniques only — no
 dependency is taken) and a full audit of the current Umbratic tree.
 

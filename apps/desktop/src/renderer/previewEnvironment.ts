@@ -565,6 +565,9 @@ const composerTestTask: TaskInfo = {
   createdAt: new Date(Date.now() - 20_000).toISOString(),
   changedFiles: composerTestReviewFiles.map((file) => file.path),
   reviewFiles: composerTestReviewFiles,
+  // `?priority` shows the panel as it renders when change analysis was
+  // available: same files, ordered by review priority, one quiet caption.
+  reviewPrioritized: composerTestParams.has("priority"),
   reviewScope: "task",
   reviewBaselineLabel: "Turn changes",
   reviewBaselineOid: "task start",

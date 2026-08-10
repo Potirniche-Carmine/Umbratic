@@ -192,11 +192,15 @@
 }
 
 .reviewNavigatorOrder > button {
+  flex: 0 0 auto;
   border: 0;
   background: none;
   padding: 0;
   color: var(--faint);
   font: inherit;
+  /* The navigator column is narrow; without this the two-word label breaks
+     across lines and reads as two separate controls. */
+  white-space: nowrap;
   text-decoration: underline;
   cursor: pointer;
 }
