@@ -93,7 +93,7 @@ func TestOrientRouteNullsTheSummaryForDirectAnswerAndInvalidSentences(t *testing
 	for _, content := range []string{
 		`{"bucket":"code_change","summarySentence":null}`,
 		`{"bucket":"code_change","summarySentence":"Running deep_review now."}`,
-		`{"bucket":"code_change","summarySentence":"no terminator"}`,
+		`{"bucket":"code_change","summarySentence":"First line.\nSecond line."}`,
 	} {
 		kept := post(content)
 		if kept.Code != http.StatusOK ||

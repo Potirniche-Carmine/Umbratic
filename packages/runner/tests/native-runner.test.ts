@@ -472,11 +472,24 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     );
     await events.waitFor((event) => event.type === "run.settled" && event.sessionId === approvedSession.id);
 
-    const blockedSession = await createSession(run);
-    assert.equal((await prompt(run, blockedSession.id, "BLOCK_NETWORK")).status, 204);
-    const blocked = await events.waitFor((event) => event.type === "tool.finished" && event.toolCallId === "command-1");
-    assert.equal(blocked.status, "policy_blocked");
-    assert.equal(fs.existsSync(path.join(cwd, "blocked-command-spawned.txt")), false, "policy-denied commands must never spawn");
+    const networkSession = await createSession(run);
+    assert.equal((await prompt(run, networkSession.id, "NETWORK_APPROVAL")).status, 204);
+    const networkPermission = await events.waitFor((event) =>
+      event.type === "permission.requested"
+      && String(event.summary).includes("curl https://example.com")
+    );
+    const networkReply = await run.request(`/permission/${networkPermission.permissionId}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reply: "reject" }),
+    });
+    assert.equal(networkReply.status, 200);
+    const networkFinished = await events.waitFor((event) =>
+      event.type === "tool.finished" && event.toolCallId === "network-command-1"
+    );
+    assert.equal(networkFinished.status, "permission_denied");
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === networkSession.id);
+    assert.equal(fs.existsSync(path.join(cwd, "network-command-spawned.txt")), false);
 
     const rejectedSession = await createSession(run);
     assert.equal((await prompt(run, rejectedSession.id, "REJECTED_COMMAND")).status, 204);
@@ -526,7 +539,7 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
     assert.equal(streamRequests.length, 1, "a direct answer uses one model request");
     assert.ok(Array.isArray(streamRequests[0].body.tools), "the model keeps automatic tool choice");
 
-    const system = await run.request(`/session/${blockedSession.id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: "x", system: "override" }) });
+    const system = await run.request(`/session/${networkSession.id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: "x", system: "override" }) });
     assert.equal(system.status, 400);
     assert.deepEqual(await system.json(), { error: "System prompts are managed by Veil.", code: "protected_system_prompt" });
 
@@ -890,13 +903,19 @@ test("native runner accepts an unterminated final SSE line, stops stalled repeat
     const repeatedRequests = provider.requests.filter(({ body }) => JSON.stringify(body.messages).includes("REPEAT_TOOL"));
     assert.equal(repeatedRequests.length, 11, "ten identical tool turns and one final request are required");
     assert.equal(repeatedRequests.filter(({ body }) => body.response_mode === "progress").length, 0, "tool count must not schedule progress requests");
-    const malformedSession = await createSession(run), malformedEventStart = events.events.length;
-    assert.equal((await prompt(run, malformedSession.id, "MALFORMED_TOOL_SYNTAX")).status, 204);
-    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === malformedSession.id);
-    const malformedEvents = events.events.slice(malformedEventStart);
-    assert.equal(JSON.stringify(malformedEvents).includes("<|tool*call>"), false);
-    assert.equal(malformedEvents.some((event) => event.type === "tool.finished" && event.toolCallId === "malformed-recovery-read"), true);
-    assert.equal(malformedEvents.some((event) => event.type === "assistant.delta" && event.text === "Recovered from the malformed tool call."), true);
+    const literalSyntaxSession = await createSession(run), literalSyntaxEventStart = events.events.length;
+    assert.equal((await prompt(run, literalSyntaxSession.id, "MALFORMED_TOOL_SYNTAX")).status, 204);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === literalSyntaxSession.id);
+    const literalSyntaxEvents = events.events.slice(literalSyntaxEventStart);
+    assert.equal(
+      literalSyntaxEvents.some((event) =>
+        event.type === "assistant.delta"
+        && event.text === "<|tool*call>call:read{path:'README.md'}<tool*call|>"
+      ),
+      true,
+      "provider-like syntax in assistant content must remain visible text",
+    );
+    assert.equal(literalSyntaxEvents.some((event) => event.type === "tool.requested"), false);
     const recoveringSession = await createSession(run);
     assert.equal((await prompt(run, recoveringSession.id, "RECOVER_AFTER_FAILURES")).status, 204);
     await events.waitFor((event) => event.type === "run.settled" && event.sessionId === recoveringSession.id);

@@ -370,11 +370,16 @@ pub fn compress_tool_result(
             marker_hash: None,
         };
     }
-    if regex::Regex::new(r"(?i)refusing blocked path|workspace_boundary|blocked path")
-        .unwrap()
-        .is_match(output)
-        && !output.to_ascii_lowercase().contains("[redacted")
-    {
+    // A result that did not succeed is a diagnosis, and the whole of it is the
+    // point: it is clipped to the display bound but never folded into a
+    // head-and-tail sample. This used to be decided by matching the output text
+    // against refusal phrasings ("refusing blocked path", "workspace_boundary").
+    // Every phrasing it looked for is produced on the error path, which never
+    // reaches this function, so the match only ever fired on a successful result
+    // that happened to *discuss* blocked paths — a search hit in this very file
+    // would do it — and silently opted that result out of compaction. The status
+    // is already an argument; it answers the question exactly.
+    if status != "success" {
         let clipped = clip_utf8(output, MAX_DISPLAYED_BYTES);
         return CompressionResult {
             output_bytes: clipped.len(),

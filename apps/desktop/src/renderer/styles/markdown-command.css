@@ -6,11 +6,26 @@
 .markdownContent p,
 .markdownContent ul,
 .markdownContent ol,
+.markdownContent blockquote,
 .markdownTableWrapper,
 .markdownContent h3,
 .markdownContent h4,
 .markdownContent h5 {
   margin: 0 0 10px;
+}
+
+.markdownContent blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.markdownContent hr {
+  height: 0;
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
 }
 
 .markdownContent p {

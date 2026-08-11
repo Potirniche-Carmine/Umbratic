@@ -35,6 +35,8 @@ export type MarkdownBlock =
   | { type: "heading"; level: number; text: string }
   | { type: "list"; ordered?: boolean; items: string[] }
   | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "quote"; text: string }
+  | { type: "rule" }
   | { type: "paragraph"; text: string };
 
 export function attachmentName(pathValue: string): string {
@@ -214,7 +216,28 @@ function normalizeMarkdownTableRow(cells: string[], columnCount: number): string
   return Array.from({ length: columnCount }, (_, index) => cells[index] ?? "");
 }
 
-const markdownListItem = /^\s*(?:([-*])|(\d+)[.)])\s+(.+)$/;
+// Bullets accept every marker CommonMark does. "+" used to be missing, so a
+// model that reached for it got its list rendered as literal paragraph text.
+const markdownListItem = /^\s*(?:([-*+])|(\d+)[.)])\s+(.+)$/;
+
+// A fence is three or more backticks or tildes. Matching exactly three, with
+// only a bare word after them, meant a four-backtick fence (what a model uses
+// to nest a fence inside a fence) and an info string like `js title="x"` both
+// failed to open a block — and the entire code listing then rendered as
+// paragraph text with its backticks showing.
+const markdownFence = /^(\s*)(`{3,}|~{3,})[ \t]*(.*)$/;
+
+// A thematic break: three or more of the same marker, spaces allowed between.
+const markdownRule = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+
+const markdownQuote = /^ {0,3}>[ \t]?(.*)$/;
+
+// Only the first word of an info string names the language; the rest is
+// metadata for other renderers. Anything that could not be a language token is
+// dropped rather than carried into a class name.
+function fenceLanguage(info: string): string {
+  return (info.trim().split(/\s+/)[0] ?? "").replace(/[^A-Za-z0-9_+.#-]/g, "");
+}
 
 /// Reports whether the next non-blank line continues a list of the same kind.
 function continuesList(lines: string[], from: number, ordered: boolean): boolean {
@@ -269,6 +292,10 @@ function withRenderedMath(block: MarkdownBlock): MarkdownBlock {
         headers: block.headers.map(renderInlineMath),
         rows: block.rows.map((row) => row.map(renderInlineMath)),
       };
+    case "quote":
+      return { ...block, text: renderInlineMath(block.text) };
+    case "rule":
+      return block;
   }
 }
 
@@ -278,7 +305,8 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
   let paragraph: string[] = [];
   let list: string[] = [];
   let listOrdered = false;
-  let code: { language: string; lines: string[]; indent: string } | null = null;
+  let quote: string[] = [];
+  let code: { language: string; lines: string[]; indent: string; marker: string } | null = null;
 
   const flushParagraph = () => {
     if (paragraph.length) {
@@ -293,28 +321,45 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
       listOrdered = false;
     }
   };
+  const flushQuote = () => {
+    if (quote.length) {
+      blocks.push({ type: "quote", text: quote.join("\n").trim() });
+      quote = [];
+    }
+  };
+  const flushText = () => {
+    flushParagraph();
+    flushList();
+    flushQuote();
+  };
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex];
-    const fence = line.match(/^(\s*)```\s*([A-Za-z0-9_+.#-]+)?\s*$/);
-    if (fence) {
-      if (code) {
+    const fence = line.match(markdownFence);
+    if (code) {
+      // A closing fence uses the same character, runs at least as long as the
+      // opener, and carries no info string. Anything else is content, which is
+      // what lets a ```` block hold a ``` block intact.
+      const closes =
+        fence !== null
+        && fence[2][0] === code.marker[0]
+        && fence[2].length >= code.marker.length
+        && !fence[3].trim();
+      if (closes) {
         blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
         code = null;
-      } else {
-        flushParagraph();
-        flushList();
-        code = { language: fence[2] ?? "", lines: [], indent: fence[1] ?? "" };
+        continue;
       }
-      continue;
-    }
-    if (code) {
       code.lines.push(code.indent && line.startsWith(code.indent) ? line.slice(code.indent.length) : line);
       continue;
     }
+    if (fence) {
+      flushText();
+      code = { language: fenceLanguage(fence[3]), lines: [], indent: fence[1] ?? "", marker: fence[2] };
+      continue;
+    }
     if (isMarkdownTableRow(line) && isMarkdownTableSeparator(lines[lineIndex + 1] ?? "")) {
-      flushParagraph();
-      flushList();
+      flushText();
 
       const headers = splitMarkdownTableRow(line);
       const rows: string[][] = [];
@@ -327,17 +372,30 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
       lineIndex = rowIndex - 1;
       continue;
     }
+    // Ahead of the list check: "- - -" is a thematic break, not three bullets.
+    if (markdownRule.test(line)) {
+      flushText();
+      blocks.push({ type: "rule" });
+      continue;
+    }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
-      flushParagraph();
-      flushList();
+      flushText();
       blocks.push({ type: "heading", level: heading[1].length, text: heading[2] });
       continue;
     }
-    const listItem = line.match(/^\s*(?:([-*])|(\d+)[.)])\s+(.+)$/);
+    const quoted = line.match(markdownQuote);
+    if (quoted) {
+      flushParagraph();
+      flushList();
+      quote.push(quoted[1]);
+      continue;
+    }
+    const listItem = line.match(markdownListItem);
     if (listItem) {
       const ordered = !!listItem[2];
       flushParagraph();
+      flushQuote();
       if (list.length && listOrdered !== ordered) flushList();
       listOrdered = ordered;
       list.push(listItem[3]);
@@ -345,10 +403,17 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
     }
     if (!line.trim()) {
       flushParagraph();
+      flushQuote();
       // A blank line between items is a loose list, not two lists. Flushing here
       // started a second <ol>, which restarts numbering at 1, so a model that
       // spaces out its steps rendered "1. 1. 1." instead of "1. 2. 3.".
       if (!list.length || !continuesList(lines, lineIndex + 1, listOrdered)) flushList();
+      continue;
+    }
+    // A bare line under a quote continues it: models wrap quoted prose without
+    // repeating ">" on every line.
+    if (quote.length) {
+      quote.push(line);
       continue;
     }
     flushList();
@@ -356,8 +421,7 @@ export function parseMarkdown(content: string): MarkdownBlock[] {
   }
 
   if (code) blocks.push({ type: "code", language: code.language, content: code.lines.join("\n") });
-  flushParagraph();
-  flushList();
+  flushText();
   return blocks.map(withRenderedMath);
 }
 

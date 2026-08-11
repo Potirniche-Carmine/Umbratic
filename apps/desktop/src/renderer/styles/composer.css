@@ -400,7 +400,7 @@ button.attachmentPreview:focus-visible {
 
 .queuedPromptEdit {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr) 18px;
   gap: 7px;
   align-items: center;
   min-width: 0;
@@ -419,19 +419,6 @@ button.attachmentPreview:focus-visible {
 .queuedPromptEdit:hover:not(:disabled) .queuedPromptEditIcon,
 .queuedPromptEdit:focus-visible .queuedPromptEditIcon {
   opacity: 1;
-}
-
-.queuedPromptOrder {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--control-bg) 88%, transparent);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
 }
 
 .queuedPromptText {

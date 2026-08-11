@@ -43,7 +43,6 @@ import {
   compactTaskEvents,
   filterReviewPaths,
   hiddenRendererReviewPaths,
-  isReviewReadyAssistantEvent,
   mergeTaskEvents,
   rendererReviewFiles,
 } from "./taskReviewPresentation";
@@ -355,7 +354,7 @@ export function getTask(taskId: string): TaskRecord {
 }
 
 export function recordTaskEvent(event: BackendUiEvent) {
-  if (isReviewReadyAssistantEvent(event) || event.type === "review.ready") return;
+  if (event.type === "review.ready") return;
   const events = pendingTaskEvents.get(event.taskId) ?? [];
   pendingTaskEvents.set(event.taskId, appendTaskEvent(events, event, 500));
   scheduleTaskEventFlush(shouldDeferTaskEventFlush(event) ? streamingTaskEventCrashCheckpointMs : 0);

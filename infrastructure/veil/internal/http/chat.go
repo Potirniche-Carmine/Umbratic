@@ -42,7 +42,7 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 				s.retriever.Overlay(r.Context(), corpusRoute(route), lastUserText(input.Messages)),
 			),
 		)
-		skills := prompts.RelevantSkills(input.Skills, input.Messages)
+		skills := input.Skills
 		// The playbook is Veil-owned text rendered from the validated (route,
 		// bucket) pair. The client never supplies prompt text, only a selector,
 		// and the playbook lands after the skill catalog so everything before it
@@ -51,12 +51,12 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		if playbook := prompts.PlaybookPrompt(route, input.HarnessBucket, skills, input.Tools); playbook != "" {
 			protectedMessages = []model.Message{{Role: "system", Content: playbook}}
 		}
-		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, protectedMessages, skills)
+		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, protectedMessages, skills, input.Tools)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return
 		}
-		protectedPrefix, err := prompts.ProtectedPrefix(route, protectedMessages, skills)
+		protectedPrefix, err := prompts.ProtectedPrefix(route, protectedMessages, skills, input.Tools)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return

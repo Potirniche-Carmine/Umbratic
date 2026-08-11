@@ -19,7 +19,7 @@ use crate::{
     permission::PermissionBroker,
     public_progress::{PublicProgressSchedule, compaction_finished, compaction_started},
     repeat_guard::RepeatGuard,
-    response_output::{emit_fallback_answer, looks_like_unstructured_tool_call, record_answer},
+    response_output::{emit_fallback_answer, record_answer},
     session::{EventSink, InputPart, Session},
     skill_preflight::{
         collect_selected_skill_ids, harness_skill_context_message, run_harness_skill_preflight,
@@ -434,10 +434,7 @@ async fn final_without_tools(
         .await;
     }
     match response {
-        Ok(result)
-            if !result.content.trim().is_empty()
-                && !looks_like_unstructured_tool_call(&result.content) =>
-        {
+        Ok(result) if !result.content.trim().is_empty() => {
             update_context_calibration(session, &prepared, &result).await;
             record_system_prompt_size(session, &result).await;
             record_compaction_verdict(session, &result).await;
@@ -617,23 +614,15 @@ pub async fn run_turn(
             harness_bucket.clone(),
         ));
         sink.emit(context_event(&session, prepared.usage));
-        // What can still be refused decides how this step's text streams. An
-        // evidence-required run that has not yet called a tool is the one
-        // window where an entire answer can be refused — a finished answer
-        // there is a fabrication by definition — so everything is withheld
-        // until the step resolves. Every other guided step withholds one
-        // status line's worth for the cadence and streams live past it: the
-        // user watches the answer arrive, and what the model wrote is what
-        // they see.
+        // Guided steps hold every token until the step resolves. Tool-calling
+        // steps then drop that text: orientation plus the tool rows are the
+        // whole mid-run story. Only a finished answer (no tool calls) is
+        // released. Streaming live before knowing whether tools arrived is
+        // what used to leak kilobyte mid-plan reports between rounds.
         let hold = if harness_bucket.is_none() {
             HoldPolicy::None
-        } else if orient.evidence_required
-            && !evidence_retried
-            && summary["toolCalls"].as_u64().unwrap_or(0) == 0
-        {
-            HoldPolicy::All
         } else {
-            HoldPolicy::Bounded
+            HoldPolicy::All
         };
         let mut response = stream_veil_chat(
             &session,
@@ -707,44 +696,12 @@ pub async fn run_turn(
         let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
         if !calls.is_empty() {
-            if result.hold_broken {
-                // The step's prose already streamed live, so anything still
-                // held completes a paragraph the user is mid-way through
-                // reading. It stands where it streamed, verbatim; the desktop
-                // closes the working block above it rather than relocating
-                // text under the reader.
-                release_held_text(&sink, &session, &mut result);
-            } else {
-                // A short preamble on a tool step is dropped unshown. The
-                // orientation opens the run and the tool rows narrate every
-                // call after it — that is the whole status story, with nothing
-                // asked of the model and nothing injected into its context.
-                result.held_text.clear();
-            }
+            // Any prose on a tool-calling step is dropped unshown. The
+            // orientation opens the run and the tool rows narrate every call
+            // after it — that is the whole status story.
+            result.held_text.clear();
         }
         if calls.is_empty() {
-            if looks_like_unstructured_tool_call(&result.content) {
-                let call = ToolCall {
-                    id: format!("protocol-error-{}", summary["turns"].as_u64().unwrap_or(0)),
-                    name: "invalid_tool_syntax".into(),
-                    arguments: json!({}),
-                    index: 0,
-                };
-                let error = "Assistant text contained raw tool syntax. Use one available structured tool with its declared JSON schema.";
-                append_assistant_turn(
-                    &session,
-                    assistant_tool_message(std::slice::from_ref(&call)),
-                    &result,
-                )
-                .await;
-                session
-                    .messages
-                    .lock()
-                    .await
-                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
-                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
-                continue;
-            }
             // An evidence-required bucket that produces a finished answer
             // before any tool has run has described a workspace it never
             // looked at. A live repo_orient run did exactly this: a confident,
@@ -791,15 +748,9 @@ pub async fn run_turn(
             // it is shown. The branch above returns without releasing,
             // which is what leaves a refused answer with no trace in the UI.
             //
-            // There is deliberately no text inspection here. An earlier
-            // version scanned the answer's closing sentences for announcement
-            // phrasings ("I will now examine…") and refused or trimmed them —
-            // and every live model promptly used a phrasing the list did not
-            // have. Word lists are a treadmill and they are English-only; a
-            // harness stays model-agnostic by reacting to structure (tool
-            // calls made, text length, step shape), never to wording. Ending
-            // on the answer is the playbook's guidance to give, and whatever
-            // the model writes is what the user sees, verbatim.
+            // There is deliberately no text inspection here. Mid-plan prose is
+            // dropped by structure (tool calls present), never by wording; the
+            // final no-tool message ships verbatim.
             release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {
                 increment(

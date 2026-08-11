@@ -40,6 +40,55 @@ fn an_orient_decision_carries_veils_evidence_requirement() {
     assert!(parse_orient_payload(&json!({"bucket":"repo_orient","playbook":"do this"})).is_err());
 }
 
+// The runner's own sentence check is a bound and a shape, never a vocabulary.
+// It used to reject any sentence containing an underscore — a superset chosen
+// to cover the bucket catalog it does not hold — which on this route is most
+// real sentences, since naming a file is the useful thing a status line does.
+// Requiring a trailing "." or "!" was the same mistake in punctuation.
+#[test]
+fn the_status_sentence_survives_underscores_and_non_english_punctuation() {
+    for sentence in [
+        "I will trace the failure through main_test.go and report the cause.",
+        "I will check whether snake_case names are already normalized?",
+        "このリポジトリの構成を調べます。",
+        "I will start with the entry points",
+    ] {
+        let decision = parse_orient_payload(
+            &json!({"bucket":"repo_orient","summarySentence":sentence,"evidenceRequired":true}),
+        )
+        .unwrap();
+        assert_eq!(
+            decision.summary_sentence.as_deref(),
+            Some(sentence),
+            "{sentence}"
+        );
+    }
+
+    // The bucket id itself is hidden harness state, and it arrives with the
+    // sentence, so the check that matters stays precise rather than broad.
+    let leaked = parse_orient_payload(
+        &json!({"bucket":"repo_orient","summarySentence":"I will run repo_orient over this workspace."}),
+    )
+    .unwrap();
+    assert_eq!(leaked.bucket, "repo_orient");
+    assert!(leaked.summary_sentence.is_none());
+
+    // A bound is still a bound.
+    let long = "x".repeat(MAX_SUMMARY_SENTENCE_RUNES + 1);
+    assert!(
+        parse_orient_payload(&json!({"bucket":"repo_orient","summarySentence":long}))
+            .unwrap()
+            .summary_sentence
+            .is_none()
+    );
+    assert!(
+        parse_orient_payload(&json!({"bucket":"repo_orient","summarySentence":"One.\nTwo."}))
+            .unwrap()
+            .summary_sentence
+            .is_none()
+    );
+}
+
 // Holding text until the step resolves is what lets the runner decide whether
 // it was the answer without ever moving text after the fact. Releasing shows
 // it; dropping a result on the floor is how a refused step leaves no trace.
@@ -78,68 +127,38 @@ fn released_held_text_is_the_answer_and_an_empty_hold_says_nothing() {
     assert_eq!(narration["text"], "I will look at the failing test.");
 }
 
-// Bounded holding is the deal the guided path makes: one status line's worth
-// can still be dropped when tool calls prove it was a preamble, and anything
-// past it is prose the user watches arrive live, shown verbatim. Size decides,
-// never wording.
+// Guided holding withholds every token until the step resolves. Tool-calling
+// steps drop that text; a finished answer releases it. Size never decides —
+// structure does — so a long mid-plan report cannot leak between tool rounds.
 #[test]
-fn bounded_holding_streams_live_past_the_status_line_bound() {
+fn guided_holding_withholds_all_text_until_released() {
     let directory = tempfile::tempdir().unwrap();
     let session = crate::session::test_session(directory.path());
     let sink = crate::session::test_sink(directory.path());
     let mut events = sink.subscribe();
     let mut result = VeilChatResult::default();
 
-    // One status line's worth stays held with nothing emitted.
     assert!(!stream_or_hold(
         &sink,
         &session,
         &mut result,
-        "a".repeat(MAX_HELD_TEXT_CHARS),
-        HoldPolicy::Bounded,
-    ));
-    assert!(!result.hold_broken);
-    assert!(events.try_recv().is_err());
-
-    // Growing past the bound flushes everything and streams from then on.
-    assert!(stream_or_hold(
-        &sink,
-        &session,
-        &mut result,
-        "b".repeat(200),
-        HoldPolicy::Bounded,
-    ));
-    assert!(result.hold_broken);
-    assert!(result.held_text.is_empty());
-    let first = events.try_recv().unwrap();
-    assert_eq!(first["type"], "assistant.delta");
-    assert_eq!(
-        first["text"].as_str().unwrap().chars().count(),
-        MAX_HELD_TEXT_CHARS + 200
-    );
-
-    // Every later chunk streams straight through.
-    assert!(stream_or_hold(
-        &sink,
-        &session,
-        &mut result,
-        "c".repeat(50),
-        HoldPolicy::Bounded,
-    ));
-    assert!(result.held_text.is_empty());
-    assert_eq!(events.try_recv().unwrap()["text"], "c".repeat(50));
-
-    // All withholds everything regardless of size: this is the refusable step.
-    let mut refusable = VeilChatResult::default();
-    assert!(!stream_or_hold(
-        &sink,
-        &session,
-        &mut refusable,
-        "d".repeat(5_000),
+        "a".repeat(5_000),
         HoldPolicy::All,
     ));
-    assert!(!refusable.hold_broken);
-    assert_eq!(refusable.held_text.chars().count(), 5_000);
+    assert_eq!(result.held_text.chars().count(), 5_000);
+    assert!(events.try_recv().is_err());
+
+    // Unguided steps still stream live.
+    let mut live = VeilChatResult::default();
+    assert!(stream_or_hold(
+        &sink,
+        &session,
+        &mut live,
+        "hello".into(),
+        HoldPolicy::None,
+    ));
+    assert!(live.held_text.is_empty());
+    assert_eq!(events.try_recv().unwrap()["text"], "hello");
 }
 
 #[test]

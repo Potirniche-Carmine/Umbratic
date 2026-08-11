@@ -52,8 +52,12 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     ["cat notes.txt > stolen.txt", "shell", false],
     ["find . -name '*.rs'", "read", false],
     ["cat .env", "blocked-path", true],
+    ["cat config/.env", "blocked-path", true],
     ["cat *.env", "blocked-path", true],
     ["type id_rsa", "blocked-path", true],
+    ["cat src/tokenizer.rs", "read", false],
+    ["cat docs/secret-management.md", "markdown", false],
+    ["cat tests/credential_store.rs", "read", false],
     ["cat ..\\..\\secret.txt", "external-directory", true],
   ];
 
@@ -138,4 +142,3 @@ test("tool settings normalize enabled tools without accepting unknown ids", () =
     command: false,
   });
 });
-

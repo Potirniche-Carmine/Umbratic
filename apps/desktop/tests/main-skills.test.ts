@@ -211,44 +211,6 @@ test("enabledPromptSkills returns every enabled skill as metadata with a readabl
   assert.equal(catalog.every((skill) => fs.existsSync(skill.instructionPath)), true);
 });
 
-test("harness profiles select only their relevant system skills", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-harness-skill-settings-"));
-  const skills = loadSkills(userData);
-
-  const engineering = skills.harnessSystemSkillSettings("engineering");
-  assert.equal(engineering["umbratic-git-worktree"], true);
-  assert.equal(engineering["umbratic-python"], true);
-  assert.equal(engineering["umbratic-data-analysis"], false);
-  assert.equal(engineering["umbratic-presentations"], false);
-  assert.equal(engineering["umbratic-documents"], false);
-  assert.equal(engineering["umbratic-spreadsheets"], false);
-  assert.equal(engineering["umbratic-cmake"], true);
-  assert.equal(engineering["umbratic-discovery"], true);
-  assert.equal(engineering["umbratic-product-spec"], true);
-  assert.equal(engineering["umbratic-security-review"], true);
-  // Domain skills belong to their own profile only.
-  assert.equal(engineering["umbratic-marketing-brief"], false);
-  assert.equal(engineering["umbratic-sales-enablement"], false);
-  assert.equal("umbratic-ocr" in engineering, false);
-
-  for (const profile of ["marketing", "sales"]) {
-    const business = skills.harnessSystemSkillSettings(profile);
-    assert.equal(business["umbratic-git-worktree"], false);
-    assert.equal(business["umbratic-data-analysis"], true);
-    assert.equal(business["umbratic-pdf"], true);
-    assert.equal(business["umbratic-presentations"], true);
-    assert.equal(business["umbratic-documents"], true);
-    assert.equal(business["umbratic-spreadsheets"], true);
-    assert.equal(business["umbratic-discovery"], true);
-    // Engineering-only skills must not leak into the business profiles.
-    assert.equal(business["umbratic-cmake"], false);
-    assert.equal(business["umbratic-product-spec"], false);
-    assert.equal(business["umbratic-security-review"], false);
-    assert.equal(business["umbratic-marketing-brief"], profile === "marketing");
-    assert.equal(business["umbratic-sales-enablement"], profile === "sales");
-  }
-});
-
 test("skill document editing validates ids, size, and real files", async () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-skill-doc-"));
   const skills = loadSkills(userData);
@@ -419,4 +381,3 @@ test("importSkill rejects zip archives with too many entries or symlink entries"
     fs.rmSync(symlinkPath, { force: true });
   }
 });
-

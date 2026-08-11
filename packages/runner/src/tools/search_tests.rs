@@ -27,7 +27,9 @@ fn search_workspace() -> tempfile::TempDir {
     .unwrap();
     std::fs::write(root.join("src/main/Main.ts"), "// Uppercase Main marker\n").unwrap();
     std::fs::write(root.join("docs/plan.md"), "# harnessRoute notes\n").unwrap();
-    // Must never be indexed: generated tree, secret name, dotenv.
+    // Generated trees and exact sensitive-file forms must never be indexed.
+    // Ordinary source and documentation names remain visible even when they
+    // discuss secrets, credentials, or tokens.
     std::fs::write(root.join("node_modules/pkg/main.tsx"), "generated\n").unwrap();
     std::fs::write(root.join("secret-notes.txt"), "harnessRoute\n").unwrap();
     std::fs::write(root.join(".env"), "TOKEN=1\n").unwrap();
@@ -130,8 +132,7 @@ async fn search_inherits_scope_glob_and_blocked_path_policy() {
     assert!(globbed.content.contains("src/main/Main.ts"));
     assert!(!globbed.content.contains("main.tsx"));
 
-    // Generated trees, secret-named files, and dotenv never reach the model,
-    // in either mode.
+    // Generated trees and dotenv never reach the model in either mode.
     for mode in ["path", "content"] {
         let result = run_search(
             &session,
@@ -140,9 +141,15 @@ async fn search_inherits_scope_glob_and_blocked_path_policy() {
         .await;
         assert_eq!(result.status, "success", "{:?}", result.error_message);
         assert!(!result.content.contains("node_modules"), "{mode}");
-        assert!(!result.content.contains("secret-notes"), "{mode}");
         assert!(!result.content.contains(".env"), "{mode}");
     }
+
+    let ordinary = run_search(
+        &session,
+        json!({"query":"secret-notes","mode":"path","path":"."}),
+    )
+    .await;
+    assert!(ordinary.content.contains("secret-notes.txt"));
 
     let escape = run_search(&session, json!({"query":"main","mode":"path","path":"../"})).await;
     assert_eq!(escape.status, "policy_blocked");

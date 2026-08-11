@@ -353,8 +353,8 @@ func TestTheOrientationSentenceIsModelWrittenNeverCanned(t *testing.T) {
 // none" and "the one it returned was rejected", which made a live run's absent
 // status line unexplainable. The two are now distinguishable.
 func TestADroppedSentenceIsDistinguishableFromAnAbsentOne(t *testing.T) {
-	// Rejected: no terminal punctuation.
-	dropped, err := ParseOrientDecision(EngineeringChat, `{"bucket":"repo_orient","summarySentence":"I will map this repository"}`)
+	// Rejected: the sentence names a bucket id, which is hidden harness state.
+	dropped, err := ParseOrientDecision(EngineeringChat, `{"bucket":"repo_orient","summarySentence":"I will start repo_orient on this repository."}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,6 +387,30 @@ func TestADroppedSentenceIsDistinguishableFromAnAbsentOne(t *testing.T) {
 	}
 	if direct.SentenceDropped {
 		t.Fatalf("direct_answer must never report a dropped sentence: %+v", direct)
+	}
+}
+
+// The sentence is the only prose every run shows the user, so what disqualifies
+// it must be a bound or hidden state — never a spelling of English. Terminal
+// "." or "!" used to be required, which discarded whole lines for punctuation
+// no other language shares, and a discarded line is indistinguishable from a
+// classifier that wrote none.
+func TestAStatusSentenceIsNotJudgedOnEnglishPunctuation(t *testing.T) {
+	for _, sentence := range []string{
+		"I will check whether the retry wrapper is already there?",
+		"I will trace the failure through main_test.go and report the cause.",
+		"このリポジトリの構成を調べます。",
+		"Je vais parcourir la documentation du projet…",
+		"I will start with the entry points",
+	} {
+		raw := `{"bucket":"repo_orient","summarySentence":` + strconv.Quote(sentence) + `}`
+		decision, err := ParseOrientDecision(EngineeringChat, raw)
+		if err != nil {
+			t.Fatalf("%q: %v", sentence, err)
+		}
+		if decision.SummarySentence != sentence || decision.SentenceDropped {
+			t.Fatalf("sentence must survive as written: %q -> %+v", sentence, decision)
+		}
 	}
 }
 
@@ -557,11 +581,10 @@ func TestOrientDecisionValidationSeparatesTheBucketFromTheSentence(t *testing.T)
 		"non-string sentence": `{"bucket":"code_change","summarySentence":42}`,
 		"null sentence":       `{"bucket":"code_change","summarySentence":null}`,
 		"empty sentence":      `{"bucket":"code_change","summarySentence":"   "}`,
-		"no terminator":       `{"bucket":"code_change","summarySentence":"I will make the change"}`,
 		"multi line":          `{"bucket":"code_change","summarySentence":"First.\nSecond."}`,
 		"names bucket cased":  `{"bucket":"code_change","summarySentence":"Starting the Code_Change now."}`,
 		"too long": `{"bucket":"code_change","summarySentence":"` +
-			strings.Repeat("x", MaxSummarySentenceRunes) + `."}`,
+			strings.Repeat("x", MaxSummarySentenceRunes+1) + `"}`,
 	} {
 		decision := valid(raw)
 		if decision.Bucket != "code_change" || decision.SummarySentence != "" {
@@ -627,14 +650,14 @@ func TestPlaybookIsTheLastProtectedSegment(t *testing.T) {
 		t.Fatal("debug_failure must render a playbook")
 	}
 	assembled, err := BuildWithProtectedMessages(
-		EngineeringChat, client, []model.Message{{Role: "system", Content: playbook}}, skills)
+		EngineeringChat, client, []model.Message{{Role: "system", Content: playbook}}, skills, allWorkspaceTools())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(assembled) != 5 {
 		t.Fatalf("expected global, route, catalog, playbook, client; got %d", len(assembled))
 	}
-	if assembled[0].Content.(string) != GlobalSystemPrompt {
+	if assembled[0].Content.(string) != GlobalSystemPrompt(allWorkspaceTools()) {
 		t.Fatal("global prompt must stay first")
 	}
 	if !strings.Contains(assembled[2].Content.(string), "skill catalog") {
@@ -648,7 +671,7 @@ func TestPlaybookIsTheLastProtectedSegment(t *testing.T) {
 	}
 
 	// The guaranteed-stable protected prefix now ends at the skill catalog.
-	baseline, err := BuildWithProtectedMessages(EngineeringChat, client, nil, skills)
+	baseline, err := BuildWithProtectedMessages(EngineeringChat, client, nil, skills, allWorkspaceTools())
 	if err != nil {
 		t.Fatal(err)
 	}

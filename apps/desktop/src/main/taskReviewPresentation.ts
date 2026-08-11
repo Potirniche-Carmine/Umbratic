@@ -7,12 +7,15 @@ import {
   taskEventSignature,
 } from "../shared/taskEvents";
 
-export function isReviewReadyAssistantEvent(event: BackendUiEvent): boolean {
-  return event.type === "assistant.delta" && event.text.trim() === "Ready for review.";
-}
-
+// review.ready is a state transition the panel renders on its own, so it is
+// kept out of the event feed. Assistant text is never filtered here: this used
+// to also drop any answer whose text was exactly "Ready for review.", a
+// sentinel no part of the runner or Veil emits any more. Nothing produced it,
+// and the only thing it could still match was a model whose real answer
+// happened to be that sentence — which then vanished from the transcript, the
+// telemetry, and the UI at once, with no trace anywhere.
 export function visibleTaskEvents(events: BackendUiEvent[]): BackendUiEvent[] {
-  return events.filter((event) => !isReviewReadyAssistantEvent(event) && event.type !== "review.ready");
+  return events.filter((event) => event.type !== "review.ready");
 }
 
 export function appendTaskEvent(events: BackendUiEvent[], event: BackendUiEvent, limit: number): BackendUiEvent[] {

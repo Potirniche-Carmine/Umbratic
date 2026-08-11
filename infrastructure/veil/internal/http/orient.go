@@ -126,7 +126,7 @@ func recordOrientSentenceDropped(route prompts.Route, bucket string) {
 		"event":  "orient.sentence_dropped",
 		"route":  string(route),
 		"bucket": bucket,
-		"reason": "sentence failed validation: needs one line ending in . or !, at most 240 runes, and no bucket id",
+		"reason": "sentence failed validation: needs one line, at most 240 runes, and no bucket id",
 	}
 	if encoded, err := json.Marshal(record); err == nil {
 		log.Printf("VEIL_DIAGNOSTIC %s", encoded)

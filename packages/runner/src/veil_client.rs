@@ -7,7 +7,6 @@ use serde_json::{Map, Value, json};
 use crate::{
     config::{ProviderConfig, provider_endpoint_url},
     events::now_iso,
-    response_output::{SafeAssistantText, looks_like_unstructured_tool_call},
     session::{EventSink, Session},
     tools::ToolCall,
     veil_retry::{
@@ -60,33 +59,16 @@ pub struct VeilChatResult {
     /// byte-length estimate.
     pub system_prompt_tokens_exact: bool,
     pub truncated_tool_arguments: bool,
-    /// Redaction-safe assistant text that was withheld from the event stream
-    /// under the request's `HoldPolicy`. Under `All` it is the step's whole
-    /// text; under `Bounded` it is text still inside the status-line bound.
-    /// The caller releases it with `release_held_text` or drops it.
+    /// Held text under `HoldPolicy::All`, released or dropped by the caller.
     pub held_text: String,
-    /// Set once step text started streaming live. From then on the step's
-    /// prose is on screen and nothing about it can be taken back.
-    pub hold_broken: bool,
 }
 
-/// What happens to a step's assistant text while it streams.
-///
-/// Streaming commits to text before the harness knows what the step turned out
-/// to be, and the three policies are the three answers to that bet. `None` is
-/// the unguided path: everything streams live. `All` withholds everything, for
-/// the one window where a whole answer can still be refused — before any tool
-/// has run in an evidence-required bucket, where a finished answer is a
-/// fabrication by definition. `Bounded` is the guided default: one status
-/// line's worth is withheld so the cadence can drop or narrate it, and text
-/// that outgrows the bound is an answer or a report the user watches arrive,
-/// streamed live and shown verbatim. All three are size and structure rules;
-/// none of them reads the words.
+/// `None` streams live (unguided). `All` withholds until the step resolves so
+/// tool-step prose can be dropped and evidence-required fabrications refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldPolicy {
     None,
     All,
-    Bounded,
 }
 
 pub struct VeilRequestOptions {
@@ -162,22 +144,25 @@ fn bounded_context_tail(response: &str) -> String {
     format!("…{tail}")
 }
 
-/// The runner-side check on the status sentence.
-///
-/// Veil owns the bucket catalog and does the precise "no bucket id as a
-/// standalone token" check. The runner cannot repeat that check without the
-/// catalog, so it enforces a strict superset instead: every bucket id contains
-/// an underscore, so rejecting any sentence containing one guarantees no id can
-/// reach a user-visible event. The sentence goes into exported telemetry, so a
-/// failing sentence is dropped whole rather than scrubbed — but it costs only
-/// the sentence, never the bucket.
-fn valid_summary_sentence(sentence: &str) -> bool {
+/// Runner check on the status sentence: non-empty, one line, rune-capped, and
+/// free of the decision's own bucket id as a token. No punctuation rule — that
+/// made the line English-only. Underscore-rejection used to drop real paths
+/// like `main_test.go`; checking only the chosen bucket id is enough.
+fn valid_summary_sentence(sentence: &str, bucket: &str) -> bool {
     !sentence.is_empty()
         && !sentence.contains('\n')
         && !sentence.contains('\r')
-        && !sentence.contains('_')
         && sentence.chars().count() <= MAX_SUMMARY_SENTENCE_RUNES
-        && (sentence.ends_with('.') || sentence.ends_with('!'))
+        && !mentions_bucket_id(sentence, bucket)
+}
+
+/// True when the sentence carries `bucket` as a standalone token (`_` counts).
+fn mentions_bucket_id(sentence: &str, bucket: &str) -> bool {
+    let bucket = bucket.to_ascii_lowercase();
+    sentence
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+        .any(|token| token == bucket)
 }
 
 /// Classifies one accepted run. Orient can only add behavior: every failure
@@ -308,7 +293,7 @@ fn parse_orient_payload(payload: &Value) -> Result<OrientDecision, String> {
     let sentence = match object.get("summarySentence") {
         Some(Value::String(value)) => {
             let trimmed = value.trim();
-            valid_summary_sentence(trimmed).then(|| trimmed.to_owned())
+            valid_summary_sentence(trimmed, &bucket).then(|| trimmed.to_owned())
         }
         _ => None,
     };
@@ -516,9 +501,6 @@ fn emit_completed_output(
     hold: HoldPolicy,
 ) {
     if text_streamed || result.content.is_empty() || !result.held_text.is_empty() {
-        return;
-    }
-    if looks_like_unstructured_tool_call(&result.content) {
         return;
     }
     let content = result.content.clone();
@@ -759,11 +741,6 @@ pub fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
 /// Routes one chunk of already-redacted assistant text to the event stream or to
 /// the hold buffer. Returns whether anything reached the stream, which is what
 /// `emit_completed_output` uses to avoid emitting the message twice.
-/// Under `Bounded`, text up to this bound stays held — one status line and
-/// change, which is what the cadence can still drop unshown. Past it the step
-/// is writing prose the user should watch arrive, so it streams live.
-const MAX_HELD_TEXT_CHARS: usize = 600;
-
 fn stream_or_hold(
     sink: &EventSink,
     session: &Session,
@@ -771,19 +748,11 @@ fn stream_or_hold(
     text: String,
     hold: HoldPolicy,
 ) -> bool {
-    if hold == HoldPolicy::None || result.hold_broken {
+    if hold == HoldPolicy::None {
         return emit_delta(sink, session, &text);
     }
     result.held_text.push_str(&text);
-    if hold == HoldPolicy::All {
-        return false;
-    }
-    if result.held_text.chars().count() <= MAX_HELD_TEXT_CHARS {
-        return false;
-    }
-    let flushed = std::mem::take(&mut result.held_text);
-    result.hold_broken = true;
-    emit_delta(sink, session, &flushed)
+    false
 }
 
 fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {
@@ -953,7 +922,6 @@ async fn attempt_veil_chat(
     let mut buffer = Vec::new();
     let mut completed = false;
     let mut text_streamed = false;
-    let mut safe_output = SafeAssistantText::default();
     let mut stream = response.bytes_stream();
     loop {
         if session.is_aborted() {
@@ -980,8 +948,7 @@ async fn attempt_veil_chat(
             }
             let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)
                 .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
-            let safe = safe_output.push(&content);
-            text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold);
+            text_streamed |= stream_or_hold(sink, session, &mut result, content, hold);
             if line_completed {
                 completed = true;
             }
@@ -999,8 +966,7 @@ async fn attempt_veil_chat(
         }
         let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)
             .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
-        let safe = safe_output.push(&content);
-        text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold);
+        text_streamed |= stream_or_hold(sink, session, &mut result, content, hold);
         if line_completed {
             completed = true;
         }
@@ -1013,8 +979,6 @@ async fn attempt_veil_chat(
                 .committed_if(committed_output(&result, &partial, text_streamed)),
         );
     }
-    let tail = safe_output.finish();
-    text_streamed |= stream_or_hold(sink, session, &mut result, tail, hold);
     fill_missing_tool_call_ids(&mut result.tool_calls);
     if result.truncated_tool_arguments {
         for call in &mut result.tool_calls {

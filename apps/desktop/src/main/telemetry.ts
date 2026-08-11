@@ -215,7 +215,7 @@ function taskConversation(task: TaskRecord): TelemetryConversationMessage[] {
   let assistantIndex = 0;
   const flushAssistant = () => {
     const content = assistant.trim();
-    if (content && content !== "Ready for review.") {
+    if (content) {
       assistantIndex += 1;
       messages.push({
         role: "assistant",

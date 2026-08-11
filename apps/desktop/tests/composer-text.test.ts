@@ -105,6 +105,51 @@ test("markdown parser handles nested headings, escaped table cells, and unfinish
   assert.match(unfinishedFence[0].content, /npm run build/);
 });
 
+// The renderer decides what an answer looks like, so anything it fails to
+// recognize is shown to the user as raw punctuation. These are all ordinary
+// Markdown a model may reach for on any turn, and every one of them used to
+// fall through to a paragraph with its markers showing.
+test("markdown covers the constructs a model actually writes", () => {
+  // An info string beyond the bare language, which is how a model labels a
+  // snippet. The whole listing used to leak as text because the fence needed
+  // a bare word and nothing else.
+  const labelled = parseMarkdown('```ts title="server.ts"\nconst port = 8443;\n```');
+  assert.equal(labelled.length, 1);
+  assert.equal(labelled[0].type, "code");
+  assert.equal(labelled[0].language, "ts");
+  assert.equal(labelled[0].content, "const port = 8443;");
+
+  // Four backticks are how a fence holds a fence, which any answer about
+  // Markdown needs.
+  const nested = parseMarkdown("````md\n```js\nconst a = 1;\n```\n````");
+  assert.equal(nested.length, 1);
+  assert.equal(nested[0].type, "code");
+  assert.equal(nested[0].content, "```js\nconst a = 1;\n```");
+
+  const tildes = parseMarkdown("~~~python\nprint(1)\n~~~");
+  assert.equal(tildes[0].type, "code");
+  assert.equal(tildes[0].language, "python");
+  assert.equal(tildes[0].content, "print(1)");
+
+  const plusBullets = parseMarkdown("+ first\n+ second");
+  assert.equal(plusBullets[0].type, "list");
+  assert.equal(plusBullets[0].ordered, false);
+  assert.deepEqual(plain(plusBullets[0].items), ["first", "second"]);
+
+  const quoted = parseMarkdown("> The config sets three limits.\n> All of them are bounded.");
+  assert.equal(quoted[0].type, "quote");
+  assert.equal(quoted[0].text, "The config sets three limits.\nAll of them are bounded.");
+
+  const rules = parseMarkdown("Before\n\n---\n\nAfter");
+  assert.deepEqual(plain(rules).map((block) => block.type), ["paragraph", "rule", "paragraph"]);
+  assert.equal(parseMarkdown("- - -")[0].type, "rule");
+  assert.equal(parseMarkdown("***")[0].type, "rule");
+
+  // A table separator is still a table, not a thematic break.
+  const table = parseMarkdown("| a | b |\n| --- | --- |\n| 1 | 2 |");
+  assert.equal(table[0].type, "table");
+});
+
 test("prompt highlighting recognizes file mentions without matching email addresses", () => {
   const segments = promptHighlightSegments(
     "Open @main.tsx, then @metrics.csv) and not email@main.tsx",

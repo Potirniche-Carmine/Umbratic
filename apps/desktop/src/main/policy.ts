@@ -100,6 +100,7 @@ export function isBlockedPath(filePath: string): boolean {
   const basename = path.posix.basename(normalized);
   return (
     normalized === ".env" ||
+    normalized.endsWith("/.env") ||
     normalized.startsWith(".env.") ||
     normalized.includes("/.env.") ||
     basename.endsWith(".pem") ||
@@ -108,9 +109,9 @@ export function isBlockedPath(filePath: string): boolean {
     basename.endsWith(".p12") ||
     basename === "id_rsa" ||
     basename === "id_ed25519" ||
-    normalized.includes("credential") ||
-    normalized.includes("secret") ||
-    normalized.includes("token")
+    basename === ".npmrc" ||
+    normalized === ".git/config" ||
+    normalized.startsWith(".git/hooks/")
   );
 }
 

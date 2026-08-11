@@ -234,11 +234,11 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
             .command_class
         {
             "network" => (
-                SafetyAction::Deny,
-                SafetySeverity::Critical,
+                SafetyAction::Confirm,
+                SafetySeverity::High,
                 SafetyCertainty::Exact,
-                "network_denied",
-                "Network transfer commands and visible network URLs are blocked.",
+                "network_access",
+                "Network access can transmit workspace content and requires explicit approval.",
                 None,
             ),
             "blocked-path" => (
@@ -246,7 +246,7 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 SafetySeverity::Critical,
                 SafetyCertainty::Heuristic,
                 "blocked_workspace_path",
-                "The command references a workspace path the file tools refuse, such as a key, an environment file, or a credential.",
+                "The command references a workspace path the file tools refuse, such as a private key or environment file.",
                 None,
             ),
             "external-directory" => (
@@ -344,7 +344,7 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("git status; curl https://example.com", cwd).action,
-            SafetyAction::Deny
+            SafetyAction::Confirm
         );
         assert_eq!(
             evaluate_command("npm test", cwd).action,

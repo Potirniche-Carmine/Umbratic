@@ -357,7 +357,7 @@ test("command aggregation, pending permissions, and timelines reflect real event
     events[5],
   ])));
   assert.deepEqual(groupedProgressTimeline.map((item) => item.type), ["user", "assistant"]);
-  assert.equal(groupedProgressTimeline[1].text, "Done");
+  assert.equal(groupedProgressTimeline[1].text, "**Umbratic AI**: Done");
   const runningGroupedProgressTimeline = composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "Reading files", at: "2026-01-01T00:00:01.000Z" },

@@ -17,7 +17,7 @@ const scenarioTable = [
   ["lsp-code-intelligence", "LSP_CODE_INTELLIGENCE"],
   ["read-file", "READ_FILE"],
   ["write-file", "WRITE_FILE"],
-  ["block-network", "BLOCK_NETWORK"],
+  ["network-approval", "NETWORK_APPROVAL"],
   ["rejected-command", "REJECTED_COMMAND"],
   ["approved-executable", "APPROVED_EXECUTABLE"],
   ["duplicate-ids", "DUPLICATE_IDS"],
@@ -72,8 +72,13 @@ function orientDecisionFor(requestText: string): Record<string, unknown> | null 
       evidenceRequired: true,
     };
   }
+  // This fake stands in for Veil, so it returns a decision that has already
+  // skipped Veil's own catalog check — which is exactly what the runner's
+  // backstop exists for. The leak it can catch without holding the catalog is
+  // the decision naming its own bucket, and that is the realistic one: the
+  // classifier echoing the id it just chose.
   if (requestText.includes("ORIENT_BAD_SENTENCE")) {
-    return { bucket: "debug_failure", summarySentence: "Running deep_review now." };
+    return { bucket: "debug_failure", summarySentence: "Running debug_failure now." };
   }
   return null;
 }
@@ -143,9 +148,9 @@ export async function startProvider() {
       response.end(sse({ choices: [{ delta: { content: "The workspace root holds README.md." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "guided-tour") {
       // A long guided tour: a short preamble before every read, thirteen
-      // reads, then the answer. The runner is expected to drop every
-      // volunteered preamble by size and inject nothing into the model's
-      // context — the orientation is the run's only status line.
+      // reads, then the answer. The runner drops every volunteered preamble
+      // and injects nothing into the model's context — the orientation is the
+      // run's only status line.
       const completed = new Set(
         Array.from(encoded.matchAll(/read: tour-(\d+)\.txt \(ok\)/g), (match) => Number(match[1])),
       ).size;
@@ -165,17 +170,16 @@ export async function startProvider() {
         function: { name: "read", arguments: "{\"path\":\"README.md\",\"limit\":2}" },
       }] } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "streamed-trim" && !encoded.includes("read: site.js (ok)")) {
-      // A long mid-turn report that outgrows the hold and streams live,
-      // closing promise included. The harness ships it verbatim: size decides
-      // what streams, and no wording is ever inspected.
+      // A long mid-turn report with a tool call. The runner must hold and
+      // drop it: mid-plan prose never reaches the user.
       const report = "The documentation describes a static bakery site with one page and a couple of scripts. ".repeat(8);
       response.end(sse({ choices: [{ delta: {
         content: `${report.trim()} Next, I will read the site script to confirm this behavior.`,
         tool_calls: [{ index: 0, id: "stream-read-js", function: { name: "read", arguments: "{\"path\":\"site.js\",\"limit\":2}" } }],
       } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "streamed-trim") {
-      // A long answer that ends on a promise-shaped sentence. It streams live
-      // and ships verbatim — what the model writes is what the user sees.
+      // The final answer. It ships when the step has no tools — what the model
+      // writes here is what the user sees.
       const body = "The bakery site is one static page with no build step and plain vanilla scripting. ".repeat(9);
       const announcement = "To go deeper, I will now examine the configuration files. Starting with the main config, which appears central.";
       response.end(sse({ choices: [{ delta: { content: `${body.trim()} ${announcement}` } }] }) + "data: [DONE]\n\n");
@@ -218,8 +222,10 @@ export async function startProvider() {
       } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "write-file" && !encoded.includes("write: note.txt (ok)")) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "write-1", function: { name: "write", arguments: "{\"path\":\"note.txt\",\"content\":\"native write\\n\"}" } }] } }] }) + "data: [DONE]\n\n");
-    } else if (scenario === "block-network" && !encoded.includes("policy_blocked")) {
-      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "command-1", function: { name: "command", arguments: "{\"command\":\"curl https://example.com; printf spawned > blocked-command-spawned.txt\"}" } }] } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "network-approval" && !encoded.toLowerCase().includes("user rejected")) {
+      response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "network-command-1", function: { name: "command", arguments: "{\"command\":\"curl https://example.com; printf spawned > network-command-spawned.txt\"}" } }] } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "network-approval") {
+      response.end(sse({ choices: [{ delta: { content: "The network command was not run." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "rejected-command" && !encoded.toLowerCase().includes("user rejected")) {
       response.end(sse({ choices: [{ delta: { content: "I will request approval before I run this command.", tool_calls: [{ index: 0, id: "rejected-command-1", function: { name: "command", arguments: "{\"command\":\"echo should-not-run > rejected-command.txt\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "rejected-command") {
@@ -284,13 +290,9 @@ export async function startProvider() {
     } else if (scenario === "repeat-tool" && Array.isArray(body.tools)) {
       response.end(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: "repeat", function: { name: "read", arguments: "{\"path\":\"README.md\",\"limit\":1}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "repeat-tool") {
-      response.end(sse({ choices: [{ delta: { content: "<|toolcall>call:command{programId:'python3'}<toolcall|>" } }] }) + "data: [DONE]\n\n");
-    } else if (scenario === "malformed-tool-syntax" && !encoded.includes("raw tool syntax")) {
-      response.end(sse({ choices: [{ delta: { content: "<|tool*call>call:read{path:'README.md'}<tool*call|>" } }] }) + "data: [DONE]\n\n");
-    } else if (scenario === "malformed-tool-syntax" && !encoded.includes("read: README.md (ok)")) {
-      response.end(sse({ choices: [{ delta: { content: "I corrected the call and will inspect the workspace now.", tool_calls: [{ index: 0, id: "malformed-recovery-read", function: { name: "read", arguments: "{\"path\":\"README.md\",\"limit\":2}" } }] } }] }) + "data: [DONE]\n\n");
+      response.end(sse({ choices: [{ delta: { content: "I stopped because the same workspace tool call returned the same result repeatedly." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "malformed-tool-syntax") {
-      response.end(sse({ choices: [{ delta: { content: "Recovered from the malformed tool call." } }] }) + "data: [DONE]\n\n");
+      response.end(sse({ choices: [{ delta: { content: "<|tool*call>call:read{path:'README.md'}<tool*call|>" } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "missing-done") {
       response.end(sse({ choices: [{ delta: { content: "incomplete" } }] }));
     } else if (scenario === "done-without-newline") {

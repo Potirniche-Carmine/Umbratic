@@ -252,23 +252,8 @@
   transform-origin: 50% 0;
 }
 
-/* The answer keeps the plain treatment every assistant message used to have —
-   it is what the reader came for and should be the least decorated thing on
-   screen. What changes is everything around it.
-
-   Narration is the run talking about itself: the opening sentence, the aside
-   between two rounds of work. It is not a message but a status line, so it drops
-   the assistant rail entirely and lines up with the Working block's own header,
-   which is the layer it actually belongs to. */
-/* The colour has to land on the markdown body, not the article:
-   `.markdownContent` paragraphs set their own colour, so styling only the
-   wrapper left the visible text untouched.
-
-   Colour alone carries the demotion. Shrinking narration to 11px as well made
-   it a caption rather than a quieter voice — one sentence of ordinary prose set
-   two-and-a-half points below everything around it, which reads as a rendering
-   fault before it reads as a hierarchy. It keeps the body size and recedes by
-   being muted. */
+/* Answer: plain. Narration: status line — no rail, muted, aligned with Working. */
+/* Colour on the markdown body: paragraphs set their own colour. Size stays body. */
 .timelineMessage.assistantProgress,
 .timelineMessage.assistantProgress .markdownContent,
 .timelineMessage.assistantProgress .markdownContent p,
@@ -280,13 +265,7 @@
   content: none;
 }
 
-/* Prose that leads straight into work reads as that work's opening line.
-   It cannot move inside the Working block: whether more tools are coming is
-   unknowable at the first streamed token, so classifying prose that early means
-   sometimes relocating it afterwards — and relocating settled text is what made
-   the answer arrive as a jump before. Instead it stays exactly where it streamed
-   and the grid gap beneath it closes, so the two read as one section and nothing
-   ever moves. */
+/* Prose before work stays put; close the gap so it reads with the Working block. */
 .timelineMessage.assistantProgress:has(+ .timelineActivity) {
   margin-bottom: calc(0px - clamp(20px, 3vh, 34px) + 9px);
 }
@@ -324,12 +303,7 @@
   opacity: 1;
 }
 
-/* The Working header is the run narrating itself, exactly like the opening
-   sentence and the asides between rounds of work. It used to be set two steps
-   heavier and a shade brighter than that narration, so "Worked for 2 seconds"
-   read as a heading dropped between two quiet status lines. It now takes the
-   narration's own type — same size, same colour, same weight — and keeps only
-   what earns its place as a control: the chevron, and a brighter hover. */
+/* Working header matches narration type; only the chevron/hover mark it as a control. */
 .activityHeader {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 14px;
@@ -457,13 +431,7 @@
   transition: opacity 130ms ease-out 45ms;
 }
 
-/* A finished block closing is the settle at the end of the work — it happens
-   on its own, right as the answer starts streaming below, and it can fold away
-   hundreds of pixels of narration. At the click-toggle timing above that reads
-   as a snap, so the close (and only the close) of a finished block is slower
-   and softer: content fades first, then the rows fold. Opening a finished
-   block stays on the snappy click timing, because :not(.open) stops matching
-   the moment it opens. */
+/* Finished-block close is slower so folding narration does not snap. */
 .timelineActivity.isFinished .activityBody:not(.open) {
   transition: grid-template-rows 460ms cubic-bezier(0.3, 0, 0.12, 1) 120ms;
 }
@@ -990,9 +958,7 @@
   overflow-wrap: anywhere;
 }
 
-/* Shown only during a workspace's first index. The artifact lives outside the
-   workspace, so nothing in the user's own tree signals that work is happening;
-   without this the first folder open just feels slow. */
+/* First-index banner: the artifact is outside the workspace, so open feels slow without it. */
 .workspaceIndexing {
   display: flex;
   align-items: center;

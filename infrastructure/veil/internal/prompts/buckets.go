@@ -52,8 +52,8 @@ type Bucket struct {
 	// rendering, so a disabled skill is simply omitted.
 	PreferredSkills []string
 	// GraphGuidance is rendered only when the request's tool array actually
-	// carries workspace_graph, the same conditional discipline RelevantSkills
-	// uses. A run without the tool assembles byte-identically to today.
+	// carries workspace_graph. A run without the tool assembles byte-identically
+	// to today.
 	GraphGuidance string
 	// Stop is the bucket's completion rule.
 	Stop string
@@ -645,6 +645,13 @@ func ParseOrientDecision(route Route, raw string) (OrientDecision, error) {
 
 // validSummarySentence is the complete syntactic definition of a status
 // sentence. There is deliberately no heuristic sentence parsing here.
+//
+// What is left is a bound and a shape: non-empty, one line, inside the rune
+// cap, and free of bucket ids. Terminal punctuation used to be required — "."
+// or "!" — and that quietly made the one line every user reads an English-only
+// feature: a sentence ending in "?", "…", or "。" was dropped whole, and a drop
+// looks exactly like a classifier that wrote no sentence at all. The prompt
+// still asks for a period, where a miss costs nothing.
 func validSummarySentence(route Route, sentence string) bool {
 	if sentence == "" {
 		return false
@@ -653,9 +660,6 @@ func validSummarySentence(route Route, sentence string) bool {
 		return false
 	}
 	if len([]rune(sentence)) > MaxSummarySentenceRunes {
-		return false
-	}
-	if !strings.HasSuffix(sentence, ".") && !strings.HasSuffix(sentence, "!") {
 		return false
 	}
 	// Second person used to be disqualifying. It cost the user the whole line:
@@ -700,11 +704,11 @@ func mentionsBucketID(route Route, sentence string) bool {
 // step of the turn, so it is the nearest instruction the model sees before each
 // tool call; any formatting rule here becomes the dominant instruction and
 // competes with the plan. The status line is the harness's job — the classifier
-// opens the run and the runner asks for check-ins on its own cadence — so the
-// header's whole job is to state the precedence split, anchor the final
-// message, and push the model into the first step.
+// opens the run and the tool rows narrate the work — so the header's whole job
+// is to state the precedence split, anchor the final message, and push the
+// model into the first step.
 const playbookHeader = `Your task playbook for this turn. It sets what work happens, in what order, and when to stop. The global instructions cover who you are and how to call tools; this plan sets the work. Follow it, and adapt as evidence changes it.
-Keep the plan to yourself and speak to the user in ordinary language. Keep everything you find for your last message, the one with no tool calls. When a next step remains, call its tool in the same message you mention it. Start now with your first tool call, or with the questions the plan asks for.`
+Keep the plan to yourself. Do not summarize progress, findings, or next steps while tools remain — call the next tool with no intervening report. Speak to the user only in your last message, the one with no tool calls; keep everything you find for that message. Start now with your first tool call, or with the questions the plan asks for.`
 
 const playbookAntiLoop = `If a tool fails, read the error and try a different approach.`
 

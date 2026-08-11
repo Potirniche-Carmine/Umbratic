@@ -296,7 +296,7 @@ export class RunnerEventAdapter {
   }
 
   private emitAssistant(text: string, at?: string, endedAt?: string): void {
-    if (!text || text.trim() === "Ready for review.") return;
+    if (!text) return;
     this.options.emit({
       type: "assistant.delta",
       taskId: this.options.task.id,

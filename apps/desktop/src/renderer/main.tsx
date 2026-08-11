@@ -63,6 +63,7 @@ import type {
   ReviewFile, RunnerToolId, SkillSourceFilter, ToolErrorCode, ToolResultStatus,
 } from "./rendererTypes";
 import { readQueuedPrompts } from "./queuedPrompts";
+import { QueuedPromptList } from "./queuedPromptList";
 import {
   CONTEXT_LENGTH_OPTIONS,
   DEFAULT_CONTEXT_LENGTH,
@@ -89,7 +90,6 @@ import {
   CircleDashed,
   Cloud,
   Copy,
-  CornerUpRight,
   Ellipsis,
   ExternalLink,
   File,
@@ -107,7 +107,6 @@ import {
   Moon,
   PanelRight,
   Paperclip,
-  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -331,10 +330,6 @@ const previewEnvironment = composerTestMode
   ? window.__UMBRATIC_PREVIEW_ENVIRONMENT__ ?? null
   : null;
 let api: DesktopApi;
-
-function isReviewReadyText(text: string): boolean {
-  return text.trim() === "Ready for review.";
-}
 
 function appendBackendEvent(events: BackendUiEvent[], event: BackendUiEvent, limit = 500): BackendUiEvent[] {
   return appendTaskEvent(events, event, limit) as BackendUiEvent[];
@@ -800,10 +795,9 @@ export function activityToolGroups(segments: ComposerActivitySegment[]): Array<{
   return Array.from(groups.values());
 }
 
-function stripAssistantSpeakerPrefix(text: string): string {
-  return text.replace(/^\s*(?:\*\*)?Umbratic(?: AI)?(?:\*\*)?\s*:\s*/i, "");
-}
-
+// Assistant text renders as the model wrote it. Stripping a "Umbratic:" prefix
+// was a word list: every phrasing it lacked leaked anyway, and it ate the first
+// words of an answer that legitimately opened on the name.
 export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
   const runs = new Map<string, CommandRun>();
   const items: ComposerTimelineItem[] = [];
@@ -847,7 +841,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   // one case nobody can classify early, since holding it would delay the
   // answer.
   const flushAssistant = (streaming = false) => {
-    const text = stripAssistantSpeakerPrefix(assistantBuffer).trim();
+    const text = assistantBuffer.trim();
     if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
     assistantIndex += 1;
     items.push({
@@ -948,7 +942,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   const foldProseIntoNarration = () => {
     if (!assistantBuffer.trim()) return;
     const separator = reasoningBuffer.trim() ? "\n\n" : "";
-    reasoningBuffer = `${reasoningBuffer}${separator}${stripAssistantSpeakerPrefix(assistantBuffer).trim()}`;
+    reasoningBuffer = `${reasoningBuffer}${separator}${assistantBuffer.trim()}`;
     assistantBuffer = "";
     assistantNeedsSeparator = false;
   };
@@ -996,7 +990,6 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "assistant.delta") {
-      if (isReviewReadyText(event.text)) continue;
       // The work is over once the model starts speaking, so the first token of a
       // burst closes the elapsed window. Later tokens of the same answer must not
       // keep inflating it. A tool afterwards reopens it: the run was not done
@@ -1433,6 +1426,10 @@ function MarkdownBlockView({
     ));
     return block.ordered ? <ol>{listItems}</ol> : <ul>{listItems}</ul>;
   }
+  if (block.type === "rule") return <hr />;
+  if (block.type === "quote") {
+    return <blockquote>{renderInlineMarkdown(block.text, referenceOptions)}{trailingInline ?? null}</blockquote>;
+  }
   if (block.type === "table") {
     return (
       <div className="markdownTableWrapper">
@@ -1527,7 +1524,7 @@ export function LongMarkdownContent({
 // already renders an unterminated ``` fence as a code block, so the split is
 // fence-safe by construction.
 function stabilizedStreamingBlock(block: MarkdownBlock): MarkdownBlock {
-  if (block.type === "paragraph" || block.type === "heading") {
+  if (block.type === "paragraph" || block.type === "heading" || block.type === "quote") {
     return { ...block, text: stabilizeStreamingInlineText(block.text) };
   }
   if (block.type === "list" && block.items.length) {
@@ -1543,8 +1540,7 @@ function StreamingMarkdownContent({ content, caretClassName }: { content: string
   const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
   const caret = <span className={caretClassName} aria-hidden="true" />;
   const lastBlock = blocks.at(-1);
-  const caretInline =
-    !!lastBlock && (lastBlock.type === "paragraph" || lastBlock.type === "heading" || lastBlock.type === "list");
+  const caretInline = !!lastBlock && ["paragraph", "heading", "list", "quote"].includes(lastBlock.type);
   return (
     <div className="markdownContent">
       {blocks.map((block, index) =>
@@ -2367,14 +2363,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       backendEventFlushTimer = null;
       const batch = takeBatchedBackendEvents(pendingBackendEvents);
       if (batch.length === 0) return;
-      const visibleBatch = batch.filter((event) => !(event.type === "assistant.delta" && isReviewReadyText(event.text)));
-      cacheTaskEvents(visibleBatch);
+      cacheTaskEvents(batch);
       const visibleTaskId = visibleTaskIdRef.current;
-      const visibleTaskEvents = visibleTaskId ? visibleBatch.filter((event) => event.taskId === visibleTaskId) : [];
+      const visibleTaskEvents = visibleTaskId ? batch.filter((event) => event.taskId === visibleTaskId) : [];
       if (visibleTaskEvents.length) {
         setEvents((current) => visibleTaskEvents.reduce((next, event) => appendBackendEvent(next, event, 500), current));
       }
-      for (const event of visibleBatch) {
+      for (const event of batch) {
         const isVisibleTaskEvent = event.taskId === visibleTaskIdRef.current;
         const effects = taskEventEffects(event);
         if (isVisibleTaskEvent) {
@@ -3621,9 +3616,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (activeChatId) void persistDraft(activeChatId, "", []);
   }
 
-  // The runner releases a queued message only after a turn answers, so the
-  // mirror is re-read whenever the task settles or changes.
-  useEffect(() => { void syncQueuedPrompts(task?.id); }, [task?.id, task?.state]);
+  // Re-sync when a queued follow-up is dequeued into a user.message (task.state stays "running").
+  const userMessageCount = events.reduce((count, event) => count + (event.type === "user.message" ? 1 : 0), 0);
+  useEffect(() => { void syncQueuedPrompts(task?.id); }, [task?.id, task?.state, userMessageCount]);
 
   async function syncQueuedPrompts(taskId: string | undefined) {
     setQueuedPrompts(taskId ? await readQueuedPrompts(api, taskId).catch(() => []) : []);
@@ -5646,66 +5641,18 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 </div>
               </div>
             ) : null}
-            {activeQueuedPrompts.length ? (
-              <div className="queuedPromptList" aria-label="Queued prompts">
-                {activeQueuedPrompts.map((item, index) => {
-                  const visiblePrompt = visibleReviewPrompt(item.prompt);
-                  return (
-                  <div className="queuedPrompt" key={item.id}>
-                    <button
-                      className="queuedPromptEdit"
-                      type="button"
-                      onClick={() => editQueuedPrompt(item)}
-                      disabled={steerPending}
-                      aria-label={`Edit queued prompt ${index + 1}`}
-                      title="Edit queued prompt"
-                    >
-                      <span className="queuedPromptOrder">{index + 1}</span>
-                      <span className="queuedPromptText">{visiblePrompt.text || item.prompt}</span>
-                      <Pencil className="queuedPromptEditIcon" aria-hidden="true" size={13} />
-                    </button>
-                    {visiblePrompt.feedback.length ? (
-                      <button
-                        className="queuedPromptFeedback"
-                        type="button"
-                        onClick={() => {
-                          setReviewFeedbackPreview(visiblePrompt.feedback);
-                          setReviewFeedbackDialogOpen(true);
-                        }}
-                        aria-haspopup="dialog"
-                        title={`${visiblePrompt.feedback.length} review comment${visiblePrompt.feedback.length === 1 ? "" : "s"} attached`}
-                      >
-                        <MessageSquareText size={12} />
-                        <span>{visiblePrompt.feedback.length}</span>
-                      </button>
-                    ) : null}
-                    {isGenerating ? (
-                      <button
-                        className="queuedPromptSteer"
-                        type="button"
-                        onClick={() => void steerSubmission(item, item.id)}
-                        disabled={steerPending}
-                        aria-label={`Steer with queued prompt ${index + 1}`}
-                      >
-                        <CornerUpRight size={13} />
-                        <span>Steer</span>
-                      </button>
-                    ) : null}
-                    <button
-                      className="queuedPromptDelete"
-                      type="button"
-                      onClick={() => removeQueuedPrompt(item.id)}
-                      disabled={steerPending}
-                      aria-label={`Delete queued prompt ${index + 1}`}
-                      title="Delete queued prompt"
-                    >
-                      <Trash2 aria-hidden="true" size={13} />
-                    </button>
-                  </div>
-                  );
-                })}
-              </div>
-            ) : null}
+            <QueuedPromptList
+              items={activeQueuedPrompts}
+              isGenerating={isGenerating}
+              steerPending={steerPending}
+              onEdit={editQueuedPrompt}
+              onSteer={(item) => void steerSubmission(item, item.id)}
+              onDelete={removeQueuedPrompt}
+              onPreviewFeedback={(feedback) => {
+                setReviewFeedbackPreview(feedback);
+                setReviewFeedbackDialogOpen(true);
+              }}
+            />
             <div className="promptInputShell">
               <div className="promptEditor">
                 <div className="promptHighlight" aria-hidden="true">
@@ -5768,7 +5715,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           files={reviewFiles}
           initialSelectedPath={reviewTargetPath}
           taskId={task?.id ?? `workspace:${repository?.rootPath ?? "none"}`}
-          patchHash={task?.reviewPatchHash}          scope={task?.reviewScope ?? tasklessReviewScope}
+          patchHash={task?.reviewPatchHash}
+          scope={task?.reviewScope ?? tasklessReviewScope}
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
           canUndo={canUndo}

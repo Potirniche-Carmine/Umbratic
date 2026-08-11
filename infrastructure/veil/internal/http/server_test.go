@@ -419,11 +419,11 @@ func TestRequestOverlayLeavesTheProtectedPrefixStable(t *testing.T) {
 		[]model.Message{{Role: "user", Content: "Explain authentication."}},
 		"template two",
 	)
-	firstBuilt, err := prompts.Build(prompts.SalesChat, first)
+	firstBuilt, err := prompts.Build(prompts.SalesChat, first, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondBuilt, err := prompts.Build(prompts.SalesChat, second)
+	secondBuilt, err := prompts.Build(prompts.SalesChat, second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

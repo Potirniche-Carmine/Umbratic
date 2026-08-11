@@ -74,7 +74,7 @@ test("orient classifies once per run, stays hidden, and degrades silently", asyn
     assert.equal(
       events.events.slice(badStart).some(
         (event) => (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
-          && String(event.text).includes("deep_review"),
+          && String(event.text).includes("debug_failure"),
       ),
       false,
       "a rejected sentence must never reach the user",
@@ -181,15 +181,15 @@ test("an evidence-required bucket cannot answer before calling a tool", async ()
       progress.some((text) => text.startsWith("I will map this repository")),
       `the status sentence must still be shown: ${JSON.stringify(progress)}`,
     );
-    // The preamble the model volunteered with its tool call sits inside the
-    // status window, so the cadence drops it rather than showing a second
-    // status two seconds after the first.
+    // The preamble the model volunteered with its tool call is held with the
+    // rest of the step and dropped when tools arrive, so it never becomes a
+    // second status line after the orientation.
     assert.equal(
       events.events.some((event) =>
         (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
           && String(event.text).includes("Listing the workspace root now")),
       false,
-      "a preamble inside the status window must be dropped unshown",
+      "a tool-step preamble must be dropped unshown",
     );
 
     // The run then did real work instead of shipping the fabrication.
@@ -220,12 +220,10 @@ test("an evidence-required bucket cannot answer before calling a tool", async ()
   }
 });
 
-// Past the status-line bound, a step's prose streams live and ships verbatim.
-// The harness reads none of the words: an earlier version scanned answers for
-// announcement phrasings and trimmed or refused them, and every live model
-// promptly used a phrasing the list did not have. Whatever the model writes is
-// what the user sees; ending on the answer is the playbook's guidance to give.
-test("streamed prose ships verbatim, with no wording heuristics applied", async () => {
+// Mid-plan prose on a tool-calling step is held and dropped, however long it
+// is. Only the final no-tool answer reaches the user. The harness never reads
+// the words: structure decides (tools present or not), never wording.
+test("mid-plan prose on a tool step is dropped, final answer ships", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-verbatim-"));
   fs.writeFileSync(path.join(cwd, "README.md"), "verbatim fixture\n");
   fs.writeFileSync(path.join(cwd, "site.js"), "console.log('bakery');\n");
@@ -237,23 +235,25 @@ test("streamed prose ships verbatim, with no wording heuristics applied", async 
     assert.equal((await prompt(run, session.id, "ORIENT_STREAM describe this page")).status, 204);
     await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
 
-    const deltas = events.events
+    const answer = events.events
       .filter((event) => event.type === "assistant.delta")
-      .map((event) => String(event.text));
-    const answer = deltas.join("");
-    // Both long texts streamed live and arrived whole, closing sentences
-    // included — nothing was rewritten, trimmed, or held back.
-    assert.ok(
+      .map((event) => String(event.text))
+      .join("");
+    // The long mid-turn report that accompanied a tool call must never appear.
+    assert.equal(
       answer.includes("The documentation describes a static bakery site"),
-      `the mid-turn report must stand where it streamed: ${answer}`,
+      false,
+      `mid-plan prose must be dropped: ${answer}`,
     );
-    assert.ok(
+    assert.equal(
       answer.includes("I will read the site script"),
-      `streamed prose must ship verbatim: ${answer}`,
+      false,
+      `mid-plan next-step narration must be dropped: ${answer}`,
     );
+    // The final answer still ships whole, closing sentence included.
     assert.ok(
       answer.includes("The bakery site is one static page"),
-      `the streamed answer body must survive: ${answer}`,
+      `the final answer body must survive: ${answer}`,
     );
     assert.ok(
       answer.includes("Starting with the main config, which appears central."),
@@ -267,8 +267,7 @@ test("streamed prose ships verbatim, with no wording heuristics applied", async 
       "no announcement heuristics may run",
     );
 
-    // The structural rules still hold: the short step-one preamble stayed
-    // inside the status window and was dropped by size, not by wording.
+    // Short tool-step preambles stay dropped too.
     assert.equal(
       events.events.some((event) =>
         (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
@@ -285,9 +284,9 @@ test("streamed prose ships verbatim, with no wording heuristics applied", async 
 });
 
 // The orientation is the run's only harness-driven status line, however long
-// the run gets. Preambles are dropped by size alone, and nothing is ever
-// injected into the model's context to ask for more narration — the tool rows
-// narrate every call on their own.
+// the run gets. Preambles are dropped, and nothing is ever injected into the
+// model's context to ask for more narration — the tool rows narrate every
+// call on their own.
 test("a long guided run shows the orientation and nothing else is injected", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-cadence-"));
   for (let index = 0; index < 13; index += 1) {
@@ -317,7 +316,7 @@ test("a long guided run shows the orientation and nothing else is injected", asy
         (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
           && String(event.text).includes("Reading tour file")),
       false,
-      "short per-step preambles must be dropped by size",
+      "per-step preambles must be dropped unshown",
     );
 
     // Nothing was ever added to the model's context: every tool message the

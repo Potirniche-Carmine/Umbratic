@@ -70,7 +70,6 @@ import {
 import { checkEndpointHealth, telemetryUploadEndpoint } from "./modelEndpointRuntime";
 import { recordVeilFeatures } from "./veilFeatures";
 import {
-  applyHarnessSystemSkillSettings,
   getSkillDocument as getSkillDocumentService,
   importSkill as importSkillService,
   skillsDirectoryPath as skillsDirectoryPathService,
@@ -264,7 +263,6 @@ function revertToLocalMode() {
 
 export async function saveHarnessProfileSetting(input: unknown) {
   const settings = writeHarnessProfileSetting(input as HarnessProfileId);
-  applyHarnessSystemSkillSettings(settings);
   const status = await getBackendStatus();
   return { settings, status };
 }

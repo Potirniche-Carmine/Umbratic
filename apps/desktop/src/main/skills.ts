@@ -7,7 +7,6 @@ import { app } from "electron";
 
 import { skillsDirectory } from "./appPaths";
 import { readSkillSettings, writeSkillSettings } from "./storage";
-import type { HarnessProfileId } from "./types";
 import { pathInside } from "./utils";
 
 export type SkillSource = "system" | "local";
@@ -88,50 +87,6 @@ const systemSkillDefinitions: SystemSkillDefinition[] = [
   { id: "umbratic-marketing-brief" },
   { id: "umbratic-sales-enablement" },
 ];
-
-const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
-  engineering: new Set([
-    "umbratic-skill-creator",
-    "umbratic-git-worktree",
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-cmake",
-    "umbratic-discovery",
-    "umbratic-product-spec",
-    "umbratic-security-review",
-  ]),
-  marketing: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-    "umbratic-discovery",
-    "umbratic-marketing-brief",
-  ]),
-  sales: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-    "umbratic-discovery",
-    "umbratic-sales-enablement",
-  ]),
-};
-
-export function harnessSystemSkillSettings(profileId: HarnessProfileId): Record<string, boolean> {
-  const enabled = harnessSystemSkillIds[profileId];
-  return Object.fromEntries(systemSkillDefinitions.map((skill) => [skill.id, enabled.has(skill.id)]));
-}
-
-export function applyHarnessSystemSkillSettings(profileId: HarnessProfileId): Record<string, boolean> {
-  return writeSkillSettings(harnessSystemSkillSettings(profileId));
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);

@@ -16,7 +16,7 @@ func TestPromptAssemblyOrderIsStable(t *testing.T) {
 	client := []model.Message{{Role: "user", Content: "do the thing"}}
 	protected := []model.Message{{Role: "system", Content: "protected turn context"}}
 
-	assembled, err := BuildWithProtectedMessages(EngineeringChat, client, protected, skills)
+	assembled, err := BuildWithProtectedMessages(EngineeringChat, client, protected, skills, allWorkspaceTools())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestPromptAssemblyOrderIsStable(t *testing.T) {
 }
 
 func TestPromptAssemblyOmitsAnEmptySkillCatalog(t *testing.T) {
-	assembled, err := BuildWithProtectedMessages(EngineeringChat, nil, nil, nil)
+	assembled, err := BuildWithProtectedMessages(EngineeringChat, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestPromptAssemblyOmitsAnEmptySkillCatalog(t *testing.T) {
 func segmentName(message model.Message) string {
 	content, _ := message.Content.(string)
 	switch {
-	case content == GlobalSystemPrompt:
+	case content == GlobalSystemPrompt(allWorkspaceTools()):
 		return "global"
 	case strings.Contains(content, "skill catalog"):
 		return "skill-catalog"

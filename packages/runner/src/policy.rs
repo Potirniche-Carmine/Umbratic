@@ -85,9 +85,6 @@ pub fn is_blocked_path(value: &str) -> bool {
         || matches!(basename, "id_rsa" | "id_ed25519" | ".npmrc")
         || normalized == ".git/config"
         || normalized.starts_with(".git/hooks/")
-        || normalized.contains("credential")
-        || normalized.contains("secret")
-        || normalized.contains("token")
 }
 
 pub fn path_inside(root: &Path, candidate: &Path) -> bool {
@@ -549,7 +546,11 @@ mod tests {
         ));
         assert!(is_blocked_path(".env.local"));
         assert!(is_blocked_path("certs/client.key"));
+        assert!(is_blocked_path(".npmrc"));
         assert!(!is_blocked_path("src/main.rs"));
+        assert!(!is_blocked_path("src/tokenizer.rs"));
+        assert!(!is_blocked_path("docs/secret-management.md"));
+        assert!(!is_blocked_path("tests/credential_store.rs"));
     }
 
     #[test]
