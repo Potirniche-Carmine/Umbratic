@@ -236,19 +236,22 @@ Enrollment code after enrollment.
 go run ./cmd/veil
 ```
 
-From the monorepo root, use the local helper to start the desktop app with the same
-connection switching behavior as the packaged app. Local is the first-run default,
-and Company server remains selectable in Settings:
+From the monorepo root, build the packaged application to get the same connection
+switching behavior end to end. Local is the first-run default, and Company server
+remains selectable in Settings:
 
 ```sh
-npm run local
+npm run desktop:release
 ```
 
-When Local is selected, the desktop app starts and owns the local Veil process, just as the packaged app does. The helper does not read `infrastructure/veil/.env`, and the app does not force Local mode. Users do not configure a Veil URL or token in Local mode. Veil binds to loopback, uses an app-generated transient credential, and starts with telemetry ingestion disabled. Override local runtime values for one run when needed:
+When Local is selected, the desktop app starts and owns the local Veil process. It
+does not read `infrastructure/veil/.env`, and the app does not force Local mode.
+Users do not configure a Veil URL or token in Local mode. Veil binds to loopback,
+uses an app-generated transient credential, and starts with telemetry ingestion
+disabled. Override local runtime values for one run through the environment:
 
 ```sh
-npm run local -- --model llama3.2
-npm run local -- --software vllm --base-url http://127.0.0.1:8000/v1 --model your-model
+UMBRATIC_LOCAL_MODEL_ID=llama3.2 npm run desktop:dev
 ```
 
 ## Test

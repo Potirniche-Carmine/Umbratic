@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { extractFile } from "@electron/asar";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const releaseRoot = path.join(desktopRoot, "release");
+const releaseRoot = path.resolve(desktopRoot, "../../target/release/desktop");
 
 function packagedResources() {
   if (process.platform === "win32") {
@@ -64,6 +64,6 @@ verifyBinary(path.join(resources, "pdf", executable("umbratic-pdf")), /umbratic-
 verifyBinary(
   path.join(resources, "veil", executable("veil")),
   /VEIL_AUTH_TOKEN is required/,
-  { ...process.env, VEIL_AUTH_TOKEN: "" },
+  { ...process.env, VEIL_MODE: "local", VEIL_AUTH_TOKEN: "" },
 );
-console.log(`Verified packaged desktop resources in ${path.relative(desktopRoot, resources)}.`);
+console.log(`Verified packaged desktop resources in ${path.relative(path.resolve(desktopRoot, "../.."), resources)}.`);

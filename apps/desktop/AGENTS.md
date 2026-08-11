@@ -56,6 +56,6 @@ Add tests at the layer that owns the behavior:
 - Native-process adapter tests should assert malformed output, early exit, cancellation, event ordering, and cleanup rather than only the happy path.
 - Packaging changes must verify that both Rust binaries are present, executable, and launchable from packaged resources.
 
-Run focused checks first. Before finishing, run `npm run test:all` from the repository root. Also run `npm run desktop:build` for desktop changes. When packaged-resource behavior changes, run `npm --workspace @umbratic/desktop run package` followed by `npm --workspace @umbratic/desktop run verify:package`.
+Run focused checks first. Before finishing, run `npm run test:all` from the repository root. Also run `npm --workspace @umbratic/desktop run build` for desktop changes. When packaged-resource behavior changes, run `npm --workspace @umbratic/desktop run package` followed by `npm --workspace @umbratic/desktop run verify:package`.
 
 Clean up dev servers, Electron processes, preview servers, native helpers, and watchers before ending the task.

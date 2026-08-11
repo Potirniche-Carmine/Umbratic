@@ -127,14 +127,17 @@ for (const script of ["supply-chain:audit", "supply-chain:sbom"]) {
   const [command, args] = npmInvocation(["run", script]);
   steps.push({ label: script, command, args });
 }
-const verifyScript = release ? "release:check" : "test:all";
-const [verifyCommand, verifyArgs] = npmInvocation(["run", verifyScript]);
-steps.push({
-  label: verifyScript,
-  command: verifyCommand,
-  args: verifyArgs,
-  env: { CARGO_NET_OFFLINE: "true" },
-});
+// A release run is the full verification followed by the packaged build the
+// release workflow ships, so a local pass covers the same ground.
+for (const script of release ? ["test:all", "desktop:release"] : ["test:all"]) {
+  const [command, args] = npmInvocation(["run", script]);
+  steps.push({
+    label: script,
+    command,
+    args,
+    env: { CARGO_NET_OFFLINE: "true" },
+  });
+}
 
 const started = process.hrtime.bigint();
 for (const [index, step] of steps.entries()) {

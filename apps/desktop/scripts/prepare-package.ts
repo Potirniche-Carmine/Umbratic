@@ -28,7 +28,7 @@ const requiredFiles = [
 
 for (const file of requiredFiles) {
   if (!fs.existsSync(file)) {
-    throw new Error(`Missing packaged runner input: ${file}. Run npm run build first.`);
+    throw new Error(`Missing packaged runner input: ${file}. Run npm run desktop:release first.`);
   }
 }
 

@@ -507,6 +507,43 @@ const sidebarMaxWidth = 230;
 const reviewMinWidth = 360;
 const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
+export type ReviewSpring = { stiffness: number; damping: number };
+/// Opening is an arrival and can afford to settle. Closing is a dismissal: the
+/// reader has already decided, and every millisecond after that decision is the
+/// panel overstaying. Damping sits just under critical (2√stiffness) in both,
+/// which is the shape the panel has always had.
+export const reviewOpenSpring: ReviewSpring = { stiffness: 420, damping: 38 };
+export const reviewCloseSpring: ReviewSpring = { stiffness: 1400, damping: 72 };
+/// Small enough to stay stable at this spring's stiffness however long a frame
+/// takes, and bounded so returning from a hidden window does not simulate
+/// minutes of motion.
+export const reviewSpringStepSeconds = 1 / 240;
+export const reviewSpringCatchUpSeconds = 0.25;
+
+/// A critically damped spring, advanced in fixed sub-steps. Integrating a whole
+/// frame in one step diverges at this stiffness once a frame reaches 50ms — the
+/// panel threw itself off screen, came back further than it started, and never
+/// met the rest condition — and clamping the frame whole instead just ran the
+/// animation in slow motion under load. Sub-stepping is stable at any frame
+/// length and catches up honestly after a stall.
+export function reviewSpringStep(
+  value: number,
+  velocity: number,
+  target: number,
+  elapsedSeconds: number,
+  spring: ReviewSpring = reviewOpenSpring,
+): { value: number; velocity: number } {
+  let remaining = Math.min(Math.max(elapsedSeconds, 0), reviewSpringCatchUpSeconds);
+  let nextValue = value;
+  let nextVelocity = velocity;
+  while (remaining > 0) {
+    const step = Math.min(reviewSpringStepSeconds, remaining);
+    remaining -= step;
+    nextVelocity += (target - nextValue) * spring.stiffness * step - nextVelocity * spring.damping * step;
+    nextValue += nextVelocity * step;
+  }
+  return { value: nextValue, velocity: nextVelocity };
+}
 const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
 
@@ -1559,41 +1596,108 @@ function StreamingMarkdownContent({ content, caretClassName }: { content: string
   );
 }
 
-/// Streamed text arrives in bursts — the runner's status-line hold releases
-/// its first several hundred characters at once, and local runtimes batch
-/// tokens — but reading speed is steady. The reveal walks toward the full text
-/// at a rate that scales with the backlog, so a burst becomes a quick, smooth
-/// catch-up instead of an instant wall of text. Presentation only: the full
-/// text is already in the timeline, and a settled message renders complete.
-function useRevealedText(text: string): string {
-  const [revealedCount, setRevealedCount] = useState(0);
+/// Streamed text arrives in bursts — a guided step holds every token until it
+/// resolves and then releases the whole answer as one delta, and local runtimes
+/// batch tokens — but reading speed is steady. The reveal walks toward the full
+/// text on a characters-per-second budget rather than a share of the backlog,
+/// so a burst reads as typing instead of a wall of text. Presentation only: the
+/// full text is already in the timeline, and a settled message renders
+/// complete.
+export const revealCharactersPerSecond = 420;
+/// However far behind the reveal falls, it still finishes within this many
+/// seconds, so a long answer never leaves the reader waiting on the pacing.
+export const revealCatchUpSeconds = 4;
+/// A hidden window stops firing frames. Clamping the measured gap keeps the
+/// return from resuming as one jump.
+const revealMaxFrameMs = 250;
+/// The first frame of a burst has no measured gap; assume a frame's worth so
+/// the reveal starts moving immediately.
+const revealAssumedFrameMs = 16;
+
+export function nextRevealCount(text: string, current: number, elapsedMs: number): number {
+  const backlog = text.length - current;
+  if (backlog <= 0) return current;
+  const charactersPerSecond = Math.max(revealCharactersPerSecond, backlog / revealCatchUpSeconds);
+  const elapsed = Math.min(Math.max(elapsedMs, 0), revealMaxFrameMs) || revealAssumedFrameMs;
+  let next = Math.min(text.length, current + Math.max(1, Math.round((charactersPerSecond * elapsed) / 1000)));
+  // Never split a surrogate pair: half an emoji renders as garbage.
+  const edge = text.charCodeAt(next - 1);
+  if (next < text.length && edge >= 0xd800 && edge <= 0xdbff) next += 1;
+  return next;
+}
+
+/// Text the reader has already watched arrive, so switching tabs and coming
+/// back does not replay it. Survives the component unmounting, which the reveal
+/// state cannot. Bounded because a long session should not grow a set forever.
+const completedReveals = new Set<string>();
+const completedRevealLimit = 500;
+export function markRevealComplete(key: string) {
+  if (completedReveals.size >= completedRevealLimit) completedReveals.clear();
+  completedReveals.add(key);
+}
+export function revealHasCompleted(key: string): boolean {
+  return completedReveals.has(key);
+}
+export function resetCompletedReveals() {
+  completedReveals.clear();
+}
+
+function useRevealedText(text: string, animate: boolean, revealKey: string): string {
+  const [revealedCount, setRevealedCount] = useState(() =>
+    animate && !completedReveals.has(revealKey) ? 0 : text.length,
+  );
+  const lastFrameAt = useRef<number | null>(null);
   useEffect(() => {
+    if (!animate) {
+      // Held at the end rather than left behind, so text that starts revealing
+      // later picks up from what the reader has seen instead of replaying it.
+      setRevealedCount(text.length);
+      lastFrameAt.current = null;
+      return undefined;
+    }
     if (revealedCount >= text.length) {
       // A reused component starting a new, shorter stream begins from zero
       // rather than running backwards.
       if (revealedCount > text.length) setRevealedCount(0);
+      else if (text.length > 0) markRevealComplete(revealKey);
+      lastFrameAt.current = null;
       return undefined;
     }
-    const frame = requestAnimationFrame(() => {
-      setRevealedCount((current) => {
-        const backlog = text.length - current;
-        if (backlog <= 0) return current;
-        // Catch up in about two dozen frames whatever the backlog, with a
-        // floor that keeps short tails from crawling.
-        let next = Math.min(text.length, current + Math.max(3, Math.ceil(backlog / 24)));
-        // Never split a surrogate pair: half an emoji renders as garbage.
-        const edge = text.charCodeAt(next - 1);
-        if (next < text.length && edge >= 0xd800 && edge <= 0xdbff) next += 1;
-        return next;
-      });
+    const frame = requestAnimationFrame((now) => {
+      const elapsed = lastFrameAt.current === null ? 0 : now - lastFrameAt.current;
+      lastFrameAt.current = now;
+      setRevealedCount((current) => nextRevealCount(text, current, elapsed));
     });
     return () => cancelAnimationFrame(frame);
-  }, [text, revealedCount]);
+  }, [animate, revealKey, text, revealedCount]);
+  if (!animate) return text;
   return revealedCount >= text.length ? text : text.slice(0, revealedCount);
 }
 
-function StreamingTextContent({ content }: { content: string }) {
-  const revealed = useRevealedText(content);
+/// A guided step releases its whole answer as one delta and the run settles in
+/// the same breath, so the two arrive in one render batch: keying the reveal on
+/// the run still being live meant the settled renderer replaced the revealing
+/// one before a single frame had drawn, and the answer landed whole. `animate`
+/// therefore outlives the run — it says the text arrived over this session's
+/// stream, not that more is coming — and the reveal itself decides when it is
+/// done. `streaming` only holds the caret while the answer is still growing.
+export function AssistantAnswerContent({
+  animate,
+  content,
+  revealKey,
+  streaming,
+  onReviewFileClick,
+  reviewFiles,
+}: {
+  animate: boolean;
+  content: string;
+  revealKey: string;
+  streaming: boolean;
+} & ReviewReferenceOptions) {
+  const revealed = useRevealedText(content, animate, revealKey);
+  if (!streaming && revealed.length >= content.length) {
+    return <LongMarkdownContent content={content} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />;
+  }
   return (
     <div className="streamingTextContent">
       <StreamingMarkdownContent content={revealed} caretClassName="streamingTextCaret" />
@@ -1799,6 +1903,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
+  const streamedAnswerTaskIds = useRef<Set<string>>(new Set());
   const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
   const [responseFeedbackSubmitting, setResponseFeedbackSubmitting] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -1812,7 +1917,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewClosing, setReviewClosing] = useState(false);
-  const [reviewOffset, setReviewOffset] = useState(0);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const [reviewTargetPath, setReviewTargetPath] = useState<string | undefined>();
   const [workspaceReview, setWorkspaceReview] = useState<{ reviewFiles: ReviewFile[]; baselineOid: string } | null>(null);
   /** Workspace currently being indexed for the first time, if any. */
@@ -2036,6 +2141,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
+  // Only text this session watched arrive reveals. A restored transcript's
+  // events are the same events, so the run having settled cannot tell the two
+  // apart — where they came in can.
+  const answerArrivedLive = task?.id ? streamedAnswerTaskIds.current.has(task.id) : false;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
     || task?.state === "approving"
@@ -2189,7 +2298,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     "--sidebar-reserved-width": `${sidebarDefaultWidth}px`,
     "--sidebar-visual-gap": `${Math.max(0, sidebarDefaultWidth - sidebarWidth)}px`,
     "--review-width": `${reviewWidth}px`,
-    "--review-offset": `${reviewOffset}px`,
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
@@ -2364,6 +2472,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const batch = takeBatchedBackendEvents(pendingBackendEvents);
       if (batch.length === 0) return;
       cacheTaskEvents(batch);
+      for (const event of batch) {
+        if (event.type === "assistant.delta") streamedAnswerTaskIds.current.add(event.taskId);
+      }
       const visibleTaskId = visibleTaskIdRef.current;
       const visibleTaskEvents = visibleTaskId ? batch.filter((event) => event.taskId === visibleTaskId) : [];
       if (visibleTaskEvents.length) {
@@ -2520,6 +2631,13 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const frame = window.requestAnimationFrame(() => responseFeedbackInputRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [responseFeedbackDialog?.messageId, responseFeedbackDialog?.rating]);
+
+  // The offset lives on the DOM node rather than in the style prop, so it needs
+  // its starting value written once. Everything after this comes from the
+  // animation itself.
+  useLayoutEffect(() => {
+    applyReviewOffset(reviewOffsetRef.current);
+  }, []);
 
   useEffect(() => {
     if (!reviewOpen) return undefined;
@@ -3942,27 +4060,46 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function cancelReviewClose() {
     if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
+    shellRef.current?.classList.remove("reviewClosing");
     setReviewClosing(false);
   }
 
-  function animateReviewTo(target: number, initialVelocity = 0, onRest?: () => void) {
+  // The panel's position is written straight to the shell. Carrying it in state
+  // re-rendered the whole app on every frame of the slide — the timeline, the
+  // composer, and the review panel itself, which is always mounted and holds
+  // the entire diff. That reconciliation was the frame cost, and long frames
+  // are the one thing an animation cannot absorb: the close dragged because
+  // each of its frames was paying to redraw everything it was sliding away.
+  function applyReviewOffset(value: number) {
+    shellRef.current?.style.setProperty("--review-offset", `${value}px`);
+  }
+
+  function animateReviewTo(
+    target: number,
+    initialVelocity = 0,
+    { onRest, doneEarly, spring = reviewOpenSpring }: {
+      onRest?: () => void;
+      doneEarly?: (value: number) => boolean;
+      spring?: ReviewSpring;
+    } = {},
+  ) {
     if (reviewAnimationRef.current !== null) window.cancelAnimationFrame(reviewAnimationRef.current);
     let value = reviewOffsetRef.current;
     let velocity = initialVelocity;
     let previous = performance.now();
     const tick = (now: number) => {
-      const elapsed = Math.min((now - previous) / 1000, 0.05);
+      // It starts from the presented position and can be retargeted at any time.
+      const advanced = reviewSpringStep(value, velocity, target, (now - previous) / 1000, spring);
       previous = now;
-      // A critically damped spring: it starts from the presented position and can be retargeted at any time.
-      velocity += (target - value) * 420 * elapsed - velocity * 38 * elapsed;
-      value += velocity * elapsed;
+      value = advanced.value;
+      velocity = advanced.velocity;
       reviewOffsetRef.current = value;
       reviewVelocityRef.current = velocity;
-      setReviewOffset(value);
-      if (Math.abs(target - value) < 0.5 && Math.abs(velocity) < 3) {
+      applyReviewOffset(value);
+      if ((Math.abs(target - value) < 0.5 && Math.abs(velocity) < 3) || doneEarly?.(value)) {
         reviewOffsetRef.current = target;
         reviewVelocityRef.current = 0;
-        setReviewOffset(target);
+        applyReviewOffset(target);
         reviewAnimationRef.current = null;
         onRest?.();
         return;
@@ -3974,10 +4111,21 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   function closeReviewPanel() {
     if (!reviewOpen && !reviewClosing) return;
+    // The class lands on the node before React is told anything. The state
+    // change re-renders the whole app, and that render sat between the click
+    // and the first frame of motion; this way the panel is already shedding its
+    // blur layers while React catches up to the same class name.
+    shellRef.current?.classList.add("reviewClosing");
     setReviewClosing(true);
-    animateReviewTo(reviewWidth + 18, reviewVelocityRef.current, () => {
-      setReviewOpen(false);
-      setReviewClosing(false);
+    // Past the edge the panel is invisible, and the spring's tail is another
+    // third of a second of holding a mounted diff on screen for nobody.
+    animateReviewTo(reviewWidth + 18, reviewVelocityRef.current, {
+      onRest: () => {
+        setReviewOpen(false);
+        setReviewClosing(false);
+      },
+      doneEarly: (value) => value >= reviewWidth,
+      spring: reviewCloseSpring,
     });
   }
 
@@ -4809,6 +4957,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       className={`appShell ${isMacLike ? "macChrome" : ""} sidebarOpen ${
         reviewLayoutOpen ? "" : "reviewClosed"
       } ${reviewLayoutOpen ? "reviewOpen" : ""} ${reviewClosing ? "reviewClosing" : ""}`}
+      ref={shellRef}
       style={layoutStyle}
     >
       <header className="topbar">
@@ -5090,15 +5239,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                           ) : null
                         }
                       >
-                        {item.streaming ? (
-                          <StreamingTextContent content={item.text} />
-                        ) : (
-                          <LongMarkdownContent
-                            content={item.text}
-                            onReviewFileClick={openReviewReference}
-                            reviewFiles={reviewFiles}
-                          />
-                        )}
+                        <AssistantAnswerContent
+                          animate={Boolean(item.streaming) || (answerArrivedLive && item.id === lastAssistantItemId)}
+                          content={item.text}
+                          onReviewFileClick={openReviewReference}
+                          revealKey={`${task?.id ?? "task"}:${item.id}`}
+                          reviewFiles={reviewFiles}
+                          streaming={Boolean(item.streaming)}
+                        />
                       </AssistantMessage>
                     ) : (
                       (() => {
@@ -5311,7 +5459,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         <section className="promptDock">
           <div className={`floatingAttachmentTray ${attachedFiles.length || reviewPromptFeedback.length ? "hasAttachments" : ""}`}>
             <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
-            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><small>{reviewPromptFeedback.length}</small><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
+            {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
           </div>
           <div className="promptControls">
             <div className={`workspaceCluster ${repository?.kind === "git" ? "hasBranch" : ""}`}>

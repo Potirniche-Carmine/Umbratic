@@ -138,6 +138,45 @@ test("intra-line highlighting stays focused on a close word edit", () => {
   assert.deepEqual(plain(row.right.spans.map((span) => span.changed)), [false, true, false]);
 });
 
+test("word highlighting follows how much of the line survived, not how alike the two looked", () => {
+  // A real edit: the sentence is reworked around a core that stays put. The
+  // old rule needed a 0.72 length ratio and 0.68 bigram similarity up front,
+  // so a line like this showed no word highlighting at all while a one-token
+  // rename right beside it did — which read as highlighting being broken.
+  const file = review.parseReviewPatch([
+    "diff --git a/notes.md b/notes.md",
+    "--- a/notes.md",
+    "+++ b/notes.md",
+    "@@ -1,1 +1,1 @@",
+    "-* **Header Structure:** Use proper heading tags to structure content logically.",
+    "+* **Header Hierarchy:** Use proper heading tags to structure each page logically.",
+  ].join("\n"));
+  const row = review.alignReviewFile(file)[0];
+
+  assert.equal(row.kind, "modification");
+  const changed = (side) => plain(side.spans.filter((span) => span.changed).map((span) => span.text.trim()));
+  assert.deepEqual(changed(row.left), ["Structure", "content"]);
+  assert.deepEqual(changed(row.right), ["Hierarchy", "each page"]);
+  // The shared body is left alone rather than swept into the highlight.
+  assert.equal(row.right.spans.some((span) => !span.changed && span.text.includes("heading tags")), true);
+});
+
+test("a line rewritten from scratch is left whole rather than speckled", () => {
+  const file = review.parseReviewPatch([
+    "diff --git a/notes.md b/notes.md",
+    "--- a/notes.md",
+    "+++ b/notes.md",
+    "@@ -1,1 +1,1 @@",
+    "-* **Minification:** Minify HTML, CSS, and JavaScript files to reduce their file size.",
+    "+* **Lazy Loading:** Implement native lazy loading for images and iframes below the fold.",
+  ].join("\n"));
+  const row = review.alignReviewFile(file)[0];
+
+  assert.equal(row.kind, "modification");
+  assert.equal(row.left.spans, undefined);
+  assert.equal(row.right.spans, undefined);
+});
+
 test("structural rewrites do not show unstable word fragments", () => {
   const file = review.parseReviewPatch([
     "diff --git a/tools.rs b/tools.rs",

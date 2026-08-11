@@ -7,7 +7,7 @@ asarUnpack:
 npmRebuild: false
 electronDist: ../../node_modules/electron/dist
 directories:
-  output: release
+  output: ../../target/release/desktop
 files:
   - dist/**/*
   - dist-electron/**/*
@@ -29,10 +29,14 @@ mac:
   category: public.app-category.developer-tools
   target:
     - dmg
+    - zip
 win:
   icon: assets/icons/icon.ico
   target:
     - nsis
+    - portable
+portable:
+  artifactName: Umbratic-${version}-portable.${ext}
 nsis:
   include: scripts/installer.nsh
   oneClick: false

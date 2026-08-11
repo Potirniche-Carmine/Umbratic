@@ -52,7 +52,7 @@ jobs:
       - name: Verify release
         env:
           CARGO_NET_OFFLINE: "true"
-        run: npm run release:check
+        run: npm run test:all
 
       - name: Upload dependency SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -72,16 +72,17 @@ jobs:
         include:
           - name: macOS
             os: macos-15
-            package_args: "--mac dmg"
+            package_args: "--mac dmg zip"
             artifact_name: umbratic-ai-macos
             artifact_paths: |
-              apps/desktop/release/*.dmg
+              target/release/desktop/*.dmg
+              target/release/desktop/*.zip
           - name: Windows
             os: windows-2025
-            package_args: "--win nsis --x64"
+            package_args: "--win nsis portable --x64"
             artifact_name: umbratic-ai-windows
             artifact_paths: |
-              apps/desktop/release/*.exe
+              target/release/desktop/*.exe
 
     steps:
       - name: Check out repository

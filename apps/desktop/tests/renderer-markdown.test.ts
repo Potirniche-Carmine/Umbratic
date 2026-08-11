@@ -777,6 +777,122 @@ test("stream batching drains queued assistant text without adding a display back
   assert.equal(queue.length, 0);
 });
 
+test("streamed text reveals at a reading pace instead of a share of the backlog", () => {
+  const { nextRevealCount, revealCharactersPerSecond, revealCatchUpSeconds } = loadRenderer();
+
+  const frameMs = 16;
+  const perFrame = Math.round((revealCharactersPerSecond * frameMs) / 1000);
+
+  // A burst reveals at the steady budget, not proportionally to its size.
+  const burst = "x".repeat(1200);
+  assert.equal(nextRevealCount(burst, 0, frameMs), perFrame);
+  assert.equal(nextRevealCount(burst, 600, frameMs), 600 + perFrame);
+
+  // A backlog large enough that the steady budget would outlast the catch-up
+  // window speeds up just enough to land inside it.
+  const long = "x".repeat(8000);
+  assert.equal(
+    nextRevealCount(long, 0, frameMs),
+    Math.round(((long.length / revealCatchUpSeconds) * frameMs) / 1000),
+  );
+
+  // The first frame of a burst has no measured gap and still moves.
+  assert.equal(nextRevealCount(burst, 0, 0), perFrame);
+
+  // Never stalls, never overshoots, never runs backwards past the end.
+  assert.equal(nextRevealCount(burst, 0, 0.1), 1);
+  assert.equal(nextRevealCount("abc", 1, 10_000), 3);
+  assert.equal(nextRevealCount("abc", 3, frameMs), 3);
+
+  // A hidden window's missed frames do not become one jump.
+  assert.ok(nextRevealCount(long, 0, 60_000) < long.length);
+
+  // Half an emoji renders as garbage, so the pair is revealed together.
+  const emoji = `${"x".repeat(perFrame - 1)}😀tail`;
+  assert.equal(nextRevealCount(emoji, 0, frameMs), perFrame + 1);
+});
+
+test("a settled answer still reveals, and an answer already read never replays", () => {
+  const { AssistantAnswerContent, markRevealComplete, resetCompletedReveals, revealHasCompleted } = loadRenderer();
+  resetCompletedReveals();
+
+  const content = "The whole answer arrived in one delta.";
+  const render = (props) =>
+    renderToStaticMarkup(React.createElement(AssistantAnswerContent, { content, ...props }));
+
+  // The run settling in the same batch as the answer is the case that used to
+  // skip the reveal entirely: `streaming` is already false on the first frame.
+  const settled = render({ animate: true, revealKey: "task-1:assistant-1", streaming: false });
+  assert.match(settled, /streamingTextContent/);
+  assert.doesNotMatch(settled, /arrived in one delta/);
+
+  // A restored transcript renders whole.
+  const restored = render({ animate: false, revealKey: "task-1:assistant-1", streaming: false });
+  assert.doesNotMatch(restored, /streamingTextContent/);
+  assert.match(restored, /arrived in one delta/);
+
+  // Text the reader has already watched arrive is not replayed when the
+  // component remounts — switching away from a chat and back is not a rerun.
+  assert.equal(revealHasCompleted("task-1:assistant-1"), false);
+  markRevealComplete("task-1:assistant-1");
+  const remounted = render({ animate: true, revealKey: "task-1:assistant-1", streaming: false });
+  assert.doesNotMatch(remounted, /streamingTextContent/);
+  assert.match(remounted, /arrived in one delta/);
+
+  // A different message is still its own reveal.
+  const next = render({ animate: true, revealKey: "task-1:assistant-2", streaming: false });
+  assert.match(next, /streamingTextContent/);
+});
+
+test("the review panel's close spring stays stable however long a frame takes", () => {
+  const { reviewCloseSpring, reviewOpenSpring, reviewSpringStep } = loadRenderer();
+
+  const width = 910;
+  const target = width + 18;
+  // A closing panel starts at 0 and slides out to `target`.
+  const close = (frameMs, spring = reviewCloseSpring) => {
+    let value = 0;
+    let velocity = 0;
+    let elapsed = 0;
+    let peak = 0;
+    while (elapsed < 5000 && value < width) {
+      ({ value, velocity } = reviewSpringStep(value, velocity, target, frameMs / 1000, spring));
+      peak = Math.max(peak, value);
+      elapsed += frameMs;
+    }
+    return { elapsed, offscreen: value >= width, peak };
+  };
+
+  // Both springs sit just under critical damping, so neither sails past the
+  // target and springs back into view on its way out.
+  for (const spring of [reviewOpenSpring, reviewCloseSpring]) {
+    assert.ok(spring.damping < 2 * Math.sqrt(spring.stiffness), "spring is overdamped");
+    assert.ok(spring.damping > 1.6 * Math.sqrt(spring.stiffness), "spring will visibly bounce");
+  }
+
+  // Dismissal is quicker than arrival, and moving by the first frame.
+  assert.ok(close(16.7).elapsed < close(16.7, reviewOpenSpring).elapsed);
+  assert.ok(reviewSpringStep(0, 0, target, 16.7 / 1000, reviewCloseSpring).value > 100);
+
+  // Integrating a whole frame in one step diverged here: at 50ms the offset
+  // went 974, 49, 1805, -697, 3261 and grew without bound, so the panel never
+  // reached the state that unmounts it.
+  for (const frameMs of [16.7, 33, 50, 100, 200]) {
+    for (const spring of [reviewOpenSpring, reviewCloseSpring]) {
+      const result = close(frameMs, spring);
+      assert.equal(result.offscreen, true, `panel never left the screen at ${frameMs}ms frames`);
+      assert.ok(result.elapsed <= 600, `close took ${result.elapsed}ms at ${frameMs}ms frames`);
+      assert.ok(result.peak <= target + 1, `overshot to ${result.peak} at ${frameMs}ms frames`);
+    }
+  }
+
+  // A window that stopped drawing entirely catches up by a bounded amount
+  // rather than simulating the whole gap.
+  const stalled = reviewSpringStep(0, 0, target, 60);
+  const capped = reviewSpringStep(0, 0, target, 0.25);
+  assert.equal(stalled.value, capped.value);
+});
+
 test("prompt mention parsing supports file and skill completion triggers", () => {
   const { mentionAtCursor, renderPromptHighlights, skillMention } = loadRenderer();
 

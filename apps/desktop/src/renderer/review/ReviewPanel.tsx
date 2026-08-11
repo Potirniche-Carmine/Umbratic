@@ -14,6 +14,17 @@ import { reconcileReviewComments, type ReviewCommentDraft } from "./reviewCommen
 
 const viewModeKey = "umbratic-review-view-mode";
 const wrapKey = "umbratic-review-wrap";
+/// Two 380px columns and their gutters. Below this the split layout does not
+/// fit, and CSS collapsing it to one column left the rows still shaped for two:
+/// an empty Before column, headers labelling columns that were not there, and
+/// content running past the right edge. The layout is chosen here instead, so
+/// the rows are built for the layout that is actually shown.
+export const reviewSplitMinimumWidth = 760;
+/// How long the "Added" confirmation stays up, fades included. Must match the
+/// animation in review-diff.css: the state outliving the animation leaves an
+/// invisible element in place, and the animation outliving the state cuts the
+/// confirmation off mid-fade.
+export const reviewFeedbackAddedDurationMs = 2400;
 
 function initialViewMode(): "split" | "unified" {
   return window.localStorage.getItem(viewModeKey) === "unified" ? "unified" : "split";
@@ -108,6 +119,8 @@ export function ReviewPanel({
   const [comments, setComments] = useState<ReviewCommentDraft[]>([]);  const [scopeOpen, setScopeOpen] = useState(false);
   const [selectedScope, setSelectedScope] = useState(scope);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [splitFits, setSplitFits] = useState(true);
   const feedbackAddedTimerRef = useRef<number | null>(null);
   const loadDocumentReviewRef = useRef(onLoadDocumentReview);
   const actualPatchHash = patchHash || reviewPatchHash(files);
@@ -194,6 +207,19 @@ export function ReviewPanel({
     if (editorOpen) commentRef.current?.focus();
   }, [editorOpen]);
 
+  // The width that decides the layout is the diff's own, not the panel's: the
+  // file navigator takes up to 208px of the panel before the diff sees any.
+  useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return undefined;
+    const measure = () => setSplitFits(node.clientWidth >= reviewSplitMinimumWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [selectedFileIsDocument]);
+
   useEffect(() => {
     setSelectedScope(scope);
   }, [scope]);
@@ -267,7 +293,7 @@ export function ReviewPanel({
     feedbackAddedTimerRef.current = window.setTimeout(() => {
       setFeedbackAdded(false);
       feedbackAddedTimerRef.current = null;
-    }, 1800);
+    }, reviewFeedbackAddedDurationMs);
   };
   const hasSelection = selectedFileIsDocument ? documentSelection.length > 0 : !!selection;
   const closeEditor = () => {
@@ -275,27 +301,29 @@ export function ReviewPanel({
     setCommentBody("");
   };
   const editor = hasSelection && editorOpen ? (
-    <div className="inlineReviewComment">
-      <textarea
-        ref={commentRef}
-        value={commentBody}
-        onChange={(event) => setCommentBody(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-            event.preventDefault();
-            saveComment();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            closeEditor();
-          }
-        }}
-        placeholder="Leave feedback for the next prompt…"
-        aria-label="Review comment"
-      />
-      <div className="inlineReviewCommentActions">
-        <span className="inlineReviewCommentHint" aria-hidden="true">{isMacPlatform ? "⌘↩ saves · esc cancels" : "Ctrl+Enter saves · Esc cancels"}</span>
-        <button type="button" onClick={closeEditor}>Cancel</button>
-        <button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button>
+    <div className="inlineReviewCommentAnchor">
+      <div className="inlineReviewComment">
+        <textarea
+          ref={commentRef}
+          value={commentBody}
+          onChange={(event) => setCommentBody(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              saveComment();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              closeEditor();
+            }
+          }}
+          placeholder="Leave feedback for the next prompt…"
+          aria-label="Review comment"
+        />
+        <div className="inlineReviewCommentActions">
+          <span className="inlineReviewCommentHint" aria-hidden="true">{isMacPlatform ? "⌘↩ saves · esc cancels" : "Ctrl+Enter saves · Esc cancels"}</span>
+          <button type="button" onClick={closeEditor}>Cancel</button>
+          <button className="primaryAction" type="button" onClick={saveComment} disabled={!commentBody.trim()}>Save feedback</button>
+        </div>
       </div>
     </div>
   ) : null;
@@ -368,17 +396,17 @@ export function ReviewPanel({
                   <span className="reviewSelectionConfirmSlot">{selectionCount && !editorOpen ? <button className="reviewSelectionConfirm" type="button" onClick={() => setEditorOpen(true)} aria-label={`Write feedback for ${selectionCount} selected ${selectedFileIsDocument ? (selectionCount === 1 ? "sentence" : "sentences") : (selectionCount === 1 ? "line" : "lines")}`} title="Continue with selection"><Check size={14} /><span>{selectionCount}</span></button> : null}</span>
                   <button className={`reviewFeedbackModeButton ${commenting ? "isActive" : ""}`} type="button" disabled={!documentFeedbackEnabled} aria-pressed={commenting} onClick={() => { setCommenting((current) => !current); setSelection(null); setDocumentSelection([]); setEditorOpen(false); setCommentBody(""); }} title={commenting ? `Click ${selectedFileIsDocument ? "sentences" : "lines"} to add or remove them from this comment` : selectedFileIsDocument && !documentFeedbackEnabled ? "A review preview is required for document feedback" : `Select ${selectedFileIsDocument ? "sentences" : "lines"} to leave feedback`}><MessageSquarePlus size={14} /><span>{commenting ? (selectedFileIsDocument ? "Select text" : "Select lines") : "Leave feedback"}</span></button>
                 </span>
-                {!selectedFileIsDocument ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
+                {!selectedFileIsDocument && splitFits ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
                 {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
                 <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
               </div>
             </header>
-            <div className="reviewFileScroller">
+            <div className="reviewFileScroller" ref={scrollerRef}>
               {selectedFileIsDocument ? (
                 documentPreviewLoading ? <div className="reviewDiffEmpty"><strong>Loading document preview…</strong></div>
                   : documentPreview ? <DocumentReviewPreview preview={documentPreview} commenting={commenting} selection={documentSelection} editor={editor} onSelectionChange={setDocumentSelection} />
                     : <div className="reviewDiffEmpty"><FileText size={22} /><strong>Preview unavailable</strong><span>{documentPreviewError || "Open the document externally to review it."}</span></div>
-              ) : <DiffFileView file={selectedFile} viewMode={viewMode} wrap={wrap} commenting={commenting} selection={selection} onSelect={selectLine} editor={editor} />}
+              ) : <DiffFileView file={selectedFile} viewMode={splitFits ? viewMode : "unified"} wrap={wrap} commenting={commenting} selection={selection} onSelect={selectLine} editor={editor} />}
             </div>
           </main>
         </div>

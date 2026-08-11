@@ -10,12 +10,15 @@ export type ReviewLineSelection = {
 
 function DiffCode({ cell }: { cell: DiffCell }) {
   if (cell.origin === "empty") return <code aria-hidden="true"> </code>;
-  const showIntraLineChanges = cell.spans?.some((span) => !span.changed && span.text.trim());
+  // Spans only reach here when the alignment was worth showing, so a changed
+  // span is marked on that basis alone. The extra "does anything survive?"
+  // check this used to make was a third gate on top of two others, and it
+  // silently downgraded whole rows to no highlighting at all.
   return (
     <code>
       {cell.spans?.length
         ? cell.spans.map((span, index) => (
-            <mark className={span.changed && showIntraLineChanges && span.text.trim() ? "intraLineChange" : "intraLineSame"} key={index}>{span.text}</mark>
+            <mark className={span.changed && span.text.trim() ? "intraLineChange" : "intraLineSame"} key={index}>{span.text}</mark>
           ))
         : cell.content || " "}
     </code>
@@ -24,26 +27,39 @@ function DiffCode({ cell }: { cell: DiffCell }) {
 
 function DiffCellView({
   cell,
+  selectable,
   selected,
   commenting,
   onSelect,
 }: {
   cell: DiffCell;
+  selectable: boolean;
   selected: boolean;
   commenting: boolean;
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell): void;
 }) {
-  const selectable = cell.line !== null && cell.origin !== "empty";
+  // The line itself is the target, not just its number: aiming at a 50px
+  // gutter to say something about the text beside it is a needlessly small
+  // hit area. A click that ends a text selection is still a copy, though.
+  const pickLine = (event: React.MouseEvent) => {
+    if (!commenting || !selectable) return;
+    if (window.getSelection()?.isCollapsed === false) return;
+    onSelect(event, cell);
+  };
   return (
-    <div className={`reviewDiffCell ${cell.side} origin-${cell.origin} ${selected ? "isSelected" : ""}`}>
-      {selectable ? (
+    <div
+      className={`reviewDiffCell ${cell.side} origin-${cell.origin} ${selected ? "isSelected" : ""} ${commenting && selectable ? "isPickable" : ""}`}
+      onClick={pickLine}
+      role="presentation"
+    >
+      {cell.line !== null && cell.origin !== "empty" ? (
         <button
           className="reviewLineGutter"
           type="button"
-          disabled={!commenting}
-          onClick={(event) => onSelect(event, cell)}
+          disabled={!commenting || !selectable}
+          onClick={(event) => { event.stopPropagation(); onSelect(event, cell); }}
           aria-label={commenting ? `Comment on ${cell.side} line ${cell.line}` : `${cell.side} line ${cell.line}`}
-          title={commenting ? `Select ${cell.side} line ${cell.line} for feedback` : undefined}
+          title={commenting && selectable ? `Select ${cell.side} line ${cell.line} for feedback` : undefined}
         >
           <span>{cell.line}</span>
         </button>
@@ -57,18 +73,25 @@ function DiffRowComponent({
   row,
   selection,
   commenting,
+  newSideOnly,
   onSelect,
 }: {
   row: SideBySideRow;
   selection: ReviewLineSelection | null;
   commenting: boolean;
+  newSideOnly: boolean;
   onSelect(event: React.MouseEvent | React.KeyboardEvent, cell: DiffCell, row: SideBySideRow): void;
 }) {
   const isSelected = (cell: DiffCell) => !!selection && selection.hunkId === row.hunkId && selection.side === cell.side && cell.line !== null && selection.lines.includes(cell.line);
+  // Side by side shows both files, but feedback is about the one that exists
+  // now: a comment on a line the change deleted has nothing left to attach to.
+  // Unified has no new-side copy of a deletion, so there it stays selectable.
+  const canSelect = (cell: DiffCell) =>
+    cell.line !== null && cell.origin !== "empty" && (!newSideOnly || cell.side === "new");
   return (
     <div className={`reviewDiffRow kind-${row.kind}`} data-row-id={row.id}>
-      <DiffCellView cell={row.left} selected={isSelected(row.left)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
-      <DiffCellView cell={row.right} selected={isSelected(row.right)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
+      <DiffCellView cell={row.left} selectable={canSelect(row.left)} selected={isSelected(row.left)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
+      <DiffCellView cell={row.right} selectable={canSelect(row.right)} selected={isSelected(row.right)} commenting={commenting} onSelect={(event, cell) => onSelect(event, cell, row)} />
     </div>
   );
 }
@@ -84,6 +107,7 @@ function cellIsSelected(selection: ReviewLineSelection | null, row: SideBySideRo
 export const DiffRow = React.memo(DiffRowComponent, (previous, next) => (
   previous.row === next.row
   && previous.commenting === next.commenting
+  && previous.newSideOnly === next.newSideOnly
   && previous.onSelect === next.onSelect
   && cellIsSelected(previous.selection, previous.row, previous.row.left) === cellIsSelected(next.selection, next.row, next.row.left)
   && cellIsSelected(previous.selection, previous.row, previous.row.right) === cellIsSelected(next.selection, next.row, next.row.right)

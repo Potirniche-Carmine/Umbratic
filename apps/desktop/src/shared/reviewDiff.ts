@@ -310,11 +310,37 @@ function lineSimilarity(left: string, right: string): number {
   return (2 * intersection) / Math.max(1, a.length + b.length - 2);
 }
 
-function shouldShowIntraLineDiff(left: string, right: string): boolean {
-  const longerLength = Math.max(left.trim().length, right.trim().length);
-  const shorterLength = Math.min(left.trim().length, right.trim().length);
-  if (!longerLength || shorterLength / longerLength < 0.72) return false;
-  return lineSimilarity(left, right) >= 0.68;
+/// How much of a line has to survive an edit before pointing at the words that
+/// changed says more than colouring the whole row.
+const minimumIntraLineSurvival = 0.34;
+
+function visibleLength(spans: IntraLineSpan[], changed?: boolean): number {
+  return spans.reduce(
+    (total, span) => (changed === undefined || span.changed === changed
+      ? total + span.text.replace(/\s+/g, "").length
+      : total),
+    0,
+  );
+}
+
+/// Whether a computed alignment is worth showing. Judged from the alignment
+/// itself rather than guessed beforehand from length and token overlap: that
+/// pre-check admitted only near-identical lines, so a rewritten row and a
+/// lightly edited row were treated the same way, and word highlighting showed
+/// up on the occasional line rather than wherever it applied. Lines that share
+/// too little are still left alone — scattered marks across two unrelated
+/// sentences point at nothing.
+function significantIntraLineDiff(
+  spans: { left: IntraLineSpan[]; right: IntraLineSpan[] } | undefined,
+): { left: IntraLineSpan[]; right: IntraLineSpan[] } | undefined {
+  if (!spans) return undefined;
+  const total = Math.max(visibleLength(spans.left), visibleLength(spans.right));
+  if (!total) return undefined;
+  // Unchanged spans are the tokens both sides share, so either side measures it.
+  const survived = visibleLength(spans.left, false);
+  if (!survived || survived / total < minimumIntraLineSurvival) return undefined;
+  // Something has to be marked, or the row is a pure whitespace shuffle.
+  return visibleLength(spans.left, true) || visibleLength(spans.right, true) ? spans : undefined;
 }
 
 function tokenize(value: string): string[] {
@@ -412,8 +438,8 @@ export function alignHunk(hunk: DiffHunk): SideBySideRow[] {
   const rows: SideBySideRow[] = [];
   let index = 0;
   const appendPair = (pair: Pair, allowIntraLineDiff: boolean) => {
-    const spans = allowIntraLineDiff && pair.left && pair.right && shouldShowIntraLineDiff(pair.left.content, pair.right.content)
-      ? intraLineDiff(pair.left.content, pair.right.content)
+    const spans = allowIntraLineDiff && pair.left && pair.right
+      ? significantIntraLineDiff(intraLineDiff(pair.left.content, pair.right.content))
       : undefined;
     const kind = pair.left && pair.right ? "modification" : pair.left ? "deletion" : "addition";
     rows.push({

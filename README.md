@@ -32,21 +32,26 @@ Run the desktop app in development:
 npm run desktop:dev
 ```
 
-Build the desktop app:
+Build the shippable application for the machine you are on. This compiles every
+binary, bundles Veil into the app, and writes the installers and the
+no-installer builds to `target/release/desktop`:
 
 ```sh
-npm run desktop:build
+npm run desktop:release
 ```
 
-Run the desktop app with packaged-app connection behavior. Local is the first-run
-default, and you can switch between Local and Company server in Settings:
+On Windows this produces `Umbratic-<version>.exe` (installer) and
+`Umbratic-<version>-portable.exe`, which runs with no installation. On macOS it
+produces `Umbratic-<version>.dmg` and `Umbratic-<version>-mac.zip`, which
+unzips to `Umbratic.app`. Each build runs on its own platform; electron-builder
+cannot produce a macOS app from Windows or the reverse.
 
-```sh
-npm run local -- --model llama3.2
-```
+Both carry their own Veil binary, so a packaged app runs with no install script
+and no separate Veil process to start.
 
-In Local mode the desktop owns the Veil process and supplies its configuration at
-launch. Packaged users do not need a Veil `.env` file.
+Local is the first-run default, and you can switch between Local and Company
+server in Settings. In Local mode the desktop owns the Veil process and supplies
+its configuration at launch. Packaged users do not need a Veil `.env` file.
 
 In Company server mode, an administrator creates an assigned user in Veil Console
 and gives the user one Enrollment code. The desktop uses the code once to enroll

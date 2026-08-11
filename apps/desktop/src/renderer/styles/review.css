@@ -89,7 +89,6 @@
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.composerReviewFeedback small,
 .reviewFeedbackDialog header small {
   display: inline-flex;
   box-sizing: border-box;

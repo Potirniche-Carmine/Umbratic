@@ -122,13 +122,16 @@ export function DiffFileView({
               {chunks.map(({ chunk, index }) => (
                 index < mountedChunks ? (
                   <div
-                    className="reviewDiffChunk"
+                    // A chunk's content-visibility brings paint containment with
+                    // it, which would clip the floating editor at the chunk
+                    // boundary. The one chunk holding it opts out.
+                    className={`reviewDiffChunk ${chunk.some(editorVisibleFor) ? "hasEditor" : ""}`}
                     style={{ containIntrinsicSize: `auto ${chunk.length * diffRowEstimatedHeight}px` }}
                     key={`${hunk.id}-chunk-${index}`}
                   >
                     {chunk.map((entry) => (
                       <React.Fragment key={entry.key}>
-                        <DiffRow row={entry.row} selection={selection} commenting={commenting} onSelect={onSelect} />
+                        <DiffRow row={entry.row} selection={selection} commenting={commenting} newSideOnly={viewMode === "split"} onSelect={onSelect} />
                         {editorVisibleFor(entry) ? editor : null}
                       </React.Fragment>
                     ))}

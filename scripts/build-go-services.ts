@@ -1,9 +1,9 @@
-// Builds the two Go services into target/go so `npm run build` covers every
+// Builds the two Go services into target/go so `npm run desktop:release` covers every
 // language in the repository.
 //
 // The desktop runs Veil with `go run ./cmd/veil` from source in development, so
 // nothing in the normal loop ever compiled the Go tree. A Go compile error could
-// therefore survive `npm run build` and only surface when the app tried to start
+// therefore survive `npm run desktop:release` and only surface when the app tried to start
 // Veil. These binaries exist to make that failure a build failure; the packaged
 // path still builds its own copies through scripts/run-veil-console.ts.
 

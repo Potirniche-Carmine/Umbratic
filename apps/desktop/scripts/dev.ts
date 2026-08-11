@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,9 @@ function usage() {
     "  --server <url>       Run dev against a managed server endpoint for this process.",
     "  --api-key <secret>   API key for the endpoint.",
     "  --help              Show this message.",
+    "",
+    "Builds and uses a local Veil binary so local mode works without a compile on",
+    "the first message. Set UMBRATIC_VEIL_BINARY to point at your own build instead.",
   ].join("\n");
 }
 
@@ -67,9 +71,13 @@ function devEndpointEnv(args) {
 }
 
 function runNodeScript(scriptPath, args) {
+  return runCommand(process.execPath, [scriptPath, ...args], desktopRoot, path.basename(scriptPath));
+}
+
+function runCommand(command, args, cwd, label = command) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
-      cwd: desktopRoot,
+    const child = spawn(command, args, {
+      cwd,
       stdio: "inherit",
       windowsHide: true,
     });
@@ -79,9 +87,34 @@ function runNodeScript(scriptPath, args) {
         resolve();
         return;
       }
-      reject(new Error(`${path.basename(scriptPath)} exited with code ${code ?? "unknown"}`));
+      reject(new Error(`${label} exited with code ${code ?? "unknown"}`));
     });
   });
+}
+
+// Veil runs from source in development, where the app starts it with
+// `go run ./cmd/veil`. That compiles the whole Go tree on the first request —
+// inside the app, while the reader waits on their first message — and a Go
+// compile error surfaces there rather than here. Building the binary up front
+// costs a second at startup, makes the first message as fast as the rest, and
+// turns a broken Go tree into a failure to start. The output goes where
+// `desktop:release` puts it, so the two share one artifact.
+async function buildLocalVeil() {
+  if (process.env.UMBRATIC_VEIL_BINARY?.trim()) return process.env.UMBRATIC_VEIL_BINARY.trim();
+  const binary = path.join(monorepoRoot, "target", "go", process.platform === "win32" ? "veil.exe" : "veil");
+  const source = path.join(monorepoRoot, "infrastructure", "veil");
+  await fs.mkdir(path.dirname(binary), { recursive: true });
+  try {
+    await runCommand("go", ["build", "-o", binary, "./cmd/veil"], source, "go build ./cmd/veil");
+  } catch (error) {
+    // Without Go the app can still run against a server endpoint, and local
+    // mode will report the missing runtime itself. Refusing to start the whole
+    // dev loop over it would be worse than saying so.
+    console.warn(`Local Veil was not built: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn("Install Go to use local mode, or run against a server with --server <url>.");
+    return undefined;
+  }
+  return binary;
 }
 
 function localServerUrl(server) {
@@ -112,6 +145,7 @@ async function buildDesktopProcessFiles() {
 
 async function main() {
   const cliEnv = devEndpointEnv(process.argv.slice(2));
+  const veilBinary = await buildLocalVeil();
   await buildDesktopProcessFiles();
   prepareRendererDevelopmentEnvironment(process.env);
 
@@ -134,6 +168,7 @@ async function main() {
     env: {
       ...process.env,
       ...cliEnv,
+      ...(veilBinary ? { UMBRATIC_VEIL_BINARY: veilBinary } : {}),
       UMBRATIC_DEV_SERVER_URL: devServerUrl,
     },
   });

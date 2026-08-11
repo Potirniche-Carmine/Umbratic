@@ -136,6 +136,22 @@
   font-weight: 500;
 }
 
+/* A close is a slide-out nobody reads or clicks. Blur layers over a mounted
+   diff are what made those frames long enough to matter, and a long frame is
+   what the slide is least able to afford. */
+.reviewClosing .reviewPanel {
+  pointer-events: none;
+}
+
+.reviewClosing .reviewTopbar,
+.reviewClosing .reviewFileToolbar,
+.reviewClosing .reviewFeedbackTray,
+.reviewClosing .reviewDiffColumnHeaders,
+.reviewClosing .reviewPanel > .reviewFooter {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .reviewWorkspace {
   flex: 1 1 auto;
   display: grid;

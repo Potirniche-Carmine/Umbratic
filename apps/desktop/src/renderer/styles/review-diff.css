@@ -8,12 +8,16 @@
   font-variant-ligatures: none;
 }
 
+/* The headers track the columns they name: sized like a row, not like the
+   canvas, or they drift out of line with the content the moment the diff is
+   wider than the panel. */
 .reviewDiffColumnHeaders {
   position: sticky;
   top: 0;
   z-index: 3;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr);
+  min-width: 760px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   -webkit-backdrop-filter: blur(16px);
@@ -43,6 +47,10 @@
 .reviewDiffChunk {
   min-width: max-content;
   content-visibility: auto;
+}
+
+.reviewDiffChunk.hasEditor {
+  content-visibility: visible;
 }
 
 /* Not-yet-mounted chunks of a very large diff; replaced during idle time. */
@@ -140,9 +148,12 @@
   text-align: right;
 }
 
-/* In feedback mode the whole hovered row hints at where the comment lands. */
-.reviewDiffCanvas.isCommenting .reviewDiffRow:hover .reviewDiffCell:not(.origin-empty) {
+/* In feedback mode the hovered line hints at where the comment lands — only
+   the ones that can actually take it, so side by side does not offer the old
+   file's lines. The whole cell is the target, so it carries the cursor. */
+.reviewDiffCanvas.isCommenting .reviewDiffCell.isPickable:hover {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+  cursor: pointer;
 }
 
 .reviewDiffCell.right .reviewLineGutter {
@@ -174,8 +185,23 @@
 
 .reviewDiffCanvas.isWrapped .reviewHunk,
 .reviewDiffCanvas.isWrapped .reviewDiffChunk,
-.reviewDiffCanvas.isWrapped .reviewDiffRow {
+.reviewDiffCanvas.isWrapped .reviewDiffRow,
+.reviewDiffCanvas.isWrapped .reviewDiffColumnHeaders {
   min-width: 0;
+}
+
+/* Wrapping means the diff fits the panel, so the columns have to be allowed to
+   shrink with it. Leaving a 380px floor on the tracks kept the rows wider than
+   the chunk around them, and a chunk's content-visibility paint containment
+   clips that overflow rather than passing it to the scroller — which is why
+   long lines were cut off with no way to scroll to them. */
+.reviewDiffCanvas.isWrapped .reviewDiffRow,
+.reviewDiffCanvas.isWrapped .reviewDiffColumnHeaders {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.reviewDiffCanvas.isWrapped.mode-unified .reviewDiffRow {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .reviewDiffCanvas.isWrapped .reviewDiffCell code {
@@ -227,15 +253,23 @@
   border-left: 0;
 }
 
+/* The editor floats over the lines under the one it belongs to. In the flow it
+   pushed the rest of the diff down by its own height, so the moment it opened
+   the line the reader had just clicked jumped away from the cursor. */
+.inlineReviewCommentAnchor {
+  position: relative;
+  z-index: 6;
+  height: 0;
+}
+
 .inlineReviewComment {
-  position: sticky;
+  position: absolute;
+  top: 3px;
   left: 12px;
-  z-index: 2;
   display: grid;
   width: min(520px, calc(100% - 24px));
   gap: 7px;
   padding: 9px;
-  margin: 6px 12px 10px;
   border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
   border-radius: 10px;
   background: color-mix(in srgb, var(--surface) 97%, transparent);
@@ -267,7 +301,12 @@
   white-space: nowrap;
 }
 
+/* The confirmation is legible for a full two seconds before it starts leaving.
+   The fades are carved out of the total on top of that, so shortening them is
+   what the reader would notice, not the hold. ReviewPanel clears the state on
+   the same clock — see reviewFeedbackAddedDurationMs. */
 .reviewFeedbackAdded {
+  --review-feedback-added-duration: 2400ms;
   position: absolute;
   top: 58px;
   left: 50%;
@@ -292,7 +331,10 @@
   font-size: 10.5px;
   white-space: nowrap;
   pointer-events: none;
-  animation: reviewFeedbackAdded 1800ms ease both;
+  /* Centring belongs to the element, not to the keyframes that happen to carry
+     it: an animation that only touches opacity must still land in the middle. */
+  transform: translate(-50%, 0);
+  animation: reviewFeedbackAdded var(--review-feedback-added-duration) ease both;
 }
 
 .reviewFeedbackAdded > span {
@@ -307,8 +349,16 @@
 
 @keyframes reviewFeedbackAdded {
   0% { opacity: 0; transform: translate(-50%, -4px) scale(0.97); }
-  10%, 84% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  7%, 90% { opacity: 1; transform: translate(-50%, 0) scale(1); }
   100% { opacity: 0; transform: translate(-50%, -2px) scale(0.99); }
+}
+
+/* The same lifetime without the travel, for reduced motion. Centring comes
+   from the rule rather than the keyframes, so it holds here too. */
+@keyframes reviewFeedbackAddedStill {
+  0% { opacity: 0; }
+  7%, 90% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 .inlineReviewCommentActions {
@@ -532,15 +582,14 @@
 :root[data-theme="light"] .reviewDiffCell.origin-addition { color: #174832; }
 :root[data-theme="light"] .reviewDiffCell.origin-deletion { color: #4a2027; }
 
+/* The diff's own layout is chosen in ReviewPanel from the scroller's width, so
+   nothing here reshapes split rows into a single column: rows narrower than
+   they were built for is what produced the empty Before column and the headers
+   that labelled columns nobody could see. */
 @container review (max-width: 760px) {
   .reviewWorkspace { grid-template-columns: 154px minmax(0, 1fr); }
   .reviewSegmentedControl span,
   .reviewControlButton > span { display: none; }
-  .reviewDiffCanvas { min-width: 520px; }
-  .reviewDiffColumnHeaders { display: none; }
-  .reviewDiffRow { grid-template-columns: minmax(520px, 1fr); min-width: 520px; }
-  .reviewDiffCell.origin-empty { display: none; }
-  .reviewDiffCell + .reviewDiffCell { border-left: 0; }
   .reviewFeedbackTray { grid-template-columns: minmax(0, 1fr) auto; }
   .reviewFeedbackTray > div:first-child { display: none; }
 }
@@ -548,7 +597,6 @@
 @container review (max-width: 560px) {
   .reviewWorkspace { grid-template-columns: 1fr; }
   .reviewFileNavigator { display: none; }
-  .reviewFileActions .reviewSegmentedControl { display: none; }
   .documentReviewPreview { padding: 12px; }
   .documentReviewPaper { min-height: 100%; padding: 34px 28px 48px; }
 }
