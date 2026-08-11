@@ -48,8 +48,7 @@ export function ReviewPanel({
   files,
   initialSelectedPath,
   taskId,
-  patchHash,
-  scope,
+  patchHash,  scope,
   canUseWorktreeScope,
   canOpenIde,
   canUndo,
@@ -69,8 +68,7 @@ export function ReviewPanel({
   files: ReviewFile[];
   initialSelectedPath?: string;
   taskId: string;
-  patchHash?: string;
-  scope: "task" | "worktree";
+  patchHash?: string;  scope: "task" | "worktree";
   canUseWorktreeScope: boolean;
   canOpenIde: boolean;
   canUndo: boolean;
@@ -107,8 +105,7 @@ export function ReviewPanel({
   const [editorOpen, setEditorOpen] = useState(false);
   const [feedbackAdded, setFeedbackAdded] = useState(false);
   const [commentBody, setCommentBody] = useState("");
-  const [comments, setComments] = useState<ReviewCommentDraft[]>([]);
-  const [scopeOpen, setScopeOpen] = useState(false);
+  const [comments, setComments] = useState<ReviewCommentDraft[]>([]);  const [scopeOpen, setScopeOpen] = useState(false);
   const [selectedScope, setSelectedScope] = useState(scope);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
   const feedbackAddedTimerRef = useRef<number | null>(null);
@@ -117,6 +114,9 @@ export function ReviewPanel({
   const selectedIndex = Math.max(0, files.findIndex((file) => file.path === selectedPath));
   const selectedFile = files[selectedIndex] ?? files[0];
   const selectedFileIsDocument = !!selectedFile && isDocumentReviewArtifactPath(selectedFile.path);
+  // The files arrive in the order the panel should show them: by review
+  // priority when change analysis was available, by path otherwise. The panel
+  // does not reorder them and does not say which one it got.
   const navigatorFiles = useMemo(
     () => files.filter((file) => !isDocumentReviewArtifactPath(file.path)),
     [files],

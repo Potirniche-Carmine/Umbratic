@@ -454,8 +454,13 @@ test("command aggregation, pending permissions, and timelines reflect real event
   assert.equal(escapedPlanTimeline[1].segments[0].text, "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.");
   assert.equal(escapedPlanTimeline[2].text, "Done — the script passed five test cases.");
 
-  // A multi-round turn alternates: each round of narration is its own message
-  // and each tool batch its own Working block, in the order they happened.
+  // A multi-round turn never relocates what the user has read. Prose that
+  // streamed below a block with real work in it stands exactly there: the
+  // block above settles and the next tool opens a new block beneath it.
+  // Folding that prose into the block instead — the old rule — moved a
+  // paragraph mid-read, which is the flash this replaces. The runner keeps
+  // one-line preambles out of assistant.delta on guided runs, so a split
+  // happens at a substantial mid-turn report, not at every sentence.
   const multiRoundTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "I'll start by listing all the contents of the root directory.", at: "2026-01-01T00:00:01.000Z" },
@@ -467,22 +472,21 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.delta", taskId: "task-1", text: "This repository is a Next.js application.", at: "2026-01-01T00:00:07.000Z" },
     { type: "assistant.done", taskId: "task-1", at: "2026-01-01T00:00:08.000Z" },
   ], undefined, "completed")));
-  // Several rounds of work are still one stretch of work. Splitting on every
-  // paragraph produced a column of separate Working summaries with essays
-  // stranded between them; the turn is one block and one answer.
   assert.deepEqual(
     multiRoundTimeline.map((item) => item.type),
-    ["user", "activity", "assistant"],
+    ["user", "activity", "assistant", "activity", "assistant"],
   );
+  // The opening sentence arrived before any work, so it joins the first
+  // block's narration — it was never rendered anywhere else.
   assert.deepEqual(
     multiRoundTimeline[1].segments.map((segment) => segment.type),
-    ["reasoning", "command", "reasoning", "command"],
+    ["reasoning", "command"],
   );
   assert.equal(multiRoundTimeline[1].segments[0].text, "I'll start by listing all the contents of the root directory.");
-  assert.equal(multiRoundTimeline[1].segments[2].text, "I have listed the root. Now I will list the main subdirectories.");
-  assert.equal(multiRoundTimeline[2].text, "This repository is a Next.js application.");
-  // The block's clock spans the work, not the answer that follows it.
-  assert.equal(activitySummary(multiRoundTimeline[1]), "Worked for 7 seconds");
+  // The mid-turn report streamed below the first block and stays there.
+  assert.equal(multiRoundTimeline[2].text, "I have listed the root. Now I will list the main subdirectories.");
+  assert.deepEqual(multiRoundTimeline[3].segments.map((segment) => segment.type), ["command"]);
+  assert.equal(multiRoundTimeline[4].text, "This repository is a Next.js application.");
 
   // The reported regression: the answer used to stream inside the open Working
   // block and only move outside once the run settled, so it arrived as a jump

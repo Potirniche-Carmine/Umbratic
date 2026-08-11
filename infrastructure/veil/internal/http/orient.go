@@ -92,7 +92,13 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// summarySentence is explicitly null for direct_answer.
+	// summarySentence is explicitly null for direct_answer and for a guided
+	// sentence that failed validation. There is deliberately no canned
+	// fallback: the opening status line is the assistant speaking, so it is
+	// model-written or it is absent. Reliability comes from the response
+	// grammar instead — the schema requires the sentence as a string, so the
+	// model cannot decline to write one the way it could when null was an
+	// allowed answer. A drop is rare and diagnosable below.
 	var sentence any
 	if decision.SummarySentence != "" {
 		sentence = decision.SummarySentence

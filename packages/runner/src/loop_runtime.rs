@@ -28,8 +28,7 @@ use crate::{
     tools::{ToolCall, ToolResult, tool_surface, validate_tool_call_batch},
     turn_snapshot::TurnSnapshot,
     veil_client::{
-        VeilChatResult, VeilRequestOptions, release_held_narration, release_held_text,
-        stream_veil_chat,
+        HoldPolicy, VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat,
     },
 };
 
@@ -407,7 +406,7 @@ async fn final_without_tools(
             harness_bucket: harness_bucket.map(str::to_owned),
             // final_without_tools is the last word of the run; there is no
             // later step that could refuse it, so nothing is held.
-            hold_assistant_text: false,
+            hold: HoldPolicy::None,
         },
     )
     .await;
@@ -429,7 +428,7 @@ async fn final_without_tools(
                 harness_bucket: harness_bucket.map(str::to_owned),
                 // final_without_tools is the last word of the run; there is no
                 // later step that could refuse it, so nothing is held.
-                hold_assistant_text: false,
+                hold: HoldPolicy::None,
             },
         )
         .await;
@@ -618,15 +617,24 @@ pub async fn run_turn(
             harness_bucket.clone(),
         ));
         sink.emit(context_event(&session, prepared.usage));
-        // On a guided run, hold the model's text until the step resolves, for as
-        // long as the run has no tool results. Text written before any evidence
-        // exists is the only text that can turn out to be unshowable, and the
-        // step's own outcome is what says whether it was a preamble, an answer,
-        // or a fabrication. Once a tool has run, everything streams live again:
-        // the model is free in the middle of its plan, and the final answer
-        // arrives token by token as always.
-        let hold_assistant_text =
-            harness_bucket.is_some() && summary["toolCalls"].as_u64().unwrap_or(0) == 0;
+        // What can still be refused decides how this step's text streams. An
+        // evidence-required run that has not yet called a tool is the one
+        // window where an entire answer can be refused — a finished answer
+        // there is a fabrication by definition — so everything is withheld
+        // until the step resolves. Every other guided step withholds one
+        // status line's worth for the cadence and streams live past it: the
+        // user watches the answer arrive, and what the model wrote is what
+        // they see.
+        let hold = if harness_bucket.is_none() {
+            HoldPolicy::None
+        } else if orient.evidence_required
+            && !evidence_retried
+            && summary["toolCalls"].as_u64().unwrap_or(0) == 0
+        {
+            HoldPolicy::All
+        } else {
+            HoldPolicy::Bounded
+        };
         let mut response = stream_veil_chat(
             &session,
             &sink,
@@ -636,7 +644,7 @@ pub async fn run_turn(
                 max_output_tokens: snapshot.max_output_tokens(),
                 include_tools: true,
                 harness_bucket: snapshot.harness_bucket().map(str::to_owned),
-                hold_assistant_text,
+                hold,
             },
         )
         .await;
@@ -664,7 +672,7 @@ pub async fn run_turn(
                         max_output_tokens: snapshot.max_output_tokens(),
                         include_tools: true,
                         harness_bucket: snapshot.harness_bucket().map(str::to_owned),
-                        hold_assistant_text,
+                        hold,
                     },
                 )
                 .await;
@@ -699,11 +707,20 @@ pub async fn run_turn(
         let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
         if !calls.is_empty() {
-            // Tool calls settle the step as real work, so any held preamble is
-            // released now — as narration, which is what it has just been shown
-            // to be. It goes inside the working block the tools are about to
-            // open, where the run's account of itself belongs.
-            release_held_narration(&sink, &session, &mut result);
+            if result.hold_broken {
+                // The step's prose already streamed live, so anything still
+                // held completes a paragraph the user is mid-way through
+                // reading. It stands where it streamed, verbatim; the desktop
+                // closes the working block above it rather than relocating
+                // text under the reader.
+                release_held_text(&sink, &session, &mut result);
+            } else {
+                // A short preamble on a tool step is dropped unshown. The
+                // orientation opens the run and the tool rows narrate every
+                // call after it — that is the whole status story, with nothing
+                // asked of the model and nothing injected into its context.
+                result.held_text.clear();
+            }
         }
         if calls.is_empty() {
             if looks_like_unstructured_tool_call(&result.content) {
@@ -770,9 +787,19 @@ pub async fn run_turn(
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 continue;
             }
-            // Neither refusal applied, so the step stands and anything held for
-            // it is shown. The two branches above return without releasing,
+            // No refusal applied, so the step stands and anything held for
+            // it is shown. The branch above returns without releasing,
             // which is what leaves a refused answer with no trace in the UI.
+            //
+            // There is deliberately no text inspection here. An earlier
+            // version scanned the answer's closing sentences for announcement
+            // phrasings ("I will now examine…") and refused or trimmed them —
+            // and every live model promptly used a phrasing the list did not
+            // have. Word lists are a treadmill and they are English-only; a
+            // harness stays model-agnostic by reacting to structure (tool
+            // calls made, text length, step shape), never to wording. Ending
+            // on the answer is the playbook's guidance to give, and whatever
+            // the model writes is what the user sees, verbatim.
             release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {
                 increment(

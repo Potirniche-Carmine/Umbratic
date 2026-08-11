@@ -7,7 +7,16 @@ export type PermissionMode = "normal" | "auto_safe";
 export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
-export type RunnerToolId = "read" | "ls" | "find" | "search" | "write" | "edit" | "lsp" | "command";
+export type RunnerToolId =
+  | "read"
+  | "ls"
+  | "find"
+  | "search"
+  | "write"
+  | "edit"
+  | "lsp"
+  | "workspace_graph"
+  | "command";
 export type RequiredToolContractRequirement = "file_change";
 export type RequiredToolContractReason =
   | "file_tools_disabled"

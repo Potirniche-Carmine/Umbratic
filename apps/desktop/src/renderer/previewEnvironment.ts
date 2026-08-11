@@ -564,8 +564,7 @@ const composerTestTask: TaskInfo = {
   reasoningMode: "reasoning",
   createdAt: new Date(Date.now() - 20_000).toISOString(),
   changedFiles: composerTestReviewFiles.map((file) => file.path),
-  reviewFiles: composerTestReviewFiles,
-  reviewScope: "task",
+  reviewFiles: composerTestReviewFiles,  reviewScope: "task",
   reviewBaselineLabel: "Turn changes",
   reviewBaselineOid: "task start",
   events: composerTestEvents,
@@ -946,6 +945,14 @@ function createPreviewApi(): DesktopApi {
   // no-op rather than a broken promise.
   openExternal: async () => ({ ok: false }),
   onBackendEvent: () => () => undefined,
+  // `?indexing` holds the first-index status on so it can be seen without
+  // opening a real folder.
+  onWorkspaceIndex: (callback) => {
+    if (composerTestParams.has("indexing")) {
+      callback({ workspacePath: composerTestRepository.rootPath, phase: "started" });
+    }
+    return () => undefined;
+  },
   };
   return previewApi;
 }

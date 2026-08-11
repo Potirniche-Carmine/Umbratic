@@ -39,6 +39,7 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
         ".umbratic/runtime/",
         ".umbratic/build/",
         ".umbratic/tmp/",
+        ".umbratic/index/",
         ".venv/",
         "venv/",
         "node_modules/",

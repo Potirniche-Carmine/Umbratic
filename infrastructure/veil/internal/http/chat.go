@@ -48,7 +48,7 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		// and the playbook lands after the skill catalog so everything before it
 		// stays byte-stable and prefix-cacheable.
 		var protectedMessages []model.Message
-		if playbook := prompts.PlaybookPrompt(route, input.HarnessBucket, skills); playbook != "" {
+		if playbook := prompts.PlaybookPrompt(route, input.HarnessBucket, skills, input.Tools); playbook != "" {
 			protectedMessages = []model.Message{{Role: "system", Content: playbook}}
 		}
 		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, protectedMessages, skills)

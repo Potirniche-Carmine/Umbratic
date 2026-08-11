@@ -30,6 +30,10 @@ uuid = { version = "1.17.0", features = ["v4"] }
 walkdir = "2.5.0"
 
 [dev-dependencies]
+# Test-only: the producer and the runner duplicate two facts on purpose (the
+# workspace fingerprint and the excluded-path list). These tests are what stop
+# them drifting.
+umbratic-code-index = { path = "../code-index" }
 tempfile = "3.20.0"
 
 [[bin]]

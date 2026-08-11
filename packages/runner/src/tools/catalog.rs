@@ -381,12 +381,15 @@ pub(super) const TOOLS: &[ToolDefinition] = &[
         name: "workspace_graph",
         kind: "json",
         gate: Gate::Service("workspace_graph"),
-        description: "Query bounded source-backed workspace graph evidence.",
+        // The primary steering channel: this text is in context whenever the
+        // tool admits, so it carries the decision procedure rather than a
+        // description of the data structure.
+        description: "Map of this workspace's code: symbols, callers, imports, and which tests cover what. Start with summary. Use affected for blast-radius questions, query for callers and definitions, changes when reviewing a diff. One call returns a complete small answer, so prefer it over grep-and-read chains. Results are evidence with file:line locations; verify with read before editing.",
         fields: &[
             choice(
                 "action",
                 true,
-                &["summary", "query", "explain", "path", "affected"],
+                &["summary", "query", "explain", "path", "affected", "changes"],
                 "The query to run.",
             ),
             text("query", false, "Free-text query for the query action."),

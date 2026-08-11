@@ -15,21 +15,23 @@ test("orient classifies once per run, stays hidden, and degrades silently", asyn
   const events = await eventCollector(run);
   const chatRequests = () => provider.requests.filter((request) => request.path === "/api/engineering/chat");
   try {
-    // A guided decision emits exactly one status delta, terminated with a blank
-    // line so it cannot glue to the model's first token, and carries the
-    // selector on every chat request in the run.
+    // A guided decision shows its status sentence exactly once, as narration —
+    // progress text inside the working block, never answer text — and carries
+    // the selector on every chat request in the run.
     const guided = await createSession(run);
     const guidedStart = events.events.length;
     const guidedChatStart = chatRequests().length;
     assert.equal((await prompt(run, guided.id, "ORIENT_GUIDED please look at this")).status, 204);
     await events.waitFor((event) => event.type === "run.settled" && event.sessionId === guided.id);
-    const guidedDeltas = events.events
+    const guidedProgress = events.events
       .slice(guidedStart)
-      .filter((event) => event.type === "assistant.delta")
+      .filter((event) => event.type === "assistant.progress.delta")
       .map((event) => String(event.text));
-    const status = guidedDeltas.filter((text) => text.startsWith("I'll inspect the failure path"));
-    assert.equal(status.length, 1, `expected exactly one status delta, got ${JSON.stringify(guidedDeltas)}`);
-    assert.ok(status[0].endsWith("\n\n"), "the status sentence must be terminated with a blank line");
+    assert.deepEqual(
+      guidedProgress,
+      ["I'll inspect the failure path and isolate the cause."],
+      "the status sentence must show exactly once, as narration",
+    );
     for (const request of chatRequests().slice(guidedChatStart)) {
       assert.equal(request.body.harness_bucket, "debug_failure");
     }
@@ -67,11 +69,12 @@ test("orient classifies once per run, stays hidden, and degrades silently", asyn
     for (const request of badChats) {
       assert.equal(request.body.harness_bucket, "debug_failure", "a dropped sentence must not drop the bucket");
     }
-    // The rejected sentence reached no one, and the log says it was dropped
-    // rather than never produced.
+    // The rejected sentence reached no one — not as answer text and not as
+    // narration — and the log says it was dropped rather than never produced.
     assert.equal(
       events.events.slice(badStart).some(
-        (event) => event.type === "assistant.delta" && String(event.text).includes("deep_review"),
+        (event) => (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
+          && String(event.text).includes("deep_review"),
       ),
       false,
       "a rejected sentence must never reach the user",
@@ -169,11 +172,24 @@ test("an evidence-required bucket cannot answer before calling a tool", async ()
         `the refused answer must never be streamed: ${delta}`,
       );
     }
-    // The status sentence still opens the run: holding applies to the model's
-    // answer, never to orient's own status line.
+    // The status sentence still opens the run, as narration: holding applies
+    // to the model's answer, never to orient's own status line.
+    const progress = events.events
+      .filter((event) => event.type === "assistant.progress.delta")
+      .map((event) => String(event.text));
     assert.ok(
-      deltas.some((text) => text.startsWith("I will map this repository")),
-      `the status sentence must still be shown: ${JSON.stringify(deltas)}`,
+      progress.some((text) => text.startsWith("I will map this repository")),
+      `the status sentence must still be shown: ${JSON.stringify(progress)}`,
+    );
+    // The preamble the model volunteered with its tool call sits inside the
+    // status window, so the cadence drops it rather than showing a second
+    // status two seconds after the first.
+    assert.equal(
+      events.events.some((event) =>
+        (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
+          && String(event.text).includes("Listing the workspace root now")),
+      false,
+      "a preamble inside the status window must be dropped unshown",
     );
 
     // The run then did real work instead of shipping the fabrication.
@@ -196,6 +212,127 @@ test("an evidence-required bucket cannot answer before calling a tool", async ()
       1,
       "the run settles normally after the single refusal",
     );
+  } finally {
+    await events?.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// Past the status-line bound, a step's prose streams live and ships verbatim.
+// The harness reads none of the words: an earlier version scanned answers for
+// announcement phrasings and trimmed or refused them, and every live model
+// promptly used a phrasing the list did not have. Whatever the model writes is
+// what the user sees; ending on the answer is the playbook's guidance to give.
+test("streamed prose ships verbatim, with no wording heuristics applied", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-verbatim-"));
+  fs.writeFileSync(path.join(cwd, "README.md"), "verbatim fixture\n");
+  fs.writeFileSync(path.join(cwd, "site.js"), "console.log('bakery');\n");
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "ORIENT_STREAM describe this page")).status, 204);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
+
+    const deltas = events.events
+      .filter((event) => event.type === "assistant.delta")
+      .map((event) => String(event.text));
+    const answer = deltas.join("");
+    // Both long texts streamed live and arrived whole, closing sentences
+    // included — nothing was rewritten, trimmed, or held back.
+    assert.ok(
+      answer.includes("The documentation describes a static bakery site"),
+      `the mid-turn report must stand where it streamed: ${answer}`,
+    );
+    assert.ok(
+      answer.includes("I will read the site script"),
+      `streamed prose must ship verbatim: ${answer}`,
+    );
+    assert.ok(
+      answer.includes("The bakery site is one static page"),
+      `the streamed answer body must survive: ${answer}`,
+    );
+    assert.ok(
+      answer.includes("Starting with the main config, which appears central."),
+      `the answer's own closing words must ship verbatim: ${answer}`,
+    );
+
+    // No wording-based event exists anywhere in the stream.
+    assert.equal(
+      events.events.some((event) => String(event.type).startsWith("orient.announcement")),
+      false,
+      "no announcement heuristics may run",
+    );
+
+    // The structural rules still hold: the short step-one preamble stayed
+    // inside the status window and was dropped by size, not by wording.
+    assert.equal(
+      events.events.some((event) =>
+        (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
+          && String(event.text).includes("Opening the documentation first")),
+      false,
+      "the volunteered preamble must be dropped unshown",
+    );
+  } finally {
+    await events?.close();
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// The orientation is the run's only harness-driven status line, however long
+// the run gets. Preambles are dropped by size alone, and nothing is ever
+// injected into the model's context to ask for more narration — the tool rows
+// narrate every call on their own.
+test("a long guided run shows the orientation and nothing else is injected", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-cadence-"));
+  for (let index = 0; index < 13; index += 1) {
+    fs.writeFileSync(path.join(cwd, `tour-${index}.txt`), `tour file ${index}\n`);
+  }
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  const events = await eventCollector(run);
+  try {
+    const session = await createSession(run);
+    assert.equal((await prompt(run, session.id, "ORIENT_TOUR walk this folder")).status, 204);
+    await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
+
+    // Exactly one status line for thirteen tool calls: the orientation.
+    const progress = events.events
+      .filter((event) => event.type === "assistant.progress.delta")
+      .map((event) => String(event.text));
+    assert.deepEqual(
+      progress,
+      ["I will map this repository and read what it documents."],
+      `expected the orientation alone, got ${JSON.stringify(progress)}`,
+    );
+
+    // The volunteered per-step preambles were dropped, not shown anywhere.
+    assert.equal(
+      events.events.some((event) =>
+        (event.type === "assistant.delta" || event.type === "assistant.progress.delta")
+          && String(event.text).includes("Reading tour file")),
+      false,
+      "short per-step preambles must be dropped by size",
+    );
+
+    // Nothing was ever added to the model's context: every tool message the
+    // model saw is exactly the tool output the runner produced.
+    const lastChat = provider.requests.filter((request) => request.path === "/api/engineering/chat").at(-1);
+    const toolMessages = (lastChat?.body.messages as Array<{ role?: string; content?: unknown }>)
+      .filter((message) => message.role === "tool" && !/^read: tour-\d+\.txt \(ok\)/.test(String(message.content ?? "")));
+    assert.deepEqual(toolMessages, [], "no harness text may ride the model's tool results");
+
+    // The turn still ends on the real answer.
+    const answer = events.events
+      .filter((event) => event.type === "assistant.delta")
+      .map((event) => String(event.text))
+      .join("");
+    assert.ok(answer.includes("the map is complete"), `the final answer must arrive: ${answer}`);
   } finally {
     await events?.close();
     await run.close();

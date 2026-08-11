@@ -32,11 +32,29 @@ type Bucket struct {
 	ID string
 	// When tells the classifier what belongs in this bucket.
 	When string
-	// Playbook is the soft plan injected as protected context.
+	// Playbook is the soft plan injected as protected context. A bucket sets
+	// either this or Steps, never both.
 	Playbook string
+	// Preamble, Steps, and Closing are the structured form, used by buckets
+	// whose plan changes with the available tools. Steps are numbered at render
+	// time so a substituted step cannot renumber the list or leave a later step
+	// pointing at one that no longer exists.
+	Preamble string
+	Steps    []string
+	Closing  string
+	// GraphSteps replaces individual steps, one-based, when the request carries
+	// workspace_graph. Substituting the step itself is what makes the rendered
+	// plan a single coherent list: telling a model to "replace step 1" asks it
+	// to do prompt arithmetic, and it reads the original imperative first
+	// anyway.
+	GraphSteps map[int]string
 	// PreferredSkills are intersected with the validated client catalog before
 	// rendering, so a disabled skill is simply omitted.
 	PreferredSkills []string
+	// GraphGuidance is rendered only when the request's tool array actually
+	// carries workspace_graph, the same conditional discipline RelevantSkills
+	// uses. A run without the tool assembles byte-identically to today.
+	GraphGuidance string
 	// Stop is the bucket's completion rule.
 	Stop string
 	// RequiresEvidence marks a bucket whose answer must rest on tool results.
@@ -58,31 +76,40 @@ var engineeringBuckets = []Bucket{
 		When: "Chitchat, \"who are you\", \"what can you do\", or a general knowledge question that no file in this workspace could answer better. Not a request to say more about the workspace: \"tell me more\", \"go deeper\", and \"not just one sentence\" still need evidence.",
 	},
 	{
-		ID:   "repo_orient",
-		When: "Map the repository, \"what is here\", \"tell me more about this folder\", a high-level tour.",
-		Playbook: `A read-only tour, documentation first. Never create, edit, or write a file, and never fix a problem you notice; mention it instead.
+		ID:       "repo_orient",
+		When:     "Map the repository, \"what is here\", \"tell me more about this folder\", a high-level tour.",
+		Preamble: "A read-only tour, documentation first. Look and report: when you spot a problem, name it in your answer and leave the files as they are.",
+		Steps: []string{
+			"List the workspace root. Make a tool call your first action: a tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds.",
+			"Read the documentation before the source. Whatever the project wrote about itself — a readme, any other Markdown, any document file — outranks what you would infer from filenames.",
+			"Then read the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs.",
+			"Read paths you have seen in a listing or search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
+			"Then stop exploring and answer: what the project is, how it is organized, how it runs when that is evident, and what you did not cover.",
+		},
+		// Steps 3 and 4 change too. They name a listing as the only thing that
+		// makes a path real, so leaving them alone would contradict a step 1
+		// that never lists anything.
+		GraphSteps: map[int]string{
+			1: "Call workspace_graph with action summary. Make a tool call your first action: a tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds. The summary names this workspace's files and its main symbols together, so start there and list the workspace root when it leaves a gap.",
+			3: "Then read the entry points the graph and any listing named, enough to say what each part is for, and as far into each file as the map needs. The graph already gave you each symbol's name and location, so spend your reads on what the code does.",
+			4: "Read paths you have seen in the graph, a listing, or a search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
+		},
+		Closing: `Give the answer as much room as it needs. You just read the project, so put what you found into it.
 
-1. List the workspace root. Your first action is a tool call, never prose: until a tool tells you, you do not know what is here, and a tour written from the project's name is fabrication however plausible it sounds.
-2. Read the documentation before the source. Whatever the project wrote about itself — a readme, any other Markdown, any document file — outranks what you would infer from filenames.
-3. Then read the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs.
-4. Read only paths you have actually seen in a listing or search result. A file you expect to exist because similar projects have one is a guess, and guessed reads are how this stalls.
-5. Then stop exploring and answer: what the project is, how it is organized, how it runs when that is evident, and what you did not cover.
-
-Length is yours to judge. You have just read the project; a two-line reply throws that away and makes the user ask again for what they already asked for.
-
-Anti-stuck: once listings and searches stop telling you anything new, stop exploring and write the answer from what you have. That is a limit on exploring, never a licence to answer before you have looked.`,
+When listings and searches stop showing you anything new, write the answer from what you have.`,
 		PreferredSkills:  []string{"umbratic-markdown"},
-		Stop:             "the map is delivered. Do not write files unless the user asked for a durable map.",
+		Stop:             "the map is delivered. Write a file only when the user asked for a durable map.",
 		RequiresEvidence: true,
 	},
 	{
 		ID:   "code_explain",
 		When: "How does X work, explain this module, trace a data flow.",
 		Playbook: `1. Search for the symbols and paths the request names. If the area has documentation of its own, read that first; it names the parts worth reading.
-2. Set context on that search: when the lines around a hit already answer the question, do not open the file at all. Where they do not, read a window around the hit and follow only the references you actually need.
-3. Read only paths you have actually seen in a listing or search result. When a read fails, the error says what is really there — pick from that, and never answer a miss by inventing another name beside it.
-4. Explain with exact paths and symbols. No speculative architecture.`,
-		Stop:             "the explanation is clear. Make no edits.",
+2. Set context on that search: when the lines around a hit already answer the question, answer from them. Where they fall short, read a window around the hit and follow the references you need.
+3. Read paths you have seen in a listing or search result. When a read fails, its error lists what that directory really holds; pick from that list.
+4. Explain with exact paths and symbols, each one taken from a tool result.`,
+		GraphGuidance:    "Locate the symbol with workspace_graph query first, then read its callers from that result instead of grepping for them.",
+		Stop:             "the explanation is clear. Leave the files as they are.",
 		RequiresEvidence: true,
 	},
 	{
@@ -93,7 +120,8 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 3. Fix only if the user asked for a fix; otherwise report the root cause.
 4. Re-run the failing check after any fix.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
-		Stop:             "you have a verified fix or a concrete root-cause answer. Do not thrash on tools.",
+		GraphGuidance:    "Locate the failing symbol with workspace_graph query, then read its callers from that result before grepping for them.",
+		Stop:             "you have a verified fix or a concrete root-cause answer.",
 		RequiresEvidence: true,
 	},
 	{
@@ -102,8 +130,9 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 		Playbook: `1. Read before you write. Search for the regions you will actually change and read those, opening a whole file only when the change genuinely spans it. Understand the code you are changing and the style around it.
 2. Edit in place rather than rewriting whole files, and match what is already there. Copy oldText from a read that covered those exact lines.
 3. Verify with the narrowest check that proves the change works.
-4. Report the paths you changed and the verification result. Do not repeat the file contents back.`,
+4. Report the paths you changed and the verification result, and keep it to that.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
+		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the change is made and verified, or a blocker needs the user.",
 		RequiresEvidence: true,
 	},
@@ -113,23 +142,25 @@ Anti-stuck: once listings and searches stop telling you anything new, stop explo
 		Playbook: `1. Settle the scope: a diff, the paths named, or the area the user pointed at.
 2. Search across that scope with context where a bare match is not conclusive, read windows where it is not, and keep track of what you did and did not cover.
 3. Order findings by severity, each with the path and symbol that shows it.
-4. Make no changes unless the user asked you to fix what you find.`,
+4. Report what you find. Make changes when the user asked you to fix them.`,
 		PreferredSkills:  []string{"umbratic-git-worktree", "umbratic-security-review"},
+		GraphGuidance:    "Call workspace_graph changes first, then read the symbols it ranks highest and stop there. Those symbols are what the diff touched.",
 		Stop:             "the findings are reported, plus an optional fix pass if the user asked for one.",
 		RequiresEvidence: true,
 	},
 	{
 		ID:   "deep_review",
 		When: "An explicitly security-focused review, vulnerability analysis, threat modeling, or a deeper-than-normal audit of a named risk surface. \"Think hard\" or \"deep analysis\" alone does NOT belong here.",
-		Playbook: `Go deep on a bounded risk surface. Never read every file, and never treat "I opened many files" as coverage.
+		Playbook: `Go deep on a bounded risk surface. Coverage comes from picking the right files, so choose a surface and report which one you chose.
 
 1. Settle the surface first. If the user named one, that is it. If they asked for everything and the project is large, ask which areas and what "done" means before any heavy reading. If the ask is a vague "make this secure", default to entry points, authentication and sessions, secret handling, dangerous sinks, configuration, and permission checks.
-2. Search in targeted waves, with context lines so a wave can be triaged without opening files, and read windows around only the strongest hits. Use mode regex for precise confirmation patterns. Rank and sample; do not open everything a search returns.
-3. Stay read-only unless the user asked for fixes.
+2. Search in targeted waves, with context lines so a wave can be triaged without opening files, and read windows around only the strongest hits. Use mode regex for precise confirmation patterns. Rank the hits and open the strongest.
+3. Stay read-only. Make fixes when the user asked for them.
 4. Report Confirmed, Needs validation, and Not covered as separate sections, so the limits of the pass are as visible as its findings.
 
 Anti-stuck: when several waves stop producing a new class of finding, stop and write it up. One honest pass with stated gaps beats an endless second one.`,
 		PreferredSkills:  []string{"umbratic-security-review", "umbratic-git-worktree"},
+		GraphGuidance:    "Call workspace_graph changes first, then read the symbols it ranks highest and stop there. Those symbols are what the diff touched.",
 		Stop:             "the scoped deep report is delivered with explicit coverage limits.",
 		RequiresEvidence: true,
 	},
@@ -152,6 +183,7 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 3. Work in dependency order and verify after each meaningful chunk rather than at the end.
 4. Summarize the risks and whatever is left over.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
+		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the sequenced changes are made and verified, or the requested plan is delivered.",
 		RequiresEvidence: true,
 	},
@@ -168,14 +200,14 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 	{
 		ID:   "spec_discovery",
 		When: "Planning, a PRD, a product spec, a design doc, an RFC, or an architecture write-up where the requirements are still incomplete.",
-		Playbook: `Ask before drafting. Do not write the document until you know enough to make it correct.
+		Playbook: `Ask before drafting. Write the document once you know enough to make it correct.
 
 1. Ask one tight batch of questions — the problem, who it is for, goals and non-goals, constraints, what success looks like, and the format wanted.
 2. Wait for the answers, unless the user told you to assume and draft.
 3. Then outline, then draft.
 4. Mark every assumption and unresolved decision in the draft itself.
 
-Ending this turn on questions alone is the right outcome when you do not yet have enough.`,
+Ending this turn on questions alone is a good outcome when you need more to go on.`,
 		PreferredSkills: []string{"umbratic-discovery", "umbratic-product-spec", "umbratic-markdown"},
 		Stop:            "the questions are asked if context is insufficient, or the draft is delivered if it is sufficient.",
 	},
@@ -183,7 +215,7 @@ Ending this turn on questions alone is the right outcome when you do not yet hav
 		ID:   OpenTaskBucket,
 		When: "The request does not fit cleanly, or it is a multi-intent blob.",
 		Playbook: `1. Identify the primary actionable goal in the request.
-2. Complete tightly related requested outcomes together. Do not silently drop part of a coherent request just because one bucket is available.
+2. Complete tightly related requested outcomes together, and say so when you leave part of a request for later.
 3. If the request contains genuinely independent deliverables needing different workflows, ask which to do first.
 4. Prefer stopping and asking over a speculative multi-hop tool loop.`,
 		Stop: "one coherent outcome is delivered, or a single clarifying question is asked.",
@@ -393,21 +425,20 @@ func KnownBucket(route Route, id string) bool {
 const orientSystemPromptHeader = `You are the Umbratic request classifier. Classify the user's current request into exactly one bucket for the active route, and return one JSON object. You are not answering the request and you have no tools.
 
 Return exactly this JSON object and nothing else, with no code fence and no commentary:
-{"bucket": "<one bucket id from the list below>", "summarySentence": <string or null>}
+{"bucket": "<one bucket id from the list below>", "summarySentence": "<one sentence>"}
 
-Rules:
-- bucket must be exactly one id from the list below. Do not invent an id.
-- If bucket is "direct_answer", summarySentence must be null.
-- Otherwise summarySentence must restate the request as your plan, in your own words: one or two short, natural, plain sentences in the first person saying what you will do and, when it helps, the key consideration. For example: "I will map this folder's layout and read its key manifests. The goal is a short overview of what the project is and how it runs." End with "." or "!", at most 240 characters, on a single line.
-- You have no tools and you have not seen the workspace, so the sentence may state no fact about it. Never name a language, framework, service, component, architecture, directory, or file, and never say what the code is or does. You are announcing an action you are about to take, not previewing its result. "I will map this project's layout and read its documentation." is right; "I will map out this Electron and Go architecture." is a fabrication, because you have not looked.
-- Write about your own work, in the first person, throughout. Do not address the reader and do not explain what the work is for: no "you", no "your", no "so you can ...", and no advice.
-- The sentence is shown to the user. Never name a bucket id, a playbook, routing, or classification in it.
-- Choose "deep_review" only for security, vulnerability, or threat-modeling intent, or an explicit request to audit a named risk surface. A request to "think hard" or do "deep analysis" is NOT security intent; classify it by its actual task instead.
-- Choose "spec_discovery" only for planning, PRD, spec, RFC, or design-doc work whose requirements are still incomplete.
-- On the marketing and sales routes, prefer the matching deliverable bucket over "direct_answer" whenever the user wants something produced. Whether discovery questions are actually needed is decided later, not by you.
-- Classify only the CURRENT USER REQUEST. A CONTEXT block may precede it holding the end of your own last reply; read it only to understand what a short request refers to, and never classify the context itself.
-- Carry no plan forward. The context tells you what was offered, not which bucket the last turn used, and a heavy previous turn does not make this one heavy: judge the current request on its own merit. "yes, go ahead" after an offer to edit a file is a code change; "what does this project do?" right after a security audit is still a repository tour.
-- Before choosing "direct_answer", ask whether reading a file could change the answer. If it could, it is not a direct answer. A short follow-up like "tell me more", "go deeper", or "not just one sentence" is still asking about the workspace, so it needs a bucket that looks at the workspace.
+Steps:
+1. Read the CURRENT USER REQUEST and pick one bucket id from the list below.
+2. Write summarySentence on every decision: one sentence that starts with "I will" and says what you are about to do. End it with "." or "!", keep it under 240 characters, and keep it on one line. Example: "I will map this project's layout and read its documentation."
+3. Keep that sentence about your action alone. You have not looked at the workspace yet, so its language, files, and design are still unknown to you; describe those after the tools have looked. Example of the difference: "I will map this project's layout" is what you know now, and "I will map out this Electron and Go architecture" is a guess.
+4. Keep it to your own work in plain words. The sentence describes what you are doing, so the words "you" and "your" stay out of it.
+
+Choosing a bucket:
+- Pick "deep_review" for security, vulnerability, or threat-modeling work, or an explicit audit of a named risk surface. Classify "think hard" and "deep analysis" by whatever the actual task is.
+- Pick "spec_discovery" for planning, PRD, spec, RFC, or design-doc work whose requirements are still incomplete.
+- On the marketing and sales routes, pick the matching deliverable bucket whenever the user wants something produced. Whether discovery questions are needed is decided later.
+- Pick a bucket that looks at the workspace whenever reading a file could change the answer. Short follow-ups like "tell me more", "go deeper", and "not just one sentence" are still questions about the workspace.
+- Judge this request on its own. A CONTEXT block before it holds the end of your last reply, and it is there to tell you what a short request refers to: "yes, go ahead" after an offer to edit a file is a code change, and "what does this project do?" right after a security audit is a repository tour.
 
 Buckets for this route:`
 
@@ -416,12 +447,20 @@ Buckets for this route:`
 // chatty or thinking-by-default model cannot spend the bounded decision budget
 // on prose. It must stay in lockstep with ParseOrientDecision's envelope:
 // exactly the two declared fields, nothing else.
+//
+// summarySentence is a string, never null. When null was allowed, the live
+// model took it as the easy way out on most runs, and the user's opening
+// status line had to come from a canned per-bucket fallback instead — a
+// hardcoded sentence where a model-written one belongs. The grammar is what
+// makes the model write it: the sentence exists on every decision, and
+// validation only polices its shape. direct_answer still nulls the sentence
+// server-side, so nothing downstream changes for direct runs.
 func OrientResponseSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"bucket":          map[string]any{"type": "string"},
-			"summarySentence": map[string]any{"type": []string{"string", "null"}},
+			"summarySentence": map[string]any{"type": "string"},
 		},
 		"required":             []string{"bucket", "summarySentence"},
 		"additionalProperties": false,
@@ -619,27 +658,13 @@ func validSummarySentence(route Route, sentence string) bool {
 	if !strings.HasSuffix(sentence, ".") && !strings.HasSuffix(sentence, "!") {
 		return false
 	}
-	if addressesTheReader(sentence) {
-		return false
-	}
+	// Second person used to be disqualifying. It cost the user the whole line:
+	// "I will map out your workspace and read its documentation." is a fine
+	// status line, and dropping it showed nothing at all where the orientation
+	// should have been. Live logs had this firing on ordinary phrasings, so the
+	// rule now lives in the prompt alone, where a miss degrades to slightly
+	// awkward wording rather than to silence.
 	return !mentionsBucketID(route, sentence)
-}
-
-// addressesTheReader reports whether the sentence talks to the user instead of
-// stating the assistant's own next action. A live run opened with "I will map
-// out Umbratic's hybrid architecture ... so you can navigate the codebase":
-// first person up front, then a second-person purpose clause the status line has
-// no business carrying. The line is the assistant narrating its own work, so a
-// second-person pronoun anywhere in it is disqualifying. Checked as whole,
-// case-insensitive tokens, so "your" is caught while "young" is not.
-func addressesTheReader(sentence string) bool {
-	for _, token := range sentenceTokens(sentence) {
-		switch token {
-		case "you", "your", "yours", "yourself":
-			return true
-		}
-	}
-	return false
 }
 
 // sentenceTokens splits on everything that is not a letter, digit, or
@@ -671,15 +696,17 @@ func mentionsBucketID(route Route, sentence string) bool {
 	return false
 }
 
-// The header deliberately does not restate the global preamble rule. This
-// message is re-sent on every step of the turn, so it is the nearest instruction
-// the model sees before each tool call; repeating conduct rules here made
-// formatting, not the plan, the dominant instruction. The header's job is the
-// opposite: state the precedence split and push the model into the first step.
-const playbookHeader = `Active task playbook (harness-internal). This playbook defines the plan for this turn: what work happens, in what order, and when to stop. The global instructions define who you are and how to call tools correctly; they do not override this plan. Follow it as a soft plan and adapt when evidence changes.
-Do not mention playbooks, buckets, or routing to the user. Begin the plan now: call tools or ask the required questions directly.`
+// The header carries no per-step status rule. This message is re-sent on every
+// step of the turn, so it is the nearest instruction the model sees before each
+// tool call; any formatting rule here becomes the dominant instruction and
+// competes with the plan. The status line is the harness's job — the classifier
+// opens the run and the runner asks for check-ins on its own cadence — so the
+// header's whole job is to state the precedence split, anchor the final
+// message, and push the model into the first step.
+const playbookHeader = `Your task playbook for this turn. It sets what work happens, in what order, and when to stop. The global instructions cover who you are and how to call tools; this plan sets the work. Follow it, and adapt as evidence changes it.
+Keep the plan to yourself and speak to the user in ordinary language. Keep everything you find for your last message, the one with no tool calls. When a next step remains, call its tool in the same message you mention it. Start now with your first tool call, or with the questions the plan asks for.`
 
-const playbookAntiLoop = `Anti-loop: after a tool failure, change the approach; do not repeat an equivalent failing call.`
+const playbookAntiLoop = `If a tool fails, read the error and try a different approach.`
 
 // PlaybookPrompt renders the protected playbook message for a decision.
 //
@@ -687,12 +714,20 @@ const playbookAntiLoop = `Anti-loop: after a tool failure, change the approach; 
 // playbook body, so a degraded run assembles byte-identically to today.
 // availableSkills is the already-validated client catalog; preferred skills the
 // user disabled are simply omitted, and every playbook stands alone without one.
-func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadata) string {
+func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadata, tools any) string {
 	bucket, ok := BucketFor(route, bucketID)
-	if !ok || bucket.ID == DirectAnswerBucket || strings.TrimSpace(bucket.Playbook) == "" {
+	if !ok || bucket.ID == DirectAnswerBucket {
 		return ""
 	}
-	sections := []string{playbookHeader, "", bucket.Playbook}
+	withGraph := HasTool(tools, "workspace_graph")
+	body := bucket.body(withGraph)
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	sections := []string{playbookHeader, "", body}
+	if strings.TrimSpace(bucket.GraphGuidance) != "" && withGraph {
+		sections = append(sections, "", bucket.GraphGuidance)
+	}
 	if preferred := intersectSkills(bucket.PreferredSkills, availableSkills); len(preferred) > 0 {
 		sections = append(sections, "",
 			"Preferred skills (optional): "+strings.Join(preferred, ", "),
@@ -705,6 +740,57 @@ func PlaybookPrompt(route Route, bucketID string, availableSkills []SkillMetadat
 	}
 	sections = append(sections, playbookAntiLoop)
 	return strings.Join(sections, "\n")
+}
+
+// body renders the bucket's plan. Buckets that state a flat Playbook return it
+// unchanged, so a run without structured steps assembles byte-identically to
+// today. Structured buckets number their steps here, which is what keeps a
+// substituted step from renumbering the list or stranding a later reference.
+func (b Bucket) body(withGraph bool) string {
+	if len(b.Steps) == 0 {
+		return b.Playbook
+	}
+	sections := make([]string, 0, len(b.Steps)+4)
+	if strings.TrimSpace(b.Preamble) != "" {
+		sections = append(sections, b.Preamble, "")
+	}
+	for index, step := range b.Steps {
+		if withGraph {
+			if replacement, ok := b.GraphSteps[index+1]; ok {
+				step = replacement
+			}
+		}
+		sections = append(sections, fmt.Sprintf("%d. %s", index+1, step))
+	}
+	if strings.TrimSpace(b.Closing) != "" {
+		sections = append(sections, "", b.Closing)
+	}
+	return strings.Join(sections, "\n")
+}
+
+// HasTool reports whether the request's already-validated tool array carries a
+// function with this name. The array is untyped by design — Veil passes the
+// harness's tool contract through rather than modelling it — so this walks it
+// defensively and answers false for anything it does not recognize.
+func HasTool(tools any, name string) bool {
+	rows, ok := tools.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range rows {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		function, ok := tool["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value, _ := function["name"].(string); value == name {
+			return true
+		}
+	}
+	return false
 }
 
 func intersectSkills(preferred []string, available []SkillMetadata) []string {

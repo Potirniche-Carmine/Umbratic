@@ -61,9 +61,32 @@ pub struct VeilChatResult {
     pub system_prompt_tokens_exact: bool,
     pub truncated_tool_arguments: bool,
     /// Redaction-safe assistant text that was withheld from the event stream
-    /// because `hold_assistant_text` was set. Empty on every ordinary request.
-    /// The caller either releases it with `release_held_text` or drops it.
+    /// under the request's `HoldPolicy`. Under `All` it is the step's whole
+    /// text; under `Bounded` it is text still inside the status-line bound.
+    /// The caller releases it with `release_held_text` or drops it.
     pub held_text: String,
+    /// Set once step text started streaming live. From then on the step's
+    /// prose is on screen and nothing about it can be taken back.
+    pub hold_broken: bool,
+}
+
+/// What happens to a step's assistant text while it streams.
+///
+/// Streaming commits to text before the harness knows what the step turned out
+/// to be, and the three policies are the three answers to that bet. `None` is
+/// the unguided path: everything streams live. `All` withholds everything, for
+/// the one window where a whole answer can still be refused — before any tool
+/// has run in an evidence-required bucket, where a finished answer is a
+/// fabrication by definition. `Bounded` is the guided default: one status
+/// line's worth is withheld so the cadence can drop or narrate it, and text
+/// that outgrows the bound is an answer or a report the user watches arrive,
+/// streamed live and shown verbatim. All three are size and structure rules;
+/// none of them reads the words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldPolicy {
+    None,
+    All,
+    Bounded,
 }
 
 pub struct VeilRequestOptions {
@@ -72,15 +95,8 @@ pub struct VeilRequestOptions {
     /// The run's validated bucket selector. Protected control metadata, not
     /// prompt text: Veil renders the playbook from its own catalog.
     pub harness_bucket: Option<String>,
-    /// Withhold assistant text from the event stream and return it on the
-    /// result instead, so the caller can decide whether it is fit to show.
-    ///
-    /// Streaming commits to text before the harness knows what the step turned
-    /// out to be. A live run streamed a wholly invented architecture summary,
-    /// which the evidence rule then refused — correctly, but far too late: the
-    /// user had already read it. On the one step that can be refused, the text
-    /// waits until the step resolves. Nothing else streams differently.
-    pub hold_assistant_text: bool,
+    /// How this step's assistant text is withheld while it streams.
+    pub hold: HoldPolicy,
 }
 
 /// A validated classifier decision for the active run.
@@ -497,7 +513,7 @@ fn emit_completed_output(
     session: &Session,
     result: &mut VeilChatResult,
     text_streamed: bool,
-    hold: bool,
+    hold: HoldPolicy,
 ) {
     if text_streamed || result.content.is_empty() || !result.held_text.is_empty() {
         return;
@@ -724,18 +740,6 @@ pub fn release_held_text(sink: &EventSink, session: &Session, result: &mut VeilC
     emit_delta(sink, session, &held);
 }
 
-/// The same release, for a step that turned out to be a preamble.
-///
-/// Holding is what makes this classification possible at all: the text has not
-/// been shown yet, so naming it narration now costs nothing, where deciding the
-/// same thing after it had streamed would mean moving text the user was already
-/// reading. Tool calls arriving on the step are the evidence — prose written
-/// ahead of work is describing that work, not answering.
-pub fn release_held_narration(sink: &EventSink, session: &Session, result: &mut VeilChatResult) {
-    let held = std::mem::take(&mut result.held_text);
-    emit_narration(sink, session, &held);
-}
-
 /// Run narration: prose the UI shows inside the working block rather than as an
 /// answer. It is display output only — `assistant.progress.delta` is dropped
 /// from the conversation history the model reads back.
@@ -755,18 +759,31 @@ pub fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
 /// Routes one chunk of already-redacted assistant text to the event stream or to
 /// the hold buffer. Returns whether anything reached the stream, which is what
 /// `emit_completed_output` uses to avoid emitting the message twice.
+/// Under `Bounded`, text up to this bound stays held — one status line and
+/// change, which is what the cadence can still drop unshown. Past it the step
+/// is writing prose the user should watch arrive, so it streams live.
+const MAX_HELD_TEXT_CHARS: usize = 600;
+
 fn stream_or_hold(
     sink: &EventSink,
     session: &Session,
     result: &mut VeilChatResult,
     text: String,
-    hold: bool,
+    hold: HoldPolicy,
 ) -> bool {
-    if !hold {
+    if hold == HoldPolicy::None || result.hold_broken {
         return emit_delta(sink, session, &text);
     }
     result.held_text.push_str(&text);
-    false
+    if hold == HoldPolicy::All {
+        return false;
+    }
+    if result.held_text.chars().count() <= MAX_HELD_TEXT_CHARS {
+        return false;
+    }
+    let flushed = std::mem::take(&mut result.held_text);
+    result.hold_broken = true;
+    emit_delta(sink, session, &flushed)
 }
 
 fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {
@@ -799,7 +816,7 @@ pub async fn stream_veil_chat(
         max_output_tokens,
         include_tools,
         harness_bucket,
-        hold_assistant_text,
+        hold,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -832,7 +849,7 @@ pub async fn stream_veil_chat(
         endpoint,
         host_header,
         body,
-        hold_assistant_text,
+        hold,
     };
     let mut attempt = 1_u32;
     loop {
@@ -878,9 +895,9 @@ async fn attempt_veil_chat(
         endpoint,
         host_header,
         body,
-        hold_assistant_text,
+        hold,
     } = input;
-    let hold_assistant_text = *hold_assistant_text;
+    let hold = *hold;
     // A misconfigured provider answers the same way every time.
     let client =
         shared_client(&session.config.provider).map_err(VeilAttemptError::final_failure)?;
@@ -964,7 +981,7 @@ async fn attempt_veil_chat(
             let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)
                 .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
             let safe = safe_output.push(&content);
-            text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold_assistant_text);
+            text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold);
             if line_completed {
                 completed = true;
             }
@@ -983,7 +1000,7 @@ async fn attempt_veil_chat(
         let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)
             .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
         let safe = safe_output.push(&content);
-        text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold_assistant_text);
+        text_streamed |= stream_or_hold(sink, session, &mut result, safe, hold);
         if line_completed {
             completed = true;
         }
@@ -997,20 +1014,14 @@ async fn attempt_veil_chat(
         );
     }
     let tail = safe_output.finish();
-    text_streamed |= stream_or_hold(sink, session, &mut result, tail, hold_assistant_text);
+    text_streamed |= stream_or_hold(sink, session, &mut result, tail, hold);
     fill_missing_tool_call_ids(&mut result.tool_calls);
     if result.truncated_tool_arguments {
         for call in &mut result.tool_calls {
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
-    emit_completed_output(
-        sink,
-        session,
-        &mut result,
-        text_streamed,
-        hold_assistant_text,
-    );
+    emit_completed_output(sink, session, &mut result, text_streamed, hold);
     Ok(result)
 }
 

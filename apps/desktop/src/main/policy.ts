@@ -12,7 +12,7 @@ import type {
   RuntimeDiagnostics,
   TelemetryPolicyInfo,
 } from "./types";
-import { normalizeRelativePath, pathInside } from "./utils";
+import { isRecord, normalizeRelativePath, pathInside } from "./utils";
 
 export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
 export const umbraticRunnerName = "UmbraticRunner";
@@ -49,6 +49,7 @@ const generatedRuntimePrefixes = [
   ".umbratic/runtime/",
   ".umbratic/build/",
   ".umbratic/tmp/",
+  ".umbratic/index/",
   ".venv/",
   "venv/",
   "node_modules/",
@@ -427,7 +428,15 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-export function assertUmbraticRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
+/**
+ * `dataRoot` is passed in rather than read from Electron so this module stays
+ * importable without an app instance, which is how its tests load it.
+ */
+export function assertUmbraticRunnerConfig(
+  config: Record<string, unknown>,
+  selectedModel: LocalModelInfo,
+  dataRoot: string,
+): void {
   assert(typeof config.taskId === "string" && config.taskId.length > 0, "task id must be set");
   assert(typeof config.cwd === "string" && config.cwd.length > 0, "cwd must be set");
   assert(config.permissionMode === "normal", "permissions must be mediated by the desktop app");
@@ -458,6 +467,27 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
   assert(
     !config.enabledTools.includes("lsp") || lspServers.length > 0,
     "LSP must not be enabled without an approved server",
+  );
+  const workspaceGraph = config.workspaceGraph;
+  assert(
+    workspaceGraph === undefined
+      || (isRecord(workspaceGraph)
+        && typeof workspaceGraph.artifactPath === "string"
+        && path.isAbsolute(workspaceGraph.artifactPath)),
+    "workspace graph must be an absolute artifact path when configured",
+  );
+  // The artifact is Umbratic's own derived state, so it belongs in the app's
+  // data directory and nowhere else. Asserting that positively is what stops a
+  // future caller from quietly pointing the runner at a path in the user's
+  // tree — or anywhere else on disk.
+  assert(
+    !isRecord(workspaceGraph)
+      || pathInside(dataRoot, String(workspaceGraph.artifactPath)),
+    "workspace graph artifact must live in the Umbratic data directory",
+  );
+  assert(
+    !config.enabledTools.includes("workspace_graph") || workspaceGraph !== undefined,
+    "the workspace graph tool must not be enabled without an artifact",
   );
   assert(selectedModel.providerId === companyEndpointProviderId, "provider must be the Umbratic private endpoint");
 

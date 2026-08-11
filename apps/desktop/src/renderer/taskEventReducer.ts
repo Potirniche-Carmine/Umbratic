@@ -49,8 +49,7 @@ export function reduceVisibleTask(
         ...current,
         state: "review_ready",
         changedFiles: event.changedFiles,
-        reviewFiles: event.reviewFiles,
-        latestTest: event.latestTest,
+        reviewFiles: event.reviewFiles,        latestTest: event.latestTest,
       };
     case "approval.completed":
       return { ...current, state: "approved", patchHash: event.patchHash };

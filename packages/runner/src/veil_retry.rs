@@ -135,7 +135,7 @@ pub(crate) struct VeilAttemptInput {
     pub(crate) endpoint: url::Url,
     pub(crate) host_header: Option<String>,
     pub(crate) body: Value,
-    pub(crate) hold_assistant_text: bool,
+    pub(crate) hold: crate::veil_client::HoldPolicy,
 }
 
 /// Announces that the turn is waiting on a server it cannot reach.

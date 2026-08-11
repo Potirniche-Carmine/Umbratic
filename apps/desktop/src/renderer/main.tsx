@@ -433,6 +433,15 @@ type ReviewReferenceOptions = {
   onReviewFileClick?: (filePath: string) => void;
 };
 
+/**
+ * Compares two filesystem paths for identity. Separator and case differences
+ * are the two ways the same Windows folder arrives spelled differently.
+ */
+export function samePathKey(left: string, right: string): boolean {
+  const key = (value: string) => value.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  return key(left) === key(right);
+}
+
 export function normalizeReviewReference(value: string): string {
   return value
     .replace(/^@/, "")
@@ -934,16 +943,8 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     reasoningEndedAt = undefined;
   };
 
-  // New workspace activity turns whatever prose preceded it into narration
-  // inside the block that is already open.
-  //
-  // Prose used to close the block instead, which split one turn into a row of
-  // separate Working summaries with paragraphs stranded between them — three
-  // blocks and two loose essays for a single question. Work continuing is not a
-  // new activity; it is the same activity, still going. Only the answer ends it.
-  // Prose and progress lines are one voice once they are both narration, so
-  // they join the same passage in arrival order rather than stacking up as
-  // separate fragments of the same thought.
+  // Prose that arrives before any real work joins the narration inside the
+  // block: it was never rendered anywhere else, so it has no place to keep.
   const foldProseIntoNarration = () => {
     if (!assistantBuffer.trim()) return;
     const separator = reasoningBuffer.trim() ? "\n\n" : "";
@@ -952,8 +953,27 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
     assistantNeedsSeparator = false;
   };
 
-  const narrateAssistantForActivity = () => {
+  // Streamed prose never relocates. It renders below the open block from its
+  // first token, so when more work follows it, the block above settles, the
+  // prose stands exactly where the user read it, and the new work opens a new
+  // block beneath it. Folding it into the block instead — the previous rule —
+  // moved a paragraph the user was mid-way through reading, which is the flash
+  // this replaces. The runner keeps one-line preambles out of this path
+  // entirely (they are held and paced as status lines), so a split only
+  // happens at a substantial mid-turn report, not at every sentence — the
+  // failure that originally motivated folding.
+  const proseStandsOrFolds = () => {
+    if (assistantBuffer.trim() && activityHasTools(activitySegments)) {
+      flushReasoning();
+      flushActivity();
+      flushAssistant();
+      return;
+    }
     foldProseIntoNarration();
+  };
+
+  const narrateAssistantForActivity = () => {
+    proseStandsOrFolds();
     flushReasoning();
   };
 
@@ -1022,9 +1042,10 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "assistant.progress.delta") {
-      // Prose already buffered came first and joins the passage ahead of this
-      // line, rather than being appended after it when the block closes.
-      foldProseIntoNarration();
+      // Prose already buffered came first. Before real work it joins the
+      // passage ahead of this line; after real work it stands where it
+      // streamed, and this line opens the narration of the next block.
+      proseStandsOrFolds();
       reasoningStartedAt = reasoningStartedAt ?? event.at;
       reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
       reasoningBuffer = `${reasoningBuffer}${reasoningBuffer ? "\n\n" : ""}${event.text}`;
@@ -1542,10 +1563,44 @@ function StreamingMarkdownContent({ content, caretClassName }: { content: string
   );
 }
 
+/// Streamed text arrives in bursts — the runner's status-line hold releases
+/// its first several hundred characters at once, and local runtimes batch
+/// tokens — but reading speed is steady. The reveal walks toward the full text
+/// at a rate that scales with the backlog, so a burst becomes a quick, smooth
+/// catch-up instead of an instant wall of text. Presentation only: the full
+/// text is already in the timeline, and a settled message renders complete.
+function useRevealedText(text: string): string {
+  const [revealedCount, setRevealedCount] = useState(0);
+  useEffect(() => {
+    if (revealedCount >= text.length) {
+      // A reused component starting a new, shorter stream begins from zero
+      // rather than running backwards.
+      if (revealedCount > text.length) setRevealedCount(0);
+      return undefined;
+    }
+    const frame = requestAnimationFrame(() => {
+      setRevealedCount((current) => {
+        const backlog = text.length - current;
+        if (backlog <= 0) return current;
+        // Catch up in about two dozen frames whatever the backlog, with a
+        // floor that keeps short tails from crawling.
+        let next = Math.min(text.length, current + Math.max(3, Math.ceil(backlog / 24)));
+        // Never split a surrogate pair: half an emoji renders as garbage.
+        const edge = text.charCodeAt(next - 1);
+        if (next < text.length && edge >= 0xd800 && edge <= 0xdbff) next += 1;
+        return next;
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [text, revealedCount]);
+  return revealedCount >= text.length ? text : text.slice(0, revealedCount);
+}
+
 function StreamingTextContent({ content }: { content: string }) {
+  const revealed = useRevealedText(content);
   return (
     <div className="streamingTextContent">
-      <StreamingMarkdownContent content={content} caretClassName="streamingTextCaret" />
+      <StreamingMarkdownContent content={revealed} caretClassName="streamingTextCaret" />
     </div>
   );
 }
@@ -1764,6 +1819,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [reviewOffset, setReviewOffset] = useState(0);
   const [reviewTargetPath, setReviewTargetPath] = useState<string | undefined>();
   const [workspaceReview, setWorkspaceReview] = useState<{ reviewFiles: ReviewFile[]; baselineOid: string } | null>(null);
+  /** Workspace currently being indexed for the first time, if any. */
+  const [indexingWorkspace, setIndexingWorkspace] = useState<string | null>(null);
   const [tasklessReviewScope, setTasklessReviewScope] = useState<"task" | "worktree">("task");
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
@@ -2140,6 +2197,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
+  // Shown only while the *open* workspace is being indexed for the first time.
+  // The artifact lives outside the workspace, so nothing in the user's own tree
+  // hints that work is happening; without this the first open just feels slow.
+  const indexingThisWorkspace = !!indexingWorkspace && !!repository
+    && samePathKey(indexingWorkspace, repository.rootPath);
   const composerHeaderTitle = activeChat
     ? chatDisplayTitle(activeChat)
     : task?.prompt
@@ -2337,6 +2399,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       pendingBackendEvents.push(event);
       scheduleBackendEventFlush();
     });
+    const unsubscribeIndex = api.onWorkspaceIndex((event) => {
+      setIndexingWorkspace(event.phase === "started" ? event.workspacePath : null);
+    });
     return () => {
       window.clearInterval(statusTimer);
       backendEventFlushDisposed = true;
@@ -2346,6 +2411,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         flushBackendEvents();
       }
       unsubscribe();
+      unsubscribeIndex();
     };
   }, []);
 
@@ -4942,6 +5008,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               <div className="composerHeaderTitle">
                 <strong>{composerHeaderTitle}</strong>
                 <span>{composerHeaderMeta}</span>
+                {indexingThisWorkspace ? (
+                  <span className="workspaceIndexing" role="status">
+                    <span className="workspaceIndexingSpinner" aria-hidden="true" />
+                    Indexing this folder…
+                  </span>
+                ) : null}
               </div>
               <div className="composerHeaderActions">
                 {renderIdePicker("composer")}
@@ -5696,8 +5768,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           files={reviewFiles}
           initialSelectedPath={reviewTargetPath}
           taskId={task?.id ?? `workspace:${repository?.rootPath ?? "none"}`}
-          patchHash={task?.reviewPatchHash}
-          scope={task?.reviewScope ?? tasklessReviewScope}
+          patchHash={task?.reviewPatchHash}          scope={task?.reviewScope ?? tasklessReviewScope}
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
           canUndo={canUndo}

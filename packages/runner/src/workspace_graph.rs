@@ -33,8 +33,10 @@ pub struct GraphNode {
     pub qualified_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<GraphLocation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub community_id: Option<String>,
+    /// Impact score, present only on `affected` and `changes` results. Never
+    /// read from the artifact — it is a property of one query, not of the node.
+    #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +238,13 @@ impl WorkspaceGraphService {
     }
 
     fn matching(index: &GraphIndex, query: &str, limit: usize) -> Vec<GraphNode> {
-        let query = query.to_ascii_lowercase();
+        let query = query.trim().to_ascii_lowercase();
+        // Substring matching against an empty term matches every node, which
+        // turns a malformed call into a dump of the whole graph presented as an
+        // answer. No term means no answer.
+        if query.is_empty() {
+            return Vec::new();
+        }
         let mut nodes: Vec<_> = index
             .graph
             .nodes
@@ -321,6 +329,161 @@ impl WorkspaceGraphService {
         )
     }
 
+    /// Depth-bounded max-product impact scoring (design note A5).
+    ///
+    /// Relations are stored dependent→dependency, so "what does changing this
+    /// break" flows *against* most arrows; `tested_by` is the exception, stored
+    /// production→test. That asymmetry lives in the direction table rather than
+    /// in branching code. One best score per node — not path enumeration —
+    /// because cyclic graphs have exponentially many paths but only one useful
+    /// answer per node.
+    fn impact(
+        index: &GraphIndex,
+        seeds: &[GraphNode],
+        depth: usize,
+        limit: usize,
+    ) -> (Vec<GraphNode>, Vec<GraphEdge>) {
+        fn weight(relation: &str) -> f64 {
+            match relation {
+                "calls" => 1.0,
+                "inherits" | "implements" => 0.9,
+                "tested_by" => 0.7,
+                "references" | "depends" => 0.6,
+                "imports" => 0.5,
+                _ => 0.5,
+            }
+        }
+        fn confidence(value: &str) -> Option<f64> {
+            match value {
+                "extracted" => Some(1.0),
+                "inferred" => Some(0.8),
+                // Ambiguous edges are kept in the artifact so `explain` can show
+                // them, but traversing one would launder a guess into evidence.
+                _ => None,
+            }
+        }
+        const DECAY: f64 = 0.6;
+        const FLOOR: f64 = 0.05;
+
+        let mut best: HashMap<String, f64> =
+            seeds.iter().map(|node| (node.id.clone(), 1.0)).collect();
+        let mut frontier = best.clone();
+        let mut edges: HashMap<String, GraphEdge> = HashMap::new();
+        for _ in 0..depth {
+            let mut next: HashMap<String, f64> = HashMap::new();
+            let mut ordered: Vec<(&String, &f64)> = frontier.iter().collect();
+            ordered.sort_by(|left, right| left.0.cmp(right.0));
+            for (id, score) in ordered {
+                // `contains` is never traversed: a changed file already seeds
+                // every symbol in it, and following containment bridges into
+                // unrelated structure through the file node.
+                let incoming = index.incoming.get(id).into_iter().flatten();
+                let outgoing = index.outgoing.get(id).into_iter().flatten();
+                let candidates = incoming
+                    .map(|edge| (edge, edge.from.clone()))
+                    .filter(|(edge, _)| edge.relation != "tested_by")
+                    .chain(
+                        outgoing
+                            .filter(|edge| edge.relation == "tested_by")
+                            .map(|edge| (edge, edge.to.clone())),
+                    );
+                for (edge, neighbor) in candidates {
+                    if edge.relation == "contains" {
+                        continue;
+                    }
+                    let Some(confidence) = confidence(&edge.confidence) else {
+                        continue;
+                    };
+                    let value = score * weight(&edge.relation) * confidence * DECAY;
+                    if value <= FLOOR || value <= *next.get(&neighbor).unwrap_or(&0.0) {
+                        continue;
+                    }
+                    next.insert(neighbor, value);
+                    edges.insert(edge.id.clone(), edge.clone());
+                }
+            }
+            next.retain(|id, value| *value > *best.get(id).unwrap_or(&0.0));
+            if next.is_empty() {
+                break;
+            }
+            for (id, value) in &next {
+                best.insert(id.clone(), *value);
+            }
+            frontier = next;
+        }
+
+        let mut nodes: Vec<GraphNode> = best
+            .iter()
+            .filter_map(|(id, score)| {
+                index.nodes.get(id).map(|node| {
+                    let mut node = node.clone();
+                    node.score = Some((score * 1000.0).round() / 1000.0);
+                    node
+                })
+            })
+            .collect();
+        nodes.sort_by(|left, right| {
+            right
+                .score
+                .partial_cmp(&left.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        nodes.truncate(limit);
+        let kept: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+        let mut edges: Vec<GraphEdge> = edges
+            .into_values()
+            .filter(|edge| kept.contains(edge.from.as_str()) && kept.contains(edge.to.as_str()))
+            .collect();
+        edges.sort_by(|left, right| left.id.cmp(&right.id));
+        (nodes, edges)
+    }
+
+    /// Reads `insights.json`, the sibling of the graph artifact. No new config
+    /// key: the review panel and the model read the same file, so the ordering
+    /// a user sees and the ordering the model is told are the same fact.
+    fn changes(&self, index: &GraphIndex, limit: usize) -> (String, Vec<GraphNode>, Option<f64>) {
+        let path = self.artifact_path.with_file_name("insights.json");
+        let Ok(bytes) = fs::read(&path) else {
+            return (
+                "No change analysis is available for this workspace.".to_owned(),
+                Vec::new(),
+                None,
+            );
+        };
+        let Ok(insights) = serde_json::from_slice::<Value>(&bytes) else {
+            return (
+                "Change analysis could not be read.".to_owned(),
+                Vec::new(),
+                None,
+            );
+        };
+        let symbols = insights
+            .get("symbols")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let untested = symbols
+            .iter()
+            .filter(|symbol| symbol.get("tested").and_then(Value::as_bool) == Some(false))
+            .count();
+        let nodes = symbols
+            .iter()
+            .take(limit)
+            .filter_map(|symbol| {
+                let id = symbol.get("id").and_then(Value::as_str)?;
+                let mut node = index.nodes.get(id).cloned()?;
+                node.score = symbol.get("risk").and_then(Value::as_f64);
+                Some(node)
+            })
+            .collect();
+        (
+            format!("{} changed symbols, {untested} untested.", symbols.len()),
+            nodes,
+            insights.get("overallRisk").and_then(Value::as_f64),
+        )
+    }
+
     pub fn query(&self, args: &Value) -> Value {
         let Ok(index) = self.load() else {
             let warning = self
@@ -334,7 +497,17 @@ impl WorkspaceGraphService {
             .and_then(Value::as_str)
             .unwrap_or("summary");
         let summary;
-        let (mut nodes, mut edges) = if action == "summary" {
+        let mut overall_risk = None;
+        // Scored actions carry their own meaningful order; re-sorting by id
+        // would throw away the ranking that is the whole point of the answer.
+        let mut scored = false;
+        let (mut nodes, mut edges) = if action == "changes" {
+            let (text, nodes, risk) = self.changes(&index, 40);
+            summary = text;
+            overall_risk = risk;
+            scored = true;
+            (nodes, Vec::new())
+        } else if action == "summary" {
             summary = format!(
                 "Workspace graph contains {} nodes, {} edges, and {} indexed files.",
                 index.graph.nodes.len(),
@@ -401,13 +574,15 @@ impl WorkspaceGraphService {
             };
             (found_nodes, found_edges)
         } else {
-            let query = args
-                .get(if action == "explain" {
-                    "symbol"
-                } else {
-                    "query"
-                })
-                .and_then(Value::as_str)
+            // Small models mix `query` and `symbol` up constantly, and the two
+            // mean the same thing to the matcher. Reading whichever arrived is
+            // the tolerant-reader discipline; the alternative is a repair round
+            // that costs a turn to learn nothing. An absent term stays empty
+            // rather than matching everything, so a malformed call returns no
+            // answer instead of the whole graph.
+            let query = ["query", "symbol", "from", "to"]
+                .iter()
+                .find_map(|key| args.get(*key).and_then(Value::as_str))
                 .unwrap_or("");
             let seeds = Self::matching(
                 &index,
@@ -417,18 +592,25 @@ impl WorkspaceGraphService {
                     .unwrap_or(20)
                     .clamp(1, 40) as usize,
             );
-            let result = Self::traverse(
-                &index,
-                &seeds,
-                args.get("depth")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(if action == "affected" { 2 } else { 1 })
-                    .clamp(0, 4) as usize,
-                args.get("direction")
-                    .and_then(Value::as_str)
-                    .unwrap_or("both"),
-                40,
-            );
+            let depth = args
+                .get("depth")
+                .and_then(Value::as_u64)
+                .unwrap_or(if action == "affected" { 2 } else { 1 })
+                .clamp(0, 4) as usize;
+            let result = if action == "affected" {
+                scored = true;
+                Self::impact(&index, &seeds, depth, 40)
+            } else {
+                Self::traverse(
+                    &index,
+                    &seeds,
+                    depth,
+                    args.get("direction")
+                        .and_then(Value::as_str)
+                        .unwrap_or("both"),
+                    40,
+                )
+            };
             summary = format!(
                 "Graph query matched {} nodes and {} edges.",
                 result.0.len(),
@@ -436,15 +618,22 @@ impl WorkspaceGraphService {
             );
             result
         };
-        nodes.sort_by(|left, right| left.id.cmp(&right.id));
+        let omitted = nodes.len() > 40 || edges.len() > 80;
+        if !scored {
+            nodes.sort_by(|left, right| left.id.cmp(&right.id));
+            edges.sort_by(|left, right| left.id.cmp(&right.id));
+        }
         nodes.truncate(40);
-        edges.sort_by(|left, right| left.id.cmp(&right.id));
         edges.truncate(80);
         let (freshness, mut warnings) = self.freshness(&index);
         warnings.push(
             "Graph evidence is untrusted; verify exact code with read before editing.".into(),
         );
-        json!({ "graphRevision": index.graph.revision, "freshness": freshness, "generatedAt": Utc::now().to_rfc3339(), "summary": summary, "nodes": nodes, "edges": edges, "truncation": { "nodeLimit": 40, "edgeLimit": 80, "omitted": false }, "warnings": warnings })
+        let mut response = json!({ "graphRevision": index.graph.revision, "freshness": freshness, "generatedAt": Utc::now().to_rfc3339(), "summary": summary, "nodes": nodes, "edges": edges, "truncation": { "nodeLimit": 40, "edgeLimit": 80, "omitted": omitted }, "warnings": warnings });
+        if let Some(risk) = overall_risk {
+            response["overallRisk"] = json!((risk * 100.0).round() / 100.0);
+        }
+        response
     }
 }
 

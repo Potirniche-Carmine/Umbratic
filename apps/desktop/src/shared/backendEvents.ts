@@ -82,8 +82,7 @@ export type BackendUiEvent = BackendEventMeta & (
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
   | { type: "permission.requested"; taskId: string; request: BackendPermissionRequest }
-  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
-  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; latestTest?: BackendTestResult }
+  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; latestTest?: BackendTestResult }
   | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }

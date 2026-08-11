@@ -272,8 +272,7 @@ export type TaskInfo = {
   reviewFiles: ReviewFile[];
   events: BackendUiEvent[];
   latestTest?: TestResult;
-  reviewPatchHash?: string;
-  reviewScope?: "task" | "worktree";
+  reviewPatchHash?: string;  reviewScope?: "task" | "worktree";
   reviewBaselineLabel?: string;
   reviewBaselineOid?: string;
   patchHash?: string;
@@ -352,6 +351,12 @@ export type SkillInfo = {
 export type SkillDocument = SkillInfo & {
   path: string;
   content: string;
+};
+
+export type WorkspaceIndexEvent = {
+  workspacePath: string;
+  phase: "started" | "finished";
+  ok?: boolean;
 };
 
 export type DesktopApi = {
@@ -670,6 +675,12 @@ export type DesktopApi = {
    */
   openExternal(input: { url: string }): Promise<{ ok: boolean }>;
   onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
+  /**
+   * The first index build for a workspace. Separate from the backend event bus
+   * because that bus is task-scoped and this happens on folder open, before any
+   * task exists.
+   */
+  onWorkspaceIndex(callback: (event: WorkspaceIndexEvent) => void): () => void;
 };
 
 export const desktopIpcChannels = {
@@ -752,7 +763,7 @@ export const desktopIpcChannels = {
   setResponseFeedback: "umbratic:set-response-feedback",
   setWindowChromeTheme: "umbratic:set-window-chrome-theme",
   openExternal: "umbratic:open-external",
-} as const satisfies Record<Exclude<keyof DesktopApi, "onBackendEvent">, string>;
+} as const satisfies Record<Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex">, string>;
 
 type DesktopIpcMethod = keyof typeof desktopIpcChannels;
 
