@@ -30,6 +30,8 @@ const scenarioTable = [
   ["done-without-newline", "DONE_WITHOUT_NEWLINE"],
   ["split-utf8", "SPLIT_UTF8"],
   ["evidence-required", "ORIENT_EVIDENCE"],
+  ["guided-tour", "ORIENT_TOUR"],
+  ["streamed-trim", "ORIENT_STREAM"],
 ] as const;
 
 function scenarioName(encoded: string) {
@@ -55,6 +57,20 @@ function orientDecisionFor(requestText: string): Record<string, unknown> | null 
   }
   if (requestText.includes("ORIENT_GUIDED")) {
     return { bucket: "debug_failure", summarySentence: "I'll inspect the failure path and isolate the cause." };
+  }
+  if (requestText.includes("ORIENT_TOUR")) {
+    return {
+      bucket: "repo_orient",
+      summarySentence: "I will map this repository and read what it documents.",
+      evidenceRequired: true,
+    };
+  }
+  if (requestText.includes("ORIENT_STREAM")) {
+    return {
+      bucket: "repo_orient",
+      summarySentence: "I will read the page and describe it.",
+      evidenceRequired: true,
+    };
   }
   if (requestText.includes("ORIENT_BAD_SENTENCE")) {
     return { bucket: "debug_failure", summarySentence: "Running deep_review now." };
@@ -125,6 +141,44 @@ export async function startProvider() {
       response.end(sse({ choices: [{ delta: { content: "Listing the workspace root now.", tool_calls: [{ index: 0, id: "evidence-ls", function: { name: "ls", arguments: "{\"path\":\".\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "evidence-required") {
       response.end(sse({ choices: [{ delta: { content: "The workspace root holds README.md." } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "guided-tour") {
+      // A long guided tour: a short preamble before every read, thirteen
+      // reads, then the answer. The runner is expected to drop every
+      // volunteered preamble by size and inject nothing into the model's
+      // context — the orientation is the run's only status line.
+      const completed = new Set(
+        Array.from(encoded.matchAll(/read: tour-(\d+)\.txt \(ok\)/g), (match) => Number(match[1])),
+      ).size;
+      if (completed < 13) {
+        response.end(sse({ choices: [{ delta: { content: `Reading tour file ${completed} next.`, tool_calls: [{
+          index: 0,
+          id: `tour-${completed}`,
+          function: { name: "read", arguments: JSON.stringify({ path: `tour-${completed}.txt` }) },
+        }] } }] }) + "data: [DONE]\n\n");
+      } else {
+        response.end(sse({ choices: [{ delta: { content: "The tour visited all thirteen files and the map is complete." } }] }) + "data: [DONE]\n\n");
+      }
+    } else if (scenario === "streamed-trim" && !encoded.includes("read: README.md (ok)")) {
+      response.end(sse({ choices: [{ delta: { content: "Opening the documentation first.", tool_calls: [{
+        index: 0,
+        id: "stream-read",
+        function: { name: "read", arguments: "{\"path\":\"README.md\",\"limit\":2}" },
+      }] } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "streamed-trim" && !encoded.includes("read: site.js (ok)")) {
+      // A long mid-turn report that outgrows the hold and streams live,
+      // closing promise included. The harness ships it verbatim: size decides
+      // what streams, and no wording is ever inspected.
+      const report = "The documentation describes a static bakery site with one page and a couple of scripts. ".repeat(8);
+      response.end(sse({ choices: [{ delta: {
+        content: `${report.trim()} Next, I will read the site script to confirm this behavior.`,
+        tool_calls: [{ index: 0, id: "stream-read-js", function: { name: "read", arguments: "{\"path\":\"site.js\",\"limit\":2}" } }],
+      } }] }) + "data: [DONE]\n\n");
+    } else if (scenario === "streamed-trim") {
+      // A long answer that ends on a promise-shaped sentence. It streams live
+      // and ships verbatim — what the model writes is what the user sees.
+      const body = "The bakery site is one static page with no build step and plain vanilla scripting. ".repeat(9);
+      const announcement = "To go deeper, I will now examine the configuration files. Starting with the main config, which appears central.";
+      response.end(sse({ choices: [{ delta: { content: `${body.trim()} ${announcement}` } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "required-inspection") {
       response.end(sse({ choices: [{ delta: { content: "I can explain this directly without changing or inspecting the workspace." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "lsp-degraded" && !encoded.includes("freshness")) {

@@ -425,14 +425,13 @@ func KnownBucket(route Route, id string) bool {
 const orientSystemPromptHeader = `You are the Umbratic request classifier. Classify the user's current request into exactly one bucket for the active route, and return one JSON object. You are not answering the request and you have no tools.
 
 Return exactly this JSON object and nothing else, with no code fence and no commentary:
-{"bucket": "<one bucket id from the list below>", "summarySentence": <string or null>}
+{"bucket": "<one bucket id from the list below>", "summarySentence": "<one sentence>"}
 
 Steps:
 1. Read the CURRENT USER REQUEST and pick one bucket id from the list below.
-2. For "direct_answer", set summarySentence to null. Then you are done.
-3. For every other bucket, write summarySentence as one sentence that starts with "I will" and says what you are about to do. End it with "." or "!", keep it under 240 characters, and keep it on one line. Example: "I will map this project's layout and read its documentation."
-4. Keep that sentence about your action alone. You have not looked at the workspace yet, so its language, files, and design are still unknown to you; describe those after the tools have looked. Example of the difference: "I will map this project's layout" is what you know now, and "I will map out this Electron and Go architecture" is a guess.
-5. Keep it to your own work in plain words. The sentence describes what you are doing, so the words "you" and "your" stay out of it.
+2. Write summarySentence on every decision: one sentence that starts with "I will" and says what you are about to do. End it with "." or "!", keep it under 240 characters, and keep it on one line. Example: "I will map this project's layout and read its documentation."
+3. Keep that sentence about your action alone. You have not looked at the workspace yet, so its language, files, and design are still unknown to you; describe those after the tools have looked. Example of the difference: "I will map this project's layout" is what you know now, and "I will map out this Electron and Go architecture" is a guess.
+4. Keep it to your own work in plain words. The sentence describes what you are doing, so the words "you" and "your" stay out of it.
 
 Choosing a bucket:
 - Pick "deep_review" for security, vulnerability, or threat-modeling work, or an explicit audit of a named risk surface. Classify "think hard" and "deep analysis" by whatever the actual task is.
@@ -448,12 +447,20 @@ Buckets for this route:`
 // chatty or thinking-by-default model cannot spend the bounded decision budget
 // on prose. It must stay in lockstep with ParseOrientDecision's envelope:
 // exactly the two declared fields, nothing else.
+//
+// summarySentence is a string, never null. When null was allowed, the live
+// model took it as the easy way out on most runs, and the user's opening
+// status line had to come from a canned per-bucket fallback instead — a
+// hardcoded sentence where a model-written one belongs. The grammar is what
+// makes the model write it: the sentence exists on every decision, and
+// validation only polices its shape. direct_answer still nulls the sentence
+// server-side, so nothing downstream changes for direct runs.
 func OrientResponseSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"bucket":          map[string]any{"type": "string"},
-			"summarySentence": map[string]any{"type": []string{"string", "null"}},
+			"summarySentence": map[string]any{"type": "string"},
 		},
 		"required":             []string{"bucket", "summarySentence"},
 		"additionalProperties": false,
@@ -689,15 +696,15 @@ func mentionsBucketID(route Route, sentence string) bool {
 	return false
 }
 
-// The header deliberately does not restate the global preamble rule. This
-// message is re-sent on every step of the turn, so it is the nearest instruction
-// the model sees before each tool call; repeating conduct rules here made
-// formatting, not the plan, the dominant instruction. The header's job is the
-// opposite: state the precedence split and push the model into the first step.
+// The header carries no per-step status rule. This message is re-sent on every
+// step of the turn, so it is the nearest instruction the model sees before each
+// tool call; any formatting rule here becomes the dominant instruction and
+// competes with the plan. The status line is the harness's job — the classifier
+// opens the run and the runner asks for check-ins on its own cadence — so the
+// header's whole job is to state the precedence split, anchor the final
+// message, and push the model into the first step.
 const playbookHeader = `Your task playbook for this turn. It sets what work happens, in what order, and when to stop. The global instructions cover who you are and how to call tools; this plan sets the work. Follow it, and adapt as evidence changes it.
-Keep the plan to yourself and speak to the user in ordinary language. Start now with your first tool call, or with the questions the plan asks for.
-
-Before each tool call, write one sentence saying what you are about to do. Keep everything you find for your last message, the one with no tool calls.`
+Keep the plan to yourself and speak to the user in ordinary language. Keep everything you find for your last message, the one with no tool calls. When a next step remains, call its tool in the same message you mention it. Start now with your first tool call, or with the questions the plan asks for.`
 
 const playbookAntiLoop = `If a tool fails, read the error and try a different approach.`
 

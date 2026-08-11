@@ -28,8 +28,7 @@ use crate::{
     tools::{ToolCall, ToolResult, tool_surface, validate_tool_call_batch},
     turn_snapshot::TurnSnapshot,
     veil_client::{
-        VeilChatResult, VeilRequestOptions, release_held_narration, release_held_text,
-        stream_veil_chat,
+        HoldPolicy, VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat,
     },
 };
 
@@ -51,98 +50,6 @@ enum RunOutcome {
     Aborted,
     ModelGaveUp,
     SafetyLimit,
-}
-
-/// Splits `text` into sentences.
-///
-/// A terminator only counts when whitespace or the end of the text follows it,
-/// because assistant prose is full of file names: splitting "assets/site.js."
-/// on every period leaves "js" as a sentence and loses the clause that actually
-/// mattered.
-fn sentences(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut found = Vec::new();
-    let mut start = 0;
-    for (index, character) in text.char_indices() {
-        if !matches!(character, '.' | '!' | '?' | '\n') {
-            continue;
-        }
-        let next = index + character.len_utf8();
-        if bytes
-            .get(next)
-            .is_none_or(|byte| byte.is_ascii_whitespace())
-        {
-            let sentence = text[start..next].trim();
-            if !sentence.is_empty() {
-                found.push(sentence);
-            }
-            start = next;
-        }
-    }
-    let tail = text[start..].trim();
-    if !tail.is_empty() {
-        found.push(tail);
-    }
-    found
-}
-
-/// Does this final answer end by announcing a step it never took?
-///
-/// Deliberately narrow, because a false positive spends a whole round-trip
-/// arguing with a model that was already finished. Two independent signals must
-/// appear **in the same sentence**: a first-person announcement of something
-/// still to come, and an inspection verb naming what that something is. "I am
-/// now confident the parser is correct." carries the first and not the second,
-/// so it is left alone; "I am now examining the main file." carries both.
-///
-/// Only the closing sentences are considered — a plan stated up front and then
-/// carried out is what a good turn looks like. Two rather than one, because a
-/// live run ended "…I will now examine the core source files. Starting with
-/// src/ledger.ts, which appears central." and the announcement sat one sentence
-/// back from the end.
-fn announces_unperformed_action(content: &str) -> bool {
-    const ANNOUNCEMENTS: [&str; 12] = [
-        "i will now",
-        "i'll now",
-        "i am now",
-        "i'm now",
-        "now i will",
-        "next, i will",
-        "next i will",
-        "i am going to",
-        "i'm going to",
-        "let me now",
-        "i will next",
-        "i will proceed",
-    ];
-    const INSPECTIONS: [&str; 14] = [
-        "examin",
-        "read",
-        "look",
-        "check",
-        "inspect",
-        "open",
-        "search",
-        "find",
-        "list",
-        "review",
-        "analyz",
-        "explor",
-        "verif",
-        "investigat",
-    ];
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let all = sentences(trimmed);
-    all.iter()
-        .skip(all.len().saturating_sub(2))
-        .map(|sentence| sentence.to_ascii_lowercase())
-        .any(|sentence| {
-            ANNOUNCEMENTS.iter().any(|phrase| sentence.contains(phrase))
-                && INSPECTIONS.iter().any(|verb| sentence.contains(verb))
-        })
 }
 
 fn set_run_outcome(summary: &mut Value, outcome: RunOutcome) {
@@ -499,7 +406,7 @@ async fn final_without_tools(
             harness_bucket: harness_bucket.map(str::to_owned),
             // final_without_tools is the last word of the run; there is no
             // later step that could refuse it, so nothing is held.
-            hold_assistant_text: false,
+            hold: HoldPolicy::None,
         },
     )
     .await;
@@ -521,7 +428,7 @@ async fn final_without_tools(
                 harness_bucket: harness_bucket.map(str::to_owned),
                 // final_without_tools is the last word of the run; there is no
                 // later step that could refuse it, so nothing is held.
-                hold_assistant_text: false,
+                hold: HoldPolicy::None,
             },
         )
         .await;
@@ -677,8 +584,6 @@ pub async fn run_turn(
     // nothing twice is answering deliberately, and a second refusal would only
     // spend the turn budget on the same argument.
     let mut evidence_retried = false;
-    // Same once-only reasoning for the abandoned-plan refusal below.
-    let mut announcement_retried = false;
     let mut repeat_guard = RepeatGuard::default();
     let mut public_progress = PublicProgressSchedule::default();
     let mut step_index = 0_u32;
@@ -712,17 +617,24 @@ pub async fn run_turn(
             harness_bucket.clone(),
         ));
         sink.emit(context_event(&session, prepared.usage));
-        // Hold the model's text on every step of a guided run, not only the
-        // first. What the text turns out to be — a preamble, an answer, or a
-        // refused answer — is the step's outcome, and that is as unknown on
-        // step five as on step one.
-        //
-        // Holding only the first step is what produced two live complaints:
-        // mid-turn prose streamed as an answer and then jumped into the working
-        // block once tool calls arrived, and a refused answer stayed on screen
-        // and ran straight into the real one with no separator. Long answers
-        // still stream, because the hold breaks itself at `MAX_HELD_TEXT_CHARS`.
-        let hold_assistant_text = harness_bucket.is_some();
+        // What can still be refused decides how this step's text streams. An
+        // evidence-required run that has not yet called a tool is the one
+        // window where an entire answer can be refused — a finished answer
+        // there is a fabrication by definition — so everything is withheld
+        // until the step resolves. Every other guided step withholds one
+        // status line's worth for the cadence and streams live past it: the
+        // user watches the answer arrive, and what the model wrote is what
+        // they see.
+        let hold = if harness_bucket.is_none() {
+            HoldPolicy::None
+        } else if orient.evidence_required
+            && !evidence_retried
+            && summary["toolCalls"].as_u64().unwrap_or(0) == 0
+        {
+            HoldPolicy::All
+        } else {
+            HoldPolicy::Bounded
+        };
         let mut response = stream_veil_chat(
             &session,
             &sink,
@@ -732,7 +644,7 @@ pub async fn run_turn(
                 max_output_tokens: snapshot.max_output_tokens(),
                 include_tools: true,
                 harness_bucket: snapshot.harness_bucket().map(str::to_owned),
-                hold_assistant_text,
+                hold,
             },
         )
         .await;
@@ -760,7 +672,7 @@ pub async fn run_turn(
                         max_output_tokens: snapshot.max_output_tokens(),
                         include_tools: true,
                         harness_bucket: snapshot.harness_bucket().map(str::to_owned),
-                        hold_assistant_text,
+                        hold,
                     },
                 )
                 .await;
@@ -795,11 +707,20 @@ pub async fn run_turn(
         let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
         if !calls.is_empty() {
-            // Tool calls settle the step as real work, so any held preamble is
-            // released now — as narration, which is what it has just been shown
-            // to be. It goes inside the working block the tools are about to
-            // open, where the run's account of itself belongs.
-            release_held_narration(&sink, &session, &mut result);
+            if result.hold_broken {
+                // The step's prose already streamed live, so anything still
+                // held completes a paragraph the user is mid-way through
+                // reading. It stands where it streamed, verbatim; the desktop
+                // closes the working block above it rather than relocating
+                // text under the reader.
+                release_held_text(&sink, &session, &mut result);
+            } else {
+                // A short preamble on a tool step is dropped unshown. The
+                // orientation opens the run and the tool rows narrate every
+                // call after it — that is the whole status story, with nothing
+                // asked of the model and nothing injected into its context.
+                result.held_text.clear();
+            }
         }
         if calls.is_empty() {
             if looks_like_unstructured_tool_call(&result.content) {
@@ -866,48 +787,19 @@ pub async fn run_turn(
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 continue;
             }
-            // A turn that ends by announcing its next move never made it. A
-            // live repo_orient run stopped on "I am now examining the main
-            // JavaScript file", having called no tool for it — the user was
-            // left with a promise where the tour should have been. The plan is
-            // mid-flight rather than unstarted, so the fix is the opposite of
-            // the refusal above: finish it, do not restart it.
-            if orient.evidence_required
-                && !announcement_retried
-                && summary["toolCalls"].as_u64().unwrap_or(0) > 0
-                && announces_unperformed_action(&result.content)
-            {
-                announcement_retried = true;
-                let call = ToolCall {
-                    id: format!("abandoned-plan-{}", summary["turns"].as_u64().unwrap_or(0)),
-                    name: "announced_without_acting".into(),
-                    arguments: json!({}),
-                    index: 0,
-                };
-                let error = "That response ended by announcing a next step instead of taking it, and it carried no tool call, so the step never happened. Either call that tool now, or give the complete final answer from what the tools have already shown. Do not describe what you are about to do again.";
-                append_assistant_turn(
-                    &session,
-                    assistant_tool_message(std::slice::from_ref(&call)),
-                    &result,
-                )
-                .await;
-                session
-                    .messages
-                    .lock()
-                    .await
-                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
-                sink.emit(json!({
-                    "type": "orient.announcement_retry",
-                    "taskId": session.task_id,
-                    "bucket": orient.bucket(),
-                    "at": now_iso()
-                }));
-                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
-                continue;
-            }
             // No refusal applied, so the step stands and anything held for
-            // it is shown. The branches above return without releasing,
+            // it is shown. The branch above returns without releasing,
             // which is what leaves a refused answer with no trace in the UI.
+            //
+            // There is deliberately no text inspection here. An earlier
+            // version scanned the answer's closing sentences for announcement
+            // phrasings ("I will now examine…") and refused or trimmed them —
+            // and every live model promptly used a phrasing the list did not
+            // have. Word lists are a treadmill and they are English-only; a
+            // harness stays model-agnostic by reacting to structure (tool
+            // calls made, text length, step shape), never to wording. Ending
+            // on the answer is the playbook's guidance to give, and whatever
+            // the model writes is what the user sees, verbatim.
             release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {
                 increment(

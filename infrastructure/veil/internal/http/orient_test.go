@@ -86,8 +86,10 @@ func TestOrientRouteNullsTheSummaryForDirectAnswerAndInvalidSentences(t *testing
 		t.Fatalf("direct_answer must carry a null summary: %d %s", rr.Code, rr.Body.String())
 	}
 
-	// An invalid sentence costs only the sentence: the bucket still guides the
-	// run, so the decision comes back with a null summary rather than failing.
+	// An invalid sentence costs only the sentence, and nothing stands in for
+	// it: the opening status line is model-written or absent. The response
+	// grammar is what makes absence rare — the schema requires the sentence
+	// as a string — so a null here models an older or degraded runtime.
 	for _, content := range []string{
 		`{"bucket":"code_change","summarySentence":null}`,
 		`{"bucket":"code_change","summarySentence":"Running deep_review now."}`,
@@ -99,6 +101,12 @@ func TestOrientRouteNullsTheSummaryForDirectAnswerAndInvalidSentences(t *testing
 			!strings.Contains(kept.Body.String(), `"summarySentence":null`) {
 			t.Fatalf("output %q must keep the bucket with a null summary: %d %s", content, kept.Code, kept.Body.String())
 		}
+	}
+
+	// A valid sentence survives as written.
+	own := post(`{"bucket":"code_change","summarySentence":"I'll add the retry wrapper and verify it."}`)
+	if !strings.Contains(own.Body.String(), `"summarySentence":"I'll add the retry wrapper and verify it."`) {
+		t.Fatalf("a valid sentence must survive: %s", own.Body.String())
 	}
 
 	// A fenced decision from a local model is normalized, not degraded.

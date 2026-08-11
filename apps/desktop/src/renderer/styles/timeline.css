@@ -228,6 +228,11 @@
   width: 100%;
   max-width: 980px;
   padding: 0 0 0 18px;
+  /* One rise on mount, never per token: the element persists across streaming
+     re-renders, so the animation runs exactly once, when the message first
+     appears. Its first tokens land right as the Working block above starts to
+     settle, and without this the hand-off reads as a pop. */
+  animation: assistantMessageIn 280ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
 .timelineActivity + .timelineMessage.assistantMessage {
@@ -450,6 +455,21 @@
 .activityBody.open .activityBodyContent {
   opacity: 1;
   transition: opacity 130ms ease-out 45ms;
+}
+
+/* A finished block closing is the settle at the end of the work — it happens
+   on its own, right as the answer starts streaming below, and it can fold away
+   hundreds of pixels of narration. At the click-toggle timing above that reads
+   as a snap, so the close (and only the close) of a finished block is slower
+   and softer: content fades first, then the rows fold. Opening a finished
+   block stays on the snappy click timing, because :not(.open) stops matching
+   the moment it opens. */
+.timelineActivity.isFinished .activityBody:not(.open) {
+  transition: grid-template-rows 460ms cubic-bezier(0.3, 0, 0.12, 1) 120ms;
+}
+
+.timelineActivity.isFinished .activityBody:not(.open) .activityBodyContent {
+  transition: opacity 240ms ease-out;
 }
 
 .activityBodyInner::-webkit-scrollbar {

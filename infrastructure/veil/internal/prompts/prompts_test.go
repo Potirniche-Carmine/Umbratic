@@ -29,7 +29,7 @@ func TestBuildAddsGlobalAndRoutePrompts(t *testing.T) {
 
 func TestGlobalAndEngineeringPromptsKeepGeneralScope(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt)
-	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "open every response that has tool calls with one short sentence", "write one sentence, then stop", "save what you found for the final response", "your final response is the one with no tool calls", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
+	for _, want := range []string{"umbratic", "private and confidential ai assistant", "software and non-software", "latest user message defines the current request", "changes, narrows, or replaces", "do not resume an obsolete plan", "evidence already collected", "workspace preview", "decide from the request's meaning, not from keywords", "do not mention supplied workspace context unless it is relevant", "read-only requests do not authorize file changes", "file-changing tool", "valid json object", "oldtext", "stop using tools", "do not repeat the file's code", "materially different correction", "read_attachment", "read status is complete", "never claim whole-document coverage from an excerpt alone", "never print tool tags", "never invent, rename, alias", "command and run_program tools are different contracts", "emit them together in one response", "save what you found for the final response", "your final response is the one with no tool calls", "user rejected", "never guess a workspace filename", "one exact file path, not a glob or directory"} {
 		if !strings.Contains(global, want) {
 			t.Fatalf("global prompt missing %q: %q", want, GlobalSystemPrompt)
 		}
@@ -163,30 +163,37 @@ func TestRelevantSkillsHidesPathScopedEntriesUntilToolTouch(t *testing.T) {
 	}
 }
 
-// Conduct is stated once, at the global tier. The playbook header is re-sent on
-// every step of the turn and is the nearest instruction the model sees before
-// each tool call; repeating the preamble rule there made formatting, not the
-// plan, the dominant instruction. The global prompt embeds the rule verbatim
-// and the playbook header must not restate it in any form.
-func TestThePreambleRuleLivesOnlyInTheGlobalPrompt(t *testing.T) {
-	if !strings.Contains(GlobalSystemPrompt, PreambleRule) {
-		t.Fatal("the global prompt must embed PreambleRule verbatim, not paraphrase it")
-	}
-	if strings.Contains(playbookHeader, PreambleRule) {
-		t.Fatal("the playbook header must not duplicate PreambleRule per step")
-	}
-	if strings.Contains(strings.ToLower(playbookHeader), "preamble") {
-		t.Fatal("the playbook header must not paraphrase preamble conduct; that is global-prompt territory")
-	}
-	// Old header wordings that contradicted the global rule must stay gone.
-	for _, gone := range []string{
-		"already been shown to the user",
-		"second status preamble",
-		"at most three short sentences",
-	} {
-		if strings.Contains(GlobalSystemPrompt, gone) || strings.Contains(playbookHeader, gone) {
-			t.Fatalf("contradicting preamble guidance %q is still present", gone)
+// The per-tool-call status line is retired from the prompts entirely: the
+// classifier supplies the opening orientation and the runner asks for a
+// check-in on its own cadence, so no prompt tier may reintroduce a per-call
+// preamble. Every prompt-side placement of the rule was tried, and each one
+// either produced mid-turn recaps, kilobyte preambles, or no preamble at all
+// depending on wording and position — the definition of a rule this model
+// cannot hold.
+func TestNoPromptTierAsksForAPerCallStatusLine(t *testing.T) {
+	for _, prompt := range []string{GlobalSystemPrompt, playbookHeader} {
+		for _, gone := range []string{
+			"Status line",
+			"one short sentence",
+			"Before each tool call",
+			"before each tool call",
+			"Write one sentence, then stop",
+			"already been shown to the user",
+			"second status preamble",
+			"at most three short sentences",
+		} {
+			if strings.Contains(prompt, gone) {
+				t.Fatalf("a prompt tier still asks for a per-call status line (%q)", gone)
+			}
 		}
+	}
+	// What survives is the final-message anchor, in both tiers: the answer is
+	// the message with no tool calls, and findings belong there.
+	if !strings.Contains(strings.ToLower(GlobalSystemPrompt), "your final response is the one with no tool calls") {
+		t.Fatal("the global prompt lost its final-message anchor")
+	}
+	if !strings.Contains(playbookHeader, "Keep everything you find for your last message, the one with no tool calls.") {
+		t.Fatal("the playbook header lost its final-message anchor")
 	}
 }
 

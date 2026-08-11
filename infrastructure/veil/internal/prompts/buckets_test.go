@@ -94,10 +94,13 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 			t.Fatalf("deep_review playbook is missing %q:\n%s", want, rendered)
 		}
 	}
-	// Conduct is stated once, in the global prompt. Repeating the preamble rule
-	// per step made formatting the nearest instruction before every tool call.
-	if strings.Contains(rendered, PreambleRule) {
-		t.Fatal("the playbook must not repeat PreambleRule")
+	// The status line is harness-paced now; a per-call formatting rule here
+	// would become the nearest instruction before every tool call and compete
+	// with the plan.
+	for _, gone := range []string{"Before each tool call", "one short sentence", "write one sentence"} {
+		if strings.Contains(rendered, gone) {
+			t.Fatalf("the playbook must not ask for a per-call status line (%q)", gone)
+		}
 	}
 	// umbratic-git-worktree is preferred but not enabled here, so it must not
 	// be named. Every playbook has to work without its preferred skills.
@@ -310,6 +313,39 @@ func TestOnlyEvidenceBackedBucketsRequireEvidence(t *testing.T) {
 	// An unknown selector can never turn the rule on.
 	if RequiresEvidence(EngineeringChat, "not_a_bucket") {
 		t.Fatal("an unknown bucket must not require evidence")
+	}
+}
+
+// The opening status line is the assistant speaking, so it is model-written or
+// it is absent — no prompt tier and no catalog may carry a canned sentence for
+// it. Reliability comes from the response grammar: summarySentence is a
+// required string, so a model that used to answer null now has to write one.
+func TestTheOrientationSentenceIsModelWrittenNeverCanned(t *testing.T) {
+	schema := OrientResponseSchema()
+	properties := schema["properties"].(map[string]any)
+	sentence := properties["summarySentence"].(map[string]any)
+	if sentence["type"] != "string" {
+		t.Fatalf("summarySentence must be grammar-required as a string, got %v", sentence["type"])
+	}
+	required := schema["required"].([]string)
+	if len(required) != 2 || required[0] != "bucket" || required[1] != "summarySentence" {
+		t.Fatalf("both fields must be required: %v", required)
+	}
+
+	// The classifier prompt asks for the sentence on every decision and never
+	// offers null as a way out.
+	messages, err := BuildOrient(EngineeringChat, "tell me more about this folder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := messages[0].Content.(string)
+	if !strings.Contains(system, "Write summarySentence on every decision") {
+		t.Fatalf("the prompt must require the sentence on every decision:\n%s", system)
+	}
+	for _, gone := range []string{"set summarySentence to null", "<string or null>"} {
+		if strings.Contains(system, gone) {
+			t.Fatalf("the prompt still offers the null escape (%q)", gone)
+		}
 	}
 }
 

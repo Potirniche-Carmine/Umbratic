@@ -40,27 +40,15 @@ fn an_orient_decision_carries_veils_evidence_requirement() {
     assert!(parse_orient_payload(&json!({"bucket":"repo_orient","playbook":"do this"})).is_err());
 }
 
-// Holding text until the step resolves is what lets the runner say which kind
-// of prose it was without ever moving it after the fact. The two release sites
-// are the whole classification: tool calls mean the text was a preamble, no
-// tool calls mean it was the answer.
+// Holding text until the step resolves is what lets the runner decide whether
+// it was the answer without ever moving text after the fact. Releasing shows
+// it; dropping a result on the floor is how a refused step leaves no trace.
 #[test]
-fn a_released_step_says_whether_its_text_was_narration_or_the_answer() {
+fn released_held_text_is_the_answer_and_an_empty_hold_says_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let session = crate::session::test_session(directory.path());
     let sink = crate::session::test_sink(directory.path());
     let mut events = sink.subscribe();
-
-    let mut preamble = VeilChatResult {
-        held_text: "I'll read the config first.".into(),
-        ..VeilChatResult::default()
-    };
-    release_held_narration(&sink, &session, &mut preamble);
-    let narration = events.try_recv().unwrap();
-    assert_eq!(narration["type"], "assistant.progress.delta");
-    assert_eq!(narration["text"], "I'll read the config first.");
-    // Released means released: nothing is left to emit a second time.
-    assert!(preamble.held_text.is_empty());
 
     let mut answer = VeilChatResult {
         held_text: "The config sets three limits.".into(),
@@ -70,12 +58,88 @@ fn a_released_step_says_whether_its_text_was_narration_or_the_answer() {
     let delta = events.try_recv().unwrap();
     assert_eq!(delta["type"], "assistant.delta");
     assert_eq!(delta["text"], "The config sets three limits.");
+    // Released means released: nothing is left to emit a second time.
+    assert!(answer.held_text.is_empty());
 
     // A step that held nothing says nothing, so a refused step still leaves no
     // trace in the UI.
     let mut empty = VeilChatResult::default();
-    release_held_narration(&sink, &session, &mut empty);
+    release_held_text(&sink, &session, &mut empty);
     assert!(events.try_recv().is_err());
+
+    // The orientation is the one narration line, and it is emitted directly.
+    assert!(emit_narration(
+        &sink,
+        &session,
+        "I will look at the failing test."
+    ));
+    let narration = events.try_recv().unwrap();
+    assert_eq!(narration["type"], "assistant.progress.delta");
+    assert_eq!(narration["text"], "I will look at the failing test.");
+}
+
+// Bounded holding is the deal the guided path makes: one status line's worth
+// can still be dropped when tool calls prove it was a preamble, and anything
+// past it is prose the user watches arrive live, shown verbatim. Size decides,
+// never wording.
+#[test]
+fn bounded_holding_streams_live_past_the_status_line_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    let session = crate::session::test_session(directory.path());
+    let sink = crate::session::test_sink(directory.path());
+    let mut events = sink.subscribe();
+    let mut result = VeilChatResult::default();
+
+    // One status line's worth stays held with nothing emitted.
+    assert!(!stream_or_hold(
+        &sink,
+        &session,
+        &mut result,
+        "a".repeat(MAX_HELD_TEXT_CHARS),
+        HoldPolicy::Bounded,
+    ));
+    assert!(!result.hold_broken);
+    assert!(events.try_recv().is_err());
+
+    // Growing past the bound flushes everything and streams from then on.
+    assert!(stream_or_hold(
+        &sink,
+        &session,
+        &mut result,
+        "b".repeat(200),
+        HoldPolicy::Bounded,
+    ));
+    assert!(result.hold_broken);
+    assert!(result.held_text.is_empty());
+    let first = events.try_recv().unwrap();
+    assert_eq!(first["type"], "assistant.delta");
+    assert_eq!(
+        first["text"].as_str().unwrap().chars().count(),
+        MAX_HELD_TEXT_CHARS + 200
+    );
+
+    // Every later chunk streams straight through.
+    assert!(stream_or_hold(
+        &sink,
+        &session,
+        &mut result,
+        "c".repeat(50),
+        HoldPolicy::Bounded,
+    ));
+    assert!(result.held_text.is_empty());
+    assert_eq!(events.try_recv().unwrap()["text"], "c".repeat(50));
+
+    // All withholds everything regardless of size: this is the refusable step.
+    let mut refusable = VeilChatResult::default();
+    assert!(!stream_or_hold(
+        &sink,
+        &session,
+        &mut refusable,
+        "d".repeat(5_000),
+        HoldPolicy::All,
+    ));
+    assert!(!refusable.hold_broken);
+    assert_eq!(refusable.held_text.chars().count(), 5_000);
 }
 
 #[test]

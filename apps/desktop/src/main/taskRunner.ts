@@ -240,6 +240,11 @@ export async function runRunnerTask(
         resolveCompletion = resolve;
         rejectCompletion = reject;
       });
+      // Rejections are observed even when no wait is active. A queued turn
+      // failing right as the task tears down used to reject a promise nobody
+      // awaited, which surfaced as an UnhandledPromiseRejectionWarning instead
+      // of an error the catch below could route to failTask.
+      void completion.catch(() => undefined);
     };
     armCompletion();
 
@@ -449,6 +454,21 @@ export async function runRunnerTask(
       ]);
 
     await waitForCompletion();
+    // A turn that answered can be followed straight away by a queued message
+    // the runner releases as the next turn. The wait has to drain that queue:
+    // tearing down after the first completion killed the queued turn mid-launch
+    // — its requests aborted against a stopped runner, the re-armed completion
+    // rejected with no awaiter, and the queued message was silently lost.
+    // Owning the re-arm here (completed is reset before awaiting again) also
+    // closes the race where the release event lands after this line.
+    while (
+      !run.abortController.signal.aborted
+      && taskStillRunning(task)
+      && (!completed || pendingTaskFollowUps.has(task.id))
+    ) {
+      if (completed) armCompletion();
+      await waitForCompletion();
+    }
 
     if (delegatedToWorktree || task.state === "awaiting_worktree_approval") {
       return;
