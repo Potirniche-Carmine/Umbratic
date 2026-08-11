@@ -981,12 +981,38 @@ fn finished_answers_are_left_alone() {
         "The review found three issues worth checking."
     ));
     // A plan stated up front and then actually carried out: the answer ends on
-    // the finding, which is exactly the shape a good turn has.
+    // findings, which is exactly the shape a good turn has.
     assert!(!announces_unperformed_action(
+        "I will now read the store. It keeps entries in memory. It validates them on write."
+    ));
+    // Accepted trade-off, stated rather than hidden: a two-sentence answer that
+    // opens with an announcement and closes with one finding does fire, because
+    // the two-sentence window covers the whole answer. That shape is far more
+    // often an unfinished turn than a complete one, and being wrong costs one
+    // nudge and a fuller answer — against a turn that ends on a promise, which
+    // is the user-visible failure this guard exists to stop.
+    assert!(announces_unperformed_action(
         "I will now read the store. The store keeps entries in memory and validates them on write."
     ));
     assert!(!announces_unperformed_action(""));
     assert!(!announces_unperformed_action(
         "This project is a static site with no build step."
+    ));
+}
+
+/// The observed miss: the announcement sat one sentence back from the end,
+/// trailed by an elaborating clause, so a last-sentence-only check let a turn
+/// settle on "I will now examine the core source files."
+#[test]
+fn an_announcement_one_sentence_from_the_end_is_still_caught() {
+    assert!(announces_unperformed_action(
+        "The project is a small billing ledger service. To understand how it works, I will now \
+         examine the core source files in the `src` directory. Starting with `src/ledger.ts`, \
+         which appears central to the ledger functionality."
+    ));
+    // Three sentences back is a plan that was then carried out, so it stands.
+    assert!(!announces_unperformed_action(
+        "I will now read the store. It keeps entries in memory. It validates them on write. \
+         Nothing else touches the array."
     ));
 }

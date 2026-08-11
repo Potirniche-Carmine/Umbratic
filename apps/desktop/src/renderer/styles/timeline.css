@@ -969,3 +969,36 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Shown only during a workspace's first index. The artifact lives outside the
+   workspace, so nothing in the user's own tree signals that work is happening;
+   without this the first folder open just feels slow. */
+.workspaceIndexing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.workspaceIndexingSpinner {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1.5px solid color-mix(in srgb, var(--faint) 45%, transparent);
+  border-top-color: var(--faint);
+  border-radius: 50%;
+  animation: workspaceIndexingSpin 0.8s linear infinite;
+}
+
+@keyframes workspaceIndexingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspaceIndexingSpinner {
+    animation: none;
+  }
+}

@@ -32,16 +32,15 @@ const (
 // playbook header made formatting the nearest instruction the model saw before
 // every tool call, competing with the playbook's own plan. Conduct is stated
 // once, at the global tier; the playbook owns the workflow.
-const PreambleRule = `Preamble rule. A response that contains tool calls may open with a preamble. It is a status line, not a report:
+const PreambleRule = `Status line. Open every response that has tool calls with one short sentence saying what you are about to do, so the user can follow along:
 
-- Exactly one short sentence. Never two, never a paragraph.
-- Say only what you are about to do. Never what you found, never what you already did, never what a tool result said.
-- No lists, paths, file inventories, headings, findings, or conclusions.
-- Skip it entirely when it would repeat the last one.
+- Write one sentence, then stop.
+- Say the action you are about to take next.
+- Save what you found for the final response.
 
-Everything you found goes in the final response — the one response that has no tool calls. Never send findings and tool calls together, and never encode a preamble as JSON or expose private reasoning.
+Your final response is the one with no tool calls. Findings, lists, paths, and conclusions all go there, and that is where the user looks for them.
 
-A response with no tool calls is the final answer, so it must never end by announcing a next step. If work remains, call the tool now instead of describing it; if it does not, answer from what the tools already showed. "I will now examine X" is never how a turn ends.`
+So while work remains, call the next tool; once the work is done, write the answer from what the tools showed you.`
 
 const GlobalSystemPrompt = `You are Umbratic, a private and confidential AI assistant. Be direct, natural, and helpful across software and non-software tasks. A route identifies the current workspace specialization; it does not limit what you can discuss or how you describe your capabilities.
 

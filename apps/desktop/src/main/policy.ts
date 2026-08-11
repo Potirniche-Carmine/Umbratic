@@ -428,7 +428,15 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-export function assertUmbraticRunnerConfig(config: Record<string, unknown>, selectedModel: LocalModelInfo): void {
+/**
+ * `dataRoot` is passed in rather than read from Electron so this module stays
+ * importable without an app instance, which is how its tests load it.
+ */
+export function assertUmbraticRunnerConfig(
+  config: Record<string, unknown>,
+  selectedModel: LocalModelInfo,
+  dataRoot: string,
+): void {
   assert(typeof config.taskId === "string" && config.taskId.length > 0, "task id must be set");
   assert(typeof config.cwd === "string" && config.cwd.length > 0, "cwd must be set");
   assert(config.permissionMode === "normal", "permissions must be mediated by the desktop app");
@@ -468,10 +476,14 @@ export function assertUmbraticRunnerConfig(config: Record<string, unknown>, sele
         && path.isAbsolute(workspaceGraph.artifactPath)),
     "workspace graph must be an absolute artifact path when configured",
   );
+  // The artifact is Umbratic's own derived state, so it belongs in the app's
+  // data directory and nowhere else. Asserting that positively is what stops a
+  // future caller from quietly pointing the runner at a path in the user's
+  // tree — or anywhere else on disk.
   assert(
     !isRecord(workspaceGraph)
-      || pathInside(String(config.cwd), String(workspaceGraph.artifactPath)),
-    "workspace graph artifact must live inside the workspace",
+      || pathInside(dataRoot, String(workspaceGraph.artifactPath)),
+    "workspace graph artifact must live in the Umbratic data directory",
   );
   assert(
     !config.enabledTools.includes("workspace_graph") || workspaceGraph !== undefined,

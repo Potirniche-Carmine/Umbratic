@@ -945,6 +945,14 @@ function createPreviewApi(): DesktopApi {
   // no-op rather than a broken promise.
   openExternal: async () => ({ ok: false }),
   onBackendEvent: () => () => undefined,
+  // `?indexing` holds the first-index status on so it can be seen without
+  // opening a real folder.
+  onWorkspaceIndex: (callback) => {
+    if (composerTestParams.has("indexing")) {
+      callback({ workspacePath: composerTestRepository.rootPath, phase: "started" });
+    }
+    return () => undefined;
+  },
   };
   return previewApi;
 }

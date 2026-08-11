@@ -1,5 +1,6 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
+import { onWorkspaceIndexProgress } from "./indexerService";
 import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, refreshLocalModels, retryTelemetrySpoolQueue, saveContextLengthSetting, saveHarnessProfileSetting, saveModelEndpointSettings } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
@@ -451,6 +452,11 @@ app.whenReady().then(async () => {
   }
   await startLocalCacheMaintenance(session.defaultSession, appPaths.runtimesDirectory(app.getPath("userData")), () => activeRunnerProcesses.size === 0, (error) => recordLocalDiagnostic({ level: "warn", source: "desktop", event: "cache.maintenance.failed", message: error instanceof Error ? error.message : String(error) }));
   registerMainIpc();
+  // Indexing starts on folder open, before any task exists, so it reaches the
+  // renderer on its own channel rather than through the task event bus.
+  onWorkspaceIndexProgress((event) => {
+    getMainWindow()?.webContents.send("umbratic:workspace-index", event);
+  });
   Menu.setApplicationMenu(null);
   await loadWindowWithModelWarmup(createWindow);
   void retryTelemetrySpoolQueue().catch((cause) => {

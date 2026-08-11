@@ -220,7 +220,7 @@ func TestChatRouteRendersTheVeilOwnedPlaybookLastAndOnlyWhenSelected(t *testing.
 		t.Fatalf("a selector must add exactly one protected message: %d vs %d", len(guided), len(baseline))
 	}
 	playbook, _ := guided[len(guided)-2].Content.(string)
-	if !strings.Contains(playbook, "Active task playbook") {
+	if !strings.Contains(playbook, "Your task playbook for this turn.") {
 		t.Fatalf("playbook must be the last protected message, got %q", playbook)
 	}
 	if !strings.Contains(playbook, "umbratic-security-review") {

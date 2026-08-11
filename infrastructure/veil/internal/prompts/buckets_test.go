@@ -80,15 +80,15 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 		t.Fatal("deep_review must render a playbook")
 	}
 	for _, want := range []string{
-		"Active task playbook (harness-internal).",
-		"defines the plan for this turn",
-		"they do not override this plan",
-		"Begin the plan now",
-		"Do not mention playbooks, buckets, or routing to the user.",
+		"Your task playbook for this turn.",
+		"what work happens, in what order, and when to stop",
+		"this plan sets the work",
+		"Start now with your first tool call",
+		"Keep the plan to yourself",
 		"Preferred skills (optional): umbratic-security-review",
 		"read_skill",
 		"Stop when: ",
-		"Anti-loop: after a tool failure",
+		"If a tool fails, read the error and try a different approach.",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("deep_review playbook is missing %q:\n%s", want, rendered)
@@ -130,13 +130,13 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 	for _, tools := range []any{nil, graphTools} {
 		rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, tools)
 		for name, want := range map[string]string{
-			"read-only":            "Never create, edit, or write a file",
-			"no drive-by fixes":    "never fix a problem you notice",
-			"first move is a tool": "Your first action is a tool call, never prose",
+			"read-only":            "leave the files as they are",
+			"no drive-by fixes":    "name it in your answer",
+			"first move is a tool": "Make a tool call your first action",
 			"docs before source":   "Read the documentation before the source",
-			"no guessed paths":     "Read only paths you have actually seen",
-			"answer is unbounded":  "Length is yours to judge",
-			"self-terminating":     "stop exploring and write the answer from what you have",
+			"no guessed paths":     "Read paths you have seen",
+			"answer is unbounded":  "as much room as it needs",
+			"self-terminating":     "write the answer from what you have",
 		} {
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("repo_orient lost its %s rule (%q):\n%s", name, want, rendered)
@@ -144,9 +144,10 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 		}
 	}
 	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, nil)
-	// The exploration budget may never be read as a budget on the answer.
-	if !strings.Contains(rendered, "never a licence to answer before you have looked") {
-		t.Fatalf("the anti-stuck rule must not license an early exit:\n%s", rendered)
+	// The exploration budget applies to exploring, not to the answer: the plan
+	// still has to say the tour comes after looking.
+	if !strings.Contains(rendered, "You just read the project") {
+		t.Fatalf("the answer must still rest on what was read:\n%s", rendered)
 	}
 	bucket, _ := BucketFor(EngineeringChat, "repo_orient")
 	if !strings.Contains(bucket.When, "tell me more about this folder") {
@@ -202,10 +203,10 @@ func TestAWorkspaceFollowUpIsNotADirectAnswer(t *testing.T) {
 	}
 	system := messages[0].Content.(string)
 	for _, want := range []string{
-		"ask whether reading a file could change the answer",
+		"whenever reading a file could change the answer",
 		"not just one sentence",
-		"Classify only the CURRENT USER REQUEST",
-		"Carry no plan forward",
+		"Read the CURRENT USER REQUEST",
+		"Judge this request on its own",
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("orient prompt is missing %q", want)
@@ -401,9 +402,9 @@ func TestAStatusSentenceNarratesItsOwnWorkInFirstPerson(t *testing.T) {
 	}
 	system := messages[0].Content.(string)
 	for _, want := range []string{
-		"the sentence may state no fact about it",
-		"Never name a language, framework, service, component, architecture, directory, or file",
-		`no "so you can ..."`,
+		"Keep that sentence about your action alone",
+		"its language, files, and design are still unknown to you",
+		`the words "you" and "your" stay out of it`,
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("orient prompt is missing %q", want)
@@ -417,8 +418,8 @@ func TestAStatusSentenceNarratesItsOwnWorkInFirstPerson(t *testing.T) {
 func TestCodeExplainForbidsGuessedPaths(t *testing.T) {
 	rendered := PlaybookPrompt(EngineeringChat, "code_explain", nil, nil)
 	for _, want := range []string{
-		"Read only paths you have actually seen",
-		"never answer a miss by inventing another name beside it",
+		"Read paths you have seen",
+		"its error lists what that directory really holds",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("code_explain playbook is missing %q:\n%s", want, rendered)
@@ -435,9 +436,9 @@ func TestOrientPromptAsksForAFirstPersonPlanSentence(t *testing.T) {
 	}
 	system := messages[0].Content.(string)
 	for _, want := range []string{
-		"restate the request as your plan",
-		"one or two short, natural, plain sentences in the first person",
-		`For example: "I will map this folder's layout`,
+		`starts with "I will" and says what you are about to do`,
+		"keep it under 240 characters",
+		`Example: "I will map this project's layout`,
 	} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("orient prompt missing %q", want)
@@ -653,8 +654,8 @@ func TestReviewBucketsTellTheModelWhatNotToReRead(t *testing.T) {
 	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "workspace_graph"}}}
 	for _, bucket := range []string{"review_audit", "deep_review"} {
 		rendered := PlaybookPrompt(EngineeringChat, bucket, nil, tools)
-		if !strings.Contains(rendered, "Do not re-read files the diff did not touch") {
-			t.Fatalf("%s lost its negative read instruction:\n%s", bucket, rendered)
+		if !strings.Contains(rendered, "stop there") {
+			t.Fatalf("%s lost its bound on how much to read:\n%s", bucket, rendered)
 		}
 	}
 }
@@ -690,7 +691,7 @@ func TestRepoOrientGraphVariantIsOneCoherentNumberedPlan(t *testing.T) {
 	}
 	// Steps 3 and 4 gate what counts as a real path. If they still name only a
 	// listing, they contradict a step 1 that never lists anything.
-	if !strings.Contains(rendered, "Read only paths you have actually seen in the graph") {
+	if !strings.Contains(rendered, "Read paths you have seen in the graph") {
 		t.Fatalf("step 4 must accept the graph as a source of real paths:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "directories the listing showed") {

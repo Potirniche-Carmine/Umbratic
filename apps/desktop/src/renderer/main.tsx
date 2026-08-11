@@ -433,6 +433,15 @@ type ReviewReferenceOptions = {
   onReviewFileClick?: (filePath: string) => void;
 };
 
+/**
+ * Compares two filesystem paths for identity. Separator and case differences
+ * are the two ways the same Windows folder arrives spelled differently.
+ */
+export function samePathKey(left: string, right: string): boolean {
+  const key = (value: string) => value.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  return key(left) === key(right);
+}
+
 export function normalizeReviewReference(value: string): string {
   return value
     .replace(/^@/, "")
@@ -1764,6 +1773,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [reviewOffset, setReviewOffset] = useState(0);
   const [reviewTargetPath, setReviewTargetPath] = useState<string | undefined>();
   const [workspaceReview, setWorkspaceReview] = useState<{ reviewFiles: ReviewFile[]; baselineOid: string } | null>(null);
+  /** Workspace currently being indexed for the first time, if any. */
+  const [indexingWorkspace, setIndexingWorkspace] = useState<string | null>(null);
   const [tasklessReviewScope, setTasklessReviewScope] = useState<"task" | "worktree">("task");
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
@@ -2140,6 +2151,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   } as React.CSSProperties;
   const reviewLayoutOpen = reviewOpen || reviewClosing;
   const todayPromptLabel = repository ? `What should we build in ${repository.name}?` : "What should we build today?";
+  // Shown only while the *open* workspace is being indexed for the first time.
+  // The artifact lives outside the workspace, so nothing in the user's own tree
+  // hints that work is happening; without this the first open just feels slow.
+  const indexingThisWorkspace = !!indexingWorkspace && !!repository
+    && samePathKey(indexingWorkspace, repository.rootPath);
   const composerHeaderTitle = activeChat
     ? chatDisplayTitle(activeChat)
     : task?.prompt
@@ -2337,6 +2353,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       pendingBackendEvents.push(event);
       scheduleBackendEventFlush();
     });
+    const unsubscribeIndex = api.onWorkspaceIndex((event) => {
+      setIndexingWorkspace(event.phase === "started" ? event.workspacePath : null);
+    });
     return () => {
       window.clearInterval(statusTimer);
       backendEventFlushDisposed = true;
@@ -2346,6 +2365,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         flushBackendEvents();
       }
       unsubscribe();
+      unsubscribeIndex();
     };
   }, []);
 
@@ -4942,6 +4962,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               <div className="composerHeaderTitle">
                 <strong>{composerHeaderTitle}</strong>
                 <span>{composerHeaderMeta}</span>
+                {indexingThisWorkspace ? (
+                  <span className="workspaceIndexing" role="status">
+                    <span className="workspaceIndexingSpinner" aria-hidden="true" />
+                    Indexing this folder…
+                  </span>
+                ) : null}
               </div>
               <div className="composerHeaderActions">
                 {renderIdePicker("composer")}

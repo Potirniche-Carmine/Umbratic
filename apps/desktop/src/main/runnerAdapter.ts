@@ -326,7 +326,7 @@ export async function startUmbraticRunnerServer(
   const diagnostics = isRecord(config.diagnostics) && typeof config.diagnostics.logPath === "string"
     ? { diagnosticLogPath: config.diagnostics.logPath }
     : {};
-  assertUmbraticRunnerConfig(config, model);
+  assertUmbraticRunnerConfig(config, model, app.getPath("userData"));
   const env: NodeJS.ProcessEnv = {
     ...runtimeEnv(task.worktreePath),
     ...umbraticRunnerHardeningEnvironment(),

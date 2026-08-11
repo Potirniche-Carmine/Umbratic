@@ -39,24 +39,45 @@ test("workspace graph is a togglable tool and defaults on", () => {
   assert.ok(tools.enabledToolsFromSettings({}).includes("workspace_graph"));
 });
 
-test("the artifact path stays inside the workspace and under the excluded index directory", () => {
+/**
+ * The index is Umbratic's own derived state. Writing it into the tree being
+ * worked on would put a multi-megabyte generated file into the user's diffs,
+ * their git status, and their backups.
+ */
+test("the artifact lives in the app data directory, never in the workspace", () => {
   const workspace = temporaryWorkspace();
+  const dataRoot = temporaryWorkspace();
+  indexer.setIndexDataRoot(dataRoot);
+
   const artifact = indexer.workspaceGraphArtifactPath(workspace);
   assert.equal(path.isAbsolute(artifact), true);
-  assert.equal(path.relative(workspace, artifact).startsWith(".."), false);
-  assert.equal(policy.isGeneratedRuntimePath(indexer.workspaceGraphArtifactRelativePath), true);
+  assert.equal(path.relative(dataRoot, artifact).startsWith(".."), false);
+  assert.equal(path.relative(workspace, artifact).startsWith(".."), true);
+
+  // Two workspaces never share an index, and one workspace is stable across calls.
+  const other = indexer.workspaceGraphArtifactPath(path.join(workspace, "nested"));
+  assert.notEqual(artifact, other);
+  assert.equal(artifact, indexer.workspaceGraphArtifactPath(workspace));
+
+  indexer.setIndexDataRoot(null);
   fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
 test("no artifact means no runner config fragment, so the tool cannot admit", () => {
   const workspace = temporaryWorkspace();
+  const dataRoot = temporaryWorkspace();
+  indexer.setIndexDataRoot(dataRoot);
   assert.equal(indexer.workspaceGraphArtifactExists(workspace), false);
   assert.equal(indexer.workspaceGraphRunnerConfig(workspace), undefined);
+  indexer.setIndexDataRoot(null);
   fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
-test("the config assertion rejects enabling the tool without an artifact", () => {
+test("the config assertion rejects an artifact outside the Umbratic data directory", () => {
   const workspace = temporaryWorkspace();
+  const dataRoot = temporaryWorkspace();
   const base = {
     taskId: "task-1",
     cwd: workspace,
@@ -65,16 +86,19 @@ test("the config assertion rejects enabling the tool without an artifact", () =>
     lspServers: [],
   };
   assert.throws(
-    () => policy.assertUmbraticRunnerConfig({ ...base }, {}),
+    () => policy.assertUmbraticRunnerConfig({ ...base }, {}, dataRoot),
     /workspace graph tool must not be enabled without an artifact/,
   );
+  // Inside the user's own tree is the specific mistake this guards against.
   assert.throws(
     () =>
       policy.assertUmbraticRunnerConfig(
-        { ...base, workspaceGraph: { artifactPath: path.join(os.tmpdir(), "elsewhere", "graph.json") } },
+        { ...base, workspaceGraph: { artifactPath: path.join(workspace, ".umbratic/index/graph.json") } },
         {},
+        dataRoot,
       ),
-    /workspace graph artifact must live inside the workspace/,
+    /workspace graph artifact must live in the Umbratic data directory/,
   );
   fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(dataRoot, { recursive: true, force: true });
 });

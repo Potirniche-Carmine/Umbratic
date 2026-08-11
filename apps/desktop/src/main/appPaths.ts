@@ -85,6 +85,18 @@ export function workspaceOcrDirectory(dataRoot: string, workspacePath: string): 
   return path.join(dataRoot, "artifacts", "ocr", workspaceStorageKey(workspacePath));
 }
 
+/// Where the code index for one workspace lives.
+///
+/// Deliberately outside the workspace: an index is Umbratic's own derived
+/// state, not the user's source. Writing it into the tree being worked on puts
+/// a multi-megabyte generated file into their diffs, their git status, and
+/// their backups, and asks every project to gitignore a directory it never
+/// asked for. Keyed by workspace path the same way OCR artifacts are, so a
+/// worktree indexes separately from the repository it came from.
+export function workspaceIndexDirectory(dataRoot: string, workspacePath: string): string {
+  return path.join(dataRoot, "artifacts", "index", workspaceStorageKey(workspacePath));
+}
+
 export function electronSessionDirectory(dataRoot: string): string {
   return path.join(dataRoot, "cache", "electron");
 }

@@ -53,42 +53,53 @@ enum RunOutcome {
     SafetyLimit,
 }
 
-/// The last sentence of `text`.
+/// Splits `text` into sentences.
 ///
 /// A terminator only counts when whitespace or the end of the text follows it,
 /// because assistant prose is full of file names: splitting "assets/site.js."
-/// on every period leaves "js" as the final sentence and loses the clause that
-/// actually mattered.
-fn last_sentence(text: &str) -> &str {
+/// on every period leaves "js" as a sentence and loses the clause that actually
+/// mattered.
+fn sentences(text: &str) -> Vec<&str> {
     let bytes = text.as_bytes();
+    let mut found = Vec::new();
     let mut start = 0;
     for (index, character) in text.char_indices() {
         if !matches!(character, '.' | '!' | '?' | '\n') {
             continue;
         }
         let next = index + character.len_utf8();
-        let terminates = bytes
+        if bytes
             .get(next)
-            .is_none_or(|byte| byte.is_ascii_whitespace());
-        if terminates && text[next..].trim().is_empty() {
-            break;
-        }
-        if terminates {
+            .is_none_or(|byte| byte.is_ascii_whitespace())
+        {
+            let sentence = text[start..next].trim();
+            if !sentence.is_empty() {
+                found.push(sentence);
+            }
             start = next;
         }
     }
-    text[start..].trim()
+    let tail = text[start..].trim();
+    if !tail.is_empty() {
+        found.push(tail);
+    }
+    found
 }
 
 /// Does this final answer end by announcing a step it never took?
 ///
 /// Deliberately narrow, because a false positive spends a whole round-trip
 /// arguing with a model that was already finished. Two independent signals must
-/// both appear **in the last sentence**: a first-person announcement of
-/// something still to come, and an inspection verb naming what that something
-/// is. "I am now confident the parser is correct." carries the first and not
-/// the second, so it is left alone; "I am now examining the main file." carries
-/// both.
+/// appear **in the same sentence**: a first-person announcement of something
+/// still to come, and an inspection verb naming what that something is. "I am
+/// now confident the parser is correct." carries the first and not the second,
+/// so it is left alone; "I am now examining the main file." carries both.
+///
+/// Only the closing sentences are considered — a plan stated up front and then
+/// carried out is what a good turn looks like. Two rather than one, because a
+/// live run ended "…I will now examine the core source files. Starting with
+/// src/ledger.ts, which appears central." and the announcement sat one sentence
+/// back from the end.
 fn announces_unperformed_action(content: &str) -> bool {
     const ANNOUNCEMENTS: [&str; 12] = [
         "i will now",
@@ -124,11 +135,14 @@ fn announces_unperformed_action(content: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    // The announcement has to be how the answer *ends*. A plan stated up front
-    // and then carried out is exactly what a good turn looks like.
-    let last = last_sentence(trimmed).to_ascii_lowercase();
-    ANNOUNCEMENTS.iter().any(|phrase| last.contains(phrase))
-        && INSPECTIONS.iter().any(|verb| last.contains(verb))
+    let all = sentences(trimmed);
+    all.iter()
+        .skip(all.len().saturating_sub(2))
+        .map(|sentence| sentence.to_ascii_lowercase())
+        .any(|sentence| {
+            ANNOUNCEMENTS.iter().any(|phrase| sentence.contains(phrase))
+                && INSPECTIONS.iter().any(|verb| sentence.contains(verb))
+        })
 }
 
 fn set_run_outcome(summary: &mut Value, outcome: RunOutcome) {

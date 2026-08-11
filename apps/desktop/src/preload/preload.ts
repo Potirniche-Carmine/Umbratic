@@ -7,6 +7,7 @@ import type {
   PastedAttachmentInput,
   PermissionMode,
   ReasoningMode,
+  WorkspaceIndexEvent,
 } from "../shared/desktopApi";
 import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
 
@@ -141,6 +142,11 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => ipcRenderer.invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => ipcRenderer.invoke("umbratic:open-external", input),
+  onWorkspaceIndex: (callback: (event: WorkspaceIndexEvent) => void) => {
+    const listener = (_event: IpcRendererEvent, value: WorkspaceIndexEvent) => callback(value);
+    ipcRenderer.on("umbratic:workspace-index", listener);
+    return () => ipcRenderer.removeListener("umbratic:workspace-index", listener);
+  },
   onBackendEvent: (callback: (event: BackendUiEvent) => void) => {
     // The main process validates at the runner boundary and constructs the rest
     // itself, so by the time an event reaches this channel its shape is settled.
