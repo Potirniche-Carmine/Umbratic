@@ -5,9 +5,11 @@ import type {
   CompanyConnectionStatus,
   DesktopApi,
   ModelEndpointMode,
+  ServerModelInfo,
 } from "../shared/desktopApi";
 import { CompanyServerActions } from "./CompanyServerActions";
-import { LocalModelPicker, type LocalModelDiscoveryStatus } from "./LocalModelPicker";
+import { ModelCombobox, type ModelDiscoveryStatus } from "./ModelCombobox";
+import { contextBadge } from "./ComposerControls";
 import {
   localModelCacheKey,
   readCachedLocalModels,
@@ -68,12 +70,17 @@ export function useConnectionSettings({
   const [localModelDiscovery, setLocalModelDiscovery] = useState<{
     baseUrl: string;
     models: string[];
-    status: LocalModelDiscoveryStatus;
+    status: ModelDiscoveryStatus;
   }>({
     baseUrl: initialLocalBaseUrl,
     models: seededLocalModels,
     status: seededLocalModels.length > 0 ? "ready" : "idle",
   });
+  // What the connected Veil publishes. Empty on a server too old to publish a
+  // registry, which is the same state as "not connected yet" — both mean there
+  // is no choice to offer here.
+  const [serverModels, setServerModels] = useState<ServerModelInfo[]>([]);
+  const [serverModelStatus, setServerModelStatus] = useState<ModelDiscoveryStatus>("idle");
   const saveSequenceRef = useRef(0);
   const modeLoadSequenceRef = useRef(0);
   const modeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({
@@ -190,6 +197,33 @@ export function useConnectionSettings({
     localRuntimeUrlValid,
     settingsOpen,
   ]);
+
+  // Server mode asks the server, for the same reason local mode probes the
+  // runtime: a list the user has to press refresh to see is a list they will
+  // assume is empty.
+  useEffect(() => {
+    if (!settingsOpen || !active || draft.mode !== "server") {
+      setServerModelStatus("idle");
+      return;
+    }
+    let current = true;
+    setServerModelStatus("loading");
+    void api.listServerModels().then(
+      (published) => {
+        if (!current) return;
+        setServerModels(published);
+        setServerModelStatus(published.length > 0 ? "ready" : "unavailable");
+      },
+      () => {
+        if (!current) return;
+        setServerModels([]);
+        setServerModelStatus("unavailable");
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [active, api, draft.mode, settingsOpen]);
 
   function updateDraft(patch: Partial<ModelEndpointSettings>) {
     cancelPendingLocalModelCommit();
@@ -469,9 +503,58 @@ export function useConnectionSettings({
     }
   }
 
+  async function refreshServerModels() {
+    setServerModelStatus("loading");
+    try {
+      const published = await api.listServerModels();
+      setServerModels(published);
+      setServerModelStatus(published.length > 0 ? "ready" : "unavailable");
+    } catch {
+      setServerModels([]);
+      setServerModelStatus("unavailable");
+    }
+  }
+
+  /**
+   * Picking a server model is a settings write like any other, not a
+   * connection change: the enrollment, the URL, and the session all stay.
+   */
+  async function selectServerModel(modelId: string) {
+    const next = normalizeEndpointSettings({
+      ...(modeDraftsRef.current.server ?? draft),
+      modelId,
+    });
+    const requestId = saveSequenceRef.current + 1;
+    saveSequenceRef.current = requestId;
+    const previous = settings;
+    setSettings(next);
+    setDraft(next);
+    modeDraftsRef.current.server = next;
+    setMessage(null);
+    try {
+      const result = await api.saveModelEndpointSettings(next);
+      if (requestId !== saveSequenceRef.current) return;
+      const normalized = normalizeEndpointSettings(result.settings);
+      setSettings(normalized);
+      setDraft(normalized);
+      modeDraftsRef.current.server = normalized;
+      onBackendStatus(result.status);
+    } catch (cause) {
+      if (requestId !== saveSequenceRef.current) return;
+      setSettings(previous);
+      setDraft(previous);
+      modeDraftsRef.current.server = previous;
+      setMessage(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
   return {
     settings,
     draft,
+    serverModels,
+    serverModelStatus,
+    refreshServerModels,
+    selectServerModel,
     companyConnection,
     saving,
     saveFeedback,
@@ -523,6 +606,8 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
     localRuntimeUrlValid,
     localModelStatus,
     localModels,
+    serverModels,
+    serverModelStatus,
     refreshDisabled,
     displayState,
     statusLabel,
@@ -591,12 +676,19 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
         <h4>{draft.mode === "local" ? "Local model" : "Company server"}</h4>
         {draft.mode === "local" ? (
           <>
-            <LocalModelPicker
+            <ModelCombobox
+              label="Model"
               disabled={formDisabled}
-              models={localModels}
-              selectedModel={draft.modelId}
+              items={localModels.map((modelId) => ({ id: modelId, label: modelId }))}
+              selectedId={draft.modelId}
               status={localModelStatus}
-              onModelChange={(modelId) => void controller.selectLocalModel(modelId)}
+              placeholders={{
+                loading: "Checking installed models…",
+                unavailable: "Ollama is not running",
+                empty: "No models installed",
+                choose: "Choose a model",
+              }}
+              onSelect={(modelId) => void controller.selectLocalModel(modelId)}
             />
             <details className="settingsAdvanced">
               <summary>Advanced</summary>
@@ -618,6 +710,41 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
               <strong>{companyConnection.orgName}</strong>
               <span>{companyConnection.deviceLabel}</span>
             </div>
+            {serverModels.length > 0 ? (
+              <div className="connectionServerModelRow">
+                <ModelCombobox
+                  label="Model"
+                  disabled={formDisabled}
+                  items={serverModels.map((model) => ({
+                    id: model.id,
+                    label: model.default ? `${model.display} (default)` : model.display,
+                    available: model.available,
+                    badge: contextBadge(model.contextLength),
+                  }))}
+                  selectedId={draft.modelId === "veil-managed" ? serverModels.find((model) => model.default)?.id ?? "" : draft.modelId}
+                  status={serverModelStatus}
+                  placeholders={{
+                    loading: "Asking the server…",
+                    unavailable: "Model list unavailable on this server",
+                    empty: "Model list unavailable on this server",
+                    choose: "Choose a model",
+                  }}
+                  onSelect={(modelId) => void controller.selectServerModel(modelId)}
+                />
+                <button
+                  className="connectionModelRefresh"
+                  type="button"
+                  disabled={formDisabled || serverModelStatus === "loading"}
+                  onClick={() => void controller.refreshServerModels()}
+                  aria-label="Refresh model list"
+                  title="Refresh model list"
+                >
+                  {serverModelStatus === "loading" ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+                </button>
+              </div>
+            ) : (
+              <p className="connectionModelUnavailable">Model list unavailable on this server</p>
+            )}
             <CompanyServerActions
               active={companyServerActive}
               busy={saving}

@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 
-import { configuredEndpointRoute } from "./endpointConfig";
+import { configuredEndpointRoute, veilManagedModelId } from "./endpointConfig";
 import { isRunnerToolId } from "./toolSettings";
 import type {
   CommandClass,
@@ -503,6 +503,16 @@ export function assertUmbraticRunnerConfig(
   assert(
     isApprovedVeilChatRoute(configuredEndpointRoute(selectedModel.baseUrl, provider.chatEndpointPath)),
     "provider route must be an approved Veil chat API",
+  );
+  // A model name on the wire is a claim the server invited; the sentinel is a
+  // local placeholder that must never become one.
+  assert(
+    provider.sendModelField === undefined || typeof provider.sendModelField === "boolean",
+    "provider sendModelField must be an explicit boolean when present",
+  );
+  assert(
+    provider.sendModelField !== true || provider.modelId !== veilManagedModelId,
+    "the server-default sentinel must never be sent as a model name",
   );
   assert(!("system" in config), "protected system prompts must stay inside Veil");
 }

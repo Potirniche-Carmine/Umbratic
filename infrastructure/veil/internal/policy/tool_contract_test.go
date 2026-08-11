@@ -39,7 +39,7 @@ func TestChatRouteAcceptsTheGeneratedRunnerToolContract(t *testing.T) {
 		t.Fatalf("read tool contract fixture: %v", err)
 	}
 	body := `{"messages":[{"role":"user","content":"hello"}],"stream":true,"tools":` + string(raw) + `}`
-	if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err != nil {
+	if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, nil); err != nil {
 		t.Fatalf("chat route rejected the runner's generated tools: %v", err)
 	}
 }

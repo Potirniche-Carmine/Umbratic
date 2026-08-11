@@ -13,11 +13,13 @@ Use idiomatic Go and the standard library. Veil intentionally has no third-party
 Keep package boundaries simple:
 
 - `cmd/veil` starts the service.
-- `internal/config` loads and validates trusted server configuration.
+- `internal/config` loads and validates trusted server configuration, including the `VEIL_MODELS` registry.
 - `internal/http` owns routes, authentication, middleware, limits, and response contracts.
-- `internal/model` owns outbound private-runtime calls and streaming.
+- `internal/model` owns outbound private-runtime calls and streaming. One `Client` per registry entry, behind a `Registry` that routes by model id.
 - `internal/prompts` owns protected global and route prompt assembly.
 - `internal/policy` owns request validation and access rules.
+- `internal/identity` and `internal/entitlement` own company identity mode: signed entitlement, users, devices, sessions.
+- `internal/rag` owns optional retrieval of company documents into request-scoped untrusted context.
 - `internal/telemetry` owns redacted operational telemetry.
 - `internal/templates` owns built-in route/template definitions.
 
@@ -29,15 +31,18 @@ Prompt logic belongs on Veil. Do not move protected prompt assembly into the des
 
 Each public request follows the same security sequence: authenticate, enforce size and shape limits, validate the route and request, build protected global and route guidance, call the configured runtime, and return or stream the response.
 
-Do not create a generic runtime passthrough. Every public endpoint must have a defined product purpose and an explicit policy. Route selection from a client is allowed only within the configured route set; client-selected models and protected system-prompt overrides are not.
+Do not create a generic runtime passthrough. Every public endpoint must have a defined product purpose and an explicit policy. Route selection from a client is allowed only within the configured route set; protected system-prompt overrides never are.
+
+A client may name a `model`, but only one this server published. With `VEIL_MODELS` set, `/api/models` lists the registry, `/api/health` advertises `chat.model_selection`, and a body may carry an id from that list. Without it there is no registry, `model` is refused loudly, and the wire behavior is byte identical to a single-model deployment. That refusal is deliberate and must stay: silently answering with a different model than the caller asked for is worse than failing.
 
 ## Security
 
 Treat HTTP input and runtime output as untrusted:
 
 - Never log API keys, authorization headers, raw secrets, full prompts, full model responses, or unredacted workspace content.
-- Reject missing/invalid authentication, oversized bodies, unknown fields where the contract is strict, unknown routes, unsupported model choices, and client attempts to override protected system guidance.
+- Reject missing/invalid authentication, oversized bodies, unknown fields where the contract is strict, unknown routes, models outside the published registry, and client attempts to override protected system guidance. Unknown *vocabulary* on product routes is stripped and counted, never rejected — see the root wire-compatibility rules.
 - Keep runtime credentials and model configuration server-side.
+- Reasoning content never leaves Veil. `stripPrivateReasoning` drops it from vLLM streams and the Ollama `thinking` field is dropped alongside it. A client's `thinking` directive decides whether the model reasons, never whether that reasoning is shown, and no feature may turn this into a toggle.
 - Apply server, header, body, stream, idle, and outbound-call timeouts appropriate to each endpoint.
 - Preserve backpressure, cancellation, status mapping, and safe error behavior when either side disconnects.
 - Do not expose stack traces, runtime addresses, provider bodies, or sensitive configuration in health checks or errors.
@@ -50,8 +55,9 @@ Run:
 
 ```sh
 gofmt -w <changed-go-files>
-go test ./...
+go vet ./...
+go test -race ./...
 npm run test:all
 ```
 
-Run `npm run test:all` from the repository root even for documentation-only repository changes, as required by the root instructions.
+Run `npm run test:all` from the repository root even for documentation-only repository changes, as required by the root instructions. `-race` needs CGO, so it is skipped on Windows — run it on Linux or WSL when concurrency changed.

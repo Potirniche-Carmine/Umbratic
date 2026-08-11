@@ -1,0 +1,343 @@
+/*
+ * The Models page. One card per model, single column: an administrator reads
+ * down a fleet, they do not scan a grid.
+ *
+ * Every state a card can be in occupies the same space. The status text has a
+ * reserved width, the action row always holds two buttons plus Save, and the
+ * notice line is always rendered whether or not it has anything to say — so a
+ * card starting, failing, or going stale never moves the cards below it.
+ */
+
+.model-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.model-list {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 1.6rem;
+}
+
+.model-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem 1.2rem;
+  padding: clamp(1rem, 3vw, 1.35rem);
+  align-items: center;
+}
+
+.model-identity {
+  display: grid;
+  align-content: center;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/*
+ * The display name is editable in place, so it is styled as text until it is
+ * touched. A box around every name would make the card read as a form rather
+ * than as a model.
+ */
+.model-name {
+  /* The global input styling is a 46px field with an inset shadow. A name is
+     not a field until it is touched, so all of that is reset here. */
+  width: 100%;
+  height: auto;
+  padding: 0.1rem 0.4rem;
+  margin-left: -0.4rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.model-name:hover {
+  border-color: var(--line);
+}
+
+.model-name:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  background: var(--control);
+}
+
+.model-identity code {
+  padding-left: 0.05rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Reserved width. "Stopped", "Starting", "Serving", and "Loading weights" are
+ * different lengths, and without this the dot would walk left and right as a
+ * model came up.
+ */
+.model-state {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  width: 11rem;
+}
+
+.model-state-text {
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--faint);
+}
+
+.model-dot-healthy { background: var(--green); }
+.model-dot-failed { background: var(--red); }
+.model-dot-stopped { background: var(--muted); }
+
+/*
+ * Starting is the only state that lasts minutes, so it is the only one that
+ * moves. A slow, low-amplitude pulse reads as "working" without pulling the
+ * eye away from the rest of the page.
+ */
+.model-dot-starting {
+  background: var(--blue);
+  animation: model-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes model-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/*
+ * The command block: one argument per line, monospace, and a fixed height that
+ * holds about eight lines. Every card is therefore the same height whatever it
+ * is running, and typing never reflows the page — an auto-growing box would.
+ * Longer argument lists scroll inside the box.
+ */
+.model-command {
+  grid-column: 1 / -1;
+  display: block;
+}
+
+.model-command textarea,
+.field textarea {
+  display: block;
+  width: 100%;
+  /* Eight lines with no scrollbar — the seven a default command uses, plus
+     one. Longer lists scroll rather than resizing the card. */
+  height: 12rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  resize: vertical;
+  overflow: auto;
+  tab-size: 2;
+  transition: border-color 140ms ease;
+}
+
+/* The first line is the model itself, so it gets to look like the subject. */
+.model-command textarea {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.model-command textarea:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: var(--line-strong);
+}
+
+.model-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Equal widths so swapping Start↔Restart or Remove↔Stop moves nothing. */
+.model-actions .button {
+  min-width: 5.75rem;
+}
+
+/*
+ * The reserved line. `is-empty` keeps the box and drops the ink, rather than
+ * removing the element and letting every card below jump.
+ */
+.model-notice {
+  grid-column: 1 / -1;
+  min-height: 1.2rem;
+  margin: 0;
+  color: var(--amber);
+  font-size: 0.8rem;
+  line-height: 1.2rem;
+}
+
+.model-notice.is-empty {
+  visibility: hidden;
+}
+
+.model-logs {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.model-log-tail {
+  max-height: 18rem;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.model-form .field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.9rem 1.1rem;
+  margin-bottom: 1.2rem;
+}
+
+/*
+ * align-content: start is the whole fix for the misaligned Add form. A field
+ * with a helper line is taller than one without; both stretch to the tallest
+ * in the row, and grid's default `stretch` then shares that slack out between
+ * the label and the input, so the two inputs sat at different heights.
+ */
+.field {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.field > span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.field small {
+  color: var(--faint);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.field small code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.95em;
+}
+
+.field input,
+.field select {
+  min-height: 40px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  background: var(--control);
+  color: var(--text);
+  font: inherit;
+}
+
+.checkbox-field {
+  grid-auto-flow: column;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  justify-content: start;
+  gap: 0.55rem;
+}
+
+.checkbox-field input {
+  width: 1.1rem;
+  min-height: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+}
+
+.form-error {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--red);
+  border-radius: var(--control-radius);
+  color: var(--red);
+  font-size: 0.85rem;
+}
+
+/* A label the screen reader reads and the eye does not need. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.connectionModelUnavailable {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-dot-starting {
+    animation: none;
+  }
+}
+
+@media (max-width: 40rem) {
+  .model-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-state {
+    width: auto;
+  }
+}

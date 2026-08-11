@@ -181,6 +181,12 @@ type ChatInput struct {
 	// HarnessBucket is protected control metadata, not system text. A caller can
 	// select a catalog bucket for the endpoint's route and nothing else.
 	HarnessBucket string
+	// Model is the registry id the caller picked, empty for the server default.
+	// It is only ever set when the server published a registry to pick from.
+	Model string
+	// Thinking is "on", "off", or empty. A hint like HarnessBucket: an
+	// unreadable value falls through to empty rather than failing the request.
+	Thinking string
 }
 
 type chatRequest struct {
@@ -191,14 +197,41 @@ type chatRequest struct {
 	Skills          []prompts.SkillMetadata `json:"skills"`
 	MaxOutputTokens int                     `json:"max_output_tokens"`
 	HarnessBucket   string                  `json:"harness_bucket"`
+	Model           string                  `json:"model"`
+	// Thinking decodes as any so a harness that sends a shape this build has no
+	// reader for is treated as having sent nothing, rather than being refused.
+	Thinking any `json:"thinking"`
+}
+
+// normalizeThinkingDirective reads the tolerant thinking hint. Anything that is
+// not exactly "on" or "off" — a bool, a number, a word invented later — means
+// "no directive", which is the same request a client that never sent the field
+// would have made.
+func normalizeThinkingDirective(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "on":
+		return "on"
+	case "off":
+		return "off"
+	default:
+		return ""
+	}
 }
 
 // DecodeChatInput validates a chat request for a specific route. Validation is
 // bounds and authority only: sizes and counts are enforced, client attempts to
-// write system text or pick the model are rejected, and everything else the
-// harness sends is passed through or stripped. The route is still required
-// because harness_bucket selects a playbook from that route's catalog.
-func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
+// write system text are rejected, and everything else the harness sends is
+// passed through or stripped. The route is still required because
+// harness_bucket selects a playbook from that route's catalog.
+//
+// allowedModels is the registry this server published. Empty means the server
+// never offered a choice, so naming a model stays refused loudly — a client
+// that thinks it picked a model must never be silently answered by another one.
+func DecodeChatInput(r io.Reader, route prompts.Route, allowedModels []string) (ChatInput, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
 		if strings.Contains(err.Error(), "request body too large") {
@@ -211,17 +244,21 @@ func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return ChatInput{}, errors.New("invalid JSON request")
 	}
-	// Authority, not vocabulary: a client that writes system text or names the
-	// model is refused loudly rather than silently ignored, because silently
-	// ignoring it would let the caller believe it took effect. Sampling and
-	// tool-choice knobs are the admin's to set, so they are stripped like any
-	// other unrecognized field.
-	for _, field := range []string{"model", "system"} {
+	// Authority, not vocabulary: a client that writes system text is refused
+	// loudly rather than silently ignored, because silently ignoring it would
+	// let the caller believe it took effect. The same is true of `model` on a
+	// server that publishes no registry. Sampling and tool-choice knobs are the
+	// admin's to set, so they are stripped like any other unrecognized field.
+	refused := []string{"system"}
+	if len(allowedModels) == 0 {
+		refused = append(refused, "model")
+	}
+	for _, field := range refused {
 		if _, present := raw[field]; present {
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		}
 	}
-	stripUnknownFields(raw, "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket")
+	stripUnknownFields(raw, "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket", "model", "thinking")
 
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -274,6 +311,19 @@ func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 		noteUnknownHarnessBucket()
 	}
 
+	// A named model must be one this server actually routes to. Falling back to
+	// the default would answer with a model the caller did not ask for.
+	selectedModel := strings.TrimSpace(req.Model)
+	if selectedModel != "" {
+		known := false
+		for _, allowed := range allowedModels {
+			known = known || allowed == selectedModel
+		}
+		if !known {
+			return ChatInput{}, fmt.Errorf("model %q is not available", selectedModel)
+		}
+	}
+
 	return ChatInput{
 		Messages:        req.Messages,
 		Stream:          req.Stream,
@@ -281,6 +331,8 @@ func DecodeChatInput(r io.Reader, route prompts.Route) (ChatInput, error) {
 		Skills:          skills,
 		MaxOutputTokens: req.MaxOutputTokens,
 		HarnessBucket:   bucket,
+		Model:           selectedModel,
+		Thinking:        normalizeThinkingDirective(req.Thinking),
 	}, nil
 }
 

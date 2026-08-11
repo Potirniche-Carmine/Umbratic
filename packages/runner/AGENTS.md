@@ -8,12 +8,12 @@ The runner owns:
 
 - `server.rs`: authenticated loopback HTTP/SSE boundary and request validation.
 - `config.rs`: validated launch configuration and approved Veil routes.
-- `provider.rs`: Veil-only model transport and stream decoding.
-- `loop_runtime.rs`: assistant/tool loop and lifecycle ordering.
-- `policy.rs`, `permission.rs`, and `tools.rs`: workspace safety, approval, and execution.
-- `context.rs` and `session.rs`: bounded context, history, cancellation, and session state.
+- `veil_client.rs`, `veil_request.rs`, `veil_retry.rs`, `veil_tls.rs`: Veil-only model transport — streaming and decoding, the request body, reconnect policy, and pinned TLS. `veil_request.rs` is pure, so the wire contract is asserted without a live Veil.
+- `loop_runtime.rs`: assistant/tool loop and lifecycle ordering. `orient.rs` classifies the run, `compaction.rs` bounds its history, `skill_preflight.rs` resolves skills before the first model call.
+- `policy.rs`, `permission.rs`, `safety.rs`, `tools.rs`, `tool_scheduling.rs`: workspace safety, approval, execution, and path-scoped batch locking.
+- `context.rs`, `session.rs`, `run_queue.rs`: bounded context, history, cancellation, session state, and queued turns.
 - `events.rs` and `diagnostics.rs`: stable external contracts and redacted diagnostics.
-- `workspace_graph.rs`: bounded workspace relationship data.
+- `workspace_graph.rs`: bounded workspace relationship data, read from the artifact `packages/code-index` produces.
 - `lsp/`: probe-gated, read-only language-server lifecycle, protocol framing, and workspace-relative code-intelligence results.
 
 Keep modules cohesive and keep security decisions at the boundary that has enough information to enforce them.
@@ -48,7 +48,7 @@ Tests must prove the contract, not just execute code:
 - Assert full event sequences and terminal outcomes; do not accept tests that return early before the behavior under test is observed.
 - Exercise split UTF-8 and split JSON/SSE chunks, provider disconnects, cancellation, denied policy, denied permission, tool failure, and process-tree cleanup where relevant.
 - Use realistic workspace data. A fixture should be possible under actual policy and filesystem rules.
-- Keep unit tests close to Rust modules. Keep `tests/native-runner.test.ts` as a black-box test that launches the real compiled binary.
+- Keep unit tests close to Rust modules. Keep `tests/*.test.ts` black-box: they launch the real compiled binary against the fake Veil in `tests/native-runner-provider.ts`. These are not run by `cargo test`, so an event- or wire-contract change has to run them too or they go stale silently.
 - Do not ignore, conditionally skip, or silently pass a security or contract test because an external service is unavailable. Use local deterministic fakes at the transport boundary.
 
 Run:

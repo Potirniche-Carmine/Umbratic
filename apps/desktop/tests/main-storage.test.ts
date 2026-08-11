@@ -786,3 +786,37 @@ test("startup settings use one SQLite settings-row read", () => {
     storage.closeStorageDatabases();
   }
 });
+
+test("the thinking toggle and the server model choice survive a relaunch", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-reasoning-"));
+  const storage = loadStorage(userData);
+
+  // Default before anything is chosen: the model reasons.
+  assert.equal(storage.readReasoningModeSetting(), "reasoning");
+  assert.equal(storage.readStartupSettings().reasoningMode, "reasoning");
+
+  assert.equal(storage.writeReasoningModeSetting("fast"), "fast");
+  assert.equal(storage.writeReasoningModeSetting("balanced"), "reasoning");
+  assert.equal(storage.writeReasoningModeSetting("fast"), "fast");
+
+  storage.writeModelEndpointSettings({
+    mode: "server",
+    baseUrl: "https://veil.example.internal",
+    modelId: "qwen3-32b",
+  });
+
+  // A fresh process reads the same two answers off disk.
+  const relaunched = loadStorage(userData);
+  assert.equal(relaunched.readReasoningModeSetting(), "fast");
+  assert.equal(relaunched.readStartupSettings().reasoningMode, "fast");
+  assert.equal(relaunched.readModelEndpointSettings().modelId, "qwen3-32b");
+
+  // The sentinel round-trips as itself: it means "the server's default", and
+  // turning it into a model name would send it on the wire.
+  relaunched.writeModelEndpointSettings({
+    mode: "server",
+    baseUrl: "https://veil.example.internal",
+    modelId: "veil-managed",
+  });
+  assert.equal(relaunched.readModelEndpointSettings().modelId, "veil-managed");
+});

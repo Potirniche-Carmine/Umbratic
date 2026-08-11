@@ -159,6 +159,11 @@ export async function createSession(run: Awaited<ReturnType<typeof startRunner>>
   return response.json() as Promise<{ id: string }>;
 }
 
-export async function prompt(run: Awaited<ReturnType<typeof startRunner>>, id: string, text: string) {
-  return run.request(`/session/${id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text }) });
+export async function prompt(
+  run: Awaited<ReturnType<typeof startRunner>>,
+  id: string,
+  text: string,
+  extra: Record<string, unknown> = {},
+) {
+  return run.request(`/session/${id}/prompt_async`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, ...extra }) });
 }

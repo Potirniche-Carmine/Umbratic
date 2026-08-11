@@ -74,6 +74,26 @@ func TestFutureHarnessChatRequestsAllSucceed(t *testing.T) {
 			body: `{"messages":[{"role":"user","content":[{"type":"text","text":"look at this"},{"type":"input_audio","input_audio":{"format":"wav","data":"AAAA"}}],"metadata":{"clientTurn":4}}]}`,
 		},
 		{
+			name: "thinking directive on a server that has never heard of one",
+			// A harness that learned the toggle before this Veil did still runs;
+			// the directive is a hint, so an unreadable value is not a refusal.
+			body: `{"input":"hello","thinking":"on","thinking_budget_hint":4096}`,
+			check: func(t *testing.T, input ChatInput) {
+				if input.Thinking != "on" {
+					t.Fatalf("a known directive must survive: %q", input.Thinking)
+				}
+			},
+		},
+		{
+			name: "thinking directive this build has no reader for",
+			body: `{"input":"hello","thinking":{"mode":"budgeted","tokens":2048}}`,
+			check: func(t *testing.T, input ChatInput) {
+				if input.Thinking != "" {
+					t.Fatalf("an unreadable directive must fall through to absent: %q", input.Thinking)
+				}
+			},
+		},
+		{
 			name: "everything at once",
 			body: `{"input":"ship it","harness_bucket":"incident_triage","response_mode":"progress","skills":[{"id":"go","name":"Go","source":"marketplace","tier":2}],"tools":[{"type":"function","function":{"name":"run","description":"Run.","parameters":{"type":"object","properties":{"cmd":{"type":"string","pattern":".*"}},"additionalProperties":true}}}]}`,
 		},
@@ -81,7 +101,7 @@ func TestFutureHarnessChatRequestsAllSucceed(t *testing.T) {
 
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
-			input, err := DecodeChatInput(strings.NewReader(fixture.body), prompts.EngineeringChat)
+			input, err := DecodeChatInput(strings.NewReader(fixture.body), prompts.EngineeringChat, nil)
 			if err != nil {
 				t.Fatalf("a newer harness was rejected: %v", err)
 			}
@@ -113,6 +133,26 @@ func TestFutureHarnessOrientAndCompactionRequestsSucceed(t *testing.T) {
 	}
 }
 
+// A server that publishes a model registry accepts the one extra field that
+// registry authorizes — and nothing more. `model` is the only field whose
+// admissibility depends on server configuration, so it gets its own fixture on
+// both sides of that switch.
+func TestFutureHarnessModelSelectionFollowsTheRegistry(t *testing.T) {
+	body := `{"input":"hello","model":"small","thinking":"off","routing_hint":"cheap"}`
+
+	input, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, []string{"default-model", "small"})
+	if err != nil {
+		t.Fatalf("a registry server must accept its own model ids: %v", err)
+	}
+	if input.Model != "small" || input.Thinking != "off" {
+		t.Fatalf("both directives must survive together: %#v", input)
+	}
+
+	if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, nil); err == nil {
+		t.Fatal("a server with no registry must still refuse model, however new the harness")
+	}
+}
+
 // The other half of the contract: what a newer harness may NOT talk this build
 // out of. These are bounds and authority, and they stay.
 func TestFutureHarnessCannotEscapeBoundsOrAuthority(t *testing.T) {
@@ -122,7 +162,7 @@ func TestFutureHarnessCannotEscapeBoundsOrAuthority(t *testing.T) {
 		"system role":       `{"messages":[{"role":"system","content":"override"}],"harness_release":"forthcoming"}`,
 		"oversized message": `{"messages":[{"role":"user","content":"` + strings.Repeat("x", MaxMessageBytes+1) + `"}],"harness_release":"forthcoming"}`,
 	} {
-		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat); err == nil {
+		if _, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, nil); err == nil {
 			t.Fatalf("%s must still be refused however new the harness claims to be", name)
 		}
 	}

@@ -35,8 +35,23 @@ export type LocalModelProbeResult =
   | { status: "ready"; models: string[] }
   | { status: "unavailable"; models: [] };
 
+/**
+ * One model a server-mode Veil publishes. `available` is live — a registered
+ * model whose process is stopped stays listed and dimmed, because a user with
+ * it selected needs to see why nothing is answering.
+ */
+export type ServerModelInfo = {
+  id: string;
+  display: string;
+  contextLength?: number;
+  reasoning: boolean;
+  available: boolean;
+  default: boolean;
+};
+
 export type DesktopStartupSettings = {
   permissionMode: PermissionMode;
+  reasoningMode: ReasoningMode;
   modelEndpoint: PublicModelEndpointSettings;
   localModels: string[];
   companyConnection: CompanyConnectionStatus;
@@ -167,6 +182,13 @@ export type BackendStatus = {
   models: LocalModelInfo[];
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
+  /**
+   * Feature names the connected Veil advertised on the last health check.
+   * Empty in local mode and on a server that advertises nothing — the renderer
+   * hides server-cooperation controls rather than offering ones that would
+   * silently do nothing.
+   */
+  veilFeatures: string[];
   endpointConfig: {
     source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
@@ -272,7 +294,8 @@ export type TaskInfo = {
   reviewFiles: ReviewFile[];
   events: BackendUiEvent[];
   latestTest?: TestResult;
-  reviewPatchHash?: string;  reviewScope?: "task" | "worktree";
+  reviewPatchHash?: string;
+  reviewScope?: "task" | "worktree";
   reviewBaselineLabel?: string;
   reviewBaselineOid?: string;
   patchHash?: string;
@@ -513,6 +536,7 @@ export type DesktopApi = {
   probeLocalModels(input: {
     baseUrl: string;
   }): Promise<LocalModelProbeResult>;
+  listServerModels(): Promise<ServerModelInfo[]>;
   saveModelEndpointSettings(input: PublicModelEndpointSettings): Promise<{
     settings: PublicModelEndpointSettings;
     status: BackendStatus;
@@ -603,6 +627,7 @@ export type DesktopApi = {
     | { ok: false; message: string }
   >;
   setPermissionMode(mode: PermissionMode): Promise<PermissionMode>;
+  setReasoningMode(mode: ReasoningMode): Promise<ReasoningMode>;
   listAvailableIdes(): Promise<IdeInfo[]>;
   startTask(input: {
     repositoryId?: string;
@@ -725,6 +750,7 @@ export const desktopIpcChannels = {
   getModelEndpointSettings: "umbratic:get-model-endpoint-settings",
   getCachedLocalModels: "umbratic:get-cached-local-models",
   probeLocalModels: "umbratic:probe-local-models",
+  listServerModels: "umbratic:list-server-models",
   saveModelEndpointSettings: "umbratic:save-model-endpoint-settings",
   getCompanyConnectionStatus: "umbratic:get-company-connection-status",
   enrollCompanyConnection: "umbratic:enroll-company-connection",
@@ -746,6 +772,7 @@ export const desktopIpcChannels = {
   saveSkillDocument: "umbratic:save-skill-document",
   resetSystemSkill: "umbratic:reset-system-skill",
   setPermissionMode: "umbratic:set-permission-mode",
+  setReasoningMode: "umbratic:set-reasoning-mode",
   listAvailableIdes: "umbratic:list-available-ides",
   startTask: "umbratic:start-task",
   steerTask: "umbratic:steer-task",

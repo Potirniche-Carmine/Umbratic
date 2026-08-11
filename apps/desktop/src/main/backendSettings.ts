@@ -42,6 +42,7 @@ import {
   ensureCompanySession,
 } from "./companyIdentity";
 import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
+import { fetchServerModels } from "./serverModels";
 import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
 import {
   hasStoredModelEndpointSettings,
@@ -68,12 +69,13 @@ import {
   uploadTelemetrySpool,
 } from "./telemetrySync";
 import { checkEndpointHealth, telemetryUploadEndpoint } from "./modelEndpointRuntime";
-import { recordVeilFeatures } from "./veilFeatures";
+import { connectedVeilFeatures, connectedVeilSupports, recordVeilFeatures, veilFeature } from "./veilFeatures";
 import {
   getSkillDocument as getSkillDocumentService,
   importSkill as importSkillService,
   skillsDirectoryPath as skillsDirectoryPathService,
 } from "./skills";
+import type { ServerModelInfo } from "../shared/desktopApi";
 import type {
   BackendStatus,
   CapabilityProbeReport,
@@ -81,6 +83,7 @@ import type {
   LocalModelInfo,
   LocalModelProvider,
   LocalDiagnosticInfo,
+  ReasoningMode,
   RunnerProcess,
   TelemetrySyncResult,
 } from "./types";
@@ -129,6 +132,7 @@ export async function submitSteeredRunnerTurn(
   sessionId: string,
   parts: RunnerPromptPart[],
   model: LocalModelInfo,
+  reasoningMode?: ReasoningMode,
 ): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
@@ -138,6 +142,7 @@ export async function submitSteeredRunnerTurn(
           model: { providerID: model.providerId, modelID: model.modelId },
           agent: "build",
           parts,
+          ...(reasoningMode ? { reasoningMode } : {}),
         },
       });
       return;
@@ -147,6 +152,19 @@ export async function submitSteeredRunnerTurn(
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
+}
+
+/**
+ * The models the connected server-mode Veil publishes.
+ *
+ * Empty in local mode and on a server that does not advertise `models.list` —
+ * the renderer reads an empty list as "no picker here", which is the honest
+ * answer in both cases.
+ */
+export async function listServerModels(): Promise<ServerModelInfo[]> {
+  if (readModelEndpointSettings().mode !== "server") return [];
+  if (!connectedVeilSupports(veilFeature.modelsList)) return [];
+  return fetchServerModels(endpointProvider());
 }
 
 export async function refreshLocalModels(baseUrl: string) {
@@ -311,8 +329,30 @@ export async function resolveSelectedModel(): Promise<{ providers: LocalModelPro
   const health = await checkEndpointHealth(providerConfig);
   recordVeilFeatures(health.features);
   const availableModel = { ...configured, capabilities: health.capabilities };
-  const models: LocalModelInfo[] = health.status === "ready" ? [availableModel] : [];
-  const selected = health.status === "ready" ? availableModel : null;
+  let models: LocalModelInfo[] = health.status === "ready" ? [availableModel] : [];
+  let selected: LocalModelInfo | null = health.status === "ready" ? availableModel : null;
+  // A server that publishes a registry decides what the picker offers. The
+  // stored id is the user's pick; `veil-managed` means they never made one, so
+  // the server's own default entry answers instead.
+  if (health.status === "ready" && settings.mode === "server" && connectedVeilSupports(veilFeature.modelsList)) {
+    const published = await fetchServerModels(providerConfig);
+    if (published.length > 0) {
+      models = published.map((entry) => ({
+        ...configured,
+        modelId: entry.id,
+        displayName: entry.display,
+        ...(entry.contextLength === undefined ? {} : { contextLength: entry.contextLength }),
+        capabilities: health.capabilities
+          ? { ...health.capabilities, reasoning: entry.reasoning }
+          : undefined,
+      }));
+      const chosen =
+        models.find((model) => model.modelId === settings.modelId)
+        ?? models.find((model) => model.modelId === published.find((entry) => entry.default)?.id)
+        ?? models[0];
+      selected = chosen;
+    }
+  }
   const provider: LocalModelProvider = {
     providerId: configured.providerId,
     providerName: configured.providerName,
@@ -352,6 +392,7 @@ export async function getBackendStatus(): Promise<BackendStatus> {
     models,
     providers,
     permissionMode: getPermissionMode(),
+    veilFeatures: connectedVeilFeatures(),
     endpointConfig: {
       source: managedEndpoint
         ? "managed"

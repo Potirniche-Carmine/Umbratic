@@ -1,0 +1,112 @@
+{{define "models.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/favicon.ico?v=10">
+  <link rel="stylesheet" href="/assets/style.css?v=10">
+  <link rel="stylesheet" href="/assets/models.css?v=3">
+  <script defer src="/assets/console.js?v=11"></script>
+</head>
+<body>
+<main class="app-shell">
+  {{template "topbar" .}}
+  <div class="page">
+    <header class="page-header model-page-header">
+      <h1>Models</h1>
+      <a class="button" href="#add-model">Add model</a>
+    </header>
+
+    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+    {{if not .Models.Configured}}<p class="banner notice" role="status">Console was started without <code>--vllm-binary</code>, so no model can be started here. Registered models still reach Veil.</p>{{end}}
+    {{if .Models.PendingApply}}<p class="banner notice" role="status">Restart Veil to apply model list changes.</p>{{end}}
+
+    {{if .Models.Rows}}
+    <div class="model-list">
+      {{range .Models.Rows}}
+      <form class="panel model-card" method="post" action="/models/{{.ID}}/update">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+
+        <div class="model-identity">
+          <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
+          <code>{{.ID}}{{if .IsDefault}} · default{{end}}</code>
+        </div>
+        <div class="model-state">
+          <span class="model-dot model-dot-{{.State}}" aria-hidden="true"></span>
+          <span class="model-state-text">{{.StateText}}</span>
+        </div>
+
+        <!--
+          The command is the argument list vLLM is started with, and the single
+          source of truth: the port Veil reaches this model on is read back out
+          of it. It is executed directly, never through a shell.
+        -->
+        <label class="model-command">
+          <span class="visually-hidden">Command for {{.ID}}</span>
+          <textarea name="command" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Command}}</textarea>
+        </label>
+
+        <div class="model-controls">
+          <div class="model-actions">
+            <button class="button secondary" type="submit">Save</button>
+            {{if .Running}}
+            <button class="button" type="submit" formaction="/models/{{.ID}}/restart">Restart</button>
+            <button class="button danger" type="submit" formaction="/models/{{.ID}}/stop">Stop</button>
+            {{else}}
+            <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled{{end}}>Start</button>
+            <button class="button danger" type="submit" formaction="/models/{{.ID}}/delete">Remove</button>
+            {{end}}
+          </div>
+        </div>
+
+        <!-- Always rendered, empty or not, so the card never changes height. -->
+        <p class="model-notice{{if not .Notice}} is-empty{{end}}" role="status">{{.Notice}}</p>
+
+        <div class="model-logs">
+          {{if .Expanded}}
+          <a class="text-button" href="/models">Hide output</a>
+          <pre class="model-log-tail">{{if .Logs}}{{.Logs}}{{else}}No output yet.{{end}}</pre>
+          {{else}}
+          <a class="text-button" href="/models?logs={{.ID}}">Output</a>
+          {{end}}
+        </div>
+      </form>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="banner notice" role="status">No models are registered yet. Add one below.</p>
+    {{end}}
+
+    <section class="panel model-form" id="add-model">
+      <div class="section-heading">
+        <h2>Add model</h2>
+      </div>
+      {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
+      <form method="post" action="/models/create">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <div class="field-grid">
+          <label class="field">
+            <span>Display name</span>
+            <input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" required>
+          </label>
+          <label class="field">
+            <span>Served id</span>
+            <input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" required>
+            <small>What clients send as the model name. It cannot be renamed later, and the command's <code>--served-model-name</code> must match it.</small>
+          </label>
+          <label class="field field-wide">
+            <span>Command</span>
+            <textarea name="command" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" required>{{.Models.Form.Command}}</textarea>
+            <small>Arguments for the vLLM binary. Executed directly, never through a shell. <code>--port</code> and <code>--served-model-name</code> are required; <code>fp8</code> is the 8-bit KV cache. Thinking is a chat-template default, so set it here too — <code>--default-chat-template-kwargs</code> with <code>enable_thinking</code> (Qwen3, Gemma 4) or <code>thinking</code> (Granite 3.2, DeepSeek-V3.1, Holo2), whichever this model reads.</small>
+          </label>
+        </div>
+        <button class="button" type="submit">Add model</button>
+      </form>
+    </section>
+  </div>
+</main>
+</body>
+</html>
+{{end}}

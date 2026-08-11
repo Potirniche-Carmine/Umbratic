@@ -327,6 +327,7 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
+            send_model_field: false,
             headers: std::collections::BTreeMap::new(),
             mtls: None,
         },

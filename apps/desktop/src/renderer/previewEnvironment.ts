@@ -564,7 +564,8 @@ const composerTestTask: TaskInfo = {
   reasoningMode: "reasoning",
   createdAt: new Date(Date.now() - 20_000).toISOString(),
   changedFiles: composerTestReviewFiles.map((file) => file.path),
-  reviewFiles: composerTestReviewFiles,  reviewScope: "task",
+  reviewFiles: composerTestReviewFiles,
+  reviewScope: "task",
   reviewBaselineLabel: "Turn changes",
   reviewBaselineOid: "task start",
   events: composerTestEvents,
@@ -778,6 +779,7 @@ function createPreviewApi(): DesktopApi {
     models: [],
     providers: [],
     permissionMode: getPreviewPermissionMode(),
+    veilFeatures: [],
     endpointConfig: {
       source: "local-default",
       endpointEditingAllowed: true,
@@ -827,6 +829,7 @@ function createPreviewApi(): DesktopApi {
   }),
   getStartupSettings: async () => ({
     permissionMode: getPreviewPermissionMode(),
+    reasoningMode: "reasoning" as const,
     modelEndpoint: readPreviewEndpointSettings(),
     localModels: ["llama3.2", "qwen3:8b"],
     companyConnection: previewCompanyConnection,
@@ -850,6 +853,9 @@ function createPreviewApi(): DesktopApi {
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
   getCachedLocalModels: async () => ["llama3.2", "qwen3:8b"],
   probeLocalModels: async () => ({ status: "ready", models: ["llama3.2", "qwen3:8b"] }),
+  // The browser preview has no Veil, so it publishes no registry: the composer
+  // model picker stays hidden here exactly as it does against an older server.
+  listServerModels: async () => [],
   saveModelEndpointSettings: async (input) => {
     const settings = publicPreviewEndpointSettings(normalizeEndpointSettings(input));
     writePreviewEndpointSettings(settings);
@@ -925,6 +931,7 @@ function createPreviewApi(): DesktopApi {
     setPreviewPermissionMode(mode);
     return getPreviewPermissionMode();
   },
+  setReasoningMode: async (mode) => mode,
   listAvailableIdes: async () => defaultIdeChoices,
   startTask: async () => { throw new Error("Open the Electron app to run a task."); },
   steerTask: async () => undefined,

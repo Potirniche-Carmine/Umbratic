@@ -2,9 +2,11 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -13,16 +15,38 @@ import (
 	"umbratic-veil/internal/model"
 )
 
+// ModelEntry is one model this Veil can route a chat request to. The registry
+// is always populated: with VEIL_MODELS unset it holds exactly one entry
+// synthesized from the single-model variables, so every code path downstream
+// reads the same shape whether or not an administrator configured a fleet.
+type ModelEntry struct {
+	ID              string `json:"id"`
+	ProviderBaseURL string `json:"provider_base_url"`
+	Display         string `json:"display"`
+	Reasoning       bool   `json:"reasoning"`
+	ContextLength   int    `json:"context_length"`
+}
+
+// MaxModelIDBytes bounds a registry id. Ids travel in chat bodies and in
+// /api/models, and a longer one is a configuration mistake rather than a model.
+const MaxModelIDBytes = 256
+
 type Config struct {
-	Addr                   string
-	AuthToken              string
-	ControlToken           string
-	CompanyIdentityMode    bool
-	EntitlementPath        string
-	IdentityStorePath      string
-	Mode                   model.Mode
-	ProviderBaseURL        string
-	DefaultModel           string
+	Addr                string
+	AuthToken           string
+	ControlToken        string
+	CompanyIdentityMode bool
+	EntitlementPath     string
+	IdentityStorePath   string
+	Mode                model.Mode
+	ProviderBaseURL     string
+	DefaultModel        string
+	// Models is the routing registry, always at least one entry.
+	Models []ModelEntry
+	// ModelSelectionEnabled is true only when VEIL_MODELS was set. It gates the
+	// chat.model_selection feature name, and with it whether a client may name a
+	// model at all — an unset registry keeps rejecting `model` loudly.
+	ModelSelectionEnabled  bool
 	ContextLength          int
 	MaxOutputTokens        int
 	ModelParallelToolCalls bool
@@ -226,8 +250,95 @@ func Load() (Config, error) {
 	if err := cfg.Generation.Validate(); err != nil {
 		return Config{}, err
 	}
+	if err := loadModelRegistry(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+// loadModelRegistry fills cfg.Models. Unset VEIL_MODELS synthesizes the
+// single-model registry, which is what keeps an existing deployment byte
+// identical: one entry, no chat.model_selection, `model` still refused.
+func loadModelRegistry(cfg *Config) error {
+	raw := strings.TrimSpace(os.Getenv("VEIL_MODELS"))
+	if raw == "" {
+		cfg.Models = []ModelEntry{{
+			ID:              cfg.DefaultModel,
+			ProviderBaseURL: cfg.ProviderBaseURL,
+			Reasoning:       cfg.ModelReasoning,
+			ContextLength:   cfg.ContextLength,
+		}}
+		cfg.ModelSelectionEnabled = false
+		return nil
+	}
+	if cfg.Mode != model.ModeServer {
+		return errors.New("VEIL_MODELS is a server-mode setting")
+	}
+
+	var entries []ModelEntry
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&entries); err != nil {
+		return errors.New("VEIL_MODELS must be a JSON array of model entries")
+	}
+	if len(entries) == 0 {
+		return errors.New("VEIL_MODELS must list at least one model")
+	}
+
+	seen := make(map[string]bool, len(entries))
+	for index := range entries {
+		entry := &entries[index]
+		entry.ID = strings.TrimSpace(entry.ID)
+		entry.Display = strings.TrimSpace(entry.Display)
+		entry.ProviderBaseURL = strings.TrimSpace(entry.ProviderBaseURL)
+		if entry.ID == "" {
+			return fmt.Errorf("VEIL_MODELS entry %d is missing id", index)
+		}
+		if len(entry.ID) > MaxModelIDBytes {
+			return fmt.Errorf("VEIL_MODELS entry %q has an id longer than %d bytes", entry.ID, MaxModelIDBytes)
+		}
+		if seen[entry.ID] {
+			return fmt.Errorf("VEIL_MODELS lists id %q twice", entry.ID)
+		}
+		seen[entry.ID] = true
+		if entry.ProviderBaseURL == "" {
+			return fmt.Errorf("VEIL_MODELS entry %q is missing provider_base_url", entry.ID)
+		}
+		parsed, err := url.Parse(entry.ProviderBaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("VEIL_MODELS entry %q has an invalid provider_base_url", entry.ID)
+		}
+		if entry.ContextLength < 0 {
+			return fmt.Errorf("VEIL_MODELS entry %q has a negative context_length", entry.ID)
+		}
+	}
+	if !seen[cfg.DefaultModel] {
+		return errors.New("VEIL_MODEL must name one of the VEIL_MODELS ids")
+	}
+
+	cfg.Models = entries
+	cfg.ModelSelectionEnabled = true
+	return nil
+}
+
+// ModelEntryByID returns the registry entry for an id.
+func (c Config) ModelEntryByID(id string) (ModelEntry, bool) {
+	for _, entry := range c.Models {
+		if entry.ID == id {
+			return entry, true
+		}
+	}
+	return ModelEntry{}, false
+}
+
+// ModelIDs returns the routable ids in registry order.
+func (c Config) ModelIDs() []string {
+	ids := make([]string, 0, len(c.Models))
+	for _, entry := range c.Models {
+		ids = append(ids, entry.ID)
+	}
+	return ids
 }
 
 func loadServerGenerationProfile(maxOutputTokens int) (model.GenerationProfile, error) {

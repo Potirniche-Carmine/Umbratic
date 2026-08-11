@@ -84,6 +84,10 @@ pub struct ProviderConfig {
     pub chat_endpoint_path: Option<String>,
     pub api_key: Arc<RwLock<String>>,
     pub model_id: String,
+    /// Whether chat bodies name the model. Off unless the desktop confirmed the
+    /// Veil advertises `chat.model_selection`: a Veil with no registry refuses
+    /// the field outright, so sending it optimistically would fail every turn.
+    pub send_model_field: bool,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
 }
@@ -516,6 +520,10 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
                 .to_owned(),
         )),
         model_id: string_value(provider_object.get("modelId"), "provider.modelId")?,
+        send_model_field: provider_object
+            .get("sendModelField")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         headers,
         mtls,
     };
@@ -609,6 +617,7 @@ mod tests {
             chat_endpoint_path: Some("/api/engineering/chat".into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
+            send_model_field: false,
             headers: BTreeMap::new(),
             mtls: None,
         };
@@ -627,6 +636,7 @@ mod tests {
             chat_endpoint_path: Some(endpoint.into()),
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
+            send_model_field: false,
             headers: BTreeMap::new(),
             mtls: None,
         }

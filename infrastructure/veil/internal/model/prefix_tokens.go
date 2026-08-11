@@ -66,6 +66,9 @@ func (c *Client) PrefixTokens(ctx context.Context, key, modelID string, messages
 	if len(messages) == 0 {
 		return UsageAnnotation{}
 	}
+	// Two models tokenize the same prefix differently, so the model id is part
+	// of the identity of a cached count, not just of the request that asked.
+	key = modelID + "\x00" + key
 	if annotation, ok := c.prefixTokens.get(key); ok {
 		return annotation
 	}

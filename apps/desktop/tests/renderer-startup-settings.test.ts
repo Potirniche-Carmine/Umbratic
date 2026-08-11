@@ -21,7 +21,7 @@ test("changing Auto-run does not wait for model status", () => {
 
 test("the top connection refresh owns local model discovery", () => {
   const connection = fs.readFileSync(new URL("../src/renderer/ConnectionSettings.tsx", import.meta.url), "utf8");
-  const picker = fs.readFileSync(new URL("../src/renderer/LocalModelPicker.tsx", import.meta.url), "utf8");
+  const picker = fs.readFileSync(new URL("../src/renderer/ModelCombobox.tsx", import.meta.url), "utf8");
   const start = connection.indexOf("async function refresh()");
   const end = connection.indexOf("\n  async function save()", start);
   const refresh = connection.slice(start, end);
@@ -103,7 +103,7 @@ test("local mode discovers models automatically and applies a choice without a s
   assert.match(source, /api\s*\n?\s*\.probeLocalModels\(\{ baseUrl \}\)/);
   assert.match(source, /setLocalModelDiscovery\(\{ baseUrl, models, status: probe\.status \}\)/);
   // Choosing a model persists it directly.
-  assert.match(source, /onModelChange=\{\(modelId\) => void controller\.selectLocalModel\(modelId\)\}/);
+  assert.match(source, /onSelect=\{\(modelId\) => void controller\.selectLocalModel\(modelId\)\}/);
   assert.match(source, /await api\.saveModelEndpointSettings\(next\)/);
   // The runtime URL is no longer the first thing a user meets.
   assert.match(source, /<details className="settingsAdvanced">/);

@@ -30,6 +30,7 @@ use crate::{
     veil_client::{
         HoldPolicy, VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat,
     },
+    veil_request::ThinkingDirective,
 };
 
 const MAX_TOOL_TURNS: usize = 64;
@@ -389,6 +390,7 @@ async fn final_without_tools(
     summary: &mut Value,
     fallback: &str,
     harness_bucket: Option<&str>,
+    thinking: Option<ThinkingDirective>,
 ) {
     let Ok(mut prepared) = prepared_messages(session, &[], sink).await else {
         emit_fallback_answer(session, sink, summary, fallback).await;
@@ -407,6 +409,7 @@ async fn final_without_tools(
             // final_without_tools is the last word of the run; there is no
             // later step that could refuse it, so nothing is held.
             hold: HoldPolicy::None,
+            thinking,
         },
     )
     .await;
@@ -429,6 +432,7 @@ async fn final_without_tools(
                 // final_without_tools is the last word of the run; there is no
                 // later step that could refuse it, so nothing is held.
                 hold: HoldPolicy::None,
+                thinking,
             },
         )
         .await;
@@ -539,6 +543,7 @@ pub async fn run_turn(
     selected_skill_ids: Vec<String>,
     sink: EventSink,
     permissions: Arc<PermissionBroker>,
+    thinking: Option<ThinkingDirective>,
 ) -> Result<Value, String> {
     // Abort is owned by the active RunGuard created by /prompt_async. Starting a run
     // must not clear another run's abort flag.
@@ -634,6 +639,7 @@ pub async fn run_turn(
                 include_tools: true,
                 harness_bucket: snapshot.harness_bucket().map(str::to_owned),
                 hold,
+                thinking,
             },
         )
         .await;
@@ -662,6 +668,7 @@ pub async fn run_turn(
                         include_tools: true,
                         harness_bucket: snapshot.harness_bucket().map(str::to_owned),
                         hold,
+                        thinking,
                     },
                 )
                 .await;
@@ -773,6 +780,7 @@ pub async fn run_turn(
                 &mut summary,
                 "The model did not provide a final answer.",
                 harness_bucket.as_deref(),
+                thinking,
             )
             .await;
             set_run_outcome(&mut summary, RunOutcome::ModelGaveUp);
@@ -790,7 +798,7 @@ pub async fn run_turn(
             drop(messages);
             publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             if consecutive_invalid >= MAX_INVALID_CALL_REPAIRS {
-                final_without_tools(&session, &sink, &mut summary, "I stopped after repeated invalid workspace tool calls. Review the latest tool error before trying a different approach.", harness_bucket.as_deref()).await;
+                final_without_tools(&session, &sink, &mut summary, "I stopped after repeated invalid workspace tool calls. Review the latest tool error before trying a different approach.", harness_bucket.as_deref(), thinking).await;
                 set_run_outcome(&mut summary, RunOutcome::ModelGaveUp);
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 return Ok(summary);
@@ -838,7 +846,7 @@ pub async fn run_turn(
             consecutive_failed += 1
         }
         if consecutive_failed >= MAX_FAILED_TOOL_TURNS {
-            final_without_tools(&session, &sink, &mut summary, "I stopped after repeated workspace tool failures. Review the latest tool output before trying a different approach.", harness_bucket.as_deref()).await;
+            final_without_tools(&session, &sink, &mut summary, "I stopped after repeated workspace tool failures. Review the latest tool output before trying a different approach.", harness_bucket.as_deref(), thinking).await;
             set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
             publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             return Ok(summary);
@@ -850,6 +858,7 @@ pub async fn run_turn(
                 &mut summary,
                 "I stopped because the same workspace tool call returned the same result repeatedly.",
                 harness_bucket.as_deref(),
+                thinking,
             )
             .await;
             set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
@@ -863,6 +872,7 @@ pub async fn run_turn(
         &mut summary,
         "I reached the workspace tool safety limit before finishing.",
         harness_bucket.as_deref(),
+        thinking,
     )
     .await;
     set_run_outcome(&mut summary, RunOutcome::SafetyLimit);

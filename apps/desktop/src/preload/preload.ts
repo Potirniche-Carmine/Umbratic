@@ -69,6 +69,7 @@ const umbraticApi = {
     ipcRenderer.invoke("umbratic:get-cached-local-models", input),
   probeLocalModels: (input: { baseUrl: string }) =>
     ipcRenderer.invoke("umbratic:probe-local-models", input),
+  listServerModels: () => ipcRenderer.invoke("umbratic:list-server-models"),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";
     baseUrl: string;
@@ -107,6 +108,7 @@ const umbraticApi = {
   saveSkillDocument: (input: { id: string; content: string }) => ipcRenderer.invoke("umbratic:save-skill-document", input),
   resetSystemSkill: (input: { id: string }) => ipcRenderer.invoke("umbratic:reset-system-skill", input),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("umbratic:set-permission-mode", mode),
+  setReasoningMode: (mode: ReasoningMode) => ipcRenderer.invoke("umbratic:set-reasoning-mode", mode),
   listAvailableIdes: () => ipcRenderer.invoke("umbratic:list-available-ides"),
   startTask: (input: {
     repositoryId?: string;

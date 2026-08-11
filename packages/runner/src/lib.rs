@@ -22,6 +22,7 @@ mod tool_scheduling;
 pub mod tools;
 pub mod turn_snapshot;
 pub mod veil_client;
+pub mod veil_request;
 pub mod veil_retry;
 mod veil_tls;
 pub mod workspace_graph;

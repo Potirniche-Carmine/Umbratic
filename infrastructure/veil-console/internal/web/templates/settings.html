@@ -36,8 +36,8 @@
           </label>
 
           <div class="field field-full">
-            <span id="model-label">Model</span>
-            {{if .Models}}
+            <span id="model-label">{{if .Models.Registered}}Default model{{else}}Model{{end}}</span>
+            {{if .SettingsModels}}
             <div class="choice" data-choice>
               <input type="hidden" name="model" value="{{.Config.Model}}" data-choice-input>
               <button class="choice-trigger" type="button" aria-labelledby="model-label model-value" aria-haspopup="listbox" aria-expanded="false" data-choice-trigger>
@@ -45,12 +45,13 @@
                 <span class="choice-chevron" aria-hidden="true"></span>
               </button>
               <div class="choice-menu" role="listbox" aria-labelledby="model-label" data-choice-menu hidden>
-                {{range .Models}}<button type="button" role="option" data-choice-value="{{.}}" aria-selected="{{eq . $.Config.Model}}">{{.}}</button>{{end}}
+                {{range .SettingsModels}}<button type="button" role="option" data-choice-value="{{.}}" aria-selected="{{eq . $.Config.Model}}">{{.}}</button>{{end}}
               </div>
             </div>
             {{else}}
             <input name="model" value="{{.Config.Model}}" maxlength="256" placeholder="your-model" required>
             {{end}}
+            {{if .Models.Registered}}<small class="field-hint">The model a request that names none is answered by. It must be one of the <a href="/models">registered models</a>.</small>{{end}}
           </div>
         </div>
 

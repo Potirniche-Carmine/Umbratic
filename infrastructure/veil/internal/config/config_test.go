@@ -18,6 +18,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_MODE", "server")
 	t.Setenv("VEIL_PROVIDER_BASE_URL", "http://provider.test")
 	t.Setenv("VEIL_MODEL", "default-model")
+	t.Setenv("VEIL_MODELS", "")
 	t.Setenv("VEIL_CONTEXT_LENGTH", "")
 	t.Setenv("VEIL_MAX_OUTPUT_TOKENS", "")
 	t.Setenv("VEIL_TEMPERATURE", "")

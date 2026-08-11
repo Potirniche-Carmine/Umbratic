@@ -36,6 +36,7 @@ use crate::{
     run_queue::{QueueAction, QueueDisposition},
     session::{InputPart, SessionStore},
     skill_preflight::parse_selected_skill_ids,
+    veil_request::ThinkingDirective,
 };
 
 const MAX_JSON_BODY_BYTES: usize = 512 * 1024;
@@ -452,6 +453,12 @@ async fn prompt(
     };
     let parts = input_parts(&body);
     let selected_skill_ids = parse_selected_skill_ids(&body);
+    // The composer's Think toggle. An absent or unreadable mode leaves the model
+    // on whatever the server profile already decided.
+    let thinking = body
+        .get("reasoningMode")
+        .and_then(Value::as_str)
+        .and_then(ThinkingDirective::from_reasoning_mode);
     let sink = state.store.sink.clone();
     let permissions = state.store.permissions.clone();
     let run_id = run.run_id().to_owned();
@@ -463,6 +470,7 @@ async fn prompt(
             selected_skill_ids,
             sink.clone(),
             permissions,
+            thinking,
         )
         .await;
         let reached_final_answer = matches!(&result, Ok(summary) if summary

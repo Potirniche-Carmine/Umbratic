@@ -26,6 +26,7 @@ var migrations = []migration{
 	{name: "base", apply: applyBaseSchema},
 	{name: "configurations_generation_profile", apply: upgradeLegacyConfigurations},
 	{name: "rag_corpus", apply: applyCorpusSchema},
+	{name: "managed_models", apply: applyManagedModelSchema},
 }
 
 // Connection pragmas. These are per-connection settings rather than schema, and
@@ -90,6 +91,17 @@ CREATE TABLE IF NOT EXISTS rag_settings (
   dimension INTEGER NOT NULL, vector_base_url TEXT NOT NULL,
   collection TEXT NOT NULL, top_k INTEGER NOT NULL,
   max_injected_bytes INTEGER NOT NULL, timeout_ns INTEGER NOT NULL
+);
+`
+
+// The models Console launches and supervises. `command` is the argument list
+// vLLM is started with and the single source of truth: the port Veil reaches
+// the model on and the window it publishes are read back out of it rather than
+// stored a second time and allowed to drift.
+const managedModelSchema = `
+CREATE TABLE IF NOT EXISTS managed_models (
+  id TEXT PRIMARY KEY, display_name TEXT NOT NULL, command TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 `
 
@@ -166,6 +178,11 @@ func applyBaseSchema(tx *sql.Tx) error {
 
 func applyCorpusSchema(tx *sql.Tx) error {
 	_, err := tx.Exec(corpusSchema)
+	return err
+}
+
+func applyManagedModelSchema(tx *sql.Tx) error {
+	_, err := tx.Exec(managedModelSchema)
 	return err
 }
 
