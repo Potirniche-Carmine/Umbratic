@@ -712,15 +712,17 @@ pub async fn run_turn(
             harness_bucket.clone(),
         ));
         sink.emit(context_event(&session, prepared.usage));
-        // On a guided run, hold the model's text until the step resolves, for as
-        // long as the run has no tool results. Text written before any evidence
-        // exists is the only text that can turn out to be unshowable, and the
-        // step's own outcome is what says whether it was a preamble, an answer,
-        // or a fabrication. Once a tool has run, everything streams live again:
-        // the model is free in the middle of its plan, and the final answer
-        // arrives token by token as always.
-        let hold_assistant_text =
-            harness_bucket.is_some() && summary["toolCalls"].as_u64().unwrap_or(0) == 0;
+        // Hold the model's text on every step of a guided run, not only the
+        // first. What the text turns out to be — a preamble, an answer, or a
+        // refused answer — is the step's outcome, and that is as unknown on
+        // step five as on step one.
+        //
+        // Holding only the first step is what produced two live complaints:
+        // mid-turn prose streamed as an answer and then jumped into the working
+        // block once tool calls arrived, and a refused answer stayed on screen
+        // and ran straight into the real one with no separator. Long answers
+        // still stream, because the hold breaks itself at `MAX_HELD_TEXT_CHARS`.
+        let hold_assistant_text = harness_bucket.is_some();
         let mut response = stream_veil_chat(
             &session,
             &sink,

@@ -651,27 +651,13 @@ func validSummarySentence(route Route, sentence string) bool {
 	if !strings.HasSuffix(sentence, ".") && !strings.HasSuffix(sentence, "!") {
 		return false
 	}
-	if addressesTheReader(sentence) {
-		return false
-	}
+	// Second person used to be disqualifying. It cost the user the whole line:
+	// "I will map out your workspace and read its documentation." is a fine
+	// status line, and dropping it showed nothing at all where the orientation
+	// should have been. Live logs had this firing on ordinary phrasings, so the
+	// rule now lives in the prompt alone, where a miss degrades to slightly
+	// awkward wording rather than to silence.
 	return !mentionsBucketID(route, sentence)
-}
-
-// addressesTheReader reports whether the sentence talks to the user instead of
-// stating the assistant's own next action. A live run opened with "I will map
-// out Umbratic's hybrid architecture ... so you can navigate the codebase":
-// first person up front, then a second-person purpose clause the status line has
-// no business carrying. The line is the assistant narrating its own work, so a
-// second-person pronoun anywhere in it is disqualifying. Checked as whole,
-// case-insensitive tokens, so "your" is caught while "young" is not.
-func addressesTheReader(sentence string) bool {
-	for _, token := range sentenceTokens(sentence) {
-		switch token {
-		case "you", "your", "yours", "yourself":
-			return true
-		}
-	}
-	return false
 }
 
 // sentenceTokens splits on everything that is not a letter, digit, or
@@ -709,7 +695,9 @@ func mentionsBucketID(route Route, sentence string) bool {
 // formatting, not the plan, the dominant instruction. The header's job is the
 // opposite: state the precedence split and push the model into the first step.
 const playbookHeader = `Your task playbook for this turn. It sets what work happens, in what order, and when to stop. The global instructions cover who you are and how to call tools; this plan sets the work. Follow it, and adapt as evidence changes it.
-Keep the plan to yourself and speak to the user in ordinary language. Start now with your first tool call, or with the questions the plan asks for.`
+Keep the plan to yourself and speak to the user in ordinary language. Start now with your first tool call, or with the questions the plan asks for.
+
+Before each tool call, write one sentence saying what you are about to do. Keep everything you find for your last message, the one with no tool calls.`
 
 const playbookAntiLoop = `If a tool fails, read the error and try a different approach.`
 

@@ -369,17 +369,20 @@ func TestAStatusSentenceNarratesItsOwnWorkInFirstPerson(t *testing.T) {
 		return decision
 	}
 
-	for _, rejected := range []string{
+	// Second person is asked for in the prompt and no longer enforced here.
+	// Enforcing it dropped the whole line, so an ordinary phrasing like "your
+	// workspace" showed the user nothing where the orientation belongs — which
+	// is what live logs were reporting. Awkward wording beats silence.
+	for _, kept := range []string{
 		"I will map this repository so you can navigate the codebase.",
 		"I will read the docs and summarize them for your review.",
-		"Here is what you asked for.",
 	} {
-		got := decide(rejected)
-		if got.SummarySentence != "" || !got.SentenceDropped {
-			t.Fatalf("a second-person sentence must be dropped: %q -> %+v", rejected, got)
+		got := decide(kept)
+		if got.SummarySentence != kept || got.SentenceDropped {
+			t.Fatalf("a second-person sentence should still reach the user: %q -> %+v", kept, got)
 		}
 		if got.Bucket != "repo_orient" {
-			t.Fatalf("dropping the sentence must not drop the bucket: %+v", got)
+			t.Fatalf("the bucket must survive either way: %+v", got)
 		}
 	}
 

@@ -62,6 +62,8 @@ export type RunnerEventAdapterOptions = {
   /** Diagnostic-only: the run's hidden intent classification. Never rendered. */
   onOrientDecision?(event: Extract<RunnerEvent, { type: "orient.decision" }>): void;
   onOrientEvidenceRetry?(event: Extract<RunnerEvent, { type: "orient.evidence_retry" }>): void;
+  onOrientAnnouncementRetry?(event: Extract<RunnerEvent, { type: "orient.announcement_retry" }>): void;
+  onOrientAnnouncementRetry?(event: Extract<RunnerEvent, { type: "orient.announcement_retry" }>): void;
 };
 
 function eventAt(event: RunnerEvent): string | undefined {
@@ -275,6 +277,9 @@ export class RunnerEventAdapter {
       case "orient.evidence_retry":
         // Same rule as the decision it follows: diagnostics only.
         this.options.onOrientEvidenceRetry?.(event);
+        return;
+      case "orient.announcement_retry":
+        this.options.onOrientAnnouncementRetry?.(event);
         return;
     }
   };

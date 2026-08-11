@@ -64,6 +64,9 @@ pub struct VeilChatResult {
     /// because `hold_assistant_text` was set. Empty on every ordinary request.
     /// The caller either releases it with `release_held_text` or drops it.
     pub held_text: String,
+    /// Set once the held text outgrew a status line and started streaming. From
+    /// then on the step streams live and there is nothing left to release.
+    pub hold_broken: bool,
 }
 
 pub struct VeilRequestOptions {
@@ -755,6 +758,11 @@ pub fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
 /// Routes one chunk of already-redacted assistant text to the event stream or to
 /// the hold buffer. Returns whether anything reached the stream, which is what
 /// `emit_completed_output` uses to avoid emitting the message twice.
+/// A status line is one sentence. Past this much text the step is writing an
+/// answer, and an answer the user watches arrive beats one that appears whole
+/// after a silence — so the hold breaks and the rest streams live.
+const MAX_HELD_TEXT_CHARS: usize = 600;
+
 fn stream_or_hold(
     sink: &EventSink,
     session: &Session,
@@ -762,11 +770,16 @@ fn stream_or_hold(
     text: String,
     hold: bool,
 ) -> bool {
-    if !hold {
+    if !hold || result.hold_broken {
         return emit_delta(sink, session, &text);
     }
     result.held_text.push_str(&text);
-    false
+    if result.held_text.chars().count() <= MAX_HELD_TEXT_CHARS {
+        return false;
+    }
+    let flushed = std::mem::take(&mut result.held_text);
+    result.hold_broken = true;
+    emit_delta(sink, session, &flushed)
 }
 
 fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {

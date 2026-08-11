@@ -175,6 +175,12 @@ export type RunnerEvent =
       bucket?: string;
     })
   | (RunnerEventBase & {
+      // The run ended by announcing a step it never took, so the runner asked
+      // once for the finished answer. Diagnostic only, like the two above.
+      type: "orient.announcement_retry";
+      bucket?: string;
+    })
+  | (RunnerEventBase & {
       type: "run.queue.updated";
       sessionId: string;
       runId: string | null;
@@ -221,6 +227,7 @@ const handledTypes = new Set<RunnerEvent["type"]>([
   "run.queue.updated",
   "orient.decision",
   "orient.evidence_retry",
+  "orient.announcement_retry",
 ]);
 
 const ignoredTypes = new Set([
@@ -417,6 +424,7 @@ function validPayload(value: Record<string, unknown>, type: RunnerEvent["type"])
         && (value.message === undefined || typeof value.message === "string")
       );
     case "orient.evidence_retry":
+    case "orient.announcement_retry":
       return value.bucket === undefined || typeof value.bucket === "string";
     default: {
       const _exhaustive: never = type;
