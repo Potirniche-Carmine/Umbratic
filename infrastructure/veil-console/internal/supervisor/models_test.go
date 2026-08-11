@@ -19,15 +19,25 @@ import (
 
 func managedModel() config.ManagedModel {
 	return config.ManagedModel{
-		ID: "qwen3-32b", DisplayName: "Qwen 32B", ModelPath: "Qwen/Qwen3-32B",
-		Port: 8001, MaxModelLen: 32768, GPUMemoryUtilization: 0.45, KVCacheDType: config.KVCacheFP8,
+		ID: "qwen3-32b", DisplayName: "Qwen 32B",
+		Command: "serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b" +
+			" --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8",
 	}
+}
+
+// withPort rewrites the command's port, which is where a model's port lives.
+func withPort(model config.ManagedModel, port int) config.ManagedModel {
+	model.Command = strings.Replace(model.Command, "--port 8001", "--port "+strconv.Itoa(port), 1)
+	return model
 }
 
 // The argv is the entire attack surface of this launcher, so it is asserted
 // exactly rather than by substring.
 func TestVLLMArgsAreExactAndTyped(t *testing.T) {
-	got := vllmArgs(managedModel())
+	got, err := vllmArgs(managedModel())
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
 		"serve", "Qwen/Qwen3-32B",
 		"--host", "127.0.0.1",
@@ -47,22 +57,24 @@ func TestVLLMArgsAreExactAndTyped(t *testing.T) {
 	}
 }
 
-// Every one of these is refused by Validate before argv is ever built, which is
-// why the launcher needs no quoting rules of its own.
-func TestInjectionAttemptsNeverReachArgv(t *testing.T) {
-	for name, mutate := range map[string]func(*config.ManagedModel){
-		"flag as id":            func(m *config.ManagedModel) { m.ID = "--tensor-parallel-size" },
-		"flag as model path":    func(m *config.ManagedModel) { m.ModelPath = "--trust-remote-code" },
-		"whitespace in id":      func(m *config.ManagedModel) { m.ID = "a b" },
-		"newline in model path": func(m *config.ManagedModel) { m.ModelPath = "model\n--trust-remote-code" },
-		"null in model path":    func(m *config.ManagedModel) { m.ModelPath = "model\x00evil" },
-		"dtype smuggling":       func(m *config.ManagedModel) { m.KVCacheDType = "fp8 --trust-remote-code" },
+// A command is an argument list, so the launcher needs no quoting rules of its
+// own — but it must never become a second process. Everything here is refused
+// before argv is built.
+func TestShellConstructsNeverReachArgv(t *testing.T) {
+	base := managedModel().Command
+	for name, command := range map[string]string{
+		"command chaining":    base + " ; rm -rf /",
+		"piping into a shell": base + " | sh",
+		"substitution":        base + " --seed $(id -u)",
+		"redirection":         base + " > /etc/passwd",
+		"flag as model":       "serve --trust-remote-code --port 8001 --served-model-name qwen3-32b",
+		"renamed served id":   "serve Qwen/Qwen3-32B --port 8001 --served-model-name other",
 	} {
 		t.Run(name, func(t *testing.T) {
 			model := managedModel()
-			mutate(&model)
-			if err := model.Validate(); err == nil {
-				t.Fatalf("this value must never reach argv: %#v", vllmArgs(model))
+			model.Command = command
+			if args, err := vllmArgs(model); err == nil {
+				t.Fatalf("this must never reach argv: %#v", args)
 			}
 		})
 	}
@@ -138,7 +150,7 @@ func TestStartAndStopLifecycleWithAStubBinary(t *testing.T) {
 	binary := writeStubRuntime(t)
 	models := NewModelSupervisor(binary)
 	model := managedModel()
-	model.Port = freePort(t)
+	model = withPort(model, freePort(t))
 
 	if err := models.Start(model); err != nil {
 		t.Fatal(err)
@@ -171,8 +183,9 @@ func TestStopAllReapsEveryChild(t *testing.T) {
 	binary := writeStubRuntime(t)
 	models := NewModelSupervisor(binary)
 	first, second := managedModel(), managedModel()
-	first.Port, second.Port = freePort(t), freePort(t)
+	first, second = withPort(first, freePort(t)), withPort(second, freePort(t))
 	second.ID = "small"
+	second.Command = strings.Replace(second.Command, "--served-model-name qwen3-32b", "--served-model-name small", 1)
 
 	if err := models.Start(first); err != nil {
 		t.Fatal(err)
@@ -195,11 +208,11 @@ func TestStopAllReapsEveryChild(t *testing.T) {
 // process: the served name appearing in /v1/models is what flips healthy.
 func TestReadinessRequiresTheServedNameInTheListing(t *testing.T) {
 	model := managedModel()
-	model.Port = freePort(t)
+	model = withPort(model, freePort(t))
 	listing := map[string]any{"data": []any{map[string]any{"id": model.ID}}}
 	payload, _ := json.Marshal(listing)
 	server := &http.Server{
-		Addr: fmt.Sprintf("127.0.0.1:%d", model.Port),
+		Addr: fmt.Sprintf("127.0.0.1:%d", model.Port()),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/models" {
 				http.NotFound(w, r)
@@ -256,7 +269,7 @@ func TestStoppingAModelReapsItsWholeProcessTree(t *testing.T) {
 	binary, marker := writeTreeRuntime(t)
 	models := NewModelSupervisor(binary)
 	model := managedModel()
-	model.Port = freePort(t)
+	model = withPort(model, freePort(t))
 
 	if err := models.Start(model); err != nil {
 		t.Fatal(err)

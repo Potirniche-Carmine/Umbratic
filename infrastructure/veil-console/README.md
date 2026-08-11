@@ -134,40 +134,79 @@ Browser -> Veil Console :8177 -> supervised Veil :8080 -> vLLM :8001, :8002, ...
 
 Start Console with `--vllm-binary /path/to/vllm` to launch models from this
 page. Without it the page still lists and edits registered models — Veil routes
-to whatever is already running on those ports — but the Start button is
-unavailable, because there is nothing for Console to run.
+to whatever is already running on those ports — but Start is unavailable,
+because there is nothing for Console to run.
 
-Every field is typed. There is no free-form argument box, and there will not be
-one: the argv is assembled server-side from validated fields alone, which is
-what keeps this a purpose-built launcher rather than the command runner the
-security boundary forbids. See AGENTS.md.
+### The command
 
-| Field | Meaning |
-| --- | --- |
-| Display name | What the desktop's picker shows. |
-| Served id | What clients send as `model` and what `/v1/models` reports. It cannot be renamed — that is a remove and an add. |
-| Model | A Hugging Face repository id or an absolute path on this machine. |
-| Port | A free loopback port, suggested from 8001–8099. It cannot be Console's or Veil's. |
-| Max model length | vLLM's `--max-model-len`, also published as the model's context window. |
-| GPU memory fraction | vLLM's `--gpu-memory-utilization`. The page warns past a total of 1.0, which is legitimate across several GPUs. |
-| KV cache dtype | `fp8` — vLLM's 8-bit option, and the default here — or `auto`. vLLM has no literal `q8`. |
-| Model emits thinking | Published as `capabilities.reasoning`, which is what enables the desktop's Think toggle for this model. |
+Each card carries the argument list its model is started with, editable in
+place:
 
-Starting a model returns immediately and the row reports `starting` until the
-runtime lists its own served id. Loading weights takes minutes, so a blocking
-start would time out the browser long before the model was ready. Expand
-**Logs** to read the tail of that process's output, redacted the same way Veil's
-is.
+```text
+serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b   --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8
+```
+
+It reads like a command line and is not one. Console tokenizes it into argv and
+executes the vLLM binary directly — there is no shell, so nothing is expanded,
+substituted, or chained. `;`, `|`, `&`, `<`, `>`, `$`, and backticks are refused
+at the form, so they cannot be stored, let alone run. Quotes group an argument
+containing spaces and do nothing else.
+
+### Thinking
+
+There is no control for thinking on this page, deliberately. Thinking is a
+chat-template default, and the kwarg that sets it is named differently per model
+family — `enable_thinking` for Qwen3 and Gemma 4, `thinking` for Granite 3.2,
+DeepSeek-V3.1, and Holo2 — with defaults that go both ways. A checkbox would
+have to guess which, so the command says it instead:
+
+```text
+--default-chat-template-kwargs '{"enable_thinking": false}'
+```
+
+That is the server default for this model. A client may still override it per
+request, which is vLLM's own precedence, and is what the desktop's Think toggle
+does.
+
+### The rest of the command
+
+The command is the single source of truth. `--port` is where Veil reaches the
+model, `--max-model-len` is the window Veil publishes, and both are read back
+out of the command rather than stored a second time and allowed to drift.
+`--port` and `--served-model-name` are therefore required, and the served name
+must keep matching the model's id — clients already use that name, so changing
+it is a remove and an add. `fp8` is vLLM's 8-bit KV cache and the default here;
+there is no literal `q8`.
+
+Because an administrator chooses the flags, an administrator can choose a
+dangerous one: `--trust-remote-code` runs code from the model repository. That
+is accepted for a loopback console operated by someone who already controls the
+machine, and it is the reason this page is not exposed any further.
+
+### Lifecycle
+
+**Save** stores the command; it does not touch a running process. A model
+already serving keeps running exactly as it was launched, and the card says
+`Saved. Restart to run this command.` until it does. **Restart** stops and
+starts from the saved command. **Start** returns immediately and the row reports
+`Starting` until the runtime lists its own served id — loading weights takes
+minutes, so a blocking start would time out the browser long before the model
+was ready. Expand **Output** for the tail of that process's log, redacted the
+same way Veil's is.
 
 **Start and stop do not restart Veil.** Availability is live on Veil's
 `/api/models`, so a model that comes up is usable immediately. Adding, editing,
 or removing a model changes the registry, and the page says so: restart Veil
-from Overview to apply it. Console reaps every supervised runtime on shutdown,
-so no model process outlives the Console that started it.
+from Overview to apply it. Console signals each model's whole process group on
+shutdown, so no worker outlives the Console that started it.
 
 Registered models also become the **Default model** choices on Settings. The
 default has to be one of them: a default naming anything else would point Veil
 at a process nobody starts.
+
+The Models page asks for the owner password nowhere. Console is a loopback
+surface behind a session, and re-confirming a password on every click bought
+nothing here.
 
 ## Documents and retrieval
 

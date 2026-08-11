@@ -14,6 +14,8 @@ import (
 
 const ownerPassword = "a long owner password"
 
+const testCommand = "serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8"
+
 // signedInConsole returns a handler with an owner account and the session
 // cookies to use it, which is the precondition for every route below.
 func signedInConsole(t *testing.T) (*Server, http.Handler, []*http.Cookie, string, func()) {
@@ -84,15 +86,10 @@ func authorizedPost(t *testing.T, handler http.Handler, cookies []*http.Cookie, 
 
 func modelFormValues(csrf string, overrides map[string]string) url.Values {
 	form := url.Values{
-		"csrf":                   {csrf},
-		"password":               {ownerPassword},
-		"id":                     {"qwen3-32b"},
-		"display_name":           {"Qwen 32B"},
-		"model_path":             {"Qwen/Qwen3-32B"},
-		"port":                   {"8001"},
-		"max_model_len":          {"32768"},
-		"gpu_memory_utilization": {"0.45"},
-		"kv_cache_dtype":         {"fp8"},
+		"csrf":         {csrf},
+		"id":           {"qwen3-32b"},
+		"display_name": {"Qwen 32B"},
+		"command":      {testCommand},
 	}
 	for key, value := range overrides {
 		if value == "" {
@@ -102,21 +99,6 @@ func modelFormValues(csrf string, overrides map[string]string) url.Values {
 		form.Set(key, value)
 	}
 	return form
-}
-
-// refreshedSession follows the session rotation that every owner-password
-// confirmation performs, so a test can make more than one write.
-func refreshedSession(response *httptest.ResponseRecorder, cookies []*http.Cookie, csrf string) ([]*http.Cookie, string) {
-	next := response.Result().Cookies()
-	if len(next) == 0 {
-		return cookies, csrf
-	}
-	for _, cookie := range next {
-		if strings.Contains(cookie.Name, "csrf") {
-			csrf = cookie.Value
-		}
-	}
-	return next, csrf
 }
 
 func TestModelsPageRequiresASession(t *testing.T) {
@@ -131,26 +113,15 @@ func TestModelsPageRequiresASession(t *testing.T) {
 	}
 }
 
+// The owner password is no longer asked for on this page — a locked, local
+// deployment does not re-authenticate every click — but the session and the
+// CSRF token are still the gate on every write.
 func TestModelWritesRequireCSRF(t *testing.T) {
 	_, handler, cookies, _, closeServer := signedInConsole(t)
 	defer closeServer()
-	// A session cookie with no CSRF token must not create anything.
 	response := authorizedPost(t, handler, cookies, "/models/create", modelFormValues("", map[string]string{"csrf": ""}))
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("a missing CSRF token was accepted: %d", response.Code)
-	}
-}
-
-func TestModelWritesRequireTheOwnerPassword(t *testing.T) {
-	server, handler, cookies, csrf, closeServer := signedInConsole(t)
-	defer closeServer()
-	response := authorizedPost(t, handler, cookies, "/models/create",
-		modelFormValues(csrf, map[string]string{"password": "wrong password"}))
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("a wrong owner password was accepted: %d", response.Code)
-	}
-	if models, _ := server.store.ManagedModels(t.Context()); len(models) != 0 {
-		t.Fatalf("nothing must be registered: %#v", models)
 	}
 }
 
@@ -167,33 +138,39 @@ func TestModelLifecycleThroughTheWeb(t *testing.T) {
 	if err != nil || len(models) != 1 {
 		t.Fatalf("the model must be registered: %#v %v", models, err)
 	}
-	if models[0].KVCacheDType != config.KVCacheFP8 {
-		t.Fatalf("fp8 is the default 8-bit KV cache: %#v", models[0])
+	// Saving lays the arguments out one per line, so a pasted one-liner comes
+	// back readable.
+	wantPrefix := strings.Join([]string{"serve Qwen/Qwen3-32B", "--host 127.0.0.1", "--port 8001", ""}, "\n")
+	if !strings.HasPrefix(models[0].Command, wantPrefix) {
+		t.Fatalf("the command must be stored one flag per line: %q", models[0].Command)
 	}
-	if models[0].Reasoning {
-		t.Fatal("an unchecked reasoning box must not declare reasoning")
+	if models[0].Port() != 8001 {
+		t.Fatalf("the port must be read out of the command: %d", models[0].Port())
 	}
-	// The registry reached the supervisor, so the next Veil start carries it.
+
 	if !strings.Contains(server.supervisor.PendingModelsEnvironment(), `"qwen3-32b"`) {
 		t.Fatalf("the registry must be handed to Veil: %q", server.supervisor.PendingModelsEnvironment())
 	}
 
-	cookies, csrf = refreshedSession(create, cookies, csrf)
-	update := authorizedPost(t, handler, cookies, "/models/qwen3-32b/update",
-		modelFormValues(csrf, map[string]string{"display_name": "Qwen 32B long", "max_model_len": "98304", "reasoning": "on"}))
+	// Editing the command is the point of the card: it is saved as typed.
+	edited := strings.Replace(models[0].Command, "--max-model-len 32768", "--max-model-len 98304", 1)
+	update := authorizedPost(t, handler, cookies, "/models/qwen3-32b/update", url.Values{
+		"csrf": {csrf}, "display_name": {"Qwen 32B long"}, "command": {edited},
+	})
 	if update.Code != http.StatusSeeOther {
 		body, _ := io.ReadAll(update.Result().Body)
 		t.Fatalf("update failed: %d %s", update.Code, body)
 	}
 	stored, _, _ := server.store.ManagedModel(t.Context(), "qwen3-32b")
-	if stored.DisplayName != "Qwen 32B long" || stored.MaxModelLen != 98304 || !stored.Reasoning {
+	if stored.DisplayName != "Qwen 32B long" || stored.Command != edited {
 		t.Fatalf("the update must persist: %#v", stored)
 	}
+	// The window Veil publishes follows the command it was read from.
+	if !strings.Contains(server.supervisor.PendingModelsEnvironment(), `"context_length":98304`) {
+		t.Fatalf("the published window must follow the command: %q", server.supervisor.PendingModelsEnvironment())
+	}
 
-	cookies, csrf = refreshedSession(update, cookies, csrf)
-	remove := authorizedPost(t, handler, cookies, "/models/qwen3-32b/delete", url.Values{
-		"csrf": {csrf}, "password": {ownerPassword},
-	})
+	remove := authorizedPost(t, handler, cookies, "/models/qwen3-32b/delete", url.Values{"csrf": {csrf}})
 	if remove.Code != http.StatusSeeOther {
 		body, _ := io.ReadAll(remove.Result().Body)
 		t.Fatalf("delete failed: %d %s", remove.Code, body)
@@ -206,41 +183,45 @@ func TestModelLifecycleThroughTheWeb(t *testing.T) {
 	}
 }
 
-func TestModelFormRefusesInvalidValuesWithoutStoringThem(t *testing.T) {
+// The command reaches the database only if it would also reach argv. Every one
+// of these is refused at the form, so a row that cannot start cannot be stored.
+func TestModelFormRefusesCommandsThatCannotRun(t *testing.T) {
 	server, handler, cookies, csrf, closeServer := signedInConsole(t)
 	defer closeServer()
 
-	for name, overrides := range map[string]map[string]string{
-		"served id that is a flag":  {"id": "--trust-remote-code"},
-		"model path that is a flag": {"model_path": "--trust-remote-code"},
-		"privileged port":           {"port": "80"},
-		"port that is not a number": {"port": "eighty"},
-		"unknown kv dtype":          {"kv_cache_dtype": "q8"},
-		"gpu fraction above one":    {"gpu_memory_utilization": "1.4"},
-		"the console port":          {"port": "8177"},
-		"the veil port":             {"port": "8080"},
+	for name, command := range map[string]string{
+		"command chaining":  testCommand + " ; rm -rf /",
+		"piping to a shell": testCommand + " | sh",
+		"substitution":      testCommand + " --seed $(id -u)",
+		"redirection":       testCommand + " > /etc/passwd",
+		"missing port":      "serve Qwen/Qwen3-32B --served-model-name qwen3-32b",
+		"missing served id": "serve Qwen/Qwen3-32B --port 8001",
+		"renamed served id": "serve Qwen/Qwen3-32B --port 8001 --served-model-name other",
+		"privileged port":   "serve Qwen/Qwen3-32B --port 80 --served-model-name qwen3-32b",
+		"the console port":  "serve Qwen/Qwen3-32B --port 8177 --served-model-name qwen3-32b",
+		"the veil port":     "serve Qwen/Qwen3-32B --port 8080 --served-model-name qwen3-32b",
+		"flag as model":     "serve --trust-remote-code --port 8001 --served-model-name qwen3-32b",
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, overrides))
+			response := authorizedPost(t, handler, cookies, "/models/create",
+				modelFormValues(csrf, map[string]string{"command": command}))
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("expected 400, got %d", response.Code)
 			}
 			if models, _ := server.store.ManagedModels(t.Context()); len(models) != 0 {
-				t.Fatalf("a refused form must store nothing: %#v", models)
+				t.Fatalf("a refused command must store nothing: %#v", models)
 			}
-			cookies, csrf = refreshedSession(response, cookies, csrf)
 		})
 	}
 }
 
-func TestModelsPageRendersTheFleetAndItsState(t *testing.T) {
+func TestModelsPageRendersTheCommandAndItsState(t *testing.T) {
 	_, handler, cookies, csrf, closeServer := signedInConsole(t)
 	defer closeServer()
 	create := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, nil))
 	if create.Code != http.StatusSeeOther {
 		t.Fatalf("create failed: %d", create.Code)
 	}
-	cookies, _ = refreshedSession(create, cookies, csrf)
 
 	page := authorizedGet(t, handler, cookies, "/models")
 	if page.Code != http.StatusOK {
@@ -248,20 +229,56 @@ func TestModelsPageRendersTheFleetAndItsState(t *testing.T) {
 	}
 	body := page.Body.String()
 	for _, expected := range []string{
-		"Qwen 32B", "qwen3-32b", "port 8001", "max len 32k", "GPU 0.45", "KV fp8",
-		// Registered but never started, and the page says so rather than
-		// leaving the row ambiguous.
-		"model-dot model-dot-stopped",
+		"Qwen 32B", "qwen3-32b",
+		// The command is editable on the card, shown exactly as stored.
+		"--kv-cache-dtype fp8",
+		`name="command"`,
+		// Registered but never started, capitalized.
+		"model-dot model-dot-stopped", ">Stopped<",
 		// Console has no vLLM binary in tests, and the page explains it.
 		"--vllm-binary",
+		// The reserved notice line is present even with nothing to say.
+		"model-notice is-empty",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("the models page must show %q", expected)
 		}
 	}
-	// Veil is not running here, so there is nothing for a registry change to be
-	// pending against and the notice would be noise.
-	if strings.Contains(body, "Restart Veil to apply model list changes") {
-		t.Fatal("the apply notice must not appear while Veil is stopped")
+	// The counts line moved to the dashboard; the cards say what they are doing.
+	if strings.Contains(body, "registered</span>") {
+		t.Fatal("the Models header must not repeat the dashboard's counts")
 	}
+	// No owner password anywhere on this page.
+	if strings.Contains(body, `type="password"`) {
+		t.Fatal("the Models page must not ask for the owner password")
+	}
+	// Thinking is a chat-template default whose kwarg is named differently per
+	// model family, so the card offers no control that would have to guess it.
+	if strings.Contains(body, `name="thinking"`) || strings.Contains(body, "Emits thinking") {
+		t.Fatal("thinking belongs in the command, not in a control that guesses the kwarg name")
+	}
+}
+
+// A saved command only takes effect on restart, and the card has to say so
+// rather than letting an administrator believe an edit is live.
+func TestASavedCommandThatIsNotRunningYetIsCalledOut(t *testing.T) {
+	model := managedTestModel()
+	if got := modelNotice(model, false, false); got != "" {
+		t.Fatalf("a stopped, saved model has nothing to report: %q", got)
+	}
+	if got := modelNotice(model, true, false); got != "" {
+		t.Fatalf("a model running its saved command has nothing to report: %q", got)
+	}
+	if got := modelNotice(model, true, true); got != "Saved. Restart to run this command." {
+		t.Fatalf("a stale command must be called out: %q", got)
+	}
+	broken := model
+	broken.Command = "serve Qwen/Qwen3-32B --served-model-name qwen3-32b"
+	if got := modelNotice(broken, false, false); !strings.Contains(got, "will not start") {
+		t.Fatalf("a command that cannot start must say so: %q", got)
+	}
+}
+
+func managedTestModel() config.ManagedModel {
+	return config.ManagedModel{ID: "qwen3-32b", DisplayName: "Qwen 32B", Command: testCommand}
 }

@@ -94,17 +94,14 @@ CREATE TABLE IF NOT EXISTS rag_settings (
 );
 `
 
-// The models Console launches and supervises. The port is unique because two
-// runtimes cannot share one, and the dtype is constrained in the schema so a
-// row that would produce an invalid argv cannot be stored in the first place.
+// The models Console launches and supervises. `command` is the argument list
+// vLLM is started with and the single source of truth: the port Veil reaches
+// the model on and the window it publishes are read back out of it rather than
+// stored a second time and allowed to drift.
 const managedModelSchema = `
 CREATE TABLE IF NOT EXISTS managed_models (
-  id TEXT PRIMARY KEY, display_name TEXT NOT NULL, model_path TEXT NOT NULL,
-  port INTEGER NOT NULL UNIQUE, max_model_len INTEGER NOT NULL,
-  gpu_memory_utilization REAL NOT NULL,
-  kv_cache_dtype TEXT NOT NULL DEFAULT 'fp8',
-  reasoning INTEGER NOT NULL, created_at INTEGER NOT NULL,
-  CHECK (kv_cache_dtype IN ('fp8','auto'))
+  id TEXT PRIMARY KEY, display_name TEXT NOT NULL, command TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 `
 

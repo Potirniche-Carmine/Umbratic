@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
+const validCommand = "serve Qwen/Qwen3-32B --host 127.0.0.1 --port 8001 --served-model-name qwen3-32b --max-model-len 32768 --gpu-memory-utilization 0.45 --kv-cache-dtype fp8"
+
 func validModel() ManagedModel {
-	return ManagedModel{
-		ID: "qwen3-32b", DisplayName: "Qwen 32B", ModelPath: "Qwen/Qwen3-32B",
-		Port: 8001, MaxModelLen: 32768, GPUMemoryUtilization: 0.45, KVCacheDType: KVCacheFP8,
-	}
+	return ManagedModel{ID: "qwen3-32b", DisplayName: "Qwen 32B", Command: validCommand}
 }
 
 func TestManagedModelValidation(t *testing.T) {
@@ -20,23 +19,14 @@ func TestManagedModelValidation(t *testing.T) {
 
 	cases := map[string]func(*ManagedModel){
 		// A served id that starts with a dash would be read by vLLM as a flag.
-		"leading dash in id":     func(m *ManagedModel) { m.ID = "-flag" },
-		"whitespace in id":       func(m *ManagedModel) { m.ID = "two words" },
-		"slash in id":            func(m *ManagedModel) { m.ID = "org/model" },
-		"empty id":               func(m *ManagedModel) { m.ID = "" },
-		"oversized id":           func(m *ManagedModel) { m.ID = "a" + strings.Repeat("b", 128) },
-		"empty display":          func(m *ManagedModel) { m.DisplayName = "  " },
-		"newline in display":     func(m *ManagedModel) { m.DisplayName = "Qwen\n32B" },
-		"leading dash in path":   func(m *ManagedModel) { m.ModelPath = "--served-model-name" },
-		"control char in path":   func(m *ManagedModel) { m.ModelPath = "Qwen/Qwen3\x0032B" },
-		"empty path":             func(m *ManagedModel) { m.ModelPath = "" },
-		"privileged port":        func(m *ManagedModel) { m.Port = 80 },
-		"port out of range":      func(m *ManagedModel) { m.Port = 70000 },
-		"tiny context":           func(m *ManagedModel) { m.MaxModelLen = 128 },
-		"absurd context":         func(m *ManagedModel) { m.MaxModelLen = MaxMaxModelLen + 1 },
-		"zero gpu fraction":      func(m *ManagedModel) { m.GPUMemoryUtilization = 0 },
-		"gpu fraction above one": func(m *ManagedModel) { m.GPUMemoryUtilization = 1.5 },
-		"unknown kv dtype":       func(m *ManagedModel) { m.KVCacheDType = "q8" },
+		"leading dash in id": func(m *ManagedModel) { m.ID = "-flag" },
+		"whitespace in id":   func(m *ManagedModel) { m.ID = "two words" },
+		"slash in id":        func(m *ManagedModel) { m.ID = "org/model" },
+		"empty id":           func(m *ManagedModel) { m.ID = "" },
+		"oversized id":       func(m *ManagedModel) { m.ID = "a" + strings.Repeat("b", 128) },
+		"empty display":      func(m *ManagedModel) { m.DisplayName = "  " },
+		"newline in display": func(m *ManagedModel) { m.DisplayName = "Qwen\n32B" },
+		"empty command":      func(m *ManagedModel) { m.Command = "  " },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -49,34 +39,212 @@ func TestManagedModelValidation(t *testing.T) {
 	}
 }
 
+// The command is an argument list, not a shell command. Nothing here can become
+// a second process, a redirection, or a substitution — Console never invokes a
+// shell, and refusing the characters outright is what keeps that true.
+func TestCommandRefusesShellConstructs(t *testing.T) {
+	for name, command := range map[string]string{
+		"command chaining":      validCommand + " ; rm -rf /",
+		"backgrounding":         validCommand + " & curl evil.test",
+		"piping":                validCommand + " | sh",
+		"output redirection":    validCommand + " > /etc/passwd",
+		"input redirection":     validCommand + " < /etc/shadow",
+		"dollar substitution":   validCommand + " --seed $(id -u)",
+		"backtick substitution": validCommand + " --seed `id -u`",
+		"null byte":             validCommand + " \x00",
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := validModel()
+			model.Command = command
+			if err := model.Validate(); err == nil {
+				facts, _ := model.Parse()
+				t.Fatalf("this must never become argv: %#v", facts.Args)
+			}
+		})
+	}
+}
+
+func TestCommandRequiresWhatVeilNeeds(t *testing.T) {
+	for name, testCase := range map[string]struct{ command, want string }{
+		"missing serve":      {"Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b", "must start with `serve`"},
+		"flag before model":  {"serve --port 8001 --served-model-name qwen3-32b", "before any flag"},
+		"missing port":       {"serve Qwen/Qwen3-32B --served-model-name qwen3-32b", "must set --port"},
+		"missing served id":  {"serve Qwen/Qwen3-32B --port 8001", "must set --served-model-name"},
+		"served id mismatch": {"serve Qwen/Qwen3-32B --port 8001 --served-model-name other", "must stay"},
+		"port not a number":  {"serve Qwen/Qwen3-32B --port eighty --served-model-name qwen3-32b", "--port must be a number"},
+		"privileged port":    {"serve Qwen/Qwen3-32B --port 80 --served-model-name qwen3-32b", "--port must be between"},
+		"tiny context":       {"serve Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b --max-model-len 8", "--max-model-len must be between"},
+		"unclosed quote":     {`serve "Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b`, "unclosed quote"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := validModel()
+			model.Command = testCase.command
+			err := model.Validate()
+			if err == nil {
+				t.Fatal("expected the command to be refused")
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error %q must explain %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+// Arguments are written one per line, so a newline is whitespace to the
+// tokenizer — not a second command, because there is no shell to give it that
+// meaning.
+func TestNewlinesSeparateArgumentsRatherThanCommands(t *testing.T) {
+	model := validModel()
+	model.Command = strings.Join([]string{
+		"serve Qwen/Qwen3-32B",
+		"--port 8001",
+		"--served-model-name qwen3-32b",
+		"--max-model-len 32768",
+	}, "\n")
+	facts, err := model.Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.Port != 8001 || facts.MaxModelLen != 32768 {
+		t.Fatalf("a multi-line command must parse: %#v", facts)
+	}
+	if len(facts.Args) != 8 {
+		t.Fatalf("newlines separate arguments, nothing more: %#v", facts.Args)
+	}
+}
+
+// Saving lays the arguments out one flag per line, so a pasted one-liner comes
+// back readable instead of staying a wall of text.
+func TestFormatCommandPutsOneFlagPerLine(t *testing.T) {
+	facts, err := validModel().Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := FormatCommand(facts.Args)
+	want := strings.Join([]string{
+		"serve Qwen/Qwen3-32B",
+		"--host 127.0.0.1",
+		"--port 8001",
+		"--served-model-name qwen3-32b",
+		"--max-model-len 32768",
+		"--gpu-memory-utilization 0.45",
+		"--kv-cache-dtype fp8",
+	}, "\n")
+	if got != want {
+		t.Fatalf("layout changed:\n%s\n---\n%s", got, want)
+	}
+
+	// A bare switch keeps its own line, and a value with a space keeps quotes
+	// so the next read still sees one argument.
+	got = FormatCommand([]string{"serve", "/models/Qwen 32B", "--enforce-eager", "--port", "8001"})
+	want = strings.Join([]string{`serve "/models/Qwen 32B"`, "--enforce-eager", "--port 8001"}, "\n")
+	if got != want {
+		t.Fatalf("layout changed:\n%s\n---\n%s", got, want)
+	}
+
+	// And what it writes, it can read back.
+	round := ManagedModel{ID: "qwen3-32b", DisplayName: "Q", Command: FormatCommand(facts.Args)}
+	if err := round.Validate(); err != nil {
+		t.Fatalf("a formatted command must parse again: %v", err)
+	}
+}
+
+func TestCommandParsesIntoArgvAndFacts(t *testing.T) {
+	facts, err := validModel().Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"serve", "Qwen/Qwen3-32B",
+		"--host", "127.0.0.1",
+		"--port", "8001",
+		"--served-model-name", "qwen3-32b",
+		"--max-model-len", "32768",
+		"--gpu-memory-utilization", "0.45",
+		"--kv-cache-dtype", "fp8",
+	}
+	if len(facts.Args) != len(want) {
+		t.Fatalf("argv shape changed: %#v", facts.Args)
+	}
+	for index := range want {
+		if facts.Args[index] != want[index] {
+			t.Fatalf("argv[%d] = %q, want %q", index, facts.Args[index], want[index])
+		}
+	}
+	if facts.Port != 8001 || facts.MaxModelLen != 32768 || facts.ModelPath != "Qwen/Qwen3-32B" {
+		t.Fatalf("the facts Veil needs must be read from the command: %#v", facts)
+	}
+}
+
+// A quote groups a token and does nothing else — no expansion, no escapes.
+func TestQuotesGroupAndNothingMore(t *testing.T) {
+	model := validModel()
+	model.Command = `serve "/models/Qwen 32B" --port 8001 --served-model-name qwen3-32b`
+	facts, err := model.Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.ModelPath != "/models/Qwen 32B" {
+		t.Fatalf("a quoted path must stay one argument: %#v", facts.Args)
+	}
+}
+
+// --flag=value is as common as --flag value, and the port has to be found
+// either way or Veil is pointed at nothing.
+func TestNamedValuesAreFoundInEitherForm(t *testing.T) {
+	model := validModel()
+	model.Command = "serve Qwen/Qwen3-32B --port=8042 --served-model-name=qwen3-32b --max-model-len=65536"
+	facts, err := model.Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.Port != 8042 || facts.MaxModelLen != 65536 {
+		t.Fatalf("--flag=value must be read: %#v", facts)
+	}
+}
+
+func TestCommandIsBounded(t *testing.T) {
+	model := validModel()
+	model.Command = validCommand + strings.Repeat(" --extra", 200)
+	if err := model.Validate(); err == nil {
+		t.Fatal("an unbounded argument list must be refused")
+	}
+	model.Command = "serve " + strings.Repeat("m", 600) + " --port 8001 --served-model-name qwen3-32b"
+	if err := model.Validate(); err == nil {
+		t.Fatal("an unbounded single argument must be refused")
+	}
+}
+
 func TestManagedFleetRefusesCollisions(t *testing.T) {
 	first := validModel()
-	second := validModel()
-	second.ID, second.Port = "small", 8002
+	second := ManagedModel{
+		ID: "small", DisplayName: "Small",
+		Command: "serve Qwen/Qwen3-4B --port 8002 --served-model-name small",
+	}
 
 	if err := ValidateManagedModels([]ManagedModel{first, second}, 8177, 8080); err != nil {
 		t.Fatalf("two distinct models must coexist: %v", err)
 	}
 
 	duplicate := second
-	duplicate.ID = first.ID
+	duplicate.ID, duplicate.Command = first.ID, first.Command
 	if err := ValidateManagedModels([]ManagedModel{first, duplicate}, 8177, 8080); err == nil {
 		t.Fatal("a duplicate served id must be refused")
 	}
 
-	sharedPort := second
-	sharedPort.Port = first.Port
+	sharedPort := ManagedModel{
+		ID: "small", DisplayName: "Small",
+		Command: "serve Qwen/Qwen3-4B --port 8001 --served-model-name small",
+	}
 	if err := ValidateManagedModels([]ManagedModel{first, sharedPort}, 8177, 8080); err == nil {
 		t.Fatal("two models cannot share one port")
 	}
 
-	onConsole := validModel()
-	onConsole.Port = 8177
+	onConsole := ManagedModel{ID: "c", DisplayName: "C", Command: "serve m --port 8177 --served-model-name c"}
 	if err := ValidateManagedModels([]ManagedModel{onConsole}, 8177, 8080); err == nil {
 		t.Fatal("a model must not take Console's own port")
 	}
-	onVeil := validModel()
-	onVeil.Port = 8080
+	onVeil := ManagedModel{ID: "v", DisplayName: "V", Command: "serve m --port 8080 --served-model-name v"}
 	if err := ValidateManagedModels([]ManagedModel{onVeil}, 8177, 8080); err == nil {
 		t.Fatal("a model must not take Veil's own port")
 	}
@@ -88,9 +256,10 @@ func TestModelsEnvJSONMatchesVeilsContract(t *testing.T) {
 	}
 
 	reasoning := validModel()
-	reasoning.Reasoning = true
-	plain := validModel()
-	plain.ID, plain.Port, plain.DisplayName = "small", 8002, "Small"
+	plain := ManagedModel{
+		ID: "small", DisplayName: "Small",
+		Command: "serve Qwen/Qwen3-4B --port 8002 --served-model-name small --max-model-len 32768",
+	}
 
 	value, err := ModelsEnvJSON([]ManagedModel{reasoning, plain})
 	if err != nil {
@@ -105,25 +274,35 @@ func TestModelsEnvJSONMatchesVeilsContract(t *testing.T) {
 	}
 	first := entries[0]
 	if first["id"] != "qwen3-32b" || first["provider_base_url"] != "http://127.0.0.1:8001/v1" {
-		t.Fatalf("the entry must address the model's own loopback port: %#v", first)
+		t.Fatalf("the entry must address the port the command sets: %#v", first)
 	}
-	if first["display"] != "Qwen 32B" || first["reasoning"] != true || first["context_length"] != float64(32768) {
+	if first["display"] != "Qwen 32B" || first["context_length"] != float64(32768) {
 		t.Fatalf("registry metadata must travel: %#v", first)
 	}
-	if entries[1]["reasoning"] != false {
-		t.Fatalf("an undeclared model must not claim reasoning: %#v", entries[1])
+	// Console does not guess whether a model thinks: the chat-template kwarg
+	// that controls it is named differently per family, so the administrator
+	// sets it in the command and the client may still override per request.
+	if entries[0]["reasoning"] != true || entries[1]["reasoning"] != true {
+		t.Fatalf("managed models leave the thinking choice to the command and the client: %#v", entries)
 	}
-	// Exactly the five keys Veil's strict parser accepts. An extra one would be
-	// refused by a Veil that has never heard of it.
+	// Exactly the five keys Veil's strict parser accepts.
 	if len(first) != 5 {
 		t.Fatalf("VEIL_MODELS entries carry exactly the contract keys: %#v", first)
 	}
 }
 
-func TestTotalGPUFractionIsAWarningNumber(t *testing.T) {
-	first, second := validModel(), validModel()
-	second.GPUMemoryUtilization = 0.6
-	if total := TotalGPUFraction([]ManagedModel{first, second}); total < 1.04 || total > 1.06 {
-		t.Fatalf("fractions must sum: %v", total)
+func TestDefaultCommandIsValidForANewModel(t *testing.T) {
+	model := ManagedModel{
+		ID: "new-model", DisplayName: "New model",
+		Command: DefaultCommand("org/weights", "new-model", 8003),
+	}
+	if err := model.Validate(); err != nil {
+		t.Fatalf("the prefilled command must be ready to save: %v", err)
+	}
+	if model.Port() != 8003 {
+		t.Fatalf("the suggested port must reach the command: %d", model.Port())
+	}
+	if !strings.Contains(model.Command, "\n--kv-cache-dtype fp8") {
+		t.Fatalf("fp8 is the default 8-bit KV cache: %q", model.Command)
 	}
 }

@@ -9,9 +9,8 @@ import (
 
 func managedFixture() config.ManagedModel {
 	return config.ManagedModel{
-		ID: "qwen3-32b", DisplayName: "Qwen 32B", ModelPath: "Qwen/Qwen3-32B",
-		Port: 8001, MaxModelLen: 32768, GPUMemoryUtilization: 0.45,
-		KVCacheDType: config.KVCacheFP8, Reasoning: true,
+		ID: "qwen3-32b", DisplayName: "Qwen 32B",
+		Command: "serve Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b --max-model-len 32768",
 	}
 }
 
@@ -29,7 +28,8 @@ func TestManagedModelsRoundTripAndPreserveOrder(t *testing.T) {
 
 	first := managedFixture()
 	second := managedFixture()
-	second.ID, second.Port, second.DisplayName, second.Reasoning = "small", 8002, "Small", false
+	second.ID, second.DisplayName = "small", "Small"
+	second.Command = "serve Qwen/Qwen3-4B --port 8002 --served-model-name small --max-model-len 32768"
 	for _, model := range []config.ManagedModel{first, second} {
 		if err := store.InsertManagedModel(ctx, model); err != nil {
 			t.Fatal(err)
@@ -46,12 +46,9 @@ func TestManagedModelsRoundTripAndPreserveOrder(t *testing.T) {
 	if models[0] != first {
 		t.Fatalf("every field must survive the round trip: %#v", models[0])
 	}
-	if models[1].Reasoning {
-		t.Fatal("an undeclared model must not read as reasoning")
-	}
 
 	found, ok, err := store.ManagedModel(ctx, "small")
-	if err != nil || !ok || found.Port != 8002 {
+	if err != nil || !ok || found.Port() != 8002 {
 		t.Fatalf("lookup by id must work: %#v %v %v", found, ok, err)
 	}
 	if _, ok, _ := store.ManagedModel(ctx, "absent"); ok {
@@ -72,7 +69,8 @@ func TestManagedModelUpdateAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	model.DisplayName, model.MaxModelLen, model.KVCacheDType = "Qwen 32B (long)", 98304, config.KVCacheAuto
+	model.DisplayName = "Qwen 32B (long)"
+	model.Command = "serve Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b --max-model-len 98304 --kv-cache-dtype auto"
 	if err := store.UpdateManagedModel(ctx, model); err != nil {
 		t.Fatal(err)
 	}
@@ -103,9 +101,9 @@ func TestManagedModelUpdateAndDelete(t *testing.T) {
 	}
 }
 
-// Two runtimes cannot share a port, and the schema is what guarantees it even
-// if a future handler forgets to check.
-func TestManagedModelPortsAreUniqueInTheSchema(t *testing.T) {
+// The served id is the primary key: it is what clients send, and two rows
+// answering to one name is a routing ambiguity the database refuses.
+func TestManagedModelIDsAreUniqueInTheSchema(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(tempStateDir(t))
 	if err != nil {
@@ -116,13 +114,8 @@ func TestManagedModelPortsAreUniqueInTheSchema(t *testing.T) {
 	if err := store.InsertManagedModel(ctx, managedFixture()); err != nil {
 		t.Fatal(err)
 	}
-	clash := managedFixture()
-	clash.ID = "other"
-	if err := store.InsertManagedModel(ctx, clash); err == nil {
-		t.Fatal("a second model on the same port must be refused by the database")
-	}
 	duplicate := managedFixture()
-	duplicate.Port = 8002
+	duplicate.Command = "serve Qwen/Qwen3-32B --port 8002 --served-model-name qwen3-32b"
 	if err := store.InsertManagedModel(ctx, duplicate); err == nil {
 		t.Fatal("a duplicate served id must be refused by the database")
 	}
@@ -130,12 +123,11 @@ func TestManagedModelPortsAreUniqueInTheSchema(t *testing.T) {
 
 func TestNextFreeManagedPortSkipsWhatIsTaken(t *testing.T) {
 	first, second := managedFixture(), managedFixture()
-	second.ID, second.Port = "small", 8002
+	second.ID = "small"
+	second.Command = "serve Qwen/Qwen3-4B --port 8002 --served-model-name small"
 	if got := NextFreeManagedPort([]config.ManagedModel{first, second}, 8177, 8080); got != 8003 {
 		t.Fatalf("the suggestion must skip registered ports, got %d", got)
 	}
-	console := managedFixture()
-	console.Port = config.SuggestedPortStart
 	if got := NextFreeManagedPort(nil, config.SuggestedPortStart, 8080); got != config.SuggestedPortStart+1 {
 		t.Fatalf("the suggestion must skip Console's own port, got %d", got)
 	}

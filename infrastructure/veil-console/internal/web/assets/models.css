@@ -1,21 +1,19 @@
 /*
  * The Models page. One card per model, single column: an administrator reads
- * down a fleet, they do not scan a grid, and a row that wraps to two lines on a
- * narrow window is worse than one that was always a column.
+ * down a fleet, they do not scan a grid.
+ *
+ * Every state a card can be in occupies the same space. The status text has a
+ * reserved width, the action row always holds two buttons plus Save, and the
+ * notice line is always rendered whether or not it has anything to say — so a
+ * card starting, failing, or going stale never moves the cards below it.
  */
 
 .model-page-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-}
-
-.model-counts {
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .model-list {
@@ -27,70 +25,80 @@
 .model-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.7rem 1.2rem;
+  gap: 0.65rem 1.2rem;
   padding: clamp(1rem, 3vw, 1.35rem);
   align-items: center;
 }
 
 .model-identity {
   display: grid;
-  gap: 0.2rem;
+  align-content: center;
+  gap: 0.15rem;
   min-width: 0;
 }
 
-.model-identity strong {
+/*
+ * The display name is editable in place, so it is styled as text until it is
+ * touched. A box around every name would make the card read as a form rather
+ * than as a model.
+ */
+.model-name {
+  /* The global input styling is a 46px field with an inset shadow. A name is
+     not a field until it is touched, so all of that is reset here. */
+  width: 100%;
+  height: auto;
+  padding: 0.1rem 0.4rem;
+  margin-left: -0.4rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
   font-size: 15px;
   font-weight: 600;
-  /* Tighter tracking as the size grows, looser leading than the mono id below. */
   letter-spacing: -0.01em;
-  line-height: 1.3;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.model-name:hover {
+  border-color: var(--line);
+}
+
+.model-name:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  background: var(--control);
 }
 
 .model-identity code {
+  padding-left: 0.05rem;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.model-default {
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  background: var(--control);
-  color: var(--blue);
-  font-size: 0.66rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  vertical-align: 0.12em;
-}
-
-.model-meta {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.chip {
-  padding: 0.14rem 0.5rem;
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
+/*
+ * Reserved width. "Stopped", "Starting", "Serving", and "Loading weights" are
+ * different lengths, and without this the dot would walk left and right as a
+ * model came up.
+ */
 .model-state {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.45rem;
+  width: 11rem;
 }
 
 .model-state-text {
   color: var(--muted);
   font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-dot {
@@ -120,43 +128,87 @@
   50% { opacity: 0.35; }
 }
 
-.model-actions {
+/*
+ * The command block: one argument per line, monospace, and a fixed height that
+ * holds about eight lines. Every card is therefore the same height whatever it
+ * is running, and typing never reflows the page — an auto-growing box would.
+ * Longer argument lists scroll inside the box.
+ */
+.model-command {
+  grid-column: 1 / -1;
+  display: block;
+}
+
+.model-command textarea,
+.field textarea {
+  display: block;
+  width: 100%;
+  /* Eight lines with no scrollbar — the seven a default command uses, plus
+     one. Longer lists scroll rather than resizing the card. */
+  height: 12rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  resize: vertical;
+  overflow: auto;
+  tab-size: 2;
+  transition: border-color 140ms ease;
+}
+
+/* The first line is the model itself, so it gets to look like the subject. */
+.model-command textarea {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.model-command textarea:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: var(--line-strong);
+}
+
+.model-controls {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.4rem;
+}
+
+/* Equal widths so swapping Start↔Restart or Remove↔Stop moves nothing. */
+.model-actions .button {
+  min-width: 5.75rem;
+}
+
+/*
+ * The reserved line. `is-empty` keeps the box and drops the ink, rather than
+ * removing the element and letting every card below jump.
+ */
+.model-notice {
+  grid-column: 1 / -1;
+  min-height: 1.2rem;
   margin: 0;
+  color: var(--amber);
+  font-size: 0.8rem;
+  line-height: 1.2rem;
 }
 
-.model-password {
-  flex: 1 1 9rem;
-  min-width: 0;
-  max-width: 14rem;
-}
-
-.model-password input {
-  width: 100%;
-  min-height: 40px;
-  padding: 0 0.7rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--control-radius);
-  background: var(--control);
-  color: var(--text);
-  font-size: 0.85rem;
-}
-
-/* A label the screen reader reads and the eye does not need: the placeholder
-   already says what the field is. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+.model-notice.is-empty {
+  visibility: hidden;
 }
 
 .model-logs {
@@ -188,8 +240,15 @@
   margin-bottom: 1.2rem;
 }
 
+/*
+ * align-content: start is the whole fix for the misaligned Add form. A field
+ * with a helper line is taller than one without; both stretch to the tallest
+ * in the row, and grid's default `stretch` then shares that slack out between
+ * the label and the input, so the two inputs sat at different heights.
+ */
 .field {
   display: grid;
+  align-content: start;
   gap: 0.35rem;
   min-width: 0;
 }
@@ -210,6 +269,11 @@
   line-height: 1.45;
 }
 
+.field small code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.95em;
+}
+
 .field input,
 .field select {
   min-height: 40px;
@@ -219,11 +283,6 @@
   background: var(--control);
   color: var(--text);
   font: inherit;
-}
-
-.field input[readonly] {
-  color: var(--muted);
-  cursor: default;
 }
 
 .checkbox-field {
@@ -242,12 +301,29 @@
 }
 
 .form-error {
-  margin: 0;
+  margin: 0 0 1rem;
   padding: 0.6rem 0.8rem;
   border: 1px solid var(--red);
   border-radius: var(--control-radius);
   color: var(--red);
   font-size: 0.85rem;
+}
+
+/* A label the screen reader reads and the eye does not need. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.connectionModelUnavailable {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -262,6 +338,6 @@
   }
 
   .model-state {
-    justify-content: flex-start;
+    width: auto;
   }
 }

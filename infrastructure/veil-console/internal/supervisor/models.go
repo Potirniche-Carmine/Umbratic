@@ -47,10 +47,13 @@ const modelPollInterval = 2 * time.Second
 const modelLogLimit = 32 << 10
 
 type managedProcess struct {
-	cmd    *exec.Cmd
-	logs   *safeBuffer
-	status ModelStatus
-	cancel context.CancelFunc
+	cmd  *exec.Cmd
+	logs *safeBuffer
+	// command is what this process was actually launched with, so the page can
+	// say when the saved command has moved on from the running one.
+	command string
+	status  ModelStatus
+	cancel  context.CancelFunc
 	// exited is closed once Wait returns. Stop waits on it rather than polling
 	// cmd.ProcessState: only the reaping goroutine may touch that field, and
 	// reading it from here both raced and never observed the exit, so every
@@ -89,19 +92,16 @@ func NewModelSupervisor(binary string) *ModelSupervisor {
 // cannot work.
 func (m *ModelSupervisor) Configured() bool { return m != nil && m.binary != "" }
 
-// vllmArgs is the entire argument surface. It is a pure function of validated
-// typed fields — there is no path by which browser text becomes an argument,
-// which is what keeps this a launcher rather than a command runner.
-func vllmArgs(model config.ManagedModel) []string {
-	return []string{
-		"serve", model.ModelPath,
-		"--host", "127.0.0.1",
-		"--port", strconv.Itoa(model.Port),
-		"--served-model-name", model.ID,
-		"--max-model-len", strconv.Itoa(model.MaxModelLen),
-		"--gpu-memory-utilization", strconv.FormatFloat(model.GPUMemoryUtilization, 'f', -1, 64),
-		"--kv-cache-dtype", model.KVCacheDType,
+// vllmArgs is the entire argument surface. The command is parsed and validated
+// into a token list here and executed directly — no shell is involved, so no
+// metacharacter has any meaning, and a command that does not parse never
+// reaches exec at all.
+func vllmArgs(model config.ManagedModel) ([]string, error) {
+	facts, err := model.Parse()
+	if err != nil {
+		return nil, err
 	}
+	return facts.Args, nil
 }
 
 // childEnvironment is an allowlist, never the parent environment. A GPU runtime
@@ -158,8 +158,12 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 	}
 	m.mu.Unlock()
 
+	args, err := vllmArgs(model)
+	if err != nil {
+		return err
+	}
 	logs := newSafeBuffer(modelLogLimit)
-	cmd := exec.Command(m.binary, vllmArgs(model)...)
+	cmd := exec.Command(m.binary, args...)
 	configureModelProcess(cmd)
 	cmd.Env = childEnvironment()
 	cmd.Stdout, cmd.Stderr = logs, logs
@@ -169,11 +173,12 @@ func (m *ModelSupervisor) Start(model config.ManagedModel) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	process := &managedProcess{
-		cmd:    cmd,
-		logs:   logs,
-		status: ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "loading weights"},
-		cancel: cancel,
-		exited: make(chan struct{}),
+		cmd:     cmd,
+		logs:    logs,
+		command: strings.TrimSpace(model.Command),
+		status:  ModelStatus{State: ModelStarting, PID: cmd.Process.Pid, Message: "Loading weights"},
+		cancel:  cancel,
+		exited:  make(chan struct{}),
 	}
 	m.mu.Lock()
 	m.processes[model.ID] = process
@@ -200,10 +205,10 @@ func (m *ModelSupervisor) reap(id string, cmd *exec.Cmd) {
 	if process.status.State == ModelStopped {
 		return
 	}
-	message := "the model runtime exited"
+	message := "Exited unexpectedly"
 	state := ModelFailed
 	if err == nil {
-		message = "stopped"
+		message = "Stopped"
 		state = ModelStopped
 	}
 	process.status = ModelStatus{State: state, Message: message}
@@ -231,7 +236,7 @@ func (m *ModelSupervisor) awaitReady(ctx context.Context, model config.ManagedMo
 				m.setStatus(model.ID, cmd, ModelStatus{
 					State:   ModelHealthy,
 					PID:     processID(cmd),
-					Message: "serving",
+					Message: "Serving",
 				})
 				return
 			}
@@ -241,7 +246,7 @@ func (m *ModelSupervisor) awaitReady(ctx context.Context, model config.ManagedMo
 
 func modelListsItself(ctx context.Context, client *http.Client, model config.ManagedModel) bool {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("http://127.0.0.1:%d/v1/models", model.Port), nil)
+		fmt.Sprintf("http://127.0.0.1:%d/v1/models", model.Port()), nil)
 	if err != nil {
 		return false
 	}
@@ -295,7 +300,7 @@ func (m *ModelSupervisor) stopNow(id string) error {
 		return nil
 	}
 	process.cancel()
-	m.setStatus(id, process.cmd, ModelStatus{State: ModelStopped, Message: "stopped"})
+	m.setStatus(id, process.cmd, ModelStatus{State: ModelStopped, Message: "Stopped"})
 	requestModelProcessStop(process.cmd)
 	select {
 	case <-process.exited:
@@ -346,6 +351,25 @@ func (m *ModelSupervisor) Status(id string) ModelStatus {
 // Logs is the ring-buffer tail, rendered server-side when an administrator
 // expands the disclosure. No websocket: a log tail on demand answers the
 // question without adding a live channel to a loopback admin page.
+// RunningCommand is the command the live process was launched with, empty when
+// nothing is running. The page compares it with the saved one.
+func (m *ModelSupervisor) RunningCommand(id string) string {
+	if m == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	process := m.processes[id]
+	if process == nil {
+		return ""
+	}
+	switch process.status.State {
+	case ModelHealthy, ModelStarting:
+		return process.command
+	}
+	return ""
+}
+
 func (m *ModelSupervisor) Logs(id string) string {
 	if m == nil {
 		return ""

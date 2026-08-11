@@ -23,15 +23,14 @@ type modelsView struct {
 	// PendingApply is true when the stored registry differs from the one the
 	// running Veil was started with. Model start and stop are live; changing
 	// which models exist is configuration, and configuration needs a restart.
-	PendingApply  bool
-	GPUTotal      string
-	GPUOverloaded bool
-	Running       int
-	Registered    int
-	// Form is the add/edit form's current values, so a rejected submission
-	// comes back with what the administrator typed.
+	PendingApply bool
+	// Running and Registered are the dashboard's summary line. The Models page
+	// itself does not repeat them: every card already says what it is doing.
+	Running    int
+	Registered int
+	// Form is the add form's current values, so a rejected submission comes
+	// back with what the administrator typed.
 	Form      modelForm
-	Editing   bool
 	FormError string
 }
 
@@ -40,55 +39,28 @@ type modelRow struct {
 	State     supervisor.ModelState
 	StateText string
 	PID       int
-	GPULabel  string
-	LenLabel  string
 	Logs      string
 	Expanded  bool
 	IsDefault bool
+	Running   bool
+	// Stale is true when the saved command is not the one the live process was
+	// started with — the model is serving yesterday's flags.
+	Stale bool
+	// Notice is the card's one reserved line. It is always rendered, empty or
+	// not, so a card never changes height when its state does.
+	Notice string
 }
 
-// modelForm mirrors the typed fields as strings so a rejected value is shown
-// back exactly as typed rather than silently normalized.
+// modelForm is the add form. Editing happens on the card itself, so this is
+// only ever the three things a new model needs.
 type modelForm struct {
-	ID           string
-	DisplayName  string
-	ModelPath    string
-	Port         string
-	MaxModelLen  string
-	GPUFraction  string
-	KVCacheDType string
-	Reasoning    bool
-}
-
-func newModelForm(model config.ManagedModel) modelForm {
-	return modelForm{
-		ID:           model.ID,
-		DisplayName:  model.DisplayName,
-		ModelPath:    model.ModelPath,
-		Port:         strconv.Itoa(model.Port),
-		MaxModelLen:  strconv.Itoa(model.MaxModelLen),
-		GPUFraction:  strconv.FormatFloat(model.GPUMemoryUtilization, 'f', -1, 64),
-		KVCacheDType: model.KVCacheDType,
-		Reasoning:    model.Reasoning,
-	}
+	ID          string
+	DisplayName string
+	Command     string
 }
 
 func (s *Server) modelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", s.modelsData(r, "", "", nil))
-}
-
-// modelsEdit reuses the same page with the form prefilled, so editing is one
-// place rather than a second nearly-identical template.
-func (s *Server) modelsEdit(w http.ResponseWriter, r *http.Request) {
-	model, ok, err := s.store.ManagedModel(r.Context(), r.PathValue("model_id"))
-	if err != nil || !ok {
-		s.renderStatus(w, "models.html", http.StatusNotFound, s.modelsData(r, "That model is not registered.", "", nil))
-		return
-	}
-	data := s.modelsData(r, "", "", nil)
-	data.Models.Form = newModelForm(model)
-	data.Models.Editing = true
-	s.render(w, "models.html", data)
 }
 
 func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string, form *modelForm) pageData {
@@ -105,38 +77,38 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	view := modelsView{
 		Configured: s.models.Configured(),
 		Registered: len(models),
-		Form:       modelForm{KVCacheDType: config.KVCacheFP8, GPUFraction: "0.45", MaxModelLen: "32768"},
+		Form: modelForm{
+			Command: config.DefaultCommand("", "", state.NextFreeManagedPort(models, s.startup.Port, s.veilPort())),
+		},
 	}
-	view.Form.Port = strconv.Itoa(state.NextFreeManagedPort(models, s.startup.Port, s.veilPort()))
 	if form != nil {
 		view.Form = *form
 	}
 	for _, model := range models {
 		status := s.models.Status(model.ID)
+		running := status.State == supervisor.ModelHealthy || status.State == supervisor.ModelStarting
+		stale := running && s.models.RunningCommand(model.ID) != strings.TrimSpace(model.Command)
 		row := modelRow{
 			ManagedModel: model,
 			State:        status.State,
 			StateText:    modelStateText(status),
 			PID:          status.PID,
-			GPULabel:     "GPU " + strconv.FormatFloat(model.GPUMemoryUtilization, 'f', -1, 64),
-			LenLabel:     "max len " + compactCount(model.MaxModelLen),
 			Expanded:     expanded == model.ID,
 			IsDefault:    model.ID == defaultModel,
+			Running:      running,
+			Stale:        stale,
+			Notice:       modelNotice(model, running, stale),
 		}
 		if row.Expanded {
 			row.Logs = s.models.Logs(model.ID)
 		}
 		view.Rows = append(view.Rows, row)
 	}
-	view.Running = s.models.RunningCount(models)
 
 	// Only meaningful against a running Veil: with none there is nothing for a
 	// change to be pending against, and the next start picks the stored set up.
 	stored, _ := config.ModelsEnvJSON(models)
 	view.PendingApply = s.supervisor.Status().Running && stored != s.supervisor.ModelsEnvironment()
-	total := config.TotalGPUFraction(models)
-	view.GPUTotal = strconv.FormatFloat(total, 'f', 2, 64)
-	view.GPUOverloaded = total > 1.0
 
 	session := r.Context().Value(sessionKey).(requestSession)
 	processStatus := s.supervisor.Status()
@@ -147,22 +119,33 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	}
 }
 
+// modelNotice is the card's reserved line. It answers one question — is what is
+// running what is saved — and says nothing when the answer is yes.
+func modelNotice(model config.ManagedModel, running, stale bool) string {
+	if _, err := model.Parse(); err != nil {
+		return "This command will not start: " + err.Error()
+	}
+	if stale {
+		return "Saved. Restart to run this command."
+	}
+	return ""
+}
+
 func modelStateText(status supervisor.ModelStatus) string {
 	if status.Message != "" {
 		return status.Message
 	}
-	return string(status.State)
-}
-
-// compactCount renders a token count the way the chip shows it: "32k", "128k".
-func compactCount(value int) string {
-	if value >= 1000 && value%1000 == 0 {
-		return strconv.Itoa(value/1000) + "k"
+	// Every state reads as a capitalized word in the UI.
+	switch status.State {
+	case supervisor.ModelHealthy:
+		return "Serving"
+	case supervisor.ModelStarting:
+		return "Starting"
+	case supervisor.ModelFailed:
+		return "Failed"
+	default:
+		return "Stopped"
 	}
-	if value >= 1000 {
-		return strconv.Itoa(value/1024) + "k"
-	}
-	return strconv.Itoa(value)
 }
 
 func (s *Server) veilPort() int {
@@ -177,48 +160,29 @@ func (s *Server) veilPort() int {
 	return parsed
 }
 
-// parseModelForm reads the typed fields. Every value is parsed into its own
-// type here, so nothing downstream ever sees browser text.
-func parseModelForm(r *http.Request) (config.ManagedModel, modelForm, error) {
+func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm) {
 	form := modelForm{
-		ID:           strings.TrimSpace(r.FormValue("id")),
-		DisplayName:  strings.TrimSpace(r.FormValue("display_name")),
-		ModelPath:    strings.TrimSpace(r.FormValue("model_path")),
-		Port:         strings.TrimSpace(r.FormValue("port")),
-		MaxModelLen:  strings.TrimSpace(r.FormValue("max_model_len")),
-		GPUFraction:  strings.TrimSpace(r.FormValue("gpu_memory_utilization")),
-		KVCacheDType: strings.TrimSpace(r.FormValue("kv_cache_dtype")),
-		// A checkbox submits its `value` when checked and nothing when not, so
-		// presence is the signal. Comparing against "on" would depend on a
-		// default the markup happens not to override.
-		Reasoning: r.FormValue("reasoning") != "",
+		ID:          strings.TrimSpace(r.FormValue("id")),
+		DisplayName: strings.TrimSpace(r.FormValue("display_name")),
+		Command:     strings.TrimSpace(r.FormValue("command")),
 	}
-	port, err := strconv.Atoi(form.Port)
-	if err != nil {
-		return config.ManagedModel{}, form, errors.New("port must be a number")
-	}
-	maxModelLen, err := strconv.Atoi(form.MaxModelLen)
-	if err != nil {
-		return config.ManagedModel{}, form, errors.New("max model length must be a number")
-	}
-	fraction, err := strconv.ParseFloat(form.GPUFraction, 64)
-	if err != nil {
-		return config.ManagedModel{}, form, errors.New("GPU memory fraction must be a number")
+	if id != "" {
+		form.ID = id
 	}
 	model := config.ManagedModel{
-		ID: form.ID, DisplayName: form.DisplayName, ModelPath: form.ModelPath,
-		Port: port, MaxModelLen: maxModelLen, GPUMemoryUtilization: fraction,
-		KVCacheDType: form.KVCacheDType, Reasoning: form.Reasoning,
+		ID: form.ID, DisplayName: form.DisplayName, Command: form.Command,
 	}
-	return model, form, model.Validate()
+	// Store it laid out one flag per line however it arrived, so a pasted
+	// one-liner is readable the next time the card is opened.
+	if facts, err := model.Parse(); err == nil {
+		model.Command = config.FormatCommand(facts.Args)
+	}
+	return model, form
 }
 
 func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmModelPassword(w, r) {
-		return
-	}
-	model, form, err := parseModelForm(r)
-	if err != nil {
+	model, form := parseModelForm(r, "")
+	if err := model.Validate(); err != nil {
 		s.renderModelFormError(w, r, form, err)
 		return
 	}
@@ -239,22 +203,19 @@ func (s *Server) modelsCreate(w http.ResponseWriter, r *http.Request) {
 	s.modelActionResult(w, r, nil, "model.create")
 }
 
+// modelsUpdate saves a card's edits. The command is the interesting one: it is
+// stored as typed and only becomes argv at start, so a model that is running
+// keeps running exactly as it was launched until it is restarted.
 func (s *Server) modelsUpdate(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmModelPassword(w, r) {
-		return
-	}
 	id := r.PathValue("model_id")
-	model, form, err := parseModelForm(r)
-	if err != nil {
-		s.renderModelFormError(w, r, form, err)
+	model, _ := parseModelForm(r, id)
+	if err := model.Validate(); err != nil {
+		s.modelActionResult(w, r, err, "model.update")
 		return
 	}
-	// The served id is the name clients stored. Editing the row cannot rename
-	// it: that is a remove and an add, and it is visibly one.
-	model.ID = id
 	existing, err := s.store.ManagedModels(r.Context())
 	if err != nil {
-		s.renderModelFormError(w, r, form, errors.New("the model list could not be loaded"))
+		s.modelActionResult(w, r, errors.New("the model list could not be loaded"), "model.update")
 		return
 	}
 	fleet := make([]config.ManagedModel, 0, len(existing))
@@ -265,11 +226,11 @@ func (s *Server) modelsUpdate(w http.ResponseWriter, r *http.Request) {
 		fleet = append(fleet, candidate)
 	}
 	if err := config.ValidateManagedModels(append(fleet, model), s.startup.Port, s.veilPort()); err != nil {
-		s.renderModelFormError(w, r, form, err)
+		s.modelActionResult(w, r, err, "model.update")
 		return
 	}
 	if err := s.store.UpdateManagedModel(r.Context(), model); err != nil {
-		s.renderModelFormError(w, r, form, errors.New("that model is not registered"))
+		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.update")
 		return
 	}
 	s.handOffModels(r)
@@ -277,9 +238,6 @@ func (s *Server) modelsUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmModelPassword(w, r) {
-		return
-	}
 	id := r.PathValue("model_id")
 	// Removing a running model would orphan its process and its GPU memory.
 	if state := s.models.Status(id).State; state == supervisor.ModelHealthy || state == supervisor.ModelStarting {
@@ -295,9 +253,6 @@ func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) modelsStart(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmModelPassword(w, r) {
-		return
-	}
 	model, ok, err := s.store.ManagedModel(r.Context(), r.PathValue("model_id"))
 	if err != nil || !ok {
 		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.start")
@@ -307,10 +262,23 @@ func (s *Server) modelsStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) modelsStop(w http.ResponseWriter, r *http.Request) {
-	if !s.confirmModelPassword(w, r) {
+	s.modelActionResult(w, r, s.models.Stop(r.PathValue("model_id")), "model.stop")
+}
+
+// modelsRestart is how an edited command takes effect: stop, then start from
+// the saved command.
+func (s *Server) modelsRestart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("model_id")
+	model, ok, err := s.store.ManagedModel(r.Context(), id)
+	if err != nil || !ok {
+		s.modelActionResult(w, r, errors.New("that model is not registered"), "model.restart")
 		return
 	}
-	s.modelActionResult(w, r, s.models.Stop(r.PathValue("model_id")), "model.stop")
+	if err := s.models.Stop(id); err != nil {
+		s.modelActionResult(w, r, err, "model.restart")
+		return
+	}
+	s.modelActionResult(w, r, s.models.Start(model), "model.restart")
 }
 
 // handOffModels records the stored registry for the next Veil start. It does
@@ -324,24 +292,9 @@ func (s *Server) handOffModels(r *http.Request) {
 	s.supervisor.SetModels(models)
 }
 
-func (s *Server) confirmModelPassword(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.freshPassword(w, r); err != nil {
-		status := http.StatusInternalServerError
-		message := "Password confirmation failed. Try again."
-		if errors.Is(err, errPasswordConfirmation) {
-			status = http.StatusUnauthorized
-			message = "Owner password is incorrect."
-		}
-		s.renderStatus(w, "models.html", status, s.modelsData(r, message, "", nil))
-		return false
-	}
-	return true
-}
-
 func (s *Server) renderModelFormError(w http.ResponseWriter, r *http.Request, form modelForm, err error) {
 	data := s.modelsData(r, "", "", &form)
 	data.Models.FormError = err.Error()
-	data.Models.Editing = form.ID != "" && r.PathValue("model_id") != ""
 	s.renderStatus(w, "models.html", http.StatusBadRequest, data)
 }
 

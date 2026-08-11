@@ -5,55 +5,269 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 // ManagedModel is one vLLM process Console launches and supervises.
 //
-// Every field is typed and bounded, and the argv the supervisor builds is
-// assembled from these fields alone. Console has no shell and no free-form
-// argument field, and this struct is why: a launcher that accepts arbitrary
-// arguments is a command runner, which the security boundary forbids.
+// Command is the argument list, and it is the single source of truth: the port
+// Veil reaches this model on and the context window it publishes are read back
+// out of it rather than stored twice and allowed to drift.
+//
+// It is an argument list, not a shell command. Console builds argv from it and
+// executes the vLLM binary directly — there is no shell, no expansion, and no
+// metacharacter has any meaning. Everything the security boundary says about
+// not adding a command runner still holds; what an administrator can choose
+// here is which flags vLLM is started with.
 type ManagedModel struct {
-	// ID is the served model name — what a client sends as `model` and what
-	// `/v1/models` reports back.
+	// ID is the served model name — what a client sends as `model`, what
+	// `/v1/models` reports, and what `--served-model-name` must say.
 	ID          string
 	DisplayName string
-	// ModelPath is a Hugging Face repository id or an absolute path on this
-	// machine. It is passed as vLLM's positional model argument.
-	ModelPath            string
-	Port                 int
-	MaxModelLen          int
-	GPUMemoryUtilization float64
-	// KVCacheDType is the KV cache precision. fp8 is vLLM's 8-bit option and
-	// the default here; there is no literal "q8" in vLLM.
-	KVCacheDType string
-	// Reasoning declares that this model emits thinking. Veil publishes it as
-	// `capabilities.reasoning`, which is what gates the desktop's Think toggle.
-	Reasoning bool
+	Command     string
 }
 
 const (
 	KVCacheFP8  = "fp8"
 	KVCacheAuto = "auto"
 	// MinManagedPort and MaxManagedPort bound the loopback ports Console will
-	// bind a runtime to. Below 1024 is privileged; the range is deliberately
-	// small so a typo cannot land on an unrelated service.
+	// bind a runtime to. Below 1024 is privileged.
 	MinManagedPort = 1024
 	MaxManagedPort = 65535
-	// SuggestedPortStart is where the Add form's port suggestion begins.
+	// SuggestedPortStart is where a new model's port suggestion begins.
 	SuggestedPortStart = 8001
 	SuggestedPortEnd   = 8099
 	MinMaxModelLen     = 1024
 	MaxMaxModelLen     = 1_048_576
-	maxModelPathBytes  = 512
-	maxDisplayBytes    = 120
+
+	maxCommandBytes  = 4096
+	maxCommandTokens = 64
+	maxTokenBytes    = 512
+	maxDisplayBytes  = 120
 )
 
 // A served id travels in URLs, in argv, and in a JSON environment variable. The
 // leading-character rule matters most: an id starting with `-` would be read by
 // vLLM as a flag rather than a value.
 var managedModelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// shellMetacharacters are refused outright. None of them mean anything to argv
+// — Console never invokes a shell — but refusing them is what keeps that true
+// no matter how this command is later handled, and none belong in a vLLM flag.
+//
+// A newline is not one of them. Arguments are written one per line for the same
+// reason a compose file is: a wall of flags on one line is unreadable. To the
+// tokenizer a newline is whitespace, exactly like a space.
+const shellMetacharacters = ";&|<>$`"
+
+// DefaultCommand is what a new model's command box is prefilled with. fp8 is
+// vLLM's 8-bit KV cache and the default here; there is no literal "q8".
+func DefaultCommand(modelPath, servedID string, port int) string {
+	if strings.TrimSpace(modelPath) == "" {
+		modelPath = "org/model"
+	}
+	if strings.TrimSpace(servedID) == "" {
+		servedID = "model-id"
+	}
+	return FormatCommand([]string{
+		"serve", modelPath,
+		"--host", "127.0.0.1",
+		"--port", strconv.Itoa(port),
+		"--served-model-name", servedID,
+		"--max-model-len", "32768",
+		"--gpu-memory-utilization", "0.45",
+		"--kv-cache-dtype", "fp8",
+	})
+}
+
+// FormatCommand lays an argument list out one flag per line, with each flag's
+// value beside it. `serve <model>` leads, because that is the one positional
+// pair and it is what the model actually is.
+//
+// Saving normalizes through this, so a pasted one-liner comes back readable
+// rather than staying a wall of text.
+func FormatCommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var lines []string
+	index := 0
+	if args[0] == "serve" && len(args) > 1 {
+		lines = append(lines, quoteIfNeeded(args[0])+" "+quoteIfNeeded(args[1]))
+		index = 2
+	}
+	for index < len(args) {
+		token := args[index]
+		// A flag takes the next token as its value unless that token is itself
+		// a flag, in which case this one is a bare switch.
+		if strings.HasPrefix(token, "-") && index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") {
+			lines = append(lines, quoteIfNeeded(token)+" "+quoteIfNeeded(args[index+1]))
+			index += 2
+			continue
+		}
+		lines = append(lines, quoteIfNeeded(token))
+		index++
+	}
+	return strings.Join(lines, "\n")
+}
+
+// quoteIfNeeded puts a token back in quotes when it contains the whitespace
+// that would otherwise split it in two on the next read.
+func quoteIfNeeded(token string) string {
+	if token == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(token, " \t\n\r") {
+		return token
+	}
+	// A JSON value is the common case here, so single quotes are the ones that
+	// survive: wrapping `{"enable_thinking": false}` in double quotes would end
+	// the quote on its first inner one.
+	if strings.Contains(token, `"`) {
+		return `'` + token + `'`
+	}
+	return `"` + token + `"`
+}
+
+// CommandFacts is what Console reads back out of a command: the arguments to
+// execute, and the two values Veil's registry is built from.
+type CommandFacts struct {
+	Args        []string
+	ModelPath   string
+	Port        int
+	MaxModelLen int
+}
+
+// splitCommand tokenizes on whitespace, honouring single and double quotes for
+// grouping only. No escapes, no variables, no globbing — a quote groups, and
+// that is all it does.
+func splitCommand(command string) ([]string, error) {
+	var tokens []string
+	var current strings.Builder
+	quote := rune(0)
+	started := false
+	for _, character := range command {
+		switch {
+		case quote != 0 && character == quote:
+			quote = 0
+		case quote == 0 && (character == '\'' || character == '"'):
+			quote = character
+			started = true
+		case quote == 0 && (character == ' ' || character == '\t' || character == '\n' || character == '\r'):
+			if started {
+				tokens = append(tokens, current.String())
+				current.Reset()
+				started = false
+			}
+		default:
+			current.WriteRune(character)
+			started = true
+		}
+	}
+	if quote != 0 {
+		return nil, errors.New("the command has an unclosed quote")
+	}
+	if started {
+		tokens = append(tokens, current.String())
+	}
+	return tokens, nil
+}
+
+func namedValue(tokens []string, flag string) (string, bool) {
+	for index, token := range tokens {
+		if token == flag && index+1 < len(tokens) {
+			return tokens[index+1], true
+		}
+		if value, found := strings.CutPrefix(token, flag+"="); found {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+// Parse validates the command and reads the facts Veil needs from it.
+func (m ManagedModel) Parse() (CommandFacts, error) {
+	command := strings.TrimSpace(m.Command)
+	if command == "" {
+		return CommandFacts{}, errors.New("the command is required")
+	}
+	if len(command) > maxCommandBytes {
+		return CommandFacts{}, fmt.Errorf("the command must be %d characters or fewer", maxCommandBytes)
+	}
+	if index := strings.IndexAny(command, shellMetacharacters); index >= 0 {
+		return CommandFacts{}, fmt.Errorf(
+			"%q is not allowed: this is an argument list, not a shell command", string(command[index]))
+	}
+	for _, character := range command {
+		if character == '\n' || character == '\r' || character == '\t' {
+			continue
+		}
+		if character < 0x20 || character == 0x7f {
+			return CommandFacts{}, errors.New("the command must not contain control characters")
+		}
+	}
+	tokens, err := splitCommand(command)
+	if err != nil {
+		return CommandFacts{}, err
+	}
+	if len(tokens) > maxCommandTokens {
+		return CommandFacts{}, fmt.Errorf("the command must have %d arguments or fewer", maxCommandTokens)
+	}
+	for _, token := range tokens {
+		if len(token) > maxTokenBytes {
+			return CommandFacts{}, fmt.Errorf("argument %q is longer than %d characters", clampToken(token), maxTokenBytes)
+		}
+	}
+	if len(tokens) < 2 || tokens[0] != "serve" {
+		return CommandFacts{}, errors.New("the command must start with `serve` followed by the model")
+	}
+	modelPath := tokens[1]
+	if strings.HasPrefix(modelPath, "-") {
+		return CommandFacts{}, errors.New("the model must follow `serve` directly, before any flag")
+	}
+
+	served, ok := namedValue(tokens, "--served-model-name")
+	if !ok {
+		return CommandFacts{}, errors.New("the command must set --served-model-name")
+	}
+	if served != m.ID {
+		return CommandFacts{}, fmt.Errorf(
+			"--served-model-name must stay %q; clients already use that name, so changing it is a remove and an add", m.ID)
+	}
+
+	rawPort, ok := namedValue(tokens, "--port")
+	if !ok {
+		return CommandFacts{}, errors.New("the command must set --port so Veil knows where to reach this model")
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil {
+		return CommandFacts{}, errors.New("--port must be a number")
+	}
+	if port < MinManagedPort || port > MaxManagedPort {
+		return CommandFacts{}, fmt.Errorf("--port must be between %d and %d", MinManagedPort, MaxManagedPort)
+	}
+
+	facts := CommandFacts{Args: tokens, ModelPath: modelPath, Port: port}
+	if rawLength, present := namedValue(tokens, "--max-model-len"); present {
+		length, err := strconv.Atoi(rawLength)
+		if err != nil {
+			return CommandFacts{}, errors.New("--max-model-len must be a number")
+		}
+		if length < MinMaxModelLen || length > MaxMaxModelLen {
+			return CommandFacts{}, fmt.Errorf("--max-model-len must be between %d and %d", MinMaxModelLen, MaxMaxModelLen)
+		}
+		facts.MaxModelLen = length
+	}
+	return facts, nil
+}
+
+func clampToken(token string) string {
+	if len(token) <= 40 {
+		return token
+	}
+	return token[:40] + "…"
+}
 
 func (m ManagedModel) Validate() error {
 	if !managedModelID.MatchString(m.ID) {
@@ -66,31 +280,18 @@ func (m ManagedModel) Validate() error {
 	if strings.ContainsAny(display, "\r\n\x00") {
 		return errors.New("display name must not contain control characters")
 	}
-	path := strings.TrimSpace(m.ModelPath)
-	if path == "" || len(path) > maxModelPathBytes {
-		return fmt.Errorf("model must be between 1 and %d characters", maxModelPathBytes)
+	_, err := m.Parse()
+	return err
+}
+
+// Port is the loopback port this model serves on, or 0 when the command does
+// not parse. Callers that need the error use Parse.
+func (m ManagedModel) Port() int {
+	facts, err := m.Parse()
+	if err != nil {
+		return 0
 	}
-	if strings.HasPrefix(path, "-") {
-		return errors.New("model must not start with a dash")
-	}
-	for _, character := range path {
-		if character < 0x20 || character == 0x7f {
-			return errors.New("model must not contain control characters")
-		}
-	}
-	if m.Port < MinManagedPort || m.Port > MaxManagedPort {
-		return fmt.Errorf("port must be between %d and %d", MinManagedPort, MaxManagedPort)
-	}
-	if m.MaxModelLen < MinMaxModelLen || m.MaxModelLen > MaxMaxModelLen {
-		return fmt.Errorf("max model length must be between %d and %d", MinMaxModelLen, MaxMaxModelLen)
-	}
-	if m.GPUMemoryUtilization <= 0 || m.GPUMemoryUtilization > 1 {
-		return errors.New("GPU memory fraction must be greater than 0.0 and at most 1.0")
-	}
-	if m.KVCacheDType != KVCacheFP8 && m.KVCacheDType != KVCacheAuto {
-		return errors.New("KV cache dtype must be fp8 or auto")
-	}
-	return nil
+	return facts.Port
 }
 
 // ValidateManagedModels checks one model against the rest of the fleet and
@@ -100,6 +301,10 @@ func ValidateManagedModels(models []ManagedModel, consolePort, veilPort int) err
 	seenID := map[string]bool{}
 	seenPort := map[int]bool{}
 	for _, model := range models {
+		facts, err := model.Parse()
+		if err != nil {
+			return fmt.Errorf("model %q: %w", model.ID, err)
+		}
 		if err := model.Validate(); err != nil {
 			return fmt.Errorf("model %q: %w", model.ID, err)
 		}
@@ -107,12 +312,12 @@ func ValidateManagedModels(models []ManagedModel, consolePort, veilPort int) err
 			return fmt.Errorf("model id %q is already registered", model.ID)
 		}
 		seenID[model.ID] = true
-		if seenPort[model.Port] {
-			return fmt.Errorf("port %d is already used by another model", model.Port)
+		if seenPort[facts.Port] {
+			return fmt.Errorf("port %d is already used by another model", facts.Port)
 		}
-		seenPort[model.Port] = true
-		if model.Port == consolePort || model.Port == veilPort {
-			return fmt.Errorf("port %d is already used by Console or Veil", model.Port)
+		seenPort[facts.Port] = true
+		if facts.Port == consolePort || facts.Port == veilPort {
+			return fmt.Errorf("port %d is already used by Console or Veil", facts.Port)
 		}
 	}
 	return nil
@@ -122,18 +327,7 @@ func ValidateManagedModels(models []ManagedModel, consolePort, veilPort int) err
 // Console supervises the process on this machine, and Veil's own dialer refuses
 // anything that is not loopback or private.
 func (m ManagedModel) ProviderBaseURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/v1", m.Port)
-}
-
-// TotalGPUFraction is the sum an administrator is warned about past 1.0. It is
-// a warning rather than a limit because a multi-GPU box legitimately exceeds
-// it — the fractions are per device, not per machine.
-func TotalGPUFraction(models []ManagedModel) float64 {
-	total := 0.0
-	for _, model := range models {
-		total += model.GPUMemoryUtilization
-	}
-	return total
+	return fmt.Sprintf("http://127.0.0.1:%d/v1", m.Port())
 }
 
 // modelEnvEntry is the exact shape Veil's VEIL_MODELS parser accepts. It is
@@ -155,12 +349,24 @@ func ModelsEnvJSON(models []ManagedModel) (string, error) {
 	}
 	entries := make([]modelEnvEntry, 0, len(models))
 	for _, model := range models {
+		facts, err := model.Parse()
+		if err != nil {
+			return "", err
+		}
 		entries = append(entries, modelEnvEntry{
 			ID:              model.ID,
-			ProviderBaseURL: model.ProviderBaseURL(),
+			ProviderBaseURL: fmt.Sprintf("http://127.0.0.1:%d/v1", facts.Port),
 			Display:         strings.TrimSpace(model.DisplayName),
-			Reasoning:       model.Reasoning,
-			ContextLength:   model.MaxModelLen,
+			// Console does not claim to know whether this model thinks. The
+			// chat-template kwarg that controls it is named differently per
+			// family — `enable_thinking` for Qwen3 and Gemma 4, `thinking` for
+			// Granite 3.2, DeepSeek-V3.1, and Holo2 — and the defaults go both
+			// ways, so guessing from the command would be wrong as often as
+			// right. The administrator sets the server default with
+			// `--default-chat-template-kwargs`; the client may still override
+			// it per request, which is vLLM's own precedence.
+			Reasoning:     true,
+			ContextLength: facts.MaxModelLen,
 		})
 	}
 	encoded, err := json.Marshal(entries)
