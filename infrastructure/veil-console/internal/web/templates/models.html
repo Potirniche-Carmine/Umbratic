@@ -1,0 +1,144 @@
+{{define "models.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="icon" href="/favicon.ico?v=10">
+  <link rel="stylesheet" href="/assets/style.css?v=10">
+  <link rel="stylesheet" href="/assets/models.css?v=2">
+  <script defer src="/assets/console.js?v=11"></script>
+</head>
+<body>
+<main class="app-shell">
+  {{template "topbar" .}}
+  <div class="page">
+    <header class="page-header model-page-header">
+      <div>
+        <h1>Models</h1>
+        <span class="model-counts">{{.Models.Running}} running · {{.Models.Registered}} registered</span>
+      </div>
+      <a class="button" href="#add-model">Add model</a>
+    </header>
+
+    {{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+    {{if .Notice}}<p class="banner notice" role="status">{{.Notice}}</p>{{end}}
+    {{if not .Models.Configured}}<p class="banner notice" role="status">Console was started without <code>--vllm-binary</code>, so no model can be started here. Registered models still reach Veil.</p>{{end}}
+    {{if .Models.PendingApply}}<p class="banner notice" role="status">Restart Veil to apply model list changes.</p>{{end}}
+    {{if .Models.GPUOverloaded}}<p class="banner notice" role="status">GPU memory fractions total {{.Models.GPUTotal}}. That is fine across several GPUs, and too much for one.</p>{{end}}
+
+    {{if .Models.Rows}}
+    <div class="model-list">
+      {{range .Models.Rows}}
+      <section class="panel model-card">
+        <div class="model-identity">
+          <strong>{{.DisplayName}}{{if .IsDefault}} <span class="model-default">default</span>{{end}}</strong>
+          <code>{{.ID}}</code>
+        </div>
+        <div class="model-state">
+          <span class="model-dot model-dot-{{.State}}" aria-hidden="true"></span>
+          <span class="model-state-text">{{.StateText}}</span>
+        </div>
+        <div class="model-meta">
+          <span class="chip">port {{.Port}}</span>
+          <span class="chip">{{.LenLabel}}</span>
+          <span class="chip">{{.GPULabel}}</span>
+          <span class="chip">KV {{.KVCacheDType}}</span>
+          {{if .Reasoning}}<span class="chip">reasoning</span>{{end}}
+        </div>
+        <!--
+          One form, one password. Every action on this card is a state change
+          that needs the owner to re-confirm, and three password boxes on one
+          card asks the same question three times.
+        -->
+        <form class="model-actions" method="post" action="/models/{{.ID}}/start">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <label class="model-password">
+            <span class="visually-hidden">Owner password for {{.DisplayName}}</span>
+            <input type="password" name="password" placeholder="Owner password" autocomplete="current-password" required>
+          </label>
+          {{if or (eq .State "healthy") (eq .State "starting")}}
+          <button class="button danger" type="submit" formaction="/models/{{.ID}}/stop">Stop</button>
+          {{else}}
+          <button class="button" type="submit" formaction="/models/{{.ID}}/start" {{if not $.Models.Configured}}disabled{{end}}>Start</button>
+          {{end}}
+          <a class="button secondary" href="/models/{{.ID}}/edit">Edit</a>
+          {{if or (eq .State "stopped") (eq .State "failed")}}
+          <button class="button danger" type="submit" formaction="/models/{{.ID}}/delete">Remove</button>
+          {{end}}
+        </form>
+        <div class="model-logs">
+          {{if .Expanded}}
+          <a class="text-button" href="/models">Hide logs</a>
+          <pre class="model-log-tail">{{if .Logs}}{{.Logs}}{{else}}No output yet.{{end}}</pre>
+          {{else}}
+          <a class="text-button" href="/models?logs={{.ID}}">Logs</a>
+          {{end}}
+        </div>
+      </section>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="banner notice" role="status">No models are registered yet. Add one below.</p>
+    {{end}}
+
+    <section class="panel model-form" id="add-model">
+      <div class="section-heading">
+        <h2>{{if .Models.Editing}}Edit {{.Models.Form.DisplayName}}{{else}}Add model{{end}}</h2>
+        {{if .Models.Editing}}<a class="text-button" href="/models">Cancel</a>{{end}}
+      </div>
+      {{if .Models.FormError}}<p class="form-error" role="alert">{{.Models.FormError}}</p>{{end}}
+      <form method="post" action="{{if .Models.Editing}}/models/{{.Models.Form.ID}}/update{{else}}/models/create{{end}}">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <div class="field-grid">
+          <label class="field">
+            <span>Display name</span>
+            <input name="display_name" value="{{.Models.Form.DisplayName}}" maxlength="120" required>
+          </label>
+          <label class="field">
+            <span>Served id</span>
+            <input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" required {{if .Models.Editing}}readonly{{end}}>
+            <small>What clients send as the model name. It cannot be renamed later.</small>
+          </label>
+          <label class="field field-wide">
+            <span>Model</span>
+            <input name="model_path" value="{{.Models.Form.ModelPath}}" maxlength="512" required>
+            <small>A Hugging Face repository id or an absolute path on this machine.</small>
+          </label>
+          <label class="field">
+            <span>Port</span>
+            <input name="port" type="number" min="1024" max="65535" value="{{.Models.Form.Port}}" required>
+          </label>
+          <label class="field">
+            <span>Max model length</span>
+            <input name="max_model_len" type="number" min="1024" max="1048576" value="{{.Models.Form.MaxModelLen}}" required>
+          </label>
+          <label class="field">
+            <span>GPU memory fraction</span>
+            <input name="gpu_memory_utilization" type="number" min="0.05" max="0.95" step="0.05" value="{{.Models.Form.GPUFraction}}" required>
+            <small>Registered models currently total {{.Models.GPUTotal}}.</small>
+          </label>
+          <label class="field">
+            <span>KV cache dtype</span>
+            <select name="kv_cache_dtype">
+              <option value="fp8" {{if eq .Models.Form.KVCacheDType "fp8"}}selected{{end}}>fp8 — 8-bit</option>
+              <option value="auto" {{if eq .Models.Form.KVCacheDType "auto"}}selected{{end}}>auto</option>
+            </select>
+          </label>
+          <label class="field checkbox-field">
+            <input name="reasoning" type="checkbox" {{if .Models.Form.Reasoning}}checked{{end}}>
+            <span>Model emits thinking</span>
+          </label>
+          <label class="field">
+            <span>Owner password</span>
+            <input type="password" name="password" autocomplete="current-password" required>
+          </label>
+        </div>
+        <button class="button" type="submit">{{if .Models.Editing}}Save changes{{else}}Add model{{end}}</button>
+      </form>
+    </section>
+  </div>
+</main>
+</body>
+</html>
+{{end}}

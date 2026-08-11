@@ -9,6 +9,7 @@ import { runnerLogsDirectory, workspaceRuntimeDirectory } from "./appPaths";
 import { companyEndpoint } from "./config";
 import { probeLocalCapabilities } from "./capabilities";
 import { refreshWorkspaceGraph, workspaceGraphRunnerConfig } from "./indexerService";
+import { veilManagedModelId } from "./endpointConfig";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { enabledPromptSkills } from "./skills";
@@ -25,6 +26,7 @@ import type {
   TaskRecord,
 } from "./types";
 import { isRecord } from "./utils";
+import { connectedVeilSupports, veilFeature } from "./veilFeatures";
 
 type HarnessRouteConfig = {
   chatEndpointPath: string;
@@ -100,6 +102,13 @@ export function buildUmbraticRunnerConfig(
       chatEndpointPath: route.chatEndpointPath,
       apiKey: localVeil?.authToken ?? "",
       modelId: selectedModel.modelId,
+      // Naming the model is only admissible where the server published a
+      // registry to pick from. Local mode has one model per Veil process, and
+      // the sentinel means the user never picked — both send nothing.
+      sendModelField:
+        endpointSettings.mode === "server"
+        && connectedVeilSupports(veilFeature.modelSelection)
+        && selectedModel.modelId !== veilManagedModelId,
       capabilities: selectedModel.capabilities ?? {
         parallelToolCalls: endpointSettings.mode === "local",
         vision: false,

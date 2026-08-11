@@ -23,14 +23,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	modelClient, err := model.NewClient(model.ClientConfig{
-		Mode:             cfg.Mode,
-		BaseURL:          cfg.ProviderBaseURL,
-		ContextLength:    cfg.ContextLength,
-		Timeout:          cfg.ModelTimeout,
-		EmbeddingBaseURL: cfg.RAG.EmbeddingBaseURL,
-		EmbeddingModel:   cfg.RAG.EmbeddingModel,
-	})
+	specs := make([]model.RegistrySpec, 0, len(cfg.Models))
+	for _, entry := range cfg.Models {
+		specs = append(specs, model.RegistrySpec{
+			ID:               entry.ID,
+			BaseURL:          entry.ProviderBaseURL,
+			ContextLength:    entry.ContextLength,
+			Reasoning:        entry.Reasoning,
+			EmbeddingBaseURL: cfg.RAG.EmbeddingBaseURL,
+			EmbeddingModel:   cfg.RAG.EmbeddingModel,
+		})
+	}
+	modelClient, err := model.NewRegistry(cfg.Mode, cfg.DefaultModel, specs, cfg.ModelTimeout)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -105,6 +105,26 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
     /approved Veil chat API/,
   );
   assert.throws(() => policy.assertUmbraticRunnerConfig({ ...config, system: "client prompt" }, model), /protected system prompts/);
+  // The server-default sentinel is a local placeholder. Sending it as a model
+  // name would name a model that does not exist on any server.
+  assert.throws(
+    () => policy.assertUmbraticRunnerConfig(
+      { ...config, provider: { ...config.provider, sendModelField: true } },
+      model,
+    ),
+    /sentinel must never be sent/,
+  );
+  assert.doesNotThrow(() => policy.assertUmbraticRunnerConfig(
+    { ...config, provider: { ...config.provider, modelId: "qwen3-32b", sendModelField: true } },
+    { ...model, modelId: "qwen3-32b" },
+  ));
+  assert.throws(
+    () => policy.assertUmbraticRunnerConfig(
+      { ...config, provider: { ...config.provider, sendModelField: "yes" } },
+      model,
+    ),
+    /sendModelField/,
+  );
   // provider.mode is trusted config that selects the runner's orient timeout,
   // so it must be explicit rather than inferred from the URL.
   for (const mode of [undefined, "", "auto", "Local", 1]) {

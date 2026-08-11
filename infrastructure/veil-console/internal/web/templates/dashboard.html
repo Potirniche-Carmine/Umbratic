@@ -26,6 +26,12 @@
         <span>Connect at</span>
         <strong>{{.VeilURL}}</strong>
       </div>
+      {{if .Models.Registered}}
+      <div class="service-endpoint">
+        <span>Models</span>
+        <strong><a href="/models">{{.Models.Running}} running / {{.Models.Registered}} registered</a></strong>
+      </div>
+      {{end}}
       {{if not .Configured}}
         <p class="empty-copy">A model runtime is not configured.</p>
         <a class="button primary" href="/settings">Configure</a>

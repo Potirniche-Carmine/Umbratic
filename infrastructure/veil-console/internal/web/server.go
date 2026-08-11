@@ -37,6 +37,7 @@ type Server struct {
 	secretsMu    sync.RWMutex
 	secrets      state.Secrets
 	supervisor   *supervisor.Supervisor
+	models       *supervisor.ModelSupervisor
 	corpus       *rag.Corpus
 	access       *access.Client
 	templates    *template.Template
@@ -70,7 +71,9 @@ type pageData struct {
 	Ops               supervisor.OpsMetrics
 	EnterpriseEnabled bool
 	Access            accessView
-	Models            []string
+	// SettingsModels is the default-model dropdown on the Settings page.
+	SettingsModels    []string
+	Models            modelsView
 	EnrollmentCode    string
 	EnrollmentExpires string
 	RetryAfterSeconds int
@@ -113,6 +116,7 @@ func New(startup config.Startup, store *state.Store, secrets state.Secrets, proc
 	}))
 	return &Server{
 		startup: startup, store: store, secrets: secrets, supervisor: process, corpus: corpus,
+		models:    supervisor.NewModelSupervisor(startup.VLLMBinary),
 		access:    access.NewClient(startup.VeilAddress, secrets.ControlToken),
 		templates: templates, throttle: newLoginThrottle(), crossOrigin: crossOrigin,
 	}, nil
@@ -127,6 +131,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /assets/access.css", s.accessStyle)
 	mux.HandleFunc("GET /assets/settings.css", s.settingsStyle)
 	mux.HandleFunc("GET /assets/documents.css", s.documentsStyle)
+	mux.HandleFunc("GET /assets/models.css", s.modelsStyle)
 	mux.HandleFunc("GET /assets/console.js", s.script)
 	mux.HandleFunc("GET /assets/umbratic-icon.png", s.logo)
 	mux.HandleFunc("GET /favicon.ico", s.favicon)
@@ -143,6 +148,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /veil/start", s.requireSession(http.HandlerFunc(s.veilStart)))
 	mux.Handle("POST /veil/stop", s.requireSession(http.HandlerFunc(s.veilStop)))
 	mux.Handle("POST /veil/restart", s.requireSession(http.HandlerFunc(s.veilRestart)))
+	mux.Handle("GET /models", s.requireSession(http.HandlerFunc(s.modelsPage)))
+	mux.Handle("GET /models/{model_id}/edit", s.requireSession(http.HandlerFunc(s.modelsEdit)))
+	mux.Handle("POST /models/create", s.requireSession(http.HandlerFunc(s.modelsCreate)))
+	mux.Handle("POST /models/{model_id}/update", s.requireSession(http.HandlerFunc(s.modelsUpdate)))
+	mux.Handle("POST /models/{model_id}/delete", s.requireSession(http.HandlerFunc(s.modelsDelete)))
+	mux.Handle("POST /models/{model_id}/start", s.requireSession(http.HandlerFunc(s.modelsStart)))
+	mux.Handle("POST /models/{model_id}/stop", s.requireSession(http.HandlerFunc(s.modelsStop)))
 	mux.Handle("GET /documents", s.requireSession(http.HandlerFunc(s.documentsPage)))
 	mux.Handle("POST /documents/upload", s.requireSession(http.HandlerFunc(s.documentsUpload)))
 	mux.Handle("POST /documents/settings/test", s.requireSession(http.HandlerFunc(s.documentsSettingsTest)))
@@ -408,11 +420,13 @@ func (s *Server) dashboardData(r *http.Request, errorMessage, noticeMessage stri
 	metricsCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	ops := s.supervisor.FetchOpsMetrics(metricsCtx, token)
+	managed, _ := s.store.ManagedModels(r.Context())
 	return pageData{
 		Title: "Veil Console", CSRF: csrfCookie(r), Username: session.Data.Username,
 		Configured: configured, Status: processStatus.String(), Running: processStatus.Running, Healthy: processStatus.Healthy,
 		VeilURL: "http://" + s.startup.VeilAddress, Ops: ops,
-		Error: errorMessage, Notice: noticeMessage,
+		Models: modelsView{Registered: len(managed), Running: s.models.RunningCount(managed)},
+		Error:  errorMessage, Notice: noticeMessage,
 	}
 }
 
@@ -430,10 +444,31 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsData(r *http.Request, cfg config.Veil, errorMessage, noticeMessage string) pageData {
+	managed, _ := s.store.ManagedModels(r.Context())
 	return pageData{
 		Title: "Settings", CSRF: csrfCookie(r), Config: cfg,
-		Error: errorMessage, Notice: noticeMessage, Models: settingsModels(r.Context(), cfg),
+		Error: errorMessage, Notice: noticeMessage,
+		SettingsModels: settingsModelChoices(r.Context(), cfg, managed),
+		// Only the count is needed here: it decides whether this field is a
+		// free-form model name or a choice among the managed runtimes.
+		Models: modelsView{Registered: len(managed)},
 	}
+}
+
+// defaultModelIsManaged refuses a default that names no runtime Console can
+// start. It applies only once models are registered: a deployment with none
+// still points Veil at whatever the administrator configured by hand.
+func (s *Server) defaultModelIsManaged(r *http.Request, cfg config.Veil) error {
+	managed, err := s.store.ManagedModels(r.Context())
+	if err != nil || len(managed) == 0 {
+		return nil
+	}
+	for _, model := range managed {
+		if model.ID == cfg.Model {
+			return nil
+		}
+	}
+	return errors.New("the default model must be one of the registered models")
 }
 
 func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +485,9 @@ func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, err := parseSettings(r)
+	if err == nil {
+		err = s.defaultModelIsManaged(r, cfg)
+	}
 	if err == nil {
 		err = supervisor.TestProvider(r.Context(), cfg)
 	}
@@ -474,6 +512,9 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, err := parseSettings(r)
+	if err == nil {
+		err = s.defaultModelIsManaged(r, cfg)
+	}
 	secrets := s.currentSecrets()
 	if err != nil {
 		s.store.Audit(r.Context(), "settings.apply", "failure", time.Now())
@@ -913,11 +954,19 @@ func (t *loginThrottle) Success(key string) {
 	t.mu.Unlock()
 }
 
+// Shutdown reaps every supervised process. A model runtime that outlives
+// Console holds its share of the GPU with nothing left to stop it.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.models.StopAll()
 	return s.supervisor.Stop(ctx)
 }
 
 func (s *Server) StartLastKnownGood(ctx context.Context) {
+	// The registry Veil starts with is the stored one, read before the process
+	// exists rather than at the first page load.
+	if models, err := s.store.ManagedModels(ctx); err == nil {
+		s.supervisor.SetModels(models)
+	}
 	cfg, ok, err := s.store.Configuration(ctx, "current")
 	if err != nil || !ok {
 		return

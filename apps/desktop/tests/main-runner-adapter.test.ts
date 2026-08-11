@@ -453,3 +453,48 @@ test("runner config passes only verified command executables", () => {
     { id: "npm", command: fs.realpathSync(process.execPath) },
   ]);
 });
+
+test("the runner names its model only when the server invited it", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-send-model-"));
+  const cache = new Map();
+  const electron = electronMock(userData);
+  const mocks = { electron, "node:os": { ...os, homedir: () => path.join(userData, "home") } };
+  const adapter = loadTypeScriptModule(runnerAdapterPath, { cache, mocks });
+  const storage = loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), { cache, mocks });
+  const features = loadTypeScriptModule(new URL("../src/main/veilFeatures.ts", import.meta.url), { cache, mocks });
+
+  const task = {
+    id: "task-model",
+    repositoryId: "repo-1",
+    prompt: "Ship it",
+    workspaceKind: "git",
+    workspaceMode: "local",
+    enabledTools: ["read"],
+    worktreePath: path.join(userData, "work"),
+  };
+  const model = (modelId) => ({
+    providerId: "company-endpoint",
+    providerName: "Umbratic Veil",
+    modelId,
+    displayName: modelId,
+    baseUrl: "https://veil.example.internal",
+  });
+  const sendModelField = (modelId) =>
+    adapter.buildUmbraticRunnerConfig(task, model(modelId)).provider.sendModelField;
+
+  storage.writeModelEndpointSettings({ mode: "server", baseUrl: "https://veil.example.internal", modelId: "qwen3-32b" });
+
+  // A server that never advertised the feature refuses `model` outright.
+  features.recordVeilFeatures([]);
+  assert.equal(sendModelField("qwen3-32b"), false);
+
+  features.recordVeilFeatures(["chat.model_selection"]);
+  assert.equal(sendModelField("qwen3-32b"), true);
+  // The sentinel means "no pick", so there is nothing to name.
+  assert.equal(sendModelField("veil-managed"), false);
+
+  // Local mode runs one model per Veil process; there is no registry to pick
+  // from, and the local Veil refuses the field.
+  storage.writeModelEndpointSettings({ mode: "local", baseUrl: "http://127.0.0.1:11434", modelId: "qwen3:8b" });
+  assert.equal(sendModelField("qwen3:8b"), false);
+});

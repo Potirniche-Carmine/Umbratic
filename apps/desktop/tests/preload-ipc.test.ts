@@ -89,6 +89,8 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["saveSkillDocument", [{ id: "skill", content: "# Skill" }], "umbratic:save-skill-document"],
     ["resetSystemSkill", [{ id: "umbratic-markdown" }], "umbratic:reset-system-skill"],
     ["setPermissionMode", ["auto_safe"], "umbratic:set-permission-mode"],
+    ["setReasoningMode", ["fast"], "umbratic:set-reasoning-mode"],
+    ["listServerModels", [], "umbratic:list-server-models", undefined],
     ["listAvailableIdes", [], "umbratic:list-available-ides", undefined],
     ["startTask", [{ prompt: "go", worktreeTaskId: "task-root" }], "umbratic:start-task"],
     ["steerTask", [{ taskId: "task-1", prompt: "Use the smaller layout" }], "umbratic:steer-task"],

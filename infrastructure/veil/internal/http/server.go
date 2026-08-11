@@ -33,6 +33,13 @@ type ModelClient interface {
 	RuntimeMetrics(context.Context) (model.RuntimeMetrics, error)
 	PrefixTokens(ctx context.Context, key, modelID string, messages []model.Message) model.UsageAnnotation
 	Embed(ctx context.Context, text string) ([]float32, error)
+	// Available reports whether the runtime behind this model id lists it right
+	// now. ListModels answers for the default runtime only; with a registry
+	// each id may live behind its own process.
+	Available(ctx context.Context, modelID string) (bool, error)
+	// ThinkingSupported reports whether a thinking directive means anything for
+	// this model, so the toggle can be disabled rather than silently ignored.
+	ThinkingSupported(ctx context.Context, modelID string) bool
 }
 
 type Server struct {
@@ -47,6 +54,7 @@ type Server struct {
 	templateErr  error
 	templateData templates.Registry
 	retriever    *rag.Retriever
+	availability availabilityCache
 }
 
 type contextKey int
@@ -142,6 +150,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleHealth(w, r)
+		return
+	}
+	if r.URL.Path == "/api/models" {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleModels(w, r)
 		return
 	}
 	if r.URL.Path == "/api/model/context" {
@@ -541,7 +557,7 @@ func writeIdentityError(w http.ResponseWriter, err error) {
 
 func isActivityProductRoute(path string) bool {
 	switch path {
-	case "/api/model/connect", "/api/model/context", "/api/engineering/chat", "/api/marketing/chat",
+	case "/api/model/connect", "/api/model/context", "/api/models", "/api/engineering/chat", "/api/marketing/chat",
 		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry":
 		return true
 	default:
@@ -573,13 +589,24 @@ func (s *Server) handleModelContext(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
 	defer cancel()
 
-	contextLength, err := s.model.ContextLength(ctx, s.cfg.DefaultModel)
-	if err != nil && s.cfg.ContextLength <= 0 {
+	// The window belongs to the model, so a client that lets a user pick one
+	// has to be able to ask about that one. An unknown id falls back to the
+	// default rather than failing: the caller learns the truth from /api/models.
+	selected := s.cfg.DefaultModel
+	if requested := strings.TrimSpace(r.URL.Query().Get("model")); requested != "" {
+		if _, ok := s.cfg.ModelEntryByID(requested); ok {
+			selected = requested
+		}
+	}
+	configured := s.contextLengthFor(selected)
+
+	contextLength, err := s.model.ContextLength(ctx, selected)
+	if err != nil && configured <= 0 {
 		writeJSONError(w, http.StatusBadGateway, "model context unavailable")
 		return
 	}
-	if s.cfg.ContextLength > 0 && (contextLength <= 0 || s.cfg.ContextLength < contextLength) {
-		contextLength = s.cfg.ContextLength
+	if configured > 0 && (contextLength <= 0 || configured < contextLength) {
+		contextLength = configured
 	}
 	if contextLength <= 0 {
 		writeJSONError(w, http.StatusBadGateway, "model context unavailable")
@@ -609,11 +636,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"state":    string(s.lifecycle.state()),
-		"features": Features(s.cfg.RAG.Enabled),
+		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,
-			"reasoning":           s.cfg.ModelReasoning,
+			"reasoning":           s.defaultModelReasons(ctx),
 		},
 	})
 }
@@ -649,6 +676,19 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		"retentionDays":  s.cfg.TelemetryRetentionDays,
 		"stored":         storedPath != "",
 	})
+}
+
+// defaultModelReasons is what capabilities.reasoning has always meant — can the
+// model this server answers with think — asked of the model rather than only of
+// the environment, now that local runtimes can be asked directly.
+func (s *Server) defaultModelReasons(ctx context.Context) bool {
+	if s.cfg.Mode == model.ModeLocal {
+		return s.model.ThinkingSupported(ctx, s.cfg.DefaultModel)
+	}
+	if entry, ok := s.cfg.ModelEntryByID(s.cfg.DefaultModel); ok && entry.Reasoning {
+		return true
+	}
+	return s.cfg.ModelReasoning
 }
 
 func (s *Server) configuredModelAvailable(ctx context.Context) (bool, error) {

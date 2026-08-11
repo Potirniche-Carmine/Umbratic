@@ -26,6 +26,7 @@ var migrations = []migration{
 	{name: "base", apply: applyBaseSchema},
 	{name: "configurations_generation_profile", apply: upgradeLegacyConfigurations},
 	{name: "rag_corpus", apply: applyCorpusSchema},
+	{name: "managed_models", apply: applyManagedModelSchema},
 }
 
 // Connection pragmas. These are per-connection settings rather than schema, and
@@ -90,6 +91,20 @@ CREATE TABLE IF NOT EXISTS rag_settings (
   dimension INTEGER NOT NULL, vector_base_url TEXT NOT NULL,
   collection TEXT NOT NULL, top_k INTEGER NOT NULL,
   max_injected_bytes INTEGER NOT NULL, timeout_ns INTEGER NOT NULL
+);
+`
+
+// The models Console launches and supervises. The port is unique because two
+// runtimes cannot share one, and the dtype is constrained in the schema so a
+// row that would produce an invalid argv cannot be stored in the first place.
+const managedModelSchema = `
+CREATE TABLE IF NOT EXISTS managed_models (
+  id TEXT PRIMARY KEY, display_name TEXT NOT NULL, model_path TEXT NOT NULL,
+  port INTEGER NOT NULL UNIQUE, max_model_len INTEGER NOT NULL,
+  gpu_memory_utilization REAL NOT NULL,
+  kv_cache_dtype TEXT NOT NULL DEFAULT 'fp8',
+  reasoning INTEGER NOT NULL, created_at INTEGER NOT NULL,
+  CHECK (kv_cache_dtype IN ('fp8','auto'))
 );
 `
 
@@ -166,6 +181,11 @@ func applyBaseSchema(tx *sql.Tx) error {
 
 func applyCorpusSchema(tx *sql.Tx) error {
 	_, err := tx.Exec(corpusSchema)
+	return err
+}
+
+func applyManagedModelSchema(tx *sql.Tx) error {
+	_, err := tx.Exec(managedModelSchema)
 	return err
 }
 

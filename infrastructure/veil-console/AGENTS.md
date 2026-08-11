@@ -11,6 +11,7 @@ Do not merge Console code into Veil. Console can change Veil only through its fi
 - Accept only `127.0.0.1` or `::1` as the Console listen address. Do not add an override.
 - For an HTTPS reverse proxy, accept only one validated exact HTTPS origin. Keep the Console listener on loopback and mark authentication cookies as `Secure`.
 - Do not add a shell, command runner, generic environment editor, file browser, public listener, or browser-supplied executable arguments.
+- **One deliberate exception: the managed-model launcher.** Console starts `vllm serve` for each registered model. Its argv comes from a single pure function over validated typed fields — served id, model path, port, max model length, GPU fraction, KV cache dtype — and from nothing else. There is no free-form argument field, and there must never be one: a launcher that accepts arbitrary arguments is the command runner this rule forbids. The child gets an allowlisted environment (PATH/HOME/CUDA/HF), never the parent's. See `internal/supervisor/models.go`.
 - Store passwords as versioned Argon2id verifiers. Store session and setup tokens only as hashes.
 - Put non-secret state in SQLite. Put only the Veil token and CSRF signing key in the restricted secret file.
 - Support only local Ollama or local vLLM runtimes without provider authentication.
@@ -27,7 +28,7 @@ Do not merge Console code into Veil. Console can change Veil only through its fi
 - `internal/auth` owns password and opaque-token primitives.
 - `internal/config` owns typed Console and Veil configuration validation.
 - `internal/state` owns SQLite schema initialization, accounts, sessions, configurations, audit events, and the secret file.
-- `internal/supervisor` owns provider tests, Veil process state, health checks, and rollback.
+- `internal/supervisor` owns provider tests, Veil process state, health checks, rollback, and the per-model vLLM child processes.
 - `internal/web` owns routes, middleware, embedded templates, and assets. Keep business rules outside handlers.
 
 ## Dependencies

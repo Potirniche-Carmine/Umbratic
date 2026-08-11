@@ -20,6 +20,8 @@ Veil owns model-facing behavior. Do not add system prompts, hidden behavioral pr
 
 Both connection modes go through Veil. Local mode uses the app-managed local Veil process; Server mode uses the hosted Veil service. Never call Ollama, vLLM, or another model runtime directly.
 
+Picking a model from the registry Veil publishes is a route choice of the same kind, not a runtime decision: the desktop names an id Veil already offered on `/api/models`, and Veil decides what that id means and where it goes. Never derive a model list from a runtime, and never send `model` to a server that has not advertised `chat.model_selection` — a server without a registry refuses the field rather than ignoring it.
+
 The desktop may select an explicit product route requested by the user. Veil owns the prompt and model behavior behind that route. Client-to-model content is limited to user content and factual local context such as workspace facts, repository instructions, attachments, conversation history, capability results, and tool results. Keep context envelopes neutral.
 
 Enabled skills are an index, not pre-injected instructions. The desktop may send validated skill id, name, description, and source metadata and expose the local `read_skill` tool. Never preselect skills with desktop heuristics or inject full skill bodies from the shell.

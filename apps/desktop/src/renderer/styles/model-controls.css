@@ -1,0 +1,344 @@
+/*
+ * The composer's Think toggle and model picker.
+ *
+ * Both sit in `.promptControls` and borrow the 28px pill grammar the workspace,
+ * permission, and branch controls already use — a new control that invented its
+ * own shape would read as belonging to a different app.
+ */
+
+.thinkControl {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.thinkToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--control-bg);
+  font-weight: 500;
+  font-size: 12px;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    /* Feedback belongs to the press, not the release, so this one is fast. */
+    transform 100ms ease-out;
+}
+
+.thinkToggle svg {
+  flex: 0 0 auto;
+}
+
+.thinkToggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+  border-color: var(--line-strong);
+}
+
+/* A tap, not a flick: it presses in and returns. No overshoot. */
+.thinkToggle:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/*
+ * On borrows the composer's existing "this control is engaged" look — the same
+ * one the worktree pill uses — rather than inventing a state colour. The
+ * reasoning tokens were the obvious choice and the wrong one: they are tuned to
+ * make reasoning text recede, and at that strength the on background differed
+ * from off by four values out of 255. A toggle whose state you have to squint
+ * at is a toggle that will be left in the wrong position.
+ */
+.thinkControl.isOn .thinkToggle {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--control-active);
+}
+
+.thinkControl.isOn .thinkToggle svg {
+  color: var(--reasoning-text);
+}
+
+.thinkControl.isOn .thinkToggle:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.thinkToggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.modelControl {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.modelControl.isOpen {
+  z-index: 120;
+}
+
+.modelTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--control-bg);
+  font-weight: 500;
+  font-size: 12px;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 100ms ease-out;
+}
+
+.modelTrigger svg {
+  flex: 0 0 auto;
+}
+
+.modelTrigger > span {
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+  border-color: var(--line-strong);
+}
+
+.modelTrigger:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.modelControl.isOpen .modelTrigger {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--control-active);
+}
+
+.modelTrigger:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/*
+ * Opens upward from the trigger, with its origin anchored there, so the menu
+ * visibly grows out of the control that was pressed rather than appearing
+ * beside it.
+ */
+.modelMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 120;
+  display: grid;
+  gap: 3px;
+  min-width: 240px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  transform-origin: bottom left;
+  animation: menuRise 180ms ease both;
+}
+
+.modelMenu button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 600;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+
+.modelMenu button:hover,
+.modelMenu button.active {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.modelMenu button.active svg {
+  color: var(--accent);
+}
+
+.modelName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelContextBadge {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * A stopped model stays selectable: it is registered, an administrator can
+ * start it, and hiding it would read as the model having been removed.
+ */
+.modelMenu button.isStopped {
+  opacity: 0.55;
+}
+
+.modelStatusDot,
+.modelPickerStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.modelMenu button.isStopped .modelStatusDot {
+  background: var(--muted);
+}
+
+.modelPickerOption.isStopped .modelPickerStatusDot {
+  background: var(--muted);
+}
+
+/* The connection page's shared combobox carries the same two affordances. */
+.modelPickerOption.isStopped {
+  opacity: 0.55;
+}
+
+.modelPickerOptionName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelPickerBadge {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.connectionModelUnavailable {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Reduced motion keeps the state change legible without the rise. */
+@keyframes menuFade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modelMenu {
+    animation: menuFade 120ms ease both;
+  }
+
+  .thinkToggle,
+  .modelTrigger {
+    transition: none;
+  }
+
+  .thinkToggle:active:not(:disabled),
+  .modelTrigger:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .modelMenu {
+    background: var(--surface-2);
+    backdrop-filter: none;
+  }
+}
+
+/*
+ * Connection page: the model picker and its refresh sit on one line, matching
+ * the local runtime's refresh affordance so the two modes read the same.
+ */
+.connectionServerModelRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+.connectionServerModelRow .settingsField {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.connectionModelRefresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--control-bg);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 100ms ease-out;
+}
+
+.connectionModelRefresh:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+  border-color: var(--line-strong);
+}
+
+.connectionModelRefresh:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.connectionModelRefresh:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connectionModelRefresh {
+    transition: none;
+  }
+
+  .connectionModelRefresh:active:not(:disabled) {
+    transform: none;
+  }
+}

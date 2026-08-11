@@ -13,10 +13,14 @@ import (
 )
 
 type Startup struct {
-	Listen          string
-	Port            int
-	StateDir        string
-	VeilBinary      string
+	Listen     string
+	Port       int
+	StateDir   string
+	VeilBinary string
+	// VLLMBinary is the vLLM executable Console launches managed models with.
+	// Optional: without it the Models page renders read-only, because there is
+	// nothing to start.
+	VLLMBinary      string
 	VeilAddress     string
 	EntitlementPath string
 	TrustedOrigin   string
@@ -106,6 +110,9 @@ func ValidateStartup(cfg *Startup) error {
 		return errors.New("Veil binary owner is unsafe")
 	}
 	cfg.VeilBinary = filepath.Clean(binary)
+	if err := validateOptionalBinary(&cfg.VLLMBinary, "vLLM binary"); err != nil {
+		return err
+	}
 	if cfg.EntitlementPath != "" {
 		entitlementPath, err := filepath.Abs(cfg.EntitlementPath)
 		if err != nil {
@@ -128,6 +135,39 @@ func ValidateStartup(cfg *Startup) error {
 	if err != nil || parsedPort < 1 || parsedPort > 65535 {
 		return errors.New("Veil address must use a valid port")
 	}
+	return nil
+}
+
+// validateOptionalBinary holds an optional executable to the same bar as the
+// Veil binary: a real file, not a symlink, not group or world writable, and
+// owned safely. A launcher is only as trustworthy as what it launches.
+func validateOptionalBinary(path *string, label string) error {
+	if strings.TrimSpace(*path) == "" {
+		*path = ""
+		return nil
+	}
+	resolved, err := filepath.Abs(*path)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", label, err)
+	}
+	resolved, err = resolveBinaryPath(resolved)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", label, err)
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", label, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s must be a regular file", label)
+	}
+	if unsafePermissions(info.Mode()) {
+		return fmt.Errorf("%s must not be group or world writable", label)
+	}
+	if unsafeOwner(info) {
+		return fmt.Errorf("%s owner is unsafe", label)
+	}
+	*path = filepath.Clean(resolved)
 	return nil
 }
 

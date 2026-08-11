@@ -4,7 +4,11 @@ import { currentCompanySessionToken } from "./companyIdentity";
 import { currentLocalVeilConnection } from "./localVeil";
 import { readModelEndpointSettings } from "./storage";
 
-const veilManagedModelId = "veil-managed";
+/**
+ * The stored id that means "whatever the server defaults to". It is a local
+ * sentinel, never a model name: it must not reach a chat body.
+ */
+export const veilManagedModelId = "veil-managed";
 
 export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");

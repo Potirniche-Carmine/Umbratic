@@ -13,9 +13,9 @@ func TestSettingsUseCustomChoicesAndShowEverySliderValue(t *testing.T) {
 	defer closeServer()
 	response := httptest.NewRecorder()
 	server.render(response, "settings.html", pageData{
-		Title:  "Settings",
-		Config: config.Veil{Model: "ornith:9b"},
-		Models: []string{"ornith:9b"},
+		Title:          "Settings",
+		Config:         config.Veil{Model: "ornith:9b"},
+		SettingsModels: []string{"ornith:9b"},
 	})
 	body := response.Body.String()
 	for _, expected := range []string{

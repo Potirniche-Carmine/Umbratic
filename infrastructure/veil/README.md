@@ -26,6 +26,7 @@ Veil has two authentication modes.
 
 ```text
 GET  /api/health
+GET  /api/models
 POST /api/engineering/chat
 POST /api/marketing/chat
 POST /api/sales/chat
@@ -54,6 +55,62 @@ Chat requests may include a validated `skills` catalog containing only each enab
 Both desktop modes use this same boundary. Local mode starts a loopback Veil process bundled with the app; Server mode calls a hosted Veil deployment. The runner never injects or forwards a client system prompt in either mode.
 
 The health route checks that the model configured inside Veil is available from the runtime, but it does not return model names or runtime metadata.
+
+### Model registry
+
+`GET /api/models` lists what this Veil routes to:
+
+```json
+{"models":[{"id":"qwen3-32b","display":"Qwen 32B","context_length":98304,
+            "capabilities":{"reasoning":true},"available":true,"default":true}]}
+```
+
+`available` is live — a registered model whose runtime is stopped stays listed
+and unavailable, because a client with it selected needs to see why nothing
+answers. Availability is cached for a few seconds, so the picker does not probe
+every runtime on the box each time it opens.
+
+Set `VEIL_MODELS` to publish more than one:
+
+```json
+[{"id":"qwen3-32b","provider_base_url":"http://127.0.0.1:8001/v1",
+  "display":"Qwen 32B","reasoning":true,"context_length":98304},
+ {"id":"small","provider_base_url":"http://127.0.0.1:8002/v1"}]
+```
+
+`id` and `provider_base_url` are required; ids are unique and at most 256 bytes,
+and `VEIL_MODEL` must name one of them. Each entry gets its own frozen endpoint
+set at startup, so a chat request naming an id lands on that runtime and nowhere
+else.
+
+With `VEIL_MODELS` set, `/api/health` advertises `chat.model_selection` and a
+chat body may carry `model`. **Unset, behavior is byte identical to a
+single-model deployment**: one synthesized registry entry, no
+`chat.model_selection`, and `model` in a chat body is still refused loudly. That
+refusal is deliberate — a client that believes it chose a model must never be
+answered by a different one.
+
+### Thinking
+
+A chat body may carry `thinking: "on" | "off"`. It is a tolerant hint like
+`harness_bucket`: an unreadable value is treated as absent and never refuses the
+request. It decides whether the model reasons, never whether that reasoning is
+shown — reasoning content stays stripped either way.
+
+- vLLM receives `chat_template_kwargs.enable_thinking`. Only chat templates that
+  read it act on it (the Qwen3 family does), so document per-model expectations
+  where it matters. `off` also clears `reasoning_effort` and the thinking
+  budget, so the request does not ask the model not to think and then tell it
+  how hard to think.
+- Ollama receives `think`, and only when `api/show` confirms the model carries
+  the `thinking` capability: some builds fail the whole request otherwise. A
+  failed probe counts as unsupported.
+
+For KV cache precision, vLLM's 8-bit option is `--kv-cache-dtype fp8` — there is
+no literal `q8`. A local Ollama administrator sets `OLLAMA_KV_CACHE_TYPE=q8_0`
+in the runtime's own environment; Veil does not manage it.
+
+Veil accepts no provider `--api-key`, in this configuration or any other.
 
 ## Configure
 
@@ -93,7 +150,8 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_ENTITLEMENT_PATH` | In company mode | None | Signed customer entitlement file. Veil fails closed if verification fails. |
 | `VEIL_IDENTITY_STORE_PATH` | In company mode | None | Customer-managed Veil identity state file. |
 | `VEIL_PROVIDER_BASE_URL` | Yes | None | Base URL of the private model runtime. Keep this runtime inaccessible to public clients. |
-| `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. |
+| `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. With `VEIL_MODELS` set it must also name one of that registry's ids, and it is the default a request with no `model` gets. |
+| `VEIL_MODELS` | Server | Unset | JSON array of routable models. Unset means the single-model behavior below, byte for byte. |
 | `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
 | `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
 | `VEIL_TRUSTED_PROXY_CIDRS` | No | Empty | Comma-separated addresses or CIDRs whose `X-Forwarded-For` is believed when keying identity rate limits. Leave empty unless the proxy overwrites that header; otherwise a client picks its own bucket. Console sets loopback for the supervised deployment. |

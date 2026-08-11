@@ -37,7 +37,7 @@ Administrator browser -> Veil Console -> supervised Veil process
 - Renderer: presentation only. No privileged filesystem or process access.
 - Electron main: orchestration, IPC, permissions, local product state, runner/Veil lifecycle.
 - Runner: workspace tools, policy, execution, session/context, authenticated HTTP/SSE.
-- Veil: all protected model-facing behavior. Desktop and runner never call Ollama, vLLM, or another runtime directly.
+- Veil: all protected model-facing behavior. Desktop and runner never call Ollama, vLLM, or another runtime directly. Choosing among the models Veil publishes is a product route choice, not a runtime decision: the list comes from Veil and the id means whatever Veil says it means.
 - Veil Console: admin config and Veil process control only.
 - Desktop core: file search only. Do not grow it into a second runner.
 

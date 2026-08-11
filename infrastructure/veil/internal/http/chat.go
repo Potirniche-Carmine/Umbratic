@@ -15,7 +15,7 @@ import (
 
 func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		input, err := policy.DecodeChatInput(http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes), route)
+		input, err := policy.DecodeChatInput(http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes), route, s.selectableModelIDs())
 		if err != nil {
 			if errors.Is(err, policy.ErrRequestTooLarge) {
 				writeJSONError(w, http.StatusRequestEntityTooLarge, "request too large")
@@ -77,8 +77,27 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 		if input.Tools != nil {
 			toolChoice = "auto"
 		}
+		selectedModel := s.cfg.DefaultModel
+		if input.Model != "" {
+			selectedModel = input.Model
+		}
+		// A directive of "off" has to unwind the server's own reasoning profile
+		// too. Leaving reasoning_effort in place would ask the model not to
+		// think and then tell it how hard to think — here, not in the body
+		// builder, whose guard only skips the "none" effort.
+		var thinking *bool
+		switch input.Thinking {
+		case "on":
+			forced := true
+			thinking = &forced
+		case "off":
+			forced := false
+			thinking = &forced
+			profile.ReasoningEffort = model.ReasoningNone
+			profile.ThinkingTokenBudget = nil
+		}
 		req := model.ChatRequest{
-			Model:               s.cfg.DefaultModel,
+			Model:               selectedModel,
 			Messages:            messages,
 			Stream:              input.Stream,
 			Tools:               input.Tools,
@@ -89,13 +108,15 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			TopP:                profile.TopP,
 			ReasoningEffort:     profile.ReasoningEffort,
 			ThinkingTokenBudget: profile.ThinkingTokenBudget,
+			Thinking:            thinking,
 		}
-		if estimated, ok := finalRequestFits(req, s.cfg.ContextLength); !ok {
+		contextLength := s.contextLengthFor(selectedModel)
+		if estimated, ok := finalRequestFits(req, contextLength); !ok {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
 				"error":           "assembled request exceeds the configured context window",
 				"code":            "context_overflow_preflight",
 				"estimatedTokens": estimated,
-				"contextLength":   s.cfg.ContextLength,
+				"contextLength":   contextLength,
 			})
 			return
 		}
@@ -221,6 +242,26 @@ func effectiveMaxOutputTokens(requested int, configured int) int {
 		return configured
 	}
 	return requested
+}
+
+// selectableModelIDs is the list a client may name. It is nil unless the
+// administrator published a registry, which is what keeps `model` refused on
+// every deployment that never offered a choice.
+func (s *Server) selectableModelIDs() []string {
+	if !s.cfg.ModelSelectionEnabled {
+		return nil
+	}
+	return s.cfg.ModelIDs()
+}
+
+// contextLengthFor prefers the registry's declared window for the chosen model
+// and falls back to the process-wide one, which is all a single-model
+// deployment ever had.
+func (s *Server) contextLengthFor(modelID string) int {
+	if entry, ok := s.cfg.ModelEntryByID(modelID); ok && entry.ContextLength > 0 {
+		return entry.ContextLength
+	}
+	return s.cfg.ContextLength
 }
 
 func (s *Server) activeGenerationProfile() model.GenerationProfile {

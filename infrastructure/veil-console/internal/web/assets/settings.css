@@ -138,3 +138,13 @@
     transition: none;
   }
 }
+
+/* A one-line constraint under a field, for the cases where the constraint is
+   what makes the field make sense. */
+.field-hint {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--faint);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}

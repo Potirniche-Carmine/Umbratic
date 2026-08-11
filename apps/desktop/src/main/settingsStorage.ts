@@ -24,6 +24,7 @@ import type {
   HarnessProfileId,
   ModelEndpointMode,
   PermissionMode,
+  ReasoningMode,
   RunnerToolId,
   UserNotes,
 } from "./types";
@@ -37,6 +38,7 @@ type RawSettings = {
   harnessProfile?: unknown;
   contextLength?: unknown;
   permissionMode?: unknown;
+  reasoningMode?: unknown;
   companyCredential?: unknown;
   localModelCache?: unknown;
 };
@@ -187,12 +189,18 @@ function modelEndpointSettings(
   const storedBaseUrl = storedEndpointAllowed && typeof endpoint.baseUrl === "string" && endpoint.baseUrl.trim()
     ? endpoint.baseUrl.trim()
     : undefined;
+  // In server mode the stored id is the user's pick among the models the Veil
+  // publishes. `veil-managed` is the sentinel for "whatever the server
+  // defaults to" — it is never sent on the wire, it only means no pick.
+  const storedModelId = typeof endpoint.modelId === "string" ? endpoint.modelId.trim() : "";
   const modelId =
     mode === "local"
-      ? storedLocalEndpoint && typeof endpoint.modelId === "string" && endpoint.modelId.trim()
-        ? endpoint.modelId.trim()
+      ? storedLocalEndpoint && storedModelId
+        ? storedModelId
         : defaultLocalModelId
-      : defaultEndpointModelId;
+      : endpoint.mode === "server" && storedModelId
+        ? storedModelId
+        : defaultEndpointModelId;
   return {
     mode,
     baseUrl: managedBaseUrl ?? storedBaseUrl ?? defaultEndpointBaseUrlForMode(mode),
@@ -273,13 +281,13 @@ export function writeModelEndpointSettings(input: Partial<ActiveModelEndpointSet
           ? input.baseUrl.trim()
           : defaultEndpointBaseUrlForMode(nextMode),
     modelId:
-      nextMode === "local"
-        ? typeof input.modelId === "string"
-          ? input.modelId.trim()
-          : current.mode === "local"
-            ? current.modelId
-            : defaultLocalModelId
-        : defaultEndpointModelId,
+      typeof input.modelId === "string"
+        ? input.modelId.trim() || (nextMode === "local" ? defaultLocalModelId : defaultEndpointModelId)
+        : current.mode === nextMode
+          ? current.modelId
+          : nextMode === "local"
+            ? defaultLocalModelId
+            : defaultEndpointModelId,
     secret:
       nextMode === "local"
         ? ""
@@ -392,11 +400,26 @@ export function readPermissionModeSetting(): PermissionMode {
   return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
 }
 
+export function readReasoningModeSetting(): ReasoningMode {
+  return readRawSettings().reasoningMode === "fast" ? "fast" : "reasoning";
+}
+
+export function writeReasoningModeSetting(value: unknown): ReasoningMode {
+  const reasoningMode: ReasoningMode = value === "fast" ? "fast" : "reasoning";
+  const settings = readRawSettings();
+  writeRawSettings({
+    ...settings,
+    reasoningMode,
+  });
+  return reasoningMode;
+}
+
 export function readStartupSettings(): DesktopStartupSettings {
   const settings = readRawSettings();
   const endpoint = modelEndpointSettings(settings);
   return {
     permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
+    reasoningMode: settings.reasoningMode === "fast" ? "fast" : "reasoning",
     modelEndpoint: publicModelEndpointSettings(endpoint),
     localModels: endpoint.mode === "local"
       ? Array.from(new Set([endpoint.modelId, ...cachedLocalModels(settings, endpoint.baseUrl)].filter(Boolean)))

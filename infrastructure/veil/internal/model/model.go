@@ -33,6 +33,11 @@ type ChatRequest struct {
 	TopP                float64
 	ReasoningEffort     ReasoningEffort
 	ThinkingTokenBudget *int
+	// Thinking forces the model to reason, or not to, for this request. nil
+	// leaves the runtime on its own default. It controls whether the model
+	// thinks, never whether that thinking is shown — reasoning content stays
+	// stripped either way.
+	Thinking *bool
 	// ResponseSchema constrains local generation to this JSON schema via
 	// Ollama structured outputs. nil leaves generation unconstrained. The
 	// model may still think freely first — Ollama carries thinking in its own
@@ -469,6 +474,12 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 	if req.ThinkingTokenBudget != nil {
 		body["thinking_budget"] = *req.ThinkingTokenBudget
 	}
+	// Only chat templates that read enable_thinking act on it. Sending it
+	// unasked would be a silent no-op on every other model, so it travels only
+	// with an explicit directive.
+	if req.Thinking != nil {
+		body["chat_template_kwargs"] = map[string]any{"enable_thinking": *req.Thinking}
+	}
 	if req.Tools != nil {
 		body["tools"] = strictTools(req.Tools)
 		if req.ToolChoice != nil {
@@ -485,6 +496,12 @@ func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Respo
 		"messages":   ollamaMessages(req.Messages),
 		"stream":     req.Stream,
 		"keep_alive": ollamaKeepAlive,
+	}
+	// The caller has already confirmed the model carries the thinking
+	// capability; some Ollama builds fail the request outright when `think` is
+	// sent to a model without it.
+	if req.Thinking != nil {
+		body["think"] = *req.Thinking
 	}
 	if req.ResponseSchema != nil {
 		body["format"] = req.ResponseSchema

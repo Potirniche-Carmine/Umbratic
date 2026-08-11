@@ -14,6 +14,10 @@ npm run veil-console:dev
 
 The launcher builds native `veil` and `veil-console` binaries and starts Console on `127.0.0.1:8177`.
 
+Pass `--vllm-binary` to let Console launch models from the **Models** tab. It is
+validated like the Veil binary: a regular file, not a symlink, not group or
+world writable.
+
 Default development state locations:
 
 - Windows: `%LOCALAPPDATA%\Umbratic\Veil Console\dev`
@@ -111,9 +115,59 @@ The administrator browser communicates with Veil Console through loopback, eithe
 Browser -> native Veil Console :8177 -> supervised Veil :8080 -> vLLM
 ```
 
+With managed models registered, the last hop fans out: one supervised
+`vllm serve` per model, each on its own loopback port. See **Models**.
+
 Console does not expose a shell or a generic environment editor. It does not read a Veil `.env` file. A failed configuration test or failed Veil start keeps or restores the last known-good configuration.
 
 The Overview page shows **Start** when the supervised process is stopped and **Restart** when it is running. Both actions require the owner password. Restart operations are serialized, perform the normal configuration and health checks, and have a five-second server-side cooldown. Console does not define a paused state. If the child process exits, the next page load shows **Start**.
+
+## Models
+
+The **Models** tab is the model fleet. Each entry is one supervised
+`vllm serve` process on its own loopback port, and together they are the
+registry Console hands Veil as `VEIL_MODELS`.
+
+```text
+Browser -> Veil Console :8177 -> supervised Veil :8080 -> vLLM :8001, :8002, ...
+```
+
+Start Console with `--vllm-binary /path/to/vllm` to launch models from this
+page. Without it the page still lists and edits registered models — Veil routes
+to whatever is already running on those ports — but the Start button is
+unavailable, because there is nothing for Console to run.
+
+Every field is typed. There is no free-form argument box, and there will not be
+one: the argv is assembled server-side from validated fields alone, which is
+what keeps this a purpose-built launcher rather than the command runner the
+security boundary forbids. See AGENTS.md.
+
+| Field | Meaning |
+| --- | --- |
+| Display name | What the desktop's picker shows. |
+| Served id | What clients send as `model` and what `/v1/models` reports. It cannot be renamed — that is a remove and an add. |
+| Model | A Hugging Face repository id or an absolute path on this machine. |
+| Port | A free loopback port, suggested from 8001–8099. It cannot be Console's or Veil's. |
+| Max model length | vLLM's `--max-model-len`, also published as the model's context window. |
+| GPU memory fraction | vLLM's `--gpu-memory-utilization`. The page warns past a total of 1.0, which is legitimate across several GPUs. |
+| KV cache dtype | `fp8` — vLLM's 8-bit option, and the default here — or `auto`. vLLM has no literal `q8`. |
+| Model emits thinking | Published as `capabilities.reasoning`, which is what enables the desktop's Think toggle for this model. |
+
+Starting a model returns immediately and the row reports `starting` until the
+runtime lists its own served id. Loading weights takes minutes, so a blocking
+start would time out the browser long before the model was ready. Expand
+**Logs** to read the tail of that process's output, redacted the same way Veil's
+is.
+
+**Start and stop do not restart Veil.** Availability is live on Veil's
+`/api/models`, so a model that comes up is usable immediately. Adding, editing,
+or removing a model changes the registry, and the page says so: restart Veil
+from Overview to apply it. Console reaps every supervised runtime on shutdown,
+so no model process outlives the Console that started it.
+
+Registered models also become the **Default model** choices on Settings. The
+default has to be one of them: a default naming anything else would point Veil
+at a process nobody starts.
 
 ## Documents and retrieval
 

@@ -20,6 +20,7 @@ import type {
   PermissionMode,
   ReasoningMode,
   RepositoryInfo,
+  ServerModelInfo,
   SkillDocument,
   SkillInfo,
   TaskInfo,
@@ -75,6 +76,15 @@ import {
   type ContextEstimateMessage,
 } from "../shared/contextWindow";
 import { ContextMeter } from "./contextMeter";
+import {
+  BranchPicker,
+  ComposerModelPicker,
+  PermissionModePicker,
+  ThinkingToggle,
+  WorkspaceModePicker,
+  contextBadge,
+  type ComposerModelOption,
+} from "./ComposerControls";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { eventDetail, eventTitle } from "./eventDisplay";
@@ -222,6 +232,7 @@ const defaultMonoFontChoices = [
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultStartupSettings: DesktopStartupSettings = {
   permissionMode: "normal",
+  reasoningMode: "reasoning",
   modelEndpoint: defaultModelEndpointSettings,
   localModels: [],
   companyConnection: { state: "not_enrolled" },
@@ -1877,7 +1888,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [repository, setRepository] = useState<RepositoryInfo | null>(previewEnvironment?.repository ?? null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>(startupSettings.permissionMode);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
-  const reasoningMode: ReasoningMode = "reasoning";
+  const [reasoningMode, setReasoningModeState] = useState<ReasoningMode>(startupSettings.reasoningMode);
   const [projects, setProjects] = useState<RepositoryInfo[]>(previewEnvironment ? [previewEnvironment.repository] : []);
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -2065,6 +2076,34 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
+  const [serverModels, setServerModels] = useState<ServerModelInfo[]>([]);
+  // The composer offers a choice only where there is one to make: local mode
+  // runs one model per Veil process, and a server that publishes no registry
+  // reports its single configured model.
+  // Availability is a server concept: it comes from the published registry,
+  // which reports whether each model's process is answering right now.
+  const composerModels = useMemo<ComposerModelOption[]>(
+    () => (endpointSettings.mode === "server" && serverModels.length > 0
+      ? serverModels.map((model) => ({
+          id: model.id,
+          label: model.display,
+          available: model.available,
+          contextBadge: contextBadge(model.contextLength),
+          reasoning: model.reasoning,
+        }))
+      : (backend?.models ?? []).map((model) => ({
+          id: model.modelId,
+          label: model.displayName,
+          contextBadge: contextBadge(model.contextLength),
+          reasoning: model.capabilities?.reasoning ?? false,
+        }))),
+    [backend?.models, endpointSettings.mode, serverModels],
+  );
+  // Local Veil is this build, so the directive is always understood. A server
+  // has to say it understands it before the control claims to do anything.
+  const thinkingToggleVisible =
+    endpointSettings.mode === "local"
+    || (backend?.veilFeatures ?? []).includes("chat.thinking_toggle");
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -2410,6 +2449,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }, []);
 
   const hasRunningActivity = composerItems.some((item) => item.type === "activity" && !item.finished);
+
+  // The published registry is refetched whenever the connection changes, and
+  // again when the menu opens, so a model an administrator just started stops
+  // reading as unavailable without the user reconnecting.
+  useEffect(() => {
+    if (endpointSettings.mode !== "server" || backend?.endpoint !== "ready") {
+      setServerModels([]);
+      return;
+    }
+    void api.listServerModels().then(setServerModels).catch(() => setServerModels([]));
+  }, [endpointSettings.mode, backend?.endpoint, backend?.model?.modelId]);
 
   useEffect(() => {
     if (!hasRunningActivity) return undefined;
@@ -3505,6 +3555,29 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setPermissionModeState("auto_safe");
     try {
       setPermissionModeState(await api.setPermissionMode("auto_safe"));
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateReasoningMode(mode: ReasoningMode) {
+    setError(null);
+    // Optimistic: the toggle is the feedback for the press, so it must not wait
+    // on a round trip to the main process before it moves.
+    setReasoningModeState(mode);
+    try {
+      setReasoningModeState(await api.setReasoningMode(mode));
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function selectComposerModel(modelId: string) {
+    setError(null);
+    try {
+      const endpoint = await api.getModelEndpointSettings();
+      await api.saveModelEndpointSettings({ ...endpoint, modelId });
+      await refreshStatus();
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -5470,156 +5543,74 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 </span>
               </button>
               {repository?.kind === "git" ? (
-                <div className="branchControl">
-                  <button
-                    className="branchTrigger"
-                    type="button"
-                    onClick={() => void toggleBranchMenu()}
-                    aria-expanded={branchMenuOpen}
-                    aria-haspopup="menu"
-                    disabled={busy || checkoutPending}
-                    title={`Branch: ${repository.originalBranch}`}
-                  >
-                    <GitBranch size={12} />
-                    <span>{repository.originalBranch}</span>
-                    <ChevronDown size={12} />
-                  </button>
-                  {branchMenuOpen ? (
-                    <div className="branchMenu" role="menu">
-                      <div className="branchMenuHeader">
-                        <span>Branches</span>
-                        <button
-                          className="branchRefreshButton"
-                          type="button"
-                          onClick={() => void refreshBranches()}
-                          disabled={branchesLoading}
-                        >
-                          {branchesLoading ? <Loader2 className="spin" size={12} /> : <RefreshCw size={12} />}
-                        </button>
-                      </div>
-                      {branchError ? <div className="branchMenuError">{branchError}</div> : null}
-                      {branches.length ? (
-                        branches.map((branch) => {
-                          const active = branch === repository.originalBranch;
-                          return (
-                            <button
-                              key={branch}
-                              type="button"
-                              className={active ? "active" : ""}
-                              onClick={() => void selectBranch(branch)}
-                              disabled={checkoutPending}
-                            >
-                              {active ? <Check size={13} /> : <span className="branchSpacer" />}
-                              <span>{branch}</span>
-                            </button>
-                          );
-                        })
-                      ) : !branchesLoading && !branchError ? (
-                        <div className="branchMenuEmpty">No branches found</div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
+                <BranchPicker
+                  branch={repository.originalBranch}
+                  branches={branches}
+                  open={branchMenuOpen}
+                  loading={branchesLoading}
+                  error={branchError}
+                  disabled={busy || checkoutPending}
+                  checkoutPending={checkoutPending}
+                  onToggleMenu={() => void toggleBranchMenu()}
+                  onRefresh={() => void refreshBranches()}
+                  onSelect={(branch) => void selectBranch(branch)}
+                />
               ) : null}
             </div>
 
             {canUseWorktreeMode ? (
-              <div className={`workspaceModeControl ${useWorktreeForNextRun ? "isWorktree" : ""}`}>
-                <button
-                  className="workspaceModeTrigger"
-                  type="button"
-                  onClick={toggleWorkspaceMode}
-                  disabled={busy || workspaceModeLocked}
-                  aria-expanded={workspaceModeMenuOpen}
-                  aria-haspopup="menu"
-                  title={
-                    workspaceModeLocked
-                      ? "This chat is already running in an isolated worktree"
-                      : useWorktreeForNextRun
-                        ? "Run this chat in an isolated worktree"
-                        : "Run this chat in the selected repository"
-                  }
-                >
-                  {useWorktreeForNextRun ? <GitBranch size={14} /> : <FolderOpen size={14} />}
-                  <span>{useWorktreeForNextRun ? "Worktree" : "Local"}</span>
-                  <ChevronDown size={12} />
-                </button>
-                {workspaceModeMenuOpen ? (
-                  <div className="workspaceModeMenu" role="menu">
-                    <button
-                      className={workspaceMode === "local" ? "active" : ""}
-                      type="button"
-                      onClick={() => selectWorkspaceMode("local")}
-                    >
-                      <FolderOpen size={14} />
-                      <span>Local</span>
-                    </button>
-                    <button
-                      className={workspaceMode === "worktree" ? "active" : ""}
-                      type="button"
-                      onClick={() => selectWorkspaceMode("worktree")}
-                    >
-                      <GitBranch size={14} />
-                      <span>Worktree</span>
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+              <WorkspaceModePicker
+                mode={workspaceMode}
+                useWorktree={useWorktreeForNextRun}
+                locked={workspaceModeLocked}
+                disabled={busy}
+                open={workspaceModeMenuOpen}
+                onToggleMenu={toggleWorkspaceMode}
+                onSelect={selectWorkspaceMode}
+              />
             ) : null}
 
-            <div className={`permissionControl ${permissionMode === "auto_safe" ? "isElevated" : ""}`}>
-              <button
-                className="permissionTrigger"
-                type="button"
-                onClick={() => {
-                  setPermissionMenuOpen((open) => {
-                    const next = !open;
-                    if (next) {
-                      setBranchMenuOpen(false);
-                      setWorkspaceModeMenuOpen(false);
-                    }
-                    return next;
-                  });
+            <PermissionModePicker
+              mode={permissionMode}
+              open={permissionMenuOpen}
+              onToggleMenu={() => {
+                setPermissionMenuOpen((open) => {
+                  const next = !open;
+                  if (next) {
+                    setBranchMenuOpen(false);
+                    setWorkspaceModeMenuOpen(false);
+                  }
+                  return next;
+                });
+              }}
+              onSelect={(mode) => {
+                setPermissionMenuOpen(false);
+                void updatePermissionMode(mode);
+              }}
+            />
+
+            {composerModels.length > 1 ? (
+              <ComposerModelPicker
+                models={composerModels}
+                selectedId={selectedModel?.modelId ?? ""}
+                disabled={busy}
+                disabledReason="Wait for the current run to finish"
+                onOpen={() => {
+                  if (endpointSettings.mode !== "server") return;
+                  void api.listServerModels().then(setServerModels).catch(() => undefined);
                 }}
-                aria-expanded={permissionMenuOpen}
-                aria-haspopup="menu"
-                title={permissionMode === "auto_safe" ? "Auto-run low-risk actions" : "Ask before running actions"}
-              >
-                {permissionMode === "auto_safe" ? (
-                  <ShieldCheck className="elevatedPermissionsIcon" size={14} />
-                ) : (
-                  <Hand size={14} />
-                )}
-                <span className="permissionLabel">{permissionMode === "auto_safe" ? "Auto-run low risk" : "Ask first"}</span>
-                <ChevronDown size={12} />
-              </button>
-              {permissionMenuOpen ? (
-                <div className="permissionMenu" role="menu">
-                  <button
-                    className={permissionMode === "normal" ? "active" : ""}
-                    type="button"
-                    onClick={() => {
-                      setPermissionMenuOpen(false);
-                      void updatePermissionMode("normal");
-                    }}
-                  >
-                    <Hand size={14} />
-                    <span>Ask first</span>
-                  </button>
-                  <button
-                    className={permissionMode === "auto_safe" ? "active" : ""}
-                    type="button"
-                    onClick={() => {
-                      setPermissionMenuOpen(false);
-                      void updatePermissionMode("auto_safe");
-                    }}
-                  >
-                    <ShieldCheck className="elevatedPermissionsIcon" size={14} />
-                    <span>Auto-run low risk</span>
-                  </button>
-                </div>
-              ) : null}
-            </div>
+                onSelect={(modelId) => void selectComposerModel(modelId)}
+              />
+            ) : null}
+
+            {thinkingToggleVisible ? (
+              <ThinkingToggle
+                mode={reasoningMode}
+                disabled={busy}
+                supported={selectedModel?.capabilities?.reasoning ?? false}
+                onChange={(mode) => void updateReasoningMode(mode)}
+              />
+            ) : null}
 
             <div className="attachmentControl">
               <button

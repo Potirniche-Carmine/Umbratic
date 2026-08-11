@@ -79,6 +79,8 @@ export type BackendStatus = {
   models: LocalModelInfo[];
   providers: LocalModelProvider[];
   permissionMode: PermissionMode;
+  /** Feature names the connected Veil advertised on the last health check. */
+  veilFeatures: string[];
   endpointConfig: {
     source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
@@ -284,6 +286,7 @@ export type ProductTelemetryEventType =
   | "ide.selected"
   | "ide.opened"
   | "permission.mode_changed"
+  | "reasoning.mode_changed"
   | "task.accepted"
   | "task.undone"
   | "worktree.requested"

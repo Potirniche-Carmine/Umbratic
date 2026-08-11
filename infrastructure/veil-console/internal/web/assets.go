@@ -58,6 +58,17 @@ func (s *Server) documentsStyle(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(payload)
 }
 
+func (s *Server) modelsStyle(w http.ResponseWriter, _ *http.Request) {
+	payload, err := content.ReadFile("assets/models.css")
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(payload)
+}
+
 func (s *Server) script(w http.ResponseWriter, _ *http.Request) {
 	payload, err := content.ReadFile("assets/console.js")
 	if err != nil {

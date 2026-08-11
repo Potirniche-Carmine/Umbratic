@@ -32,6 +32,10 @@ type fakeModelClient struct {
 	embedErr          error
 	embedCalls        int
 	embedQuery        string
+	available         map[string]bool
+	availableErr      error
+	availableCalls    []string
+	thinkingSupported map[string]bool
 }
 
 func (f *fakeModelClient) Embed(_ context.Context, text string) ([]float32, error) {
@@ -101,6 +105,30 @@ func (f *fakeModelClient) DoChat(ctx context.Context, req model.ChatRequest) (*h
 	}, nil
 }
 
+func (f *fakeModelClient) Available(ctx context.Context, modelID string) (bool, error) {
+	f.availableCalls = append(f.availableCalls, modelID)
+	if f.availableErr != nil {
+		return false, f.availableErr
+	}
+	if f.available != nil {
+		return f.available[modelID], nil
+	}
+	models, err := f.ListModels(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, candidate := range models {
+		if candidate.ID == modelID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeModelClient) ThinkingSupported(_ context.Context, modelID string) bool {
+	return f.thinkingSupported[modelID]
+}
+
 func (f *fakeModelClient) ListModels(ctx context.Context) ([]model.ModelInfo, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
@@ -117,6 +145,7 @@ func testConfig() config.Config {
 		AuthToken:              "test-token",
 		Mode:                   model.ModeServer,
 		DefaultModel:           "default-model",
+		Models:                 []config.ModelEntry{{ID: "default-model", ProviderBaseURL: "http://provider.test"}},
 		TelemetryEnabled:       true,
 		TelemetryRetentionDays: 30,
 		RequestTimeout:         time.Second,

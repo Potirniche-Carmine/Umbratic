@@ -27,6 +27,16 @@ export const veilFeature = {
    * cannot.
    */
   rag: "rag",
+  /** `GET /api/models` exists and lists what this server routes to. */
+  modelsList: "models.list",
+  /**
+   * Chat bodies may name a model. Security-semantic: a server without a
+   * registry refuses `model` outright rather than ignoring it, so this name
+   * must be present before the field is ever sent.
+   */
+  modelSelection: "chat.model_selection",
+  /** Chat bodies may carry a `thinking` directive. */
+  thinkingToggle: "chat.thinking_toggle",
 } as const;
 
 export type VeilFeature = (typeof veilFeature)[keyof typeof veilFeature];

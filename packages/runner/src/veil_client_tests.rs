@@ -328,6 +328,7 @@ fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
         chat_endpoint_path: Some("/v1/chat/completions".into()),
         api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
         model_id: "test".into(),
+        send_model_field: false,
         headers: BTreeMap::new(),
         mtls: Some(mtls),
     }
@@ -379,4 +380,87 @@ fn a_newer_veil_stream_does_not_break_this_runner() {
 
     let (done, _) = process_veil_line("data: [DONE]", &mut result, &mut calls).unwrap();
     assert!(done);
+}
+
+/// The wire contract for the composer's two new controls. Both fields are
+/// opt-in: a body that carries neither is the body this runner has always sent.
+mod chat_body {
+    use super::*;
+    use crate::{config::RunnerConfig, veil_client::chat_request_body};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn config(send_model_field: bool) -> Arc<RunnerConfig> {
+        let directory = std::env::temp_dir();
+        let mut config = (*crate::session::test_config(&directory)).clone();
+        config.provider.model_id = "qwen3-32b".into();
+        config.provider.send_model_field = send_model_field;
+        Arc::new(config)
+    }
+
+    fn body(
+        send_model_field: bool,
+        thinking: Option<ThinkingDirective>,
+    ) -> serde_json::Map<String, Value> {
+        let config = config(send_model_field);
+        chat_request_body(
+            &config,
+            &[json!({"role":"user","content":"hi"})],
+            &[],
+            1024,
+            false,
+            None,
+            thinking,
+        )
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn a_default_run_sends_neither_field() {
+        let sent = body(false, None);
+        assert!(!sent.contains_key("thinking"));
+        assert!(!sent.contains_key("model"));
+    }
+
+    #[test]
+    fn the_thinking_directive_travels_as_on_or_off() {
+        assert_eq!(
+            body(false, Some(ThinkingDirective::On))["thinking"],
+            json!("on")
+        );
+        assert_eq!(
+            body(false, Some(ThinkingDirective::Off))["thinking"],
+            json!("off")
+        );
+    }
+
+    #[test]
+    fn the_model_is_named_only_when_the_desktop_confirmed_the_feature() {
+        assert_eq!(body(true, None)["model"], json!("qwen3-32b"));
+        assert!(!body(false, None).contains_key("model"));
+    }
+
+    #[test]
+    fn both_fields_can_travel_together() {
+        let sent = body(true, Some(ThinkingDirective::Off));
+        assert_eq!(sent["thinking"], json!("off"));
+        assert_eq!(sent["model"], json!("qwen3-32b"));
+        assert_eq!(sent["stream"], json!(true));
+    }
+
+    #[test]
+    fn reasoning_modes_map_to_directives_and_unknown_modes_do_not() {
+        assert_eq!(
+            ThinkingDirective::from_reasoning_mode("reasoning"),
+            Some(ThinkingDirective::On)
+        );
+        assert_eq!(
+            ThinkingDirective::from_reasoning_mode("fast"),
+            Some(ThinkingDirective::Off)
+        );
+        assert_eq!(ThinkingDirective::from_reasoning_mode("balanced"), None);
+        assert_eq!(ThinkingDirective::from_reasoning_mode(""), None);
+    }
 }

@@ -9,6 +9,7 @@ use crate::{
     events::now_iso,
     session::{EventSink, Session},
     tools::ToolCall,
+    veil_request::{ThinkingDirective, chat_request_body},
     veil_retry::{
         MAX_CONNECT_ATTEMPTS, VeilAttemptError, VeilAttemptInput, committed_output,
         emit_reconnected, emit_reconnecting, reconnect_delay_ms, retry_after_from,
@@ -79,6 +80,9 @@ pub struct VeilRequestOptions {
     pub harness_bucket: Option<String>,
     /// How this step's assistant text is withheld while it streams.
     pub hold: HoldPolicy,
+    /// The run's thinking directive, `None` when the user left the model on its
+    /// own default.
+    pub thinking: Option<ThinkingDirective>,
 }
 
 /// A validated classifier decision for the active run.
@@ -766,7 +770,7 @@ fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {
     }
 }
 
-fn encoded_messages(messages: &[Value]) -> Vec<Value> {
+pub(crate) fn encoded_messages(messages: &[Value]) -> Vec<Value> {
     messages
         .iter()
         .filter(|message| message.get("role").and_then(Value::as_str) != Some("system"))
@@ -786,6 +790,7 @@ pub async fn stream_veil_chat(
         include_tools,
         harness_bucket,
         hold,
+        thinking,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -798,21 +803,15 @@ pub async fn stream_veil_chat(
     ) {
         return Err("model request must target an approved Veil chat route".into());
     }
-    let mut body = json!({
-        "messages": encoded_messages(messages),
-        "stream": true,
-        "max_output_tokens": max_output_tokens
-    });
-    let object = body.as_object_mut().unwrap();
-    if !session.config.skills.is_empty() {
-        object.insert("skills".into(), Value::Array(session.config.skills.iter().map(|skill| json!({ "id":skill.id, "name":skill.name, "description":skill.description, "source":skill.source, "paths":skill.paths })).collect()));
-    }
-    if include_tools && !tools.is_empty() {
-        object.insert("tools".into(), Value::Array(tools.to_vec()));
-    }
-    if let Some(bucket) = harness_bucket.as_deref().filter(|value| !value.is_empty()) {
-        object.insert("harness_bucket".into(), Value::String(bucket.to_owned()));
-    }
+    let body = chat_request_body(
+        &session.config,
+        messages,
+        tools,
+        max_output_tokens,
+        include_tools,
+        harness_bucket.as_deref(),
+        thinking,
+    );
 
     let attempt_input = VeilAttemptInput {
         endpoint,

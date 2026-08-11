@@ -58,6 +58,10 @@ type Supervisor struct {
 	internalToken     string
 	rag               config.RAG
 	ragAPIKey         string
+	models            []config.ManagedModel
+	// startedModels is what the live process was actually launched with, which
+	// is a different question from what the next start will use.
+	startedModels []config.ManagedModel
 }
 
 // SetRAG records the retrieval configuration handed to the next Veil start.
@@ -68,6 +72,45 @@ func (s *Supervisor) SetRAG(settings config.RAG, apiKey string) {
 	s.stateMu.Lock()
 	s.rag, s.ragAPIKey = settings, apiKey
 	s.stateMu.Unlock()
+}
+
+// SetModels records the registry handed to the next Veil start. Like RAG, it
+// reaches Veil only through the allowlisted child environment, so a change
+// takes effect on restart and nothing is written to disk for Veil to read.
+//
+// Starting or stopping a model does NOT go through here: availability is live
+// on Veil's /api/models, and only the registered set is configuration.
+func (s *Supervisor) SetModels(models []config.ManagedModel) {
+	s.stateMu.Lock()
+	s.models = append([]config.ManagedModel(nil), models...)
+	s.stateMu.Unlock()
+}
+
+// ModelsEnvironment is the VEIL_MODELS value the running Veil was started with,
+// so the page can say when the stored set has drifted from it. Empty while Veil
+// is stopped: there is then nothing for a change to be pending against.
+func (s *Supervisor) ModelsEnvironment() string {
+	s.stateMu.RLock()
+	models := s.startedModels
+	s.stateMu.RUnlock()
+	return modelsEnvOrEmpty(models)
+}
+
+// PendingModelsEnvironment is what the next start will carry — the registry
+// SetModels last recorded.
+func (s *Supervisor) PendingModelsEnvironment() string {
+	s.stateMu.RLock()
+	models := s.models
+	s.stateMu.RUnlock()
+	return modelsEnvOrEmpty(models)
+}
+
+func modelsEnvOrEmpty(models []config.ManagedModel) string {
+	value, err := config.ModelsEnvJSON(models)
+	if err != nil {
+		return ""
+	}
+	return value
 }
 
 func New(binary, veilAddress string) *Supervisor {
@@ -115,7 +158,7 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 		return errors.New("Veil is already running")
 	}
 	s.stateMu.RLock()
-	rag, ragAPIKey := s.rag, s.ragAPIKey
+	rag, ragAPIKey, models := s.rag, s.ragAPIKey, s.models
 	s.stateMu.RUnlock()
 	s.logs.SetSecrets(token, s.internalToken, ragAPIKey)
 	cmd := exec.Command(s.binary)
@@ -127,12 +170,18 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 		cmd.Env = cfg.Environment(s.veilAddress, token)
 	}
 	cmd.Env = append(cmd.Env, rag.Environment(ragAPIKey)...)
+	// An empty registry means no VEIL_MODELS at all, which is what keeps a
+	// single-model deployment byte identical to one that predates this page.
+	if entries, err := config.ModelsEnvJSON(models); err == nil && entries != "" {
+		cmd.Env = append(cmd.Env, "VEIL_MODELS="+entries)
+	}
 	cmd.Stdout, cmd.Stderr = s.logs, s.logs
 	if err := cmd.Start(); err != nil {
 		return errors.New("Veil did not start")
 	}
 	s.stateMu.Lock()
 	s.cmd = cmd
+	s.startedModels = models
 	s.status = Status{Running: true, PID: cmd.Process.Pid, Message: "starting"}
 	s.stateMu.Unlock()
 	go s.wait(cmd)
@@ -159,6 +208,7 @@ func (s *Supervisor) wait(cmd *exec.Cmd) {
 		return
 	}
 	s.cmd = nil
+	s.startedModels = nil
 	s.status.Running = false
 	s.status.Healthy = false
 	s.status.PID = 0
