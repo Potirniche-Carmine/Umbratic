@@ -2,7 +2,7 @@
 
 ## Desktop App
 
-This project is the desktop product shell. Most of it remains Electron, Vite, React, and TypeScript; `native/` is a separate Rust binary for bounded repository file search. Follow `native/AGENTS.md` for work inside that directory.
+This project is the desktop product shell: Electron, Vite, React, and TypeScript. `native/` is a separate Rust binary for bounded repository file search — follow `native/AGENTS.md` for work inside that directory.
 
 Keep the shell thin and direct:
 
@@ -11,6 +11,8 @@ Keep the shell thin and direct:
 - `src/main/` owns trusted desktop orchestration, native-process lifecycle, workspace and attachment context, permissions, review flows, event streaming, local state, telemetry redaction, and transport to the Rust runner.
 - `native/` owns only the small desktop-core command surface described by its local instructions.
 - `scripts/` owns development, build-copy, packaging, and package-verification tasks.
+
+The other Rust helpers live outside this project and are invoked as child processes: `umbratic-pdf` for PDF text, `umbratic-code-index` for the workspace-graph artifact.
 
 Workspace tool execution belongs in the Rust runner. Do not restore a TypeScript runner or add a Node fallback that silently changes security behavior. Resolve the signed packaged Rust binaries through the existing development and packaged-resource paths.
 
@@ -47,16 +49,16 @@ Keep the experience calm, fast, and intentional. Avoid configuration-heavy UI, d
 
 Use semantic colors consistently and do not use emoji in product UI. For visual changes, verify light and dark mode plus relevant hover, focus, pressed, disabled, open, closed, empty, loading, success, and error states. Check keyboard navigation, accessible names, contrast, responsive sizing, truncation, overflow, and reduced motion.
 
-Review visual work in the running app at realistic window sizes. Typechecks and source inspection alone are not sufficient visual verification.
+Review visual work in the running app at realistic window sizes. Typechecks and source inspection alone are not sufficient visual verification. `npm run dev:web` from this directory serves `preview.html`, which boots the renderer against the fixtures in `src/renderer/previewEnvironment.ts` with no Electron — enough to look at composer and review states without a live Veil.
 
 ## Testing
 
 Add tests at the layer that owns the behavior:
 
-- TypeScript unit and contract tests belong in `tests/*.test.ts`.
-- IPC tests must prove that the preload surface is narrow and main-process validation cannot be bypassed.
+- TypeScript unit and contract tests belong in `tests/*.test.ts`. They load main-process modules directly through `tests/helpers/load-ts-module.ts` with mocked Electron, so values that cross that boundary need `JSON.parse(JSON.stringify(...))` before `deepEqual`.
+- IPC tests must prove that the preload surface is narrow and main-process validation cannot be bypassed. A new API method needs its channel added in `src/shared/desktopApi.ts`, `src/preload/preload.ts`, the `main.ts` handler map, and the `preload-ipc` table, or it fails at one of the four.
 - Native-process adapter tests should assert malformed output, early exit, cancellation, event ordering, and cleanup rather than only the happy path.
-- Packaging changes must verify that both Rust binaries are present, executable, and launchable from packaged resources.
+- Packaging changes must verify that the packaged Rust binaries are present, executable, and launchable from packaged resources. `prepare-package.ts` copies four — runner, desktop-core, pdf, code-index — and `verify-package.ts` launches the first three.
 
 Run focused checks first. Before finishing, run `npm run test:all` from the repository root. Also run `npm --workspace @umbratic/desktop run build` for desktop changes. When packaged-resource behavior changes, run `npm --workspace @umbratic/desktop run package` followed by `npm --workspace @umbratic/desktop run verify:package`.
 
