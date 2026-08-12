@@ -20,6 +20,7 @@ import {
   startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
+import { startRemoteRunnerServer } from "./remoteRunner";
 import {
   canAutoResolvePermission,
   classifyCommandText,
@@ -218,11 +219,13 @@ export async function runRunnerTask(
         selectedForRun.contextLength ?? readContextLengthSetting(),
       ));
     let promptParts = runnerPromptParts(prompt);
-    run = await startUmbraticRunnerServer(
-      task,
-      selectedForRun,
-      task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
-    );
+    run = task.remote
+      ? await startRemoteRunnerServer(task, selectedForRun)
+      : await startUmbraticRunnerServer(
+          task,
+          selectedForRun,
+          task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
+        );
     // Register the moment the process exists. Session setup below awaits the
     // network, and anything that happened in that window — a cancel, a model
     // settings change — used to act as if no run were in flight, because the

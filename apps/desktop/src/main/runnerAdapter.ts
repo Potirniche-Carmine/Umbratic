@@ -53,9 +53,14 @@ export function buildUmbraticRunnerConfig(
   const harnessProfile = readHarnessProfileSetting();
   const route = harnessRouteConfig(harnessProfile);
   const requestedTools = normalizeEnabledTools(task.enabledTools, enabledToolsFromSettings({}));
-  const lspServers = approvedLspServers(capabilityReport);
-  const approvedExecutables = approvedCommandExecutables(capabilityReport);
-  const workspaceGraph = workspaceGraphRunnerConfig(task.worktreePath);
+  // A remote task's probe describes a filesystem this process cannot see, so
+  // the paths in it are taken as reported instead of being resolved here.
+  const onRemoteHost = task.remote !== undefined;
+  const lspServers = approvedLspServers(capabilityReport, onRemoteHost);
+  const approvedExecutables = approvedCommandExecutables(capabilityReport, onRemoteHost);
+  // The workspace graph is an artifact this desktop builds from a local
+  // checkout. There is none for a directory on another machine.
+  const workspaceGraph = onRemoteHost ? undefined : workspaceGraphRunnerConfig(task.worktreePath);
   const enabledTools = requestedTools.filter(
     (tool) => tool !== "lsp" && tool !== "workspace_graph",
   ) as RunnerToolId[];
@@ -124,32 +129,44 @@ export function buildUmbraticRunnerConfig(
   };
 }
 
+/**
+ * Resolves a probed executable to the command the runner may launch.
+ *
+ * Locally that means following the path to a real file, so a stale report
+ * cannot approve something that has since been removed. On a remote host there
+ * is no such check to make from here: the probe ran there, moments ago, and the
+ * path it reported is the only evidence available. Requiring it to be absolute
+ * is what remains enforceable.
+ */
+function resolvedProbeCommand(executablePath: string, onRemoteHost: boolean): string | null {
+  if (!path.isAbsolute(executablePath)) return null;
+  if (onRemoteHost) return executablePath;
+  try {
+    const command = fs.realpathSync(executablePath);
+    return fs.statSync(command).isFile() ? command : null;
+  } catch {
+    return null;
+  }
+}
+
 export function approvedCommandExecutables(
   report?: CapabilityProbeReport,
+  onRemoteHost = false,
 ): Array<{ id: string; command: string }> {
   if (!report) return [];
   const approved: Array<{ id: string; command: string }> = [];
   for (const probe of report.probes) {
-    if (
-      probe.status !== "available"
-      || !probe.detectedCommand
-      || !probe.executablePath
-      || !path.isAbsolute(probe.executablePath)
-    ) {
-      continue;
-    }
-    try {
-      const command = fs.realpathSync(probe.executablePath);
-      if (!fs.statSync(command).isFile()) continue;
-      approved.push({ id: probe.id, command });
-    } catch {
-      // A stale capability report must not approve a missing executable.
-    }
+    if (probe.status !== "available" || !probe.detectedCommand || !probe.executablePath) continue;
+    const command = resolvedProbeCommand(probe.executablePath, onRemoteHost);
+    if (command) approved.push({ id: probe.id, command });
   }
   return approved.slice(0, 32);
 }
 
-export function approvedLspServers(report?: CapabilityProbeReport): LspServerLaunchConfig[] {
+export function approvedLspServers(
+  report?: CapabilityProbeReport,
+  onRemoteHost = false,
+): LspServerLaunchConfig[] {
   if (!report) return [];
   const definitions: Record<string, Omit<LspServerLaunchConfig, "command">> = {
     "typescript-language-server": {
@@ -168,16 +185,9 @@ export function approvedLspServers(report?: CapabilityProbeReport): LspServerLau
   const servers: LspServerLaunchConfig[] = [];
   for (const probe of report.probes) {
     const definition = definitions[probe.id];
-    if (!definition || probe.status !== "available" || !probe.executablePath || !path.isAbsolute(probe.executablePath)) {
-      continue;
-    }
-    try {
-      const command = fs.realpathSync(probe.executablePath);
-      if (!fs.statSync(command).isFile()) continue;
-      servers.push({ ...definition, command });
-    } catch {
-      // A stale probe must not approve a missing executable.
-    }
+    if (!definition || probe.status !== "available" || !probe.executablePath) continue;
+    const command = resolvedProbeCommand(probe.executablePath, onRemoteHost);
+    if (command) servers.push({ ...definition, command });
   }
   return servers.slice(0, 3);
 }
@@ -239,7 +249,7 @@ export function runnerBinaryPath(): string | null {
   return null;
 }
 
-async function freeLocalPort(): Promise<number> {
+export async function freeLocalPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -262,6 +272,11 @@ export function stopRunnerProcess(run: RunnerProcess) {
   }
   run.abortController.abort();
   if (run.child.killed || run.child.exitCode !== null) return;
+  // Closing stdin is the shutdown signal the runner listens for, and for a
+  // remote run it is the only one that reaches it: killing the local ssh
+  // process ends the channel, but nothing on the remote host would otherwise
+  // tell the runner that the desktop is gone.
+  run.child.stdin?.end();
   if (process.platform === "win32" && run.child.pid) {
     const terminator = spawn("taskkill", ["/pid", String(run.child.pid), "/t", "/f"], {
       stdio: "ignore",
@@ -348,7 +363,11 @@ export async function startUmbraticRunnerServer(
   });
   // The password travels on stdin with the rest of the configuration. Process
   // arguments are readable by any local process via `ps` or WMI.
-  child.stdin?.end(JSON.stringify({ ...config, password }));
+  //
+  // Stdin stays open afterwards. The runner reads the configuration as one line
+  // and then treats end of file as "the parent is gone", which is what stops a
+  // runner from outliving the app that configured it.
+  child.stdin?.write(`${JSON.stringify({ ...config, password })}\n`);
 
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {

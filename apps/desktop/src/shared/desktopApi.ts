@@ -59,6 +59,82 @@ export type DesktopStartupSettings = {
   contextLength: number;
 };
 
+/** How a remote connection proves who it is. */
+export type RemoteAuthMethod = "agent" | "identity_file" | "password";
+
+export type RemoteRunnerState = "unknown" | "missing" | "outdated" | "ready";
+
+/**
+ * A saved remote host, as the renderer is allowed to see it. Passwords and host
+ * keys never cross this boundary — only whether one is configured.
+ */
+export type RemoteConnectionInfo = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: RemoteAuthMethod;
+  identityFilePath: string;
+  passwordConfigured: boolean;
+  /** Where a run starts unless the chat picked another folder. */
+  defaultDirectory: string;
+  /** SHA256 fingerprint of the trusted host key, empty until one is trusted. */
+  hostKeyFingerprint: string;
+  hostKeyType: string;
+  runnerState: RemoteRunnerState;
+  /** What the installed runner calls itself, for display only. */
+  runnerVersion: string;
+  /** Absolute path on the remote host, empty when nothing is installed. */
+  runnerPath: string;
+  platform: { os: string; arch: string };
+  lastConnectedAt: string;
+};
+
+export type RemoteConnectionDraft = {
+  id?: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: RemoteAuthMethod;
+  identityFilePath?: string;
+  /** Empty leaves a stored password untouched; a value replaces it. */
+  password?: string;
+  defaultDirectory?: string;
+};
+
+/** What a host offered before any credential was sent to it. */
+export type RemoteHostKeyOffer = {
+  fingerprint: string;
+  keyType: string;
+  /** True when this is the key already trusted for the host and port. */
+  alreadyTrusted: boolean;
+};
+
+export type RemoteConnectionCheck = {
+  ok: boolean;
+  message: string;
+  connection: RemoteConnectionInfo;
+};
+
+export type RemoteDirectoryEntry = {
+  name: string;
+  /** Absolute POSIX path on the remote host. */
+  path: string;
+  kind: "directory" | "file";
+  /** True for a directory the connecting user cannot enter. */
+  unreadable: boolean;
+};
+
+export type RemoteDirectoryListing = {
+  path: string;
+  parentPath: string;
+  entries: RemoteDirectoryEntry[];
+  /** Set when the directory holds more entries than the listing returned. */
+  truncated: boolean;
+};
+
 export type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
 export type CapabilityProbeCategory =
   | "required"
@@ -271,10 +347,19 @@ export type TaskState =
 
 export type { BackendUiEvent };
 
+/** Identifies the remote host a task ran on, for tasks that did not run here. */
+export type TaskRemoteInfo = {
+  connectionId: string;
+  name: string;
+  host: string;
+  directory: string;
+};
+
 export type TaskInfo = {
   id: string;
   chatId?: string;
   worktreeRootTaskId?: string;
+  remote?: TaskRemoteInfo;
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
@@ -517,6 +602,16 @@ export type DesktopApi = {
   getCapabilityProbes(input?: {
     force?: boolean;
   }): Promise<CapabilityProbeReport>;
+  listRemoteConnections(): Promise<RemoteConnectionInfo[]>;
+  saveRemoteConnection(input: RemoteConnectionDraft): Promise<RemoteConnectionInfo>;
+  deleteRemoteConnection(input: { connectionId: string }): Promise<{ ok: true }>;
+  offerRemoteHostKey(input: { connectionId: string }): Promise<RemoteHostKeyOffer>;
+  trustRemoteHostKey(input: { connectionId: string; fingerprint: string }): Promise<RemoteConnectionInfo>;
+  checkRemoteConnection(input: { connectionId: string }): Promise<RemoteConnectionCheck>;
+  installRemoteRunner(input: { connectionId: string }): Promise<RemoteConnectionCheck>;
+  browseRemoteDirectory(input: { connectionId: string; path?: string }): Promise<RemoteDirectoryListing>;
+  setRemoteDefaultDirectory(input: { connectionId: string; path: string }): Promise<RemoteConnectionInfo>;
+  pickRemoteIdentityFile(): Promise<{ path: string }>;
   getHarnessProfile(): Promise<HarnessProfileId>;
   saveHarnessProfile(input: HarnessProfileId): Promise<{
     settings: HarnessProfileId;
@@ -631,6 +726,10 @@ export type DesktopApi = {
   listAvailableIdes(): Promise<IdeInfo[]>;
   startTask(input: {
     repositoryId?: string;
+    /** Runs on this saved remote host instead of on this computer. */
+    remoteConnectionId?: string;
+    /** Absolute folder on that host; its default folder when omitted. */
+    remoteDirectory?: string;
     prompt: string;
     chatId?: string;
     attachedFiles?: ChatAttachment[];
@@ -743,6 +842,16 @@ export const desktopIpcChannels = {
   getBackendStatus: "umbratic:get-backend-status",
   getStartupSettings: "umbratic:get-startup-settings",
   getCapabilityProbes: "umbratic:get-capability-probes",
+  listRemoteConnections: "umbratic:list-remote-connections",
+  saveRemoteConnection: "umbratic:save-remote-connection",
+  deleteRemoteConnection: "umbratic:delete-remote-connection",
+  offerRemoteHostKey: "umbratic:offer-remote-host-key",
+  trustRemoteHostKey: "umbratic:trust-remote-host-key",
+  checkRemoteConnection: "umbratic:check-remote-connection",
+  installRemoteRunner: "umbratic:install-remote-runner",
+  browseRemoteDirectory: "umbratic:browse-remote-directory",
+  setRemoteDefaultDirectory: "umbratic:set-remote-default-directory",
+  pickRemoteIdentityFile: "umbratic:pick-remote-identity-file",
   getHarnessProfile: "umbratic:get-harness-profile",
   saveHarnessProfile: "umbratic:save-harness-profile",
   getContextLength: "umbratic:get-context-length",

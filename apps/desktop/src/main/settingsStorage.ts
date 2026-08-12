@@ -41,6 +41,7 @@ type RawSettings = {
   reasoningMode?: unknown;
   companyCredential?: unknown;
   localModelCache?: unknown;
+  remoteConnections?: unknown;
 };
 
 type SettingsRow = {
@@ -438,6 +439,18 @@ export function writePermissionModeSetting(value: unknown): PermissionMode {
     permissionMode,
   });
   return permissionMode;
+}
+
+/**
+ * The stored remote-connection list, verbatim. Shape and secret handling belong
+ * to `remoteConnections.ts`; this module only owns the settings blob.
+ */
+export function readStoredRemoteConnections(): unknown {
+  return readRawSettings().remoteConnections;
+}
+
+export function writeStoredRemoteConnections(value: unknown): void {
+  writeRawSettings({ ...readRawSettings(), remoteConnections: value });
 }
 
 export function readNotes(): UserNotes {

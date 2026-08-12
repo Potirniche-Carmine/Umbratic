@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env,
-    io::Read,
+    io::{BufRead, Read},
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -579,11 +579,18 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
     })
 }
 
+/// Reads the configuration as a single line, leaving stdin open.
+///
+/// The configuration is one JSON document, and JSON escapes newlines inside
+/// strings, so a line is exactly one config. Stopping at the newline rather
+/// than at end of file is what lets the rest of stdin mean something else: the
+/// parent holds it open for the life of the run, and its close is the signal to
+/// shut down. A parent that closes stdin immediately after writing still works,
+/// because end of file terminates the line just as a newline does.
 pub fn load_runner_config() -> Result<RunnerConfig, String> {
     let mut bytes = Vec::new();
-    std::io::stdin()
-        .take((MAX_RUNNER_CONFIG_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
+    std::io::BufReader::new(std::io::stdin().take((MAX_RUNNER_CONFIG_BYTES + 1) as u64))
+        .read_until(b'\n', &mut bytes)
         .map_err(|error| format!("failed to read runner config from stdin: {error}"))?;
     if bytes.len() > MAX_RUNNER_CONFIG_BYTES {
         return Err("runner config exceeds the 2 MiB limit".into());

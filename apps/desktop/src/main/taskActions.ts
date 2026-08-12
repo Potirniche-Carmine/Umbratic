@@ -26,6 +26,9 @@ import {
   runnerBinaryPath,
   stopRunnerProcess,
 } from "./runnerAdapter";
+import { remoteCapabilityReport } from "./remoteHost";
+import { validatedRemoteDirectory } from "./remoteConnections";
+import { checkRemoteRunnerReady } from "./remoteRunner";
 import {
   umbraticPolicyVersion,
   umbraticRunnerName,
@@ -50,6 +53,7 @@ import type {
   ReviewFile,
   TaskInfo,
   TaskRecord,
+  TaskRemote,
   WorkspaceMode,
 } from "./types";
 import { hasSymlinkComponent, isRecord, pathInside, requiredString, slugify } from "./utils";
@@ -117,6 +121,8 @@ export function startTaskRequestKey(input: Record<string, unknown>): string {
     : [];
   return JSON.stringify({
     repositoryId: typeof input.repositoryId === "string" ? input.repositoryId.trim() : "",
+    remoteConnectionId: typeof input.remoteConnectionId === "string" ? input.remoteConnectionId.trim() : "",
+    remoteDirectory: typeof input.remoteDirectory === "string" ? input.remoteDirectory.trim() : "",
     worktreeTaskId: typeof input.worktreeTaskId === "string" ? input.worktreeTaskId.trim() : "",
     prompt: typeof input.prompt === "string" ? input.prompt.trim() : "",
     attachedFiles,
@@ -170,9 +176,33 @@ export async function startTask(input: unknown): Promise<TaskInfo> {
   }
 }
 
+/**
+ * Resolves the remote host a run was asked for, refusing early if that host
+ * cannot host it. A run that would fail after the chat has already accepted the
+ * message reads as a broken app; a refusal here reads as a setting to fix.
+ */
+async function requestedTaskRemote(input: Record<string, unknown>): Promise<TaskRemote | undefined> {
+  const connectionId = typeof input.remoteConnectionId === "string" ? input.remoteConnectionId.trim() : "";
+  if (!connectionId) return undefined;
+  const readiness = await checkRemoteRunnerReady(connectionId);
+  if (!readiness.ok) throw new Error(readiness.message);
+  const connection = readiness.connection;
+  const directory = validatedRemoteDirectory(
+    typeof input.remoteDirectory === "string" && input.remoteDirectory.trim()
+      ? input.remoteDirectory
+      : connection.defaultDirectory,
+  );
+  return { connectionId: connection.id, name: connection.name, host: connection.host, directory };
+}
+
 export async function startTaskOnce(input: Record<string, unknown>): Promise<TaskInfo> {
-  const requestedRepositoryId =
-    typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
+  const remote = await requestedTaskRemote(input);
+  // A remote run has no local project. Its local identity is the same private
+  // scratch workspace a chat without a folder gets, which is where attachments
+  // land; the only path the runner ever sees is the remote directory.
+  const requestedRepositoryId = remote
+    ? ""
+    : typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
   const prompt = requiredString(input.prompt, "prompt");
   const reasoningMode = parseReasoningMode(input.reasoningMode);
   const requestedChatId = typeof input.chatId === "string" && input.chatId.trim() ? input.chatId.trim() : undefined;
@@ -208,7 +238,9 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     throw new Error("This worktree is no longer open. Start a new worktree chat from the project.");
   }
   const requestedEnabledTools = normalizeEnabledTools(input.enabledTools, enabledToolsFromSettings({}));
-  const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
+  const capabilityReport = remote
+    ? await remoteCapabilityReport(remote.connectionId)
+    : await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const taskCapabilityProbes = capabilityTelemetrySnapshot(capabilityReport, capabilityNeedsForPrompt(prompt, attachments));
   const modelEndpointMode = readModelEndpointSettings().mode;
   if (existingTask) {
@@ -257,7 +289,12 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     }
 
     existingTask.state = "running";
-    if (!existingTask.agentBranch) {
+    existingTask.remote = remote;
+    if (remote) {
+      existingTask.workspaceMode = "local";
+      existingTask.workspaceKind = "folder";
+      existingTask.worktreePath = remote.directory;
+    } else if (!existingTask.agentBranch) {
       existingTask.workspaceMode = "local";
       existingTask.worktreePath = refreshed.rootPath;
     }
@@ -314,13 +351,16 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
   const id = taskId();
   const shouldCreateWorktree = requestedWorkspaceMode === "worktree";
   const branch = shouldCreateWorktree ? `umbratic/${id}-${slugify(prompt)}` : "";
-  const worktreePath = shouldCreateWorktree ? path.join(worktreeRootForRepo(refreshed.rootPath), id) : refreshed.rootPath;
+  const worktreePath = remote
+    ? remote.directory
+    : shouldCreateWorktree ? path.join(worktreeRootForRepo(refreshed.rootPath), id) : refreshed.rootPath;
   const task: TaskRecord = {
     id,
     chatId: chat?.id,
+    remote,
     repositoryId,
     prompt,
-    workspaceKind: refreshed.kind,
+    workspaceKind: remote ? "folder" : refreshed.kind,
     workspaceMode: shouldCreateWorktree ? "worktree" : "local",
     modelEndpointMode,
     hiddenWorkspace,

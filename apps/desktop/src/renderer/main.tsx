@@ -121,6 +121,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Server,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -166,6 +167,11 @@ import {
 import { ReviewPanel } from "./review/ReviewPanel";
 import { defaultModelEndpointSettings } from "./endpointSettings";
 import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
+import { AppearanceSettingsPanel } from "./AppearanceSettings";
+import { SettingsNav, type SettingsTab } from "./SettingsNav";
+import { TelemetrySettingsPanel } from "./TelemetrySettings";
+import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
+import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
   reduceApprovalChecks,
@@ -1941,7 +1947,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"account" | "harness" | "appearance" | "skills" | "telemetry">("account");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
@@ -1999,6 +2005,25 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setPermissionModeState(status.permissionMode);
     },
   });
+  const remoteSettings = useRemoteSettings({ api, active: settingsOpen });
+  // Where the next run happens. A chat that has already started keeps the host
+  // it started on: the runner, its session, and its workspace all live there.
+  const [remoteConnectionId, setRemoteConnectionId] = useState("");
+  const [remoteDirectory, setRemoteDirectory] = useState("");
+  const activeRemote = task?.remote;
+  const pendingRemote = remoteSettings.connections.find((connection) => connection.id === remoteConnectionId);
+  // What the chat header says. A chat that has run names the host it ran on;
+  // one that has not yet run names the host it is about to use, so the choice
+  // is visible before it matters rather than only after.
+  const remoteBadge = activeRemote
+    ?? (pendingRemote ? { name: pendingRemote.name, directory: remoteDirectory || pendingRemote.defaultDirectory } : null);
+  // Opening a chat adopts the host it belongs to. A chat that ran here shows
+  // this computer again, rather than inheriting the previous chat's remote.
+  useEffect(() => {
+    if (!task) return;
+    setRemoteConnectionId(task.remote?.connectionId ?? "");
+    setRemoteDirectory(task.remote?.directory ?? "");
+  }, [task?.id, task?.remote?.connectionId, task?.remote?.directory]);
   const endpointSettings = connectionSettings.settings;
   const endpointDraftSettings = connectionSettings.draft;
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -3751,6 +3776,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       }
       const nextTask = await api.startTask({
         repositoryId: repository?.id,
+        remoteConnectionId: remoteConnectionId || undefined,
+        remoteDirectory: remoteConnectionId ? remoteDirectory : undefined,
         prompt: trimmedPrompt,
         chatId,
         attachedFiles: sourceAttachments.map(normalizeAttachment),
@@ -5224,7 +5251,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             <div className="composerHeader">
               <div className="composerHeaderTitle">
                 <strong>{composerHeaderTitle}</strong>
-                <span>{composerHeaderMeta}</span>
+                <div className="composerHeaderMetaRow">
+                  <span>{composerHeaderMeta}</span>
+                  {remoteBadge ? <RemoteChatBadge name={remoteBadge.name} directory={remoteBadge.directory} /> : null}
+                </div>
                 {indexingThisWorkspace ? (
                   <span className="workspaceIndexing" role="status">
                     <span className="workspaceIndexingSpinner" aria-hidden="true" />
@@ -5558,7 +5588,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               ) : null}
             </div>
 
-            {canUseWorktreeMode ? (
+            <RemoteHostPicker
+              connections={remoteSettings.connections}
+              selectedId={remoteConnectionId}
+              directory={remoteDirectory}
+              disabled={busy}
+              locked={task !== null}
+              onSelect={(connectionId, directory) => {
+                setRemoteConnectionId(connectionId);
+                setRemoteDirectory(directory);
+              }}
+              onBrowse={(connectionId, path) => api.browseRemoteDirectory({ connectionId, path })}
+              onManage={() => {
+                setSettingsOpen(true);
+                setSettingsTab("remote");
+              }}
+            />
+
+            {canUseWorktreeMode && !remoteConnectionId ? (
               <WorkspaceModePicker
                 mode={workspaceMode}
                 useWorktree={useWorktreeForNextRun}
@@ -6005,51 +6052,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             </header>
 
             <div className="settingsLayout">
-              <nav className="settingsNav" aria-label="Settings sections">
-                <button
-                  type="button"
-                  className={`settingsNavItem ${settingsTab === "account" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("account")}
-                >
-                  <User size={15} />
-                  <span>Connection</span>
-                </button>
-                <button
-                  type="button"
-                  className={`settingsNavItem ${settingsTab === "harness" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("harness")}
-                >
-                  <Brain size={15} />
-                  <span>Harness</span>
-                </button>
-                <button
-                  type="button"
-                  className={`settingsNavItem ${settingsTab === "appearance" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("appearance")}
-                >
-                  <Type size={15} />
-                  <span>Appearance</span>
-                </button>
-                <button
-                  type="button"
-                  className={`settingsNavItem ${settingsTab === "skills" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("skills")}
-                >
-                  <Sparkles size={15} />
-                  <span>Skills</span>
-                </button>
-                <button
-                  type="button"
-                  className={`settingsNavItem ${settingsTab === "telemetry" ? "isActive" : ""}`}
-                  onClick={() => setSettingsTab("telemetry")}
-                >
-                  <BarChart3 size={15} />
-                  <span>Telemetry</span>
-                </button>
-              </nav>
+              <SettingsNav active={settingsTab} onSelect={setSettingsTab} />
 
               <div className="settingsContent">
                 {settingsTab === "account" ? <ConnectionSettingsPanel controller={connectionSettings} /> : null}
+
+                {settingsTab === "remote" ? <RemoteSettingsPanel controller={remoteSettings} /> : null}
 
                 {settingsTab === "harness" ? (
                   <div className="settingsPanel">
@@ -6143,86 +6151,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 ) : null}
 
                 {settingsTab === "appearance" ? (
-                  <div className="settingsPanel">
-                    <div className="settingsPanelHead">
-                      <h3>Appearance</h3>
-                      <p>Theme and typography used throughout Umbratic.</p>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>Theme</h4>
-                      <div className="appearanceOptionGrid">
-                        {[
-                          { id: "system" as const, label: "System", icon: <Monitor size={15} /> },
-                          { id: "light" as const, label: "Light", icon: <Sun size={15} /> },
-                          { id: "dark" as const, label: "Dark", icon: <Moon size={15} /> },
-                        ].map((option) => (
-                          <button
-                            className={appearanceSettings.theme === option.id ? "isActive" : ""}
-                            key={option.id}
-                            type="button"
-                            aria-pressed={appearanceSettings.theme === option.id}
-                            onClick={() => updateAppearanceSettings({ theme: option.id })}
-                          >
-                            {option.icon}
-                            <span>{option.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>Fonts</h4>
-                      <label className="settingsField">
-                        <span>Interface</span>
-                        <select
-                          value={appearanceSettings.uiFont}
-                          onChange={(event) => updateAppearanceSettings({ uiFont: event.target.value })}
-                        >
-                          {uiFontOptions.map((font) => (
-                            <option key={font} value={font}>
-                              {font}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="settingsField">
-                        <span>Code</span>
-                        <select
-                          value={appearanceSettings.monoFont}
-                          onChange={(event) => updateAppearanceSettings({ monoFont: event.target.value })}
-                        >
-                          {monoFontOptions.map((font) => (
-                            <option key={font} value={font}>
-                              {font}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div className="settingsActions">
-                        <button
-                          className="settingsInlineButton"
-                          type="button"
-                          onClick={() => void scanSystemFonts()}
-                          disabled={fontScanPending || !localFontAccessAvailable()}
-                          title={localFontAccessAvailable() ? "Scan installed fonts" : "System font scanning is unavailable here"}
-                        >
-                          {fontScanPending ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
-                          <span>Scan system fonts</span>
-                        </button>
-                        {!localFontAccessAvailable() ? (
-                          <p className="settingsMessage">System font scanning is unavailable here, so Umbratic is showing common system font choices.</p>
-                        ) : null}
-                        {fontScanMessage ? <p className="settingsMessage">{fontScanMessage}</p> : null}
-                      </div>
-                    </div>
-
-                    <div className="appearancePreview">
-                      <strong>Preview</strong>
-                      <p>The quick brown fox jumps over a careful build log.</p>
-                      <code>cmake --build .umbratic/build --parallel</code>
-                    </div>
-                  </div>
+                  <AppearanceSettingsPanel
+                    settings={appearanceSettings}
+                    uiFontOptions={uiFontOptions}
+                    monoFontOptions={monoFontOptions}
+                    fontScanPending={fontScanPending}
+                    fontScanMessage={fontScanMessage}
+                    fontScanAvailable={localFontAccessAvailable()}
+                    onChange={(next) => updateAppearanceSettings(next)}
+                    onScanFonts={() => void scanSystemFonts()}
+                  />
                 ) : null}
 
                 {settingsTab === "skills" ? (
@@ -6419,103 +6357,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 ) : null}
 
                 {settingsTab === "telemetry" ? (
-                  <div className="settingsPanel">
-                    <div className="settingsPanelHead">
-                      <h3>Telemetry</h3>
-                      <p>
-                        {telemetrySyncEnabled
-                          ? "Your organization owns and controls telemetry stored on its configured Veil server."
-                          : "Your organization owns and controls these logs. In local mode, they remain on this device."}
-                      </p>
-                    </div>
-
-                    <div className="telemetryPrivacyNotice">
-                      <ShieldCheck size={18} aria-hidden="true" />
-                      <div>
-                        <strong>Umbratic does not collect this data</strong>
-                        <p>
-                          Logs and telemetry can be shared with Umbratic only with explicit approval from you or your organization, and only to improve the platform.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>Local logs</h4>
-                      <div className="localLogsControl">
-                        <strong>{formatFileSize(localLogInfo.bytes)}</strong>
-                        <div>
-                          <button className="settingsInlineButton" type="button" onClick={() => void exportLocalLogs()} disabled={localLogsBusy}>
-                            Export
-                          </button>
-                          <button className="settingsInlineButton" type="button" onClick={() => void clearLocalLogs()} disabled={localLogsBusy || localLogInfo.entries === 0}>
-                            Clear
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>{telemetrySyncEnabled ? "What your server receives" : "Local mode"}</h4>
-                      <div className="settingsList telemetryDisclosureList">
-                        {telemetrySyncEnabled ? (
-                          <>
-                            <div className="settingsListRow">
-                              <span>Activity</span>
-                              <p>
-                                Review opens, editor choices, accept, undo, worktree actions, and context thresholds.
-                              </p>
-                            </div>
-                            <div className="settingsListRow">
-                              <span>Rated chats</span>
-                              <p>
-                                Only chats where you rate a response, plus the optional note. Unrated prompt text is not sent.
-                              </p>
-                            </div>
-                            <div className="settingsListRow">
-                              <span>Tool failures</span>
-                              <p>
-                                The attempted tool input and returned failure response, so your organization can diagnose problems.
-                              </p>
-                            </div>
-                          </>
-                        ) : (
-                          <div className="settingsListRow">
-                            <span>Uploads</span>
-                            <p>Stored on this device under your organization&apos;s control. Nothing is sent to Umbratic without explicit permission.</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>{telemetrySyncEnabled ? "What stays private" : "What stays local"}</h4>
-                      <div className="settingsList telemetryDisclosureList">
-                        <div className="settingsListRow">
-                          <span>Repository</span>
-                          <p>
-                            Source files, repository names and paths, ignored files, diffs, and attachments are never bulk-uploaded.
-                          </p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Sensitive data</span>
-                          <p>
-                            Umbratic does not scan environment variables, credentials, keys, secret files, or ignored files for telemetry.
-                          </p>
-                        </div>
-                        <div className="settingsListRow">
-                          <span>Local diagnostics</span>
-                          <p>
-                            SQLite logs, successful tool output, and safe progress updates stay on this computer.
-                          </p>
-                        </div>
-                      </div>
-                      {telemetrySyncEnabled ? (
-                        <p className="telemetryScopeNote">
-                          Content included in a rated chat or present in a failed tool request or response is part of that specific telemetry item.
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
+                  <TelemetrySettingsPanel
+                    syncEnabled={telemetrySyncEnabled}
+                    localLogSize={formatFileSize(localLogInfo.bytes)}
+                    busy={localLogsBusy}
+                    logEntryCount={localLogInfo.entries}
+                    onExport={() => void exportLocalLogs()}
+                    onClear={() => void clearLocalLogs()}
+                  />
                 ) : null}
               </div>
             </div>

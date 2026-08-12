@@ -732,6 +732,66 @@ export async function probeLocalCapabilities(options: CapabilityProbeOptions = {
   return report;
 }
 
+/**
+ * What a host has to be asked for, so a host this process cannot run commands
+ * on can still be probed. Only the command probes are exposed: the Node and
+ * Python package probes describe the desktop's own document pipeline, which
+ * runs here regardless of where the workspace lives.
+ */
+export type CapabilityCommandSpec = {
+  id: string;
+  commands: readonly string[];
+  versionArgs: readonly string[];
+  acceptNonZeroAsAvailable: boolean;
+};
+
+export function capabilityCommandSpecs(): CapabilityCommandSpec[] {
+  return commandProbeSpecs.map((spec) => ({
+    id: spec.id,
+    commands: spec.commands,
+    versionArgs: spec.versionArgs ?? ["--version"],
+    acceptNonZeroAsAvailable: spec.acceptNonZeroAsAvailable === true,
+  }));
+}
+
+export type CapabilityCommandOutcome = {
+  id: string;
+  status: CapabilityProbeStatus;
+  detectedCommand?: string;
+  executablePath?: string;
+  version?: string;
+  message?: string;
+};
+
+/**
+ * Assembles a report from outcomes gathered elsewhere. The labels, categories,
+ * purposes, and install hints stay here, so a probe means the same thing to the
+ * model wherever it was measured.
+ */
+export function commandCapabilityReport(
+  outcomes: readonly CapabilityCommandOutcome[],
+  extraProbes: readonly CapabilityProbeResult[] = [],
+  at = new Date().toISOString(),
+): CapabilityProbeReport {
+  const byId = new Map(outcomes.map((outcome) => [outcome.id, outcome]));
+  const probes = [
+    ...extraProbes,
+    ...commandProbeSpecs.map((spec) => {
+      const outcome = byId.get(spec.id);
+      if (!outcome) {
+        return baseProbe(spec, "unknown", at, { message: "This host was not asked about this command." });
+      }
+      return baseProbe(spec, outcome.status, at, {
+        version: outcome.version,
+        executablePath: outcome.executablePath,
+        detectedCommand: outcome.detectedCommand,
+        message: outcome.message,
+      });
+    }),
+  ];
+  return { checkedAt: at, probes, summary: reportSummary(probes) };
+}
+
 export function capabilityById(report: CapabilityProbeReport, id: string): CapabilityProbeResult | undefined {
   return report.probes.find((probe) => probe.id === id);
 }

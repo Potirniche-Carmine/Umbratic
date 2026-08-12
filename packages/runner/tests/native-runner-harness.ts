@@ -64,7 +64,9 @@ export async function startRunner(
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  child.stdin.end(JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, overrides)));
+  // The configuration is one line and stdin stays open for the session: the
+  // runner reads its close as "the parent is gone" and shuts down.
+  child.stdin.write(`${JSON.stringify(config(cwd, providerUrl, diagnosticLogPath, overrides))}\n`);
   let output = "";
   const url = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`runner startup timed out: ${output}`)), 5_000);

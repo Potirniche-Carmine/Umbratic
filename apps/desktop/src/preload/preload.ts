@@ -7,6 +7,7 @@ import type {
   PastedAttachmentInput,
   PermissionMode,
   ReasoningMode,
+  RemoteConnectionDraft,
   WorkspaceIndexEvent,
 } from "../shared/desktopApi";
 import type { ResponseFeedbackReason, ResponseRating } from "../shared/responseFeedback";
@@ -59,6 +60,24 @@ const umbraticApi = {
   getBackendStatus: () => ipcRenderer.invoke("umbratic:get-backend-status"),
   getStartupSettings: () => ipcRenderer.invoke("umbratic:get-startup-settings"),
   getCapabilityProbes: (input?: { force?: boolean }) => ipcRenderer.invoke("umbratic:get-capability-probes", input ?? {}),
+  listRemoteConnections: () => ipcRenderer.invoke("umbratic:list-remote-connections"),
+  saveRemoteConnection: (input: RemoteConnectionDraft) =>
+    ipcRenderer.invoke("umbratic:save-remote-connection", input),
+  deleteRemoteConnection: (input: { connectionId: string }) =>
+    ipcRenderer.invoke("umbratic:delete-remote-connection", input),
+  offerRemoteHostKey: (input: { connectionId: string }) =>
+    ipcRenderer.invoke("umbratic:offer-remote-host-key", input),
+  trustRemoteHostKey: (input: { connectionId: string; fingerprint: string }) =>
+    ipcRenderer.invoke("umbratic:trust-remote-host-key", input),
+  checkRemoteConnection: (input: { connectionId: string }) =>
+    ipcRenderer.invoke("umbratic:check-remote-connection", input),
+  installRemoteRunner: (input: { connectionId: string }) =>
+    ipcRenderer.invoke("umbratic:install-remote-runner", input),
+  browseRemoteDirectory: (input: { connectionId: string; path?: string }) =>
+    ipcRenderer.invoke("umbratic:browse-remote-directory", input),
+  setRemoteDefaultDirectory: (input: { connectionId: string; path: string }) =>
+    ipcRenderer.invoke("umbratic:set-remote-default-directory", input),
+  pickRemoteIdentityFile: () => ipcRenderer.invoke("umbratic:pick-remote-identity-file"),
   getHarnessProfile: () => ipcRenderer.invoke("umbratic:get-harness-profile"),
   saveHarnessProfile: (input: HarnessProfileId) => ipcRenderer.invoke("umbratic:save-harness-profile", input),
   getContextLength: () => ipcRenderer.invoke("umbratic:get-context-length"),
@@ -112,6 +131,8 @@ const umbraticApi = {
   listAvailableIdes: () => ipcRenderer.invoke("umbratic:list-available-ides"),
   startTask: (input: {
     repositoryId?: string;
+    remoteConnectionId?: string;
+    remoteDirectory?: string;
     prompt: string;
     chatId?: string;
     attachedFiles?: ChatAttachment[];

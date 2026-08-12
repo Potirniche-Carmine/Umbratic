@@ -21,6 +21,7 @@ import type {
   ModelEndpointMode,
   PermissionMode,
   PublicModelEndpointSettings,
+  RemoteConnectionInfo,
   RepositoryInfo,
   SkillInfo,
   TaskInfo,
@@ -67,6 +68,7 @@ import {
   previewDefaultSkills,
   previewSkillContent,
 } from "./previewCapabilities";
+import { previewRemoteApi } from "./previewRemoteFixtures";
 
 let previewSkills = previewDefaultSkills.map((skill) => ({
   ...skill,
@@ -837,6 +839,7 @@ function createPreviewApi(): DesktopApi {
     contextLength: readPreviewContextLength(),
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
+  ...previewRemoteApi,
   getHarnessProfile: async () => readPreviewHarnessProfile(),
   saveHarnessProfile: async (input) => {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;

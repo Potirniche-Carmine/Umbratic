@@ -9,6 +9,18 @@ import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLaun
 import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
 import { checkoutRepositoryBranch, getRepository, listRepositoryBranches, openChatAttachment, pickAttachmentFiles, pickRepository, savePastedAttachments } from "./repositoryOps";
 import { refreshTaskReview, refreshWorkspaceReview } from "./reviewFiles";
+import {
+  browseRemoteDirectory,
+  checkRemoteConnection,
+  deleteRemoteConnection,
+  installRunnerOnRemote,
+  listRemoteConnections,
+  offerRemoteHostKey,
+  pickRemoteIdentityFile,
+  saveRemoteConnection,
+  setRemoteDefaultDirectory,
+  trustRemoteHostKey,
+} from "./remoteService";
 import { approveTaskMerge, approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, rejectTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
 import { worktreeRootForRepo } from "./worktreeOps";
@@ -360,6 +372,16 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getBackendStatus: () => getBackendStatus(),
     getStartupSettings: () => readStartupSettings(),
     getCapabilityProbes: (input) => getCapabilityProbes(input),
+    listRemoteConnections: () => listRemoteConnections(),
+    saveRemoteConnection: (input) => saveRemoteConnection(input),
+    deleteRemoteConnection: (input) => deleteRemoteConnection(input),
+    offerRemoteHostKey: (input) => offerRemoteHostKey(input),
+    trustRemoteHostKey: (input) => trustRemoteHostKey(input),
+    checkRemoteConnection: (input) => checkRemoteConnection(input),
+    installRemoteRunner: (input) => installRunnerOnRemote(input),
+    browseRemoteDirectory: (input) => browseRemoteDirectory(input),
+    setRemoteDefaultDirectory: (input) => setRemoteDefaultDirectory(input),
+    pickRemoteIdentityFile: () => pickRemoteIdentityFile(),
     getModelEndpointSettings: (input) => {
       const mode = input?.mode;
       return publicModelEndpointSettings(mode ? readModelEndpointSettingsForMode(mode) : readModelEndpointSettings());
