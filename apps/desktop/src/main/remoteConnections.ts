@@ -40,7 +40,6 @@ export type StoredRemoteConnection = {
   runnerVersion: string;
   platformOs: string;
   platformArch: string;
-  lastConnectedAt: string;
 };
 
 export type RemoteConnectionPatch = Partial<
@@ -53,7 +52,6 @@ export type RemoteConnectionPatch = Partial<
     | "runnerVersion"
     | "platformOs"
     | "platformArch"
-    | "lastConnectedAt"
     | "defaultDirectory"
   >
 >;
@@ -88,7 +86,6 @@ function decodeConnection(value: unknown): StoredRemoteConnection | null {
     runnerVersion: text("runnerVersion"),
     platformOs: text("platformOs"),
     platformArch: text("platformArch"),
-    lastConnectedAt: text("lastConnectedAt"),
   };
 }
 
@@ -137,7 +134,6 @@ export function publicRemoteConnection(
     runnerVersion: connection.runnerVersion,
     runnerPath: connection.runnerPath,
     platform: { os: connection.platformOs, arch: connection.platformArch },
-    lastConnectedAt: connection.lastConnectedAt,
   };
 }
 
@@ -270,7 +266,6 @@ export function saveRemoteConnection(input: unknown): RemoteConnectionInfo {
       runnerVersion: "",
       platformOs: "",
       platformArch: "",
-      lastConnectedAt: "",
     }),
     name: validatedName(draft.name),
     host,

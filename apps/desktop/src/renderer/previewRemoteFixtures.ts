@@ -23,7 +23,6 @@ export function blankPreviewRemoteConnection(): RemoteConnectionInfo {
     runnerVersion: "",
     runnerPath: "",
     platform: { os: "", arch: "" },
-    lastConnectedAt: "",
   };
 }
 
@@ -48,7 +47,6 @@ let connections: RemoteConnectionInfo[] = [
     runnerVersion: "UmbraticRunner rust-1",
     runnerPath: "/home/carmine/.umbratic/bin/umbratic-runner",
     platform: { os: "Linux", arch: "x86_64" },
-    lastConnectedAt: new Date(Date.now() - 900_000).toISOString(),
   },
   {
     ...blankPreviewRemoteConnection(),
@@ -150,7 +148,6 @@ export const previewRemoteApi: Pick<
   offerRemoteHostKey: async () => ({
     fingerprint: "SHA256:0pQ7yLp2Wm1nD8xTf4uKcRvZs6Ab9EgHjNoY3iX5tQc",
     keyType: "ED25519",
-    alreadyTrusted: false,
   }),
   trustRemoteHostKey: async (input) =>
     patchPreviewRemoteConnection(input.connectionId, {

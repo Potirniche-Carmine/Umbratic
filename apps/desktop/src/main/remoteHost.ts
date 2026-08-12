@@ -93,14 +93,22 @@ export async function probeRemoteHostFacts(
   target: RemoteTarget,
   secret?: string,
 ): Promise<RemoteHostFacts> {
-  const stdout = await runRemoteCommandOrThrow(
+  const result = await runRemoteCommand(
     target,
     app.getPath("userData"),
     ["sh", "-c", hostFactsScript()],
     { timeoutMs: 20_000 },
     secret,
   );
-  const values = keyedOutput(stdout);
+  if (result.code !== 0) {
+    // A default Windows sshd hands the command to cmd.exe, where `sh` does not
+    // exist. That deserves a plain answer, not a shell error verbatim.
+    if (/'sh' is not recognized|is not recognized as an internal or external command/i.test(`${result.stdout}\n${result.stderr}`)) {
+      throw new Error("This host looks like Windows. Umbratic can run on Linux and macOS remote hosts.");
+    }
+    throw new Error(remoteFailureMessage(result));
+  }
+  const values = keyedOutput(result.stdout);
   const home = values.get("home") ?? "";
   if (!home.startsWith("/")) {
     throw new Error("The remote host did not report a usable home directory.");
@@ -240,21 +248,6 @@ export async function installRemoteRunner(
     sha256: values.get("sha") ?? "",
     runnerVersion: values.get("runnerVersion") ?? "",
   };
-}
-
-export async function removeRemoteRunner(
-  target: RemoteTarget,
-  facts: RemoteHostFacts,
-  secret?: string,
-): Promise<void> {
-  const destination = `${facts.home}/${runnerInstallDirectory}/${runnerFileName}`;
-  await runRemoteCommand(
-    target,
-    app.getPath("userData"),
-    ["sh", "-c", `rm -f ${shellQuote(destination)}`],
-    { timeoutMs: 20_000 },
-    secret,
-  );
 }
 
 function capabilityScript(): string {

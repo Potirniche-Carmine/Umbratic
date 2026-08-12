@@ -150,27 +150,26 @@ test("a password never reaches a command line and is absent unless it is the met
 });
 
 test("trusting a host key replaces the previous key for that host and port", () => {
-  const { trustHostKey, forgetHostKey, hostKeyIsTrusted, knownHostsPath } = loadTransport();
+  const { trustHostKey, forgetHostKey, knownHostsPath } = loadTransport();
   const dataRoot = temporaryDataRoot();
   const marker = "[build.example.com]:2222";
+  const trustedLines = () =>
+    fs.readFileSync(knownHostsPath(dataRoot), "utf8").split("\n").filter(Boolean);
 
-  assert.equal(hostKeyIsTrusted(dataRoot, "build.example.com", 2222), false);
   trustHostKey(dataRoot, `${marker} ssh-ed25519 AAAAfirst`);
-  assert.equal(hostKeyIsTrusted(dataRoot, "build.example.com", 2222), true);
+  assert.deepEqual(trustedLines(), [`${marker} ssh-ed25519 AAAAfirst`]);
 
   // A host that presents a new key must not end up with two trusted keys.
   trustHostKey(dataRoot, `${marker} ssh-ed25519 AAAAsecond`);
-  const lines = fs.readFileSync(knownHostsPath(dataRoot), "utf8").split("\n").filter(Boolean);
-  assert.deepEqual(lines, [`${marker} ssh-ed25519 AAAAsecond`]);
+  assert.deepEqual(trustedLines(), [`${marker} ssh-ed25519 AAAAsecond`]);
 
-  // Port 22 is written without brackets, the way OpenSSH writes it.
+  // Port-22 hosts are written bare, the way OpenSSH writes them, and forgetting
+  // one host must not touch the other.
   trustHostKey(dataRoot, "other.example.com ssh-ed25519 AAAAthird");
-  assert.equal(hostKeyIsTrusted(dataRoot, "other.example.com", 22), true);
-  assert.equal(hostKeyIsTrusted(dataRoot, "other.example.com", 2222), false);
-
   forgetHostKey(dataRoot, "build.example.com", 2222);
-  assert.equal(hostKeyIsTrusted(dataRoot, "build.example.com", 2222), false);
-  assert.equal(hostKeyIsTrusted(dataRoot, "other.example.com", 22), true);
+  assert.deepEqual(trustedLines(), ["other.example.com ssh-ed25519 AAAAthird"]);
+  forgetHostKey(dataRoot, "other.example.com", 22);
+  assert.deepEqual(trustedLines(), []);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
@@ -188,6 +187,32 @@ test("ssh failures are reported as something the user can act on", () => {
     /refused the credentials/,
   );
   assert.match(message("", 7), /exited with code 7/);
+});
+
+test("a Windows remote is answered in plain language, not with a cmd.exe error", async () => {
+  // A default Windows sshd hands the probe to cmd.exe, which does not have
+  // `sh`. The user should read "this is Windows", not shell output.
+  const dataRoot = temporaryDataRoot();
+  const remoteHost = loadTypeScriptModule(new URL("../src/main/remoteHost.ts", import.meta.url), {
+    mocks: {
+      electron: { app: { getPath: () => dataRoot } },
+      "./sshTransport": {
+        runRemoteCommand: async () => ({
+          code: 1,
+          stdout: "",
+          stderr: "'sh' is not recognized as an internal or external command,\r\noperable program or batch file.",
+        }),
+        runRemoteCommandOrThrow: async () => "",
+        remoteFailureMessage: () => "",
+        shellQuote: (value: string) => value,
+      },
+    },
+  });
+  await assert.rejects(
+    () => remoteHost.probeRemoteHostFacts({ host: "h", port: 22, username: "u", authMethod: "agent" }),
+    /looks like Windows/,
+  );
+  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
 test("only platforms with a shipped runner are offered one", () => {

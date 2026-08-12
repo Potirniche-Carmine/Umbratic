@@ -88,7 +88,6 @@ export type RemoteConnectionInfo = {
   /** Absolute path on the remote host, empty when nothing is installed. */
   runnerPath: string;
   platform: { os: string; arch: string };
-  lastConnectedAt: string;
 };
 
 export type RemoteConnectionDraft = {
@@ -108,8 +107,6 @@ export type RemoteConnectionDraft = {
 export type RemoteHostKeyOffer = {
   fingerprint: string;
   keyType: string;
-  /** True when this is the key already trusted for the host and port. */
-  alreadyTrusted: boolean;
 };
 
 export type RemoteConnectionCheck = {

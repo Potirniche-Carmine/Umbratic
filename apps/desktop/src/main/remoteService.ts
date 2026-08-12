@@ -20,7 +20,7 @@ import {
   remotePlatformKey,
   remoteRunnerArtifact,
 } from "./remoteHost";
-import { hostKeyIsTrusted, scanRemoteHostKey, trustHostKey } from "./sshTransport";
+import { scanRemoteHostKey, trustHostKey } from "./sshTransport";
 import type {
   RemoteConnectionCheck,
   RemoteConnectionInfo,
@@ -64,13 +64,7 @@ export function deleteRemoteConnection(input: unknown): { ok: true } {
 export async function offerRemoteHostKey(input: unknown): Promise<RemoteHostKeyOffer> {
   const connection = requireStoredRemoteConnection(connectionIdFrom(input));
   const key = await scanRemoteHostKey(remoteTarget(connection));
-  return {
-    fingerprint: key.fingerprint,
-    keyType: key.keyType,
-    alreadyTrusted:
-      hostKeyIsTrusted(app.getPath("userData"), connection.host, connection.port)
-      && connection.hostKeyFingerprint === key.fingerprint,
-  };
+  return { fingerprint: key.fingerprint, keyType: key.keyType };
 }
 
 /**
@@ -113,7 +107,6 @@ export async function checkRemoteConnection(input: unknown): Promise<RemoteConne
     runnerPath: facts.runnerSha256 ? facts.runnerPath : "",
     runnerSha256: facts.runnerSha256,
     runnerVersion: facts.runnerVersion,
-    lastConnectedAt: new Date().toISOString(),
     defaultDirectory: connection.defaultDirectory || facts.home,
   });
   const info = publicRemoteConnectionFor(updated);
@@ -156,7 +149,6 @@ export async function installRunnerOnRemote(input: unknown): Promise<RemoteConne
     runnerPath: installed.runnerPath,
     runnerSha256: installed.sha256,
     runnerVersion: installed.runnerVersion,
-    lastConnectedAt: new Date().toISOString(),
     defaultDirectory: connection.defaultDirectory || facts.home,
   });
   const info = publicRemoteConnectionFor(updated);

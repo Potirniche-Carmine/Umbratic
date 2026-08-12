@@ -407,18 +407,11 @@ export function trustHostKey(userDataPath: string, hostKeyLine: string): void {
 
 export function forgetHostKey(userDataPath: string, host: string, port: number): void {
   const file = knownHostsPath(userDataPath);
+  // OpenSSH writes port-22 hosts bare and everything else bracketed.
   const marker = port === 22 ? host : `[${host}]:${port}`;
   const kept = fs
     .readFileSync(file, "utf8")
     .split(/\r?\n/)
     .filter((line) => line.trim() && line.split(" ")[0] !== marker);
   fs.writeFileSync(file, kept.length ? `${kept.join("\n")}\n` : "", { encoding: "utf8", mode: 0o600 });
-}
-
-export function hostKeyIsTrusted(userDataPath: string, host: string, port: number): boolean {
-  const marker = port === 22 ? host : `[${host}]:${port}`;
-  return fs
-    .readFileSync(knownHostsPath(userDataPath), "utf8")
-    .split(/\r?\n/)
-    .some((line) => line.split(" ")[0] === marker);
 }

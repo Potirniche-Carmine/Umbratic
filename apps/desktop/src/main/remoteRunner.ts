@@ -10,7 +10,6 @@ import {
   type StoredRemoteConnection,
 } from "./remoteConnections";
 import {
-  probeRemoteHostFacts,
   remoteCapabilityReport,
   remotePlatformKey,
   remoteRunnerArtifact,
@@ -19,7 +18,6 @@ import { buildUmbraticRunnerConfig, freeLocalPort } from "./runnerAdapter";
 import { shellCommand, spawnSsh } from "./sshTransport";
 import { readModelEndpointSettings } from "./storage";
 import type { LocalModelInfo, RunnerProcess, TaskRecord } from "./types";
-import { isRecord } from "./utils";
 
 /**
  * Runs the workspace runner on another machine.
@@ -79,43 +77,17 @@ export async function checkRemoteRunnerReady(connectionId: string): Promise<Remo
  * the runner's configuration is byte-identical to a local run's. Model traffic
  * then travels inside the SSH channel and is never exposed on the network.
  */
-function veilReverseForward(): { forward: string; port: number } {
+function veilReverseForward(): string {
   const connection = currentLocalVeilConnection();
   if (!connection) {
     throw new Error("The local model service is not running, so a remote run has nothing to call.");
   }
-  const url = new URL(connection.baseUrl);
-  const port = Number(url.port);
+  const port = Number(new URL(connection.baseUrl).port);
   if (!Number.isInteger(port) || port <= 0) {
     throw new Error("The local model service is not reachable on a port that can be forwarded.");
   }
-  return { forward: `127.0.0.1:${port}:127.0.0.1:${port}`, port };
+  return `127.0.0.1:${port}:127.0.0.1:${port}`;
 }
-
-function serverModeForwarding(): void {
-  const settings = readModelEndpointSettings();
-  if (settings.mode !== "server") return;
-  throw new Error(
-    "Remote hosts run against the local model service. Switch this connection to Local mode to run on a remote host.",
-  );
-}
-
-/**
- * Refreshes what the desktop knows about a host and returns it for display.
- * Called from settings, where the user is waiting and wants the truth now.
- */
-export async function inspectRemoteConnection(connection: StoredRemoteConnection) {
-  const facts = await probeRemoteHostFacts(remoteTarget(connection), remoteSecret(connection));
-  const platformKey = remotePlatformKey(facts.os, facts.arch);
-  const artifact = platformKey ? remoteRunnerArtifact(platformKey) : null;
-  return { facts, artifact, platformKey };
-}
-
-type RemoteStartAttempt = {
-  child: ReturnType<typeof spawnSsh>;
-  localPort: number;
-  remotePort: number;
-};
 
 function startAttempt(
   connection: StoredRemoteConnection,
@@ -123,8 +95,8 @@ function startAttempt(
   remotePort: number,
   veilForward: string,
   directory: string,
-): RemoteStartAttempt {
-  const child = spawnSsh(
+): ReturnType<typeof spawnSsh> {
+  return spawnSsh(
     remoteTarget(connection),
     app.getPath("userData"),
     [
@@ -144,20 +116,19 @@ function startAttempt(
     ].join("\n"),
     remoteSecret(connection),
   );
-  return { child, localPort, remotePort };
 }
 
-function awaitRemoteListener(attempt: RemoteStartAttempt): Promise<{ ok: true } | { ok: false; output: string; portInUse: boolean }> {
+function awaitRemoteListener(child: ReturnType<typeof spawnSsh>): Promise<{ ok: true } | { ok: false; output: string; portInUse: boolean }> {
   return new Promise((resolve) => {
     let output = "";
     let settled = false;
     const timer = setTimeout(() => finish({ ok: false, output, portInUse: false }), startupTimeoutMs);
     const cleanup = () => {
       clearTimeout(timer);
-      attempt.child.stdout?.off("data", onData);
-      attempt.child.stderr?.off("data", onData);
-      attempt.child.off("error", onError);
-      attempt.child.off("exit", onExit);
+      child.stdout?.off("data", onData);
+      child.stderr?.off("data", onData);
+      child.off("error", onError);
+      child.off("exit", onExit);
     };
     const finish = (result: { ok: true } | { ok: false; output: string; portInUse: boolean }) => {
       if (settled) return;
@@ -176,10 +147,10 @@ function awaitRemoteListener(attempt: RemoteStartAttempt): Promise<{ ok: true } 
         output,
         portInUse: /address (already )?in use|cannot listen to port|bind: /i.test(output),
       });
-    attempt.child.stdout?.on("data", onData);
-    attempt.child.stderr?.on("data", onData);
-    attempt.child.once("error", onError);
-    attempt.child.once("exit", onExit);
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+    child.once("error", onError);
+    child.once("exit", onExit);
   });
 }
 
@@ -205,30 +176,31 @@ export async function startRemoteRunnerServer(
 ): Promise<RunnerProcess> {
   const remote = task.remote;
   if (!remote) throw new Error("This task is not attached to a remote host.");
-  serverModeForwarding();
+  if (readModelEndpointSettings().mode === "server") {
+    throw new Error(
+      "Remote hosts run against the local model service. Switch this connection to Local mode to run on a remote host.",
+    );
+  }
   const readiness = await checkRemoteRunnerReady(remote.connectionId);
   if (!readiness.ok) throw new Error(readiness.message);
   const connection = readiness.connection;
   const capabilityReport = await remoteCapabilityReport(connection.id);
-  const veil = veilReverseForward();
+  const veilForward = veilReverseForward();
   const password = crypto.randomBytes(18).toString("base64url");
   // Attachments live in this app's data directory; the remote runner cannot
   // read them, so a remote run carries no attachment directory at all rather
   // than one that silently resolves to nothing over there.
   const config = buildUmbraticRunnerConfig(task, model, undefined, capabilityReport);
-  const diagnostics = isRecord(config.diagnostics) && typeof config.diagnostics.logPath === "string"
-    ? { diagnosticLogPath: config.diagnostics.logPath }
-    : {};
   assertUmbraticRunnerConfig(config, model, app.getPath("userData"));
 
   let lastOutput = "";
   for (let attemptIndex = 0; attemptIndex < portAttempts; attemptIndex += 1) {
     const localPort = await freeLocalPort();
-    const attempt = startAttempt(connection, localPort, candidateRemotePort(), veil.forward, remote.directory);
+    const child = startAttempt(connection, localPort, candidateRemotePort(), veilForward, remote.directory);
     // Stdin carries the configuration and then stays open for the life of the
     // run. Its close is how the remote runner learns the session ended.
-    attempt.child.stdin?.write(`${JSON.stringify({ ...config, password })}\n`);
-    const started = await awaitRemoteListener(attempt);
+    child.stdin?.write(`${JSON.stringify({ ...config, password })}\n`);
+    const started = await awaitRemoteListener(child);
     if (started.ok) {
       return {
         taskId: task.id,
@@ -236,14 +208,13 @@ export async function startRemoteRunnerServer(
         password,
         directory: remote.directory,
         remote,
-        ...diagnostics,
-        child: attempt.child,
+        child,
         abortController: new AbortController(),
       };
     }
     lastOutput = started.output;
-    attempt.child.stdin?.end();
-    attempt.child.kill();
+    child.stdin?.end();
+    child.kill();
     // A port collision on the remote host is the one failure worth retrying:
     // the port was chosen here without being able to see what is already bound
     // over there.
