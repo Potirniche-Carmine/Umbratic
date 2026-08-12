@@ -41,8 +41,7 @@
         "version": "0.0.3"
       },
       "mode": {
-        "permission": "normal",
-        "reasoning": "reasoning"
+        "permission": "normal"
       },
       "status": "review_ready",
       "outcome": "success",

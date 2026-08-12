@@ -21,7 +21,6 @@ function fixture(taskId: string) {
     baseCommit: "base",
     agentBranch: `umbratic/${taskId}`,
     permissionMode: "normal",
-    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: ["tracked.txt"],
     reviewFiles: [],

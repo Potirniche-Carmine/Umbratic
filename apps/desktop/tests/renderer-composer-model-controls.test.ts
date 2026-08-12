@@ -19,33 +19,6 @@ test("the composer controls stylesheet is actually loaded", () => {
   assert.match(stylesIndex, /@import "\.\/styles\/model-controls\.css";/);
 });
 
-test("the Think toggle reports its state to assistive technology and to the eye", () => {
-  assert.match(controls, /aria-pressed=\{on\}/);
-  assert.match(controls, /Thinking forced on — model reasons before answering/);
-  assert.match(controls, /Thinking off — model answers directly/);
-  // Disabled with an explanation rather than silently inert.
-  assert.match(controls, /This model does not reason before answering/);
-  assert.match(controls, /disabled=\{disabled \|\| !supported\}/);
-});
-
-test("the Think toggle matches the composer pill grammar and presses in on touch-down", () => {
-  const pill = declarations(".thinkToggle");
-  assert.match(pill, /height:\s*28px/);
-  assert.match(pill, /padding:\s*0 9px/);
-  assert.match(pill, /border-radius:\s*999px/);
-  assert.match(pill, /font-size:\s*12px/);
-  // Feedback belongs to the press, so the transform transition is the fast one.
-  assert.match(pill, /transform 100ms ease-out/);
-  assert.match(declarations(".thinkToggle:active:not(:disabled)"), /transform:\s*scale\(0\.97\)/);
-  // On borrows the composer's existing engaged look rather than inventing a
-  // state colour, and it has to be visible: the reasoning tokens are tuned to
-  // make text recede and left on and off four values apart.
-  const on = declarations(".thinkControl.isOn .thinkToggle");
-  assert.match(on, /color:\s*var\(--text\)/);
-  assert.match(on, /border-color:\s*var\(--line-strong\)/);
-  assert.match(on, /background:\s*var\(--control-active\)/);
-});
-
 test("the model menu grows upward from the trigger it belongs to", () => {
   const menu = declarations(".modelMenu");
   assert.match(menu, /bottom:\s*calc\(100% \+ 7px\)/);
@@ -81,8 +54,6 @@ test("the composer offers a choice only where one exists", () => {
   // with a single row.
   assert.match(main, /composerModels\.length > 1 \? \(/);
   assert.match(controls, /if \(models\.length === 0\) return null;/);
-  // Server mode has to hear the feature name before the toggle claims to work.
-  assert.match(main, /endpointSettings\.mode === "local"\s*\n\s*\|\| \(backend\?\.veilFeatures \?\? \[\]\)\.includes\("chat\.thinking_toggle"\)/);
 });
 
 test("both model lists are the same control", () => {

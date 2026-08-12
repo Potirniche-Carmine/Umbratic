@@ -398,10 +398,7 @@ mod chat_body {
         Arc::new(config)
     }
 
-    fn body(
-        send_model_field: bool,
-        thinking: Option<ThinkingDirective>,
-    ) -> serde_json::Map<String, Value> {
+    fn body(send_model_field: bool) -> serde_json::Map<String, Value> {
         let config = config(send_model_field);
         chat_request_body(
             &config,
@@ -410,7 +407,6 @@ mod chat_body {
             1024,
             false,
             None,
-            thinking,
         )
         .as_object()
         .unwrap()
@@ -418,49 +414,10 @@ mod chat_body {
     }
 
     #[test]
-    fn a_default_run_sends_neither_field() {
-        let sent = body(false, None);
-        assert!(!sent.contains_key("thinking"));
-        assert!(!sent.contains_key("model"));
-    }
-
-    #[test]
-    fn the_thinking_directive_travels_as_on_or_off() {
-        assert_eq!(
-            body(false, Some(ThinkingDirective::On))["thinking"],
-            json!("on")
-        );
-        assert_eq!(
-            body(false, Some(ThinkingDirective::Off))["thinking"],
-            json!("off")
-        );
-    }
-
-    #[test]
     fn the_model_is_named_only_when_the_desktop_confirmed_the_feature() {
-        assert_eq!(body(true, None)["model"], json!("qwen3-32b"));
-        assert!(!body(false, None).contains_key("model"));
-    }
-
-    #[test]
-    fn both_fields_can_travel_together() {
-        let sent = body(true, Some(ThinkingDirective::Off));
-        assert_eq!(sent["thinking"], json!("off"));
+        let sent = body(true);
         assert_eq!(sent["model"], json!("qwen3-32b"));
         assert_eq!(sent["stream"], json!(true));
-    }
-
-    #[test]
-    fn reasoning_modes_map_to_directives_and_unknown_modes_do_not() {
-        assert_eq!(
-            ThinkingDirective::from_reasoning_mode("reasoning"),
-            Some(ThinkingDirective::On)
-        );
-        assert_eq!(
-            ThinkingDirective::from_reasoning_mode("fast"),
-            Some(ThinkingDirective::Off)
-        );
-        assert_eq!(ThinkingDirective::from_reasoning_mode("balanced"), None);
-        assert_eq!(ThinkingDirective::from_reasoning_mode(""), None);
+        assert!(!body(false).contains_key("model"));
     }
 }

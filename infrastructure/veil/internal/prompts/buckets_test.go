@@ -121,8 +121,9 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 // Every rule repo_orient earned from a live failure, in one place. Each line
 // here cost a bad run: a drive-by write during a read-only tour, a wholly
 // invented architecture answered before any tool ran, a tour that skipped the
-// project's own documentation and guessed filenames instead, and a dozen files
-// read then summarized in two lines.
+// project's own documentation and guessed filenames instead, a dozen files
+// read then summarized in two lines, and a nine-minute tour that read fifty
+// source files while the documents next to them went unopened.
 // Substituting a step is how the graph variant is built, so every rule below
 // has to survive substitution too — otherwise the tool's presence silently
 // buys back a failure this bucket already paid for.
@@ -136,7 +137,9 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 			"read-only":            "leave the files as they are",
 			"no drive-by fixes":    "name it in your answer",
 			"first move is a tool": "Make a tool call your first action",
-			"docs before source":   "Read the documentation before the source",
+			"docs before source":   "documents before any source",
+			"reads every document": "every other Markdown, plain-text, or word-processor document",
+			"source reads bounded": "has stopped being a tour",
 			"no guessed paths":     "Read paths you have seen",
 			"answer is unbounded":  "as much room as it needs",
 			"self-terminating":     "write the answer from what you have",
@@ -780,7 +783,7 @@ func TestRepoOrientWithoutTheGraphRendersTheOriginalPlan(t *testing.T) {
 	if !strings.Contains(rendered, "1. List the workspace root.") {
 		t.Fatalf("the original step 1 must survive:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "3. Then read the entry points and directories the listing showed") {
+	if !strings.Contains(rendered, "3. Then read only what the documents left unexplained: the entry points and directories the listing showed") {
 		t.Fatalf("the original step 3 must survive:\n%s", rendered)
 	}
 }

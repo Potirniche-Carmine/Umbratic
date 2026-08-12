@@ -240,7 +240,6 @@ test("tasks normalize current tool settings", () => {
     baseCommit: "abc",
     agentBranch: "",
     permissionMode: "auto_safe",
-    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: [],
     enabledTools: ["read", "bogus", "command", "read"],
@@ -250,7 +249,6 @@ test("tasks normalize current tool settings", () => {
 
   const [task] = storage.readTasks();
   assert.equal(task.workspaceMode, "local");
-  assert.equal(task.reasoningMode, "reasoning");
   assert.equal(task.permissionMode, "auto_safe");
   assert.deepEqual(plain(task.enabledTools), ["read", "command"]);
   assert.deepEqual(plain(task.reviewFiles), []);
@@ -274,7 +272,6 @@ test("single-task writes update payloads without rewriting or reordering unrelat
     baseCommit: "abc",
     agentBranch: "",
     permissionMode: "normal",
-    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: [],
     reviewFiles: [],
@@ -315,7 +312,6 @@ test("checkpoint metadata persists and workspace activation switches the task at
     baseCommit: "base",
     agentBranch: "umbratic/task-checkpoint",
     permissionMode: "normal",
-    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: ["tracked.txt"],
     reviewFiles: [],
@@ -667,7 +663,6 @@ test("app and chat databases keep one process-lifetime handle", () => {
     baseCommit: "abc",
     agentBranch: "",
     permissionMode: "normal",
-    reasoningMode: "reasoning",
     createdAt: "2026-01-01T00:00:00.000Z",
     changedFiles: [],
     reviewFiles: [],
@@ -787,17 +782,9 @@ test("startup settings use one SQLite settings-row read", () => {
   }
 });
 
-test("the thinking toggle and the server model choice survive a relaunch", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-reasoning-"));
+test("the server model choice survives a relaunch", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-model-"));
   const storage = loadStorage(userData);
-
-  // Default before anything is chosen: the model reasons.
-  assert.equal(storage.readReasoningModeSetting(), "reasoning");
-  assert.equal(storage.readStartupSettings().reasoningMode, "reasoning");
-
-  assert.equal(storage.writeReasoningModeSetting("fast"), "fast");
-  assert.equal(storage.writeReasoningModeSetting("balanced"), "reasoning");
-  assert.equal(storage.writeReasoningModeSetting("fast"), "fast");
 
   storage.writeModelEndpointSettings({
     mode: "server",
@@ -805,10 +792,8 @@ test("the thinking toggle and the server model choice survive a relaunch", () =>
     modelId: "qwen3-32b",
   });
 
-  // A fresh process reads the same two answers off disk.
+  // A fresh process reads the same answer off disk.
   const relaunched = loadStorage(userData);
-  assert.equal(relaunched.readReasoningModeSetting(), "fast");
-  assert.equal(relaunched.readStartupSettings().reasoningMode, "fast");
   assert.equal(relaunched.readModelEndpointSettings().modelId, "qwen3-32b");
 
   // The sentinel round-trips as itself: it means "the server's default", and

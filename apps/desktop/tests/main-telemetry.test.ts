@@ -34,7 +34,6 @@ function sampleTelemetryBundle() {
         baseCommit: "abcdef1234567890abcdef",
         worktreePath: "/secret/repo",
         permissionMode: "normal",
-        reasoningMode: "reasoning",
         state: "completed",
         createdAt: "2026-01-01T00:00:00.000Z",
         changedFiles: ["src/report.ts"],
@@ -114,7 +113,6 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
         agentBranch: "umbratic/test",
         worktreePath: "C:/secret/worktree",
         permissionMode: "normal",
-        reasoningMode: "reasoning",
         state: "review_ready",
         createdAt: "2026-01-01T00:00:00.000Z",
         changedFiles: ["src/app.ts"],
@@ -291,7 +289,7 @@ test("telemetry bundle keeps workflow facts while redacting prompts, paths, comm
   assert.equal(task.outcome, "success");
   assert.deepEqual(plain(task.workspace), { kind: "git", mode: "worktree" });
   assert.deepEqual(plain(task.model), { providerId: "company-endpoint", modelId: "veil-managed" });
-  assert.deepEqual(plain(task.mode), { permission: "normal", reasoning: "reasoning" });
+  assert.deepEqual(plain(task.mode), { permission: "normal" });
   assert.equal(task.changes.fileCount, 1);
   assert.deepEqual(plain(task.changes.review), { fileCount: 1, additions: 2, deletions: 1 });
   assert.deepEqual(plain(task.changes.latestTest), { passed: true, exitCode: 0 });
@@ -358,7 +356,6 @@ test("telemetry includes full rated conversations, typed failed tool metadata, c
     baseCommit: "abcdef1234567890",
     worktreePath: "/private/repo",
     permissionMode: "normal",
-    reasoningMode: "reasoning",
     state: "completed",
     createdAt,
     changedFiles: [],

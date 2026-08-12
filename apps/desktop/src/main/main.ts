@@ -61,7 +61,6 @@ import {
   readStartupSettings, readTask,
   readTasks,
   writePermissionModeSetting,
-  writeReasoningModeSetting,
   writeTasks,
   closeStorageDatabases,
 } from "./storage";
@@ -76,7 +75,7 @@ import {
   saveSkillDocument as saveSkillDocumentService,
   saveSkillSettings as saveSkillSettingsService,
 } from "./skills";
-import type { PermissionMode, ReasoningMode, TaskInfo } from "./types";
+import type { PermissionMode, TaskInfo } from "./types";
 import { isRecord, requiredString } from "./utils";
 import {
   registerDesktopIpcHandlers,
@@ -164,12 +163,6 @@ function setPermissionMode(input: unknown): PermissionMode {
   const mode = writePermissionModeSetting(input);
   setPermissionModeValue(mode);
   recordProductTelemetry("permission.mode_changed", { data: { mode } });
-  return mode;
-}
-
-function setReasoningMode(input: unknown): ReasoningMode {
-  const mode = writeReasoningModeSetting(input);
-  recordProductTelemetry("reasoning.mode_changed", { data: { mode } });
   return mode;
 }
 
@@ -424,7 +417,6 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveSkillDocument: (input) => saveSkillDocumentService(input),
     resetSystemSkill: (input) => resetSystemSkillService(input),
     setPermissionMode: (mode) => setPermissionMode(mode),
-    setReasoningMode: (mode) => setReasoningMode(mode),
     listAvailableIdes: () => listAvailableIdes(),
     openRepositoryInIde: (input) => openRepositoryInIde(input),
     startTask: (input) => startTask(input),

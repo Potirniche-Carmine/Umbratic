@@ -73,6 +73,9 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
   const [installPrompt, setInstallPrompt] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  // A blank draft looks exactly like "nothing chosen", so the form has to be
+  // told it was asked for rather than inferring it from the fields.
+  const [creating, setCreating] = useState(false);
 
   const selected = connections.find((connection) => connection.id === selectedId) ?? null;
 
@@ -94,6 +97,7 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
   function select(connection: RemoteConnectionInfo | null) {
     setSelectedId(connection?.id ?? "");
     setDraft(connection ? draftFrom(connection) : blankDraft);
+    setCreating(false);
     setMessage(null);
     setHostKeyOffer(null);
     setInstallPrompt(false);
@@ -122,11 +126,15 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
     hostKeyOffer,
     installPrompt,
     browsing,
+    creating,
     setDraft,
     setBrowsing,
     setInstallPrompt,
     select,
-    startNew: () => select(null),
+    startNew() {
+      select(null);
+      setCreating(true);
+    },
     async save() {
       const saved = await run("saving", async () => {
         const connection = await api.saveRemoteConnection({
@@ -146,6 +154,7 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
       if (!saved) return;
       setSelectedId(saved.id);
       setDraft(draftFrom(saved));
+      setCreating(false);
       setMessage({ tone: "ok", text: "Saved." });
     },
     async remove(connectionId: string) {
@@ -241,11 +250,12 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
     hostKeyOffer,
     installPrompt,
     browsing,
+    creating,
     setDraft,
     setBrowsing,
     setInstallPrompt,
   } = controller;
-  const editing = selected !== null || draft.host !== "" || draft.name !== "";
+  const editing = creating || selected !== null;
 
   return (
     <div className="settingsPanel remoteSettings">

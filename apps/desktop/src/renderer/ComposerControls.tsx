@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Brain, Check, ChevronDown, Cpu, FolderOpen, GitBranch, Hand, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, Cpu, FolderOpen, GitBranch, Hand, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 
-import type { PermissionMode, ReasoningMode, WorkspaceMode } from "../shared/desktopApi";
+import type { PermissionMode, WorkspaceMode } from "../shared/desktopApi";
 
 export type ComposerModelOption = {
   id: string;
@@ -11,52 +11,7 @@ export type ComposerModelOption = {
   available?: boolean;
   /** The model's context window, already formatted ("96k"). */
   contextBadge?: string;
-  reasoning: boolean;
 };
-
-/**
- * Forces the model to reason, or not to, for the next run.
- *
- * It controls what the model does, never what the user is shown: reasoning
- * content is stripped by Veil either way. That is why the label is "Think" and
- * not "Show thinking" — the button would otherwise promise something it cannot
- * deliver.
- */
-export function ThinkingToggle({
-  mode,
-  disabled,
-  supported,
-  onChange,
-}: {
-  mode: ReasoningMode;
-  disabled: boolean;
-  /** False when the selected model has no reasoning capability. */
-  supported: boolean;
-  onChange(next: ReasoningMode): void;
-}) {
-  const on = mode === "reasoning";
-  return (
-    <div className={`thinkControl ${on ? "isOn" : ""}`}>
-      <button
-        className="thinkToggle"
-        type="button"
-        aria-pressed={on}
-        disabled={disabled || !supported}
-        title={
-          !supported
-            ? "This model does not reason before answering"
-            : on
-              ? "Thinking forced on — model reasons before answering"
-              : "Thinking off — model answers directly"
-        }
-        onClick={() => onChange(on ? "fast" : "reasoning")}
-      >
-        <Brain size={14} aria-hidden="true" />
-        <span>Think</span>
-      </button>
-    </div>
-  );
-}
 
 /**
  * Picks which model answers the next run.

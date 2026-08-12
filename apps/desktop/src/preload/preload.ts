@@ -6,7 +6,6 @@ import type {
   HarnessProfileId,
   PastedAttachmentInput,
   PermissionMode,
-  ReasoningMode,
   RemoteConnectionDraft,
   WorkspaceIndexEvent,
 } from "../shared/desktopApi";
@@ -127,7 +126,6 @@ const umbraticApi = {
   saveSkillDocument: (input: { id: string; content: string }) => ipcRenderer.invoke("umbratic:save-skill-document", input),
   resetSystemSkill: (input: { id: string }) => ipcRenderer.invoke("umbratic:reset-system-skill", input),
   setPermissionMode: (mode: PermissionMode) => ipcRenderer.invoke("umbratic:set-permission-mode", mode),
-  setReasoningMode: (mode: ReasoningMode) => ipcRenderer.invoke("umbratic:set-reasoning-mode", mode),
   listAvailableIdes: () => ipcRenderer.invoke("umbratic:list-available-ides"),
   startTask: (input: {
     repositoryId?: string;
@@ -136,7 +134,6 @@ const umbraticApi = {
     prompt: string;
     chatId?: string;
     attachedFiles?: ChatAttachment[];
-    reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
     worktreeTaskId?: string;
   }) =>

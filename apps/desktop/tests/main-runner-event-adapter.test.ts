@@ -9,7 +9,7 @@ const { RunnerEventAdapter } = loadTypeScriptModule(
 );
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 
-function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
+function adapterHarness() {
   const emitted: BackendUiEvent[] = [];
   const invalid: Array<{ message: string; code: string; type?: string }> = [];
   const failures: string[] = [];
@@ -20,7 +20,6 @@ function adapterHarness(reasoningMode: "fast" | "reasoning" = "reasoning") {
     task: {
       id: "task-1",
       worktreePath: "C:/workspace",
-      reasoningMode,
     },
     emit: (event) => emitted.push(event),
     onPermission: async () => "resolved",
@@ -111,8 +110,8 @@ test("runner event adapter rejects the removed raw reasoning event", () => {
   assert.deepEqual(plain(harness.emitted), []);
 });
 
-test("runner event adapter shows safe public progress in fast mode", () => {
-  const harness = adapterHarness("fast");
+test("runner event adapter shows safe public progress", () => {
+  const harness = adapterHarness();
   harness.adapter.handle({
     type: "assistant.progress.delta",
     taskId: "task-1",
@@ -387,7 +386,6 @@ test("runner event adapter forwards run.queue.updated to the queue callback", ()
     task: {
       id: "task-1",
       worktreePath: "C:/workspace",
-      reasoningMode: "reasoning",
     },
     emit: () => undefined,
     onPermission: async () => "resolved",

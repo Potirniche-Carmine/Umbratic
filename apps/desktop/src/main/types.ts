@@ -4,7 +4,6 @@ import type { BackendUiEvent } from "../shared/backendEvents";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "auto_safe";
-export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type RunnerToolId =
@@ -427,7 +426,6 @@ export type TaskInfo = {
   agentBranch: string;
   worktreePath: string;
   permissionMode: PermissionMode;
-  reasoningMode?: ReasoningMode;
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;

@@ -9,7 +9,6 @@
       "workspaceKind": "git",
       "workspaceMode": "worktree",
       "permissionMode": "normal",
-      "reasoningMode": "reasoning",
       "providerId": "company-endpoint",
       "modelId": "golden-model",
       "runnerName": "umbratic-runner",

@@ -4,7 +4,6 @@ import type { ReviewFile } from "./reviewDiff";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "auto_safe";
-export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
@@ -51,7 +50,6 @@ export type ServerModelInfo = {
 
 export type DesktopStartupSettings = {
   permissionMode: PermissionMode;
-  reasoningMode: ReasoningMode;
   modelEndpoint: PublicModelEndpointSettings;
   localModels: string[];
   companyConnection: CompanyConnectionStatus;
@@ -367,7 +365,6 @@ export type TaskInfo = {
   agentBranch: string;
   worktreePath: string;
   permissionMode: PermissionMode;
-  reasoningMode?: ReasoningMode;
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
@@ -719,7 +716,6 @@ export type DesktopApi = {
     | { ok: false; message: string }
   >;
   setPermissionMode(mode: PermissionMode): Promise<PermissionMode>;
-  setReasoningMode(mode: ReasoningMode): Promise<ReasoningMode>;
   listAvailableIdes(): Promise<IdeInfo[]>;
   startTask(input: {
     repositoryId?: string;
@@ -730,7 +726,6 @@ export type DesktopApi = {
     prompt: string;
     chatId?: string;
     attachedFiles?: ChatAttachment[];
-    reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
     worktreeTaskId?: string;
   }): Promise<TaskInfo>;
@@ -878,7 +873,6 @@ export const desktopIpcChannels = {
   saveSkillDocument: "umbratic:save-skill-document",
   resetSystemSkill: "umbratic:reset-system-skill",
   setPermissionMode: "umbratic:set-permission-mode",
-  setReasoningMode: "umbratic:set-reasoning-mode",
   listAvailableIdes: "umbratic:list-available-ides",
   startTask: "umbratic:start-task",
   steerTask: "umbratic:steer-task",

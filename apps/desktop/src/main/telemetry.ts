@@ -361,7 +361,6 @@ export function buildRedactedTelemetryBundle(
         },
         mode: {
           permission: task.permissionMode,
-          reasoning: task.reasoningMode,
         },
         status: task.state,
         outcome: taskOutcome(task),

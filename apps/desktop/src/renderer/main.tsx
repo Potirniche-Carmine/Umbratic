@@ -18,7 +18,6 @@ import type {
   LocalModelInfo,
   PastedAttachmentInput,
   PermissionMode,
-  ReasoningMode,
   RepositoryInfo,
   ServerModelInfo,
   SkillDocument,
@@ -80,7 +79,6 @@ import {
   BranchPicker,
   ComposerModelPicker,
   PermissionModePicker,
-  ThinkingToggle,
   WorkspaceModePicker,
   contextBadge,
   type ComposerModelOption,
@@ -238,7 +236,6 @@ const defaultMonoFontChoices = [
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultStartupSettings: DesktopStartupSettings = {
   permissionMode: "normal",
-  reasoningMode: "reasoning",
   modelEndpoint: defaultModelEndpointSettings,
   localModels: [],
   companyConnection: { state: "not_enrolled" },
@@ -1894,7 +1891,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [repository, setRepository] = useState<RepositoryInfo | null>(previewEnvironment?.repository ?? null);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>(startupSettings.permissionMode);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => readWorkspaceMode());
-  const [reasoningMode, setReasoningModeState] = useState<ReasoningMode>(startupSettings.reasoningMode);
   const [projects, setProjects] = useState<RepositoryInfo[]>(previewEnvironment ? [previewEnvironment.repository] : []);
   const [chats, setChats] = useState<ChatRecord[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -2114,21 +2110,14 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           label: model.display,
           available: model.available,
           contextBadge: contextBadge(model.contextLength),
-          reasoning: model.reasoning,
         }))
       : (backend?.models ?? []).map((model) => ({
           id: model.modelId,
           label: model.displayName,
           contextBadge: contextBadge(model.contextLength),
-          reasoning: model.capabilities?.reasoning ?? false,
         }))),
     [backend?.models, endpointSettings.mode, serverModels],
   );
-  // Local Veil is this build, so the directive is always understood. A server
-  // has to say it understands it before the control claims to do anything.
-  const thinkingToggleVisible =
-    endpointSettings.mode === "local"
-    || (backend?.veilFeatures ?? []).includes("chat.thinking_toggle");
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -3585,18 +3574,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
-  async function updateReasoningMode(mode: ReasoningMode) {
-    setError(null);
-    // Optimistic: the toggle is the feedback for the press, so it must not wait
-    // on a round trip to the main process before it moves.
-    setReasoningModeState(mode);
-    try {
-      setReasoningModeState(await api.setReasoningMode(mode));
-    } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    }
-  }
-
   async function selectComposerModel(modelId: string) {
     setError(null);
     try {
@@ -3781,7 +3758,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         prompt: trimmedPrompt,
         chatId,
         attachedFiles: sourceAttachments.map(normalizeAttachment),
-        reasoningMode,
         useWorktree: useWorktreeForNextRun,
         worktreeTaskId: activeChatWorktreeTaskId,
       });
@@ -5647,15 +5623,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   void api.listServerModels().then(setServerModels).catch(() => undefined);
                 }}
                 onSelect={(modelId) => void selectComposerModel(modelId)}
-              />
-            ) : null}
-
-            {thinkingToggleVisible ? (
-              <ThinkingToggle
-                mode={reasoningMode}
-                disabled={busy}
-                supported={selectedModel?.capabilities?.reasoning ?? false}
-                onChange={(mode) => void updateReasoningMode(mode)}
               />
             ) : null}
 

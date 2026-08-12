@@ -24,7 +24,6 @@ import type {
   HarnessProfileId,
   ModelEndpointMode,
   PermissionMode,
-  ReasoningMode,
   RunnerToolId,
   UserNotes,
 } from "./types";
@@ -38,7 +37,6 @@ type RawSettings = {
   harnessProfile?: unknown;
   contextLength?: unknown;
   permissionMode?: unknown;
-  reasoningMode?: unknown;
   companyCredential?: unknown;
   localModelCache?: unknown;
   remoteConnections?: unknown;
@@ -401,26 +399,11 @@ export function readPermissionModeSetting(): PermissionMode {
   return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
 }
 
-export function readReasoningModeSetting(): ReasoningMode {
-  return readRawSettings().reasoningMode === "fast" ? "fast" : "reasoning";
-}
-
-export function writeReasoningModeSetting(value: unknown): ReasoningMode {
-  const reasoningMode: ReasoningMode = value === "fast" ? "fast" : "reasoning";
-  const settings = readRawSettings();
-  writeRawSettings({
-    ...settings,
-    reasoningMode,
-  });
-  return reasoningMode;
-}
-
 export function readStartupSettings(): DesktopStartupSettings {
   const settings = readRawSettings();
   const endpoint = modelEndpointSettings(settings);
   return {
     permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
-    reasoningMode: settings.reasoningMode === "fast" ? "fast" : "reasoning",
     modelEndpoint: publicModelEndpointSettings(endpoint),
     localModels: endpoint.mode === "local"
       ? Array.from(new Set([endpoint.modelId, ...cachedLocalModels(settings, endpoint.baseUrl)].filter(Boolean)))

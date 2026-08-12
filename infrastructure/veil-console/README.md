@@ -165,8 +165,7 @@ have to guess which, so the command says it instead:
 ```
 
 That is the server default for this model. A client may still override it per
-request, which is vLLM's own precedence, and is what the desktop's Think toggle
-does.
+request with a `thinking` directive, which is vLLM's own precedence.
 
 ### The rest of the command
 

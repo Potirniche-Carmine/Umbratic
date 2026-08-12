@@ -1,6 +1,6 @@
 import { getPermissionMode } from "./mainRuntime";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
-import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, parseReasoningMode, taskId } from "./chatStore";
+import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
 import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, failTask, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
 import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
@@ -126,7 +126,6 @@ export function startTaskRequestKey(input: Record<string, unknown>): string {
     worktreeTaskId: typeof input.worktreeTaskId === "string" ? input.worktreeTaskId.trim() : "",
     prompt: typeof input.prompt === "string" ? input.prompt.trim() : "",
     attachedFiles,
-    reasoningMode: input.reasoningMode === "fast" ? "fast" : "reasoning",
     useWorktree: input.useWorktree === true,
     enabledTools,
   });
@@ -204,7 +203,6 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     ? ""
     : typeof input.repositoryId === "string" && input.repositoryId.trim() ? input.repositoryId.trim() : "";
   const prompt = requiredString(input.prompt, "prompt");
-  const reasoningMode = parseReasoningMode(input.reasoningMode);
   const requestedChatId = typeof input.chatId === "string" && input.chatId.trim() ? input.chatId.trim() : undefined;
   const inputWorktreeTaskId =
     typeof input.worktreeTaskId === "string" && input.worktreeTaskId.trim() ? input.worktreeTaskId.trim() : undefined;
@@ -260,7 +258,6 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     }
     existingTask.permissionMode = getPermissionMode();
     existingTask.prompt = prompt;
-    existingTask.reasoningMode = reasoningMode;
     existingTask.runnerName = umbraticRunnerName;
     existingTask.runnerVersion = umbraticRunnerVersion;
     existingTask.policyVersion = umbraticPolicyVersion;
@@ -329,7 +326,6 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
       agentBranch: reusableWorktreeTask.agentBranch,
       worktreePath: reusableWorktreeTask.worktreePath,
       permissionMode: getPermissionMode(),
-      reasoningMode,
       runnerName: umbraticRunnerName,
       runnerVersion: umbraticRunnerVersion,
       policyVersion: umbraticPolicyVersion,
@@ -370,7 +366,6 @@ export async function startTaskOnce(input: Record<string, unknown>): Promise<Tas
     agentBranch: branch,
     worktreePath,
     permissionMode: getPermissionMode(),
-    reasoningMode,
     runnerName: umbraticRunnerName,
     runnerVersion: umbraticRunnerVersion,
     policyVersion: umbraticPolicyVersion,
