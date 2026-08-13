@@ -1,0 +1,482 @@
+/*
+ * Remote hosts: the composer pill that chooses one, the folder browser inside
+ * its menu, and the settings page that sets them up.
+ *
+ * The pill matches the other composer controls exactly — same height, radius,
+ * colour ramp, and upward menu — because it belongs to the same row and answers
+ * the same kind of question. Nothing here introduces a new visual idea.
+ */
+
+.remoteControl {
+  position: relative;
+  z-index: 44;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.remoteControl.isOpen {
+  z-index: 130;
+}
+
+.remoteTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 28px;
+  max-width: 190px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--control-bg);
+  font-weight: 500;
+  font-size: 12px;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.remoteTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+
+.remoteTrigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.remoteTrigger svg {
+  flex: 0 0 auto;
+}
+
+.remoteTrigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A run that leaves this machine reads as a state, not a default. */
+.remoteControl.isRemote .remoteTrigger {
+  color: color-mix(in srgb, var(--text) 82%, var(--accent));
+  border-color: var(--line-strong);
+  background: var(--control-active);
+}
+
+.remoteControl.isRemote .remoteTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.remoteMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  z-index: 120;
+  display: grid;
+  gap: 3px;
+  min-width: 236px;
+  max-width: 320px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 18px 42px var(--shadow-color);
+  animation: menuRise 180ms ease both;
+}
+
+.remoteMenu > button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 600;
+}
+
+.remoteMenu > button:hover:not(:disabled),
+.remoteMenu > button.active {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.remoteMenu > button.active svg:first-child {
+  color: var(--accent);
+}
+
+.remoteMenu > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.remoteMenuName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remoteMenuDivider {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--line);
+}
+
+/* The browsing view replaces the host list in place, so the menu keeps one
+   footprint and the composer beneath it never moves. */
+.remoteMenu.isBrowsing {
+  min-width: 300px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.remoteBrowser {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.remoteBrowserHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.remoteBrowserHead strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.remoteBrowserBack {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+
+.remoteBrowserBack:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.remoteBrowserList {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  /* Fixed height, so paging through folders never resizes the overlay. */
+  height: 208px;
+  padding: 5px;
+  overflow-y: auto;
+}
+
+.remoteBrowserList button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: left;
+  font-weight: 500;
+}
+
+.remoteBrowserList button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+.remoteBrowserList button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.remoteBrowserEmpty,
+.remoteBrowserError {
+  padding: 8px;
+  color: var(--faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.remoteBrowserError {
+  color: var(--red);
+}
+
+.remoteBrowserFoot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* The chat's own reminder of where its work is happening.
+   It shares the header's second line with the folder meta rather than adding a
+   third, so choosing a remote host does not change the header's height. */
+.composerHeaderMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composerHeaderMetaRow > span {
+  flex: 0 1 auto;
+}
+
+.remoteChatBadge {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-2) 62%, transparent);
+  font-size: 11.5px;
+}
+
+.remoteChatBadge svg {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text) 70%, var(--accent));
+}
+
+.remoteChatBadge strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.remoteChatBadge span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+}
+
+/* Settings */
+
+.remoteSettings .settingsActionsRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.remoteEmpty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.remoteList {
+  background: transparent;
+}
+
+.remoteListRow {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+}
+
+.remoteListRow:last-child {
+  border-bottom: none;
+}
+
+.remoteListRow:hover,
+.remoteListRow.isActive {
+  background: var(--control-hover-soft);
+}
+
+.remoteListRow.isActive {
+  color: var(--text);
+}
+
+.remoteListName {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.remoteListName strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.remoteListName em {
+  overflow: hidden;
+  color: var(--faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.remoteStatus {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.remoteStatus.isReady {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.remoteStatus.isWarn {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+}
+
+.remoteFieldRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 10px;
+}
+
+.remoteFileField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.remoteConfirm {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "icon body"
+    ".    action";
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 34%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--amber) 7%, transparent);
+}
+
+.remoteConfirm > svg {
+  grid-area: icon;
+  color: var(--amber);
+}
+
+/* The actions are a div too, so the body rule has to exclude them or both land
+   in the same cell and overlap. */
+.remoteConfirm > div:not(.remoteConfirmActions) {
+  grid-area: body;
+  min-width: 0;
+}
+
+.remoteConfirm strong {
+  display: block;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.remoteConfirm p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.remoteConfirm code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--inline-code-text);
+  background: var(--inline-code-bg);
+  font-size: 11px;
+}
+
+.remoteConfirmActions {
+  display: flex;
+  grid-area: action;
+  gap: 8px;
+}
+
+.remoteMessage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.remoteMessage svg {
+  flex: 0 0 auto;
+}
+
+.remoteMessage.ok svg {
+  color: var(--green);
+}
+
+.remoteMessage.warn svg {
+  color: var(--amber);
+}
+
+.remoteMessage.error {
+  border-color: color-mix(in srgb, var(--red) 32%, var(--line));
+  color: var(--text);
+}
+
+.remoteMessage.error svg {
+  color: var(--red);
+}
+
+.remoteDanger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 44%, var(--line));
+  color: var(--red);
+}
+
+.remoteSettings .remoteBrowser {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+}

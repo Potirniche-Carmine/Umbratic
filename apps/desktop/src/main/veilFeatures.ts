@@ -35,8 +35,6 @@ export const veilFeature = {
    * must be present before the field is ever sent.
    */
   modelSelection: "chat.model_selection",
-  /** Chat bodies may carry a `thinking` directive. */
-  thinkingToggle: "chat.thinking_toggle",
 } as const;
 
 export type VeilFeature = (typeof veilFeature)[keyof typeof veilFeature];

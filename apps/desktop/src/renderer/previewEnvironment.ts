@@ -21,6 +21,7 @@ import type {
   ModelEndpointMode,
   PermissionMode,
   PublicModelEndpointSettings,
+  RemoteConnectionInfo,
   RepositoryInfo,
   SkillInfo,
   TaskInfo,
@@ -67,6 +68,7 @@ import {
   previewDefaultSkills,
   previewSkillContent,
 } from "./previewCapabilities";
+import { previewRemoteApi } from "./previewRemoteFixtures";
 
 let previewSkills = previewDefaultSkills.map((skill) => ({
   ...skill,
@@ -561,7 +563,6 @@ const composerTestTask: TaskInfo = {
   agentBranch: "preview",
   worktreePath: composerTestRepository.rootPath,
   permissionMode: "normal",
-  reasoningMode: "reasoning",
   createdAt: new Date(Date.now() - 20_000).toISOString(),
   changedFiles: composerTestReviewFiles.map((file) => file.path),
   reviewFiles: composerTestReviewFiles,
@@ -829,7 +830,6 @@ function createPreviewApi(): DesktopApi {
   }),
   getStartupSettings: async () => ({
     permissionMode: getPreviewPermissionMode(),
-    reasoningMode: "reasoning" as const,
     modelEndpoint: readPreviewEndpointSettings(),
     localModels: ["llama3.2", "qwen3:8b"],
     companyConnection: previewCompanyConnection,
@@ -837,6 +837,7 @@ function createPreviewApi(): DesktopApi {
     contextLength: readPreviewContextLength(),
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
+  ...previewRemoteApi,
   getHarnessProfile: async () => readPreviewHarnessProfile(),
   saveHarnessProfile: async (input) => {
     const settings = isHarnessProfileId(input) ? input : defaultHarnessProfileId;
@@ -931,7 +932,6 @@ function createPreviewApi(): DesktopApi {
     setPreviewPermissionMode(mode);
     return getPreviewPermissionMode();
   },
-  setReasoningMode: async (mode) => mode,
   listAvailableIdes: async () => defaultIdeChoices,
   startTask: async () => { throw new Error("Open the Electron app to run a task."); },
   steerTask: async () => undefined,

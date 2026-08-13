@@ -83,7 +83,6 @@ import type {
   LocalModelInfo,
   LocalModelProvider,
   LocalDiagnosticInfo,
-  ReasoningMode,
   RunnerProcess,
   TelemetrySyncResult,
 } from "./types";
@@ -132,7 +131,6 @@ export async function submitSteeredRunnerTurn(
   sessionId: string,
   parts: RunnerPromptPart[],
   model: LocalModelInfo,
-  reasoningMode?: ReasoningMode,
 ): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
@@ -142,7 +140,6 @@ export async function submitSteeredRunnerTurn(
           model: { providerID: model.providerId, modelID: model.modelId },
           agent: "build",
           parts,
-          ...(reasoningMode ? { reasoningMode } : {}),
         },
       });
       return;

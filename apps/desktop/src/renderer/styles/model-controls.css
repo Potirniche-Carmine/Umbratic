@@ -1,79 +1,10 @@
 /*
- * The composer's Think toggle and model picker.
+ * The composer's model picker.
  *
- * Both sit in `.promptControls` and borrow the 28px pill grammar the workspace,
+ * It sits in `.promptControls` and borrows the 28px pill grammar the workspace,
  * permission, and branch controls already use — a new control that invented its
  * own shape would read as belonging to a different app.
  */
-
-.thinkControl {
-  position: relative;
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-}
-
-.thinkToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted);
-  background: var(--control-bg);
-  font-weight: 500;
-  font-size: 12px;
-  transition:
-    background 150ms ease,
-    border-color 150ms ease,
-    color 150ms ease,
-    /* Feedback belongs to the press, not the release, so this one is fast. */
-    transform 100ms ease-out;
-}
-
-.thinkToggle svg {
-  flex: 0 0 auto;
-}
-
-.thinkToggle:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--control-hover);
-  border-color: var(--line-strong);
-}
-
-/* A tap, not a flick: it presses in and returns. No overshoot. */
-.thinkToggle:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-/*
- * On borrows the composer's existing "this control is engaged" look — the same
- * one the worktree pill uses — rather than inventing a state colour. The
- * reasoning tokens were the obvious choice and the wrong one: they are tuned to
- * make reasoning text recede, and at that strength the on background differed
- * from off by four values out of 255. A toggle whose state you have to squint
- * at is a toggle that will be left in the wrong position.
- */
-.thinkControl.isOn .thinkToggle {
-  color: var(--text);
-  border-color: var(--line-strong);
-  background: var(--control-active);
-}
-
-.thinkControl.isOn .thinkToggle svg {
-  color: var(--reasoning-text);
-}
-
-.thinkControl.isOn .thinkToggle:hover:not(:disabled) {
-  background: var(--control-hover);
-}
-
-.thinkToggle:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
 
 .modelControl {
   position: relative;
@@ -266,12 +197,10 @@
     animation: menuFade 120ms ease both;
   }
 
-  .thinkToggle,
   .modelTrigger {
     transition: none;
   }
 
-  .thinkToggle:active:not(:disabled),
   .modelTrigger:active:not(:disabled) {
     transform: none;
   }

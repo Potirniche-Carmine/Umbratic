@@ -854,6 +854,31 @@ test("native runner keeps its API password out of process arguments", async () =
   }
 });
 
+test("native runner shuts down when its parent closes stdin", async () => {
+  // The desktop holds stdin open for the life of a run. Over SSH that pipe is
+  // the only thing the remote runner can observe: killing the local ssh process
+  // closes the channel, and without this the runner would keep listening on a
+  // machine nothing is attached to any more.
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-parent-"));
+  const provider = await startProvider();
+  const run = await startRunner(cwd, provider.url, path.join(cwd, "runner.jsonl"));
+  try {
+    assert.equal(run.child.exitCode, null, "the runner is listening before stdin closes");
+    const exited = new Promise<number | null>((resolve) => run.child.once("exit", resolve));
+    run.child.stdin.end();
+    const code = await Promise.race([
+      exited,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 10_000)),
+    ]);
+    assert.notEqual(code, "timeout", "the runner kept running after its parent closed stdin");
+    assert.equal(code, 0);
+  } finally {
+    await run.close();
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("native runner refuses non-loopback listener addresses", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-listener-"));
   const provider = await startProvider();

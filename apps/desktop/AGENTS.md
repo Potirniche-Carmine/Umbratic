@@ -16,6 +16,19 @@ The other Rust helpers live outside this project and are invoked as child proces
 
 Workspace tool execution belongs in the Rust runner. Do not restore a TypeScript runner or add a Node fallback that silently changes security behavior. Resolve the signed packaged Rust binaries through the existing development and packaged-resource paths.
 
+## Remote Hosts
+
+A chat may run its tools on another machine over SSH. `sshTransport.ts` drives the system OpenSSH client as a child process — nothing here implements the protocol — and every invocation sets its guarantees on the command line, where OpenSSH resolves them ahead of any `ssh_config`. `remoteConnections.ts` owns saved hosts, `remoteHost.ts` owns what is asked of a host, `remoteRunner.ts` starts a run there, and `remoteService.ts` is the surface the settings page drives.
+
+The rules that make this safe are not optional:
+
+- Host keys are pinned on first contact and verified from then on. They live in Umbratic's own `known_hosts`, every connection uses `StrictHostKeyChecking=accept-new` against it, and removing or repointing a connection is what forgets the pin. There is no in-app approval step and no way to weaken this to `no`.
+- Remote commands are built as argument lists and quoted for the remote shell. Never concatenate a path or a user value into a command line.
+- The runner still binds loopback on the host it runs on. An `ssh -L` forward reaches it and an `ssh -R` forward carries the local Veil back, so model traffic stays inside the SSH channel and no listener is exposed on either network.
+- The runner's configuration is one line on stdin and stdin stays open for the session. Closing it is how a remote runner learns the desktop is gone; a caller that closes stdin early gets an immediate shutdown, which is the contract, not a bug.
+- Only a platform-matched runner artifact is installed, verified by checksum on the remote host after transfer. A remote runner whose checksum does not match this build reads as not installed.
+- A remote task has no local workspace. Checkpoints, local review, the workspace graph, and attachment directories do not apply to it, and its capability report describes the remote host rather than this one.
+
 ## Veil Boundary
 
 Veil owns model-facing behavior. Do not add system prompts, hidden behavioral prompts, personas, skill-selection prompts, route-specific guidance, model policy, model selection, or provider/runtime decisions to Electron, the renderer, desktop core, or runner.

@@ -46,7 +46,7 @@ export type RunnerFailureDetails = {
 };
 
 export type RunnerEventAdapterOptions = {
-  task: Pick<TaskRecord, "id" | "reasoningMode" | "worktreePath">;
+  task: Pick<TaskRecord, "id" | "worktreePath">;
   emit(event: BackendUiEvent): void;
   onPermission(
     permission: RunnerPermissionEvent,

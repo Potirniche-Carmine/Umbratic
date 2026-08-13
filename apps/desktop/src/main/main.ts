@@ -9,6 +9,16 @@ import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLaun
 import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
 import { checkoutRepositoryBranch, getRepository, listRepositoryBranches, openChatAttachment, pickAttachmentFiles, pickRepository, savePastedAttachments } from "./repositoryOps";
 import { refreshTaskReview, refreshWorkspaceReview } from "./reviewFiles";
+import {
+  browseRemoteDirectory,
+  checkRemoteConnection,
+  deleteRemoteConnection,
+  installRunnerOnRemote,
+  listRemoteConnections,
+  pickRemoteIdentityFile,
+  saveRemoteConnection,
+  setRemoteDefaultDirectory,
+} from "./remoteService";
 import { approveTaskMerge, approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, rejectTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
 import { worktreeRootForRepo } from "./worktreeOps";
@@ -49,7 +59,6 @@ import {
   readStartupSettings, readTask,
   readTasks,
   writePermissionModeSetting,
-  writeReasoningModeSetting,
   writeTasks,
   closeStorageDatabases,
 } from "./storage";
@@ -64,7 +73,7 @@ import {
   saveSkillDocument as saveSkillDocumentService,
   saveSkillSettings as saveSkillSettingsService,
 } from "./skills";
-import type { PermissionMode, ReasoningMode, TaskInfo } from "./types";
+import type { PermissionMode, TaskInfo } from "./types";
 import { isRecord, requiredString } from "./utils";
 import {
   registerDesktopIpcHandlers,
@@ -152,12 +161,6 @@ function setPermissionMode(input: unknown): PermissionMode {
   const mode = writePermissionModeSetting(input);
   setPermissionModeValue(mode);
   recordProductTelemetry("permission.mode_changed", { data: { mode } });
-  return mode;
-}
-
-function setReasoningMode(input: unknown): ReasoningMode {
-  const mode = writeReasoningModeSetting(input);
-  recordProductTelemetry("reasoning.mode_changed", { data: { mode } });
   return mode;
 }
 
@@ -360,6 +363,14 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     getBackendStatus: () => getBackendStatus(),
     getStartupSettings: () => readStartupSettings(),
     getCapabilityProbes: (input) => getCapabilityProbes(input),
+    listRemoteConnections: () => listRemoteConnections(),
+    saveRemoteConnection: (input) => saveRemoteConnection(input),
+    deleteRemoteConnection: (input) => deleteRemoteConnection(input),
+    checkRemoteConnection: (input) => checkRemoteConnection(input),
+    installRemoteRunner: (input) => installRunnerOnRemote(input),
+    browseRemoteDirectory: (input) => browseRemoteDirectory(input),
+    setRemoteDefaultDirectory: (input) => setRemoteDefaultDirectory(input),
+    pickRemoteIdentityFile: () => pickRemoteIdentityFile(),
     getModelEndpointSettings: (input) => {
       const mode = input?.mode;
       return publicModelEndpointSettings(mode ? readModelEndpointSettingsForMode(mode) : readModelEndpointSettings());
@@ -402,7 +413,6 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveSkillDocument: (input) => saveSkillDocumentService(input),
     resetSystemSkill: (input) => resetSystemSkillService(input),
     setPermissionMode: (mode) => setPermissionMode(mode),
-    setReasoningMode: (mode) => setReasoningMode(mode),
     listAvailableIdes: () => listAvailableIdes(),
     openRepositoryInIde: (input) => openRepositoryInIde(input),
     startTask: (input) => startTask(input),

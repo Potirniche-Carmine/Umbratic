@@ -61,6 +61,14 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["getBackendStatus", [], "umbratic:get-backend-status", undefined],
     ["getStartupSettings", [], "umbratic:get-startup-settings", undefined],
     ["getCapabilityProbes", [{ force: true }], "umbratic:get-capability-probes"],
+    ["listRemoteConnections", [], "umbratic:list-remote-connections", undefined],
+    ["saveRemoteConnection", [{ name: "Build box", host: "build.example.com", port: 22, username: "carmine", authMethod: "agent" }], "umbratic:save-remote-connection"],
+    ["deleteRemoteConnection", [{ connectionId: "remote_1" }], "umbratic:delete-remote-connection"],
+    ["checkRemoteConnection", [{ connectionId: "remote_1" }], "umbratic:check-remote-connection"],
+    ["installRemoteRunner", [{ connectionId: "remote_1" }], "umbratic:install-remote-runner"],
+    ["browseRemoteDirectory", [{ connectionId: "remote_1", path: "/srv" }], "umbratic:browse-remote-directory"],
+    ["setRemoteDefaultDirectory", [{ connectionId: "remote_1", path: "/srv/app" }], "umbratic:set-remote-default-directory"],
+    ["pickRemoteIdentityFile", [], "umbratic:pick-remote-identity-file", undefined],
     ["getHarnessProfile", [], "umbratic:get-harness-profile", undefined],
     ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],
     ["getContextLength", [], "umbratic:get-context-length", undefined],
@@ -89,7 +97,6 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["saveSkillDocument", [{ id: "skill", content: "# Skill" }], "umbratic:save-skill-document"],
     ["resetSystemSkill", [{ id: "umbratic-markdown" }], "umbratic:reset-system-skill"],
     ["setPermissionMode", ["auto_safe"], "umbratic:set-permission-mode"],
-    ["setReasoningMode", ["fast"], "umbratic:set-reasoning-mode"],
     ["listServerModels", [], "umbratic:list-server-models", undefined],
     ["listAvailableIdes", [], "umbratic:list-available-ides", undefined],
     ["startTask", [{ prompt: "go", worktreeTaskId: "task-root" }], "umbratic:start-task"],
@@ -131,6 +138,45 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   ]);
   unsubscribe();
   assert.equal(listeners.has("umbratic:backend-event"), false);
+});
+
+test("a failed call reports the message the main process wrote, not Electron's wrapper", async () => {
+  let exposedApi = null;
+  let rejection = new Error("unset");
+  const electron = {
+    contextBridge: { exposeInMainWorld(_name, api) { exposedApi = api; } },
+    ipcRenderer: {
+      invoke: () => Promise.reject(rejection),
+      on() {},
+      removeListener() {},
+    },
+  };
+  loadTypeScriptModule(new URL("../src/preload/preload.ts", import.meta.url), { mocks: { electron } });
+
+  const failureMessage = async () => {
+    try {
+      await exposedApi.saveRemoteConnection({});
+      return "";
+    } catch (cause) {
+      return cause.message;
+    }
+  };
+
+  // What Electron actually rejects with: the channel name and the thrown
+  // class wrapped around the one sentence written for a person to read.
+  rejection = new Error("Error invoking remote method 'umbratic:save-remote-connection': Error: Enter the remote host.");
+  assert.equal(await failureMessage(), "Enter the remote host.");
+
+  rejection = new Error("Error invoking remote method 'umbratic:check-remote-connection': SshError: The remote host name could not be resolved.");
+  assert.equal(await failureMessage(), "The remote host name could not be resolved.");
+
+  // A message that was never wrapped is left exactly as it is.
+  rejection = new Error("The remote request was cancelled.");
+  assert.equal(await failureMessage(), "The remote request was cancelled.");
+
+  // Nothing readable is still worth saying something readable about.
+  rejection = new Error("Error invoking remote method 'umbratic:get-task': Error: ");
+  assert.match(await failureMessage(), /did not work/);
 });
 
 test("compiled sandboxed preload has no relative runtime dependencies", () => {

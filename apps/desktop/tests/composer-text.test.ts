@@ -44,6 +44,7 @@ const {
   matchHighlightSegments,
   parseMarkdown,
   promptHighlightSegments,
+  promptMentionsAttachment,
   rankSkillMatches,
   splitMarkdownTableRow,
 } = loadTypeScriptModule(modulePath);
@@ -163,6 +164,29 @@ test("prompt highlighting recognizes file mentions without matching email addres
     ["@main.tsx", "@metrics.csv"],
   );
   assert.equal(segments.some((segment) => segment.mention && segment.text.includes("email")), false);
+});
+
+test("only attachments the prompt does not already name are shown as chips", () => {
+  const file = { path: "src/renderer/main.tsx", name: "main.tsx", kind: "file" };
+  const folder = { path: "packages/runner", name: "runner", kind: "folder" };
+
+  // Written into the text by `@`: the mention is the chip.
+  assert.equal(promptMentionsAttachment("Fix @main.tsx please", file), true);
+  assert.equal(promptMentionsAttachment("@main.tsx", file), true);
+  assert.equal(promptMentionsAttachment("Look at @main.tsx, then stop.", file), true);
+  assert.equal(promptMentionsAttachment("Check @runner/ first", folder), true);
+
+  // Picked with the paperclip and named nowhere: only a chip can show it.
+  assert.equal(promptMentionsAttachment("Ship it", file), false);
+  assert.equal(promptMentionsAttachment("", file), false);
+  // A folder's mention carries its slash, so the bare name is not the same
+  // reference and the chip has to stay.
+  assert.equal(promptMentionsAttachment("Check @runner first", folder), false);
+
+  // The same boundary rules the highlighter draws by, so a chip disappears
+  // exactly when the text starts rendering as a mention and not before.
+  assert.equal(promptMentionsAttachment("mail me@main.tsx now", file), false);
+  assert.equal(promptMentionsAttachment("see @main.tsxx", file), false);
 });
 
 test("numbered list continuation increments the current item and places the caret after the marker", () => {

@@ -4,7 +4,6 @@ import type { ReviewFile } from "./reviewDiff";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "auto_safe";
-export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
@@ -51,12 +50,75 @@ export type ServerModelInfo = {
 
 export type DesktopStartupSettings = {
   permissionMode: PermissionMode;
-  reasoningMode: ReasoningMode;
   modelEndpoint: PublicModelEndpointSettings;
   localModels: string[];
   companyConnection: CompanyConnectionStatus;
   harnessProfile: HarnessProfileId;
   contextLength: number;
+};
+
+/** How a remote connection proves who it is. */
+export type RemoteAuthMethod = "agent" | "identity_file" | "password";
+
+export type RemoteRunnerState = "unknown" | "missing" | "outdated" | "ready";
+
+/**
+ * A saved remote host, as the renderer is allowed to see it. The password never
+ * crosses this boundary — only whether one is configured.
+ */
+export type RemoteConnectionInfo = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: RemoteAuthMethod;
+  identityFilePath: string;
+  passwordConfigured: boolean;
+  /** Where a run starts unless the chat picked another folder. */
+  defaultDirectory: string;
+  runnerState: RemoteRunnerState;
+  /** What the installed runner calls itself, for display only. */
+  runnerVersion: string;
+  /** Absolute path on the remote host, empty when nothing is installed. */
+  runnerPath: string;
+  platform: { os: string; arch: string };
+};
+
+export type RemoteConnectionDraft = {
+  id?: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: RemoteAuthMethod;
+  identityFilePath?: string;
+  /** Empty leaves a stored password untouched; a value replaces it. */
+  password?: string;
+  defaultDirectory?: string;
+};
+
+export type RemoteConnectionCheck = {
+  ok: boolean;
+  message: string;
+  connection: RemoteConnectionInfo;
+};
+
+export type RemoteDirectoryEntry = {
+  name: string;
+  /** Absolute POSIX path on the remote host. */
+  path: string;
+  kind: "directory" | "file";
+  /** True for a directory the connecting user cannot enter. */
+  unreadable: boolean;
+};
+
+export type RemoteDirectoryListing = {
+  path: string;
+  parentPath: string;
+  entries: RemoteDirectoryEntry[];
+  /** Set when the directory holds more entries than the listing returned. */
+  truncated: boolean;
 };
 
 export type CapabilityProbeStatus = "available" | "missing" | "error" | "unknown";
@@ -271,10 +333,19 @@ export type TaskState =
 
 export type { BackendUiEvent };
 
+/** Identifies the remote host a task ran on, for tasks that did not run here. */
+export type TaskRemoteInfo = {
+  connectionId: string;
+  name: string;
+  host: string;
+  directory: string;
+};
+
 export type TaskInfo = {
   id: string;
   chatId?: string;
   worktreeRootTaskId?: string;
+  remote?: TaskRemoteInfo;
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
@@ -285,7 +356,6 @@ export type TaskInfo = {
   agentBranch: string;
   worktreePath: string;
   permissionMode: PermissionMode;
-  reasoningMode?: ReasoningMode;
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
@@ -517,6 +587,14 @@ export type DesktopApi = {
   getCapabilityProbes(input?: {
     force?: boolean;
   }): Promise<CapabilityProbeReport>;
+  listRemoteConnections(): Promise<RemoteConnectionInfo[]>;
+  saveRemoteConnection(input: RemoteConnectionDraft): Promise<RemoteConnectionInfo>;
+  deleteRemoteConnection(input: { connectionId: string }): Promise<{ ok: true }>;
+  checkRemoteConnection(input: { connectionId: string }): Promise<RemoteConnectionCheck>;
+  installRemoteRunner(input: { connectionId: string }): Promise<RemoteConnectionCheck>;
+  browseRemoteDirectory(input: { connectionId: string; path?: string }): Promise<RemoteDirectoryListing>;
+  setRemoteDefaultDirectory(input: { connectionId: string; path: string }): Promise<RemoteConnectionInfo>;
+  pickRemoteIdentityFile(): Promise<{ path: string }>;
   getHarnessProfile(): Promise<HarnessProfileId>;
   saveHarnessProfile(input: HarnessProfileId): Promise<{
     settings: HarnessProfileId;
@@ -627,14 +705,16 @@ export type DesktopApi = {
     | { ok: false; message: string }
   >;
   setPermissionMode(mode: PermissionMode): Promise<PermissionMode>;
-  setReasoningMode(mode: ReasoningMode): Promise<ReasoningMode>;
   listAvailableIdes(): Promise<IdeInfo[]>;
   startTask(input: {
     repositoryId?: string;
+    /** Runs on this saved remote host instead of on this computer. */
+    remoteConnectionId?: string;
+    /** Absolute folder on that host; its default folder when omitted. */
+    remoteDirectory?: string;
     prompt: string;
     chatId?: string;
     attachedFiles?: ChatAttachment[];
-    reasoningMode?: ReasoningMode;
     useWorktree?: boolean;
     worktreeTaskId?: string;
   }): Promise<TaskInfo>;
@@ -743,6 +823,14 @@ export const desktopIpcChannels = {
   getBackendStatus: "umbratic:get-backend-status",
   getStartupSettings: "umbratic:get-startup-settings",
   getCapabilityProbes: "umbratic:get-capability-probes",
+  listRemoteConnections: "umbratic:list-remote-connections",
+  saveRemoteConnection: "umbratic:save-remote-connection",
+  deleteRemoteConnection: "umbratic:delete-remote-connection",
+  checkRemoteConnection: "umbratic:check-remote-connection",
+  installRemoteRunner: "umbratic:install-remote-runner",
+  browseRemoteDirectory: "umbratic:browse-remote-directory",
+  setRemoteDefaultDirectory: "umbratic:set-remote-default-directory",
+  pickRemoteIdentityFile: "umbratic:pick-remote-identity-file",
   getHarnessProfile: "umbratic:get-harness-profile",
   saveHarnessProfile: "umbratic:save-harness-profile",
   getContextLength: "umbratic:get-context-length",
@@ -772,7 +860,6 @@ export const desktopIpcChannels = {
   saveSkillDocument: "umbratic:save-skill-document",
   resetSystemSkill: "umbratic:reset-system-skill",
   setPermissionMode: "umbratic:set-permission-mode",
-  setReasoningMode: "umbratic:set-reasoning-mode",
   listAvailableIdes: "umbratic:list-available-ides",
   startTask: "umbratic:start-task",
   steerTask: "umbratic:steer-task",

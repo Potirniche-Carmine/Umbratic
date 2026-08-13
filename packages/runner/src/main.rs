@@ -45,17 +45,25 @@ async fn main() -> ExitCode {
     {
         Ok(server) => {
             eprintln!("umbratic runner listening on {}", server.url());
+            let parent_gone = tokio::task::spawn_blocking(|| {
+                let mut rest = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut rest);
+            });
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{SignalKind, signal};
                 if let Ok(mut terminate) = signal(SignalKind::terminate()) {
-                    tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {},
+                        _ = terminate.recv() => {},
+                        _ = parent_gone => {},
+                    }
                 } else {
-                    let _ = tokio::signal::ctrl_c().await;
+                    tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = parent_gone => {} }
                 }
             }
             #[cfg(not(unix))]
-            let _ = tokio::signal::ctrl_c().await;
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = parent_gone => {} }
             server.close().await;
             ExitCode::SUCCESS
         }

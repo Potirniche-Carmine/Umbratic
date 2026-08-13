@@ -22,7 +22,7 @@ import {
   writeNotes,
   writeProjects,
 } from "./storage";
-import type { ChatAttachment, ChatRecord, ReasoningMode, RepositoryInfo, TaskRecord, UserNotes } from "./types";
+import type { ChatAttachment, ChatRecord, RepositoryInfo, TaskRecord, UserNotes } from "./types";
 import { isRecord, normalizeRelativePath, pathInside, requiredString } from "./utils";
 import * as appPaths from "./appPaths";
 
@@ -143,10 +143,6 @@ export function chatAttachmentFromRecord(file: Record<string, unknown>, chatIdVa
     previewDataUrl,
     contextTokens: attachmentContextTokens(storedPath),
   };
-}
-
-export function parseReasoningMode(value: unknown): ReasoningMode {
-  return value === "fast" ? "fast" : "reasoning";
 }
 
 export function createChat(input: unknown): ChatRecord {

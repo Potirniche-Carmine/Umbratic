@@ -18,6 +18,7 @@ import {
   probeLocalCapabilities,
   type CapabilityPromptNeeds,
 } from "./capabilities";
+import { remoteCapabilityReport } from "./remoteHost";
 import { promptLooksLikeArtifactTask, promptLooksLikeOcrTask } from "./artifactRuntime";
 import { priorChatAttachments, readAttachmentTextIfSafe } from "./attachmentContext";
 import {
@@ -299,29 +300,46 @@ export async function runnerPromptForTask(
   contextLength: number,
   options: { useDurableContext?: boolean } = {},
 ): Promise<RunnerPromptPart[]> {
-  const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
-  const hiddenChat = isHiddenChatTask(task), historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
+  const remote = task.remote;
+  const rootPath = remote
+    ? remote.directory
+    : fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
+  const hiddenChat = !remote && isHiddenChatTask(task);
+  const historicalAttachments = priorChatAttachments(task.events ?? [], userPrompt);
   if (!shouldIncludeWorkspaceContext({
     hasProject: !hiddenChat,
-    workspaceHasFiles: !directoryIsEmpty(rootPath),
+    // A remote workspace cannot be inspected from here, and a run was asked for
+    // against it, so it counts as a workspace with something in it.
+    workspaceHasFiles: remote ? true : !directoryIsEmpty(rootPath),
     attachmentCount: attachments.length,
     historicalAttachmentCount: historicalAttachments.length,
   })) return [{ type: "text", text: userPrompt }];
-  const capabilityReport = await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
+  // What the model is told is available has to describe the machine the tools
+  // will actually run on, which for a remote task is not this one.
+  const capabilityReport = remote
+    ? await remoteCapabilityReport(remote.connectionId)
+    : await probeLocalCapabilities({ runnerPath: runnerBinaryPath() });
   const capabilityNeeds = capabilityNeedsForPrompt(userPrompt, attachments);
-  const lines = hiddenChat
+  const lines = remote
     ? [
-        "Umbratic chat context:",
-        "- no project folder is selected for this chat",
-        "- Umbratic created a private scratch workspace for attachments and any files produced during the conversation",
-        `- scratch workspace: ${rootPath}`,
-      ]
-    : [
         "Umbratic workspace context:",
-        `- opened folder: ${rootPath}`,
-        `- workspace kind: ${task.workspaceKind}`,
-      ];
-  pushAgentInstructionContext(lines, rootPath);
+        `- the workspace is on a remote host reached over SSH: ${remote.name}`,
+        `- opened folder on that host: ${remote.directory}`,
+        "- workspace tools run on the remote host, so paths and commands are that host's, not this computer's",
+      ]
+    : hiddenChat
+      ? [
+          "Umbratic chat context:",
+          "- no project folder is selected for this chat",
+          "- Umbratic created a private scratch workspace for attachments and any files produced during the conversation",
+          `- scratch workspace: ${rootPath}`,
+        ]
+      : [
+          "Umbratic workspace context:",
+          `- opened folder: ${rootPath}`,
+          `- workspace kind: ${task.workspaceKind}`,
+        ];
+  if (!remote) pushAgentInstructionContext(lines, rootPath);
   const hasDurableContext = options.useDurableContext
     ?? Boolean(task.chatId && readChat(task.chatId)?.conversationState);
   const history = hasDurableContext ? "" : priorChatContext(task.events ?? [], userPrompt);

@@ -9,7 +9,7 @@ use crate::{
     events::now_iso,
     session::{EventSink, Session},
     tools::ToolCall,
-    veil_request::{ThinkingDirective, chat_request_body},
+    veil_request::chat_request_body,
     veil_retry::{
         MAX_CONNECT_ATTEMPTS, VeilAttemptError, VeilAttemptInput, committed_output,
         emit_reconnected, emit_reconnecting, reconnect_delay_ms, retry_after_from,
@@ -80,9 +80,6 @@ pub struct VeilRequestOptions {
     pub harness_bucket: Option<String>,
     /// How this step's assistant text is withheld while it streams.
     pub hold: HoldPolicy,
-    /// The run's thinking directive, `None` when the user left the model on its
-    /// own default.
-    pub thinking: Option<ThinkingDirective>,
 }
 
 /// A validated classifier decision for the active run.
@@ -790,7 +787,6 @@ pub async fn stream_veil_chat(
         include_tools,
         harness_bucket,
         hold,
-        thinking,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -810,7 +806,6 @@ pub async fn stream_veil_chat(
         max_output_tokens,
         include_tools,
         harness_bucket.as_deref(),
-        thinking,
     );
 
     let attempt_input = VeilAttemptInput {

@@ -41,6 +41,7 @@ const descriptiveVersionFiles = new Set([
   "packages/runner/src/lsp/mod.rs",
   "scripts/generate-sbom.ts",
   "apps/desktop/src/main/capabilities.ts",
+  "apps/desktop/src/main/remoteHost.ts",
   "packages/runner/src/conversation_state.rs",
   "apps/desktop/tests/fixtures/telemetry-bundle.golden.json",
   "apps/desktop/src/main/telemetry.ts",

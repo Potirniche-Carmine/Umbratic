@@ -65,6 +65,15 @@ export async function respondToToolPermission(input: unknown) {
 }
 
 export async function prepareTaskTurnCheckpoint(task: TaskRecord): Promise<void> {
+  // A remote task's workspace is on another machine. There is nothing here to
+  // snapshot, and snapshotting the local stand-in would describe a folder the
+  // run never touches.
+  if (task.remote) {
+    task.baselineFiles = undefined;
+    task.turnCheckpointId = undefined;
+    saveTask(task);
+    return;
+  }
   const rootPath = fs.existsSync(task.worktreePath) ? task.worktreePath : task.originalRepoPath;
   task.baselineFiles = task.workspaceKind === "git"
     ? snapshotSelectedFiles(rootPath, await getChangedFiles(rootPath, task.baseCommit))

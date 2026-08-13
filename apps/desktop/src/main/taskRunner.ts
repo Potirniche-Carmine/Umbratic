@@ -20,6 +20,7 @@ import {
   startUmbraticRunnerServer,
   stopRunnerProcess,
 } from "./runnerAdapter";
+import { startRemoteRunnerServer } from "./remoteRunner";
 import {
   canAutoResolvePermission,
   classifyCommandText,
@@ -41,9 +42,8 @@ import { recordLocalDiagnostic } from "./diagnostics";
 import { modelWithFreshContextLength as refreshModelContextLength } from "./modelEndpointRuntime";
 import { execFileOutput } from "./processCommands";
 import { RunnerEventAdapter } from "./runnerEventAdapter";
-import type { ChatAttachment, CommandClass, ReasoningMode, RunnerProcess, PermissionRequest, TaskRecord } from "./types";
+import type { ChatAttachment, CommandClass, RunnerProcess, PermissionRequest, TaskRecord } from "./types";
 import { isRecord, slugify } from "./utils";
-import { connectedVeilSupports, veilFeature } from "./veilFeatures";
 import {
   hiddenRendererReviewPaths,
   rendererReviewFiles,
@@ -168,22 +168,6 @@ export async function handleRunnerPermission(
   return "pending";
 }
 
-/**
- * The run's thinking directive, as the runner's prompt body carries it.
- *
- * Local mode always sends it: the local Veil is this build, so the field is
- * always understood. Server mode sends it only when the connected Veil
- * advertises the name — the features read here were recorded by the health
- * check `resolveSelectedModel` runs at the top of every run, so they describe
- * the server this turn is about to talk to.
- */
-function promptReasoningMode(task: TaskRecord): { reasoningMode?: ReasoningMode } {
-  if (!task.reasoningMode) return {};
-  const local = readModelEndpointSettings().mode === "local";
-  if (!local && !connectedVeilSupports(veilFeature.thinkingToggle)) return {};
-  return { reasoningMode: task.reasoningMode };
-}
-
 export async function runRunnerTask(
   taskIdValue: string,
   promptForRun?: RunnerPrompt,
@@ -218,11 +202,13 @@ export async function runRunnerTask(
         selectedForRun.contextLength ?? readContextLengthSetting(),
       ));
     let promptParts = runnerPromptParts(prompt);
-    run = await startUmbraticRunnerServer(
-      task,
-      selectedForRun,
-      task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
-    );
+    run = task.remote
+      ? await startRemoteRunnerServer(task, selectedForRun)
+      : await startUmbraticRunnerServer(
+          task,
+          selectedForRun,
+          task.chatId ? chatAttachmentDirectory(task.chatId) : undefined,
+        );
     // Register the moment the process exists. Session setup below awaits the
     // network, and anything that happened in that window — a cancel, a model
     // settings change — used to act as if no run were in flight, because the
@@ -290,7 +276,7 @@ export async function runRunnerTask(
           intent = pending.prompt;
           prompt = parts;
           promptParts = parts;
-          return submitSteeredRunnerTurn(run as RunnerProcess, session.id, parts, selectedForRun, promptReasoningMode(task).reasoningMode);
+          return submitSteeredRunnerTurn(run as RunnerProcess, session.id, parts, selectedForRun);
         })
         .catch((cause) => {
           fail(String(cause instanceof Error ? cause.message : cause));
@@ -461,7 +447,6 @@ export async function runRunnerTask(
         model: { providerID: selected.providerId, modelID: selected.modelId },
         agent: "build",
         parts: promptParts,
-        ...promptReasoningMode(task),
       },
     });
 

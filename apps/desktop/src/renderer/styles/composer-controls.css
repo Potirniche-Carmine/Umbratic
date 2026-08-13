@@ -274,22 +274,35 @@
   text-transform: uppercase;
 }
 
+/* Sized to the 10.5px header it sits in rather than to the branch rows below,
+   which are twice its height: a hover box that overhung the header was reading
+   as a row of its own. */
 .branchRefreshButton {
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  color: var(--muted);
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--faint);
   background: transparent;
+  transition: color 120ms ease, background 120ms ease;
 }
 
 .branchRefreshButton:hover:not(:disabled) {
   color: var(--text);
-  background: var(--control-hover);
+  background: color-mix(in srgb, var(--control-hover) 70%, transparent);
 }
 
-.branchMenu button {
+.branchRefreshButton:disabled {
+  color: var(--faint);
+  background: transparent;
+}
+
+/* The refresh button is a header control, not one of the branch rows, so the
+   row grid and row hover must not reach it. */
+.branchMenu button:not(.branchRefreshButton) {
   display: grid;
   grid-template-columns: 14px minmax(0, max-content);
   align-items: center;
@@ -305,7 +318,7 @@
   font-weight: 500;
 }
 
-.branchMenu button:hover:not(:disabled) {
+.branchMenu button:not(.branchRefreshButton):hover:not(:disabled) {
   background: var(--control-hover);
 }
 
@@ -313,7 +326,7 @@
   color: var(--text);
 }
 
-.branchMenu button svg {
+.branchMenu button:not(.branchRefreshButton) svg {
   color: var(--text);
 }
 

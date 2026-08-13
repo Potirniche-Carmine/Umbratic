@@ -4,7 +4,6 @@ import type { BackendUiEvent } from "../shared/backendEvents";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "auto_safe";
-export type ReasoningMode = "fast" | "reasoning";
 export type WorkspaceKind = "git" | "folder";
 export type WorkspaceMode = "local" | "worktree";
 export type RunnerToolId =
@@ -24,6 +23,35 @@ export type RequiredToolContractReason =
   | "agent_reported_blocker"
   | "attempted_tool_failed"
   | "no_review_changes";
+export type {
+  RemoteAuthMethod,
+  RemoteConnectionCheck,
+  RemoteConnectionDraft,
+  RemoteConnectionInfo,
+  RemoteDirectoryEntry,
+  RemoteDirectoryListing,
+  RemoteRunnerState,
+} from "../shared/desktopApi";
+
+/** The minimum a connection needs to build an ssh command line. */
+export type RemoteTarget = {
+  host: string;
+  port: number;
+  username: string;
+  authMethod: import("../shared/desktopApi").RemoteAuthMethod;
+  identityFilePath?: string;
+};
+
+/** Where a task runs when it does not run on this machine. */
+export type TaskRemote = {
+  connectionId: string;
+  /** Copied at start so a renamed or deleted connection still reads sensibly. */
+  name: string;
+  host: string;
+  /** Absolute POSIX path on the remote host. */
+  directory: string;
+};
+
 export type HarnessProfileId = "marketing" | "sales" | "engineering";
 export type LocalProviderId = "company-endpoint";
 export type ModelEndpointMode = "local" | "server";
@@ -386,6 +414,7 @@ export type TaskInfo = {
   id: string;
   chatId?: string;
   worktreeRootTaskId?: string;
+  remote?: TaskRemote;
   repositoryId: string;
   prompt: string;
   workspaceKind: WorkspaceKind;
@@ -396,7 +425,6 @@ export type TaskInfo = {
   agentBranch: string;
   worktreePath: string;
   permissionMode: PermissionMode;
-  reasoningMode?: ReasoningMode;
   runnerName?: string;
   runnerVersion?: string;
   policyVersion?: string;
@@ -528,6 +556,8 @@ export type RunnerProcess = {
   url: string;
   password: string;
   directory: string;
+  /** Present when `child` is the ssh tunnel rather than the runner itself. */
+  remote?: TaskRemote;
   diagnosticLogPath?: string;
   child: ChildProcess;
   abortController: AbortController;

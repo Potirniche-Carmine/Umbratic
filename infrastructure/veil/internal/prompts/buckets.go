@@ -81,8 +81,8 @@ var engineeringBuckets = []Bucket{
 		Preamble: "A read-only tour, documentation first. Look and report: when you spot a problem, name it in your answer and leave the files as they are.",
 		Steps: []string{
 			"List the workspace root. Make a tool call your first action: a tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds.",
-			"Read the documentation before the source. Whatever the project wrote about itself — a readme, any other Markdown, any document file — outranks what you would infer from filenames.",
-			"Then read the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs.",
+			"Read the project's own documents before any source, and read all of them: the readme in the root, plus every other Markdown, plain-text, or word-processor document the listing shows or a search for document files finds. Whatever the project wrote about itself outranks what you would infer from filenames. Skip an instruction file that workspace context already supplied — you are holding it already.",
+			"Then read only what the documents left unexplained: the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs. The documents carry the tour, source reads fill its gaps, and a tour that reads dozens of source files has stopped being a tour.",
 			"Read paths you have seen in a listing or search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
 			"Then stop exploring and answer: what the project is, how it is organized, how it runs when that is evident, and what you did not cover.",
 		},
@@ -91,7 +91,7 @@ var engineeringBuckets = []Bucket{
 		// that never lists anything.
 		GraphSteps: map[int]string{
 			1: "Call workspace_graph with action summary. Make a tool call your first action: a tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds. The summary names this workspace's files and its main symbols together, so start there and list the workspace root when it leaves a gap.",
-			3: "Then read the entry points the graph and any listing named, enough to say what each part is for, and as far into each file as the map needs. The graph already gave you each symbol's name and location, so spend your reads on what the code does.",
+			3: "Then read only what the documents left unexplained: the entry points the graph and any listing named, enough to say what each part is for, and as far into each file as the map needs. The graph already gave you each symbol's name and location, so spend the few reads you need on what the code does. A tour that reads dozens of source files has stopped being a tour.",
 			4: "Read paths you have seen in the graph, a listing, or a search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
 		},
 		Closing: `Give the answer as much room as it needs. You just read the project, so put what you found into it.

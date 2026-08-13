@@ -1,4 +1,4 @@
-//! The chat request body, and the two composer controls that change it.
+//! The chat request body, and the composer control that changes it.
 //!
 //! Kept apart from the transport in `veil_client` because it is pure: what
 //! `chat_request_body` returns is exactly what leaves the process, so the wire
@@ -7,34 +7,6 @@
 use serde_json::{Value, json};
 
 use crate::{config::RunnerConfig, veil_client::encoded_messages};
-
-/// Whether the model must reason before answering. It decides what the model
-/// does, never what the client is shown: reasoning content stays stripped
-/// either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThinkingDirective {
-    On,
-    Off,
-}
-
-impl ThinkingDirective {
-    pub fn wire_value(self) -> &'static str {
-        match self {
-            Self::On => "on",
-            Self::Off => "off",
-        }
-    }
-
-    /// Reads the prompt body's `reasoningMode`. An unrecognized mode means no
-    /// directive, which is the request a client that never sent one would make.
-    pub fn from_reasoning_mode(value: &str) -> Option<Self> {
-        match value.trim() {
-            "reasoning" => Some(Self::On),
-            "fast" => Some(Self::Off),
-            _ => None,
-        }
-    }
-}
 
 /// Builds the chat body. Pure, so the wire contract can be asserted without a
 /// live Veil: what this returns is exactly what leaves the process.
@@ -45,7 +17,6 @@ pub(crate) fn chat_request_body(
     max_output_tokens: u64,
     include_tools: bool,
     harness_bucket: Option<&str>,
-    thinking: Option<ThinkingDirective>,
 ) -> Value {
     let mut body = json!({
         "messages": encoded_messages(messages),
@@ -61,12 +32,6 @@ pub(crate) fn chat_request_body(
     }
     if let Some(bucket) = harness_bucket.filter(|value| !value.is_empty()) {
         object.insert("harness_bucket".into(), Value::String(bucket.to_owned()));
-    }
-    if let Some(directive) = thinking {
-        object.insert(
-            "thinking".into(),
-            Value::String(directive.wire_value().to_owned()),
-        );
     }
     // Naming the model is only admissible on a Veil that published a registry,
     // which the desktop confirms before setting this flag.
