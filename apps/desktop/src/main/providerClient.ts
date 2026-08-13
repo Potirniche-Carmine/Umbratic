@@ -73,6 +73,44 @@ export async function postProviderJson(
   });
 }
 
+/**
+ * Opens a POST whose body is written over time and whose response is read as it
+ * arrives.
+ *
+ * Dictation is the only caller and the only thing that needs it: audio goes up
+ * for as long as someone is speaking while transcripts come back before they
+ * stop, so neither half can wait for the other to finish. Sending no
+ * Content-Length is what makes that work — Node falls back to chunked transfer
+ * encoding, which is exactly the framing an open-ended recording wants.
+ */
+export function openProviderStream(
+  rawUrl: string,
+  options: { headers?: Record<string, string>; mtls?: EndpointMtlsConfig } = {},
+): { request: http.ClientRequest; response: Promise<http.IncomingMessage> } {
+  const url = new URL(rawUrl);
+  assertSecureEndpoint(url);
+  const requestOptions: http.RequestOptions | https.RequestOptions = {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port,
+    path: `${url.pathname}${url.search}`,
+    method: "POST",
+    headers: options.headers ?? {},
+    ...(url.protocol === "https:" ? tlsOptions(url, options.mtls) : {}),
+  };
+  const transport = url.protocol === "https:" ? https : http;
+
+  let settle: (value: http.IncomingMessage) => void = () => {};
+  let fail: (cause: unknown) => void = () => {};
+  const response = new Promise<http.IncomingMessage>((resolve, reject) => {
+    settle = resolve;
+    fail = reject;
+  });
+  const request = transport.request(requestOptions, (incoming) => settle(incoming));
+  request.once("error", (cause) => fail(cause));
+  return { request, response };
+}
+
 async function requestProviderJson(
   rawUrl: string,
   options: { method: "GET" | "POST"; headers?: Record<string, string>; body?: string; mtls?: EndpointMtlsConfig; signal?: AbortSignal },

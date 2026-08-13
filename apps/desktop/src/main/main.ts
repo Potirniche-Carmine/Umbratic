@@ -5,6 +5,7 @@ import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyCo
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
+import { cancelDictation, sendDictationAudio, startDictation, stopDictation } from "./dictation";
 import { listAvailableIdes, openRepositoryInIde, openTaskInIde } from "./ideLauncher";
 import { activeRunnerProcesses, appIcon, compactClosedTaskStorage, flushPendingTaskEvents, flushRendererEvents, getTask, pendingPermissions, publicTask, recordProductTelemetry, windowChromeDark, windowChromeHeight, windowChromeLight, windowChromeSymbolDark, windowChromeSymbolLight } from "./mainRuntime";
 import { checkoutRepositoryBranch, getRepository, listRepositoryBranches, openChatAttachment, pickAttachmentFiles, pickRepository, savePastedAttachments } from "./repositoryOps";
@@ -431,6 +432,12 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     setWindowChromeTheme: (input) =>
       setWindowChromeTheme(input === "light" ? "light" : "dark"),
     openExternal: (input) => openExternalLink(input?.url),
+    // The sender is the trusted renderer by the time a handler runs, and it is
+    // also where the transcripts have to be delivered.
+    startDictation: (input, event) => startDictation(input ?? {}, event.sender),
+    sendDictationAudio: async (input) => sendDictationAudio(input),
+    stopDictation: async () => stopDictation(),
+    cancelDictation: async () => cancelDictation(),
   };
 }
 

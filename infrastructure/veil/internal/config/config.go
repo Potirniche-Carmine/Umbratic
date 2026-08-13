@@ -62,7 +62,13 @@ type Config struct {
 	RequestTimeout         time.Duration
 	StreamIdleTimeout      time.Duration
 	MaxBodyBytes           int64
-	RAG                    RAG
+	// SpeechBaseURL and SpeechModel address the transcription runtime that backs
+	// dictation. Both empty is the normal case: a deployment without them has no
+	// /api/transcribe route and withholds the feature name, rather than
+	// advertising a capability that would fail on first use.
+	SpeechBaseURL string
+	SpeechModel   string
+	RAG           RAG
 	// Networks whose X-Forwarded-For header may be believed. Empty by default,
 	// so an unconfigured deployment keys rate limits on the immediate peer
 	// rather than on a header any client can forge.
@@ -196,6 +202,8 @@ func Load() (Config, error) {
 		TelemetryStorePath:     strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
 		TelemetryRetentionDays: telemetryRetentionDays,
 		TelemetryMaxBodyBytes:  telemetryMaxBodyBytes,
+		SpeechBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
+		SpeechModel:            strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
 		ModelTimeout:           modelTimeout,
 		RequestTimeout:         requestTimeout,
 		StreamIdleTimeout:      streamIdleTimeout,
@@ -253,8 +261,40 @@ func Load() (Config, error) {
 	if err := loadModelRegistry(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateSpeech(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+// SpeechEnabled reports whether this deployment can transcribe. It gates both
+// the route and the advertised feature name, so the two can never disagree.
+func (c Config) SpeechEnabled() bool {
+	return c.SpeechBaseURL != "" && c.SpeechModel != ""
+}
+
+// validateSpeech refuses a half-configured runtime. Setting one variable and
+// not the other is always a mistake, and silently disabling dictation would
+// send the administrator looking for the fault in the client.
+func validateSpeech(cfg *Config) error {
+	if cfg.SpeechBaseURL == "" && cfg.SpeechModel == "" {
+		return nil
+	}
+	if cfg.SpeechBaseURL == "" {
+		return errors.New("VEIL_SPEECH_BASE_URL is required when VEIL_SPEECH_MODEL is set")
+	}
+	if cfg.SpeechModel == "" {
+		return errors.New("VEIL_SPEECH_MODEL is required when VEIL_SPEECH_BASE_URL is set")
+	}
+	if len(cfg.SpeechModel) > MaxModelIDBytes {
+		return fmt.Errorf("VEIL_SPEECH_MODEL is longer than %d bytes", MaxModelIDBytes)
+	}
+	parsed, err := url.Parse(cfg.SpeechBaseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("VEIL_SPEECH_BASE_URL must be an http or https URL")
+	}
+	return nil
 }
 
 // loadModelRegistry fills cfg.Models. Unset VEIL_MODELS synthesizes the

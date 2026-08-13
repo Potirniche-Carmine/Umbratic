@@ -81,6 +81,38 @@
 }
 
 /*
+ * The role sits with the identity rather than in its own grid cell: the card is
+ * a two-column grid whose later rows span both columns, so a new top-level
+ * child would push the run state onto its own row.
+ */
+.model-role {
+  margin-top: 0.3rem;
+}
+
+.model-role select {
+  width: auto;
+  height: auto;
+  padding: 0.12rem 1.4rem 0.12rem 0.4rem;
+  margin-left: -0.4rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-role select:hover {
+  border-color: var(--line);
+}
+
+.model-role select:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  background-color: var(--control);
+}
+
+/*
  * Reserved width. "Stopped", "Starting", "Serving", and "Loading weights" are
  * different lengths, and without this the dot would walk left and right as a
  * model came up.

@@ -6,7 +6,7 @@
   <title>{{.Title}}</title>
   <link rel="icon" href="/favicon.ico?v=10">
   <link rel="stylesheet" href="/assets/style.css?v=10">
-  <link rel="stylesheet" href="/assets/models.css?v=3">
+  <link rel="stylesheet" href="/assets/models.css?v=4">
   <script defer src="/assets/console.js?v=11"></script>
 </head>
 <body>
@@ -32,6 +32,13 @@
         <div class="model-identity">
           <input class="model-name" name="display_name" value="{{.DisplayName}}" maxlength="120" required aria-label="Display name for {{.ID}}">
           <code>{{.ID}}{{if .IsDefault}} · default{{end}}</code>
+          <label class="model-role">
+            <span class="visually-hidden">Role for {{.ID}}</span>
+            <select name="role">
+              <option value="chat" {{if not .IsSpeech}}selected{{end}}>Chat</option>
+              <option value="speech" {{if .IsSpeech}}selected{{end}}>Dictation</option>
+            </select>
+          </label>
         </div>
         <div class="model-state">
           <span class="model-dot model-dot-{{.State}}" aria-hidden="true"></span>
@@ -95,6 +102,14 @@
             <span>Served id</span>
             <input name="id" value="{{.Models.Form.ID}}" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" required>
             <small>What clients send as the model name. It cannot be renamed later, and the command's <code>--served-model-name</code> must match it.</small>
+          </label>
+          <label class="field">
+            <span>Role</span>
+            <select name="role">
+              <option value="chat" {{if not .Models.Form.SpeechSelected}}selected{{end}}>Chat</option>
+              <option value="speech" {{if .Models.Form.SpeechSelected}}selected{{end}}>Dictation</option>
+            </select>
+            <small>Dictation serves speech-to-text for the composer's microphone instead of chat. One model at most, and it must be an ASR model such as <code>Qwen/Qwen3-ASR-1.7B</code>.</small>
           </label>
           <label class="field field-wide">
             <span>Command</span>

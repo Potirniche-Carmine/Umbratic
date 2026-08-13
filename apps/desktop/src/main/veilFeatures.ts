@@ -35,6 +35,12 @@ export const veilFeature = {
    * must be present before the field is ever sent.
    */
   modelSelection: "chat.model_selection",
+  /**
+   * `POST /api/transcribe` exists and a speech runtime is configured behind it.
+   * Advertised only while both are true, so the composer hides its microphone
+   * rather than offering a button that fails on first press.
+   */
+  speechTranscribe: "speech.transcribe",
 } as const;
 
 export type VeilFeature = (typeof veilFeature)[keyof typeof veilFeature];

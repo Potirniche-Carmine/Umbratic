@@ -105,6 +105,25 @@ func (s *Supervisor) PendingModelsEnvironment() string {
 	return modelsEnvOrEmpty(models)
 }
 
+// SpeechEnvironment is the dictation configuration the running Veil was started
+// with, and PendingSpeechEnvironment the one the next start will carry. They
+// are tracked separately from the chat registry because a deployment can gain
+// its first speech model without the chat registry changing at all, and that
+// still needs a restart to take effect.
+func (s *Supervisor) SpeechEnvironment() string {
+	s.stateMu.RLock()
+	models := s.startedModels
+	s.stateMu.RUnlock()
+	return strings.Join(config.SpeechEnvironment(models), "\n")
+}
+
+func (s *Supervisor) PendingSpeechEnvironment() string {
+	s.stateMu.RLock()
+	models := s.models
+	s.stateMu.RUnlock()
+	return strings.Join(config.SpeechEnvironment(models), "\n")
+}
+
 func modelsEnvOrEmpty(models []config.ManagedModel) string {
 	value, err := config.ModelsEnvJSON(models)
 	if err != nil {
@@ -175,6 +194,9 @@ func (s *Supervisor) startLocked(ctx context.Context, cfg config.Veil, token str
 	if entries, err := config.ModelsEnvJSON(models); err == nil && entries != "" {
 		cmd.Env = append(cmd.Env, "VEIL_MODELS="+entries)
 	}
+	// No speech model means neither variable is set, and Veil refuses to start
+	// on half a pair — so this is all or nothing by construction.
+	cmd.Env = append(cmd.Env, config.SpeechEnvironment(models)...)
 	cmd.Stdout, cmd.Stderr = s.logs, s.logs
 	if err := cmd.Start(); err != nil {
 		return errors.New("Veil did not start")

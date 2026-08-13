@@ -3,6 +3,7 @@ import {
   normalizeContextLength,
 } from "../shared/contextWindow";
 import type { DocumentReviewSnapshot } from "../shared/documentReview";
+import { previewDictation } from "./previewDictation";
 import {
   buildTextDiff,
   normalizeReviewFile,
@@ -780,7 +781,9 @@ function createPreviewApi(): DesktopApi {
     models: [],
     providers: [],
     permissionMode: getPreviewPermissionMode(),
-    veilFeatures: [],
+    // `?dictation` advertises the speech feature so the composer's microphone
+    // can be exercised in the preview harness, which has no Veil behind it.
+    veilFeatures: composerTestParams.has("dictation") ? ["speech.transcribe"] : [],
     endpointConfig: {
       source: "local-default",
       endpointEditingAllowed: true,
@@ -952,6 +955,11 @@ function createPreviewApi(): DesktopApi {
   // no-op rather than a broken promise.
   openExternal: async () => ({ ok: false }),
   onBackendEvent: () => () => undefined,
+  startDictation: async () => previewDictation.start(),
+  sendDictationAudio: async () => undefined,
+  stopDictation: async () => previewDictation.stop(),
+  cancelDictation: async () => previewDictation.cancel(),
+  onDictationEvent: (callback) => previewDictation.subscribe(callback),
   // `?indexing` holds the first-index status on so it can be seen without
   // opening a real folder.
   onWorkspaceIndex: (callback) => {

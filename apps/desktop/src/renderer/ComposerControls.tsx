@@ -1,7 +1,66 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Cpu, FolderOpen, GitBranch, Hand, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, Cpu, FolderOpen, GitBranch, Hand, Loader2, Mic, RefreshCw, ShieldCheck, Square } from "lucide-react";
 
 import type { PermissionMode, WorkspaceMode } from "../shared/desktopApi";
+import type { DictationStatus } from "./dictation";
+
+/**
+ * Speaks a prompt instead of typing it.
+ *
+ * The live transcript is a popover above the button rather than text written
+ * into the prompt: a partial is replaced whole on every update, and rewriting
+ * the input under a cursor the user may have moved is how dictation eats an
+ * edit someone was in the middle of. Only the final transcript is inserted.
+ */
+export function DictationControl({
+  status,
+  onToggle,
+}: {
+  status: DictationStatus;
+  onToggle(): void;
+}) {
+  const recording = status.state === "recording";
+  const busy = status.state === "starting" || status.state === "transcribing";
+  const label = recording
+    ? "Stop dictation"
+    : busy
+      ? status.state === "starting" ? "Starting dictation" : "Transcribing"
+      : "Dictate prompt";
+
+  return (
+    <>
+      {/*
+        The caption is a sibling in the action rail rather than a popover above
+        the button: the composer shell clips its overflow, so anything floated
+        out of the rail is cut off at the shell's edge.
+      */}
+      {status.preview || status.error ? (
+        <div className={`dictationCaption ${status.error ? "isError" : ""}`} role="status">
+          {status.error ?? status.preview}
+        </div>
+      ) : null}
+      <div className={`dictationControl ${recording ? "isRecording" : ""}`}>
+      <button
+        className="dictationButton"
+        type="button"
+        onClick={onToggle}
+        disabled={busy}
+        aria-label={label}
+        aria-pressed={recording}
+        title={label}
+      >
+        {busy ? (
+          <Loader2 className="spin" size={16} />
+        ) : recording ? (
+          <Square aria-hidden="true" fill="currentColor" size={11} />
+        ) : (
+          <Mic aria-hidden="true" size={16} />
+        )}
+      </button>
+      </div>
+    </>
+  );
+}
 
 export type ComposerModelOption = {
   id: string;

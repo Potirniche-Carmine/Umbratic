@@ -152,6 +152,8 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_PROVIDER_BASE_URL` | Yes | None | Base URL of the private model runtime. Keep this runtime inaccessible to public clients. |
 | `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. With `VEIL_MODELS` set it must also name one of that registry's ids, and it is the default a request with no `model` gets. |
 | `VEIL_MODELS` | Server | Unset | JSON array of routable models. Unset means the single-model behavior below, byte for byte. |
+| `VEIL_SPEECH_BASE_URL` | No | Unset | Base URL of the transcription runtime that backs dictation, such as `vllm serve Qwen/Qwen3-ASR-1.7B`. Set it together with `VEIL_SPEECH_MODEL`; either one alone refuses to start. Unset means no `/api/transcribe` route and no `speech.transcribe` feature name. |
+| `VEIL_SPEECH_MODEL` | No | Unset | Served model id the transcription runtime answers to. Never appears in `/api/models`: it transcribes audio and would fail every chat request sent to it. |
 | `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
 | `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
 | `VEIL_TRUSTED_PROXY_CIDRS` | No | Empty | Comma-separated addresses or CIDRs whose `X-Forwarded-For` is believed when keying identity rate limits. Leave empty unless the proxy overwrites that header; otherwise a client picks its own bucket. Console sets loopback for the supervised deployment. |

@@ -78,11 +78,13 @@ import { ContextMeter } from "./contextMeter";
 import {
   BranchPicker,
   ComposerModelPicker,
+  DictationControl,
   PermissionModePicker,
   WorkspaceModePicker,
   contextBadge,
   type ComposerModelOption,
 } from "./ComposerControls";
+import { insertTranscript, useDictation } from "./dictation";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { eventDetail, eventTitle } from "./eventDisplay";
@@ -2031,6 +2033,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
+  // Where the caret was the last time the composer was touched. Null until it
+  // is touched at all, which dictation has to tell apart from a caret at 0.
+  const promptCaretRef = useRef<number | null>(null);
+  const dictation = useDictation(api, (text) => {
+    setPrompt((current) => {
+      const next = insertTranscript(current, promptCaretRef.current, text);
+      promptCaretRef.current = next.caret;
+      return next.prompt;
+    });
+    textareaRef.current?.focus();
+  });
   const draftSaveRef = useRef<number | null>(null);
   const lastPersistedDraftRef = useRef<Map<string, { draftPrompt: string; filesSignature: string }>>(new Map());
   const reviewAnimationRef = useRef<number | null>(null);
@@ -4396,6 +4409,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function updateMention(value: string, cursor: number | null) {
+    // Every composer interaction routes through here, which makes it the one
+    // place that knows where the caret is. Dictation reads it later.
+    if (cursor !== null) promptCaretRef.current = cursor;
     const nextMention = cursor === null ? null : mentionAtCursor(value, cursor);
     setMention(nextMention);
     if (!nextMention) setFileMatches([]);
@@ -5851,6 +5867,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 />
               </div>
               <div className="promptActionRail">
+                {backend?.veilFeatures.includes("speech.transcribe") ? (
+                  <DictationControl status={dictation.status} onToggle={dictation.toggle} />
+                ) : null}
                 {isGenerating && !hasComposerMessage ? (
                   <button
                     className="sendButton stopButton"

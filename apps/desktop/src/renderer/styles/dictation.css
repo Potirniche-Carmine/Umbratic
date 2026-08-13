@@ -1,0 +1,95 @@
+
+/*
+ * Dictation sits in the action rail beside send, and reads as secondary to it:
+ * send is a filled circle because it commits the prompt, so the microphone is
+ * an outline that does not compete with it.
+ */
+.dictationControl {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.dictationButton {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.dictationButton:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.dictationButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
+}
+
+.dictationButton:disabled {
+  color: var(--muted);
+}
+
+/*
+ * Recording is the one state that has to be unmistakable from across a desk:
+ * a live microphone the user has forgotten about is a privacy problem, not a
+ * cosmetic one. Colour alone would not carry that, so the ring pulses too.
+ */
+.dictationControl.isRecording .dictationButton {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+  animation: dictationPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes dictationPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 42%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--red) 0%, transparent);
+  }
+}
+
+/*
+ * The live transcript is shown beside the microphone rather than written into
+ * the prompt: a partial is replaced whole on every update, and rewriting the
+ * input under the cursor would eat an edit the user was in the middle of. Only
+ * the final transcript is inserted.
+ *
+ * It sits in the action rail as a sibling of the button, not as a popover above
+ * it, because the composer shell clips its overflow — a floated panel would be
+ * cut off at the shell's edge rather than sitting over the conversation.
+ */
+.dictationCaption {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
+  padding-left: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  /* One line that truncates: the caption tracks speech and would otherwise
+     reflow the rail on nearly every update. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dictationCaption.isError {
+  color: var(--red);
+  white-space: normal;
+}

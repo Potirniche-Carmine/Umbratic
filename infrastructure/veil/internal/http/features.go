@@ -44,16 +44,25 @@ const modelSelectionFeature = "chat.model_selection"
 // capability that would silently do nothing.
 const ragFeature = "rag"
 
+// speechFeature is advertised only while a transcription runtime is
+// configured. Like rag, a name is a promise: a server with no ASR endpoint
+// wired up cannot keep this one, and a microphone button that fails on first
+// press is worse than no microphone button.
+const speechFeature = "speech.transcribe"
+
 // Features returns the advertised capability list. The slice is built fresh so
 // a caller cannot rewrite what this server claims to support.
-func Features(ragEnabled, modelSelectionEnabled bool) []string {
-	names := make([]string, 0, len(serverFeatures)+2)
+func Features(ragEnabled, modelSelectionEnabled, speechEnabled bool) []string {
+	names := make([]string, 0, len(serverFeatures)+3)
 	names = append(names, serverFeatures...)
 	if ragEnabled {
 		names = append(names, ragFeature)
 	}
 	if modelSelectionEnabled {
 		names = append(names, modelSelectionFeature)
+	}
+	if speechEnabled {
+		names = append(names, speechFeature)
 	}
 	return names
 }

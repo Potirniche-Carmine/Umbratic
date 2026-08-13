@@ -39,6 +39,47 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("VEIL_MODEL_TIMEOUT", "")
 	t.Setenv("VEIL_REQUEST_TIMEOUT", "")
 	t.Setenv("VEIL_MAX_BODY_BYTES", "")
+	t.Setenv("VEIL_SPEECH_BASE_URL", "")
+	t.Setenv("VEIL_SPEECH_MODEL", "")
+}
+
+func TestSpeechIsOffUntilBothVariablesAreSet(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SpeechEnabled() {
+		t.Fatal("dictation must be off by default")
+	}
+
+	// Half a configuration is always a mistake. Disabling dictation silently
+	// would send the administrator looking for the fault in the client.
+	for _, half := range []struct{ baseURL, model string }{
+		{"http://127.0.0.1:8010/", ""},
+		{"", "qwen3-asr"},
+		{"not-a-url", "qwen3-asr"},
+		{"ftp://127.0.0.1:8010", "qwen3-asr"},
+	} {
+		t.Setenv("VEIL_SPEECH_BASE_URL", half.baseURL)
+		t.Setenv("VEIL_SPEECH_MODEL", half.model)
+		if _, err := Load(); err == nil {
+			t.Fatalf("a half-configured speech runtime must refuse to start: %#v", half)
+		}
+	}
+
+	t.Setenv("VEIL_SPEECH_BASE_URL", "http://127.0.0.1:8010/")
+	t.Setenv("VEIL_SPEECH_MODEL", "qwen3-asr")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SpeechEnabled() {
+		t.Fatal("both variables set enables dictation")
+	}
+	if cfg.SpeechBaseURL != "http://127.0.0.1:8010" {
+		t.Fatalf("the trailing slash is trimmed once, at load: %q", cfg.SpeechBaseURL)
+	}
 }
 
 func TestLoadManagedModeDoesNotReadDotEnv(t *testing.T) {

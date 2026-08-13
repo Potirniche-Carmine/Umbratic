@@ -55,6 +55,10 @@ type Server struct {
 	templateData templates.Registry
 	retriever    *rag.Retriever
 	availability availabilityCache
+	// speech is nil unless a transcription runtime is configured, which is what
+	// keeps /api/transcribe absent rather than broken on a deployment without
+	// one.
+	speech *model.SpeechClient
 }
 
 type contextKey int
@@ -82,6 +86,9 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 			profile.QueueTimeout,
 		),
 		retriever: rag.New(cfg.RAG, modelClient),
+	}
+	if cfg.SpeechEnabled() {
+		server.speech = model.NewSpeechClient(cfg.SpeechBaseURL, cfg.SpeechModel, cfg.ModelTimeout)
 	}
 	if cfg.CompanyIdentityMode {
 		license, licenseErr := entitlement.Load(cfg.EntitlementPath)
@@ -186,7 +193,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// routes stay available so a restart is still observable.
 	switch r.URL.Path {
 	case "/api/engineering/chat", "/api/marketing/chat", "/api/sales/chat",
-		"/api/internal/context/compact", "/api/internal/orient":
+		"/api/internal/context/compact", "/api/internal/orient", "/api/transcribe":
 		if !s.guardLifecycle(w) {
 			return
 		}
@@ -205,6 +212,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleContextCompact(w, r)
 	case "/api/internal/orient":
 		s.handleOrient(w, r)
+	case "/api/transcribe":
+		s.handleTranscribe(w, r)
 	case "/api/telemetry":
 		s.handleTelemetry(w, r)
 	default:
@@ -558,7 +567,8 @@ func writeIdentityError(w http.ResponseWriter, err error) {
 func isActivityProductRoute(path string) bool {
 	switch path {
 	case "/api/model/connect", "/api/model/context", "/api/models", "/api/engineering/chat", "/api/marketing/chat",
-		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry":
+		"/api/sales/chat", "/api/internal/context/compact", "/api/internal/orient", "/api/telemetry",
+		"/api/transcribe":
 		return true
 	default:
 		return false
@@ -636,7 +646,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"state":    string(s.lifecycle.state()),
-		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled),
+		"features": Features(s.cfg.RAG.Enabled, s.cfg.ModelSelectionEnabled, s.cfg.SpeechEnabled()),
 		"capabilities": map[string]bool{
 			"parallel_tool_calls": s.cfg.ModelParallelToolCalls,
 			"vision":              s.cfg.ModelVision,

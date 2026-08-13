@@ -452,6 +452,18 @@ export type WorkspaceIndexEvent = {
   ok?: boolean;
 };
 
+/**
+ * One update from the open dictation.
+ *
+ * A partial replaces the previous partial rather than extending it: a
+ * transcript is not append-only, and a model that has heard two more syllables
+ * may revise words it already emitted. `final` and `error` are terminal.
+ */
+export type DictationEvent =
+  | { kind: "partial"; text: string }
+  | { kind: "final"; text: string; truncated: boolean }
+  | { kind: "error"; message: string };
+
 export type DesktopApi = {
   listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
@@ -779,7 +791,25 @@ export type DesktopApi = {
    * `{ ok: false }` for anything it will not open.
    */
   openExternal(input: { url: string }): Promise<{ ok: boolean }>;
+  /**
+   * Opens the dictation stream to Veil. The renderer holds the microphone and
+   * this call holds the connection, so audio is captured in one place and
+   * credentials stay in the other. Throws when the connected server does not
+   * advertise `speech.transcribe`.
+   */
+  startDictation(input: { language?: string }): Promise<{ started: boolean }>;
+  /** Sends one slice of 16 kHz mono 16-bit PCM to the open stream. */
+  sendDictationAudio(input: { chunk: Uint8Array }): Promise<void>;
+  /** Ends the recording and waits for the last transcript. */
+  stopDictation(): Promise<void>;
+  /** Abandons the recording without waiting for a transcript. */
+  cancelDictation(): Promise<void>;
   onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
+  /**
+   * Transcripts for the open dictation. Partials replace each other and a
+   * terminal event ends the session.
+   */
+  onDictationEvent(callback: (event: DictationEvent) => void): () => void;
   /**
    * The first index build for a workspace. Separate from the backend event bus
    * because that bus is task-scoped and this happens on folder open, before any
@@ -877,7 +907,14 @@ export const desktopIpcChannels = {
   setResponseFeedback: "umbratic:set-response-feedback",
   setWindowChromeTheme: "umbratic:set-window-chrome-theme",
   openExternal: "umbratic:open-external",
-} as const satisfies Record<Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex">, string>;
+  startDictation: "umbratic:start-dictation",
+  sendDictationAudio: "umbratic:send-dictation-audio",
+  stopDictation: "umbratic:stop-dictation",
+  cancelDictation: "umbratic:cancel-dictation",
+} as const satisfies Record<
+  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent">,
+  string
+>;
 
 type DesktopIpcMethod = keyof typeof desktopIpcChannels;
 

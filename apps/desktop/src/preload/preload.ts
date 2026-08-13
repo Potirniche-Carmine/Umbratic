@@ -3,6 +3,7 @@ import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
   ChatAttachment,
   DesktopApi,
+  DictationEvent,
   HarnessProfileId,
   PastedAttachmentInput,
   PermissionMode,
@@ -192,6 +193,15 @@ const umbraticApi = {
     invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => invoke("umbratic:open-external", input),
+  startDictation: (input: { language?: string }) => invoke("umbratic:start-dictation", input),
+  sendDictationAudio: (input: { chunk: Uint8Array }) => invoke("umbratic:send-dictation-audio", input),
+  stopDictation: () => invoke("umbratic:stop-dictation", undefined),
+  cancelDictation: () => invoke("umbratic:cancel-dictation", undefined),
+  onDictationEvent: (callback: (event: DictationEvent) => void) => {
+    const listener = (_event: IpcRendererEvent, value: DictationEvent) => callback(value);
+    ipcRenderer.on("umbratic:dictation-event", listener);
+    return () => ipcRenderer.removeListener("umbratic:dictation-event", listener);
+  },
   onWorkspaceIndex: (callback: (event: WorkspaceIndexEvent) => void) => {
     const listener = (_event: IpcRendererEvent, value: WorkspaceIndexEvent) => callback(value);
     ipcRenderer.on("umbratic:workspace-index", listener);
