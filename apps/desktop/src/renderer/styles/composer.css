@@ -15,7 +15,10 @@
   min-width: 0;
 }
 
-.floatingAttachmentTray {
+/* What is going out next, stacked above the controls: queued messages first,
+   then the review comments attached to the message still being written — the
+   one nearest the box is the one the box is holding. */
+.composerPendingTray {
   position: absolute;
   left: 50%;
   bottom: calc(100% + 8px);
@@ -23,8 +26,9 @@
   width: var(--prompt-width);
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%) translateY(5px);
@@ -33,10 +37,21 @@
     transform 170ms ease;
 }
 
-.floatingAttachmentTray.hasAttachments {
+.composerPendingTray.hasPending {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(-50%) translateY(0);
+}
+
+/* A pill, not a bar: it stays its own width in a column of full-width rows. */
+.composerPendingTray .composerReviewFeedback {
+  align-self: flex-start;
+}
+
+/* Attachments live inside the box now, so the box grows upward to hold them and
+   they sit with the text they belong to. */
+.promptAttachmentStrip {
+  min-width: 0;
 }
 
 .composerAttachmentList {
@@ -46,7 +61,7 @@
   max-height: 40px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 2px 4px;
+  padding: 7px 10px 1px;
   scrollbar-width: none;
 }
 
@@ -480,7 +495,10 @@ button.attachmentPreview:focus-visible {
 .promptInputShell {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(38px, auto) 38px;
+  /* Attachments, editor, rail. The first track is empty and zero-height until
+     something is picked, which is what lets the box grow upward rather than
+     reserving room for chips that are usually not there. */
+  grid-template-rows: auto minmax(38px, auto) 38px;
   width: 100%;
   max-width: 100%;
   min-height: 76px;

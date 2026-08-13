@@ -32,8 +32,6 @@ export type StoredRemoteConnection = {
   identityFilePath: string;
   password: "" | StoredProtectedString;
   defaultDirectory: string;
-  hostKeyFingerprint: string;
-  hostKeyType: string;
   runnerPath: string;
   /** Checksum of the binary this desktop installed, used to detect drift. */
   runnerSha256: string;
@@ -45,8 +43,6 @@ export type StoredRemoteConnection = {
 export type RemoteConnectionPatch = Partial<
   Pick<
     StoredRemoteConnection,
-    | "hostKeyFingerprint"
-    | "hostKeyType"
     | "runnerPath"
     | "runnerSha256"
     | "runnerVersion"
@@ -79,8 +75,6 @@ function decodeConnection(value: unknown): StoredRemoteConnection | null {
     identityFilePath: text("identityFilePath"),
     password,
     defaultDirectory: text("defaultDirectory"),
-    hostKeyFingerprint: text("hostKeyFingerprint"),
-    hostKeyType: text("hostKeyType"),
     runnerPath: text("runnerPath"),
     runnerSha256: text("runnerSha256"),
     runnerVersion: text("runnerVersion"),
@@ -128,8 +122,6 @@ export function publicRemoteConnection(
     identityFilePath: connection.identityFilePath,
     passwordConfigured: connection.password !== "",
     defaultDirectory: connection.defaultDirectory,
-    hostKeyFingerprint: connection.hostKeyFingerprint,
-    hostKeyType: connection.hostKeyType,
     runnerState: runnerState(connection, expectedSha256),
     runnerVersion: connection.runnerVersion,
     runnerPath: connection.runnerPath,
@@ -259,8 +251,6 @@ export function saveRemoteConnection(input: unknown): RemoteConnectionInfo {
     ...(existing ?? {
       id: connectionId(),
       password: "" as const,
-      hostKeyFingerprint: "",
-      hostKeyType: "",
       runnerPath: "",
       runnerSha256: "",
       runnerVersion: "",
@@ -283,12 +273,11 @@ export function saveRemoteConnection(input: unknown): RemoteConnectionInfo {
         ? writeProtectedString(password, "Secure storage is not available, so the remote password was not saved.")
         : existing?.password ?? "",
   };
-  // Moving a connection to a different host or port invalidates the key that
-  // was trusted for the old one; the next connection has to ask again.
+  // Pointing a connection at a different machine says nothing about the new
+  // one: its key is pinned afresh, and whatever the old host had installed is
+  // not what this row now describes.
   if (identityChanged) {
     forgetHostKey(app.getPath("userData"), existing.host, existing.port);
-    next.hostKeyFingerprint = "";
-    next.hostKeyType = "";
     next.runnerPath = "";
     next.runnerSha256 = "";
     next.runnerVersion = "";

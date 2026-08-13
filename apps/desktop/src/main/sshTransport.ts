@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import type { RemoteAuthMethod, RemoteTarget } from "./types";
@@ -15,6 +14,11 @@ import type { RemoteAuthMethod, RemoteTarget } from "./types";
  * The options below are set on the command line, which OpenSSH resolves before
  * any config file, so a user's `ssh_config` can add to the connection but never
  * weaken the guarantees this module depends on.
+ *
+ * Host keys are pinned on first contact into Umbratic's own `known_hosts` and
+ * verified against it from then on, which is what `ssh` itself does out of the
+ * box. There is no fingerprint to approve: a host that answers with a different
+ * key later is refused, and removing the connection is what forgets the pin.
  */
 
 const connectTimeoutSeconds = 10;
@@ -66,7 +70,7 @@ function opensshDirectory(): string | null {
  * shipped inside an unrelated toolchain, and the connection the user configured
  * would then read a different `known_hosts` than the one this app verified.
  */
-function opensshTool(tool: "ssh" | "ssh-keyscan" | "ssh-keygen"): string {
+function opensshTool(tool: "ssh"): string {
   const directory = opensshDirectory();
   if (directory) {
     const candidate = path.join(directory, `${tool}.exe`);
@@ -149,7 +153,10 @@ export function sshArguments(
     "-T",
     "-p", String(target.port),
     "-o", `ConnectTimeout=${connectTimeoutSeconds}`,
-    "-o", "StrictHostKeyChecking=yes",
+    // `accept-new` pins the key the first time this host is reached and refuses
+    // any later change to it. `yes` would refuse the first connection too, and
+    // there is nowhere left in the app to approve one.
+    "-o", "StrictHostKeyChecking=accept-new",
     "-o", `UserKnownHostsFile=${knownHostsPath(userDataPath)}`,
     // A user's own multiplexing configuration would outlive this process and
     // leave the remote runner running with nothing attached to it.
@@ -295,7 +302,7 @@ export function remoteFailureMessage(result: SshExecResult): string {
     return "The remote host refused the credentials for this connection.";
   }
   if (/host key verification failed/i.test(detail)) {
-    return "The remote host key no longer matches the one this connection trusted.";
+    return "This host answered with a different key than the one Umbratic first saw. Remove the connection and add it again if that was expected.";
   }
   if (/could not resolve hostname|name or service not known/i.test(detail)) {
     return "The remote host name could not be resolved.";
@@ -306,105 +313,11 @@ export function remoteFailureMessage(result: SshExecResult): string {
   return detail || `The remote command exited with code ${result.code ?? "unknown"}.`;
 }
 
-export type RemoteHostKey = {
-  /** The `known_hosts` line, stored verbatim once the user trusts it. */
-  line: string;
-  keyType: string;
-  fingerprint: string;
-};
-
 /**
- * Reads the host's key without authenticating, so a fingerprint can be shown
- * for approval before any credential is offered to the host.
- *
- * This uses `ssh` rather than `ssh-keyscan`, for two reasons. The key exchange
- * is then negotiated exactly as the real connection will negotiate it, so the
- * key pinned here is the key that connection verifies against — `ssh-keyscan`
- * negotiates differently and fails outright against servers whose preferred
- * algorithm it does not implement. And it is the same binary, reading the same
- * configuration, so a host reached through a jump host is reached the same way
- * for its key as for its work.
- *
- * `PreferredAuthentications=none` is what keeps this a read. SSH records the
- * host key during key exchange, which happens before authentication, so the
- * connection is refused with nothing offered and the key already known.
+ * Drops the pinned key for a host, so the next connection pins whatever answers
+ * then. Called when a connection is deleted or repointed at a different
+ * address — the pin belongs to the host, not to the saved row.
  */
-export async function scanRemoteHostKey(target: RemoteTarget): Promise<RemoteHostKey> {
-  const probeFile = path.join(os.tmpdir(), `umbratic-hostscan-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(probeFile, "", { encoding: "utf8", mode: 0o600 });
-  try {
-    await new Promise<void>((resolve) => {
-      const child = spawn(
-        opensshTool("ssh"),
-        [
-          "-T",
-          "-p", String(target.port),
-          "-o", `ConnectTimeout=${connectTimeoutSeconds}`,
-          "-o", "StrictHostKeyChecking=accept-new",
-          "-o", `UserKnownHostsFile=${probeFile}`,
-          "-o", "BatchMode=yes",
-          "-o", "PreferredAuthentications=none",
-          "-o", "PubkeyAuthentication=no",
-          "-o", "ControlMaster=no",
-          "-o", "ControlPath=none",
-          `${target.username}@${target.host}`,
-          "--",
-          "true",
-        ],
-        { stdio: ["ignore", "ignore", "pipe"], windowsHide: true },
-      );
-      const timer = setTimeout(() => child.kill(), 15_000);
-      // The refusal is expected: the key is on disk by the time it happens.
-      child.stderr.resume();
-      child.once("error", () => { clearTimeout(timer); resolve(); });
-      child.once("close", () => { clearTimeout(timer); resolve(); });
-    });
-    const chosen = fs
-      .readFileSync(probeFile, "utf8")
-      .split(/\r?\n/)
-      .find((line) => line.trim() && !line.startsWith("#"));
-    if (!chosen) {
-      throw new Error("The remote host did not present a host key. Check the address and port.");
-    }
-    return { ...(await hostKeyFingerprint(chosen)), line: chosen.trim() };
-  } finally {
-    fs.rmSync(probeFile, { force: true });
-  }
-}
-
-async function hostKeyFingerprint(knownHostsLine: string): Promise<{ keyType: string; fingerprint: string }> {
-  const file = path.join(os.tmpdir(), `umbratic-hostkey-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(file, `${knownHostsLine}\n`, { encoding: "utf8", mode: 0o600 });
-  try {
-    const output = await new Promise<string>((resolve, reject) => {
-      const child = spawn(opensshTool("ssh-keygen"), ["-l", "-f", file], {
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      let stdout = "";
-      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-      child.once("error", reject);
-      child.once("close", () => resolve(stdout));
-    });
-    // "256 SHA256:abc… host (ED25519)"
-    const match = output.trim().split(/\r?\n/)[0]?.match(/\s(SHA256:\S+)\s.*\(([A-Za-z0-9-]+)\)/);
-    return { fingerprint: match?.[1] ?? "unknown", keyType: match?.[2] ?? "unknown" };
-  } finally {
-    fs.rmSync(file, { force: true });
-  }
-}
-
-/** Records a host key the user approved, replacing any earlier key for the host. */
-export function trustHostKey(userDataPath: string, hostKeyLine: string): void {
-  const file = knownHostsPath(userDataPath);
-  const marker = hostKeyLine.trim().split(" ")[0];
-  const kept = fs
-    .readFileSync(file, "utf8")
-    .split(/\r?\n/)
-    .filter((line) => line.trim() && line.split(" ")[0] !== marker);
-  fs.writeFileSync(file, `${[...kept, hostKeyLine.trim()].join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-}
-
 export function forgetHostKey(userDataPath: string, host: string, port: number): void {
   const file = knownHostsPath(userDataPath);
   // OpenSSH writes port-22 hosts bare and everything else bracketed.

@@ -30,7 +30,6 @@ export type {
   RemoteConnectionInfo,
   RemoteDirectoryEntry,
   RemoteDirectoryListing,
-  RemoteHostKeyOffer,
   RemoteRunnerState,
 } from "../shared/desktopApi";
 

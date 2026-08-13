@@ -63,8 +63,8 @@ export type RemoteAuthMethod = "agent" | "identity_file" | "password";
 export type RemoteRunnerState = "unknown" | "missing" | "outdated" | "ready";
 
 /**
- * A saved remote host, as the renderer is allowed to see it. Passwords and host
- * keys never cross this boundary — only whether one is configured.
+ * A saved remote host, as the renderer is allowed to see it. The password never
+ * crosses this boundary — only whether one is configured.
  */
 export type RemoteConnectionInfo = {
   id: string;
@@ -77,9 +77,6 @@ export type RemoteConnectionInfo = {
   passwordConfigured: boolean;
   /** Where a run starts unless the chat picked another folder. */
   defaultDirectory: string;
-  /** SHA256 fingerprint of the trusted host key, empty until one is trusted. */
-  hostKeyFingerprint: string;
-  hostKeyType: string;
   runnerState: RemoteRunnerState;
   /** What the installed runner calls itself, for display only. */
   runnerVersion: string;
@@ -99,12 +96,6 @@ export type RemoteConnectionDraft = {
   /** Empty leaves a stored password untouched; a value replaces it. */
   password?: string;
   defaultDirectory?: string;
-};
-
-/** What a host offered before any credential was sent to it. */
-export type RemoteHostKeyOffer = {
-  fingerprint: string;
-  keyType: string;
 };
 
 export type RemoteConnectionCheck = {
@@ -599,8 +590,6 @@ export type DesktopApi = {
   listRemoteConnections(): Promise<RemoteConnectionInfo[]>;
   saveRemoteConnection(input: RemoteConnectionDraft): Promise<RemoteConnectionInfo>;
   deleteRemoteConnection(input: { connectionId: string }): Promise<{ ok: true }>;
-  offerRemoteHostKey(input: { connectionId: string }): Promise<RemoteHostKeyOffer>;
-  trustRemoteHostKey(input: { connectionId: string; fingerprint: string }): Promise<RemoteConnectionInfo>;
   checkRemoteConnection(input: { connectionId: string }): Promise<RemoteConnectionCheck>;
   installRemoteRunner(input: { connectionId: string }): Promise<RemoteConnectionCheck>;
   browseRemoteDirectory(input: { connectionId: string; path?: string }): Promise<RemoteDirectoryListing>;
@@ -837,8 +826,6 @@ export const desktopIpcChannels = {
   listRemoteConnections: "umbratic:list-remote-connections",
   saveRemoteConnection: "umbratic:save-remote-connection",
   deleteRemoteConnection: "umbratic:delete-remote-connection",
-  offerRemoteHostKey: "umbratic:offer-remote-host-key",
-  trustRemoteHostKey: "umbratic:trust-remote-host-key",
   checkRemoteConnection: "umbratic:check-remote-connection",
   installRemoteRunner: "umbratic:install-remote-runner",
   browseRemoteDirectory: "umbratic:browse-remote-directory",

@@ -1,4 +1,4 @@
-import { app, dialog } from "electron";
+import { dialog } from "electron";
 
 import { getMainWindow } from "./mainRuntime";
 import {
@@ -20,12 +20,10 @@ import {
   remotePlatformKey,
   remoteRunnerArtifact,
 } from "./remoteHost";
-import { scanRemoteHostKey, trustHostKey } from "./sshTransport";
 import type {
   RemoteConnectionCheck,
   RemoteConnectionInfo,
   RemoteDirectoryListing,
-  RemoteHostKeyOffer,
 } from "./types";
 import { isRecord, requiredString } from "./utils";
 
@@ -57,47 +55,9 @@ export function deleteRemoteConnection(input: unknown): { ok: true } {
   return { ok: true };
 }
 
-/**
- * Reads the host's key without offering any credential to it, so the user can
- * compare the fingerprint before this app ever tries to sign in.
- */
-export async function offerRemoteHostKey(input: unknown): Promise<RemoteHostKeyOffer> {
-  const connection = requireStoredRemoteConnection(connectionIdFrom(input));
-  const key = await scanRemoteHostKey(remoteTarget(connection));
-  return { fingerprint: key.fingerprint, keyType: key.keyType };
-}
-
-/**
- * Records the key the user approved.
- *
- * The fingerprint the user saw is sent back and re-checked against a fresh
- * scan. If the host answered with a different key in between, this refuses
- * rather than trusting something nobody looked at.
- */
-export async function trustRemoteHostKey(input: unknown): Promise<RemoteConnectionInfo> {
-  if (!isRecord(input)) throw new Error("Invalid host key approval.");
-  const connection = requireStoredRemoteConnection(connectionIdFrom(input));
-  const approved = requiredString(input.fingerprint, "fingerprint");
-  const key = await scanRemoteHostKey(remoteTarget(connection));
-  if (key.fingerprint !== approved) {
-    throw new Error("The remote host answered with a different key than the one shown. Nothing was trusted.");
-  }
-  trustHostKey(app.getPath("userData"), key.line);
-  return publicRemoteConnectionFor(
-    patchRemoteConnection(connection.id, { hostKeyFingerprint: key.fingerprint, hostKeyType: key.keyType }),
-  );
-}
-
 /** Signs in, records what the host is, and reports whether it can host a run. */
 export async function checkRemoteConnection(input: unknown): Promise<RemoteConnectionCheck> {
   const connection = requireStoredRemoteConnection(connectionIdFrom(input));
-  if (!connection.hostKeyFingerprint) {
-    return {
-      ok: false,
-      message: "Review and trust this host's key first.",
-      connection: publicRemoteConnectionFor(connection),
-    };
-  }
   const facts = await probeRemoteHostFacts(remoteTarget(connection), remoteSecret(connection));
   const platformKey = remotePlatformKey(facts.os, facts.arch);
   const artifact = platformKey ? remoteRunnerArtifact(platformKey) : null;
@@ -134,9 +94,6 @@ export async function checkRemoteConnection(input: unknown): Promise<RemoteConne
  */
 export async function installRunnerOnRemote(input: unknown): Promise<RemoteConnectionCheck> {
   const connection = requireStoredRemoteConnection(connectionIdFrom(input));
-  if (!connection.hostKeyFingerprint) {
-    throw new Error("Review and trust this host's key before installing anything on it.");
-  }
   const secret = remoteSecret(connection);
   const facts = await probeRemoteHostFacts(remoteTarget(connection), secret);
   const installed = await installRemoteRunner(remoteTarget(connection), facts, secret);
@@ -164,9 +121,6 @@ export async function installRunnerOnRemote(input: unknown): Promise<RemoteConne
 export async function browseRemoteDirectory(input: unknown): Promise<RemoteDirectoryListing> {
   if (!isRecord(input)) throw new Error("Invalid remote folder request.");
   const connection = requireStoredRemoteConnection(connectionIdFrom(input));
-  if (!connection.hostKeyFingerprint) {
-    throw new Error("Review and trust this host's key before browsing it.");
-  }
   // An empty path asks the remote host for the connecting user's home, which is
   // the only starting folder this side can name without having looked yet.
   const requested = typeof input.path === "string" && input.path.trim()

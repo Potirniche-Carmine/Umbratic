@@ -8,7 +8,7 @@ import type {
   ServerModelInfo,
 } from "../shared/desktopApi";
 import { CompanyServerActions } from "./CompanyServerActions";
-import { ModelCombobox, type ModelDiscoveryStatus } from "./ModelCombobox";
+import { Combobox } from "./Combobox";
 import { contextBadge } from "./ComposerControls";
 import {
   localModelCacheKey,
@@ -22,6 +22,20 @@ import {
   normalizeEndpointSettings,
   type ModelEndpointSettings,
 } from "./endpointSettings";
+
+/** How far a model list has got. The picker is often the only place a runtime's
+ * state is reported, so each state names what happened. */
+type ModelDiscoveryStatus = "idle" | "loading" | "ready" | "unavailable";
+
+function modelPlaceholder(
+  status: ModelDiscoveryStatus,
+  count: number,
+  texts: { loading: string; unavailable: string; empty: string },
+): string {
+  if (status === "loading") return texts.loading;
+  if (status === "unavailable") return texts.unavailable;
+  return count > 0 ? "Choose a model" : texts.empty;
+}
 
 // Applying a local model restarts the local Veil and loads the weights into
 // memory, so skimming through the picker waits for the selection to settle
@@ -676,18 +690,16 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
         <h4>{draft.mode === "local" ? "Local model" : "Company server"}</h4>
         {draft.mode === "local" ? (
           <>
-            <ModelCombobox
+            <Combobox
               label="Model"
               disabled={formDisabled}
               items={localModels.map((modelId) => ({ id: modelId, label: modelId }))}
               selectedId={draft.modelId}
-              status={localModelStatus}
-              placeholders={{
+              placeholder={modelPlaceholder(localModelStatus, localModels.length, {
                 loading: "Checking installed models…",
                 unavailable: "Ollama is not running",
                 empty: "No models installed",
-                choose: "Choose a model",
-              }}
+              })}
               onSelect={(modelId) => void controller.selectLocalModel(modelId)}
             />
             <details className="settingsAdvanced">
@@ -712,7 +724,7 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
             </div>
             {serverModels.length > 0 ? (
               <div className="connectionServerModelRow">
-                <ModelCombobox
+                <Combobox
                   label="Model"
                   disabled={formDisabled}
                   items={serverModels.map((model) => ({
@@ -722,13 +734,11 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
                     badge: contextBadge(model.contextLength),
                   }))}
                   selectedId={draft.modelId === "veil-managed" ? serverModels.find((model) => model.default)?.id ?? "" : draft.modelId}
-                  status={serverModelStatus}
-                  placeholders={{
+                  placeholder={modelPlaceholder(serverModelStatus, serverModels.length, {
                     loading: "Asking the server…",
                     unavailable: "Model list unavailable on this server",
                     empty: "Model list unavailable on this server",
-                    choose: "Choose a model",
-                  }}
+                  })}
                   onSelect={(modelId) => void controller.selectServerModel(modelId)}
                 />
                 <button

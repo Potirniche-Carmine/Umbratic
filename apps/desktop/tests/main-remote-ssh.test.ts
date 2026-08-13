@@ -83,7 +83,10 @@ test("every ssh invocation pins host-key checking to Umbratic's own known_hosts"
   const args = sshArguments(target, dataRoot, [], "true");
   const optionAt = (name: string) => args[args.indexOf(name) + 1];
   assert.equal(args[args.indexOf("-o") + 1], "ConnectTimeout=10");
-  assert.ok(args.includes("StrictHostKeyChecking=yes"), args.join(" "));
+  // `accept-new` pins on first contact and refuses a changed key afterwards.
+  // Anything weaker would accept a different host silently.
+  assert.ok(args.includes("StrictHostKeyChecking=accept-new"), args.join(" "));
+  assert.ok(!args.includes("StrictHostKeyChecking=no"), args.join(" "));
   assert.ok(
     args.includes(`UserKnownHostsFile=${path.join(dataRoot, "remote", "known_hosts")}`),
     args.join(" "),
@@ -149,27 +152,23 @@ test("a password never reaches a command line and is absent unless it is the met
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
-test("trusting a host key replaces the previous key for that host and port", () => {
-  const { trustHostKey, forgetHostKey, knownHostsPath } = loadTransport();
+test("forgetting a host's pinned key leaves every other host's alone", () => {
+  const { forgetHostKey, knownHostsPath } = loadTransport();
   const dataRoot = temporaryDataRoot();
-  const marker = "[build.example.com]:2222";
-  const trustedLines = () =>
+  // OpenSSH writes port-22 hosts bare and everything else bracketed, which is
+  // what `forgetHostKey` has to match against.
+  const pinned = [
+    "[build.example.com]:2222 ssh-ed25519 AAAAfirst",
+    "other.example.com ssh-ed25519 AAAAsecond",
+  ];
+  fs.writeFileSync(knownHostsPath(dataRoot), `${pinned.join("\n")}\n`, "utf8");
+  const pinnedLines = () =>
     fs.readFileSync(knownHostsPath(dataRoot), "utf8").split("\n").filter(Boolean);
 
-  trustHostKey(dataRoot, `${marker} ssh-ed25519 AAAAfirst`);
-  assert.deepEqual(trustedLines(), [`${marker} ssh-ed25519 AAAAfirst`]);
-
-  // A host that presents a new key must not end up with two trusted keys.
-  trustHostKey(dataRoot, `${marker} ssh-ed25519 AAAAsecond`);
-  assert.deepEqual(trustedLines(), [`${marker} ssh-ed25519 AAAAsecond`]);
-
-  // Port-22 hosts are written bare, the way OpenSSH writes them, and forgetting
-  // one host must not touch the other.
-  trustHostKey(dataRoot, "other.example.com ssh-ed25519 AAAAthird");
   forgetHostKey(dataRoot, "build.example.com", 2222);
-  assert.deepEqual(trustedLines(), ["other.example.com ssh-ed25519 AAAAthird"]);
+  assert.deepEqual(pinnedLines(), ["other.example.com ssh-ed25519 AAAAsecond"]);
   forgetHostKey(dataRoot, "other.example.com", 22);
-  assert.deepEqual(trustedLines(), []);
+  assert.deepEqual(pinnedLines(), []);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
@@ -178,7 +177,7 @@ test("ssh failures are reported as something the user can act on", () => {
   const message = (stderr: string, code: number | null = 255) =>
     remoteFailureMessage({ code, stdout: "", stderr });
   assert.match(message("carmine@host: Permission denied (publickey)."), /refused the credentials/);
-  assert.match(message("Host key verification failed."), /no longer matches/);
+  assert.match(message("Host key verification failed."), /different key/);
   assert.match(message("ssh: Could not resolve hostname nope"), /could not be resolved/);
   assert.match(message("ssh: connect to host x port 22: Connection refused"), /did not accept the connection/);
   // The banner OpenSSH writes on a first connection is not the failure.
@@ -257,8 +256,6 @@ test("the renderer is told whether a password exists, never what it is", () => {
     identityFilePath: "",
     password: { encoding: "electron-safe-storage-v1", encrypted: "c2VjcmV0" },
     defaultDirectory: "/srv/app",
-    hostKeyFingerprint: "SHA256:abc",
-    hostKeyType: "ED25519",
     runnerPath: "/home/carmine/.umbratic/bin/umbratic-runner",
     runnerSha256: "aaaa",
     runnerVersion: "UmbraticRunner rust-1",

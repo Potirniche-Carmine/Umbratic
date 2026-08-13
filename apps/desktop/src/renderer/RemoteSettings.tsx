@@ -8,7 +8,6 @@ import {
   Loader2,
   Plus,
   Server,
-  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
@@ -17,16 +16,16 @@ import type {
   RemoteAuthMethod,
   RemoteConnectionInfo,
 } from "../shared/desktopApi";
+import { Combobox } from "./Combobox";
 import { RemoteFolderBrowser } from "./RemoteFolderBrowser";
 
 /**
  * Sets up the machines Umbratic can run on.
  *
- * The page is ordered the way the work has to happen: describe the host, look
- * at its key and decide to trust it, install the runner, then choose where runs
- * start. Each step is only offered once the one before it is done, because
- * every one of them depends on the last — there is nothing to install on a host
- * whose identity has not been checked.
+ * The page is ordered the way the work has to happen: describe the host, install
+ * the runner, then choose where runs start. Saving the description is what
+ * unlocks the two steps after it, because there is nothing to install on a host
+ * nobody has named yet.
  */
 
 const blankDraft = {
@@ -34,15 +33,23 @@ const blankDraft = {
   name: "",
   host: "",
   port: 22,
-  username: "",
+  // Most hosts people reach for first — a box of their own, a container, a VM —
+  // sign in as root, and a wrong guess costs one word to fix.
+  username: "root",
   authMethod: "agent" as RemoteAuthMethod,
   identityFilePath: "",
   password: "",
 };
 
+const authMethodOptions: Array<{ id: RemoteAuthMethod; label: string }> = [
+  { id: "agent", label: "SSH agent" },
+  { id: "identity_file", label: "Private key file" },
+  { id: "password", label: "Password" },
+];
+
 type RemoteDraft = typeof blankDraft;
 
-type PendingAction = "" | "saving" | "checking" | "trusting" | "installing";
+type PendingAction = "" | "saving" | "checking" | "installing";
 
 function draftFrom(connection: RemoteConnectionInfo): RemoteDraft {
   return {
@@ -69,13 +76,13 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
   const [draft, setDraft] = useState<RemoteDraft>(blankDraft);
   const [pending, setPending] = useState<PendingAction>("");
   const [message, setMessage] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
-  const [hostKeyOffer, setHostKeyOffer] = useState<{ fingerprint: string; keyType: string } | null>(null);
   const [installPrompt, setInstallPrompt] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  // A blank draft looks exactly like "nothing chosen", so the form has to be
-  // told it was asked for rather than inferring it from the fields.
-  const [creating, setCreating] = useState(false);
+  // A blank draft looks exactly like "nothing chosen", and a saved host stays
+  // selected after its form closes, so the form has to be told when it is
+  // wanted rather than inferring it from either.
+  const [editing, setEditing] = useState(false);
 
   const selected = connections.find((connection) => connection.id === selectedId) ?? null;
 
@@ -97,9 +104,8 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
   function select(connection: RemoteConnectionInfo | null) {
     setSelectedId(connection?.id ?? "");
     setDraft(connection ? draftFrom(connection) : blankDraft);
-    setCreating(false);
+    setEditing(connection !== null);
     setMessage(null);
-    setHostKeyOffer(null);
     setInstallPrompt(false);
     setBrowsing(false);
   }
@@ -123,17 +129,25 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
     draft,
     pending,
     message,
-    hostKeyOffer,
     installPrompt,
     browsing,
-    creating,
+    editing,
     setDraft,
     setBrowsing,
     setInstallPrompt,
     select,
+    /**
+     * A saved host is a disclosure: the row opens the connection and the steps
+     * that follow it, and the same row closes them again. Re-selecting a host
+     * that is already open would otherwise be the one click in the list that
+     * does nothing visible.
+     */
+    toggle(connection: RemoteConnectionInfo) {
+      select(connection.id === selectedId ? null : connection);
+    },
     startNew() {
       select(null);
-      setCreating(true);
+      setEditing(true);
     },
     async save() {
       const saved = await run("saving", async () => {
@@ -152,10 +166,13 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
         return connection;
       });
       if (!saved) return;
+      // The form has done its job. It closes onto the saved host, which is now
+      // selected, so the steps that follow it are what the page shows next —
+      // and that is the confirmation. A banner saying so as well says nothing
+      // the page has not already shown.
       setSelectedId(saved.id);
       setDraft(draftFrom(saved));
-      setCreating(false);
-      setMessage({ tone: "ok", text: "Saved." });
+      setEditing(false);
     },
     async remove(connectionId: string) {
       await run("saving", async () => {
@@ -167,25 +184,6 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
     async chooseIdentityFile() {
       const chosen = await api.pickRemoteIdentityFile().catch(() => ({ path: "" }));
       if (chosen.path) setDraft((current) => ({ ...current, identityFilePath: chosen.path }));
-    },
-    async reviewHostKey() {
-      if (!selected) return;
-      const offer = await run("trusting", () => api.offerRemoteHostKey({ connectionId: selected.id }));
-      if (offer) setHostKeyOffer({ fingerprint: offer.fingerprint, keyType: offer.keyType });
-    },
-    async trustHostKey() {
-      if (!selected || !hostKeyOffer) return;
-      const trusted = await run("trusting", async () => {
-        const connection = await api.trustRemoteHostKey({
-          connectionId: selected.id,
-          fingerprint: hostKeyOffer.fingerprint,
-        });
-        await refresh();
-        return connection;
-      });
-      if (!trusted) return;
-      setHostKeyOffer(null);
-      setMessage({ tone: "ok", text: "Host key trusted." });
     },
     async check() {
       if (!selected) return;
@@ -222,7 +220,6 @@ export function useRemoteSettings({ api, active }: { api: DesktopApi; active: bo
 export type RemoteSettingsController = ReturnType<typeof useRemoteSettings>;
 
 function runnerStatusLabel(connection: RemoteConnectionInfo): string {
-  if (!connection.hostKeyFingerprint) return "Host key not reviewed";
   switch (connection.runnerState) {
     case "ready":
       return "Runner installed";
@@ -236,7 +233,6 @@ function runnerStatusLabel(connection: RemoteConnectionInfo): string {
 }
 
 function statusTone(connection: RemoteConnectionInfo): string {
-  if (!connection.hostKeyFingerprint) return "isWarn";
   return connection.runnerState === "ready" ? "isReady" : "isWarn";
 }
 
@@ -247,15 +243,13 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
     draft,
     pending,
     message,
-    hostKeyOffer,
     installPrompt,
     browsing,
-    creating,
+    editing,
     setDraft,
     setBrowsing,
     setInstallPrompt,
   } = controller;
-  const editing = creating || selected !== null;
 
   return (
     <div className="settingsPanel remoteSettings">
@@ -278,7 +272,8 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
                 key={connection.id}
                 type="button"
                 className={`remoteListRow ${connection.id === selected?.id ? "isActive" : ""}`}
-                onClick={() => controller.select(connection)}
+                aria-expanded={connection.id === selected?.id}
+                onClick={() => controller.toggle(connection)}
               >
                 <Server size={15} aria-hidden="true" />
                 <span className="remoteListName">
@@ -336,23 +331,18 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
             <span>User name</span>
             <input
               value={draft.username}
-              placeholder="carmine"
+              placeholder="root"
               autoCapitalize="off"
               spellCheck={false}
               onChange={(event) => setDraft({ ...draft, username: event.target.value })}
             />
           </label>
-          <label className="settingsField">
-            <span>Sign in with</span>
-            <select
-              value={draft.authMethod}
-              onChange={(event) => setDraft({ ...draft, authMethod: event.target.value as RemoteAuthMethod })}
-            >
-              <option value="agent">SSH agent</option>
-              <option value="identity_file">Private key file</option>
-              <option value="password">Password</option>
-            </select>
-          </label>
+          <Combobox
+            label="Sign in with"
+            items={authMethodOptions}
+            selectedId={draft.authMethod}
+            onSelect={(id) => setDraft({ ...draft, authMethod: id as RemoteAuthMethod })}
+          />
 
           {draft.authMethod === "identity_file" ? (
             <label className="settingsField">
@@ -382,10 +372,6 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
                 autoComplete="off"
                 onChange={(event) => setDraft({ ...draft, password: event.target.value })}
               />
-              <small className="remoteFieldNote">
-                Stored with your operating system&rsquo;s secure storage and handed to SSH only while it connects. A
-                key is safer where the host allows one.
-              </small>
             </label>
           ) : null}
 
@@ -410,57 +396,6 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
       ) : null}
 
       {selected ? (
-        <div className="settingsGroup">
-          <h4>Host key</h4>
-          {selected.hostKeyFingerprint ? (
-            <div className="remoteKeyRow">
-              <ShieldCheck className="remoteKeyIcon isReady" size={16} aria-hidden="true" />
-              <span>
-                <strong>Trusted {selected.hostKeyType}</strong>
-                <code>{selected.hostKeyFingerprint}</code>
-              </span>
-            </div>
-          ) : hostKeyOffer ? (
-            <div className="remoteKeyOffer">
-              <AlertTriangle className="remoteKeyIcon isWarn" size={16} aria-hidden="true" />
-              <div>
-                <strong>Confirm this is the right host</strong>
-                <p>Compare this fingerprint with the one the host reports before trusting it.</p>
-                <code>{hostKeyOffer.fingerprint}</code>
-                <p className="remoteKeyType">{hostKeyOffer.keyType} key</p>
-              </div>
-              <button
-                className="primaryAction"
-                type="button"
-                disabled={pending !== ""}
-                onClick={() => void controller.trustHostKey()}
-              >
-                Trust this host
-              </button>
-            </div>
-          ) : (
-            <>
-              <p className="remoteFieldNote">
-                Nothing has been sent to this host yet. Read its key first; credentials are only offered to a host
-                you have trusted.
-              </p>
-              <div className="settingsActionsRow">
-                <button
-                  className="secondaryAction"
-                  type="button"
-                  disabled={pending !== ""}
-                  onClick={() => void controller.reviewHostKey()}
-                >
-                  {pending === "trusting" ? <Loader2 className="spin" size={14} aria-hidden="true" /> : null}
-                  Read host key
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      ) : null}
-
-      {selected?.hostKeyFingerprint ? (
         <div className="settingsGroup">
           <h4>Runner</h4>
           <div className="settingsList">
@@ -529,7 +464,7 @@ export function RemoteSettingsPanel({ controller }: { controller: RemoteSettings
         </div>
       ) : null}
 
-      {selected?.hostKeyFingerprint ? (
+      {selected ? (
         <div className="settingsGroup">
           <h4>Default folder</h4>
           <div className="settingsList">

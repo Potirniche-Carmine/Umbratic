@@ -449,7 +449,15 @@ export function appendUserMessage(task: TaskRecord, text: string, attachedFiles:
     attachedFiles,
     at: new Date().toISOString(),
   };
-  task.events = appendTaskEvent(task.events ?? [], event, 500);
+  // Streaming events wait in `pendingTaskEvents` for a timer, so a queued
+  // follow-up starts its turn while the previous answer is still buffered.
+  // That buffer is drained here so the message lands after the answer it
+  // followed. Appending straight to `task.events` and leaving the drain to
+  // `saveTask` put this message *ahead* of that answer, and since a
+  // `user.message` is the only turn boundary the transcript has, the two
+  // answers then read as one — the second continuing the first mid-sentence.
+  const drained = taskWithAppendedEvents(task, takePendingTaskEvents(task.id));
+  task.events = appendTaskEvent(drained.events ?? [], event, 500);
   saveTask(task);
   dispatchRendererEvent(event);
 }

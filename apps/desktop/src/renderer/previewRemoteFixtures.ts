@@ -17,8 +17,6 @@ export function blankPreviewRemoteConnection(): RemoteConnectionInfo {
     identityFilePath: "",
     passwordConfigured: false,
     defaultDirectory: "",
-    hostKeyFingerprint: "",
-    hostKeyType: "",
     runnerState: "missing",
     runnerVersion: "",
     runnerPath: "",
@@ -41,8 +39,6 @@ let connections: RemoteConnectionInfo[] = [
     authMethod: "identity_file",
     identityFilePath: "/home/carmine/.ssh/id_ed25519",
     defaultDirectory: "/srv/umbratic",
-    hostKeyFingerprint: "SHA256:0pQ7yLp2Wm1nD8xTf4uKcRvZs6Ab9EgHjNoY3iX5tQc",
-    hostKeyType: "ED25519",
     runnerState: "ready",
     runnerVersion: "UmbraticRunner rust-1",
     runnerPath: "/home/carmine/.umbratic/bin/umbratic-runner",
@@ -110,8 +106,6 @@ export const previewRemoteApi: Pick<
   | "listRemoteConnections"
   | "saveRemoteConnection"
   | "deleteRemoteConnection"
-  | "offerRemoteHostKey"
-  | "trustRemoteHostKey"
   | "checkRemoteConnection"
   | "installRemoteRunner"
   | "browseRemoteDirectory"
@@ -145,16 +139,6 @@ export const previewRemoteApi: Pick<
     );
     return { ok: true } as const;
   },
-  offerRemoteHostKey: async () => ({
-    fingerprint: "SHA256:0pQ7yLp2Wm1nD8xTf4uKcRvZs6Ab9EgHjNoY3iX5tQc",
-    keyType: "ED25519",
-  }),
-  trustRemoteHostKey: async (input) =>
-    patchPreviewRemoteConnection(input.connectionId, {
-      hostKeyFingerprint: input.fingerprint,
-      hostKeyType: "ED25519",
-      platform: { os: "Linux", arch: "x86_64" },
-    }),
   checkRemoteConnection: async (input) => {
     const connection = previewRemoteConnections().find((row) => row.id === input.connectionId)!;
     return {

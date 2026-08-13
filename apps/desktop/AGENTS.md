@@ -22,7 +22,7 @@ A chat may run its tools on another machine over SSH. `sshTransport.ts` drives t
 
 The rules that make this safe are not optional:
 
-- A credential is never offered to a host whose key the user has not seen and approved. Host keys live in Umbratic's own `known_hosts`, and every working connection uses `StrictHostKeyChecking=yes` against it.
+- Host keys are pinned on first contact and verified from then on. They live in Umbratic's own `known_hosts`, every connection uses `StrictHostKeyChecking=accept-new` against it, and removing or repointing a connection is what forgets the pin. There is no in-app approval step and no way to weaken this to `no`.
 - Remote commands are built as argument lists and quoted for the remote shell. Never concatenate a path or a user value into a command line.
 - The runner still binds loopback on the host it runs on. An `ssh -L` forward reaches it and an `ssh -R` forward carries the local Veil back, so model traffic stays inside the SSH channel and no listener is exposed on either network.
 - The runner's configuration is one line on stdin and stdin stays open for the session. Closing it is how a remote runner learns the desktop is gone; a caller that closes stdin early gets an immediate shutdown, which is the contract, not a bug.

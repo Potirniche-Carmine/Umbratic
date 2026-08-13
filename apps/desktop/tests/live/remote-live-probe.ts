@@ -7,9 +7,9 @@
  *   UMBRATIC_LIVE_SSH_USER=<user> UMBRATIC_LIVE_SSH_KEY=<path> \
  *   UMBRATIC_LIVE_SSH_PORT=2222 node --test tests/live/remote-live-probe.ts
  *
- * Every assertion goes through the same TypeScript that ships: sshTransport
- * for the key scan and trust, remoteHost for facts, install, capabilities and
- * the folder listing. Nothing re-implements the wire behaviour it checks.
+ * Every assertion goes through the same TypeScript that ships: sshTransport for
+ * the connection itself, remoteHost for facts, install, capabilities and the
+ * folder listing. Nothing re-implements the wire behaviour it checks.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -48,11 +48,13 @@ const target = {
   identityFilePath: keyPath,
 };
 
-test("live: host key is read, shown, and trusted before any credential is offered", { skip: !enabled }, async () => {
-  const offer = await sshTransport.scanRemoteHostKey(target);
-  assert.match(offer.fingerprint, /^SHA256:/);
-  assert.equal(offer.keyType, "ED25519");
-  sshTransport.trustHostKey(dataRoot, offer.line);
+test("live: the first connection pins the host's key into Umbratic's known_hosts", { skip: !enabled }, async () => {
+  const knownHosts = sshTransport.knownHostsPath(dataRoot);
+  assert.equal(fs.readFileSync(knownHosts, "utf8").trim(), "", "this run starts with nothing pinned");
+  await sshTransport.runRemoteCommandOrThrow(target, dataRoot, ["true"]);
+  const marker = port === 22 ? "127.0.0.1" : `[127.0.0.1]:${port}`;
+  const pinned = fs.readFileSync(knownHosts, "utf8").split("\n").filter(Boolean);
+  assert.ok(pinned.some((line: string) => line.split(" ")[0] === marker), pinned.join("\n"));
 });
 
 test("live: host facts, runner install, capabilities, and folder listing", { skip: !enabled }, async () => {
@@ -77,16 +79,24 @@ test("live: host facts, runner install, capabilities, and folder listing", { ski
   assert.equal(listing.parentPath, facts.home);
 });
 
-test("live: a wrong key is refused before authentication", { skip: !enabled }, async () => {
-  // Trusting a garbage key for the host must make every later command fail
-  // with the host-key message, proving StrictHostKeyChecking is doing its job.
+test("live: a changed host key is refused once one is pinned", { skip: !enabled }, async () => {
+  // Replacing the pin with someone else's key must make every later command
+  // fail with the host-key message, proving `accept-new` still verifies after
+  // the first contact rather than accepting whatever answers.
+  //
+  // The stand-in has to be a real ed25519 key. OpenSSH silently skips a line it
+  // cannot parse, which reads as "host not known", and `accept-new` would then
+  // pin the true key and the check would prove nothing.
   const marker = port === 22 ? "127.0.0.1" : `[127.0.0.1]:${port}`;
-  sshTransport.trustHostKey(dataRoot, `${marker} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP///////////////////////////////////////w`);
+  fs.writeFileSync(
+    sshTransport.knownHostsPath(dataRoot),
+    `${marker} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICzE13G5LItecjKmqRel0XtbVJun5pFgYW9+rGiJyKdQ\n`,
+    "utf8",
+  );
   await assert.rejects(
     () => remoteHost.probeRemoteHostFacts(target),
-    /no longer matches|host key/i,
+    /different key|host key/i,
   );
-  // Restore the real key so later runs of this file start clean.
-  const offer = await sshTransport.scanRemoteHostKey(target);
-  sshTransport.trustHostKey(dataRoot, offer.line);
+  // Forgetting it lets the next run pin the real key again from clean.
+  sshTransport.forgetHostKey(dataRoot, "127.0.0.1", port);
 });

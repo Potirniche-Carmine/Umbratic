@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Loader2, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 
+import { Combobox } from "./Combobox";
+
 /**
  * Theme and typography. Extracted from the settings dialog unchanged: it reads
  * four values and calls two functions, so keeping its markup inside the app
@@ -68,26 +70,18 @@ export function AppearanceSettingsPanel({
 
       <div className="settingsGroup">
         <h4>Fonts</h4>
-        <label className="settingsField">
-          <span>Interface</span>
-          <select value={settings.uiFont} onChange={(event) => onChange({ uiFont: event.target.value })}>
-            {uiFontOptions.map((font) => (
-              <option key={font} value={font}>
-                {font}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="settingsField">
-          <span>Code</span>
-          <select value={settings.monoFont} onChange={(event) => onChange({ monoFont: event.target.value })}>
-            {monoFontOptions.map((font) => (
-              <option key={font} value={font}>
-                {font}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Combobox
+          label="Interface"
+          items={uiFontOptions.map((font) => ({ id: font, label: font }))}
+          selectedId={settings.uiFont}
+          onSelect={(uiFont) => onChange({ uiFont })}
+        />
+        <Combobox
+          label="Code"
+          items={monoFontOptions.map((font) => ({ id: font, label: font }))}
+          selectedId={settings.monoFont}
+          onSelect={(monoFont) => onChange({ monoFont })}
+        />
         <div className="settingsActions">
           <button
             className="settingsInlineButton"

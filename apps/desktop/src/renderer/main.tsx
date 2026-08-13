@@ -145,6 +145,7 @@ import {
   markdownPreview,
   matchHighlightSegments,
   parseMarkdown,
+  promptMentionsAttachment,
   rankSkillMatches,
   isEscapedMarkdownAt,
   stabilizeStreamingInlineText,
@@ -1096,18 +1097,23 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       continue;
     }
     if (event.type === "turn.outcome") {
+      // Every outcome that reaches here is terminal, so this is where one turn
+      // ends and the next begins. It has to close the answer: `assistant.done`
+      // is emitted once per *run*, and a queued follow-up answers inside the
+      // same run, so without this the second answer continued the first one's
+      // buffer and the two rendered as a single message.
+      //
       // A stopped turn ends where it was: whatever had streamed stays exactly
       // where the user saw it, and the Working block settles around the tools
       // that did run. Prose keeps its place as a message rather than being
       // folded into the block — nothing follows it now, so it was the last
       // thing the run said.
-      if (event.outcome === "aborted" && activityHasTools(activitySegments)) {
-        // Block first, then the prose: the work came before the sentence that
-        // was still arriving when the stop landed.
-        flushReasoning();
-        flushActivity();
-        flushAssistant();
-      }
+      //
+      // Block first, then the prose: the work came before the sentence that was
+      // still arriving when the turn ended.
+      flushReasoning();
+      flushActivity();
+      flushAssistant();
       continue;
     }
     if (event.type === "assistant.done") {
@@ -2130,6 +2136,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const isGenerating = task?.state === "running";
   const hasComposerMessage = prompt.trim().length > 0 || reviewPromptFeedback.length > 0;
   const activeQueuedPrompts = task ? queuedPrompts.filter((item) => item.taskId === task.id) : [];
+  // Only the files the prompt does not already name get a chip. An `@` mention
+  // is drawn in the text where it was typed, so a chip beside it would be the
+  // same reference twice; the paperclip count still covers both kinds.
+  const pickedAttachments = attachedFiles.filter(
+    (file) => !promptMentionsAttachment(prompt, normalizeAttachment(file)),
+  );
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
   const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
@@ -5536,8 +5548,24 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         ) : null}
 
         <section className="promptDock">
-          <div className={`floatingAttachmentTray ${attachedFiles.length || reviewPromptFeedback.length ? "hasAttachments" : ""}`}>
-            <AttachmentPreviewList files={attachedFiles} mode="composer" onRemove={removeAttachment} />
+          {/* Everything already committed but not yet answered, in one stack above
+              the controls: messages waiting their turn, and the review comments
+              riding along with the message being written. They were two trays in
+              two places, which read as two unrelated things when they are both
+              just "what is going out next". */}
+          <div className={`composerPendingTray ${activeQueuedPrompts.length || reviewPromptFeedback.length ? "hasPending" : ""}`}>
+            <QueuedPromptList
+              items={activeQueuedPrompts}
+              isGenerating={isGenerating}
+              steerPending={steerPending}
+              onEdit={editQueuedPrompt}
+              onSteer={(item) => void steerSubmission(item, item.id)}
+              onDelete={removeQueuedPrompt}
+              onPreviewFeedback={(feedback) => {
+                setReviewFeedbackPreview(feedback);
+                setReviewFeedbackDialogOpen(true);
+              }}
+            />
             {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
           </div>
           <div className="promptControls">
@@ -5794,19 +5822,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 </div>
               </div>
             ) : null}
-            <QueuedPromptList
-              items={activeQueuedPrompts}
-              isGenerating={isGenerating}
-              steerPending={steerPending}
-              onEdit={editQueuedPrompt}
-              onSteer={(item) => void steerSubmission(item, item.id)}
-              onDelete={removeQueuedPrompt}
-              onPreviewFeedback={(feedback) => {
-                setReviewFeedbackPreview(feedback);
-                setReviewFeedbackDialogOpen(true);
-              }}
-            />
             <div className="promptInputShell">
+              {/* Always in the flow, so the shell's three rows line up whether or
+                  not anything is attached; it collapses to nothing when empty. */}
+              <div className="promptAttachmentStrip">
+                <AttachmentPreviewList files={pickedAttachments} mode="composer" onRemove={removeAttachment} />
+              </div>
               <div className="promptEditor">
                 <div className="promptHighlight" aria-hidden="true">
                   <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>

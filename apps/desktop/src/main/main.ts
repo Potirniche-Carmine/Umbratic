@@ -15,11 +15,9 @@ import {
   deleteRemoteConnection,
   installRunnerOnRemote,
   listRemoteConnections,
-  offerRemoteHostKey,
   pickRemoteIdentityFile,
   saveRemoteConnection,
   setRemoteDefaultDirectory,
-  trustRemoteHostKey,
 } from "./remoteService";
 import { approveTaskMerge, approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, rejectTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
@@ -368,8 +366,6 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     listRemoteConnections: () => listRemoteConnections(),
     saveRemoteConnection: (input) => saveRemoteConnection(input),
     deleteRemoteConnection: (input) => deleteRemoteConnection(input),
-    offerRemoteHostKey: (input) => offerRemoteHostKey(input),
-    trustRemoteHostKey: (input) => trustRemoteHostKey(input),
     checkRemoteConnection: (input) => checkRemoteConnection(input),
     installRemoteRunner: (input) => installRunnerOnRemote(input),
     browseRemoteDirectory: (input) => browseRemoteDirectory(input),

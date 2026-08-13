@@ -16,11 +16,10 @@ import { RemoteFolderBrowser } from "./RemoteFolderBrowser";
  */
 
 export function remoteConnectionReady(connection: RemoteConnectionInfo): boolean {
-  return connection.hostKeyFingerprint !== "" && connection.runnerState === "ready";
+  return connection.runnerState === "ready";
 }
 
 function unreadyReason(connection: RemoteConnectionInfo): string {
-  if (!connection.hostKeyFingerprint) return "Trust this host in settings first";
   if (connection.runnerState === "missing") return "Install the runner in settings first";
   if (connection.runnerState === "outdated") return "Reinstall the runner in settings first";
   return "This host cannot run Umbratic yet";

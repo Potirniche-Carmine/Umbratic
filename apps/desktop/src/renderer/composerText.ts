@@ -52,6 +52,27 @@ export function attachmentMention(file: ComposerAttachmentReference): string {
   return file.kind === "folder" ? `@${label}/` : `@${label}`;
 }
 
+/**
+ * Whether the prompt already names this attachment where the user can see it.
+ *
+ * A file put there by `@` is written into the text and highlighted in place, so
+ * a chip for it would say the same thing twice; one picked with the paperclip
+ * appears nowhere else and needs the chip to exist at all. The boundary rules
+ * match the highlighter's, so a chip disappears exactly when the mention starts
+ * being drawn as one.
+ */
+export function promptMentionsAttachment(prompt: string, file: ComposerAttachmentReference): boolean {
+  const token = attachmentMention(file);
+  if (token.length <= 1) return false;
+  for (let index = prompt.indexOf(token); index >= 0; index = prompt.indexOf(token, index + 1)) {
+    const end = index + token.length;
+    const opensCleanly = index === 0 || /\s/.test(prompt[index - 1]);
+    const closesCleanly = end === prompt.length || /\s|[.,;:!?)]/.test(prompt[end]);
+    if (opensCleanly && closesCleanly) return true;
+  }
+  return false;
+}
+
 /// Marks where the query matched, so the picker can show *why* each row is in
 /// the list instead of leaving the user to guess.
 export function matchHighlightSegments(text: string, query: string): MatchHighlightSegment[] {

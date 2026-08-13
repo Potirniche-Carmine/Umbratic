@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const controls = readFileSync(new URL("../src/renderer/ComposerControls.tsx", import.meta.url), "utf8");
-const combobox = readFileSync(new URL("../src/renderer/ModelCombobox.tsx", import.meta.url), "utf8");
+const combobox = readFileSync(new URL("../src/renderer/Combobox.tsx", import.meta.url), "utf8");
 const main = readFileSync(new URL("../src/renderer/main.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/renderer/styles/model-controls.css", import.meta.url), "utf8");
 const stylesIndex = readFileSync(new URL("../src/renderer/styles.css", import.meta.url), "utf8");
@@ -56,8 +56,8 @@ test("the composer offers a choice only where one exists", () => {
   assert.match(controls, /if \(models\.length === 0\) return null;/);
 });
 
-test("both model lists are the same control", () => {
-  assert.match(combobox, /export function ModelCombobox/);
+test("every settings dropdown is the same control", () => {
+  assert.match(combobox, /export function Combobox/);
   assert.match(combobox, /role="combobox"/);
   assert.match(combobox, /role="listbox"/);
   assert.match(combobox, /role="option"/);
@@ -65,6 +65,13 @@ test("both model lists are the same control", () => {
   assert.match(combobox, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
   // A selection the list no longer offers is kept, not silently replaced.
   assert.match(combobox, /!items\.some\(\(item\) => item\.id === selectedId\)/);
+
+  // A native <select> draws in the operating system's colours, not the app's,
+  // so no settings page may fall back to one.
+  for (const file of ["ConnectionSettings.tsx", "RemoteSettings.tsx", "AppearanceSettings.tsx"]) {
+    const source = readFileSync(new URL(`../src/renderer/${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /<select\b/, `${file} should use Combobox rather than a native select`);
+  }
 });
 
 test("context windows are labelled the way the menu shows them", () => {

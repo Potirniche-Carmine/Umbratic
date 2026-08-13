@@ -52,9 +52,6 @@ export type RemoteRunnerReadiness =
  */
 export async function checkRemoteRunnerReady(connectionId: string): Promise<RemoteRunnerReadiness> {
   const connection = requireStoredRemoteConnection(connectionId);
-  if (!connection.hostKeyFingerprint) {
-    return { ok: false, message: `Trust the host key for ${connection.name} in settings before running there.` };
-  }
   const platformKey = remotePlatformKey(connection.platformOs, connection.platformArch);
   const artifact = platformKey ? remoteRunnerArtifact(platformKey) : null;
   if (!artifact) {
@@ -158,7 +155,7 @@ function startupFailure(output: string): string {
   const trimmed = output.trim();
   if (/permission denied/i.test(trimmed)) return "The remote host refused the credentials for this connection.";
   if (/host key verification failed/i.test(trimmed)) {
-    return "The remote host key changed. Re-trust the host in settings before running there.";
+    return "This host answered with a different key than the one Umbratic first saw. Remove the connection and add it again if that was expected.";
   }
   if (/exit 4|no such file or directory/i.test(trimmed)) {
     return "The remote folder for this chat no longer exists.";

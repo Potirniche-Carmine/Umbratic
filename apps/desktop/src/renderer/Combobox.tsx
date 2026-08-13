@@ -1,54 +1,50 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Check, ChevronDown } from "lucide-react";
 
-export type ModelDiscoveryStatus = "idle" | "loading" | "ready" | "unavailable";
-
-export type ModelComboboxItem = {
+export type ComboboxItem = {
   id: string;
   label: string;
   /**
-   * Whether the model is running right now. `undefined` where availability is
-   * not a concept — a local runtime either lists a model or does not.
+   * Whether the thing behind the option is running right now. `undefined` where
+   * availability is not a concept, which is most lists.
    */
   available?: boolean;
   /** Right-aligned context badge, e.g. "96k". */
   badge?: string;
 };
 
-type ModelComboboxProps = {
+type ComboboxProps = {
   label: string;
-  disabled: boolean;
-  items: ModelComboboxItem[];
+  disabled?: boolean;
+  items: ComboboxItem[];
   selectedId: string;
-  status: ModelDiscoveryStatus;
-  /** Placeholders by status. The picker is often the only place a runtime's
-   * state is reported, so each one says what happened. */
-  placeholders: { loading: string; unavailable: string; empty: string; choose: string };
+  /** Shown in place of a selection. Lists that can be empty say why here. */
+  placeholder?: string;
   onSelect(id: string): void;
 };
 
 /**
- * One combobox for every model list in the app.
+ * One dropdown for every choice in the settings pages.
  *
- * Two lists that behave differently are two chances to behave inconsistently:
- * the local runtime's models and the server's registry look the same to a user
- * and now are the same control, differing only in what they are handed.
+ * Two lists that behave differently are two chances to behave inconsistently,
+ * and a native `<select>` is a third: it draws in the operating system's colours
+ * rather than the app's. Everything that picks one value from a short list uses
+ * this, differing only in what it is handed.
  */
-export function ModelCombobox({
+export function Combobox({
   label,
-  disabled,
+  disabled = false,
   items,
   selectedId,
-  status,
-  placeholders,
+  placeholder = "",
   onSelect,
-}: ModelComboboxProps) {
+}: ComboboxProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const options = useMemo(() => {
     const seen = new Set<string>();
-    const rows: ModelComboboxItem[] = [];
+    const rows: ComboboxItem[] = [];
     // The current selection leads even when the list no longer offers it: a
     // stopped or uninstalled model must stay visible rather than silently
     // reading as a different one.
@@ -66,14 +62,6 @@ export function ModelCombobox({
   }, [items, selectedId]);
   const interactionDisabled = disabled || options.length === 0;
   const selectedLabel = options.find((item) => item.id === selectedId)?.label ?? selectedId;
-  const displayValue = selectedLabel
-    || (status === "loading"
-      ? placeholders.loading
-      : status === "unavailable"
-        ? placeholders.unavailable
-        : options.length > 0
-          ? placeholders.choose
-          : placeholders.empty);
   const optionId = label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
   useEffect(() => {
@@ -96,7 +84,7 @@ export function ModelCombobox({
     setOpen(true);
   }
 
-  function selectModel(id: string) {
+  function choose(id: string) {
     onSelect(id);
     setOpen(false);
   }
@@ -119,7 +107,7 @@ export function ModelCombobox({
     }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      if (open) selectModel(options[focusedIndex].id);
+      if (open) choose(options[focusedIndex].id);
       else openMenu();
     }
   }
@@ -141,7 +129,7 @@ export function ModelCombobox({
           onClick={() => open ? setOpen(false) : openMenu()}
           onKeyDown={handleKeyDown}
         >
-          <span className={!selectedLabel ? "isPlaceholder" : ""}>{displayValue}</span>
+          <span className={!selectedLabel ? "isPlaceholder" : ""}>{selectedLabel || placeholder}</span>
           <ChevronDown size={14} aria-hidden="true" />
         </button>
         {open ? (
@@ -158,7 +146,7 @@ export function ModelCombobox({
                 type="button"
                 role="option"
                 aria-selected={selectedId === item.id}
-                onClick={() => selectModel(item.id)}
+                onClick={() => choose(item.id)}
                 onPointerEnter={() => setFocusedIndex(index)}
               >
                 {item.available === undefined ? null : (

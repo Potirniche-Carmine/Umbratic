@@ -21,7 +21,7 @@ test("changing Auto-run does not wait for model status", () => {
 
 test("the top connection refresh owns local model discovery", () => {
   const connection = fs.readFileSync(new URL("../src/renderer/ConnectionSettings.tsx", import.meta.url), "utf8");
-  const picker = fs.readFileSync(new URL("../src/renderer/ModelCombobox.tsx", import.meta.url), "utf8");
+  const picker = fs.readFileSync(new URL("../src/renderer/Combobox.tsx", import.meta.url), "utf8");
   const start = connection.indexOf("async function refresh()");
   const end = connection.indexOf("\n  async function save()", start);
   const refresh = connection.slice(start, end);
@@ -53,7 +53,10 @@ test("the default composer uses the compact 76 pixel shell", () => {
   const start = source.indexOf(".promptInputShell");
   const end = source.indexOf("\n}", start);
   const shell = source.slice(start, end);
-  assert.match(shell, /grid-template-rows: minmax\(38px, auto\) 38px/);
+  // Attachments, editor, rail. The attachment track is `auto`, so with nothing
+  // picked it is zero-height and the default shell is still the compact one —
+  // the box grows upward only once there is a chip to hold.
+  assert.match(shell, /grid-template-rows: auto minmax\(38px, auto\) 38px/);
   assert.match(shell, /min-height: 76px/);
 });
 
