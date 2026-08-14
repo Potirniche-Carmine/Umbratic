@@ -1,10 +1,32 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
+
+/**
+ * A file that reports the catalog's declared size without occupying it.
+ *
+ * `modelDownloaded` only compares `stat.size` against the catalog, so the bytes
+ * are never read. Truncating alone would be enough on a filesystem that leaves
+ * the hole unallocated, but NTFS allocates every one of them unless the file is
+ * marked sparse first — several gigabytes per run, for weights nothing opens.
+ */
+function writeSizedPlaceholder(filePath: string, bytes: number) {
+  fs.writeFileSync(filePath, "");
+  if (process.platform === "win32") {
+    try {
+      execFileSync("fsutil", ["sparse", "setflag", filePath], { stdio: "ignore" });
+    } catch {
+      // Not every volume supports sparse files. The truncate still produces a
+      // correctly sized file; it just costs the disk what it says it does.
+    }
+  }
+  fs.truncateSync(filePath, bytes);
+}
 
 /** An in-memory stand-in for the settings blob custom models persist into. */
 function memoryStorage() {
@@ -138,7 +160,7 @@ test("removing a custom model forgets the entry", async () => {
   assert.equal(module.removeCustomModel("custom-example-tiny-gguf"), null);
 });
 
-test("the active quantization follows the choice only once it is on disk", () => {
+test("the active quantization follows the choice only once it is on disk", (t) => {
   const storage = memoryStorage();
   const localModels = loadTypeScriptModule(new URL("../src/main/localModels.ts", import.meta.url), {
     mocks: {
@@ -151,6 +173,12 @@ test("the active quantization follows the choice only once it is on disk", () =>
   const catalog = loadTypeScriptModule(new URL("../src/main/modelCatalog.ts", import.meta.url));
   const downloads = loadTypeScriptModule(new URL("../src/main/modelDownloads.ts", import.meta.url));
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-quants-"));
+  // `modelDownloaded` compares the file's size against the catalog's, so this
+  // test writes weights at their real declared size — several gigabytes of
+  // them. Registered before the first byte is written, and unconditional, so a
+  // failing assertion leaves nothing behind either: without it every run of
+  // the suite abandoned another few gigabytes in the system temp directory.
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
   const model = catalog.catalogModel("gemma4-e2b");
   const q4 = catalog.defaultQuant(model);
   const q6 = model.quants.find((quant: { quant: string }) => quant.quant === "Q6_K");
@@ -163,8 +191,7 @@ test("the active quantization follows the choice only once it is on disk", () =>
   // The default lands on disk at its exact size.
   fs.mkdirSync(downloads.modelDirectory(dataRoot, model), { recursive: true });
   const q4Path = downloads.modelFilePath(dataRoot, model, q4.files[0]);
-  fs.writeFileSync(q4Path, "");
-  fs.truncateSync(q4Path, q4.files[0].bytes);
+  writeSizedPlaceholder(q4Path, q4.files[0].bytes);
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q4_K_M");
   assert.equal(localModels.selectedLocalChatModel(dataRoot, model.id)?.id, model.id);
 
@@ -175,8 +202,7 @@ test("the active quantization follows the choice only once it is on disk", () =>
 
   // Once Q6_K is on disk the choice takes over, including the weights path.
   const q6Path = downloads.modelFilePath(dataRoot, model, q6.files[0]);
-  fs.writeFileSync(q6Path, "");
-  fs.truncateSync(q6Path, q6.files[0].bytes);
+  writeSizedPlaceholder(q6Path, q6.files[0].bytes);
   assert.equal(localModels.activeQuant(dataRoot, model).quant, "Q6_K");
   assert.equal(localModels.localModelWeightsPath(dataRoot, model), q6Path);
 
