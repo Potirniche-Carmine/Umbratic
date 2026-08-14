@@ -184,11 +184,15 @@ func TestLoadUsesConfiguredServerMode(t *testing.T) {
 	}
 }
 
-func TestLoadLocalModeUsesFixedGenerationProfile(t *testing.T) {
+func TestLoadLocalModeTakesSamplingOverrides(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("VEIL_MODE", "local")
-	t.Setenv("VEIL_TEMPERATURE", "1.5")
-	t.Setenv("VEIL_TOP_P", "0.1")
+	t.Setenv("VEIL_TEMPERATURE", "1.0")
+	t.Setenv("VEIL_TOP_P", "0.95")
+	t.Setenv("VEIL_TOP_K", "20")
+	t.Setenv("VEIL_MIN_P", "0")
+	t.Setenv("VEIL_PRESENCE_PENALTY", "1.5")
+	t.Setenv("VEIL_REPETITION_PENALTY", "1")
 	t.Setenv("VEIL_REASONING_EFFORT", "high")
 
 	cfg, err := Load()
@@ -198,8 +202,35 @@ func TestLoadLocalModeUsesFixedGenerationProfile(t *testing.T) {
 	if cfg.Mode != "local" {
 		t.Fatalf("unexpected mode %q", cfg.Mode)
 	}
+	if cfg.Generation.Temperature != 1.0 || cfg.Generation.TopP != 0.95 || cfg.Generation.TopK != 20 {
+		t.Fatalf("local sampling overrides were dropped: %#v", cfg.Generation)
+	}
+	if cfg.Generation.PresencePenalty != 1.5 || cfg.Generation.RepetitionPenalty != 1 {
+		t.Fatalf("local penalty overrides were dropped: %#v", cfg.Generation)
+	}
+	if cfg.Generation.ReasoningEffort != "high" {
+		t.Fatalf("local reasoning effort was dropped: %#v", cfg.Generation)
+	}
+	// The admission side of the profile is not the launcher's to set: one
+	// desktop serving one person does not need it tuned from outside.
+	if cfg.Generation.MaxConcurrentRequests != 4 || cfg.Generation.MaxConcurrentRequestsUser != 2 {
+		t.Fatalf("local admission profile should stay fixed: %#v", cfg.Generation)
+	}
+}
+
+func TestLoadLocalModeDefaultsWithoutOverrides(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("VEIL_MODE", "local")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Generation.Temperature != 0.2 || cfg.Generation.TopP != 0.95 || cfg.Generation.ReasoningEffort != "none" {
-		t.Fatalf("local mode should ignore server profile env: %#v", cfg.Generation)
+		t.Fatalf("unexpected local defaults: %#v", cfg.Generation)
+	}
+	if cfg.Generation.TopK != 0 || cfg.Generation.MinP != 0 || cfg.Generation.PresencePenalty != 0 || cfg.Generation.RepetitionPenalty != 0 {
+		t.Fatalf("unset samplers should stay unset: %#v", cfg.Generation)
 	}
 }
 

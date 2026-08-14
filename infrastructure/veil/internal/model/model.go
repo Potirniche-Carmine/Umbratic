@@ -29,8 +29,14 @@ type ChatRequest struct {
 	ToolChoice          any
 	ParallelTools       bool
 	MaxOutputTokens     int
-	Temperature         float64
-	TopP                float64
+	Temperature float64
+	TopP        float64
+	// The truncation and penalty samplers. Each is omitted from the request
+	// when zero, which is also each one's no-op value.
+	TopK                int
+	MinP                float64
+	PresencePenalty     float64
+	RepetitionPenalty   float64
 	ReasoningEffort     ReasoningEffort
 	ThinkingTokenBudget *int
 	// Thinking forces the model to reason, or not to, for this request. nil
@@ -402,7 +408,22 @@ func (c *Client) doOpenAIChat(ctx context.Context, req ChatRequest) (*http.Respo
 	if req.MaxOutputTokens > 0 {
 		body["max_tokens"] = req.MaxOutputTokens
 	}
-	if req.ReasoningEffort != "" && req.ReasoningEffort != ReasoningNone {
+	if req.TopK > 0 {
+		body["top_k"] = req.TopK
+	}
+	if req.MinP > 0 {
+		body["min_p"] = req.MinP
+	}
+	if req.PresencePenalty != 0 {
+		body["presence_penalty"] = req.PresencePenalty
+	}
+	if req.RepetitionPenalty > 0 {
+		body["repetition_penalty"] = req.RepetitionPenalty
+	}
+	// "on" is thinking without a degree, so there is no degree to send: a
+	// template that reads only enable_thinking would ignore it, and one that
+	// grades effort would be handed a level nobody chose.
+	if req.ReasoningEffort != "" && req.ReasoningEffort != ReasoningNone && req.ReasoningEffort != ReasoningOff && req.ReasoningEffort != ReasoningOn {
 		body["reasoning_effort"] = string(req.ReasoningEffort)
 	}
 	if req.ThinkingTokenBudget != nil {
@@ -410,9 +431,25 @@ func (c *Client) doOpenAIChat(ctx context.Context, req ChatRequest) (*http.Respo
 	}
 	// Only chat templates that read enable_thinking act on it. Sending it
 	// unasked would be a silent no-op on every other model, so it travels only
-	// with an explicit directive.
+	// with an explicit directive — either a per-request one, or a configured
+	// effort, which is itself a statement about whether to think.
+	templateKwargs := map[string]any{}
 	if req.Thinking != nil {
-		body["chat_template_kwargs"] = map[string]any{"enable_thinking": *req.Thinking}
+		templateKwargs["enable_thinking"] = *req.Thinking
+	} else if c.mode == ModeLocal && req.ReasoningEffort == ReasoningOff {
+		templateKwargs["enable_thinking"] = false
+	} else if c.mode == ModeLocal && req.ReasoningEffort == ReasoningOn {
+		templateKwargs["enable_thinking"] = true
+	} else if c.mode == ModeLocal && req.ReasoningEffort != "" && req.ReasoningEffort != ReasoningNone {
+		// llama.cpp forwards these kwargs into the template verbatim, which is
+		// where Qwen's template reads the effort from. Local only: a server
+		// fleet's template kwargs are its operator's to set, and overriding
+		// them per request would quietly undo that configuration.
+		templateKwargs["enable_thinking"] = true
+		templateKwargs["reasoning_effort"] = string(req.ReasoningEffort)
+	}
+	if len(templateKwargs) > 0 {
+		body["chat_template_kwargs"] = templateKwargs
 	}
 	if req.Tools != nil {
 		body["tools"] = strictTools(req.Tools)

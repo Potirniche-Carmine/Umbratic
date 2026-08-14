@@ -180,7 +180,10 @@ func Load() (Config, error) {
 
 	var generation model.GenerationProfile
 	if mode == model.ModeLocal {
-		generation = model.LocalGenerationProfile(maxOutputTokens)
+		generation, err = loadLocalGenerationProfile(maxOutputTokens)
+		if err != nil {
+			return Config{}, err
+		}
 	} else {
 		generation, err = loadServerGenerationProfile(maxOutputTokens)
 		if err != nil {
@@ -389,6 +392,53 @@ func (c Config) ModelIDs() []string {
 		ids = append(ids, entry.ID)
 	}
 	return ids
+}
+
+// loadLocalGenerationProfile takes the fixed local profile and lets the desktop
+// override the sampling on top of it.
+//
+// Only the sampling: the concurrency and queue numbers describe one desktop
+// serving one person and are not the launcher's business. Every override
+// defaults to the fixed profile's own value, so a desktop that sets none of
+// them gets exactly what local mode has always done.
+func loadLocalGenerationProfile(maxOutputTokens int) (model.GenerationProfile, error) {
+	profile := model.LocalGenerationProfile(maxOutputTokens)
+	temperature, err := envFloat("VEIL_TEMPERATURE", profile.Temperature)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	topP, err := envFloat("VEIL_TOP_P", profile.TopP)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	topK, err := envInt("VEIL_TOP_K", profile.TopK)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	minP, err := envFloat("VEIL_MIN_P", profile.MinP)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	presencePenalty, err := envFloat("VEIL_PRESENCE_PENALTY", profile.PresencePenalty)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	repetitionPenalty, err := envFloat("VEIL_REPETITION_PENALTY", profile.RepetitionPenalty)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	reasoningEffort, err := model.ParseReasoningEffort(os.Getenv("VEIL_REASONING_EFFORT"))
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	profile.Temperature = temperature
+	profile.TopP = topP
+	profile.TopK = topK
+	profile.MinP = minP
+	profile.PresencePenalty = presencePenalty
+	profile.RepetitionPenalty = repetitionPenalty
+	profile.ReasoningEffort = reasoningEffort
+	return profile, nil
 }
 
 func loadServerGenerationProfile(maxOutputTokens int) (model.GenerationProfile, error) {

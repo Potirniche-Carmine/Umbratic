@@ -5,6 +5,8 @@ import * as http from "node:http";
 import * as path from "node:path";
 
 import { isLocalhostUrl } from "./policy";
+import type { SamplingProfile } from "./modelCatalog";
+import type { ReasoningEffort } from "../shared/desktopApi";
 import type { ActiveModelEndpointSettings } from "./types";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 
@@ -31,6 +33,18 @@ export type LocalRuntimeConnection = {
    * fact, and Veil drops a thinking directive for a model that lacks it.
    */
   reasoning: boolean;
+  /**
+   * How hard to ask this model to think, or null to say nothing about it.
+   * Null is the honest value for a model whose chat template does not read an
+   * effort: forcing one on would be answering a question nobody asked.
+   */
+  reasoningEffort?: ReasoningEffort | null;
+  /**
+   * The sampling the model card recommends, or null to leave Veil on its own
+   * local defaults. It comes from the catalog for the same reason `reasoning`
+   * does: llama-server does not publish what its weights were tuned for.
+   */
+  sampling?: SamplingProfile | null;
   /**
    * The dictation sidecar, when a dictation model is selected and downloaded.
    * Its presence is what makes local Veil advertise `speech.transcribe`, so it
@@ -92,6 +106,10 @@ function localVeilKey(
     runtimeBaseUrl: runtime.baseUrl,
     runtimeApiKey: runtime.apiKey,
     reasoning: runtime.reasoning,
+    // Both join the key: Veil reads them from its environment once at startup,
+    // so a changed effort or a changed sampling set has to bring it back up.
+    reasoningEffort: runtime.reasoningEffort ?? null,
+    sampling: runtime.sampling ?? null,
     speech: runtime.speech ?? null,
   });
 }
@@ -240,6 +258,19 @@ export function localVeilEnvironment(input: {
   const contextLength = input.contextLength ?? DEFAULT_CONTEXT_LENGTH;
   // All three or none: Veil refuses a half-configured speech runtime rather
   // than advertising dictation that would fail on first press.
+  // The model card's own numbers, when the catalog recorded any. Absent leaves
+  // Veil on its local defaults rather than on a set this model never asked for.
+  const sampling = runtime.sampling
+    ? {
+        VEIL_TEMPERATURE: String(runtime.sampling.temperature),
+        VEIL_TOP_P: String(runtime.sampling.topP),
+        VEIL_TOP_K: String(runtime.sampling.topK),
+        VEIL_MIN_P: String(runtime.sampling.minP),
+        VEIL_PRESENCE_PENALTY: String(runtime.sampling.presencePenalty),
+        VEIL_REPETITION_PENALTY: String(runtime.sampling.repetitionPenalty),
+      }
+    : {};
+  const reasoningEffort = runtime.reasoningEffort ? { VEIL_REASONING_EFFORT: runtime.reasoningEffort } : {};
   const speech = runtime.speech
     ? {
         VEIL_SPEECH_BASE_URL: runtime.speech.baseUrl,
@@ -278,6 +309,8 @@ export function localVeilEnvironment(input: {
     VEIL_TELEMETRY_ENABLED: "false",
     VEIL_TELEMETRY_RETENTION_DAYS: "30",
     VEIL_TELEMETRY_STORE_PATH: "",
+    ...sampling,
+    ...reasoningEffort,
     ...speech,
   };
 }

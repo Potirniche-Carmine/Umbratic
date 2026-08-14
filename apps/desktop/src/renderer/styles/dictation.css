@@ -75,8 +75,11 @@
 }
 
 .dictationControl.isRecording .dictationDeviceTrigger {
-  border-left-color: color-mix(in srgb, var(--red) 38%, transparent);
   color: color-mix(in srgb, var(--red) 62%, var(--muted));
+}
+
+.dictationControl.isRecording .dictationDeviceTrigger::before {
+  background: color-mix(in srgb, var(--red) 38%, transparent);
 }
 
 @keyframes dictationPulse {
@@ -89,92 +92,21 @@
   }
 }
 
-/*
- * The live transcript is shown beside the microphone rather than written into
- * the prompt: a partial is replaced whole on every update, and rewriting the
- * input under the cursor would eat an edit the user was in the middle of. Only
- * the final transcript is inserted.
- *
- * It sits in the action rail as a sibling of the button, not as a popover above
- * it, because the composer shell clips its overflow — a floated panel would be
- * cut off at the shell's edge rather than sitting over the conversation.
- */
-.dictationCaption {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-right: auto;
-  padding-left: 2px;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.35;
-  text-align: left;
-  /* One line that truncates: the caption tracks speech and would otherwise
-     reflow the rail on nearly every update. */
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-/* The offer shown when the microphone is pressed before dictation is set up.
-   It sits in the rail like the live caption so the composer does not resize. */
-.dictationEnable {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-}
-
-/* The sentence gives way before the two actions do: losing a word off the end
-   of an explanation is recoverable, losing the button that acts on it is not. */
-.dictationEnable > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dictationEnableAction,
-.dictationEnableDismiss {
-  flex: 0 0 auto;
-  padding: 2px 9px;
-  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-.dictationEnableAction {
-  border-color: color-mix(in srgb, var(--accent) 46%, transparent);
-}
-
-.dictationEnableDismiss {
-  color: var(--muted);
-}
-
-.dictationEnableAction:hover,
-.dictationEnableDismiss:hover {
-  background: color-mix(in srgb, var(--surface-3) 62%, transparent);
-}
-
 /* Not set up yet: present, pressable, and visibly quieter than a live control. */
-.dictationControl.isOff .dictationButton {
+.dictationControl.isOff .dictationButton,
+.dictationControl.isOff .dictationDeviceTrigger {
   color: var(--faint);
 }
 
-.dictationControl.isOff .dictationButton:hover {
+.dictationControl.isOff .dictationButton:hover,
+.dictationControl.isOff .dictationDeviceTrigger:hover:not(:disabled) {
   color: var(--text);
 }
 
-.dictationCaption.isError {
-  color: var(--red);
-  white-space: normal;
-}
-
-/* Which microphone: the right half of the capsule, divided from the left by a
-   hairline rather than by a gap. */
+/* Which microphone: a satellite of the mic, not an equal half. A short seam
+   divides them rather than a wall — a full-height rule would split the capsule
+   into two buttons, which is the wrong thing to say about a menu that belongs
+   to the button beside it. */
 .dictationDevices {
   position: relative;
   flex: 0 0 auto;
@@ -183,23 +115,41 @@
 }
 
 .dictationDeviceTrigger {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 21px;
+  width: 18px;
   height: 30px;
-  padding: 0;
+  padding: 0 2px 0 0;
   border: 0;
-  border-left: 1px solid var(--line);
   border-radius: 0 999px 999px 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--faint);
   cursor: pointer;
-  transition: color 120ms ease, background 120ms ease, border-color 160ms ease;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.dictationDeviceTrigger::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--line);
+  pointer-events: none;
+  transition: opacity 120ms ease, background 160ms ease;
 }
 
 .dictationDeviceTrigger:hover:not(:disabled) {
   color: var(--text);
   background: var(--control-hover-soft);
+}
+
+.dictationDeviceTrigger:hover:not(:disabled)::before,
+.dictationDevices.isOpen .dictationDeviceTrigger::before,
+.dictationButton:hover:not(:disabled) ~ .dictationDevices .dictationDeviceTrigger::before {
+  opacity: 0.4;
 }
 
 .dictationDeviceTrigger:active:not(:disabled) {
@@ -227,6 +177,7 @@
 }
 
 .dictationDeviceTrigger svg {
+  display: block;
   transition: transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
 }
 
@@ -356,5 +307,125 @@
 @media (prefers-reduced-motion: reduce) {
   .dictationBar {
     transition: none;
+  }
+}
+
+/*
+ * The offer raised by pressing a microphone that is not set up.
+ *
+ * It covers the prompt text and blurs it back, so the question is the only
+ * thing worth reading while it is up. It stops short of the rail: the
+ * microphone that raised it, and the send button, stay live underneath.
+ *
+ * Absolutely positioned, so it costs the layout nothing — neither the box nor
+ * the conversation above it moves to make room.
+ */
+.dictationSetupOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* The rail's own height, so the strip below stays clear. */
+  bottom: 44px;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 0 10px;
+  border-radius: var(--prompt-radius) var(--prompt-radius) 0 0;
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  -webkit-backdrop-filter: blur(7px) saturate(120%);
+  backdrop-filter: blur(7px) saturate(120%);
+  animation: dictationOfferIn 160ms ease both;
+}
+
+.dictationSetupCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 3px 4px 3px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface-3);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--shadow-color) 78%, transparent);
+  font-size: 12px;
+}
+
+.dictationSetupIcon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.dictationSetupText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 560;
+}
+
+/* The app's own action button, sized for a pill. It is the thing to press, so
+   it looks like the thing to press rather than like a word that happens to be
+   clickable. */
+.dictationSetupAction.primaryAction {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 140ms ease, transform 100ms ease-out;
+}
+
+.dictationSetupAction.primaryAction:hover {
+  filter: brightness(1.08);
+}
+
+.dictationSetupAction.primaryAction:active {
+  transform: scale(0.97);
+}
+
+.dictationSetupDismiss {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.dictationSetupDismiss:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+@keyframes dictationOfferIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictationSetupOverlay {
+    animation: none;
+  }
+
+  .dictationSetupAction.primaryAction:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .dictationSetupOverlay {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }

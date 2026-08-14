@@ -72,9 +72,6 @@ const (
 func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 	registry, err := templates.LoadFile(cfg.TemplateRegistryPath)
 	profile := cfg.Generation
-	if cfg.Mode == model.ModeLocal {
-		profile = model.LocalGenerationProfile(cfg.MaxOutputTokens)
-	}
 	server := &Server{
 		cfg: cfg, model: modelClient, templateData: registry, templateErr: err,
 		identityRate: &identityRateLimiter{entries: map[string]rateEntry{}},

@@ -18,8 +18,10 @@
 }
 
 /* What is going out next, stacked above the controls: queued messages first,
-   then the review comments attached to the message still being written — the
-   one nearest the box is the one the box is holding. */
+   then the review comments attached to the message still being written, then
+   anything the composer has to say — the one nearest the box is the one the
+   box is holding. Absolutely positioned, so none of it contributes height:
+   the prompt box stays put and the conversation above it does not reflow. */
 .composerPendingTray {
   position: absolute;
   left: 50%;
@@ -500,14 +502,17 @@ button.attachmentPreview:focus-visible {
   /* Attachments, editor, rail. The first track is empty and zero-height until
      something is picked, which is what lets the box grow upward rather than
      reserving room for chips that are usually not there. */
-  grid-template-rows: auto minmax(34px, auto) 34px;
+  grid-template-rows: auto minmax(38px, auto) 44px;
   width: 100%;
   max-width: 100%;
-  min-height: 66px;
+  min-height: 82px;
   min-width: 0;
-  overflow: hidden;
+  /* Visible, not hidden: the rail's pills open their menus upward and a
+     clipping shell would cut every one of them off at its own edge. The rail
+     carries the bottom corners itself so nothing bleeds past the radius. */
+  overflow: visible;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
+  border-radius: var(--prompt-radius);
   background: var(--surface);
   box-shadow: none;
   backdrop-filter: none;
@@ -520,7 +525,7 @@ button.attachmentPreview:focus-visible {
 .promptEditor {
   position: relative;
   min-width: 0;
-  min-height: 34px;
+  min-height: 38px;
   overflow: hidden;
 }
 
@@ -533,9 +538,9 @@ button.attachmentPreview:focus-visible {
   position: absolute;
   inset: 0;
   z-index: 0;
-  min-height: 34px;
+  min-height: 38px;
   max-height: 160px;
-  padding: 8px 14px 3px;
+  padding: 9px 14px 11px;
   border: 0;
   border-radius: var(--radius);
   overflow: hidden;
@@ -546,6 +551,16 @@ button.attachmentPreview:focus-visible {
   overflow-wrap: anywhere;
   word-break: break-word;
   pointer-events: none;
+}
+
+/*
+ * The live transcript, drawn in the highlight layer under the textarea. Muted
+ * and italic so it reads as provisional — it is not in the prompt yet, and
+ * only the final text ever is.
+ */
+.promptDictationGhost {
+  color: var(--faint);
+  font-style: italic;
 }
 
 .promptMentionToken {
@@ -565,12 +580,12 @@ button.attachmentPreview:focus-visible {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  min-height: 34px;
+  min-height: 38px;
   max-height: 160px;
   field-sizing: content;
   resize: none;
   scrollbar-gutter: stable;
-  padding: 8px 14px 3px;
+  padding: 9px 14px 11px;
   border: 0;
   border-radius: var(--radius);
   outline: 0;
@@ -585,18 +600,119 @@ button.attachmentPreview:focus-visible {
   box-sizing: border-box;
 }
 
+/*
+ * The rail under the prompt carries two different questions, one at each end:
+ * how this turn gets written and what it is allowed to do, against what will
+ * answer it. Grouping them apart is the whole layout — a single flex run with
+ * everything pushed right made "auto-run" look like a property of the model.
+ */
 .promptActionRail {
   position: relative;
   z-index: 2;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
-  min-height: 34px;
-  padding: 0 7px 3px;
-  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--surface) 92%, transparent) 42%);
+  /* Taller than the two icon buttons it used to hold: the rail now carries
+     28px pills, and 34px left them overhanging their own row. */
+  min-height: 44px;
+  padding: 0 9px;
+  /*
+   * A material the controls sit on, not a second box stacked under the first.
+   *
+   * A flat fill plus a divider drew a hard rectangle, which is what made the
+   * composer read as two blocks. This is the translucent-chrome treatment
+   * instead: the tint fades in from nothing rather than starting at a line,
+   * the hairline is a light-catching edge rather than a rule, and the blur
+   * gives the strip the thickness that separates it from the text above.
+   */
+  border-top: 1px solid var(--material-edge);
+  border-radius: 0 0 var(--prompt-radius) var(--prompt-radius);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-2) 34%, transparent),
+    color-mix(in srgb, var(--surface-2) 82%, transparent) 62%
+  );
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  backdrop-filter: blur(16px) saturate(170%);
   box-sizing: border-box;
+}
+
+/*
+ * Vibrancy: text over a translucent surface needs more contrast and a touch
+ * more weight than text on a solid one, or it goes muddy as the material
+ * picks up what is behind it.
+ */
+.promptActionRail .permissionLabel,
+.promptActionRail .worktreeToggle,
+.promptActionRail .modelTrigger > span,
+.promptRailModelName {
+  letter-spacing: 0.006em;
+  font-weight: 560;
+}
+
+/*
+ * Press feedback belongs on the press, not the release. Every control in the
+ * strip acknowledges the pointer on the way down.
+ */
+.promptActionRail button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 100ms ease-out;
+}
+
+/* Frostier and solid when translucency is unwelcome, and a defined edge when
+   contrast is. Neither is a reason to lose the separation itself. */
+@media (prefers-reduced-transparency: reduce) {
+  .promptActionRail {
+    background: var(--surface-2);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .promptActionRail {
+    border-top-color: var(--line-strong);
+    background: var(--surface-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .promptActionRail button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+.promptRailGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The right half is the one that has to give: the model name is the longest
+   thing in the rail and the only one that can be truncated without losing
+   what it says. */
+.promptRailRight {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.promptRailLeft {
+  flex: 0 0 auto;
+}
+
+/* With one model there is no picker, but there is still an answer to "what am
+   I talking to". Plain text, because nothing happens when it is pressed. */
+.promptRailModelName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
 }
 
 .composer textarea:focus {

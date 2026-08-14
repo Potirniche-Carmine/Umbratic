@@ -159,9 +159,13 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_TRUSTED_PROXY_CIDRS` | No | Empty | Comma-separated addresses or CIDRs whose `X-Forwarded-For` is believed when keying identity rate limits. Leave empty unless the proxy overwrites that header; otherwise a client picks its own bucket. Console sets loopback for the supervised deployment. |
 | `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for local Ollama mode. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. Unused in server mode. |
 | `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Clients may request less, never more. |
-| `VEIL_TEMPERATURE` | Server | `0.2` | Sampling temperature from `0.0` to `2.0`. Ignored in local mode, which uses a fixed profile. |
-| `VEIL_TOP_P` | Server | `0.95` | Nucleus sampling from greater than `0.0` to `1.0`. Ignored in local mode. |
-| `VEIL_REASONING_EFFORT` | Server | `none` | `none`, `low`, `medium`, or `high`. Sent on every vLLM chat request when not `none`. |
+| `VEIL_TEMPERATURE` | No | `0.2` | Sampling temperature from `0.0` to `2.0`. |
+| `VEIL_TOP_P` | No | `0.95` | Nucleus sampling from greater than `0.0` to `1.0`. |
+| `VEIL_TOP_K` | Local | Unset | Top-k truncation. Omitted from the request when unset, which is the runtime's own default. |
+| `VEIL_MIN_P` | Local | Unset | Min-p truncation from `0.0` to `1.0`. Omitted when unset or zero. |
+| `VEIL_PRESENCE_PENALTY` | Local | Unset | Presence penalty from `-2.0` to `2.0`. Omitted when unset or zero. |
+| `VEIL_REPETITION_PENALTY` | Local | Unset | Repetition penalty from `0.0` to `2.0`. Omitted when unset or zero. |
+| `VEIL_REASONING_EFFORT` | No | `none` | `none`, `off`, `on`, `low`, `medium`, or `high`. `none` says nothing about thinking; `off` turns it off; `on` turns it on without a degree, for templates that read only `enable_thinking`. Sent as `reasoning_effort` on every chat request when it is a level, and in local mode also as `chat_template_kwargs`, which is where llama.cpp's Jinja templates read it from. |
 | `VEIL_THINKING_TOKEN_BUDGET` | Server | Unset | Optional non-negative thinking token budget no greater than `VEIL_MAX_OUTPUT_TOKENS`. |
 | `VEIL_MODEL_PARALLEL_TOOL_CALLS` | Server | `true` | Whether Veil sets `parallel_tool_calls` on vLLM requests that include tools. |
 | `VEIL_MAX_CONCURRENT_REQUESTS` | Server / Local profile | `32` / `4` | Global admission semaphore for model work. |

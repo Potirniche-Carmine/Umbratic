@@ -10,7 +10,36 @@
  * `customModels.ts` and are pinned the same way, at the moment they are added.
  */
 
+import type { ReasoningEffort } from "../shared/desktopApi";
+
 export type CatalogModelKind = "chat" | "dictation";
+
+/**
+ * One sampling set, as a model card recommends it.
+ *
+ * These are the model's own numbers, not Umbratic's taste. They are recorded
+ * per model for the same reason the digests are: reading them off the card once
+ * and pinning them here is what keeps every machine sampling the same way.
+ */
+export type SamplingProfile = {
+  temperature: number;
+  topP: number;
+  topK: number;
+  minP: number;
+  presencePenalty: number;
+  repetitionPenalty: number;
+};
+
+/**
+ * A model whose card recommends different sampling depending on whether it is
+ * thinking. Qwen's instruct numbers are markedly less permissive than its
+ * thinking ones, so serving one set for both would make it worse at whichever
+ * mode it was not tuned for.
+ */
+export type SamplingProfiles = {
+  thinking: SamplingProfile;
+  instruct: SamplingProfile;
+};
 
 export type CatalogFile = {
   /** File name inside the repository, and on disk under the model's directory. */
@@ -52,11 +81,48 @@ export type CatalogModel = {
    */
   reasoning: boolean;
   /**
+   * The effort levels this model's chat template actually reads, in the order
+   * the menu should show them. Absent means the model takes no direction on how
+   * hard to think — narrower than `reasoning`, because a model can think
+   * without accepting a level, and offering a choice the template ignores is
+   * worse than offering none.
+   *
+   * A list rather than a boolean: templates disagree about which levels exist,
+   * and the menu should offer what this model has rather than a fixed four.
+   */
+  reasoningEfforts?: readonly ReasoningEffort[];
+  /**
+   * The sampling the model card recommends, when it recommends any. Absent
+   * leaves the runtime's own defaults alone.
+   */
+  sampling?: SamplingProfiles;
+  /**
    * Models with the safety training removed. Offered deliberately, never
    * suggested: a recommendation is what someone gets without choosing, and
    * this is a choice worth making on purpose.
    */
   uncensored?: boolean;
+};
+
+/**
+ * Gemma 4's recommended sampling. One set for every use case — its card gives
+ * the same numbers whether or not the model is thinking, so both slots below
+ * point at this rather than repeating it and inviting them to drift apart.
+ */
+const gemmaSampling: SamplingProfile = {
+  temperature: 1.0,
+  topP: 0.95,
+  topK: 64,
+  minP: 0.0,
+  presencePenalty: 0.0,
+  repetitionPenalty: 1.0,
+};
+
+/** Gemma 4 reads `enable_thinking` and nothing finer, so the choice is binary. */
+const gemmaReasoning = {
+  reasoning: true,
+  reasoningEfforts: ["off", "on"] as const,
+  sampling: { thinking: gemmaSampling, instruct: gemmaSampling },
 };
 
 export const modelCatalog: readonly CatalogModel[] = [
@@ -109,7 +175,7 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 8,
-    reasoning: false,
+    ...gemmaReasoning,
   },
   {
     id: "gemma4-e4b",
@@ -160,7 +226,7 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 12,
-    reasoning: false,
+    ...gemmaReasoning,
   },
   {
     id: "gemma4-12b",
@@ -211,58 +277,71 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 16,
-    reasoning: false,
+    ...gemmaReasoning,
   },
   {
-    id: "qwen36-27b",
+    id: "qwen38-27b",
     kind: "chat",
-    displayName: "Qwen3.6 27B",
-    hfRepo: "unsloth/Qwen3.6-27B-GGUF",
-    hfRevision: "82d411acf4a06cfb8d9b073a5211bf410bfc29bf",
+    displayName: "Qwen3.8 27B",
+    hfRepo: "unsloth/Qwen3.8-27B-GGUF",
+    hfRevision: "fe1e2a23d973adb629709749dc4f6756df66ef10",
     quants: [
       {
         quant: "Q4_K_M",
         files: [{
-          name: "Qwen3.6-27B-Q4_K_M.gguf",
-          bytes: 16_817_244_384,
-          sha256: "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
+          name: "Qwen3.8-27B-Q4_K_M.gguf",
+          bytes: 17_106_775_008,
+          sha256: "7e78da5d7e3ae28d178121f58646953305f3e5bd3cb46f4a75584e8b6c6fe169",
         }],
       },
       {
         quant: "Q3_K_M",
         files: [{
-          name: "Qwen3.6-27B-Q3_K_M.gguf",
-          bytes: 13_586_217_184,
-          sha256: "bdfa99d488b501f5ca711f35c930f005319a064eabcaae23290571a25c499eeb",
+          name: "Qwen3.8-27B-Q3_K_M.gguf",
+          bytes: 13_818_690_528,
+          sha256: "7f3b845b563888ec3abc269474cf744bf703a7ce8766dbb7f696c63975facfd7",
         }],
       },
       {
         quant: "Q5_K_M",
         files: [{
-          name: "Qwen3.6-27B-Q5_K_M.gguf",
-          bytes: 19_509_790_944,
-          sha256: "cfecab168156269f25d5ffe9e13cf2a401ca2f43a9693fa00bcd1625316ccbde",
+          name: "Qwen3.8-27B-Q5_K_M.gguf",
+          bytes: 19_834_055_648,
+          sha256: "07deb7fa91bf751d3000774fe5bb8afae5ffb41255fd19980147468052e07177",
         }],
       },
       {
         quant: "Q6_K",
         files: [{
-          name: "Qwen3.6-27B-Q6_K.gguf",
-          bytes: 22_523_238_624,
-          sha256: "ec1805fe87e6519c461c1ed2d179865464a875ed241032ead65a354f979cfe14",
+          name: "Qwen3.8-27B-Q6_K.gguf",
+          bytes: 22_884_408_288,
+          sha256: "562fbf760503008f118e5df38de5b3e97992d1f693f475815631198547486727",
         }],
       },
       {
         quant: "Q8_0",
         files: [{
-          name: "Qwen3.6-27B-Q8_0.gguf",
-          bytes: 28_595_763_424,
-          sha256: "f93f517f38e696d35a1a7df2c0e3155a64f4c4dcd662107a146ae263f7fb14ce",
+          name: "Qwen3.8-27B-Q8_0.gguf",
+          bytes: 29_047_086_048,
+          sha256: "a680f44a06920e5d689774823782006aa3acc8db95750323373b24139b67e348",
         }],
       },
     ],
     minRamGB: 32,
     reasoning: true,
+    // Its chat template reads `reasoning_effort` and refuses anything but low,
+    // medium and xhigh — "high" is remapped to xhigh by the template itself,
+    // which is why these map onto it without a translation table. There is no
+    // separate "extra high" here because the template treats it as high, and
+    // two rows that do the same thing is a menu that lies.
+    reasoningEfforts: ["off", "low", "medium", "high"],
+    // Qwen's own recommended settings. The instruct set is the one that changes
+    // materially: a presence penalty of 1.5 is what keeps the non-thinking mode
+    // from looping, and it would flatten the thinking mode if applied to both.
+    sampling: {
+      thinking: { temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 0.0, repetitionPenalty: 1.0 },
+      instruct: { temperature: 0.7, topP: 0.80, topK: 20, minP: 0.0, presencePenalty: 1.5, repetitionPenalty: 1.0 },
+    },
   },
   {
     id: "gemma4-e4b-uncensored",
@@ -315,7 +394,7 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 12,
-    reasoning: false,
+    ...gemmaReasoning,
     uncensored: true,
   },
   {
@@ -371,6 +450,7 @@ export const modelCatalog: readonly CatalogModel[] = [
     ],
     minRamGB: 32,
     reasoning: true,
+    reasoningEfforts: ["off", "on"],
     uncensored: true,
   },
   // Dictation weights stay at Q8_0, and it is the only quantization offered.
@@ -434,6 +514,39 @@ export function catalogModel(id: string): CatalogModel | null {
 
 export function catalogModels(kind: CatalogModelKind): CatalogModel[] {
   return modelCatalog.filter((entry) => entry.kind === kind);
+}
+
+/**
+ * The sampling to serve a model at, given how hard it is being asked to think.
+ *
+ * Effort decides which of the card's two sets applies, because "off" is exactly
+ * the non-thinking mode the instruct numbers were published for. A model that
+ * recommends nothing returns null and is left on the runtime's defaults.
+ */
+export function samplingFor(model: CatalogModel, effort: ReasoningEffort): SamplingProfile | null {
+  if (!model.sampling) return null;
+  return effort === "off" ? model.sampling.instruct : model.sampling.thinking;
+}
+
+/**
+ * The effort a model actually runs at, or null to say nothing about it.
+ *
+ * Null rather than "off" for a model whose template does not read an effort:
+ * "off" forces thinking off, and turning a dial nobody was offered into a
+ * thinking switch is the one outcome a user could not have intended.
+ *
+ * A stored level this model does not offer falls back to one it does, keeping
+ * whether the user wanted thinking at all. Only the degree fails to survive a
+ * model that grades it differently: someone on "medium" who switches to a
+ * model that only knows on and off means on, and taking the first offered
+ * level instead would quietly turn their thinking off.
+ */
+export function effectiveEffort(model: CatalogModel, effort: ReasoningEffort): ReasoningEffort | null {
+  const offered = model.reasoningEfforts;
+  if (!offered || offered.length === 0) return null;
+  if (offered.includes(effort)) return effort;
+  const wantsThinking = effort !== "off";
+  return offered.find((level) => (level !== "off") === wantsThinking) ?? offered[0];
 }
 
 /** The quantization a model comes as when nobody chooses one. */

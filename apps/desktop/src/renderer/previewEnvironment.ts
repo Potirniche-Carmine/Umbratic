@@ -29,6 +29,8 @@ import type {
   UnsavedChatDraft,
   UserNotes,
 } from "../shared/desktopApi";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
+import type { ReasoningEffort } from "../shared/desktopApi";
 
 export type PreviewEnvironment = {
   api: DesktopApi;
@@ -52,6 +54,7 @@ import {
   publicPreviewEndpointSettings,
   readPreviewChats,
   readPreviewContextLength,
+  readPreviewReasoningEffort,
   readPreviewEndpointSettings,
   readPreviewHarnessProfile,
   readPreviewNotes,
@@ -59,6 +62,7 @@ import {
   setPreviewPermissionMode,
   writePreviewChats,
   writePreviewContextLength,
+  writePreviewReasoningEffort,
   writePreviewEndpointSettings,
   writePreviewHarnessProfile,
   writePreviewNotes,
@@ -574,6 +578,25 @@ const composerTestTask: TaskInfo = {
   events: composerTestEvents,
 };
 
+/**
+ * The model the preview says is answering: the catalog's reasoning model, so
+ * the composer's effort dial is on screen here as it is in the app.
+ */
+const previewChatModel = {
+  providerId: "company-endpoint" as const,
+  providerName: "Local Veil",
+  modelId: "qwen38-27b",
+  displayName: "Qwen3.8 27B",
+  baseUrl: "http://127.0.0.1:8080",
+  contextLength: 262_144,
+  capabilities: {
+    parallelToolCalls: true,
+    vision: false,
+    reasoning: true,
+    reasoningEfforts: ["off", "low", "medium", "high"] as ReasoningEffort[],
+  },
+};
+
 function createPreviewApi(): DesktopApi {
   let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   let previewCompanySessionConnected = false;
@@ -778,8 +801,11 @@ function createPreviewApi(): DesktopApi {
   getBackendStatus: async () => ({
     runner: "unavailable",
     endpoint: previewCompanySessionConnected ? "ready" : "unavailable",
-    model: null,
-    models: [],
+    // A model is named so the composer's bottom rail is exercisable here: with
+    // none selected the rail has nothing to say about what answers, which is
+    // the one state that hides the controls being designed.
+    model: previewChatModel,
+    models: [previewChatModel],
     providers: [],
     permissionMode: getPreviewPermissionMode(),
     // `?dictation` advertises the speech feature so the composer's microphone
@@ -840,6 +866,7 @@ function createPreviewApi(): DesktopApi {
     companyConnection: previewCompanyConnection,
     harnessProfile: readPreviewHarnessProfile(),
     contextLength: readPreviewContextLength(),
+    reasoningEffort: readPreviewReasoningEffort(),
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
   ...previewRemoteApi,
@@ -849,6 +876,12 @@ function createPreviewApi(): DesktopApi {
     writePreviewHarnessProfile(settings);
     previewSkills = previewSkills.map((skill) => ({ ...skill, enabled: harnessSystemSkillIds[settings].has(skill.id) }));
     return { settings, status: await previewApi.getBackendStatus() };
+  },
+  getReasoningEffort: async () => readPreviewReasoningEffort(),
+  saveReasoningEffort: async (input) => {
+    const reasoningEffort = isReasoningEffort(input) ? input : DEFAULT_REASONING_EFFORT;
+    writePreviewReasoningEffort(reasoningEffort);
+    return { reasoningEffort, status: await previewApi.getBackendStatus() };
   },
   getContextLength: async () => readPreviewContextLength(),
   saveContextLength: async (input) => {

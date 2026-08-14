@@ -107,11 +107,41 @@ test("the dictation list only chooses a model — loading is not a decision ther
 test("pressing the microphone while dictation is off says so, and offers the way in", () => {
   // The one moment someone is definitely interested in dictation. Naming Voice
   // settings means a first-time user who declines still knows where to go.
-  assert.match(composerControls, /Dictation is off\. Choose a model in Voice settings\?/);
-  assert.match(composerControls, /Open settings/);
-  assert.match(composerControls, /className="dictationEnableDismiss"/);
   const renderer = read("../src/renderer/main.tsx");
-  assert.match(renderer, /onEnable=\{\(\) => \{ setSettingsOpen\(true\); setSettingsTab\("voice"\); \}\}/);
+  assert.match(renderer, /Dictation is off/);
+  assert.match(renderer, /Voice settings/);
+  // A small thing floating over the prompt text, not a caption in the rail, a
+  // row above the box, or a dialog over the screen: it costs no height, so
+  // neither the composer nor the conversation moves to make room for it.
+  assert.match(renderer, /className="dictationSetupOverlay"/);
+  // The way in is a real button, not a word that happens to be clickable.
+  assert.match(renderer, /className="primaryAction dictationSetupAction"/);
+  const offerRule = dictationStyles.match(/\.dictationSetupOverlay \{[^}]+\}/s)?.[0] ?? "";
+  assert.match(offerRule, /position:\s*absolute/);
+  assert.match(offerRule, /z-index:\s*\d+/);
+  // Blurs the prompt text back, and stops at the rail so the microphone that
+  // raised it stays live underneath.
+  assert.match(offerRule, /backdrop-filter:\s*blur\(/);
+  assert.match(offerRule, /bottom:\s*44px/);
+  assert.doesNotMatch(composerControls, /dictationCaption/);
+  assert.doesNotMatch(composerControls, /modalScrim/);
+  // The control asks; the composer answers. Keeping the offer out of the rail
+  // is what stops it resizing the row it lives in.
+  assert.match(composerControls, /onRequestSetup\(\)/);
+  assert.match(renderer, /onRequestSetup=\{\(\) => setDictationSetupOffer\(true\)\}/);
+  assert.match(renderer, /setSettingsTab\("voice"\)/);
+});
+
+test("the live transcript is muted text in the prompt box, never in the rail", () => {
+  const renderer = read("../src/renderer/main.tsx");
+  // Drawn in the highlight layer under the textarea, so the value — and the
+  // caret in it — is left alone until the final text arrives.
+  assert.match(renderer, /className="promptDictationGhost"/);
+  assert.match(renderer, /dictation\.status\.preview \? \(/);
+  // And the placeholder stands down rather than printing under it.
+  assert.match(renderer, /dictation\.status\.preview\s+\?\s+""/);
+  // A failure is a notice above the box, not a caption that resizes the rail.
+  assert.match(renderer, /className="connectionNotice dictationNotice"/);
 });
 
 test("local dictation needs its own model and nothing else", () => {
@@ -249,7 +279,8 @@ test("the microphone and its device chevron are one control", () => {
   const styles = read("../src/renderer/styles/dictation.css");
   // Two separate pills read as two unrelated buttons that happen to be
   // adjacent, which is the wrong thing to say about a menu belonging to the
-  // button beside it. The outline is on the pair; a hairline divides the halves.
+  // button beside it. The outline is on the pair; a short seam divides the
+  // halves instead of a full-height rule, so the pair still reads as one object.
   // Anchored to line starts: ".dictationControl.isRecording .dictationButton {"
   // also contains ".dictationButton {" and would match first.
   const rule = (selector: string) => {
@@ -264,11 +295,16 @@ test("the microphone and its device chevron are one control", () => {
   assert.match(mic, /border-radius: 999px 0 0 999px/);
   const chevron = rule(".dictationDeviceTrigger");
   assert.match(chevron, /border: 0/);
-  assert.match(chevron, /border-left: 1px solid var\(--line\)/);
+  assert.doesNotMatch(chevron, /border-left:/);
   assert.match(chevron, /border-radius: 0 999px 999px 0/);
+  const seam = rule(".dictationDeviceTrigger::before");
+  assert.match(seam, /width: 1px/);
+  assert.match(seam, /top: 10px/);
+  assert.match(seam, /bottom: 10px/);
   // Recording lights the whole capsule, since the whole capsule is the control.
   assert.match(styles, /\.dictationControl\.isRecording \{[\s\S]{0,160}border-color: var\(--red\)/);
   assert.match(styles, /\.dictationControl\.isRecording \.dictationDeviceTrigger \{/);
+  assert.match(styles, /\.dictationControl\.isRecording \.dictationDeviceTrigger::before \{/);
 });
 
 test("the device menu escapes the shell that would clip it", () => {

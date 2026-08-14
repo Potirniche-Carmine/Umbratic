@@ -106,6 +106,10 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			MaxOutputTokens:     maxOutputTokens,
 			Temperature:         profile.Temperature,
 			TopP:                profile.TopP,
+			TopK:                profile.TopK,
+			MinP:                profile.MinP,
+			PresencePenalty:     profile.PresencePenalty,
+			RepetitionPenalty:   profile.RepetitionPenalty,
 			ReasoningEffort:     profile.ReasoningEffort,
 			ThinkingTokenBudget: profile.ThinkingTokenBudget,
 			Thinking:            thinking,
@@ -264,9 +268,9 @@ func (s *Server) contextLengthFor(modelID string) int {
 	return s.cfg.ContextLength
 }
 
+// activeGenerationProfile is the loaded one in both modes. Local mode used to
+// rebuild the fixed profile here, which silently discarded the sampling the
+// desktop configures per model.
 func (s *Server) activeGenerationProfile() model.GenerationProfile {
-	if s.cfg.Mode == model.ModeLocal {
-		return model.LocalGenerationProfile(s.cfg.MaxOutputTokens)
-	}
 	return s.cfg.Generation
 }

@@ -1,9 +1,9 @@
 /*
  * The composer's model picker.
  *
- * It sits in `.promptControls` and borrows the 28px pill grammar the workspace,
- * permission, and branch controls already use — a new control that invented its
- * own shape would read as belonging to a different app.
+ * It sits in the prompt box's bottom rail and borrows the 28px pill grammar the
+ * workspace, permission, and branch controls already use — a new control that
+ * invented its own shape would read as belonging to a different app.
  */
 
 .modelControl {
@@ -78,7 +78,9 @@
  */
 .modelMenu {
   position: absolute;
-  left: 0;
+  /* Right-anchored: the picker now lives at the right end of the prompt box's
+     rail, and a left-anchored menu would open off the edge of the pane. */
+  right: 0;
   bottom: calc(100% + 7px);
   z-index: 120;
   display: grid;
@@ -89,13 +91,13 @@
   border-radius: var(--radius);
   background: var(--modal-bg);
   box-shadow: 0 18px 42px var(--shadow-color);
-  transform-origin: bottom left;
+  transform-origin: bottom right;
   animation: menuRise 180ms ease both;
 }
 
 .modelMenu button {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   min-height: 30px;
@@ -107,6 +109,64 @@
   transition:
     background 150ms ease,
     color 150ms ease;
+}
+
+/*
+ * Rows with nothing in the leading column, which is most of them now: the
+ * status dot only exists for server models. Without this the label would be
+ * indented by an empty track on every local row.
+ */
+.modelMenu .modelMenuRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.modelMenu .modelMenuRow:has(.modelStatusDot),
+.modelMenu .modelMenuBack {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+/*
+ * Section labels. Quiet and small — they name what the rows beneath them
+ * change, and a heading that competes with its own rows is noise.
+ */
+.modelMenuHeading {
+  margin: 0;
+  padding: 7px 8px 3px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* The first heading sits flush with the menu's own padding. */
+.modelMenuHeading:first-child {
+  padding-top: 3px;
+}
+
+/* The chevron says there is another page behind this row, so it points the
+   way the page will come from. */
+.modelMenu .modelMenuStep svg,
+.modelMenu .modelMenuBack svg {
+  color: var(--faint);
+}
+
+.modelMenu .modelMenuBack {
+  color: var(--faint);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.modelMenu .modelMenuBack:hover {
+  color: var(--text);
+}
+
+.modelMenu button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.modelMenu button:disabled:hover {
+  background: transparent;
 }
 
 .modelMenu button:hover,
@@ -124,13 +184,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.modelContextBadge {
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
 }
 
 /*

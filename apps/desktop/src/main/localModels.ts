@@ -12,7 +12,9 @@ import {
   catalogModel,
   catalogQuantBytes,
   defaultQuant,
+  effectiveEffort,
   modelQuant,
+  samplingFor,
   type CatalogModel,
   type CatalogModelKind,
   type CatalogQuant,
@@ -23,7 +25,7 @@ import { readLocalQuantSelections } from "./settingsStorage";
 import { ensureLocalLlama } from "./localLlama";
 import { localSpeechEndpoint } from "./localSpeech";
 import { ensureLocalVeil, type LocalVeilConnection } from "./localVeil";
-import type { DictationSettings, LocalCatalogModel } from "../shared/desktopApi";
+import type { DictationSettings, LocalCatalogModel, ReasoningEffort } from "../shared/desktopApi";
 import type { ActiveModelEndpointSettings } from "./types";
 import type { LlamaDiagnosticSink } from "./llamaServer";
 import type { LocalVeilDiagnostic } from "./localVeil";
@@ -153,6 +155,8 @@ export async function ensureLocalChatRuntime(input: {
   settings: ActiveModelEndpointSettings;
   contextLength: number;
   dictation: DictationSettings;
+  /** How hard to ask a thinking model to think. Ignored by models that do not read one. */
+  reasoningEffort: ReasoningEffort;
   onLlamaDiagnostic?: LlamaDiagnosticSink;
   onVeilDiagnostic?: (diagnostic: LocalVeilDiagnostic) => void;
 }): Promise<LocalVeilConnection> {
@@ -173,9 +177,19 @@ export async function ensureLocalChatRuntime(input: {
   const speech = dictationModel
     ? { ...(await localSpeechEndpoint()), model: dictationModel.model.id }
     : undefined;
+  // Effort first, because it decides which of the card's two sampling sets
+  // applies: "off" is exactly the non-thinking mode the instruct numbers were
+  // published for.
+  const effort = effectiveEffort(model, input.reasoningEffort);
   return ensureLocalVeil(
     input.settings,
-    { ...runtime, reasoning: model.reasoning, speech },
+    {
+      ...runtime,
+      reasoning: model.reasoning,
+      reasoningEffort: effort,
+      sampling: samplingFor(model, effort ?? "off"),
+      speech,
+    },
     input.contextLength,
     input.onVeilDiagnostic,
   );

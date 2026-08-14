@@ -114,7 +114,7 @@ export function recommendedModelId(kind: CatalogModelKind, ram: number): string 
   // the one that will actually feel good, even though the larger model remains
   // one click away for anyone who wants it.
   if (ram < 64) return "gemma4-12b";
-  return "qwen36-27b";
+  return "qwen38-27b";
 }
 
 export type CatalogModelAvailability = {

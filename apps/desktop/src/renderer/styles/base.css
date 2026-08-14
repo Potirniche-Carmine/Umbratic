@@ -14,6 +14,12 @@
   --faint: #6f7782;
   --line: rgba(225, 230, 238, 0.1);
   --line-strong: rgba(225, 230, 238, 0.17);
+  /* The bright edge where light catches a translucent surface. Softer than a
+     divider on purpose: it says "a material starts here", not "a box ends". */
+  --material-edge: rgba(255, 255, 255, 0.055);
+  /* The prompt box reads as one soft object rather than a stack of rectangles,
+     so it carries a larger radius than the app's general 8px. */
+  --prompt-radius: 15px;
   --control-bg: #191f26;
   --control-hover-soft: #1d242c;
   --control-hover: #242b34;
@@ -79,6 +85,7 @@
   --faint: #788394;
   --line: rgba(18, 24, 32, 0.11);
   --line-strong: rgba(18, 24, 32, 0.18);
+  --material-edge: rgba(18, 24, 32, 0.055);
   --control-bg: #eef2f6;
   --control-hover-soft: #e7ecf2;
   --control-hover: #dfe6ee;

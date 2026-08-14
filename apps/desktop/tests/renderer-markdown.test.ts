@@ -184,8 +184,15 @@ test("feedback dialog and prompt controls do not allow horizontal growth", () =>
   assert.match(feedbackTextRule, /width:\s*100%/);
   assert.doesNotMatch(sendRule, /position:\s*absolute/);
   assert.match(sendRule, /width:\s*30px/);
-  assert.match(actionRailRule, /justify-content:\s*flex-end/);
-  assert.match(actionRailRule, /min-height:\s*34px/);
+  // The rail holds two groups now — how the turn is written on the left, what
+  // answers it on the right — so it spreads rather than pushing everything right.
+  assert.match(actionRailRule, /justify-content:\s*space-between/);
+  assert.match(actionRailRule, /min-height:\s*44px/);
+  // Translucent chrome, not a second box: a light-catching edge rather than a
+  // divider, a tint that fades in rather than a flat fill, and real blur.
+  assert.match(actionRailRule, /border-top:\s*1px solid var\(--material-edge\)/);
+  assert.match(actionRailRule, /background:\s*linear-gradient\(/);
+  assert.match(actionRailRule, /backdrop-filter:\s*blur\(16px\) saturate\(170%\)/);
   assert.match(textareaRule, /max-width:\s*100%/);
   assert.match(textareaRule, /overflow-x:\s*hidden/);
   assert.match(textareaRule, /overflow-wrap:\s*anywhere/);

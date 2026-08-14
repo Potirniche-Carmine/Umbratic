@@ -15,9 +15,11 @@ import type {
   FileSearchResult,
   HarnessProfileId,
   IdeInfo,
+  LocalCatalogModel,
   LocalModelInfo,
   PastedAttachmentInput,
   PermissionMode,
+  ReasoningEffort,
   RepositoryInfo,
   ServerModelInfo,
   SkillDocument,
@@ -27,6 +29,7 @@ import type {
   UserNotes,
   WorkspaceMode,
 } from "../shared/desktopApi";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   attachmentDetail,
@@ -80,8 +83,7 @@ import {
   ComposerModelPicker,
   DictationControl,
   PermissionModePicker,
-  WorkspaceModePicker,
-  contextBadge,
+  WorktreeToggle,
   type ComposerModelOption,
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
@@ -113,6 +115,8 @@ import {
   Loader2,
   MessageSquareX,
   MessageSquareText,
+  Mic,
+  MicOff,
   Monitor,
   Moon,
   PanelRight,
@@ -244,6 +248,7 @@ const defaultStartupSettings: DesktopStartupSettings = {
   companyConnection: { state: "not_enrolled" },
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
+  reasoningEffort: DEFAULT_REASONING_EFFORT,
 };
 const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
   {
@@ -1949,12 +1954,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
-  const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The dictation offer, raised by pressing a microphone that is not set up.
+  const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
+    isReasoningEffort(startupSettings.reasoningEffort) ? startupSettings.reasoningEffort : DEFAULT_REASONING_EFFORT,
+  );
   const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
@@ -2118,26 +2127,49 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
   const [serverModels, setServerModels] = useState<ServerModelInfo[]>([]);
-  // The composer offers a choice only where there is one to make: local mode
-  // runs one model per Veil process, and a server that publishes no registry
-  // reports its single configured model.
+  // What is on this computer and ready to load. Local mode runs one model per
+  // Veil process, so the backend only ever reports the loaded one — but the
+  // choice a person actually has is every chat model they have downloaded, and
+  // switching is what the picker is for. Dictation weights are excluded by the
+  // kind, not by a filter here: an ASR model cannot answer a prompt.
+  const [downloadedChatModels, setDownloadedChatModels] = useState<LocalCatalogModel[]>([]);
   // Availability is a server concept: it comes from the published registry,
   // which reports whether each model's process is answering right now.
   const composerModels = useMemo<ComposerModelOption[]>(
-    () => (endpointSettings.mode === "server" && serverModels.length > 0
-      ? serverModels.map((model) => ({
+    () => {
+      if (endpointSettings.mode === "server" && serverModels.length > 0) {
+        return serverModels.map((model) => ({
           id: model.id,
           label: model.display,
           available: model.available,
-          contextBadge: contextBadge(model.contextLength),
-        }))
-      : (backend?.models ?? []).map((model) => ({
-          id: model.modelId,
+        }));
+      }
+      if (endpointSettings.mode === "local" && downloadedChatModels.length > 0) {
+        return downloadedChatModels.map((model) => ({
+          id: model.id,
           label: model.displayName,
-          contextBadge: contextBadge(model.contextLength),
-        }))),
-    [backend?.models, endpointSettings.mode, serverModels],
+        }));
+      }
+      return (backend?.models ?? []).map((model) => ({
+        id: model.modelId,
+        label: model.displayName,
+      }));
+    },
+    [backend?.models, downloadedChatModels, endpointSettings.mode, selectedModel, serverModels],
   );
+  // Re-read when the mode changes and when a different model finishes loading:
+  // the second is what a download completing looks like from here.
+  useEffect(() => {
+    if (endpointSettings.mode !== "local") {
+      setDownloadedChatModels([]);
+      return;
+    }
+    void refreshDownloadedChatModels();
+  }, [endpointSettings.mode, selectedModel?.modelId]);
+  // The levels the selected model reads. Empty for a model that takes no
+  // direction on how hard to think, which is what keeps the section out of the
+  // menu rather than showing a choice the chat template would ignore.
+  const modelReasoningEfforts = selectedModel?.capabilities?.reasoningEfforts ?? [];
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
@@ -2788,7 +2820,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const target = event.target instanceof Element ? event.target : null;
       if (!target) return;
       if (!target.closest(".branchControl")) setBranchMenuOpen(false);
-      if (!target.closest(".workspaceModeControl")) setWorkspaceModeMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
       if (!target.closest(".idePicker")) setIdeMenuOpen(null);
       if (!target.closest(".chatProjectActions")) setProjectActionMenuKey(null);
@@ -2797,7 +2828,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setBranchMenuOpen(false);
-      setWorkspaceModeMenuOpen(false);
       setPermissionMenuOpen(false);
       setIdeMenuOpen(null);
       setProjectActionMenuKey(null);
@@ -3521,10 +3551,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   async function toggleBranchMenu() {
     if (!repository || repository.kind !== "git") return;
     const next = !branchMenuOpen;
-    if (next) {
-      setWorkspaceModeMenuOpen(false);
-      setPermissionMenuOpen(false);
-    }
+    if (next) setPermissionMenuOpen(false);
     setBranchMenuOpen(next);
     if (next) await refreshBranches();
   }
@@ -3613,21 +3640,38 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
-  function toggleWorkspaceMode() {
-    setWorkspaceModeMenuOpen((open) => {
-      const next = !open;
-      if (next) {
-        setBranchMenuOpen(false);
-        setPermissionMenuOpen(false);
-      }
-      return next;
-    });
+  /**
+   * The chat models on this computer, for the composer's picker. Chat kind
+   * only, so dictation weights never appear as something that could answer a
+   * prompt, and downloaded only, because choosing one loads it.
+   */
+  async function refreshDownloadedChatModels() {
+    const rows = await api.listLocalModels({ kind: "chat" }).catch(() => [] as LocalCatalogModel[]);
+    setDownloadedChatModels(rows.filter((row) => row.downloaded));
+  }
+
+  /**
+   * Saving restarts the local stack, so the pill moves at once and the stored
+   * answer wins if it disagrees. Leaving the pill on the old level until a
+   * restart finished would read as a control that ignored the click.
+   */
+  async function updateReasoningEffort(next: ReasoningEffort) {
+    const previous = reasoningEffort;
+    setReasoningEffort(next);
+    setError(null);
+    try {
+      const saved = await api.saveReasoningEffort(next);
+      setReasoningEffort(saved.reasoningEffort);
+      setBackend(saved.status);
+    } catch (cause) {
+      setReasoningEffort(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
   }
 
   function selectWorkspaceMode(mode: WorkspaceMode) {
     setWorkspaceMode(mode);
     writeWorkspaceMode(mode);
-    setWorkspaceModeMenuOpen(false);
   }
 
   function noteComposerScrollInput(node: HTMLElement, forcePause = false) {
@@ -4071,7 +4115,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const next = open === owner ? null : owner;
       if (next) {
         setBranchMenuOpen(false);
-        setWorkspaceModeMenuOpen(false);
         setPermissionMenuOpen(false);
       }
       return next;
@@ -5569,7 +5612,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               riding along with the message being written. They were two trays in
               two places, which read as two unrelated things when they are both
               just "what is going out next". */}
-          <div className={`composerPendingTray ${activeQueuedPrompts.length || reviewPromptFeedback.length ? "hasPending" : ""}`}>
+          <div className={`composerPendingTray ${
+            activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
+              ? "hasPending"
+              : ""
+          }`}>
             <QueuedPromptList
               items={activeQueuedPrompts}
               isGenerating={isGenerating}
@@ -5582,6 +5629,12 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 setReviewFeedbackDialogOpen(true);
               }}
             />
+            {dictation.status.error ? (
+              <div className="connectionNotice dictationNotice" role="status" aria-live="polite">
+                <Mic size={14} aria-hidden="true" />
+                <span>{dictation.status.error}</span>
+              </div>
+            ) : null}
             {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
           </div>
           <div className="promptControls">
@@ -5626,47 +5679,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             />
 
             {canUseWorktreeMode && !remoteConnectionId ? (
-              <WorkspaceModePicker
-                mode={workspaceMode}
+              <WorktreeToggle
                 useWorktree={useWorktreeForNextRun}
                 locked={workspaceModeLocked}
                 disabled={busy}
-                open={workspaceModeMenuOpen}
-                onToggleMenu={toggleWorkspaceMode}
-                onSelect={selectWorkspaceMode}
-              />
-            ) : null}
-
-            <PermissionModePicker
-              mode={permissionMode}
-              open={permissionMenuOpen}
-              onToggleMenu={() => {
-                setPermissionMenuOpen((open) => {
-                  const next = !open;
-                  if (next) {
-                    setBranchMenuOpen(false);
-                    setWorkspaceModeMenuOpen(false);
-                  }
-                  return next;
-                });
-              }}
-              onSelect={(mode) => {
-                setPermissionMenuOpen(false);
-                void updatePermissionMode(mode);
-              }}
-            />
-
-            {composerModels.length > 1 ? (
-              <ComposerModelPicker
-                models={composerModels}
-                selectedId={selectedModel?.modelId ?? ""}
-                disabled={busy}
-                disabledReason="Wait for the current run to finish"
-                onOpen={() => {
-                  if (endpointSettings.mode !== "server") return;
-                  void api.listServerModels().then(setServerModels).catch(() => undefined);
-                }}
-                onSelect={(modelId) => void selectComposerModel(modelId)}
+                onToggle={(next) => selectWorkspaceMode(next ? "worktree" : "local")}
               />
             ) : null}
 
@@ -5681,17 +5698,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 <Paperclip size={14} />
                 {attachedFiles.length ? <span className="attachmentCount">{attachedFiles.length}</span> : null}
               </button>
-              {showContextMeter ? (
-                <ContextMeter
-                  estimate={contextEstimate}
-                  state={contextMeterLabel}
-                  breakdown={runnerContextUsage?.breakdown}
-                  compactionBlocked={runnerContextUsage?.compactionBlocked}
-                  compactionBlockedReason={runnerContextUsage?.compactionBlockedReason}
-                  compacting={contextCompacting}
-                  draftTokens={composerDraftTokens}
-                />
-              ) : null}
             </div>
           </div>
           {closedChatNotice ? (
@@ -5838,7 +5844,40 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 </div>
               </div>
             ) : null}
+            {/* Pressing the microphone before dictation is set up is the one
+                moment someone is definitely interested in it. The offer floats
+                over the prompt text rather than displacing anything, so it
+                costs no height and nothing in the composer moves. The text
+                behind it is blurred back: the question is the only thing worth
+                reading while it is up, and the rail stays clear so the
+                microphone that raised it is still there to press. */}
             <div className="promptInputShell">
+              {dictationSetupOffer && !dictationAvailable ? (
+                <div
+                  className="dictationSetupOverlay"
+                  role="status"
+                  onMouseDown={(event) => { if (event.target === event.currentTarget) setDictationSetupOffer(false); }}
+                >
+                  <div className="dictationSetupCard">
+                    <span className="dictationSetupIcon"><MicOff size={13} aria-hidden="true" /></span>
+                    <span className="dictationSetupText">Dictation is off</span>
+                    <button
+                      type="button"
+                      className="primaryAction dictationSetupAction"
+                      onClick={() => {
+                        setDictationSetupOffer(false);
+                        setSettingsOpen(true);
+                        setSettingsTab("voice");
+                      }}
+                    >
+                      Voice settings
+                    </button>
+                    <button className="dictationSetupDismiss" type="button" aria-label="Dismiss" onClick={() => setDictationSetupOffer(false)}>
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {/* Always in the flow, so the shell's three rows line up whether or
                   not anything is attached; it collapses to nothing when empty. */}
               <div className="promptAttachmentStrip">
@@ -5848,6 +5887,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 <div className="promptHighlight" aria-hidden="true">
                   <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
                     {renderPromptHighlights(prompt, attachedFiles, skills)}
+                    {/* The words being spoken, muted, in the box they are going
+                        into. They are drawn behind the textarea rather than
+                        written into it: a partial is replaced whole on every
+                        update, and rewriting the value would move a caret the
+                        user may have placed. Only the final text is inserted. */}
+                    {dictation.status.preview ? (
+                      <span className="promptDictationGhost">
+                        {prompt && !prompt.endsWith(" ") ? " " : ""}
+                        {dictation.status.preview}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <textarea
@@ -5862,14 +5912,84 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
                   disabled={busy || !!closedChatNotice}
                   placeholder={
-                    closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
+                    // The ghost transcript occupies the same line, so the
+                    // placeholder stands down rather than printing under it.
+                    dictation.status.preview
+                      ? ""
+                      : closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
                   }
                 />
               </div>
               <div className="promptActionRail">
-                <DictationControl status={dictation.status} enabled={dictationAvailable} onToggle={dictation.toggle}
-                  devices={dictation.devices} deviceId={dictation.deviceId} onSelectDevice={dictation.selectDevice}
-                  onEnable={() => { setSettingsOpen(true); setSettingsTab("voice"); }} />
+                {/* What this turn will do, on the left: speak it instead of
+                    typing it, and whether it may act without asking. What will
+                    answer it, on the right. The two halves are separate
+                    questions and the gap between them is what says so. */}
+                <div className="promptRailGroup promptRailLeft">
+                  <DictationControl status={dictation.status} enabled={dictationAvailable} onToggle={dictation.toggle}
+                    devices={dictation.devices} deviceId={dictation.deviceId} onSelectDevice={dictation.selectDevice}
+                    onRequestSetup={() => setDictationSetupOffer(true)} />
+                  <PermissionModePicker
+                    mode={permissionMode}
+                    open={permissionMenuOpen}
+                    onToggleMenu={() => {
+                      setPermissionMenuOpen((open) => {
+                        const next = !open;
+                        if (next) setBranchMenuOpen(false);
+                        return next;
+                      });
+                    }}
+                    onSelect={(mode) => {
+                      setPermissionMenuOpen(false);
+                      void updatePermissionMode(mode);
+                    }}
+                  />
+                </div>
+                <div className="promptRailGroup promptRailRight">
+                  {composerModels.length > 1 || modelReasoningEfforts.length > 0 || endpointSettings.mode === "local" ? (
+                    <ComposerModelPicker
+                      models={composerModels}
+                      selectedId={selectedModel?.modelId ?? ""}
+                      disabled={busy}
+                      disabledReason="Wait for the current run to finish"
+                      onOpen={() => {
+                        // Refreshed on open as well as on mount: a model
+                        // downloaded in settings while this menu was closed
+                        // should be in it the first time it is opened.
+                        if (endpointSettings.mode !== "server") {
+                          void refreshDownloadedChatModels();
+                          return;
+                        }
+                        void api.listServerModels().then(setServerModels).catch(() => undefined);
+                      }}
+                      efforts={modelReasoningEfforts}
+                      effort={reasoningEffort}
+                      effortDisabled={busy || isGenerating}
+                      onSelect={(modelId) => void selectComposerModel(modelId)}
+                      onSelectEffort={(next) => void updateReasoningEffort(next)}
+                      onManage={endpointSettings.mode === "local" ? () => {
+                        setSettingsOpen(true);
+                        setSettingsTab("account");
+                      } : undefined}
+                    />
+                  ) : selectedModel ? (
+                    // One model is still worth naming: the answer to "what am I
+                    // talking to" should not depend on there being a choice.
+                    <span className="promptRailModelName" title={`Model: ${selectedModel.displayName}`}>
+                      {selectedModel.displayName}
+                    </span>
+                  ) : null}
+                  {showContextMeter ? (
+                    <ContextMeter
+                      estimate={contextEstimate}
+                      state={contextMeterLabel}
+                      breakdown={runnerContextUsage?.breakdown}
+                      compactionBlocked={runnerContextUsage?.compactionBlocked}
+                      compactionBlockedReason={runnerContextUsage?.compactionBlockedReason}
+                      compacting={contextCompacting}
+                      draftTokens={composerDraftTokens}
+                    />
+                  ) : null}
                 {isGenerating && !hasComposerMessage ? (
                   <button
                     className="sendButton stopButton"
@@ -5897,6 +6017,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
                   </button>
                 )}
+                </div>
               </div>
             </div>
           </div>

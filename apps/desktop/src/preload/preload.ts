@@ -9,6 +9,7 @@ import type {
   ModelDownloadEvent,
   PastedAttachmentInput,
   PermissionMode,
+  ReasoningEffort,
   RemoteConnectionDraft,
   WorkspaceIndexEvent,
 } from "../shared/desktopApi";
@@ -116,6 +117,8 @@ const umbraticApi = {
   saveHarnessProfile: (input: HarnessProfileId) => invoke("umbratic:save-harness-profile", input),
   getContextLength: () => invoke("umbratic:get-context-length"),
   saveContextLength: (input: number) => invoke("umbratic:save-context-length", input),
+  getReasoningEffort: () => invoke("umbratic:get-reasoning-effort"),
+  saveReasoningEffort: (input: ReasoningEffort) => invoke("umbratic:save-reasoning-effort", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     invoke("umbratic:get-model-endpoint-settings", input),
   getDictationSettings: () => invoke("umbratic:get-dictation-settings"),

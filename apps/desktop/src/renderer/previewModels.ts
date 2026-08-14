@@ -50,7 +50,7 @@ export function previewCatalog(kind: "chat" | "dictation"): LocalCatalogModel[] 
     row("custom-thebloke-mistral-7b", "Mistral 7B Instruct", 4_368_439_296, 8, { custom: true, downloaded: true }),
     row("gemma4-e4b", "Gemma 4 E4B", 4_977_171_584, 12, { recommended: true }),
     row("gemma4-12b", "Gemma 4 12B", 7_121_861_440, 16),
-    row("qwen36-27b", "Qwen3.6 27B", 16_817_244_384, 32),
+    row("qwen38-27b", "Qwen3.8 27B", 17_106_775_008, 32, { downloaded: true }),
     row("gemma4-e4b-uncensored", "Gemma 4 E4B Uncensored", 5_335_285_728, 12, { uncensored: true }),
     row("qwen36-27b-uncensored", "Qwen3.6 27B Uncensored", 16_582_361_632, 32, { uncensored: true }),
   ];

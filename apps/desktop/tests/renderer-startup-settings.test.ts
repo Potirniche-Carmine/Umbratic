@@ -47,16 +47,18 @@ test("local model and context choices commit before backend reload completes", (
   assert.ok(harnessSave.indexOf("setContextLength(optimisticContextLength)") < harnessSave.indexOf("await api.saveContextLength"));
 });
 
-test("the default composer uses the compact 66 pixel shell", () => {
+test("the default composer uses the compact shell with a separated action strip", () => {
   const source = fs.readFileSync(new URL("../src/renderer/styles/composer.css", import.meta.url), "utf8");
   const start = source.indexOf(".promptInputShell");
   const end = source.indexOf("\n}", start);
   const shell = source.slice(start, end);
   // Attachments, editor, rail. The attachment track is `auto`, so with nothing
   // picked it is zero-height and the default shell is still the compact one —
-  // the box grows upward only once there is a chip to hold.
-  assert.match(shell, /grid-template-rows: auto minmax\(34px, auto\) 34px/);
-  assert.match(shell, /min-height: 66px/);
+  // the box grows upward only once there is a chip to hold. The rail is 44px
+  // because it is a material strip carrying the composer's pills, not a row of
+  // two icon buttons.
+  assert.match(shell, /grid-template-rows: auto minmax\(38px, auto\) 44px/);
+  assert.match(shell, /min-height: 82px/);
 });
 
 test("active task updates preserve the chat connection marker", () => {

@@ -13,7 +13,8 @@ import {
 } from "./config";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
-import type { DesktopStartupSettings, DictationSettings } from "../shared/desktopApi";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
+import type { DesktopStartupSettings, DictationSettings, ReasoningEffort } from "../shared/desktopApi";
 import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
 import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
 import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
@@ -36,6 +37,7 @@ type RawSettings = {
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
   contextLength?: unknown;
+  reasoningEffort?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
   dictation?: unknown;
@@ -347,6 +349,28 @@ export function readContextLengthSetting(): number {
   return normalizeContextLength(readRawSettings().contextLength ?? DEFAULT_CONTEXT_LENGTH);
 }
 
+/**
+ * How hard a thinking model is asked to think.
+ *
+ * One setting for the app rather than one per model: only models that read an
+ * effort are ever run at one, and a person who decided they want less thinking
+ * meant it about their work, not about a particular set of weights.
+ */
+export function readReasoningEffortSetting(): ReasoningEffort {
+  const stored = readRawSettings().reasoningEffort;
+  return isReasoningEffort(stored) ? stored : DEFAULT_REASONING_EFFORT;
+}
+
+export function writeReasoningEffortSetting(value: unknown): ReasoningEffort {
+  const reasoningEffort = isReasoningEffort(value) ? value : DEFAULT_REASONING_EFFORT;
+  const settings = readRawSettings();
+  writeRawSettings({
+    ...settings,
+    reasoningEffort,
+  });
+  return reasoningEffort;
+}
+
 export function writeContextLengthSetting(value: unknown): number {
   const contextLength = normalizeContextLength(value);
   const settings = readRawSettings();
@@ -413,6 +437,7 @@ export function readStartupSettings(): DesktopStartupSettings {
     companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
+    reasoningEffort: isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT,
   };
 }
 

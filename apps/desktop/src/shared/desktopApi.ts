@@ -51,6 +51,7 @@ export type DesktopStartupSettings = {
   companyConnection: CompanyConnectionStatus;
   harnessProfile: HarnessProfileId;
   contextLength: number;
+  reasoningEffort: ReasoningEffort;
 };
 
 /** How a remote connection proves who it is. */
@@ -169,7 +170,32 @@ export type ModelCapabilities = {
   parallelToolCalls: boolean;
   vision: boolean;
   reasoning: boolean;
+  /**
+   * The effort levels this model's chat template reads, in menu order. Absent
+   * or empty means it takes no direction on how hard to think — narrower than
+   * `reasoning`, and a choice the template ignores is worse than none.
+   */
+  reasoningEfforts?: ReasoningEffort[];
 };
+
+/**
+ * How hard the model is asked to think.
+ *
+ * "off" is a level, not the absence of one — for a model that thinks by
+ * default, turning it off is a decision somebody made. "on" is thinking with
+ * no degree attached, which is all some templates understand: they read
+ * `enable_thinking` and nothing finer, so grading it would be a dial wired to
+ * nothing. Which of these a model offers is the model's own business.
+ */
+export type ReasoningEffort = "off" | "on" | "low" | "medium" | "high";
+
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ["off", "on", "low", "medium", "high"];
+
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value);
+}
 
 export type LocalModelProvider = {
   providerId: LocalProviderId;
@@ -650,6 +676,11 @@ export type DesktopApi = {
     contextLength: number;
     status: BackendStatus;
   }>;
+  getReasoningEffort(): Promise<ReasoningEffort>;
+  saveReasoningEffort(input: ReasoningEffort): Promise<{
+    reasoningEffort: ReasoningEffort;
+    status: BackendStatus;
+  }>;
   getModelEndpointSettings(input?: {
     mode?: ModelEndpointMode;
   }): Promise<PublicModelEndpointSettings>;
@@ -911,6 +942,8 @@ export const desktopIpcChannels = {
   saveHarnessProfile: "umbratic:save-harness-profile",
   getContextLength: "umbratic:get-context-length",
   saveContextLength: "umbratic:save-context-length",
+  getReasoningEffort: "umbratic:get-reasoning-effort",
+  saveReasoningEffort: "umbratic:save-reasoning-effort",
   getModelEndpointSettings: "umbratic:get-model-endpoint-settings",
   getDictationSettings: "umbratic:get-dictation-settings",
   saveDictationSettings: "umbratic:save-dictation-settings",

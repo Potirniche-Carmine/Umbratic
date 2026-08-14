@@ -49,6 +49,7 @@ import { stopLocalSpeech } from "./localSpeech";
 import {
   chooseLocalModelMessage,
   ensureLocalChatRuntime,
+  resolveLocalModel,
   selectedLocalChatModel,
   selectedLocalDictationModel,
 } from "./localModels";
@@ -59,6 +60,7 @@ import {
   readLocalDiagnosticInfo,
   readLocalDiagnostics,
   readModelEndpointSettings,
+  readReasoningEffortSetting,
   publicModelEndpointSettings,
   readProjects,
   readProductTelemetryEvents,
@@ -67,6 +69,7 @@ import {
   clearLocalDiagnostics,
   writeHarnessProfileSetting,
   writeContextLengthSetting,
+  writeReasoningEffortSetting,
   writeDictationSettings,
   writeModelEndpointSettings,
 } from "./storage";
@@ -290,6 +293,23 @@ export async function saveHarnessProfileSetting(input: unknown) {
   return { settings, status };
 }
 
+/**
+ * Changing the effort changes the environment Veil is started with — both the
+ * effort itself and which of the model card's two sampling sets applies — so
+ * the chain restarts. llama-server keeps its weights mapped throughout: only
+ * the proxy in front of it comes back up.
+ */
+export async function saveReasoningEffortSetting(input: unknown) {
+  if (activeRunnerProcesses.size > 0) {
+    throw new Error("Wait for the active run to finish before changing the reasoning effort.");
+  }
+  const wasRunning = currentLocalVeilConnection() !== null;
+  const reasoningEffort = writeReasoningEffortSetting(input);
+  stopLocalVeil();
+  const status = await getBackendStatus(wasRunning ? "always" : "never");
+  return { reasoningEffort, status };
+}
+
 export async function saveContextLengthSetting(input: unknown) {
   if (activeRunnerProcesses.size > 0) {
     throw new Error("Wait for the active run to finish before changing the context length.");
@@ -363,6 +383,7 @@ export async function resolveSelectedModel(
           settings,
           contextLength: readContextLengthSetting(),
           dictation: readDictationSettings(),
+          reasoningEffort: readReasoningEffortSetting(),
           onLlamaDiagnostic: (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "desktop" }),
           onVeilDiagnostic: (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "veil" }),
         });
@@ -391,7 +412,14 @@ export async function resolveSelectedModel(
   const providerConfig = endpointProvider();
   const health = await checkEndpointHealth(providerConfig);
   recordVeilFeatures(health.features);
-  const availableModel = { ...configured, capabilities: health.capabilities };
+  // Whether the model takes direction on how hard to think comes from the
+  // catalog, not from Veil: llama-server does not publish what its chat
+  // template reads, and the catalog is where that was reviewed and recorded.
+  const localEntry = settings.mode === "local" ? resolveLocalModel(settings.modelId) : null;
+  const capabilities = health.capabilities
+    ? { ...health.capabilities, reasoningEfforts: [...(localEntry?.reasoningEfforts ?? [])] }
+    : undefined;
+  const availableModel = { ...configured, capabilities };
   let models: LocalModelInfo[] = health.status === "ready" ? [availableModel] : [];
   let selected: LocalModelInfo | null = health.status === "ready" ? availableModel : null;
   // A server that publishes a registry decides what the picker offers. The

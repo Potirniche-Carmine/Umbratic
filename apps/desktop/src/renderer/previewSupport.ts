@@ -2,6 +2,7 @@ import {
   DEFAULT_CONTEXT_LENGTH,
   normalizeContextLength,
 } from "../shared/contextWindow";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
 import type {
   ChatAttachment,
   ChatRecord,
@@ -10,6 +11,7 @@ import type {
   ModelEndpointMode,
   PermissionMode,
   PublicModelEndpointSettings,
+  ReasoningEffort,
   RepositoryInfo,
   UserNotes,
 } from "../shared/desktopApi";
@@ -21,6 +23,7 @@ const previewChatsKey = "umbratic-preview-chats";
 const previewNotesKey = "umbratic-preview-notes";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewContextLengthKey = "umbratic-preview-context-length";
+const previewReasoningEffortKey = "umbratic-preview-reasoning-effort";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 export const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
@@ -147,6 +150,15 @@ export function readPreviewContextLength(): number {
     window.localStorage.getItem(previewContextLengthKey)
       ?? DEFAULT_CONTEXT_LENGTH,
   );
+}
+
+export function readPreviewReasoningEffort(): ReasoningEffort {
+  const stored = window.localStorage.getItem(previewReasoningEffortKey);
+  return isReasoningEffort(stored) ? stored : DEFAULT_REASONING_EFFORT;
+}
+
+export function writePreviewReasoningEffort(effort: ReasoningEffort): void {
+  window.localStorage.setItem(previewReasoningEffortKey, effort);
 }
 
 export function writePreviewContextLength(contextLength: number): void {

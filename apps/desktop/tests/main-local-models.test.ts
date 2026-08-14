@@ -70,8 +70,8 @@ test("the recommendation follows installed memory", () => {
   assert.equal(hardware.recommendedModelId("chat", 32), "gemma4-12b");
   // The 27B waits for a machine that very likely has a GPU behind it.
   assert.equal(hardware.recommendedModelId("chat", 63), "gemma4-12b");
-  assert.equal(hardware.recommendedModelId("chat", 64), "qwen36-27b");
-  assert.equal(hardware.recommendedModelId("chat", 128), "qwen36-27b");
+  assert.equal(hardware.recommendedModelId("chat", 64), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", 128), "qwen38-27b");
 
   assert.equal(hardware.recommendedModelId("dictation", 8), "qwen3-asr-0.6b");
   assert.equal(hardware.recommendedModelId("dictation", 16), "qwen3-asr-1.7b");

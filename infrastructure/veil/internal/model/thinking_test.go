@@ -128,3 +128,80 @@ func TestPrefixTokenCacheKeyIncludesTheModel(t *testing.T) {
 		t.Fatalf("each model must get its own count: big=%d small=%d", big.SystemPromptTokens, small.SystemPromptTokens)
 	}
 }
+
+// The local chat path is the one that carries a configured effort into the
+// chat template, because llama.cpp reads it from there rather than from the
+// top-level OpenAI field.
+func TestLocalChatCarriesConfiguredReasoningEffort(t *testing.T) {
+	base := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
+
+	request := base
+	request.ReasoningEffort = ReasoningHigh
+	body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, request)
+	kwargs, ok := body["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["reasoning_effort"] != "high" || kwargs["enable_thinking"] != true {
+		t.Fatalf("an effort must reach the chat template: %#v", body)
+	}
+	if body["reasoning_effort"] != "high" {
+		t.Fatalf("an effort must stay on the request too: %#v", body)
+	}
+
+	off := base
+	off.ReasoningEffort = ReasoningOff
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, off)
+	kwargs, ok = body["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["enable_thinking"] != false {
+		t.Fatalf("off must turn thinking off: %#v", body)
+	}
+	if _, present := body["reasoning_effort"]; present {
+		t.Fatalf("off must not also say how hard to think: %#v", body)
+	}
+
+	// "on" is thinking with no degree: the template is told to think and is
+	// told nothing about how hard, because it cannot read that.
+	on := base
+	on.ReasoningEffort = ReasoningOn
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, on)
+	kwargs, ok = body["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["enable_thinking"] != true {
+		t.Fatalf("on must turn thinking on: %#v", body)
+	}
+	if _, present := kwargs["reasoning_effort"]; present {
+		t.Fatalf("on must not grade the thinking it asked for: %#v", kwargs)
+	}
+	if _, present := body["reasoning_effort"]; present {
+		t.Fatalf("on must not send a degree on the request either: %#v", body)
+	}
+
+	none := base
+	none.ReasoningEffort = ReasoningNone
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, none)
+	if _, present := body["chat_template_kwargs"]; present {
+		t.Fatalf("saying nothing must leave the template alone: %#v", body)
+	}
+}
+
+// The recommended samplers only travel when a model card recommended them; a
+// zero is the runtime's own default and is left off the wire.
+func TestChatCarriesRecommendedSamplersWhenSet(t *testing.T) {
+	base := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
+
+	body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, base)
+	for _, field := range []string{"top_k", "min_p", "presence_penalty", "repetition_penalty"} {
+		if _, present := body[field]; present {
+			t.Fatalf("%s must not travel unset: %#v", field, body)
+		}
+	}
+
+	request := base
+	request.TopK = 20
+	request.PresencePenalty = 1.5
+	request.RepetitionPenalty = 1.0
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, request)
+	if body["top_k"] != float64(20) || body["presence_penalty"] != 1.5 || body["repetition_penalty"] != 1.0 {
+		t.Fatalf("recommended samplers must reach the runtime: %#v", body)
+	}
+	if _, present := body["min_p"]; present {
+		t.Fatalf("a zero min_p is the default and must stay off the wire: %#v", body)
+	}
+}

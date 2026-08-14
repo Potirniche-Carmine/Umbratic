@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Cpu, FolderOpen, GitBranch, Hand, Loader2, Mic, RefreshCw, ShieldCheck, Square } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, GitBranch, Hand, Loader2, Mic, RefreshCw, ShieldCheck, Square } from "lucide-react";
 
-import type { PermissionMode, WorkspaceMode } from "../shared/desktopApi";
+import type { PermissionMode, ReasoningEffort } from "../shared/desktopApi";
 import type { DictationDevice, DictationStatus } from "./dictation";
 
 /**
@@ -31,10 +31,13 @@ function DictationLevelMeter({ level }: { level: number }) {
 /**
  * Speaks a prompt instead of typing it.
  *
- * The live transcript is a popover above the button rather than text written
- * into the prompt: a partial is replaced whole on every update, and rewriting
- * the input under a cursor the user may have moved is how dictation eats an
- * edit someone was in the middle of. Only the final transcript is inserted.
+ * The live transcript is drawn by the composer as muted text behind the
+ * textarea rather than written into it: a partial is replaced whole on every
+ * update, and rewriting the input under a cursor the user may have moved is
+ * how dictation eats an edit someone was in the middle of. Only the final
+ * transcript is inserted. Neither the partial nor an error appears in this
+ * rail — a caption that grows and shrinks beside the buttons moves every
+ * control in the row while somebody is talking.
  */
 export function DictationControl({
   status,
@@ -42,7 +45,7 @@ export function DictationControl({
   devices,
   deviceId,
   onToggle,
-  onEnable,
+  onRequestSetup,
   onSelectDevice,
 }: {
   status: DictationStatus;
@@ -53,14 +56,17 @@ export function DictationControl({
   /** The chosen one, or "" for the system default. */
   deviceId: string;
   onToggle(): void;
-  /** Take the user to where dictation is turned on. */
-  onEnable(): void;
+  /**
+   * Pressed while dictation is off. The composer answers with a line above the
+   * prompt box rather than this control answering inline: the offer is wider
+   * than the rail can give, and a rail that grows moves every button in it.
+   */
+  onRequestSetup(): void;
   onSelectDevice(deviceId: string): void;
 }) {
   // The button is always here, whether or not dictation is set up. A control
   // that appears only once a hidden precondition is met is a feature nobody
   // discovers; pressing it when it is off explains itself and offers the way in.
-  const [asking, setAsking] = useState(false);
   // Where the portalled menu sits, in viewport coordinates. Null is closed.
   const [menuAt, setMenuAt] = useState<{ bottom: number; right: number } | null>(null);
   const deviceRootRef = useRef<HTMLDivElement | null>(null);
@@ -110,44 +116,11 @@ export function DictationControl({
 
   return (
     <>
-      {/*
-        The caption is a sibling in the action rail rather than a popover above
-        the button: the composer shell clips its overflow, so anything floated
-        out of the rail is cut off at the shell's edge.
-      */}
-      {status.preview || status.error ? (
-        <div className={`dictationCaption ${status.error ? "isError" : ""}`} role="status">
-          {status.error ?? status.preview}
-        </div>
-      ) : null}
-      {/* Pressing the microphone before dictation is set up is the one moment
-          someone is definitely interested in it, so the offer says plainly what
-          the state is and carries the way out of it. It names Voice settings
-          rather than just "set up", because a first-time user who declines
-          should still know where to go later. */}
-      {asking ? (
-        <div className="dictationCaption dictationEnable" role="status">
-          <span>Dictation is off. Choose a model in Voice settings?</span>
-          <button
-            type="button"
-            className="dictationEnableAction"
-            onClick={() => {
-              setAsking(false);
-              onEnable();
-            }}
-          >
-            Open settings
-          </button>
-          <button type="button" className="dictationEnableDismiss" onClick={() => setAsking(false)}>
-            Not now
-          </button>
-        </div>
-      ) : null}
       <div className={`dictationControl ${recording ? "isRecording" : ""} ${enabled ? "" : "isOff"}`}>
       <button
         className="dictationButton"
         type="button"
-        onClick={() => (enabled ? onToggle() : setAsking((open) => !open))}
+        onClick={() => (enabled ? onToggle() : onRequestSetup())}
         disabled={busy}
         aria-label={label}
         aria-pressed={recording}
@@ -185,7 +158,9 @@ export function DictationControl({
           onClick={toggleDeviceMenu}
           onKeyDown={(event) => { if (event.key === "Escape") setMenuAt(null); }}
         >
-          <ChevronDown size={13} aria-hidden="true" />
+          <svg width="8" height="5" viewBox="0 0 8 5" aria-hidden="true">
+            <path fill="currentColor" d="M0.8 0.6h6.4L4 4.4z" />
+          </svg>
         </button>
         {menuAt ? createPortal(
           <div
@@ -232,12 +207,24 @@ export type ComposerModelOption = {
   /** Whether the model is running. `undefined` in local mode, where the one
    * configured model either answers or the runtime is down as a whole. */
   available?: boolean;
-  /** The model's context window, already formatted ("96k"). */
-  contextBadge?: string;
+};
+
+const reasoningEffortLabels: Record<ReasoningEffort, string> = {
+  off: "No thinking",
+  on: "Thinking",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
 };
 
 /**
- * Picks which model answers the next run.
+ * Picks which model answers the next run, and how hard it thinks.
+ *
+ * One control for both, because effort is a property of the model rather than
+ * a peer of it: a second pill beside the name implied it applied to whatever
+ * was selected, when in fact most models have no such setting at all. Here the
+ * levels are simply part of what the chosen model offers, and models that read
+ * no effort show no section.
  *
  * The menu opens upward from its trigger, like every other composer menu, so
  * the control the user pressed is visibly where the menu came from.
@@ -245,23 +232,45 @@ export type ComposerModelOption = {
 export function ComposerModelPicker({
   models,
   selectedId,
+  efforts,
+  effort,
   disabled,
   disabledReason,
+  effortDisabled,
   onOpen,
   onSelect,
+  onSelectEffort,
+  onManage,
 }: {
   models: ComposerModelOption[];
   selectedId: string;
+  /** The levels the selected model reads. Empty means it reads none. */
+  efforts: readonly ReasoningEffort[];
+  effort: ReasoningEffort;
   disabled: boolean;
   /** Shown as the trigger's tooltip while disabled — a control that refuses
    * silently reads as broken. */
   disabledReason?: string;
+  /** Effort changes restart the local stack, so they wait for a run to end
+   * even when switching models does not. */
+  effortDisabled?: boolean;
   onOpen?(): void;
   onSelect(id: string): void;
+  onSelectEffort(next: ReasoningEffort): void;
+  /** Takes the user to where models are downloaded. */
+  onManage?(): void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  // Which page of the menu is showing. The model list is a step in rather than
+  // a list inline: with the effort levels above it, one flat menu would be a
+  // wall of rows where only two of them answer the same question.
+  const [page, setPage] = useState<"main" | "models">("main");
   const selected = models.find((model) => model.id === selectedId);
+  // Nothing downloaded yet is a state the control stays present for. Hiding it
+  // leaves the composer with no answer to "what will answer this, and how do I
+  // choose one" at exactly the moment the user has not chosen.
+  const selectedLabel = selected?.label || selectedId || "Choose a model";
 
   useEffect(() => {
     if (!open) return;
@@ -276,7 +285,11 @@ export function ComposerModelPicker({
     if (disabled) setOpen(false);
   }, [disabled]);
 
-  if (models.length === 0) return null;
+  // Always reopen on the main page: a menu that remembers it was left on a
+  // sub-page reopens somewhere the user did not put it.
+  useEffect(() => {
+    if (!open) setPage("main");
+  }, [open]);
 
   return (
     <div className={`modelControl ${open ? "isOpen" : ""}`} ref={rootRef}>
@@ -286,7 +299,7 @@ export function ComposerModelPicker({
         disabled={disabled}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={disabled ? disabledReason ?? "" : `Model: ${selected?.label ?? selectedId}`}
+        title={disabled ? disabledReason ?? "" : `Model: ${selectedLabel}`}
         onClick={() => {
           setOpen((current) => {
             if (!current) onOpen?.();
@@ -294,34 +307,107 @@ export function ComposerModelPicker({
           });
         }}
       >
-        <Cpu size={14} aria-hidden="true" />
-        <span>{selected?.label ?? selectedId}</span>
+        <span>{selectedLabel}</span>
         <ChevronDown size={12} aria-hidden="true" />
       </button>
       {open ? (
         <div className="modelMenu" role="menu" aria-label="Model">
-          {models.map((model) => (
-            <button
-              key={model.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={model.id === selectedId}
-              className={[
-                model.id === selectedId ? "active" : "",
-                model.available === false ? "isStopped" : "",
-              ].filter(Boolean).join(" ")}
-              title={model.available === false ? "This model is registered but not running" : undefined}
-              onClick={() => {
-                setOpen(false);
-                onSelect(model.id);
-              }}
-            >
-              {model.available === undefined ? null : <span className="modelStatusDot" aria-hidden="true" />}
-              <span className="modelName">{model.label}</span>
-              {model.contextBadge ? <span className="modelContextBadge">{model.contextBadge}</span> : null}
-              {model.id === selectedId ? <Check size={14} aria-hidden="true" /> : null}
-            </button>
-          ))}
+          {page === "main" ? (
+            <>
+              {efforts.length > 0 ? (
+                <>
+                  <p className="modelMenuHeading">Effort</p>
+                  {efforts.map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={level === effort}
+                      className={`modelMenuRow ${level === effort ? "active" : ""}`}
+                      disabled={effortDisabled}
+                      onClick={() => {
+                        setOpen(false);
+                        onSelectEffort(level);
+                      }}
+                    >
+                      <span className="modelName">{reasoningEffortLabels[level]}</span>
+                      {level === effort ? <Check size={14} aria-hidden="true" /> : null}
+                    </button>
+                  ))}
+                </>
+              ) : null}
+              <p className="modelMenuHeading">Model</p>
+              {models.length === 0 ? (
+                <button
+                  type="button"
+                  className="modelMenuRow modelMenuStep"
+                  onClick={() => {
+                    setOpen(false);
+                    onManage?.();
+                  }}
+                >
+                  <span className="modelName">Download a model…</span>
+                  <ChevronRight size={14} aria-hidden="true" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="modelMenuRow modelMenuStep"
+                  aria-haspopup="menu"
+                  onClick={() => setPage("models")}
+                >
+                  <span className="modelName">{selectedLabel}</span>
+                  <ChevronRight size={14} aria-hidden="true" />
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="modelMenuRow modelMenuBack"
+                onClick={() => setPage("main")}
+              >
+                <ChevronLeft size={14} aria-hidden="true" />
+                <span className="modelName">Model</span>
+              </button>
+              {models.map((model) => (
+                <button
+                  key={model.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={model.id === selectedId}
+                  className={[
+                    "modelMenuRow",
+                    model.id === selectedId ? "active" : "",
+                    model.available === false ? "isStopped" : "",
+                  ].filter(Boolean).join(" ")}
+                  title={model.available === false ? "This model is registered but not running" : undefined}
+                  onClick={() => {
+                    setOpen(false);
+                    onSelect(model.id);
+                  }}
+                >
+                  {model.available === undefined ? null : <span className="modelStatusDot" aria-hidden="true" />}
+                  <span className="modelName">{model.label}</span>
+                  {model.id === selectedId ? <Check size={14} aria-hidden="true" /> : null}
+                </button>
+              ))}
+              {onManage ? (
+                <button
+                  type="button"
+                  className="modelMenuRow modelMenuStep"
+                  onClick={() => {
+                    setOpen(false);
+                    onManage();
+                  }}
+                >
+                  <span className="modelName">Download a model…</span>
+                  <ChevronRight size={14} aria-hidden="true" />
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
     </div>
@@ -330,61 +416,49 @@ export function ComposerModelPicker({
 
 /**
  * Chooses whether the next run edits the repository in place or in an isolated
- * worktree. It lives here rather than in `main.tsx` for the same reason as the
- * two controls above: the composer row is one visual grammar, and keeping its
- * markup together is what keeps it one.
+ * worktree.
+ *
+ * A checkbox rather than a two-item menu. The choice is binary and the menu
+ * spent a click and a popover restating that: worktree is either on or it is
+ * not, and a box that is either ticked or not says so without being opened.
+ * It lives here rather than in `main.tsx` for the same reason as the controls
+ * above — the composer row is one visual grammar, and keeping its markup
+ * together is what keeps it one.
  */
-export function WorkspaceModePicker({
-  mode,
+export function WorktreeToggle({
   useWorktree,
   locked,
   disabled,
-  open,
-  onToggleMenu,
-  onSelect,
+  onToggle,
 }: {
-  mode: WorkspaceMode;
   useWorktree: boolean;
+  /** The chat is already running in a worktree, so the choice is behind it. */
   locked: boolean;
   disabled: boolean;
-  open: boolean;
-  onToggleMenu(): void;
-  onSelect(next: WorkspaceMode): void;
+  onToggle(next: boolean): void;
 }) {
+  const title = locked
+    ? "This chat is already running in an isolated worktree"
+    : useWorktree
+      ? "This chat runs in an isolated worktree"
+      : "This chat edits the selected repository directly";
   return (
-    <div className={`workspaceModeControl ${useWorktree ? "isWorktree" : ""}`}>
-      <button
-        className="workspaceModeTrigger"
-        type="button"
-        onClick={onToggleMenu}
+    <label className={`worktreeToggle ${useWorktree ? "isOn" : ""} ${locked ? "isLocked" : ""}`} title={title}>
+      <input
+        type="checkbox"
+        checked={useWorktree}
         disabled={disabled || locked}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        title={
-          locked
-            ? "This chat is already running in an isolated worktree"
-            : useWorktree
-              ? "Run this chat in an isolated worktree"
-              : "Run this chat in the selected repository"
-        }
-      >
-        {useWorktree ? <GitBranch size={14} /> : <FolderOpen size={14} />}
-        <span>{useWorktree ? "Worktree" : "Local"}</span>
-        <ChevronDown size={12} />
-      </button>
-      {open ? (
-        <div className="workspaceModeMenu" role="menu">
-          <button className={mode === "local" ? "active" : ""} type="button" onClick={() => onSelect("local")}>
-            <FolderOpen size={14} />
-            <span>Local</span>
-          </button>
-          <button className={mode === "worktree" ? "active" : ""} type="button" onClick={() => onSelect("worktree")}>
-            <GitBranch size={14} />
-            <span>Worktree</span>
-          </button>
-        </div>
-      ) : null}
-    </div>
+        onChange={(event) => onToggle(event.currentTarget.checked)}
+      />
+      {/* The tick is drawn rather than native so it matches the pill row's
+          weight; the real input stays in the DOM and keeps the semantics. */}
+      <span className="worktreeToggleBox" aria-hidden="true">
+        <Check size={10} strokeWidth={3.25} />
+      </span>
+      {/* No icon: the tick already carries the state, and a branch glyph beside
+          it was a second thing to read that said nothing the word did not. */}
+      <span>Worktree</span>
+    </label>
   );
 }
 
