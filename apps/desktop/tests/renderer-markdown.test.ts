@@ -183,9 +183,9 @@ test("feedback dialog and prompt controls do not allow horizontal growth", () =>
   assert.match(feedbackTextRule, /box-sizing:\s*border-box/);
   assert.match(feedbackTextRule, /width:\s*100%/);
   assert.doesNotMatch(sendRule, /position:\s*absolute/);
-  assert.match(sendRule, /width:\s*32px/);
+  assert.match(sendRule, /width:\s*30px/);
   assert.match(actionRailRule, /justify-content:\s*flex-end/);
-  assert.match(actionRailRule, /min-height:\s*38px/);
+  assert.match(actionRailRule, /min-height:\s*34px/);
   assert.match(textareaRule, /max-width:\s*100%/);
   assert.match(textareaRule, /overflow-x:\s*hidden/);
   assert.match(textareaRule, /overflow-wrap:\s*anywhere/);

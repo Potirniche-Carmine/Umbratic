@@ -88,7 +88,7 @@ func NewServer(cfg config.Config, modelClient ModelClient) *Server {
 		retriever: rag.New(cfg.RAG, modelClient),
 	}
 	if cfg.SpeechEnabled() {
-		server.speech = model.NewSpeechClient(cfg.SpeechBaseURL, cfg.SpeechModel, cfg.ModelTimeout)
+		server.speech = model.NewSpeechClient(cfg.SpeechBaseURL, cfg.SpeechModel, cfg.SpeechAPIKey, cfg.ModelTimeout)
 	}
 	if cfg.CompanyIdentityMode {
 		license, licenseErr := entitlement.Load(cfg.EntitlementPath)

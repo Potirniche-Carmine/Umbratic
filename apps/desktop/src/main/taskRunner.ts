@@ -179,7 +179,9 @@ export async function runRunnerTask(
   let runnerFailureDetails: { category?: string; code?: string; detail?: string } = {};
   let intent = intentPrompt ?? task.prompt;
   try {
-    const { providers, selected } = await resolveSelectedModel();
+    // Sending a prompt is the explicit ask to use the model: load it if it is
+    // not already up.
+    const { providers, selected } = await resolveSelectedModel("always");
     if (!taskStillRunning(task)) {
       return;
     }

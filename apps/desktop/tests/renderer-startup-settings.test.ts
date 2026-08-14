@@ -19,16 +19,15 @@ test("changing Auto-run does not wait for model status", () => {
   assert.doesNotMatch(implementation, /getBackendStatus/);
 });
 
-test("the top connection refresh owns local model discovery", () => {
+test("the top connection refresh re-reads the local model list", () => {
   const connection = fs.readFileSync(new URL("../src/renderer/ConnectionSettings.tsx", import.meta.url), "utf8");
   const picker = fs.readFileSync(new URL("../src/renderer/Combobox.tsx", import.meta.url), "utf8");
   const start = connection.indexOf("async function refresh()");
   const end = connection.indexOf("\n  async function save()", start);
   const refresh = connection.slice(start, end);
-  assert.match(refresh, /api\.probeLocalModels/);
-  assert.match(refresh, /modelsBeforeRefresh/);
+  assert.match(refresh, /await localCatalog\.reload\(\)/);
   assert.doesNotMatch(refresh, /setTimeout/);
-  assert.doesNotMatch(picker, /probeLocalModels|RefreshCw|setTimeout/);
+  assert.doesNotMatch(picker, /RefreshCw|setTimeout/);
   assert.match(picker, /const interactionDisabled = disabled \|\| options\.length === 0/);
 });
 
@@ -48,7 +47,7 @@ test("local model and context choices commit before backend reload completes", (
   assert.ok(harnessSave.indexOf("setContextLength(optimisticContextLength)") < harnessSave.indexOf("await api.saveContextLength"));
 });
 
-test("the default composer uses the compact 76 pixel shell", () => {
+test("the default composer uses the compact 66 pixel shell", () => {
   const source = fs.readFileSync(new URL("../src/renderer/styles/composer.css", import.meta.url), "utf8");
   const start = source.indexOf(".promptInputShell");
   const end = source.indexOf("\n}", start);
@@ -56,8 +55,8 @@ test("the default composer uses the compact 76 pixel shell", () => {
   // Attachments, editor, rail. The attachment track is `auto`, so with nothing
   // picked it is zero-height and the default shell is still the compact one —
   // the box grows upward only once there is a chip to hold.
-  assert.match(shell, /grid-template-rows: auto minmax\(38px, auto\) 38px/);
-  assert.match(shell, /min-height: 76px/);
+  assert.match(shell, /grid-template-rows: auto minmax\(34px, auto\) 34px/);
+  assert.match(shell, /min-height: 66px/);
 });
 
 test("active task updates preserve the chat connection marker", () => {
@@ -99,20 +98,27 @@ test("connection state and UI are outside the main renderer shell", () => {
   assert.match(connection, /export function useConnectionSettings/);
 });
 
-test("local mode discovers models automatically and applies a choice without a save step", () => {
+test("local mode offers the catalog and applies a choice without a save step", () => {
   const source = fs.readFileSync(new URL("../src/renderer/ConnectionSettings.tsx", import.meta.url), "utf8");
-  // Opening the panel probes the runtime; the old flow only read a cache and
-  // waited for a manual refresh, which is how a run could start with no model.
-  assert.match(source, /api\s*\n?\s*\.probeLocalModels\(\{ baseUrl \}\)/);
-  assert.match(source, /setLocalModelDiscovery\(\{ baseUrl, models, status: probe\.status \}\)/);
-  // Choosing a model persists it directly.
+  const list = fs.readFileSync(new URL("../src/renderer/LocalModelList.tsx", import.meta.url), "utf8");
+  // Opening the panel lists the catalog against what is on disk.
+  assert.match(source, /useLocalModelCatalog\(api, "chat", settingsOpen && active\)/);
+  assert.match(list, /api\.listLocalModels\(\{ kind \}\)/);
+  // Choosing a downloaded model persists it directly.
   assert.match(source, /onSelect=\{\(modelId\) => void controller\.selectLocalModel\(modelId\)\}/);
   assert.match(source, /await api\.saveModelEndpointSettings\(next\)/);
-  // The runtime URL is no longer the first thing a user meets.
-  assert.match(source, /<details className="settingsAdvanced">/);
+  // There is no runtime URL to enter any more: the app starts its own.
+  assert.doesNotMatch(source, /Ollama|11434|settingsAdvanced/);
 });
 
-test("startup warm-up treats an unchosen local model as ordinary first-run state", () => {
-  const warmup = fs.readFileSync(new URL("../src/main/modelWarmup.ts", import.meta.url), "utf8");
-  assert.match(warmup, /if \(!settings\.modelId\.trim\(\)\) return;/);
+test("startup never loads a model; the hardware probe is what warms", () => {
+  const main = fs.readFileSync(new URL("../src/main/main.ts", import.meta.url), "utf8");
+  // Loading gigabytes of weights is an explicit user action — picking a model,
+  // pressing load, or sending a prompt — never a side effect of opening the app.
+  assert.doesNotMatch(main, /loadWindowWithModelWarmup|warmConfiguredModel/);
+  assert.match(main, /void systemProfile\(\);/);
+  const backend = fs.readFileSync(new URL("../src/main/backendSettings.ts", import.meta.url), "utf8");
+  // Status reads stay passive; the explicit paths opt in.
+  assert.match(backend, /getBackendStatus\(startLocal: LocalRuntimeStart = "never"\)/);
+  assert.match(backend, /export async function loadLocalModel\(\)/);
 });

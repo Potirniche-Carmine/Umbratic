@@ -25,7 +25,7 @@ func TestVLLMClientChat(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "" {
-			t.Fatalf("local runtime request included authorization")
+			t.Fatalf("an unconfigured API key must not produce an authorization header")
 		}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
@@ -67,29 +67,22 @@ func TestVLLMClientChat(t *testing.T) {
 	}
 }
 
-func TestOllamaClientChat(t *testing.T) {
-	var got struct {
-		Model    string    `json:"model"`
-		Messages []Message `json:"messages"`
-		Stream   bool      `json:"stream"`
-		Think    *bool     `json:"think"`
-		Format   any       `json:"format"`
-		Options  struct {
-			NumCtx int `json:"num_ctx"`
-		} `json:"options"`
-	}
+func TestLocalClientChatSpeaksOpenAIWithABearer(t *testing.T) {
+	var got map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/chat" {
+		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer local-secret" {
+			t.Fatalf("local runtime call must carry the per-run bearer: %q", r.Header.Get("Authorization"))
 		}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"message": map[string]string{
-				"role":    "assistant",
-				"content": "ollama done",
+			"choices": []any{
+				map[string]any{"message": map[string]string{"role": "assistant", "content": "local done"}},
 			},
 		})
 	}))
@@ -99,6 +92,7 @@ func TestOllamaClientChat(t *testing.T) {
 		Mode:          ModeLocal,
 		BaseURL:       server.URL,
 		ContextLength: 64000,
+		APIKey:        "local-secret",
 		Timeout:       time.Second,
 	})
 	if err != nil {
@@ -106,117 +100,106 @@ func TestOllamaClientChat(t *testing.T) {
 	}
 
 	resp, err := client.Chat(context.Background(), ChatRequest{
-		Model:    "llama3",
+		Model:    "qwen3-8b",
 		Messages: []Message{{Role: "user", Content: "hello"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Model != "llama3" || got.Stream {
+	if got["model"] != "qwen3-8b" || got["stream"] != false {
 		t.Fatalf("unexpected runtime request: %#v", got)
 	}
-	if got.Options.NumCtx != 64000 {
-		t.Fatalf("unexpected Ollama context length: %#v", got.Options)
-	}
-	if resp.Message.Content != "ollama done" {
+	if resp.Message.Content != "local done" {
 		t.Fatalf("unexpected response: %#v", resp)
 	}
-	// Ordinary chat leaves thinking and output format alone.
-	if got.Think != nil || got.Format != nil {
-		t.Fatalf("plain chat must not constrain thinking or format: %#v", got)
+	// Ordinary chat leaves thinking and output shape alone.
+	if _, present := got["chat_template_kwargs"]; present {
+		t.Fatalf("plain chat must not constrain thinking: %#v", got)
+	}
+	if _, present := got["response_format"]; present {
+		t.Fatalf("plain chat must not constrain the response shape: %#v", got)
 	}
 
 	// A classify-style request grammar-constrains the reply but never touches
 	// the model's thinking: the model decides how much to reason, and the
 	// schema means the content it returns can only be the decision shape.
 	if _, err := client.Chat(context.Background(), ChatRequest{
-		Model:          "llama3",
+		Model:          "qwen3-8b",
 		Messages:       []Message{{Role: "user", Content: "classify"}},
 		ResponseSchema: map[string]any{"type": "object"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got.Think != nil {
+	if _, present := got["chat_template_kwargs"]; present {
 		t.Fatalf("the thinking default must be left to the model: %#v", got)
 	}
-	if format, ok := got.Format.(map[string]any); !ok || format["type"] != "object" {
-		t.Fatalf("classify chat must send the response schema as format: %#v", got.Format)
+	format, _ := got["response_format"].(map[string]any)
+	schema, _ := format["json_schema"].(map[string]any)
+	constraint, _ := schema["schema"].(map[string]any)
+	if format["type"] != "json_schema" || constraint["type"] != "object" {
+		t.Fatalf("classify chat must send the response schema as response_format: %#v", got["response_format"])
 	}
 }
 
-func TestOllamaMessagesConsolidateSystemMessagesAtBeginning(t *testing.T) {
-	messages := ollamaMessages([]Message{
-		{Role: "system", Content: "Global policy."},
-		{Role: "user", Content: "Skill catalog."},
-		{Role: "system", Content: "Route and template policy."},
-		{Role: "user", Content: "Hello."},
-	})
-
-	if len(messages) != 3 {
-		t.Fatalf("got %d messages: %#v", len(messages), messages)
-	}
-	if messages[0]["role"] != "system" || messages[0]["content"] != "Global policy.\n\nRoute and template policy." {
-		t.Fatalf("system messages were not consolidated first: %#v", messages)
-	}
-	if messages[1]["role"] != "user" || messages[1]["content"] != "Skill catalog." {
-		t.Fatalf("non-system message order changed: %#v", messages)
-	}
-	for _, message := range messages[1:] {
-		if message["role"] == "system" {
-			t.Fatalf("found a non-leading system message: %#v", messages)
-		}
-	}
-}
-
-func TestOllamaMessagesConvertStructuredOpenAIToolHistory(t *testing.T) {
-	messages := ollamaMessages([]Message{
-		{Role: "user", Content: "Read the file."},
-		{Role: "assistant", Content: "", ToolCalls: []any{
-			map[string]any{
-				"id":   "call-1",
-				"type": "function",
-				"function": map[string]any{
-					"name":      "read",
-					"arguments": `{"path":"README.md"}`,
-				},
-			},
-		}},
-		{Role: "tool", Content: "file contents", ToolCallID: "call-1"},
-	})
-
-	if len(messages) != 3 {
-		t.Fatalf("got %d messages: %#v", len(messages), messages)
-	}
-	toolCalls, ok := messages[1]["tool_calls"].([]map[string]any)
-	if !ok || len(toolCalls) != 1 {
-		t.Fatalf("assistant tool calls were not converted: %#v", messages[1])
-	}
-	function := toolCalls[0]["function"].(map[string]any)
-	arguments, ok := function["arguments"].(map[string]any)
-	if !ok || arguments["path"] != "README.md" {
-		t.Fatalf("tool arguments were not decoded for Ollama: %#v", function["arguments"])
-	}
-	if messages[2]["tool_name"] != "read" {
-		t.Fatalf("tool result was not associated with its function: %#v", messages[2])
-	}
-	if _, exists := messages[2]["tool_call_id"]; exists {
-		t.Fatalf("OpenAI-only tool_call_id leaked into Ollama history: %#v", messages[2])
-	}
-}
-
-func TestOllamaClientActivatesConfiguredModel(t *testing.T) {
-	var got struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
-	}
+// A shared vLLM fleet is not Veil's to grammar-constrain per request, so the
+// same ChatRequest field is deliberately inert on the server path.
+func TestServerChatIgnoresTheResponseSchema(t *testing.T) {
+	var got map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/generate" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"done": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": "ok"}}},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientConfig{Mode: ModeServer, BaseURL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Chat(context.Background(), ChatRequest{
+		Model:          "fleet",
+		Messages:       []Message{{Role: "user", Content: "classify"}},
+		ResponseSchema: map[string]any{"type": "object"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got["response_format"]; present {
+		t.Fatalf("the server path must not constrain a shared fleet: %#v", got)
+	}
+}
+
+// llama-server loads its weights at process start, so there is nothing to warm.
+// Activation is only a question — is the process on that port up, and does it
+// accept our bearer — which is exactly one authenticated GET /v1/models.
+func TestLocalActivateModelIsAnAuthenticatedReadinessCheck(t *testing.T) {
+	paths := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer local-secret" {
+			t.Errorf("readiness check must be authenticated: %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"id": "selected-model"}}})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, APIKey: "local-secret", Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ActivateModel(context.Background(), "selected-model"); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "GET /v1/models" {
+		t.Fatalf("unexpected activation traffic: %#v", paths)
+	}
+}
+
+func TestLocalActivateModelFailsWhenTheRuntimeRefuses(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))
 	defer server.Close()
 
@@ -224,15 +207,12 @@ func TestOllamaClientActivatesConfiguredModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ActivateModel(context.Background(), "selected-model"); err != nil {
-		t.Fatal(err)
-	}
-	if got.Model != "selected-model" || got.Stream {
-		t.Fatalf("unexpected activation request: %#v", got)
+	if err := client.ActivateModel(context.Background(), "selected-model"); err == nil {
+		t.Fatal("a runtime that refuses the bearer must not read as activated")
 	}
 }
 
-func TestListModelsNormalizesVLLMAndOllamaPayloads(t *testing.T) {
+func TestListModelsNormalizesOpenAIPayloads(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -283,37 +263,33 @@ vllm:num_requests_waiting{model_name="a"} 4
 	}
 }
 
-func TestOllamaClientContextLengthUsesModelMetadata(t *testing.T) {
+// The desktop starts llama-server with exactly the configured --ctx-size, so
+// configuration is ground truth and the runtime is never asked.
+func TestLocalContextLengthComesFromConfiguration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/show" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		var input map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			t.Fatal(err)
-		}
-		if input["model"] != "gemma3" {
-			t.Fatalf("unexpected model %#v", input["model"])
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"model_info": map[string]any{
-				"gemma3.context_length": 131072,
-				"gemma3.block_count":    34,
-			},
-		})
+		t.Errorf("the local context length must not cost a runtime call: %s", r.URL.Path)
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
+	client, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, ContextLength: 131072, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	contextLength, err := client.ContextLength(context.Background(), "gemma3")
+	contextLength, err := client.ContextLength(context.Background(), "qwen3-8b")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if contextLength != 131072 {
 		t.Fatalf("got context length %d", contextLength)
+	}
+
+	unconfigured, err := NewClient(ClientConfig{Mode: ModeLocal, BaseURL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unconfigured.ContextLength(context.Background(), "qwen3-8b"); err == nil {
+		t.Fatal("an unconfigured local context length must be an error, not a guess")
 	}
 }
 
@@ -436,17 +412,20 @@ func TestVLLMDoChatForwardsToolsAndGenerationProfile(t *testing.T) {
 	}
 }
 
-func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
+// Multimodal content parts travel to the local runtime as the OpenAI array
+// they arrived as: llama-server reads them directly, so nothing is flattened
+// and no image is moved into a side channel.
+func TestLocalDoChatForwardsOpenAIContentPartsAndToolChoice(t *testing.T) {
 	var got map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/chat" {
+		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"ok"}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer server.Close()
 
@@ -455,7 +434,7 @@ func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, err := client.DoChat(context.Background(), ChatRequest{
-		Model: "llama3",
+		Model: "qwen3-8b",
 		Messages: []Message{{
 			Role: "user",
 			Content: []any{
@@ -467,6 +446,7 @@ func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
 		Stream:          false,
 		Tools:           []any{map[string]any{"type": "function"}},
 		ToolChoice:      "auto",
+		ParallelTools:   true,
 		MaxOutputTokens: 1024,
 	})
 	if err != nil {
@@ -475,36 +455,34 @@ func TestOllamaDoChatConvertsContentPartsAndOmitsToolChoice(t *testing.T) {
 	defer resp.Body.Close()
 
 	messages := got["messages"].([]any)
-	first := messages[0].(map[string]any)
-	if first["content"] != "first\n\nsecond" {
-		t.Fatalf("unexpected Ollama content: %#v", first["content"])
+	parts, ok := messages[0].(map[string]any)["content"].([]any)
+	if !ok || len(parts) != 3 {
+		t.Fatalf("content parts were not forwarded intact: %#v", messages[0])
 	}
-	images, ok := first["images"].([]any)
-	if !ok || len(images) != 1 || images[0] != "YWJj" {
-		t.Fatalf("Ollama image content was not forwarded: %#v", first)
+	image, _ := parts[1].(map[string]any)["image_url"].(map[string]any)
+	if image["url"] != "data:image/png;base64,YWJj" {
+		t.Fatalf("image content was not forwarded intact: %#v", parts[1])
 	}
-	options, _ := got["options"].(map[string]any)
-	if options["num_predict"] != float64(1024) {
-		t.Fatalf("Ollama output allowance was not enforced: %#v", got)
+	if got["max_tokens"] != float64(1024) {
+		t.Fatalf("output allowance was not enforced: %#v", got)
 	}
-	if _, ok := got["tool_choice"]; ok {
-		t.Fatalf("Ollama request should not include tool_choice: %#v", got)
-	}
-	if got["tools"] == nil {
-		t.Fatalf("Ollama tools were not forwarded: %#v", got)
+	if got["tool_choice"] != "auto" || got["parallel_tool_calls"] != true || got["tools"] == nil {
+		t.Fatalf("tool contract was not forwarded: %#v", got)
 	}
 }
 
-func TestListModelsNormalizesOllamaPayloadsAndDedupes(t *testing.T) {
+// Some OpenAI-compatible runtimes answer /v1/models with `models` rather than
+// `data`, and repeat an id across shapes. The normalizer takes both and dedupes.
+func TestListModelsNormalizesAlternatePayloadsAndDedupes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/tags" {
+		if r.URL.Path != "/v1/models" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"models": []any{
-				map[string]string{"name": "llama3"},
+				map[string]string{"name": "qwen3-8b"},
 				map[string]string{"model": "gemma"},
-				"llama3",
+				"qwen3-8b",
 				map[string]string{"id": "mistral"},
 			},
 		})
@@ -519,18 +497,22 @@ func TestListModelsNormalizesOllamaPayloadsAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 3 || models[0].ID != "llama3" || models[1].ID != "gemma" || models[2].ID != "mistral" {
+	if len(models) != 3 || models[0].ID != "qwen3-8b" || models[1].ID != "gemma" || models[2].ID != "mistral" {
 		t.Fatalf("unexpected models: %#v", models)
 	}
 }
 
-func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
+// llama-server's template parser emits structured tool_calls deltas for the
+// Qwen family. Veil must forward them byte for byte: rebuilding them is what
+// used to renumber parallel calls onto one index.
+func TestWriteOpenAIChatSSEPassesLocalToolCallsThrough(t *testing.T) {
 	src := strings.NewReader(strings.Join([]string{
-		`{"message":{"role":"assistant","content":"hi","tool_calls":[{"function":{"name":"read","arguments":{"path":"README.md"}}},{"function":{"name":"grep","arguments":{"pattern":"main","mode":"literal","path":"."}}}]},"done":false}`,
-		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"README.md"}}},{"function":{"name":"grep","arguments":{"pattern":"main","mode":"literal","path":"."}}}]},"done":false}`,
-		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"README.md"}}},{"function":{"name":"grep","arguments":{"pattern":"main","mode":"literal","path":"."}}}]},"done":true,"prompt_eval_count":1234,"eval_count":56}`,
+		`data: {"choices":[{"delta":{"role":"assistant","content":"hi"}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}},{"index":1,"id":"call-2","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"main\"}"}}]}}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":1234,"completion_tokens":56,"total_tokens":1290}}`,
+		`data: [DONE]`,
 		"",
-	}, "\n"))
+	}, "\n\n"))
 	var dst bytes.Buffer
 	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}); err != nil {
 		t.Fatal(err)
@@ -540,25 +522,21 @@ func TestWriteOpenAIChatSSEConvertsOllamaToolCallsAndDone(t *testing.T) {
 		t.Fatalf("missing assistant delta: %q", body)
 	}
 	if !strings.Contains(body, `"name":"read"`) || !strings.Contains(body, `"{\"path\":\"README.md\"}"`) {
-		t.Fatalf("missing converted tool call: %q", body)
+		t.Fatalf("missing forwarded tool call: %q", body)
 	}
 	if !strings.Contains(body, `"name":"grep"`) || !strings.Contains(body, `"index":1`) {
-		t.Fatalf("missing parallel tool call indexes: %q", body)
+		t.Fatalf("parallel tool call indexes were not preserved: %q", body)
 	}
-	toolMarker := `"tool_calls"`
-	firstTools := strings.Index(body, toolMarker)
+	firstTools := strings.Index(body, `"tool_calls"`)
 	doneMarker := strings.Index(body, "data: [DONE]")
 	if firstTools < 0 || doneMarker < 0 || firstTools > doneMarker {
 		t.Fatalf("tool calls must be emitted before the completion marker: %q", body)
 	}
 	if strings.Count(body, `"name":"read"`) != 1 || strings.Count(body, `"name":"grep"`) != 1 {
-		t.Fatalf("Ollama tool calls were repeated across stream chunks: %q", body)
+		t.Fatalf("tool calls were duplicated: %q", body)
 	}
-	if !strings.Contains(body, `"prompt_tokens":1234`) || !strings.Contains(body, `"completion_tokens":56`) || !strings.Contains(body, `"total_tokens":1290`) {
-		t.Fatalf("missing converted usage: %q", body)
-	}
-	if !strings.Contains(body, "data: [DONE]") {
-		t.Fatalf("missing done marker: %q", body)
+	if !strings.Contains(body, `"prompt_tokens":1234`) || !strings.Contains(body, `"total_tokens":1290`) {
+		t.Fatalf("missing usage: %q", body)
 	}
 }
 
@@ -595,24 +573,32 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 	}
 }
 
-func TestWriteOpenAIChatSSERejectsTruncatedOllamaStream(t *testing.T) {
-	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"assistant","content":"partial"},"done":false}`+"\n"), time.Second, UsageAnnotation{})
-	if err == nil {
-		t.Fatal("expected truncated stream error")
+func TestWriteOpenAIChatSSERejectsUnsafeLocalStreams(t *testing.T) {
+	for name, stream := range map[string]string{
+		"missing completion": `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
+		"not server-sent events": `{"message":{"role":"assistant","content":"partial"},"done":false}` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(stream), time.Second, UsageAnnotation{}); err == nil {
+				t.Fatal("expected invalid stream error")
+			}
+		})
 	}
 }
 
-func TestWriteOpenAIChatSSERejectsNonAssistantOllamaMessages(t *testing.T) {
-	err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(`{"message":{"role":"user","content":"bad"},"done":false}`), time.Second, UsageAnnotation{})
-	if err == nil {
-		t.Fatal("expected non-assistant message error")
+func TestWriteOpenAIChatSSEStripsPrivateReasoningFromTheLocalRuntime(t *testing.T) {
+	src := strings.NewReader(strings.Join([]string{
+		`data: {"choices":[{"delta":{"role":"assistant","reasoning_content":"hidden plan"}}]}`,
+		`data: {"choices":[{"delta":{"content":"Safe progress."}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n"))
+	var dst bytes.Buffer
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestWriteOpenAIChatSSERejectsUnsupportedMode(t *testing.T) {
-	err := WriteOpenAIChatSSE(context.Background(), Mode("raw"), &bytes.Buffer{}, strings.NewReader(""), time.Second, UsageAnnotation{})
-	if err == nil {
-		t.Fatal("expected unsupported mode error")
+	if strings.Contains(dst.String(), "hidden plan") || strings.Contains(dst.String(), "reasoning_content") {
+		t.Fatalf("private reasoning leaked through the local path: %q", dst.String())
 	}
 }
 
@@ -729,27 +715,33 @@ func TestUsageFramesCarryTheProtectedPrefixSize(t *testing.T) {
 		t.Fatalf("the prefix size belongs only on the usage frame: %q", vllm.String())
 	}
 
-	// Ollama has no tokenize endpoint, so its size is a flagged estimate.
-	var ollama bytes.Buffer
-	ollamaStream := strings.NewReader(
-		`{"message":{"role":"assistant","content":"answer"},"done":true,"prompt_eval_count":1234,"eval_count":56}` + "\n",
-	)
+	// A tokenize call that did not answer leaves a flagged estimate, which must
+	// travel as an estimate rather than as a measurement.
+	var local bytes.Buffer
+	localStream := strings.NewReader(strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"answer"}}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":1234,"completion_tokens":56,"total_tokens":1290}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n"))
 	estimated := UsageAnnotation{SystemPromptTokens: 812}
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &ollama, ollamaStream, time.Second, estimated); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &local, localStream, time.Second, estimated); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ollama.String(), `"system_prompt_tokens":812`) {
-		t.Fatalf("Ollama usage frame lost the prefix size: %q", ollama.String())
+	if !strings.Contains(local.String(), `"system_prompt_tokens":812`) {
+		t.Fatalf("local usage frame lost the prefix size: %q", local.String())
 	}
-	if !strings.Contains(ollama.String(), `"system_prompt_tokens_exact":false`) {
-		t.Fatalf("an estimated Ollama size must not claim to be exact: %q", ollama.String())
+	if !strings.Contains(local.String(), `"system_prompt_tokens_exact":false`) {
+		t.Fatalf("an estimated size must not claim to be exact: %q", local.String())
 	}
 
 	// Without a size, nothing is added and the frame stays exactly as before.
 	var bare bytes.Buffer
-	bareStream := strings.NewReader(
-		`{"message":{"role":"assistant","content":"answer"},"done":true,"prompt_eval_count":10,"eval_count":2}` + "\n",
-	)
+	bareStream := strings.NewReader(strings.Join([]string{
+		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n"))
 	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bare, bareStream, time.Second, UsageAnnotation{}); err != nil {
 		t.Fatal(err)
 	}
@@ -815,6 +807,73 @@ func TestPrefixTokensFallsBackToAFlaggedEstimate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if local.PrefixTokens(context.Background(), "engineering:a", "model", prefix).Exact {
-		t.Fatal("the local runtime has no tokenize endpoint to be exact with")
+		t.Fatal("a local runtime that will not tokenize must not yield an exact count either")
+	}
+}
+
+// Both runtimes answer /tokenize with a token array, and both reject the
+// other's request body, so the shape has to follow the mode.
+func TestTokenizeRequestShapeFollowsTheMode(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode Mode
+		// what the stub answers with, and what the request must look like
+		reply  string
+		verify func(t *testing.T, body map[string]any)
+		want   int
+	}{
+		{
+			name:  "server sends the chat shape and reads count",
+			mode:  ModeServer,
+			reply: `{"count":3187,"tokens":[1,2,3]}`,
+			want:  3187,
+			verify: func(t *testing.T, body map[string]any) {
+				if body["model"] != "model" || body["messages"] == nil {
+					t.Fatalf("vLLM tokenize needs the model and the chat messages: %#v", body)
+				}
+				if _, present := body["content"]; present {
+					t.Fatalf("vLLM tokenize must not be sent a content string: %#v", body)
+				}
+			},
+		},
+		{
+			name:  "local sends one content string and counts the tokens",
+			mode:  ModeLocal,
+			reply: `{"tokens":[1,2,3,4]}`,
+			want:  4,
+			verify: func(t *testing.T, body map[string]any) {
+				if body["content"] != "protected prompt\n" {
+					t.Fatalf("llama-server tokenize needs the prefix as one string: %#v", body)
+				}
+				if _, present := body["messages"]; present {
+					t.Fatalf("llama-server tokenize must not be sent chat messages: %#v", body)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var body map[string]any
+			runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/tokenize" {
+					t.Errorf("unexpected tokenize path %q", r.URL.Path)
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				_, _ = io.WriteString(w, test.reply)
+			}))
+			defer runtime.Close()
+
+			client, err := NewClient(ClientConfig{Mode: test.mode, BaseURL: runtime.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			annotation := client.PrefixTokens(
+				context.Background(), "engineering:a", "model",
+				[]Message{{Role: "system", Content: "protected prompt"}},
+			)
+			if !annotation.Exact || annotation.SystemPromptTokens != test.want {
+				t.Fatalf("unexpected annotation %+v", annotation)
+			}
+			test.verify(t, body)
+		})
 	}
 }

@@ -97,6 +97,15 @@ export function workspaceIndexDirectory(dataRoot: string, workspacePath: string)
   return path.join(dataRoot, "artifacts", "index", workspaceStorageKey(workspacePath));
 }
 
+/// Downloaded model weights, one directory per catalog id.
+///
+/// Under cache/ because it is regenerable: every byte can be fetched again from
+/// the revision-pinned URL in the catalog, so this is the one part of the data
+/// root a backup can skip and the one a user can delete to reclaim disk.
+export function modelsDirectory(dataRoot: string): string {
+  return path.join(dataRoot, "cache", "models");
+}
+
 export function electronSessionDirectory(dataRoot: string): string {
   return path.join(dataRoot, "cache", "electron");
 }

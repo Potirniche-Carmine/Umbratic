@@ -6,6 +6,7 @@ target/
 apps/desktop/dist/
 apps/desktop/dist-electron/
 apps/desktop/.package/
+apps/desktop/.llama-cache/
 packages/runner/dist/
 artifacts/
 %SystemDrive%/ProgramData/Microsoft/Windows/Caches/

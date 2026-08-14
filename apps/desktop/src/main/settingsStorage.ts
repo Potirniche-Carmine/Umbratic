@@ -13,7 +13,7 @@ import {
 } from "./config";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
-import type { DesktopStartupSettings } from "../shared/desktopApi";
+import type { DesktopStartupSettings, DictationSettings } from "../shared/desktopApi";
 import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
 import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
 import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
@@ -38,8 +38,10 @@ type RawSettings = {
   contextLength?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
-  localModelCache?: unknown;
+  dictation?: unknown;
   remoteConnections?: unknown;
+  customModels?: unknown;
+  localQuants?: unknown;
 };
 
 type SettingsRow = {
@@ -51,65 +53,6 @@ type NoteRow = {
 };
 const appSettingsKey = "app";
 const userNotesId = "user";
-const localModelCacheLimit = 8;
-const localModelLimit = 200;
-type StoredLocalModelCacheEntry = {
-  baseUrl: string;
-  models: string[];
-  updatedAt: string;
-};
-
-function localModelCacheKey(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, "");
-}
-
-function normalizedLocalModelCache(value: unknown): StoredLocalModelCacheEntry[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.baseUrl !== "string" || !Array.isArray(entry.models)) return [];
-    const baseUrl = localModelCacheKey(entry.baseUrl);
-    if (!baseUrl) return [];
-    const models = Array.from(new Set(
-      entry.models
-        .filter((model): model is string => typeof model === "string")
-        .map((model) => model.trim())
-        .filter((model) => model.length > 0 && model.length <= 256),
-    )).slice(0, localModelLimit);
-    return [{
-      baseUrl,
-      models,
-      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
-    }];
-  }).slice(0, localModelCacheLimit);
-}
-
-function cachedLocalModels(settings: RawSettings, baseUrl: string): string[] {
-  const key = localModelCacheKey(baseUrl);
-  return normalizedLocalModelCache(settings.localModelCache)
-    .find((entry) => entry.baseUrl === key)?.models ?? [];
-}
-
-export function readCachedLocalModels(baseUrl: string): string[] {
-  return cachedLocalModels(readRawSettings(), baseUrl);
-}
-
-export function writeCachedLocalModels(baseUrl: string, models: readonly string[]): string[] {
-  const key = localModelCacheKey(baseUrl);
-  if (!key) return [];
-  const normalized = Array.from(new Set(
-    models.map((model) => model.trim()).filter((model) => model.length > 0 && model.length <= 256),
-  )).slice(0, localModelLimit);
-  const settings = readRawSettings();
-  const entries = normalizedLocalModelCache(settings.localModelCache)
-    .filter((entry) => entry.baseUrl !== key);
-  writeRawSettings({
-    ...settings,
-    localModelCache: [{ baseUrl: key, models: normalized, updatedAt: new Date().toISOString() }, ...entries]
-      .slice(0, localModelCacheLimit),
-  });
-  return normalized;
-}
-
 function readRawSettings(): RawSettings {
   return withAppDatabase((db) => {
     const row = db.prepare("SELECT payload FROM settings WHERE key = ?").get(appSettingsKey) as SettingsRow | undefined;
@@ -233,6 +176,25 @@ export function clearCompanyDeviceCredential(): void {
 
 export function companyConnectionStatus() {
   return companyConnectionStatusFromValue(readRawSettings().companyCredential);
+}
+
+/**
+ * Forgets which local model was chosen, so every launch starts with none.
+ *
+ * A remembered pick is a model queued to load: the first prompt of the session
+ * brings up gigabytes of weights nobody asked for that run. Choosing is cheap
+ * and the collection is right there, so the session begins with the machine
+ * idle and the user decides when that changes. The rest of the local endpoint —
+ * mode, URL — is left alone; only the pick is per-session.
+ */
+export function clearLocalModelSelection(): void {
+  const settings = readRawSettings();
+  const local = settings.modelEndpoints?.local;
+  if (!local || !local.modelId) return;
+  writeRawSettings({
+    ...settings,
+    modelEndpoints: { ...settings.modelEndpoints, local: { ...local, modelId: "" } },
+  });
 }
 
 export function readModelEndpointSettings(): ActiveModelEndpointSettings { return modelEndpointSettings(readRawSettings()); }
@@ -395,6 +357,49 @@ export function writeContextLengthSetting(value: unknown): number {
   return contextLength;
 }
 
+/**
+ * Dictation is off until a model is chosen. "off" is a real stored value, not
+ * an absent one: a user who turns dictation off has made a decision, and the
+ * next release adding a default must not undo it.
+ */
+export function readDictationSettings(): DictationSettings {
+  return normalizedDictationSettings(readRawSettings().dictation);
+}
+
+export function writeDictationSettings(value: unknown): DictationSettings {
+  const dictation = normalizedDictationSettings(value);
+  writeRawSettings({ ...readRawSettings(), dictation });
+  return dictation;
+}
+
+function normalizedDictationSettings(value: unknown): DictationSettings {
+  // English by default rather than automatic detection. A two-word utterance
+  // carries little evidence of its language, and a confident transcript in the
+  // wrong one is harder to notice than a missed word. Auto stays available for
+  // anyone who switches languages.
+  if (!isRecord(value)) return { model: "off", language: defaultDictationLanguage, deviceId: null };
+  const model = value.model === "qwen3-asr-0.6b" || value.model === "qwen3-asr-1.7b" ? value.model : "off";
+  // The chosen microphone, as the browser's own device id. Null is "whatever
+  // the system calls default", which is also what a stored id that no longer
+  // matches any device falls back to — the renderer checks that, because only
+  // it can enumerate. Bounded here: it is an opaque string from an untrusted
+  // surface, and nothing downstream should meet an unbounded one.
+  const deviceId = typeof value.deviceId === "string" && value.deviceId.length > 0 && value.deviceId.length <= 256
+    ? value.deviceId
+    : null;
+  // A language hint is a BCP-47-ish tag the runtime is given verbatim, so it is
+  // bounded and character-restricted here rather than trusted. An explicitly
+  // stored null means the user chose automatic detection and keeps it.
+  if (value.language === null) return { model, language: null, deviceId };
+  const language = typeof value.language === "string" && /^[A-Za-z]{2,8}(-[A-Za-z0-9]{2,8})*$/.test(value.language)
+    ? value.language
+    : defaultDictationLanguage;
+  return { model, language, deviceId };
+}
+
+/** What dictation assumes it is hearing until someone says otherwise. */
+export const defaultDictationLanguage = "en";
+
 export function readPermissionModeSetting(): PermissionMode {
   return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
 }
@@ -405,9 +410,6 @@ export function readStartupSettings(): DesktopStartupSettings {
   return {
     permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
     modelEndpoint: publicModelEndpointSettings(endpoint),
-    localModels: endpoint.mode === "local"
-      ? Array.from(new Set([endpoint.modelId, ...cachedLocalModels(settings, endpoint.baseUrl)].filter(Boolean)))
-      : [],
     companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
@@ -434,6 +436,44 @@ export function readStoredRemoteConnections(): unknown {
 
 export function writeStoredRemoteConnections(value: unknown): void {
   writeRawSettings({ ...readRawSettings(), remoteConnections: value });
+}
+
+/**
+ * The stored custom-model list, verbatim. Shape and pinning belong to
+ * `customModels.ts`; this module only owns the settings blob.
+ */
+export function readStoredCustomModels(): unknown {
+  return readRawSettings().customModels;
+}
+
+export function writeStoredCustomModels(value: unknown): void {
+  writeRawSettings({ ...readRawSettings(), customModels: value });
+}
+
+const quantPattern = /^[A-Z0-9][A-Z0-9_.-]{0,31}$/i;
+
+/**
+ * Which quantization each local model should download and run, keyed by model
+ * id. Only deviations from a model's default are stored, so a later change to
+ * a catalog default reaches everyone who never chose.
+ */
+export function readLocalQuantSelections(): Record<string, string> {
+  const stored = readRawSettings().localQuants;
+  if (!isRecord(stored)) return {};
+  return Object.fromEntries(
+    Object.entries(stored).filter(([id, quant]) =>
+      /^[A-Za-z0-9][\w-]{0,160}$/.test(id) && typeof quant === "string" && quantPattern.test(quant),
+    ),
+  ) as Record<string, string>;
+}
+
+export function writeLocalQuantSelection(modelId: string, quant: string | null): Record<string, string> {
+  const current = readLocalQuantSelections();
+  const next = { ...current };
+  if (quant === null) delete next[modelId];
+  else if (quantPattern.test(quant)) next[modelId] = quant;
+  writeRawSettings({ ...readRawSettings(), localQuants: next });
+  return next;
 }
 
 export function readNotes(): UserNotes {

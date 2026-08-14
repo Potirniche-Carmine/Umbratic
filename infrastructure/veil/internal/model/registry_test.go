@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -42,7 +41,7 @@ func TestRegistryRoutesChatToTheNamedModel(t *testing.T) {
 	big := newStubRuntime(t, "big")
 	small := newStubRuntime(t, "small")
 
-	registry, err := NewRegistry(ModeServer, "big", []RegistrySpec{
+	registry, err := NewRegistry(ModeServer, "big", "", []RegistrySpec{
 		{ID: "big", BaseURL: big.server.URL},
 		{ID: "small", BaseURL: small.server.URL},
 	}, 2*time.Second)
@@ -73,7 +72,7 @@ func TestRegistryAvailabilityIsPerRuntime(t *testing.T) {
 	}))
 	defer stopped.Close()
 
-	registry, err := NewRegistry(ModeServer, "big", []RegistrySpec{
+	registry, err := NewRegistry(ModeServer, "big", "", []RegistrySpec{
 		{ID: "big", BaseURL: big.server.URL},
 		{ID: "small", BaseURL: stopped.URL},
 	}, 2*time.Second)
@@ -94,7 +93,7 @@ func TestRegistryAvailabilityIsPerRuntime(t *testing.T) {
 
 func TestRegistryServerThinkingSupportComesFromTheEntry(t *testing.T) {
 	big := newStubRuntime(t, "big")
-	registry, err := NewRegistry(ModeServer, "big", []RegistrySpec{
+	registry, err := NewRegistry(ModeServer, "big", "", []RegistrySpec{
 		{ID: "big", BaseURL: big.server.URL, Reasoning: true},
 		{ID: "plain", BaseURL: big.server.URL},
 	}, 2*time.Second)
@@ -109,26 +108,27 @@ func TestRegistryServerThinkingSupportComesFromTheEntry(t *testing.T) {
 	}
 }
 
-func TestRegistryLocalThinkingProbeGatesTheDirective(t *testing.T) {
-	var shows atomic.Int32
+// A local model's thinking capability comes from the catalog the desktop
+// downloaded its weights out of, the same way a server model's comes from the
+// administrator's registry. llama-server does not expose the fact, and a
+// directive that reaches a template which ignores it reads, in a trace, as a
+// directive that was honoured.
+func TestRegistryLocalThinkingSupportComesFromTheEntry(t *testing.T) {
 	var chatBody map[string]any
-	capabilities := []string{"completion", "thinking"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/show":
-			shows.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": capabilities})
-		case "/api/chat":
-			_ = json.NewDecoder(r.Body).Decode(&chatBody)
-			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"ok"}}`))
-		default:
+		if r.URL.Path != "/v1/chat/completions" {
 			http.NotFound(w, r)
+			return
 		}
+		_ = json.NewDecoder(r.Body).Decode(&chatBody)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer server.Close()
 
-	registry, err := NewRegistry(ModeLocal, "thinker", []RegistrySpec{{ID: "thinker", BaseURL: server.URL}}, 2*time.Second)
+	registry, err := NewRegistry(ModeLocal, "thinker", "", []RegistrySpec{
+		{ID: "thinker", BaseURL: server.URL, Reasoning: true},
+	}, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,20 +136,12 @@ func TestRegistryLocalThinkingProbeGatesTheDirective(t *testing.T) {
 	if _, err := registry.Chat(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if chatBody["think"] != true {
-		t.Fatalf("a capable model must receive the directive: %#v", chatBody)
-	}
-	if _, err := registry.Chat(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if shows.Load() != 1 {
-		t.Fatalf("the capability probe must be cached per model, ran %d times", shows.Load())
+	kwargs, _ := chatBody["chat_template_kwargs"].(map[string]any)
+	if kwargs["enable_thinking"] != true {
+		t.Fatalf("a declared reasoning model must receive the directive: %#v", chatBody)
 	}
 
-	// A model whose capabilities never mention thinking gets no `think` field at
-	// all: some Ollama builds fail the whole request rather than ignore it.
-	capabilities = []string{"completion"}
-	plain, err := NewRegistry(ModeLocal, "plain", []RegistrySpec{{ID: "plain", BaseURL: server.URL}}, 2*time.Second)
+	plain, err := NewRegistry(ModeLocal, "plain", "", []RegistrySpec{{ID: "plain", BaseURL: server.URL}}, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,16 +149,39 @@ func TestRegistryLocalThinkingProbeGatesTheDirective(t *testing.T) {
 	if _, err := plain.Chat(context.Background(), ChatRequest{Model: "plain", Messages: []Message{{Role: "user", Content: "hi"}}, Thinking: boolPointer(true)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, present := chatBody["think"]; present {
-		t.Fatalf("an incapable model must not be sent think: %#v", chatBody)
+	if _, present := chatBody["chat_template_kwargs"]; present {
+		t.Fatalf("an undeclared model must not be sent a thinking directive: %#v", chatBody)
+	}
+}
+
+// Every runtime call carries the configured bearer, which is what keeps a
+// second process on the box from driving the llama-server the desktop started.
+func TestRegistryClientsCarryTheProviderBearer(t *testing.T) {
+	authorizations := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations <- r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]any{"id": "local"}}})
+	}))
+	defer server.Close()
+
+	registry, err := NewRegistry(ModeLocal, "local", "run-secret", []RegistrySpec{{ID: "local", BaseURL: server.URL}}, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.ListModels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-authorizations; got != "Bearer run-secret" {
+		t.Fatalf("runtime call was not authenticated: %q", got)
 	}
 }
 
 func TestNewRegistryRequiresTheDefaultModel(t *testing.T) {
-	if _, err := NewRegistry(ModeServer, "absent", []RegistrySpec{{ID: "big", BaseURL: "http://127.0.0.1:8001/v1"}}, time.Second); err == nil {
+	if _, err := NewRegistry(ModeServer, "absent", "", []RegistrySpec{{ID: "big", BaseURL: "http://127.0.0.1:8001/v1"}}, time.Second); err == nil {
 		t.Fatal("a default outside the registry must fail at startup, not at request time")
 	}
-	if _, err := NewRegistry(ModeServer, "big", nil, time.Second); err == nil {
+	if _, err := NewRegistry(ModeServer, "big", "", nil, time.Second); err == nil {
 		t.Fatal("an empty registry must fail at startup")
 	}
 }

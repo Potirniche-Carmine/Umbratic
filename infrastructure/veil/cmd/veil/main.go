@@ -34,7 +34,7 @@ func main() {
 			EmbeddingModel:   cfg.RAG.EmbeddingModel,
 		})
 	}
-	modelClient, err := model.NewRegistry(cfg.Mode, cfg.DefaultModel, specs, cfg.ModelTimeout)
+	modelClient, err := model.NewRegistry(cfg.Mode, cfg.DefaultModel, cfg.ProviderAPIKey, specs, cfg.ModelTimeout)
 	if err != nil {
 		log.Fatal(err)
 	}

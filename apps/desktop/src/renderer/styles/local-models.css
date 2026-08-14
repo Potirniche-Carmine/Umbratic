@@ -1,0 +1,508 @@
+/* The downloadable local model list, shared by Connection and Voice. */
+
+.localModelList {
+  display: grid;
+  gap: 6px;
+}
+
+.localModelRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 8px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 7px;
+  color: var(--text);
+  text-align: left;
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.localModelTick {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+}
+
+/* A model that is only a download away reads one step back from one that is
+   here and ready to pick. */
+.localModelRow:not(.isDownloaded) .localModelName {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* The collection menu: the whole model list inside one dropdown. */
+.localModelMenu {
+  max-height: 340px;
+  padding: 6px;
+}
+
+.localModelRow.isMenuRow {
+  min-height: 36px;
+  padding: 0 6px 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  /* Menu rows answer the cursor instantly, like every other menu. */
+  transition: none;
+}
+
+.localModelRow.isMenuRow.isSelectable {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* A pickable row answers the press, like every button in the app. The standing
+   list in Voice has a border to move, so it gives way; a menu row has none, so
+   it lights instead — a row that shrinks inside a menu drags its neighbours. */
+.localModelList .localModelRow.isSelectable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.localModelList .localModelRow.isSelectable:hover {
+  border-color: color-mix(in srgb, var(--line) 52%, var(--text));
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
+}
+
+.localModelList .localModelRow.isSelectable:focus-visible {
+  outline: 0;
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.localModelList .localModelRow.isSelectable:active {
+  transform: scale(0.994);
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+.localModelList .localModelRow.isSelected {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.1), rgba(178, 186, 197, 0.04)),
+    color-mix(in srgb, var(--surface-2) 64%, transparent);
+}
+
+.localModelList .localModelRow.isSelected .localModelName {
+  font-weight: 650;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .localModelList .localModelRow.isSelectable:active,
+  .settingsIconButton:active:not(:disabled),
+  .settingsInlineButton:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* Every row lights the same on hover — a menu where a single row reacts reads
+   as flicker. The pickable row distinguishes itself by cursor and check, not
+   by being the only one alive. */
+.localModelRow.isMenuRow:hover,
+.localModelRow.isMenuRow.isSelectable:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+.localModelRow.isMenuRow.isSelected {
+  background:
+    linear-gradient(180deg, rgba(178, 186, 197, 0.1), rgba(178, 186, 197, 0.04)),
+    color-mix(in srgb, var(--surface-2) 56%, transparent);
+}
+
+.localModelRow.isMenuRow.isSelected .localModelName {
+  font-weight: 650;
+}
+
+/* Unload sits on the selected model's row, inside the menu, so appearing and
+   disappearing never resizes the field the user is pointing at. */
+.modelUnloadButton {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.modelUnloadButton:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--red) 62%, var(--text));
+  border-color: color-mix(in srgb, var(--red) 26%, var(--line));
+}
+
+/*
+ * Loading, said as a state rather than as a replacement name. The model keeps
+ * its own name in its own weight and the word sits beside it in the quiet
+ * register the rest of the trigger's metadata uses — a trigger that reads
+ * "Loading Gemma 4 12B…" in body text is a sentence where a label should be.
+ */
+.modelPickerLoading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modelPickerLoading svg {
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.modelPickerLoadingName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelPickerLoadingNote {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* The model is resident and answering. Stated on the trigger because the only
+   other evidence of it is the app being fast. */
+.modelPickerLive {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+/* A dictation row's own account of what its weights are doing. */
+.localModelState {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* The trigger's right side: chosen quant, live download progress, chevron. */
+.localMenuTriggerSide {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.localMenuTriggerProgress {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Every row reserves the same trailing slot, whether it holds a download
+   button, a cancel, a tick, or nothing. Without it the size of a downloaded
+   model sits a button-width further right than the rest and the column reads
+   as misaligned. */
+.localModelAction {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+}
+
+.localModelFolder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.localModelName {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.localModelNote {
+  flex: 0 0 auto;
+  min-width: 52px;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.localModelBadge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* A statement of fact about the model, not a suggestion to pick it. */
+.localModelBadge.isPlain {
+  border-color: color-mix(in srgb, var(--line) 84%, transparent);
+  color: var(--faint);
+}
+
+.localModelProgress {
+  flex: 1 1 90px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+  overflow: hidden;
+}
+
+.localModelProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 72%, transparent);
+  transition: width 200ms ease-out;
+}
+
+/* The per-row quantization picker: a detail of the row, styled like every
+   other dropdown in settings, just smaller. */
+.quantPicker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.quantPicker.isOpen {
+  z-index: 12;
+}
+
+.quantPickerTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px 0 9px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 6px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.quantPickerTrigger svg {
+  color: var(--faint);
+  transition: transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+.quantPickerTrigger:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--line) 58%, var(--text));
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
+}
+
+.quantPickerTrigger:focus-visible {
+  outline: 0;
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.quantPickerTrigger:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.quantPicker.isOpen .quantPickerTrigger {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+}
+
+.quantPicker.isOpen .quantPickerTrigger svg {
+  transform: rotate(180deg);
+}
+
+.quantPickerMenu {
+  width: 196px;
+  right: 0;
+  left: auto;
+  /* Portalled to <body> so the scrolling model menu cannot clip it, which puts
+     it outside the settings scrim's subtree — and the scrim paints at 45. Without
+     a higher layer the menu opens behind the dialog that asked for it. */
+  z-index: 60;
+}
+
+.quantPickerOption {
+  gap: 8px;
+}
+
+.quantPickerSize {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The model's default quantization — the one to take when unsure. Overrides
+   the option styling that paints every svg as the selection check. */
+.modelPickerOption svg.quantPickerStar {
+  color: color-mix(in srgb, var(--accent) 62%, var(--muted));
+  fill: currentColor;
+}
+
+/* Says whether picking a quantization costs a download. Fixed width so the two
+   answers do not shuffle the column between rows. */
+.quantPickerHere {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: 4px;
+  width: 62px;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.quantPickerHere.isAbsent {
+  color: var(--faint);
+  font-weight: 500;
+}
+
+/* The disk glyph belongs to its label, not to the option's selection check,
+   which is what the bare `svg` rule in settings.css paints. */
+.modelPickerOption .quantPickerHere svg {
+  color: inherit;
+}
+
+/* An option whose files are here leads with the weight of a real choice; the
+   rest read as offers. */
+.quantPickerOption.isDownloaded .modelPickerOptionName {
+  color: var(--text);
+}
+
+/* Removing a custom model deletes gigabytes, so the control arms first and
+   asks to be pressed again. */
+.localModelRemove {
+  width: auto;
+  min-width: 28px;
+  padding: 0 6px;
+  color: var(--faint);
+}
+
+.localModelRemove:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--red) 66%, var(--text));
+  border-color: color-mix(in srgb, var(--red) 24%, var(--line));
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.localModelRemove.isArmed {
+  color: color-mix(in srgb, var(--red) 74%, var(--text));
+  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.localModelRemoveConfirm {
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/* The way in for a model the catalog does not carry. */
+.customModelAdd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.customModelAdd input {
+  flex: 1 1 auto;
+  height: 30px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 6px;
+  outline: 0;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  font-size: 12px;
+}
+
+.customModelAdd input::placeholder {
+  color: var(--faint);
+}
+
+.customModelAdd input:focus {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.customModelAdd input:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+/* A quiet footnote about the machine, not a control. It sits below the groups
+   because it is context for every choice above it rather than one of them. */
+.detectedSystem {
+  display: flex;
+  /* Baselines, not boxes: the label, values, and verdict are three different
+     sizes, and centring their boxes leaves the small one riding high. */
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px;
+  line-height: 1.2;
+  margin: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.detectedSystemLabel {
+  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 10.5px;
+}
+
+/* Plain colored text, not a badge: the line is a footnote and its verdict
+   should read at the same volume as the rest of it. */
+.detectedSystemQuality {
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.detectedSystemQuality.is-optimal {
+  color: var(--green);
+}
+
+.detectedSystemQuality.is-good {
+  color: color-mix(in srgb, var(--green) 55%, var(--muted));
+}
+
+.detectedSystemQuality.is-cpu {
+  color: var(--amber);
+}
+
+.detectedSystemHint {
+  flex-basis: 100%;
+  color: var(--faint);
+}

@@ -4,7 +4,9 @@ import type {
   ChatAttachment,
   DesktopApi,
   DictationEvent,
+  DictationSettings,
   HarnessProfileId,
+  ModelDownloadEvent,
   PastedAttachmentInput,
   PermissionMode,
   RemoteConnectionDraft,
@@ -92,6 +94,8 @@ const umbraticApi = {
   checkoutRepositoryBranch: (input: { repositoryId?: string; repositoryPath?: string; branch: string }) =>
     invoke("umbratic:checkout-repository-branch", input),
   getBackendStatus: () => invoke("umbratic:get-backend-status"),
+  loadLocalModel: () => invoke("umbratic:load-local-model"),
+  unloadLocalModel: () => invoke("umbratic:unload-local-model"),
   getStartupSettings: () => invoke("umbratic:get-startup-settings"),
   getCapabilityProbes: (input?: { force?: boolean }) => invoke("umbratic:get-capability-probes", input ?? {}),
   listRemoteConnections: () => invoke("umbratic:list-remote-connections"),
@@ -114,10 +118,22 @@ const umbraticApi = {
   saveContextLength: (input: number) => invoke("umbratic:save-context-length", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     invoke("umbratic:get-model-endpoint-settings", input),
-  getCachedLocalModels: (input: { baseUrl: string }) =>
-    invoke("umbratic:get-cached-local-models", input),
-  probeLocalModels: (input: { baseUrl: string }) =>
-    invoke("umbratic:probe-local-models", input),
+  getDictationSettings: () => invoke("umbratic:get-dictation-settings"),
+  saveDictationSettings: (input: DictationSettings) =>
+    invoke("umbratic:save-dictation-settings", input),
+  listLocalModels: (input: { kind: "chat" | "dictation" }) =>
+    invoke("umbratic:list-local-models", input),
+  downloadLocalModel: (input: { id: string }) =>
+    invoke("umbratic:download-local-model", input),
+  cancelLocalModelDownload: (input: { id: string }) =>
+    invoke("umbratic:cancel-local-model-download", input),
+  setLocalModelQuant: (input: { id: string; quant: string }) =>
+    invoke("umbratic:set-local-model-quant", input),
+  addCustomLocalModel: (input: { reference: string }) =>
+    invoke("umbratic:add-custom-local-model", input),
+  removeCustomLocalModel: (input: { id: string }) =>
+    invoke("umbratic:remove-custom-local-model", input),
+  openModelsFolder: () => invoke("umbratic:open-models-folder"),
   listServerModels: () => invoke("umbratic:list-server-models"),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";
@@ -193,6 +209,7 @@ const umbraticApi = {
     invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => invoke("umbratic:open-external", input),
+  requestMicrophoneAccess: () => invoke("umbratic:request-microphone-access", undefined),
   startDictation: (input: { language?: string }) => invoke("umbratic:start-dictation", input),
   sendDictationAudio: (input: { chunk: Uint8Array }) => invoke("umbratic:send-dictation-audio", input),
   stopDictation: () => invoke("umbratic:stop-dictation", undefined),
@@ -201,6 +218,11 @@ const umbraticApi = {
     const listener = (_event: IpcRendererEvent, value: DictationEvent) => callback(value);
     ipcRenderer.on("umbratic:dictation-event", listener);
     return () => ipcRenderer.removeListener("umbratic:dictation-event", listener);
+  },
+  onModelDownloadEvent: (callback: (event: ModelDownloadEvent) => void) => {
+    const listener = (_event: IpcRendererEvent, value: ModelDownloadEvent) => callback(value);
+    ipcRenderer.on("umbratic:model-download", listener);
+    return () => ipcRenderer.removeListener("umbratic:model-download", listener);
   },
   onWorkspaceIndex: (callback: (event: WorkspaceIndexEvent) => void) => {
     const listener = (_event: IpcRendererEvent, value: WorkspaceIndexEvent) => callback(value);

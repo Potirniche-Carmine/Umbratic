@@ -7,7 +7,14 @@ import (
 )
 
 // Mode selects the trusted provider adapter once at Veil startup.
-// Server mode is fixed to vLLM. Local mode is fixed to Ollama.
+//
+// Both adapters speak OpenAI: Server is a vLLM fleet on company infrastructure,
+// Local is the llama-server the desktop starts on loopback and holds a
+// per-run bearer for. The mode no longer decides which routes exist — it
+// decides the handful of places the two runtimes genuinely differ: the
+// /tokenize request shape, whether a per-request response schema is Veil's to
+// impose, where the context length is authoritative, and whether the local
+// tool-call healer runs.
 type Mode string
 
 const (
@@ -63,7 +70,9 @@ type GenerationProfile struct {
 	QueueTimeout              time.Duration
 }
 
-// LocalGenerationProfile is the fixed Ollama profile used in local mode.
+// LocalGenerationProfile is the fixed profile used in local mode. One
+// llama-server on one desktop serves one person, so the concurrency numbers
+// only need to cover a chat and its background work overlapping.
 func LocalGenerationProfile(maxOutputTokens int) GenerationProfile {
 	return GenerationProfile{
 		Temperature:               0.2,

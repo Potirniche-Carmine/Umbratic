@@ -19,6 +19,9 @@ const sourceExtensions = new Set([
 ]);
 const ignoredDirectories = new Set([
   ".git",
+  // Third-party source the packaging build clones. Gitignoring it is not
+  // enough: this walks the filesystem, not the index.
+  ".llama-cache",
   ".package",
   "dist",
   "dist-electron",

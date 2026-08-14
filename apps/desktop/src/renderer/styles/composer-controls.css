@@ -1,10 +1,25 @@
+/*
+ * The dock still spans the pane — its background and its top fade are what
+ * separate the composer from the conversation — but everything inside it shares
+ * one column, and that column is exactly as wide as the row of controls.
+ *
+ * The prompt box used to be a fixed 980px while the pills above it were only as
+ * wide as their own text, so the two read as unrelated objects. Now the pills
+ * decide, and a longer project name widens both together. Only `.promptControls`
+ * contributes its width to the track; everything else is `width: 0` with a
+ * `min-width: 100%`, which is what stops a long prompt from pushing the box out
+ * past the row it is meant to match.
+ */
 .promptDock {
   position: relative;
   z-index: 24;
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  /* Floor, then the control row's own width. `fit-content()` is not valid
+     inside `minmax()`, so the ceiling is a max-width on the row itself. */
+  grid-template-columns: minmax(min(100%, var(--prompt-min-width)), max-content);
+  justify-content: center;
+  align-content: end;
   gap: 9px;
   min-width: 0;
   padding: 10px clamp(22px, 4vw, 48px) 14px;
@@ -48,8 +63,11 @@
   align-items: center;
   justify-content: flex-start;
   gap: 5px;
-  width: var(--prompt-width);
-  min-width: 0;
+  /* The one child that decides the shared width: it is the only item that
+     contributes to the track, and `auto` lets it stretch back out to the floor
+     when its own content is narrower. */
+  width: auto;
+  max-width: var(--prompt-max-width);
   min-height: 30px;
   overflow: visible;
   padding: 0 4px;
@@ -60,7 +78,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: var(--prompt-width);
+  width: 0;
+  min-width: 100%;
   min-height: 34px;
   padding: 8px 10px;
   border: 1px solid rgba(178, 186, 197, 0.24);
@@ -89,7 +108,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: var(--prompt-width);
+  width: 0;
+  min-width: 100%;
   min-height: 34px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);

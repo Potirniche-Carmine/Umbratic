@@ -286,6 +286,42 @@ for (const match of workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
   }
 }
 
+// llama.cpp is vendored by source build, not by a package manager, so its pin is
+// checked here rather than through a lockfile.
+const llamaPin = fs.readFileSync(path.join(root, "third_party/llama.cpp.pin"), "utf8");
+const llamaFields = new Map(
+  llamaPin
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => [line.slice(0, line.indexOf("=")).trim(), line.slice(line.indexOf("=") + 1).trim()]),
+);
+if (llamaFields.get("repository") !== "https://github.com/ggml-org/llama.cpp.git") {
+  fail("third_party/llama.cpp.pin must clone llama.cpp from its upstream GitHub repository.");
+}
+if (!/^b\d+$/.test(llamaFields.get("tag") ?? "")) {
+  fail("third_party/llama.cpp.pin must pin a llama.cpp build tag such as b10419.");
+}
+if (!/^[0-9a-f]{40}$/.test(llamaFields.get("commit") ?? "")) {
+  fail("third_party/llama.cpp.pin must pin a full 40-character commit SHA.");
+}
+const preparePackageScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/prepare-package.ts"), "utf8");
+for (const requiredFlag of [
+  "-DLLAMA_CURL=OFF",
+  // Never -march=native in a build somebody else runs.
+  "-DGGML_NATIVE=OFF",
+  // Backends are selected on the user's machine, not on the build machine.
+  "-DGGML_BACKEND_DL=ON",
+  "-DGGML_CPU_ALL_VARIANTS=ON",
+]) {
+  if (!preparePackageScript.includes(requiredFlag)) {
+    fail(`Packaged llama-server must be configured with ${requiredFlag}.`);
+  }
+}
+if (!preparePackageScript.includes("pin.commit")) {
+  fail("Packaged llama-server must verify the cloned checkout against the pinned commit SHA.");
+}
+
 const desktopDevScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/dev.ts"), "utf8");
 if (!/spawn\("cargo", \["build", "--locked",/.test(desktopDevScript)) {
   fail("Desktop development Cargo builds must pass --locked.");

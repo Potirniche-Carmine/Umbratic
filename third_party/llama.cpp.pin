@@ -1,0 +1,13 @@
+# Pinned llama.cpp release for the bundled local model runtime.
+#
+# Umbratic builds `llama-server` from this exact commit during desktop
+# packaging; nothing is downloaded from a release page. Bump both fields
+# together and deliberately — a new tag is a supply-chain review, not a
+# routine dependency update.
+#
+# Floor: any release from mid-April 2026 or later. The Qwen3-ASR projector
+# landed in ggml-org/llama.cpp#19441 and `/v1/audio/transcriptions` in
+# ggml-org/llama.cpp#21863; dictation does not work on anything older.
+repository=https://github.com/ggml-org/llama.cpp.git
+tag=b10419
+commit=aee56b3abfeb134218fe5c496c329a1faac1ef28

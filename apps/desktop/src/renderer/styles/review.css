@@ -887,5 +887,14 @@
   background: rgba(0, 0, 0, 0.18);
   -webkit-backdrop-filter: blur(10px) brightness(0.62);
   backdrop-filter: blur(10px) brightness(0.62);
+  overscroll-behavior: contain;
+}
+
+/* Set on <html> while any modal is open. The scrollable panes behind the
+   scrim pause so stray wheel input cannot move the page under the dialog. */
+html.modalOpen .composerBody,
+html.modalOpen .chatList,
+html.modalOpen .sidebar {
+  overflow: hidden;
 }
 

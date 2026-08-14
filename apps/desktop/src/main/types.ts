@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import type { BackendUiEvent } from "../shared/backendEvents";
+import type { SystemProfile } from "../shared/desktopApi";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
 export type PermissionMode = "normal" | "auto_safe";
@@ -109,6 +110,8 @@ export type BackendStatus = {
   permissionMode: PermissionMode;
   /** Feature names the connected Veil advertised on the last health check. */
   veilFeatures: string[];
+  localDictationReady: boolean;
+  system: SystemProfile;
   endpointConfig: {
     source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;

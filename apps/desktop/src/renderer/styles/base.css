@@ -48,7 +48,11 @@
   --response-content-width: 980px;
   --radius: 8px;
   --timeline-card-width: 900px;
-  --prompt-width: min(100%, 980px);
+  /* The composer's width is decided by its control row, not set here. This is
+     the floor that row cannot shrink below, so a short project name still
+     leaves a prompt box worth typing in. */
+  --prompt-min-width: 640px;
+  --prompt-max-width: 980px;
   background: var(--bg);
   color: var(--text);
   /* Keep the established 13px visual baseline while letting new tokens scale with browser text settings. */

@@ -14,8 +14,8 @@
 .dictationButton {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--line);
   border-radius: 50%;
   background: transparent;
@@ -89,7 +89,258 @@
   text-overflow: ellipsis;
 }
 
+/* The offer shown when the microphone is pressed before dictation is set up.
+   It sits in the rail like the live caption so the composer does not resize. */
+.dictationEnable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+/* The sentence gives way before the two actions do: losing a word off the end
+   of an explanation is recoverable, losing the button that acts on it is not. */
+.dictationEnable > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictationEnableAction,
+.dictationEnableDismiss {
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.dictationEnableAction {
+  border-color: color-mix(in srgb, var(--accent) 46%, transparent);
+}
+
+.dictationEnableDismiss {
+  color: var(--muted);
+}
+
+.dictationEnableAction:hover,
+.dictationEnableDismiss:hover {
+  background: color-mix(in srgb, var(--surface-3) 62%, transparent);
+}
+
+/* Not set up yet: present, pressable, and visibly quieter than a live control. */
+.dictationControl.isOff .dictationButton {
+  color: var(--faint);
+}
+
+.dictationControl.isOff .dictationButton:hover {
+  color: var(--text);
+}
+
 .dictationCaption.isError {
   color: var(--red);
   white-space: normal;
+}
+
+/* Which microphone, hung off the button it belongs to. */
+.dictationDevices {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  margin-left: 1px;
+}
+
+/*
+ * A control in its own right, not a decoration on the microphone: it carries a
+ * border and a background like every other pill in the composer, and a target
+ * wide enough to hit without aiming. A 14px chevron with no edges read as part
+ * of the icon beside it.
+ */
+.dictationDeviceTrigger {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+.dictationDeviceTrigger:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.dictationDeviceTrigger:focus-visible {
+  outline: 0;
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.dictationDeviceTrigger:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.dictationDeviceTrigger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dictationDevices.isOpen .dictationDeviceTrigger {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.dictationDevices.isOpen .dictationDeviceTrigger svg {
+  transform: rotate(180deg);
+}
+
+.dictationDeviceTrigger svg {
+  transition: transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+/*
+ * Portalled to <body> and fixed, because the prompt shell clips its overflow —
+ * a menu left inside it is cut off at the shell's edge instead of shown over
+ * the conversation. The layer clears the composer, which sits at 46.
+ */
+.dictationDeviceMenu {
+  z-index: 60;
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(360px, 60vw);
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 94%, transparent);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.26), 0 2px 8px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(18px) saturate(135%);
+}
+
+.dictationDeviceEmpty {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* "Default:" is a qualifier on the name, so it reads quieter than the name. */
+.dictationDeviceMenu em {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.dictationDeviceMenu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dictationDeviceMenu button span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictationDeviceMenu button:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
+}
+
+.dictationDeviceMenu button.active {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.dictationDeviceMenu svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+/*
+ * The live level meter. It shares the button's single grid cell with the stop
+ * square so the two cross-fade in place instead of resizing the control.
+ */
+.dictationControl.isRecording .dictationButton {
+  position: relative;
+}
+
+.dictationBars,
+.dictationStopIcon {
+  grid-area: 1 / 1;
+  transition: opacity 140ms ease;
+}
+
+.dictationBars {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 16px;
+}
+
+.dictationBar {
+  width: 2px;
+  min-height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  /* Slightly behind the audio, which is what makes the movement read as
+     physical rather than as a value being assigned. */
+  transition: height 90ms ease-out;
+}
+
+.dictationStopIcon {
+  align-self: center;
+  justify-self: center;
+  opacity: 0;
+}
+
+.dictationButton:hover .dictationBars,
+.dictationButton:focus-visible .dictationBars {
+  opacity: 0;
+}
+
+.dictationButton:hover .dictationStopIcon,
+.dictationButton:focus-visible .dictationStopIcon {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictationBar {
+    transition: none;
+  }
 }

@@ -27,6 +27,7 @@ Inside it:
 | `worktrees/` | Git worktrees the runner created | No |
 | `runtimes/` | Per-workspace runner runtime state | No |
 | `artifacts/ocr/` | Rasterized pages cached for OCR | No |
+| `cache/models/<model-id>/` | Downloaded GGUF weights for local mode (one file per downloaded quantization, custom models under their `custom-…` id), plus a `.partial` file and its `.partial.chunks` resume ledger while a download is in flight | No |
 | `cache/electron/` | Electron session cache | No |
 | `logs/electron/`, `logs/runner/`, `logs/crash-dumps/` | Diagnostics | No |
 | `telemetry/spool/` | Telemetry bundles waiting to upload | No |

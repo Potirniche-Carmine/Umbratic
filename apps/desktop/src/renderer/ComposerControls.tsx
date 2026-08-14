@@ -1,8 +1,32 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Cpu, FolderOpen, GitBranch, Hand, Loader2, Mic, RefreshCw, ShieldCheck, Square } from "lucide-react";
 
 import type { PermissionMode, WorkspaceMode } from "../shared/desktopApi";
-import type { DictationStatus } from "./dictation";
+import type { DictationDevice, DictationStatus } from "./dictation";
+
+/**
+ * The live microphone level, as four bars.
+ *
+ * Bars rather than a single meter, and weighted unevenly, because a symmetric
+ * shape that rises and falls as one block reads as a progress indicator. This
+ * has to read as sound. Silence rests at the minimum height rather than
+ * collapsing to nothing — a control that empties itself looks stopped.
+ */
+function DictationLevelMeter({ level }: { level: number }) {
+  const weights = [0.5, 1, 0.72, 0.34];
+  return (
+    <span className="dictationBars" aria-hidden="true">
+      {weights.map((weight, index) => (
+        <span
+          key={index}
+          className="dictationBar"
+          style={{ height: `${3 + Math.min(1, Math.max(0, level)) * weight * 13}px` }}
+        />
+      ))}
+    </span>
+  );
+}
 
 /**
  * Speaks a prompt instead of typing it.
@@ -14,18 +38,75 @@ import type { DictationStatus } from "./dictation";
  */
 export function DictationControl({
   status,
+  enabled,
+  devices,
+  deviceId,
   onToggle,
+  onEnable,
+  onSelectDevice,
 }: {
   status: DictationStatus;
+  /** Whether dictation can actually run right now. */
+  enabled: boolean;
+  /** Microphones this machine offers. */
+  devices: DictationDevice[];
+  /** The chosen one, or "" for the system default. */
+  deviceId: string;
   onToggle(): void;
+  /** Take the user to where dictation is turned on. */
+  onEnable(): void;
+  onSelectDevice(deviceId: string): void;
 }) {
+  // The button is always here, whether or not dictation is set up. A control
+  // that appears only once a hidden precondition is met is a feature nobody
+  // discovers; pressing it when it is off explains itself and offers the way in.
+  const [asking, setAsking] = useState(false);
+  // Where the portalled menu sits, in viewport coordinates. Null is closed.
+  const [menuAt, setMenuAt] = useState<{ bottom: number; right: number } | null>(null);
+  const deviceRootRef = useRef<HTMLDivElement | null>(null);
+  const deviceMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuAt) return;
+    const close = () => setMenuAt(null);
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!deviceRootRef.current?.contains(target) && !deviceMenuRef.current?.contains(target)) close();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    // Any scroll or resize would leave a fixed menu floating away from its
+    // trigger, which reads as a menu belonging to nothing.
+    document.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuAt]);
+
+  function toggleDeviceMenu() {
+    if (menuAt) {
+      setMenuAt(null);
+      return;
+    }
+    const rect = deviceRootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // Anchored to the trigger's top-right and opening upward, like every other
+    // composer menu. Fixed, and portalled to <body>, because the prompt shell
+    // clips its overflow — a menu left inside it is cut off at the shell's edge
+    // rather than shown over the conversation.
+    setMenuAt({ bottom: window.innerHeight - rect.top + 8, right: Math.max(8, window.innerWidth - rect.right) });
+  }
   const recording = status.state === "recording";
   const busy = status.state === "starting" || status.state === "transcribing";
-  const label = recording
-    ? "Stop dictation"
-    : busy
-      ? status.state === "starting" ? "Starting dictation" : "Transcribing"
-      : "Dictate prompt";
+  const label = !enabled
+    ? "Set up dictation"
+    : recording
+      ? "Stop dictation"
+      : busy
+        ? status.state === "starting" ? "Getting the dictation model ready" : "Transcribing"
+        : "Dictate prompt";
 
   return (
     <>
@@ -39,11 +120,34 @@ export function DictationControl({
           {status.error ?? status.preview}
         </div>
       ) : null}
-      <div className={`dictationControl ${recording ? "isRecording" : ""}`}>
+      {/* Pressing the microphone before dictation is set up is the one moment
+          someone is definitely interested in it, so the offer says plainly what
+          the state is and carries the way out of it. It names Voice settings
+          rather than just "set up", because a first-time user who declines
+          should still know where to go later. */}
+      {asking ? (
+        <div className="dictationCaption dictationEnable" role="status">
+          <span>Dictation is off. Choose a model in Voice settings?</span>
+          <button
+            type="button"
+            className="dictationEnableAction"
+            onClick={() => {
+              setAsking(false);
+              onEnable();
+            }}
+          >
+            Open settings
+          </button>
+          <button type="button" className="dictationEnableDismiss" onClick={() => setAsking(false)}>
+            Not now
+          </button>
+        </div>
+      ) : null}
+      <div className={`dictationControl ${recording ? "isRecording" : ""} ${enabled ? "" : "isOff"}`}>
       <button
         className="dictationButton"
         type="button"
-        onClick={onToggle}
+        onClick={() => (enabled ? onToggle() : setAsking((open) => !open))}
         disabled={busy}
         aria-label={label}
         aria-pressed={recording}
@@ -52,11 +156,71 @@ export function DictationControl({
         {busy ? (
           <Loader2 className="spin" size={16} />
         ) : recording ? (
-          <Square aria-hidden="true" fill="currentColor" size={11} />
+          <>
+            <DictationLevelMeter level={status.level} />
+            {/* The bars say the microphone is live; the square says what
+                pressing does. Swapping one for the other on hover means the
+                button is never ambiguous about either. */}
+            <Square className="dictationStopIcon" aria-hidden="true" fill="currentColor" size={11} />
+          </>
         ) : (
           <Mic aria-hidden="true" size={16} />
         )}
       </button>
+      {/* Which microphone is a property of the microphone button, so it hangs
+          off it rather than living in settings — the moment someone notices the
+          wrong input is the moment they are reaching for this control.
+          Always rendered, even before the device list has resolved: a control
+          that appears a beat after the composer has settled reads as the layout
+          still moving. */}
+      <div className={`dictationDevices ${menuAt ? "isOpen" : ""}`} ref={deviceRootRef}>
+        <button
+          className="dictationDeviceTrigger"
+          type="button"
+          aria-expanded={!!menuAt}
+          aria-haspopup="listbox"
+          aria-label="Choose microphone"
+          title="Choose microphone"
+          disabled={recording || busy}
+          onClick={toggleDeviceMenu}
+          onKeyDown={(event) => { if (event.key === "Escape") setMenuAt(null); }}
+        >
+          <ChevronDown size={13} aria-hidden="true" />
+        </button>
+        {menuAt ? createPortal(
+          <div
+            className="dictationDeviceMenu"
+            ref={deviceMenuRef}
+            style={{ position: "fixed", bottom: menuAt.bottom, right: menuAt.right }}
+            role="listbox"
+            aria-label="Microphone"
+          >
+            {devices.length === 0 ? (
+              <p className="dictationDeviceEmpty">No microphones found</p>
+            ) : devices.map((device) => (
+              <button
+                key={device.deviceId}
+                type="button"
+                role="option"
+                aria-selected={device.deviceId === deviceId}
+                className={device.deviceId === deviceId ? "active" : ""}
+                onClick={() => {
+                  setMenuAt(null);
+                  onSelectDevice(device.deviceId);
+                }}
+              >
+                {/* The system's own choice is named as such rather than shown as
+                    a separate "System default" row, which would have listed the
+                    same microphone twice under two names. */}
+                {device.isDefault ? <em>Default:</em> : null}
+                <span>{device.label}</span>
+                {device.deviceId === deviceId ? <Check size={13} aria-hidden="true" /> : null}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        ) : null}
+      </div>
       </div>
     </>
   );

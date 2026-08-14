@@ -46,6 +46,43 @@ test("desktop packages the Veil binary used by managed local mode", () => {
   assert.match(preparePackage, /process\.platform === "win32" \? "veil\.exe" : "veil"/);
 });
 
+test("desktop builds llama-server from the pinned commit and packages it", () => {
+  const config = fs.readFileSync(configUrl, "utf8");
+  const preparePackage = fs.readFileSync(preparePackageUrl, "utf8");
+  const verifyPackage = fs.readFileSync(new URL("../scripts/verify-package.ts", import.meta.url), "utf8");
+  const pin = fs.readFileSync(new URL("../../../third_party/llama.cpp.pin", import.meta.url), "utf8");
+
+  assert.match(pin, /^repository=https:\/\/github\.com\/ggml-org\/llama\.cpp\.git$/m);
+  assert.match(pin, /^tag=b\d+$/m);
+  assert.match(pin, /^commit=[0-9a-f]{40}$/m);
+
+  assert.match(config, /- from: \.package\/llama-server\r?\n\s+to: llama-server/);
+  // Cloning a tag is not enough: a tag can be moved, a commit cannot.
+  assert.match(preparePackage, /head !== pin\.commit/);
+  // No libcurl, and with it no `-hf` remote-download path.
+  assert.match(preparePackage, /"-DLLAMA_CURL=OFF"/);
+  // Never -march=native: a release binary must run on CPUs older than the one
+  // that built it, and macOS older than the SDK that built it.
+  assert.match(preparePackage, /"-DGGML_NATIVE=OFF"/);
+  assert.match(preparePackage, /-DCMAKE_OSX_DEPLOYMENT_TARGET=12\.0/);
+  // One build serves every machine because the backends are chosen on the
+  // user's machine: a missing Vulkan loader is a skipped backend, not a
+  // process that will not start.
+  assert.match(preparePackage, /"-DGGML_BACKEND_DL=ON"/);
+  assert.match(preparePackage, /"-DGGML_CPU_ALL_VARIANTS=ON"/);
+  // Backend libraries are loaded, not linked, so a targeted build would leave
+  // them unbuilt and ship an app with nothing to run on.
+  assert.doesNotMatch(preparePackage, /"--target", "llama-server"/);
+  assert.match(verifyPackage, /has no loadable ggml backend/);
+  assert.match(verifyPackage, /has no CPU backend to fall back to/);
+  // The packaged executable must report the commit the pin names. Not the
+  // build number: llama.cpp derives that from tag history a shallow clone does
+  // not have, so it self-reports "build 1" whichever release was checked out.
+  assert.match(verifyPackage, /commit=\(\[0-9a-f\]\{40\}\)/);
+  assert.match(verifyPackage, /commit \$\{commit\.slice\(0, 7\)\}/);
+  assert.match(verifyPackage, /verifyLlamaServer\(path\.join\(resources, "llama-server"/);
+});
+
 test("desktop packages the native Rust runner instead of a Node launcher", () => {
   const config = fs.readFileSync(configUrl, "utf8");
   const preparePackage = fs.readFileSync(preparePackageUrl, "utf8");

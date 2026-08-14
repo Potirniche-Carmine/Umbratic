@@ -70,6 +70,7 @@ import {
   previewSkillContent,
 } from "./previewCapabilities";
 import { previewRemoteApi } from "./previewRemoteFixtures";
+import { previewCatalog } from "./previewModels";
 
 let previewSkills = previewDefaultSkills.map((skill) => ({
   ...skill,
@@ -784,6 +785,8 @@ function createPreviewApi(): DesktopApi {
     // `?dictation` advertises the speech feature so the composer's microphone
     // can be exercised in the preview harness, which has no Veil behind it.
     veilFeatures: composerTestParams.has("dictation") ? ["speech.transcribe"] : [],
+    localDictationReady: composerTestParams.has("dictation"),
+    system: { totalRamGB: 32, accelerator: "Vulkan", acceleratorDevice: "NVIDIA GeForce RTX 4070", quality: "optimal" as const },
     endpointConfig: {
       source: "local-default",
       endpointEditingAllowed: true,
@@ -834,7 +837,6 @@ function createPreviewApi(): DesktopApi {
   getStartupSettings: async () => ({
     permissionMode: getPreviewPermissionMode(),
     modelEndpoint: readPreviewEndpointSettings(),
-    localModels: ["llama3.2", "qwen3:8b"],
     companyConnection: previewCompanyConnection,
     harnessProfile: readPreviewHarnessProfile(),
     contextLength: readPreviewContextLength(),
@@ -855,8 +857,18 @@ function createPreviewApi(): DesktopApi {
     return { contextLength, status: await previewApi.getBackendStatus() };
   },
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
-  getCachedLocalModels: async () => ["llama3.2", "qwen3:8b"],
-  probeLocalModels: async () => ({ status: "ready", models: ["llama3.2", "qwen3:8b"] }),
+  getDictationSettings: async () => ({ model: "off" as const, language: null, deviceId: null }),
+  saveDictationSettings: async (input) => ({ dictation: input, status: await previewApi.getBackendStatus() }),
+  listLocalModels: async ({ kind }) => previewCatalog(kind),
+  downloadLocalModel: async () => ({ ok: true as const }),
+  cancelLocalModelDownload: async () => ({ ok: true as const }),
+  setLocalModelQuant: async () => ({ ok: true as const }),
+  loadLocalModel: async () => ({ status: await previewApi.getBackendStatus() }),
+  unloadLocalModel: async () => ({ status: await previewApi.getBackendStatus() }),
+  addCustomLocalModel: async () => ({ ok: true as const }),
+  removeCustomLocalModel: async () => ({ ok: true as const }),
+  openModelsFolder: async () => ({ ok: true as const, directory: "/preview/models" }),
+  onModelDownloadEvent: () => () => undefined,
   // The browser preview has no Veil, so it publishes no registry: the composer
   // model picker stays hidden here exactly as it does against an older server.
   listServerModels: async () => [],
@@ -955,6 +967,7 @@ function createPreviewApi(): DesktopApi {
   // no-op rather than a broken promise.
   openExternal: async () => ({ ok: false }),
   onBackendEvent: () => () => undefined,
+  requestMicrophoneAccess: async () => ({ granted: true }),
   startDictation: async () => previewDictation.start(),
   sendDictationAudio: async () => undefined,
   stopDictation: async () => previewDictation.stop(),

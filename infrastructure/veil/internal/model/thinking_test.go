@@ -22,11 +22,7 @@ func captureBody(t *testing.T, mode Mode, chatPath string, handler http.HandlerF
 				t.Errorf("chat body did not decode: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if mode == ModeServer {
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
-			} else {
-				_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"ok"}}`))
-			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 			return
 		}
 		if handler != nil {
@@ -86,38 +82,24 @@ func TestVLLMChatOmitsReasoningEffortWhenSuppressed(t *testing.T) {
 	}
 }
 
-func TestOllamaChatCarriesThinkOnlyOnDirective(t *testing.T) {
+// llama-server reaches the chat template with the same kwargs vLLM does, so a
+// thinking directive travels the same way in both modes.
+func TestLocalChatCarriesThinkingOnlyOnDirective(t *testing.T) {
 	base := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
 
-	body := captureBody(t, ModeLocal, "/api/chat", nil, base)
-	if _, present := body["think"]; present {
+	body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, base)
+	if _, present := body["chat_template_kwargs"]; present {
 		t.Fatalf("no directive must leave the body exactly as it was: %#v", body)
 	}
 
 	for _, want := range []bool{true, false} {
 		request := base
 		request.Thinking = boolPointer(want)
-		body := captureBody(t, ModeLocal, "/api/chat", nil, request)
-		if body["think"] != want {
-			t.Fatalf("think must mirror the directive: %#v", body)
+		body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, request)
+		kwargs, ok := body["chat_template_kwargs"].(map[string]any)
+		if !ok || kwargs["enable_thinking"] != want {
+			t.Fatalf("enable_thinking must mirror the directive: %#v", body)
 		}
-	}
-}
-
-func TestOllamaCapabilitiesParse(t *testing.T) {
-	var payload any
-	if err := json.Unmarshal([]byte(`{"capabilities":["completion","tools","Thinking",7,""]}`), &payload); err != nil {
-		t.Fatal(err)
-	}
-	capabilities := ollamaCapabilitiesFromPayload(payload)
-	if !capabilities["thinking"] || !capabilities["tools"] {
-		t.Fatalf("declared capabilities must be readable case-insensitively: %#v", capabilities)
-	}
-	if len(capabilities) != 3 {
-		t.Fatalf("unreadable entries must be dropped, not guessed: %#v", capabilities)
-	}
-	if got := ollamaCapabilitiesFromPayload(map[string]any{}); len(got) != 0 {
-		t.Fatalf("a payload with no capability list means unknown, not supported: %#v", got)
 	}
 }
 

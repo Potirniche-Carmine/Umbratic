@@ -40,6 +40,7 @@ type SpeechClient struct {
 	transcribeURL string
 	modelsURL     string
 	model         string
+	apiKey        string
 	http          *http.Client
 }
 
@@ -51,14 +52,23 @@ type SpeechClient struct {
 // It cannot fail in practice: configuration has already refused a base URL that
 // is not an http(s) URL with a host. A resolution error still leaves the client
 // inert rather than pointed somewhere unintended.
-func NewSpeechClient(baseURL, modelID string, timeout time.Duration) *SpeechClient {
+func NewSpeechClient(baseURL, modelID, apiKey string, timeout time.Duration) *SpeechClient {
 	transcribeURL, _ := providerEndpointURL(baseURL, "", "v1/audio/transcriptions")
 	modelsURL, _ := providerEndpointURL(baseURL, "", "v1/models")
 	return &SpeechClient{
 		transcribeURL: transcribeURL,
 		modelsURL:     modelsURL,
 		model:         strings.TrimSpace(modelID),
+		apiKey:        strings.TrimSpace(apiKey),
 		http:          &http.Client{Timeout: timeout},
+	}
+}
+
+// authorize adds the bearer when one is configured. A company-server speech
+// runtime usually has none; the desktop's own sidecar always does.
+func (c *SpeechClient) authorize(request *http.Request) {
+	if c.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 }
 
@@ -110,6 +120,7 @@ func (c *SpeechClient) Transcribe(ctx context.Context, pcm []byte, language stri
 		return "", fmt.Errorf("speech: build request: %w", err)
 	}
 	request.Header.Set("Content-Type", writer.FormDataContentType())
+	c.authorize(request)
 
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -134,7 +145,24 @@ func (c *SpeechClient) Transcribe(ctx context.Context, pcm []byte, language stri
 	if err := json.Unmarshal(decoded, &payload); err != nil {
 		return "", errors.New("speech: runtime returned an unreadable response")
 	}
-	return strings.TrimSpace(payload.Text), nil
+	return strings.TrimSpace(transcriptText(payload.Text)), nil
+}
+
+// asrTextMarker separates Qwen3-ASR's own preamble from the words that were
+// spoken. llama.cpp currently returns the whole decoder output — "language
+// English<asr_text>hello there" (ggml-org/llama.cpp#26749) — while vLLM strips
+// it upstream, so this is a no-op on the company-server path.
+const asrTextMarker = "<asr_text>"
+
+// transcriptText keeps only what follows the last marker. The last, not the
+// first: a speaker who says the marker aloud gets it transcribed inside the
+// text, and taking the first occurrence would then discard their own words.
+func transcriptText(text string) string {
+	at := strings.LastIndex(text, asrTextMarker)
+	if at < 0 {
+		return text
+	}
+	return text[at+len(asrTextMarker):]
 }
 
 // Available reports whether the transcription runtime answers right now, so a
@@ -144,6 +172,7 @@ func (c *SpeechClient) Available(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
+	c.authorize(request)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return false

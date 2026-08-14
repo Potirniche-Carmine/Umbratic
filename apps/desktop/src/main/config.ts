@@ -66,14 +66,12 @@ export function isHarnessProfileId(value: unknown): value is HarnessProfileId {
   return value === "marketing" || value === "sales" || value === "engineering";
 }
 
+// Local mode has no configurable address: the app starts its own llama-server
+// on a loopback port it reserved, and only Veil is ever told where. The field
+// stays in the stored shape because the endpoint record is validated by its
+// exact key set, but its local value is always empty.
 export function defaultEndpointBaseUrlForMode(mode: ModelEndpointMode): string {
-  if (mode === "local") {
-    const configuredLocalRuntime =
-      env.UMBRATIC_LOCAL_RUNTIME_BASE_URL ||
-      env.OLLAMA_BASE_URL;
-    if (configuredLocalRuntime?.trim()) return configuredLocalRuntime.trim();
-    return "http://127.0.0.1:11434";
-  }
+  if (mode === "local") return "";
   if (configuredEndpointBaseUrl) return configuredEndpointBaseUrl;
   return "https://your-veil-server.example";
 }

@@ -1,7 +1,7 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { onWorkspaceIndexProgress } from "./indexerService";
-import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, refreshLocalModels, retryTelemetrySpoolQueue, saveContextLengthSetting, saveHarnessProfileSetting, saveModelEndpointSettings } from "./backendSettings";
+import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
@@ -47,18 +47,26 @@ import {
 } from "./companyIdentity";
 import { companyTransportOptions } from "./endpointConfig";
 import { stopLocalVeil } from "./localVeil";
-import { loadWindowWithModelWarmup } from "./modelWarmup";
+import { requestMicrophoneAccess } from "./microphone";
+import { stopLocalLlama } from "./localLlama";
+import { stopLocalSpeech } from "./localSpeech";
+import { listLocalModels, resolveLocalModel, selectedQuant } from "./localModels";
+import { addCustomModel, customModel, removeCustomModel } from "./customModels";
+import { abortModelDownloads, cancelModelDownload, downloadLocalModel, downloadingModelId, modelDirectory, onModelDownloadEvent } from "./modelDownloads";
+import { systemProfile } from "./hardware";
 import {
   readChats,
   readContextLengthSetting,
-  readCachedLocalModels,
+  readDictationSettings,
   readHarnessProfileSetting,
   readModelEndpointSettings,
   readModelEndpointSettingsForMode,
   publicModelEndpointSettings,
   readProjects,
+  clearLocalModelSelection,
   readStartupSettings, readTask,
   readTasks,
+  writeLocalQuantSelection,
   writePermissionModeSetting,
   writeTasks,
   closeStorageDatabases,
@@ -85,6 +93,10 @@ import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
 const isDev = !app.isPackaged;
+// Electron's asar fs shim constructs fs.Stats, which Node deprecates as
+// DEP0180. In a packaged app the warning is internals noise printed to the
+// user's terminal; development keeps every warning visible.
+if (!isDev) process.noDeprecation = true;
 const desktopBenchmarkStartedAt = performance.now();
 const fallbackDevServerUrl = "http://127.0.0.1:5173/";
 app.enableSandbox();
@@ -245,8 +257,19 @@ async function createWindow() {
     app.dock.setIcon(icon);
   }
 
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
+  // The microphone is the one capability this window may ask for, and only for
+  // audio: dictation needs it and nothing else in the app does. The system's
+  // own consent is taken separately, before the renderer opens a device — this
+  // gate only decides what the page is allowed to request.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
+    callback(permission === "media" && mediaTypes.length > 0 && mediaTypes.every((type) => type === "audio"));
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission, _origin, details) => {
+    // The check handler describes one media type rather than a list, and it is
+    // also asked about devices before any capture starts — the audio answer is
+    // the same in both cases.
+    return permission === "media" && (details as { mediaType?: string }).mediaType === "audio";
   });
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     const isFrame = details.resourceType === "mainFrame" || details.resourceType === "subFrame";
@@ -362,6 +385,8 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     listRepositoryBranches: (input) => listRepositoryBranches(input),
     checkoutRepositoryBranch: (input) => checkoutRepositoryBranch(input),
     getBackendStatus: () => getBackendStatus(),
+    loadLocalModel: () => loadLocalModel(),
+    unloadLocalModel: () => unloadLocalModel(),
     getStartupSettings: () => readStartupSettings(),
     getCapabilityProbes: (input) => getCapabilityProbes(input),
     listRemoteConnections: () => listRemoteConnections(),
@@ -376,10 +401,62 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
       const mode = input?.mode;
       return publicModelEndpointSettings(mode ? readModelEndpointSettingsForMode(mode) : readModelEndpointSettings());
     },
-    getCachedLocalModels: (input) =>
-      readCachedLocalModels(typeof input?.baseUrl === "string" ? input.baseUrl : ""),
-    probeLocalModels: (input) =>
-      refreshLocalModels(typeof input?.baseUrl === "string" ? input.baseUrl : ""),
+    getDictationSettings: async () => readDictationSettings(),
+    saveDictationSettings: (input) => saveDictationSettings(input),
+    listLocalModels: async (input) =>
+      listLocalModels(app.getPath("userData"), input?.kind === "dictation" ? "dictation" : "chat"),
+    downloadLocalModel: async (input) => {
+      try {
+        const model = resolveLocalModel(String(input?.id ?? ""));
+        if (!model) throw new Error("That model is not in the collection.");
+        await downloadLocalModel(app.getPath("userData"), model, selectedQuant(model));
+        return { ok: true as const };
+      } catch (cause) {
+        // The download's own failures name checksums and models, never paths or
+        // addresses, so this message is safe to show as written.
+        return { ok: false as const, message: cause instanceof Error ? cause.message : "The download failed." };
+      }
+    },
+    openModelsFolder: () => openModelsFolder(),
+    cancelLocalModelDownload: async (input) => {
+      cancelModelDownload(String(input?.id ?? ""));
+      return { ok: true as const };
+    },
+    setLocalModelQuant: async (input) => {
+      const model = resolveLocalModel(String(input?.id ?? ""));
+      const quant = String(input?.quant ?? "");
+      if (!model) return { ok: false as const, message: "That model is not in the collection." };
+      if (!model.quants.some((entry) => entry.quant === quant)) {
+        return { ok: false as const, message: "That model does not offer that quantization." };
+      }
+      writeLocalQuantSelection(model.id, quant);
+      return { ok: true as const };
+    },
+    addCustomLocalModel: async (input) => {
+      try {
+        await addCustomModel(String(input?.reference ?? ""));
+        return { ok: true as const };
+      } catch (cause) {
+        // addCustomModel's failures name Hugging Face and the reference, never
+        // paths, so the message is safe to show as written.
+        return { ok: false as const, message: cause instanceof Error ? cause.message : "The model could not be added." };
+      }
+    },
+    removeCustomLocalModel: async (input) => {
+      const id = String(input?.id ?? "");
+      if (!customModel(id)) return { ok: false as const, message: "That model is not in the collection." };
+      if (downloadingModelId() === id) cancelModelDownload(id);
+      const removed = removeCustomModel(id);
+      if (removed) {
+        try {
+          fs.rmSync(modelDirectory(app.getPath("userData"), removed), { recursive: true, force: true });
+        } catch {
+          // The entry is gone either way; stray files remain reachable through
+          // the models folder.
+        }
+      }
+      return { ok: true as const };
+    },
     listServerModels: () => listServerModels(),
     saveModelEndpointSettings: (input) =>
       saveModelEndpointSettings(
@@ -434,6 +511,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     openExternal: (input) => openExternalLink(input?.url),
     // The sender is the trusted renderer by the time a handler runs, and it is
     // also where the transcripts have to be delivered.
+    requestMicrophoneAccess: () => requestMicrophoneAccess(),
     startDictation: (input, event) => startDictation(input ?? {}, event.sender),
     sendDictationAudio: async (input) => sendDictationAudio(input),
     stopDictation: async () => stopDictation(),
@@ -464,6 +542,14 @@ function registerMainIpc(): void {
   });
 }
 app.whenReady().then(async () => {
+  // A remembered model pick is a model queued to load, so the pick does not
+  // survive the process: every launch opens with none chosen and the machine
+  // idle until the user says otherwise. Cleared before anything reads settings.
+  try {
+    clearLocalModelSelection();
+  } catch {
+    // A settings file that cannot be written still gives a usable session.
+  }
   try {
     installBundledSystemSkillsService();
   } catch (error) {
@@ -483,8 +569,16 @@ app.whenReady().then(async () => {
   onWorkspaceIndexProgress((event) => {
     getMainWindow()?.webContents.send("umbratic:workspace-index", event);
   });
+  onModelDownloadEvent((event) => {
+    getMainWindow()?.webContents.send("umbratic:model-download", event);
+  });
   Menu.setApplicationMenu(null);
-  await loadWindowWithModelWarmup(createWindow);
+  // No model is loaded at startup — loading gigabytes of weights is something
+  // the user asks for from the connection panel or by sending a prompt. The
+  // hardware probe does warm here, so the first look at settings answers from
+  // cache instead of paying for `llama-server --list-devices`.
+  void systemProfile();
+  await createWindow();
   void retryTelemetrySpoolQueue().catch((cause) => {
     recordLocalDiagnostic({
       level: "warn",
@@ -536,7 +630,12 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   stopLocalCacheMaintenance();
+  // A download in flight leaves its .partial file behind on purpose: the next
+  // attempt resumes from it rather than starting the gigabytes over.
+  abortModelDownloads();
   stopLocalVeil();
+  stopLocalLlama();
+  stopLocalSpeech();
   flushRendererEvents();
   flushPendingTaskEvents();
   closeStorageDatabases();

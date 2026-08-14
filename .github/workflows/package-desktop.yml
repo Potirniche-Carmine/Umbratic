@@ -77,10 +77,21 @@ jobs:
             artifact_paths: |
               target/release/desktop/*.dmg
               target/release/desktop/*.zip
-          - name: Windows
+          - name: Windows x64
             os: windows-2025
-            package_args: "--win nsis portable --x64"
-            artifact_name: umbratic-ai-windows
+            package_args: "--win nsis --x64"
+            artifact_name: umbratic-ai-windows-x64
+            artifact_paths: |
+              target/release/desktop/*.exe
+          # Snapdragon X and friends. Built on an arm64 runner rather than
+          # cross-compiled, because llama.cpp's CPU variants are selected by the
+          # compiler for the target architecture. No Vulkan here: the Adreno
+          # driver path is not dependable enough to ship, so these machines run
+          # on the ARM CPU backends.
+          - name: Windows arm64
+            os: windows-11-arm
+            package_args: "--win nsis --arm64"
+            artifact_name: umbratic-ai-windows-arm64
             artifact_paths: |
               target/release/desktop/*.exe
 

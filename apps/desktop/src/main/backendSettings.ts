@@ -43,10 +43,19 @@ import {
 } from "./companyIdentity";
 import { companyTransportOptions, configuredEndpointModel, endpointProvider, normalizeBaseUrl } from "./endpointConfig";
 import { fetchServerModels } from "./serverModels";
-import { ensureLocalVeil, probeLocalModels as probeLocalRuntimeModels, stopLocalVeil } from "./localVeil";
+import { currentLocalVeilConnection, resetLocalVeilBackoff, stopLocalVeil } from "./localVeil";
+import { resetLocalLlamaBackoff, stopLocalLlama } from "./localLlama";
+import { stopLocalSpeech } from "./localSpeech";
+import {
+  chooseLocalModelMessage,
+  ensureLocalChatRuntime,
+  selectedLocalChatModel,
+  selectedLocalDictationModel,
+} from "./localModels";
 import {
   hasStoredModelEndpointSettings,
   readContextLengthSetting,
+  readDictationSettings,
   readLocalDiagnosticInfo,
   readLocalDiagnostics,
   readModelEndpointSettings,
@@ -57,10 +66,12 @@ import {
   readTasks,
   clearLocalDiagnostics,
   writeHarnessProfileSetting,
-  writeCachedLocalModels,
   writeContextLengthSetting,
+  writeDictationSettings,
   writeModelEndpointSettings,
 } from "./storage";
+import { modelsDirectory } from "./appPaths";
+import { systemProfile } from "./hardware";
 import { recordLocalDiagnostic } from "./diagnostics";
 import { buildRedactedTelemetryBundle } from "./telemetry";
 import {
@@ -94,35 +105,39 @@ export async function saveModelEndpointSettings(input: Partial<ReturnType<typeof
   }
   const current = readModelEndpointSettings();
   const candidate = { ...current, ...input };
-  const baseUrl = typeof candidate.baseUrl === "string" ? candidate.baseUrl.trim() : "";
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(baseUrl);
-  } catch {
-    throw new Error(`${candidate.mode === "local" ? "Runtime" : "Server"} URL is invalid.`);
-  }
-  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-    throw new Error(`${candidate.mode === "local" ? "Runtime" : "Server"} URL must use HTTP or HTTPS.`);
-  }
-  if (candidate.mode === "local" && !isLocalhostUrl(baseUrl)) {
-    throw new Error("Local mode only connects to a model runtime on this computer. Use Server mode for remote infrastructure.");
-  }
-  if (candidate.mode === "local" && !candidate.modelId?.trim()) {
-    throw new Error("Enter the local model name before connecting.");
-  }
-  if (candidate.mode === "server") {
+  if (candidate.mode === "local") {
+    // There is no URL to validate any more: local mode addresses the
+    // llama-server this app started, and the only choice the user makes is
+    // which downloaded model it loads.
+    if (!selectedLocalChatModel(app.getPath("userData"), candidate.modelId ?? "")) {
+      throw new Error(chooseLocalModelMessage);
+    }
+  } else {
+    const baseUrl = typeof candidate.baseUrl === "string" ? candidate.baseUrl.trim() : "";
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(baseUrl);
+    } catch {
+      throw new Error("Server URL is invalid.");
+    }
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      throw new Error("Server URL must use HTTP or HTTPS.");
+    }
     const connection = companyConnectionStatus();
     if (connection.state !== "enrolled" || normalizeBaseUrl(connection.baseUrl ?? "") !== normalizeBaseUrl(baseUrl)) {
       throw new Error("Use an Enrollment code to connect to a company server.");
     }
   }
-  // The running local Veil was spawned for the previous settings. Stop it here
-  // rather than relying on the next ensureLocalVeil to notice: switching to
-  // Server mode never calls that path at all, and the stale process would keep
-  // holding its port and its model.
+  // The running sidecars were spawned for the previous settings. Stop them here
+  // rather than relying on the next ensure to notice: switching to Server mode
+  // never calls that path at all, and the stale processes would keep holding
+  // their ports and their weights.
   stopLocalVeil();
+  stopLocalLlama();
   const settings = writeModelEndpointSettings(candidate);
-  const status = await getBackendStatus();
+  // Picking a model is the explicit ask to run it, so the save is what loads
+  // the weights — the caller's spinner covers the load.
+  const status = await getBackendStatus(settings.mode === "local" ? "always" : "never");
   return { settings: publicModelEndpointSettings(settings), status };
 }
 
@@ -162,13 +177,6 @@ export async function listServerModels(): Promise<ServerModelInfo[]> {
   if (readModelEndpointSettings().mode !== "server") return [];
   if (!connectedVeilSupports(veilFeature.modelsList)) return [];
   return fetchServerModels(endpointProvider());
-}
-
-export async function refreshLocalModels(baseUrl: string) {
-  const result = await probeLocalRuntimeModels(baseUrl);
-  return result.status === "ready"
-    ? { ...result, models: writeCachedLocalModels(baseUrl, result.models) }
-    : result;
 }
 
 export async function enrollCompanyConnection(input: unknown) {
@@ -286,24 +294,82 @@ export async function saveContextLengthSetting(input: unknown) {
   if (activeRunnerProcesses.size > 0) {
     throw new Error("Wait for the active run to finish before changing the context length.");
   }
+  // A stack that was up comes back up with the new setting; one that was not
+  // stays cold — reconfiguring is not the ask to load a model.
+  const wasRunning = currentLocalVeilConnection() !== null;
   const contextLength = writeContextLengthSetting(input);
   stopLocalVeil();
-  const status = await getBackendStatus();
+  const status = await getBackendStatus(wasRunning ? "always" : "never");
   return { contextLength, status };
 }
 
-export async function resolveSelectedModel(): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
+/**
+ * Changing the dictation model changes what local Veil advertises, and Veil
+ * learns that from its environment, so the chain restarts. The ASR sidecar
+ * itself is left to its own lazy lifecycle: it starts on the next press.
+ */
+export async function saveDictationSettings(input: unknown) {
+  const wasRunning = currentLocalVeilConnection() !== null;
+  const previousModel = readDictationSettings().model;
+  const dictation = writeDictationSettings(input);
+  // Only the model choice costs a restart. The language is read per request and
+  // the microphone never leaves the renderer, so saving either must not drop
+  // loaded weights — picking a microphone mid-session would otherwise unload
+  // the model the user is about to speak into.
+  if (dictation.model === previousModel) return { dictation, status: await getBackendStatus("if-running") };
+  stopLocalSpeech();
+  stopLocalVeil();
+  const status = await getBackendStatus(wasRunning ? "always" : "never");
+  return { dictation, status };
+}
+
+/**
+ * Whether a status resolution may start the local model stack.
+ *
+ * Loading multi-gigabyte weights is something the user asks for — by picking a
+ * model, pressing the load control, or sending a prompt — never something a
+ * status read does on its own. "if-running" reconfigures a stack that is
+ * already up without cold-starting one that is not.
+ */
+export type LocalRuntimeStart = "always" | "if-running" | "never";
+
+export async function resolveSelectedModel(
+  startLocal: LocalRuntimeStart = "never",
+): Promise<{ providers: LocalModelProvider[]; models: LocalModelInfo[]; selected: LocalModelInfo | null }> {
   const settings = readModelEndpointSettings();
   try {
     if (settings.mode === "local") {
-      await ensureLocalVeil(settings, readContextLengthSetting(), (diagnostic) => {
-        recordLocalDiagnostic({
-          ...diagnostic,
-          source: "veil",
+      const shouldStart = startLocal === "always"
+        || (startLocal === "if-running" && currentLocalVeilConnection() !== null);
+      if (!shouldStart && !currentLocalVeilConnection()) {
+        // Nothing loaded is the ordinary resting state, not a failure: no
+        // message, and the panel presents it as "Not loaded" rather than
+        // an error. Loading happens from the model card or by chatting.
+        return {
+          providers: [{
+            providerId: "company-endpoint",
+            providerName: "Local Veil",
+            baseUrl: settings.baseUrl,
+            status: "unavailable",
+            models: [],
+          }],
+          models: [],
+          selected: null,
+        };
+      }
+      if (shouldStart) {
+        await ensureLocalChatRuntime({
+          dataRoot: app.getPath("userData"),
+          settings,
+          contextLength: readContextLengthSetting(),
+          dictation: readDictationSettings(),
+          onLlamaDiagnostic: (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "desktop" }),
+          onVeilDiagnostic: (diagnostic) => recordLocalDiagnostic({ ...diagnostic, source: "veil" }),
         });
-      });
+      }
     } else {
       stopLocalVeil();
+      stopLocalLlama();
       await ensureCompanySession(companyTransportOptions());
     }
   } catch (cause) {
@@ -364,8 +430,33 @@ export async function resolveSelectedModel(): Promise<{ providers: LocalModelPro
   return { providers: [provider], models, selected };
 }
 
-export async function getBackendStatus(): Promise<BackendStatus> {
-  const { providers, models, selected } = await resolveSelectedModel();
+/**
+ * The manual load: what the refresh control in the connection panel invokes.
+ * A person pressing it wants an attempt now, so any backoff from earlier
+ * failures is cleared rather than answered with "retrying in 16s".
+ */
+export async function loadLocalModel(): Promise<{ status: BackendStatus }> {
+  resetLocalLlamaBackoff();
+  resetLocalVeilBackoff();
+  return { status: await getBackendStatus("always") };
+}
+
+/**
+ * Gives the weights back: the counterpart of the load above.
+ *
+ * A chat model holds gigabytes of memory for as long as it is resident, and
+ * until now the only way to get that back was to quit the app. Veil goes with
+ * it — it is the front for this sidecar and has nothing to serve without it —
+ * and both come back on the next load or the next prompt.
+ */
+export async function unloadLocalModel(): Promise<{ status: BackendStatus }> {
+  stopLocalVeil();
+  stopLocalLlama();
+  return { status: await getBackendStatus("never") };
+}
+
+export async function getBackendStatus(startLocal: LocalRuntimeStart = "never"): Promise<BackendStatus> {
+  const { providers, models, selected } = await resolveSelectedModel(startLocal);
   const runnerPath = runnerBinaryPath();
   const capabilityReport = await probeLocalCapabilities({ runnerPath });
   const managedEndpoint = managedModelEndpointDefaults();
@@ -390,6 +481,12 @@ export async function getBackendStatus(): Promise<BackendStatus> {
     providers,
     permissionMode: getPermissionMode(),
     veilFeatures: connectedVeilFeatures(),
+    // Local mode's answer to "will the microphone work". Server mode's answer
+    // is whether the server advertises speech.transcribe, which is already in
+    // veilFeatures.
+    system: await systemProfile(),
+    localDictationReady: endpointSettings.mode === "local"
+      && selectedLocalDictationModel(app.getPath("userData"), readDictationSettings().model) !== null,
     endpointConfig: {
       source: managedEndpoint
         ? "managed"
@@ -438,6 +535,18 @@ export async function openSkillsFolder(): Promise<{ ok: true; directory: string 
     if (failure) {
       return { ok: false, message: failure };
     }
+    return { ok: true, directory };
+  } catch (cause) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+export async function openModelsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }> {
+  const directory = modelsDirectory(app.getPath("userData"));
+  try {
+    await fs.promises.mkdir(directory, { recursive: true });
+    const failure = await shell.openPath(directory);
+    if (failure) return { ok: false, message: failure };
     return { ok: true, directory };
   } catch (cause) {
     return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };

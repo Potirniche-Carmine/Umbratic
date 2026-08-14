@@ -38,11 +38,10 @@ type ChatRequest struct {
 	// thinks, never whether that thinking is shown — reasoning content stays
 	// stripped either way.
 	Thinking *bool
-	// ResponseSchema constrains local generation to this JSON schema via
-	// Ollama structured outputs. nil leaves generation unconstrained. The
-	// model may still think freely first — Ollama carries thinking in its own
-	// channel — but the content it returns can only be this shape. Local mode
-	// only; the server path ignores it.
+	// ResponseSchema constrains local generation to this JSON schema through
+	// the runtime's grammar-backed structured outputs. nil leaves generation
+	// unconstrained. Local mode only; the server path ignores it, because a
+	// shared vLLM fleet is not Veil's to constrain per request.
 	ResponseSchema map[string]any
 }
 
@@ -60,6 +59,10 @@ type ClientConfig struct {
 	BaseURL       string
 	ContextLength int
 	Timeout       time.Duration
+	// APIKey is sent as a bearer on every runtime call. Local mode always has
+	// one: the desktop mints a per-run secret so a second process on the box
+	// cannot drive the model runtime it started.
+	APIKey string
 	// EmbeddingBaseURL points at the runtime that serves `/v1/embeddings`. It
 	// is a second instance rather than the chat one, because a vLLM process
 	// serves exactly one model. Empty means retrieval is not configured, and
@@ -73,11 +76,10 @@ type Client struct {
 	chatEndpoint     string
 	modelsEndpoint   string
 	metricsEndpoint  string
-	generateEndpoint string
-	showEndpoint     string
 	tokenizeEndpoint string
 	embedEndpoint    string
 	embedModel       string
+	apiKey           string
 	contextLength    int
 	client           *http.Client
 	prefixTokens     prefixTokenCache
@@ -124,18 +126,14 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("unsupported Veil mode %q", mode)
 	}
 
-	chatDefaultPath := "v1/chat/completions"
-	modelsDefaultPath := "v1/models"
-	if mode == ModeLocal {
-		chatDefaultPath = "api/chat"
-		modelsDefaultPath = "api/tags"
-	}
-
-	chatEndpoint, err := providerEndpointURL(cfg.BaseURL, "", chatDefaultPath)
+	// Both modes speak OpenAI now: vLLM on a company server, llama-server on
+	// loopback. The mode still decides request shape in a few places, but no
+	// longer which routes exist.
+	chatEndpoint, err := providerEndpointURL(cfg.BaseURL, "", "v1/chat/completions")
 	if err != nil {
 		return nil, err
 	}
-	modelsEndpoint, err := providerEndpointURL(cfg.BaseURL, "", modelsDefaultPath)
+	modelsEndpoint, err := providerEndpointURL(cfg.BaseURL, "", "v1/models")
 	if err != nil {
 		return nil, err
 	}
@@ -143,27 +141,11 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// vLLM exposes /tokenize at the server root. Ollama has no stable
-	// equivalent, so the local mode never resolves one and falls back to a
-	// flagged byte-length estimate.
-	tokenizeEndpoint := ""
-	if mode == ModeServer {
-		tokenizeEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "tokenize")
-		if err != nil {
-			return nil, err
-		}
-	}
-	generateEndpoint := ""
-	showEndpoint := ""
-	if mode == ModeLocal {
-		generateEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "api/generate")
-		if err != nil {
-			return nil, err
-		}
-		showEndpoint, err = providerEndpointURL(cfg.BaseURL, "", "api/show")
-		if err != nil {
-			return nil, err
-		}
+	// Both runtimes expose /tokenize at the server root; only the request body
+	// differs, which tokenizePrefix branches on.
+	tokenizeEndpoint, err := providerEndpointURL(cfg.BaseURL, "", "tokenize")
+	if err != nil {
+		return nil, err
 	}
 
 	embedEndpoint := ""
@@ -183,11 +165,10 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		chatEndpoint:     chatEndpoint,
 		modelsEndpoint:   modelsEndpoint,
 		metricsEndpoint:  metricsEndpoint,
-		generateEndpoint: generateEndpoint,
-		showEndpoint:     showEndpoint,
 		tokenizeEndpoint: tokenizeEndpoint,
 		embedEndpoint:    embedEndpoint,
 		embedModel:       strings.TrimSpace(cfg.EmbeddingModel),
+		apiKey:           strings.TrimSpace(cfg.APIKey),
 		contextLength:    cfg.ContextLength,
 		client:           hardenedHTTPClient(timeout),
 	}, nil
@@ -315,33 +296,18 @@ func ensurePrivateRemote(conn net.Conn) (net.Conn, error) {
 	return conn, nil
 }
 
-// ollamaKeepAlive keeps the loaded model resident between requests. Ollama's
-// default is five minutes, after which the next request pays the full cold
-// load — routinely tens of seconds, which is exactly what blew the runner's
-// orient timeout in a live run. Every request refreshes the window, so this
-// only needs to exceed ordinary thinking time between prompts.
-const ollamaKeepAlive = "60m"
-
+// ActivateModel confirms the local runtime is up and answering as us.
+//
+// There is nothing to warm: llama-server loads its weights at process start and
+// holds them for its lifetime, so the only question this can ask is whether the
+// process on that port is ready and accepts our bearer. A server-mode fleet
+// manages its own residency, so this is a no-op there.
 func (c *Client) ActivateModel(ctx context.Context, modelID string) error {
 	if c.mode != ModeLocal {
 		return nil
 	}
-	body := map[string]any{
-		"model":      modelID,
-		"stream":     false,
-		"keep_alive": ollamaKeepAlive,
-	}
-	if c.contextLength > 0 {
-		body["options"] = map[string]any{"num_ctx": c.contextLength}
-	}
-	resp, err := c.postJSON(ctx, c.generateEndpoint, body)
-	if err != nil {
+	if _, err := c.ListModels(ctx); err != nil {
 		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 	return nil
 }
@@ -358,37 +324,16 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 		return ChatResponse{}, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
 	}
 
-	switch c.mode {
-	case ModeServer:
-		return decodeVLLMChat(resp.Body)
-	case ModeLocal:
-		return decodeOllamaChat(resp.Body)
-	default:
-		return ChatResponse{}, fmt.Errorf("unsupported Veil mode %q", c.mode)
-	}
+	return decodeOpenAIChat(resp.Body)
 }
 
 func (c *Client) DoChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
-	switch c.mode {
-	case ModeServer:
-		return c.doVLLMChat(ctx, req)
-	case ModeLocal:
-		return c.doOllamaChat(ctx, req)
-	default:
-		return nil, fmt.Errorf("unsupported Veil mode %q", c.mode)
-	}
+	return c.doOpenAIChat(ctx, req)
 }
 
 func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration, annotation UsageAnnotation) error {
 	src = withIdleAndCancel(ctx, src, idleTimeout)
-	switch mode {
-	case ModeServer:
-		return writeVLLMAsSafeOpenAIChatSSE(dst, src, annotation)
-	case ModeLocal:
-		return writeOllamaAsOpenAIChatSSE(dst, src, annotation)
-	default:
-		return fmt.Errorf("unsupported Veil mode %q", mode)
-	}
+	return writeSafeOpenAIChatSSE(mode, dst, src, annotation)
 }
 
 func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
@@ -434,27 +379,16 @@ func (c *Client) ContextLength(ctx context.Context, modelID string) (int, error)
 		return 0, fmt.Errorf("unsupported Veil mode %q", c.mode)
 	}
 
-	resp, err := c.postJSON(ctx, c.showEndpoint, map[string]any{"model": modelID})
-	if err != nil {
-		return 0, err
+	// Configuration is ground truth locally: the desktop starts llama-server
+	// with exactly this --ctx-size, so asking the runtime could only ever
+	// disagree with the launcher that set it.
+	if c.contextLength <= 0 {
+		return 0, errors.New("no local context length is configured")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return 0, ProviderError{StatusCode: resp.StatusCode, Kind: ProviderFailureStatus}
-	}
-	var payload any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
-		return 0, ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-	contextLength := ollamaContextLengthFromPayload(payload)
-	if contextLength <= 0 {
-		return 0, errors.New("model runtime did not report a context length")
-	}
-	return contextLength, nil
+	return c.contextLength, nil
 }
 
-func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
+func (c *Client) doOpenAIChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
 	body := map[string]any{
 		"model":       req.Model,
 		"messages":    req.Messages,
@@ -487,39 +421,18 @@ func (c *Client) doVLLMChat(ctx context.Context, req ChatRequest) (*http.Respons
 		}
 		body["parallel_tool_calls"] = req.ParallelTools
 	}
-	return c.postJSON(ctx, c.chatEndpoint, body)
-}
-
-func (c *Client) doOllamaChat(ctx context.Context, req ChatRequest) (*http.Response, error) {
-	body := map[string]any{
-		"model":      req.Model,
-		"messages":   ollamaMessages(req.Messages),
-		"stream":     req.Stream,
-		"keep_alive": ollamaKeepAlive,
+	// Grammar-constrained decoding is a local-only lever: llama-server is ours
+	// to constrain, a shared vLLM fleet is not.
+	if c.mode == ModeLocal && req.ResponseSchema != nil {
+		body["response_format"] = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "umbratic_structured_output",
+				"schema": req.ResponseSchema,
+				"strict": true,
+			},
+		}
 	}
-	// The caller has already confirmed the model carries the thinking
-	// capability; some Ollama builds fail the request outright when `think` is
-	// sent to a model without it.
-	if req.Thinking != nil {
-		body["think"] = *req.Thinking
-	}
-	if req.ResponseSchema != nil {
-		body["format"] = req.ResponseSchema
-	}
-	if req.Tools != nil {
-		body["tools"] = req.Tools
-	}
-	options := map[string]any{
-		"temperature": req.Temperature,
-		"top_p":       req.TopP,
-	}
-	if c.contextLength > 0 {
-		options["num_ctx"] = c.contextLength
-	}
-	if req.MaxOutputTokens > 0 {
-		options["num_predict"] = req.MaxOutputTokens
-	}
-	body["options"] = options
 	return c.postJSON(ctx, c.chatEndpoint, body)
 }
 
@@ -551,9 +464,12 @@ func (c *Client) postJSON(ctx context.Context, endpoint string, body any) (*http
 
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 }
 
-func decodeVLLMChat(r io.Reader) (ChatResponse, error) {
+func decodeOpenAIChat(r io.Reader) (ChatResponse, error) {
 	var decoded struct {
 		Choices []struct {
 			Message Message `json:"message"`
@@ -574,33 +490,6 @@ func decodeVLLMChat(r io.Reader) (ChatResponse, error) {
 		return ChatResponse{}, errors.New("model runtime returned a non-assistant message")
 	}
 	return ChatResponse{Message: message}, nil
-}
-
-func decodeOllamaChat(r io.Reader) (ChatResponse, error) {
-	var decoded struct {
-		Message Message `json:"message"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r, 1<<20)).Decode(&decoded); err != nil {
-		return ChatResponse{}, ProviderError{Kind: ProviderFailureInvalidResponse}
-	}
-	if decoded.Message.Content == nil {
-		return ChatResponse{}, errors.New("model runtime returned an empty message")
-	}
-	if decoded.Message.Role == "" {
-		decoded.Message.Role = "assistant"
-	}
-	if decoded.Message.Role != "assistant" {
-		return ChatResponse{}, errors.New("model runtime returned a non-assistant message")
-	}
-	return ChatResponse{Message: decoded.Message}, nil
-}
-
-func runtimeTokenCount(value any) (int, bool) {
-	count, ok := value.(float64)
-	if !ok || count < 0 || count != float64(int(count)) {
-		return 0, false
-	}
-	return int(count), true
 }
 
 func writeSSEData(dst io.Writer, value any) error {
@@ -630,31 +519,9 @@ func flushWriter(w io.Writer) {
 	}
 }
 
-func textFromRuntimeValue(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return typed
-	case []any:
-		parts := make([]string, 0, len(typed))
-		for _, part := range typed {
-			switch row := part.(type) {
-			case string:
-				if row != "" {
-					parts = append(parts, row)
-				}
-			case map[string]any:
-				text, _ := row["text"].(string)
-				if text != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-		return strings.Join(parts, "")
-	default:
-		return ""
-	}
-}
-
+// openAIToolCallDeltas normalizes a runtime's tool-call array into the delta
+// shape the runner consumes: stable indexes, an id per call, and arguments as
+// a JSON string rather than an object.
 func openAIToolCallDeltas(value any) []map[string]any {
 	rows, ok := value.([]any)
 	if !ok {
@@ -701,122 +568,6 @@ func toolArgumentsString(value any) string {
 			return "{}"
 		}
 		return string(encoded)
-	}
-}
-
-func ollamaMessages(messages []Message) []map[string]any {
-	rows := make([]map[string]any, 0, len(messages))
-	systemParts := make([]string, 0, 2)
-	toolNames := make(map[string]string)
-	for _, message := range messages {
-		if message.Role != "system" {
-			continue
-		}
-		if content := ollamaContent(message.Content); content != "" {
-			systemParts = append(systemParts, content)
-		}
-	}
-	if len(systemParts) > 0 {
-		rows = append(rows, map[string]any{
-			"role":    "system",
-			"content": strings.Join(systemParts, "\n\n"),
-		})
-	}
-	for _, message := range messages {
-		if message.Role == "system" {
-			continue
-		}
-		content, images := ollamaContentParts(message.Content)
-		row := map[string]any{
-			"role":    message.Role,
-			"content": content,
-		}
-		if len(images) > 0 {
-			row["images"] = images
-		}
-		if message.ToolCalls != nil {
-			row["tool_calls"] = ollamaToolCalls(message.ToolCalls, toolNames)
-		}
-		if message.Role == "tool" && message.ToolCallID != "" {
-			if name := toolNames[message.ToolCallID]; name != "" {
-				row["tool_name"] = name
-			}
-		}
-		rows = append(rows, row)
-	}
-	return rows
-}
-
-func ollamaToolCalls(value any, toolNames map[string]string) []map[string]any {
-	rows, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	converted := make([]map[string]any, 0, len(rows))
-	for _, raw := range rows {
-		call, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		function, ok := call["function"].(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := function["name"].(string)
-		arguments := function["arguments"]
-		if encoded, ok := arguments.(string); ok {
-			var decoded any
-			if json.Unmarshal([]byte(encoded), &decoded) == nil {
-				arguments = decoded
-			}
-		}
-		converted = append(converted, map[string]any{
-			"function": map[string]any{
-				"name":      name,
-				"arguments": arguments,
-			},
-		})
-		if id, _ := call["id"].(string); id != "" && name != "" {
-			toolNames[id] = name
-		}
-	}
-	return converted
-}
-
-func ollamaContent(content any) string {
-	text, _ := ollamaContentParts(content)
-	return text
-}
-
-func ollamaContentParts(content any) (string, []string) {
-	switch value := content.(type) {
-	case string:
-		return value, nil
-	case []any:
-		parts := make([]string, 0, len(value))
-		images := make([]string, 0)
-		for _, part := range value {
-			row, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			switch row["type"] {
-			case "text":
-				text, ok := row["text"].(string)
-				if ok && text != "" {
-					parts = append(parts, text)
-				}
-			case "image_url":
-				image, _ := row["image_url"].(map[string]any)
-				dataURL, _ := image["url"].(string)
-				if _, payload, ok := strings.Cut(dataURL, ","); ok && payload != "" {
-					images = append(images, payload)
-				}
-			}
-		}
-		return strings.Join(parts, "\n\n"), images
-	default:
-		return "", nil
 	}
 }
 
@@ -877,27 +628,6 @@ func positiveJSONInt(value any) int {
 		}
 	}
 	return 0
-}
-
-func ollamaContextLengthFromPayload(payload any) int {
-	record, ok := payload.(map[string]any)
-	if !ok {
-		return 0
-	}
-	modelInfo, ok := record["model_info"].(map[string]any)
-	if !ok {
-		return 0
-	}
-	contextLength := 0
-	for key, value := range modelInfo {
-		if !strings.HasSuffix(strings.ToLower(key), ".context_length") && !strings.EqualFold(key, "context_length") {
-			continue
-		}
-		if parsed := positiveJSONInt(value); parsed > contextLength {
-			contextLength = parsed
-		}
-	}
-	return contextLength
 }
 
 func providerEndpointURL(baseURL, endpointPath, defaultPath string) (string, error) {

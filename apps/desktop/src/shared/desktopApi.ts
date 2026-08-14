@@ -1,5 +1,6 @@
 import type { BackendUiEvent } from "./backendEvents";
 import type { DocumentReviewSnapshot } from "./documentReview";
+import type { LocalCatalogModel, LocalCatalogModelKind, ModelDownloadEvent } from "./localModels";
 import type { ReviewFile } from "./reviewDiff";
 
 export type ServiceStatus = "ready" | "degraded" | "unavailable";
@@ -30,10 +31,6 @@ export type CompanyConnectionStatus = {
   deviceLabel?: string;
 };
 
-export type LocalModelProbeResult =
-  | { status: "ready"; models: string[] }
-  | { status: "unavailable"; models: [] };
-
 /**
  * One model a server-mode Veil publishes. `available` is live — a registered
  * model whose process is stopped stays listed and dimmed, because a user with
@@ -51,7 +48,6 @@ export type ServerModelInfo = {
 export type DesktopStartupSettings = {
   permissionMode: PermissionMode;
   modelEndpoint: PublicModelEndpointSettings;
-  localModels: string[];
   companyConnection: CompanyConnectionStatus;
   harnessProfile: HarnessProfileId;
   contextLength: number;
@@ -251,6 +247,13 @@ export type BackendStatus = {
    * silently do nothing.
    */
   veilFeatures: string[];
+  /**
+   * Whether local mode can transcribe right now: a dictation model is selected
+   * and its files are on disk. False in server mode, where `veilFeatures`
+   * already answers the same question.
+   */
+  localDictationReady: boolean;
+  system: SystemProfile;
   endpointConfig: {
     source: "local-default" | "server-default" | "stored" | "managed";
     endpointEditingAllowed: boolean;
@@ -464,6 +467,32 @@ export type DictationEvent =
   | { kind: "final"; text: string; truncated: boolean }
   | { kind: "error"; message: string };
 
+/**
+ * How dictation is configured. `model` is a catalog id or "off"; `language` is
+ * a hint for the runtime, where null means detect it.
+ */
+export type DictationSettings = {
+  model: "off" | "qwen3-asr-0.6b" | "qwen3-asr-1.7b";
+  language: string | null;
+  /** The chosen microphone's device id, or null for the system default. */
+  deviceId: string | null;
+};
+
+/**
+ * What this machine brings to running a model, independent of which model is
+ * chosen. Reported so a user whose graphics driver leaves the app on the
+ * processor sees that, rather than concluding the app is just slow.
+ * `accelerator` is the backend family — "Vulkan", "Metal" — or null on the CPU.
+ */
+export type SystemProfile = {
+  totalRamGB: number;
+  accelerator: string | null;
+  acceleratorDevice: string | null;
+  quality: "optimal" | "good" | "cpu";
+};
+
+export type { LocalCatalogModel, LocalCatalogModelKind, LocalModelQuant, ModelDownloadEvent } from "./localModels";
+
 export type DesktopApi = {
   listProjects(): Promise<RepositoryInfo[]>;
   listChats(): Promise<ChatRecord[]>;
@@ -595,6 +624,10 @@ export type DesktopApi = {
     { ok: true; repository: RepositoryInfo } | { ok: false; message: string }
   >;
   getBackendStatus(): Promise<BackendStatus>;
+  /** Starts the local model stack now — the manual load behind the refresh control. */
+  loadLocalModel(): Promise<{ status: BackendStatus }>;
+  /** Stops the local model stack and gives its memory back. */
+  unloadLocalModel(): Promise<{ status: BackendStatus }>;
   getStartupSettings(): Promise<DesktopStartupSettings>;
   getCapabilityProbes(input?: {
     force?: boolean;
@@ -620,12 +653,18 @@ export type DesktopApi = {
   getModelEndpointSettings(input?: {
     mode?: ModelEndpointMode;
   }): Promise<PublicModelEndpointSettings>;
-  getCachedLocalModels(input: {
-    baseUrl: string;
-  }): Promise<string[]>;
-  probeLocalModels(input: {
-    baseUrl: string;
-  }): Promise<LocalModelProbeResult>;
+  getDictationSettings(): Promise<DictationSettings>;
+  saveDictationSettings(input: DictationSettings): Promise<{ dictation: DictationSettings; status: BackendStatus }>;
+  listLocalModels(input: { kind: LocalCatalogModelKind }): Promise<LocalCatalogModel[]>;
+  downloadLocalModel(input: { id: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+  cancelLocalModelDownload(input: { id: string }): Promise<{ ok: true }>;
+  /** Chooses which quantization a model downloads and runs at. */
+  setLocalModelQuant(input: { id: string; quant: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Pins a Hugging Face repo (link or author/model) into the local collection. */
+  addCustomLocalModel(input: { reference: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Forgets a custom model and deletes any of its downloaded files. */
+  removeCustomLocalModel(input: { id: string }): Promise<{ ok: true } | { ok: false; message: string }>;
+  openModelsFolder(): Promise<{ ok: true; directory: string } | { ok: false; message: string }>;
   listServerModels(): Promise<ServerModelInfo[]>;
   saveModelEndpointSettings(input: PublicModelEndpointSettings): Promise<{
     settings: PublicModelEndpointSettings;
@@ -798,6 +837,9 @@ export type DesktopApi = {
    * advertise `speech.transcribe`.
    */
   startDictation(input: { language?: string }): Promise<{ started: boolean }>;
+  /** Takes microphone consent the way the platform takes it, before the renderer
+   *  opens a device — so a refusal is explained where it can be fixed. */
+  requestMicrophoneAccess(): Promise<{ granted: boolean }>;
   /** Sends one slice of 16 kHz mono 16-bit PCM to the open stream. */
   sendDictationAudio(input: { chunk: Uint8Array }): Promise<void>;
   /** Ends the recording and waits for the last transcript. */
@@ -810,6 +852,8 @@ export type DesktopApi = {
    * terminal event ends the session.
    */
   onDictationEvent(callback: (event: DictationEvent) => void): () => void;
+  /** Progress for the one model download that can be in flight at a time. */
+  onModelDownloadEvent(callback: (event: ModelDownloadEvent) => void): () => void;
   /**
    * The first index build for a workspace. Separate from the backend event bus
    * because that bus is task-scoped and this happens on folder open, before any
@@ -851,6 +895,8 @@ export const desktopIpcChannels = {
   listRepositoryBranches: "umbratic:list-repository-branches",
   checkoutRepositoryBranch: "umbratic:checkout-repository-branch",
   getBackendStatus: "umbratic:get-backend-status",
+  loadLocalModel: "umbratic:load-local-model",
+  unloadLocalModel: "umbratic:unload-local-model",
   getStartupSettings: "umbratic:get-startup-settings",
   getCapabilityProbes: "umbratic:get-capability-probes",
   listRemoteConnections: "umbratic:list-remote-connections",
@@ -866,8 +912,15 @@ export const desktopIpcChannels = {
   getContextLength: "umbratic:get-context-length",
   saveContextLength: "umbratic:save-context-length",
   getModelEndpointSettings: "umbratic:get-model-endpoint-settings",
-  getCachedLocalModels: "umbratic:get-cached-local-models",
-  probeLocalModels: "umbratic:probe-local-models",
+  getDictationSettings: "umbratic:get-dictation-settings",
+  saveDictationSettings: "umbratic:save-dictation-settings",
+  listLocalModels: "umbratic:list-local-models",
+  downloadLocalModel: "umbratic:download-local-model",
+  cancelLocalModelDownload: "umbratic:cancel-local-model-download",
+  setLocalModelQuant: "umbratic:set-local-model-quant",
+  addCustomLocalModel: "umbratic:add-custom-local-model",
+  removeCustomLocalModel: "umbratic:remove-custom-local-model",
+  openModelsFolder: "umbratic:open-models-folder",
   listServerModels: "umbratic:list-server-models",
   saveModelEndpointSettings: "umbratic:save-model-endpoint-settings",
   getCompanyConnectionStatus: "umbratic:get-company-connection-status",
@@ -907,12 +960,13 @@ export const desktopIpcChannels = {
   setResponseFeedback: "umbratic:set-response-feedback",
   setWindowChromeTheme: "umbratic:set-window-chrome-theme",
   openExternal: "umbratic:open-external",
+  requestMicrophoneAccess: "umbratic:request-microphone-access",
   startDictation: "umbratic:start-dictation",
   sendDictationAudio: "umbratic:send-dictation-audio",
   stopDictation: "umbratic:stop-dictation",
   cancelDictation: "umbratic:cancel-dictation",
 } as const satisfies Record<
-  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent">,
+  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent">,
   string
 >;
 

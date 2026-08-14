@@ -24,21 +24,37 @@ extraResources:
     to: runner
   - from: .package/veil
     to: veil
+  - from: .package/llama-server
+    to: llama-server
+# Supported platforms: Windows x64, Windows arm64, and macOS arm64. One
+# installer per platform — the runnable-in-place build lives in win-unpacked.
 mac:
   icon: assets/icons/icon.icns
   category: public.app-category.developer-tools
+  # macOS refuses microphone access outright — no prompt, no entry in Privacy &
+  # Security — unless the bundle says what it wants the microphone for. This
+  # string is the sentence the system alert shows.
+  extendInfo:
+    NSMicrophoneUsageDescription: Umbratic uses the microphone to dictate prompts. Audio is transcribed by the model you selected and never leaves your chosen runtime.
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
 win:
   icon: assets/icons/icon.ico
+  # x64 and arm64 are separate builds carrying differently-compiled sidecars,
+  # so the architecture is part of the file name. Without it both land on the
+  # release as Umbratic-${version}.exe and one silently replaces the other.
+  artifactName: Umbratic-${version}-${arch}.${ext}
   target:
     - nsis
-    - portable
-portable:
-  artifactName: Umbratic-${version}-portable.${ext}
 nsis:
   include: scripts/installer.nsh
+  # The installer wears the shield alone: at title-bar size a neutral steel
+  # silhouette reads on both Windows themes where the dark app tile cannot.
+  installerIcon: assets/icons/installer.ico
+  uninstallerIcon: assets/icons/installer.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

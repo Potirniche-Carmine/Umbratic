@@ -40,7 +40,11 @@ type Config struct {
 	IdentityStorePath   string
 	Mode                model.Mode
 	ProviderBaseURL     string
-	DefaultModel        string
+	// ProviderAPIKey is the bearer sent to the model runtime. In local mode the
+	// desktop mints one per app run, so the llama-server it started answers only
+	// to the Veil it started alongside.
+	ProviderAPIKey string
+	DefaultModel   string
 	// Models is the routing registry, always at least one entry.
 	Models []ModelEntry
 	// ModelSelectionEnabled is true only when VEIL_MODELS was set. It gates the
@@ -68,6 +72,10 @@ type Config struct {
 	// advertising a capability that would fail on first use.
 	SpeechBaseURL string
 	SpeechModel   string
+	// SpeechAPIKey is optional. A Console-managed vLLM speech model on the
+	// company's own network needs none; the desktop's llama-server sidecar is
+	// started with a per-run key and will refuse a call without it.
+	SpeechAPIKey string
 	RAG           RAG
 	// Networks whose X-Forwarded-For header may be believed. Empty by default,
 	// so an unconfigured deployment keys rate limits on the immediate peer
@@ -190,6 +198,7 @@ func Load() (Config, error) {
 		IdentityStorePath:      strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
 		Mode:                   mode,
 		ProviderBaseURL:        strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
+		ProviderAPIKey:         strings.TrimSpace(os.Getenv("VEIL_PROVIDER_API_KEY")),
 		DefaultModel:           strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:          contextLength,
 		MaxOutputTokens:        generation.MaxOutputTokens,
@@ -204,6 +213,7 @@ func Load() (Config, error) {
 		TelemetryMaxBodyBytes:  telemetryMaxBodyBytes,
 		SpeechBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
 		SpeechModel:            strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
+		SpeechAPIKey:           strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
 		ModelTimeout:           modelTimeout,
 		RequestTimeout:         requestTimeout,
 		StreamIdleTimeout:      streamIdleTimeout,

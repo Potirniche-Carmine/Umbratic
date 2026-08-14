@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "desktop-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:web",
+        "--workspace",
+        "@umbratic/desktop"
+      ],
+      "port": 5173
+    }
+  ]
+}

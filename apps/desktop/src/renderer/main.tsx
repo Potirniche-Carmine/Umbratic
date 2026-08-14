@@ -169,6 +169,7 @@ import { ReviewPanel } from "./review/ReviewPanel";
 import { defaultModelEndpointSettings } from "./endpointSettings";
 import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
 import { AppearanceSettingsPanel } from "./AppearanceSettings";
+import { VoiceSettings } from "./VoiceSettings";
 import { SettingsNav, type SettingsTab } from "./SettingsNav";
 import { TelemetrySettingsPanel } from "./TelemetrySettings";
 import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
@@ -240,7 +241,6 @@ const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultStartupSettings: DesktopStartupSettings = {
   permissionMode: "normal",
   modelEndpoint: defaultModelEndpointSettings,
-  localModels: [],
   companyConnection: { state: "not_enrolled" },
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
@@ -2000,7 +2000,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     api,
     backend,
     initialSettings: startupSettings.modelEndpoint,
-    initialLocalModels: startupSettings.localModels,
     initialConnection: startupSettings.companyConnection,
     settingsOpen,
     active: settingsTab === "account",
@@ -2044,6 +2043,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
     textareaRef.current?.focus();
   });
+  // What the server advertises, or — locally — a downloaded dictation model. Not whether one is loaded: the mic press loads it.
+  const dictationAvailable = backend?.veilFeatures.includes("speech.transcribe") === true || backend?.localDictationReady === true;
   const draftSaveRef = useRef<number | null>(null);
   const lastPersistedDraftRef = useRef<Map<string, { draftPrompt: string; filesSignature: string }>>(new Map());
   const reviewAnimationRef = useRef<number | null>(null);
@@ -2689,6 +2690,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
   useEffect(() => {
     const isOpen = settingsOpen || !!previewAttachment?.previewDataUrl || !!deleteCandidate || showElevatedPermissionsDialog || approvalPending || !!responseFeedbackDialog;
+    // While a modal is up the page behind it holds still: see .modalScrim CSS.
+    document.documentElement.classList.toggle("modalOpen", isOpen);
     if (!isOpen) {
       modalTriggerRef.current?.focus();
       modalTriggerRef.current = null;
@@ -5228,10 +5231,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
 
         <div className="sidebarFooter">
-          <div className="sidebarBrand" aria-hidden="true">
-            <span className="sidebarBrandLogo" />
-            <span className="confidentialMark">Private and Confidential</span>
-          </div>
+          <div className="sidebarBrand" aria-hidden="true"><span className="sidebarBrandRow"><span className="sidebarBrandMark" /><span className="sidebarBrandName">Umbratic</span></span><span className="confidentialMark">Private and Confidential</span></div>
           <button
             className="settingsPlaceholder"
             type="button"
@@ -5867,9 +5867,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 />
               </div>
               <div className="promptActionRail">
-                {backend?.veilFeatures.includes("speech.transcribe") ? (
-                  <DictationControl status={dictation.status} onToggle={dictation.toggle} />
-                ) : null}
+                <DictationControl status={dictation.status} enabled={dictationAvailable} onToggle={dictation.toggle}
+                  devices={dictation.devices} deviceId={dictation.deviceId} onSelectDevice={dictation.selectDevice}
+                  onEnable={() => { setSettingsOpen(true); setSettingsTab("voice"); }} />
                 {isGenerating && !hasComposerMessage ? (
                   <button
                     className="sendButton stopButton"
@@ -6170,6 +6170,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   />
                 ) : null}
 
+                {settingsTab === "voice" ? (
+                  <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
+                    serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
+                ) : null}
                 {settingsTab === "skills" ? (
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
@@ -6373,6 +6377,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     onClear={() => void clearLocalLogs()}
                   />
                 ) : null}
+                <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic · Private and confidential</span></div>
               </div>
             </div>
           </section>

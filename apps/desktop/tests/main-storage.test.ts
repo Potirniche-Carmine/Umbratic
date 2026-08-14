@@ -40,8 +40,6 @@ function electronMock(userData) {
 function loadStorage(userData, home = userData) {
   setEnv({
     HOME: home,
-    OLLAMA_BASE_URL: "",
-    OLLAMA_API_KEY: "",
     USERPROFILE: home,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: "true",
     UMBRATIC_FORCE_LOCAL_ENDPOINT: undefined,
@@ -451,18 +449,18 @@ test("endpoint settings default to the local model runtime", () => {
 
   assert.equal(storage.hasStoredModelEndpointSettings(), false);
   assert.equal(storage.readModelEndpointSettings().mode, "local");
-  assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
+  assert.equal(storage.readModelEndpointSettings().baseUrl, "");
   assert.equal(storage.readModelEndpointSettings().modelId, "");
 
   const savedLocal = storage.writeModelEndpointSettings({
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "llama3.2",
+    baseUrl: "",
+    modelId: "gemma4-e4b",
     secret: "must-not-be-stored",
     headers: [{ name: "X-Ignored", value: "also-not-stored" }],
   });
   assert.equal(savedLocal.mode, "local");
-  assert.equal(savedLocal.modelId, "llama3.2");
+  assert.equal(savedLocal.modelId, "gemma4-e4b");
   assert.equal(savedLocal.secret, "");
   assert.deepEqual(plain(savedLocal.headers), [{ name: "", value: "" }, { name: "", value: "" }]);
   assert.equal(storage.hasStoredModelEndpointSettings(), true);
@@ -482,8 +480,8 @@ test("local model settings remain in SQLite after a switch to a company server",
 
   storage.writeModelEndpointSettings({
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "qwen3:8b",
+    baseUrl: "",
+    modelId: "gemma4-e4b",
   });
   storage.writeModelEndpointSettings({
     mode: "server",
@@ -494,37 +492,15 @@ test("local model settings remain in SQLite after a switch to a company server",
   assert.equal(storage.readModelEndpointSettings().mode, "server");
   assert.deepEqual(plain(storage.readModelEndpointSettingsForMode("local")), {
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "qwen3:8b",
+    baseUrl: "",
+    modelId: "gemma4-e4b",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
   });
 
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
-  assert.equal(rawSettings.modelEndpoints.local.modelId, "qwen3:8b");
+  assert.equal(rawSettings.modelEndpoints.local.modelId, "gemma4-e4b");
   assert.equal(rawSettings.modelEndpoints.server.baseUrl, "https://veil.example.internal");
-});
-
-test("local model discovery is cached in SQLite by normalized runtime URL", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-model-cache-"));
-  const storage = loadStorage(userData);
-
-  assert.deepEqual(plain(storage.readCachedLocalModels("http://127.0.0.1:11434")), []);
-  assert.deepEqual(plain(storage.writeCachedLocalModels(
-    "http://127.0.0.1:11434///",
-    ["qwen3", " qwen3 ", "gemma3"],
-  )), ["qwen3", "gemma3"]);
-  assert.deepEqual(
-    plain(storage.readCachedLocalModels("http://127.0.0.1:11434")),
-    ["qwen3", "gemma3"],
-  );
-
-  const reloaded = loadStorage(userData);
-  assert.deepEqual(
-    plain(reloaded.readCachedLocalModels("http://127.0.0.1:11434/")),
-    ["qwen3", "gemma3"],
-  );
-  assert.match(readSettingsPayloadText(userData), /"localModelCache"/);
 });
 
 test("an explicitly forced local configuration overrides a stored server endpoint for the session", () => {
@@ -540,27 +516,26 @@ test("an explicitly forced local configuration overrides a stored server endpoin
     },
   });
   process.env.UMBRATIC_FORCE_LOCAL_ENDPOINT = "1";
-  process.env.UMBRATIC_LOCAL_RUNTIME_BASE_URL = "http://127.0.0.1:11434";
-  process.env.UMBRATIC_LOCAL_MODEL_ID = "gemma4:12b-it-q4_K_M";
+    process.env.UMBRATIC_LOCAL_MODEL_ID = "gemma4-12b";
   const storage = loadTypeScriptModule(storagePath, { cache: new Map(), mocks: { electron: electronMock(userData) } });
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "gemma4:12b-it-q4_K_M",
+    baseUrl: "",
+    modelId: "gemma4-12b",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
   });
 
   storage.writeModelEndpointSettings({
     mode: "local",
-    baseUrl: "http://127.0.0.1:11500",
+    baseUrl: "",
     modelId: "user-selected-model",
   });
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    baseUrl: "http://127.0.0.1:11500",
+    baseUrl: "",
     modelId: "user-selected-model",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],

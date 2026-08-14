@@ -365,33 +365,49 @@ select:focus-visible {
   }
 }
 
+/* The logo mark is a masked high-resolution asset and everything else is real
+   text, so the block stays crisp at any display scale. */
 .sidebarBrand {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   padding: 6px 12px 2px;
   user-select: none;
   pointer-events: none;
 }
 
-.sidebarBrandLogo {
-  display: block;
-  width: 104px;
-  height: 32px;
-  background: var(--faint);
-  opacity: 0.95;
-  mask: url("../../../assets/brand/Umbratic/umbratic-full-horizontal-transparent.png") center / contain no-repeat;
-  -webkit-mask: url("../../../assets/brand/Umbratic/umbratic-full-horizontal-transparent.png") center / contain no-repeat;
+.sidebarBrandRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .confidentialMark {
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   text-align: center;
+}
+
+.sidebarBrandMark {
+  display: block;
+  width: 18px;
+  /* The mark's own aspect ratio: 813 x 1024. */
+  height: 22.7px;
+  background: var(--faint);
+  mask: url("../../../assets/brand/Umbratic/umbratic-icon-no-padding-transparent.png") center / contain no-repeat;
+  -webkit-mask: url("../../../assets/brand/Umbratic/umbratic-icon-no-padding-transparent.png") center / contain no-repeat;
+}
+
+.sidebarBrandName {
   color: var(--faint);
-  opacity: 0.9;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 @media (max-width: 1120px) {
