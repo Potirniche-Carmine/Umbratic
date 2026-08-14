@@ -245,6 +245,32 @@ test("the microphone can be chosen from the button it belongs to, and the choice
   assert.match(read("../src/main/settingsStorage.ts"), /value\.deviceId\.length <= 256/);
 });
 
+test("the microphone and its device chevron are one control", () => {
+  const styles = read("../src/renderer/styles/dictation.css");
+  // Two separate pills read as two unrelated buttons that happen to be
+  // adjacent, which is the wrong thing to say about a menu belonging to the
+  // button beside it. The outline is on the pair; a hairline divides the halves.
+  // Anchored to line starts: ".dictationControl.isRecording .dictationButton {"
+  // also contains ".dictationButton {" and would match first.
+  const rule = (selector: string) => {
+    const at = styles.indexOf(`\n${selector} {`);
+    return styles.slice(at, styles.indexOf("\n}", at));
+  };
+  const capsule = rule(".dictationControl");
+  assert.match(capsule, /border: 1px solid var\(--line\)/);
+  assert.match(capsule, /border-radius: 999px/);
+  const mic = rule(".dictationButton");
+  assert.match(mic, /border: 0/);
+  assert.match(mic, /border-radius: 999px 0 0 999px/);
+  const chevron = rule(".dictationDeviceTrigger");
+  assert.match(chevron, /border: 0/);
+  assert.match(chevron, /border-left: 1px solid var\(--line\)/);
+  assert.match(chevron, /border-radius: 0 999px 999px 0/);
+  // Recording lights the whole capsule, since the whole capsule is the control.
+  assert.match(styles, /\.dictationControl\.isRecording \{[\s\S]{0,160}border-color: var\(--red\)/);
+  assert.match(styles, /\.dictationControl\.isRecording \.dictationDeviceTrigger \{/);
+});
+
 test("the device menu escapes the shell that would clip it", () => {
   // The prompt shell sets `overflow: hidden`, so a menu left inside it is cut
   // off at the shell's edge rather than shown over the conversation.
@@ -294,8 +320,8 @@ test("the default microphone leads the list, and Windows' duplicate is dropped",
   ]);
   assert.deepEqual(microphoneChoices([]), []);
 
-  // Named in place rather than duplicated as a separate "System default" row.
-  assert.doesNotMatch(composerControls, /System default/);
+  // Named in place rather than duplicated as a synthetic row ahead of the list.
+  assert.doesNotMatch(composerControls, /label: "System default"/);
   assert.match(composerControls, /device\.isDefault \? <em>Default:<\/em> : null/);
 });
 

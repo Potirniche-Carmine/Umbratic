@@ -3,38 +3,55 @@
  * Dictation sits in the action rail beside send, and reads as secondary to it:
  * send is a filled circle because it commits the prompt, so the microphone is
  * an outline that does not compete with it.
+ *
+ * The microphone and its device chevron are one object, not two. They are a
+ * split control — press the left to speak, the right to choose what it listens
+ * through — so the outline belongs to the pair and only a hairline separates
+ * them. Two separate pills read as two unrelated buttons that happen to be
+ * adjacent, which is exactly the wrong thing to say about a menu that belongs
+ * to the button beside it.
  */
 .dictationControl {
   position: relative;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
+.dictationControl:hover {
+  border-color: var(--line-strong);
+}
+
+/* Each half fills its own end of the capsule, so a press highlights the part
+   that was pressed rather than moving the whole control. */
 .dictationButton {
   display: grid;
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
+  border: 0;
+  border-radius: 999px 0 0 999px;
   background: transparent;
   color: var(--muted);
-  transition:
-    background 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms cubic-bezier(0.2, 0.9, 0.2, 1);
+  transition: background 160ms ease, color 160ms ease;
 }
 
 .dictationButton:hover:not(:disabled) {
-  border-color: var(--line-strong);
   color: var(--text);
-  transform: translateY(-1px);
+  background: var(--control-hover-soft);
 }
 
 .dictationButton:active:not(:disabled) {
-  transform: translateY(0) scale(0.96);
+  background: var(--control-hover);
+}
+
+.dictationButton:focus-visible {
+  outline: 0;
+  color: var(--text);
+  background: var(--control-hover);
 }
 
 .dictationButton:disabled {
@@ -44,13 +61,22 @@
 /*
  * Recording is the one state that has to be unmistakable from across a desk:
  * a live microphone the user has forgotten about is a privacy problem, not a
- * cosmetic one. Colour alone would not carry that, so the ring pulses too.
+ * cosmetic one. Colour alone would not carry that, so the ring pulses too — and
+ * it is the whole capsule that lights, because the whole capsule is the control.
  */
-.dictationControl.isRecording .dictationButton {
+.dictationControl.isRecording {
   border-color: var(--red);
+  animation: dictationPulse 1.6s ease-in-out infinite;
+}
+
+.dictationControl.isRecording .dictationButton {
   background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
-  animation: dictationPulse 1.6s ease-in-out infinite;
+}
+
+.dictationControl.isRecording .dictationDeviceTrigger {
+  border-left-color: color-mix(in srgb, var(--red) 38%, transparent);
+  color: color-mix(in srgb, var(--red) 62%, var(--muted));
 }
 
 @keyframes dictationPulse {
@@ -147,54 +173,43 @@
   white-space: normal;
 }
 
-/* Which microphone, hung off the button it belongs to. */
+/* Which microphone: the right half of the capsule, divided from the left by a
+   hairline rather than by a gap. */
 .dictationDevices {
   position: relative;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  margin-left: 1px;
 }
 
-/*
- * A control in its own right, not a decoration on the microphone: it carries a
- * border and a background like every other pill in the composer, and a target
- * wide enough to hit without aiming. A 14px chevron with no edges read as part
- * of the icon beside it.
- */
 .dictationDeviceTrigger {
   display: grid;
   place-items: center;
-  width: 22px;
+  width: 21px;
   height: 30px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0 999px 999px 0;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition:
-    color 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease,
-    transform 160ms cubic-bezier(0.2, 0.75, 0.25, 1);
+  transition: color 120ms ease, background 120ms ease, border-color 160ms ease;
 }
 
 .dictationDeviceTrigger:hover:not(:disabled) {
   color: var(--text);
-  border-color: var(--line-strong);
+  background: var(--control-hover-soft);
+}
+
+.dictationDeviceTrigger:active:not(:disabled) {
   background: var(--control-hover);
 }
 
 .dictationDeviceTrigger:focus-visible {
   outline: 0;
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.dictationDeviceTrigger:active:not(:disabled) {
-  transform: scale(0.94);
+  background: var(--control-hover);
 }
 
 .dictationDeviceTrigger:disabled {
@@ -204,7 +219,6 @@
 
 .dictationDevices.isOpen .dictationDeviceTrigger {
   color: var(--text);
-  border-color: var(--line-strong);
   background: var(--control-hover);
 }
 
