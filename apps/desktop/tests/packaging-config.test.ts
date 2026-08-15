@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 const configUrl = new URL("../electron-builder.yml", import.meta.url);
 const preparePackageUrl = new URL("../scripts/prepare-package.ts", import.meta.url);
 const installerIncludeUrl = new URL("../scripts/installer.nsh", import.meta.url);
-const packageWorkflowUrl = new URL("../../../.github/workflows/package-desktop.yml", import.meta.url);
 const verifyWorkflowUrl = new URL("../../../.github/workflows/verify.yml", import.meta.url);
 
 test("desktop packages use the Umbratic product name without a version in Windows installed apps", () => {
@@ -21,6 +20,20 @@ test("desktop packages use the Umbratic product name without a version in Window
   assert.match(nsis, /^  uninstallDisplayName: Umbratic$/m);
   assert.doesNotMatch(config, /^productName:.*\$\{version\}/m);
   assert.doesNotMatch(config, /^  uninstallDisplayName:.*\$\{version\}/m);
+});
+
+test("packaged Electron flips security fuses and does not keep runAsNode", () => {
+  const config = fs.readFileSync(configUrl, "utf8");
+  const snapshot = fs.readFileSync(new URL("../src/main/workspaceSnapshot.ts", import.meta.url), "utf8");
+  assert.match(config, /^electronFuses:\r?$/m);
+  assert.match(config, /^  runAsNode: false$/m);
+  assert.match(config, /^  enableNodeOptionsEnvironmentVariable: false$/m);
+  assert.match(config, /^  enableNodeCliInspectArguments: false$/m);
+  assert.match(config, /^  enableEmbeddedAsarIntegrityValidation: false$/m);
+  assert.match(config, /^  onlyLoadAppFromAsar: true$/m);
+  assert.match(config, /^  resetAdHocDarwinSignature: true$/m);
+  assert.match(snapshot, /utilityProcess\.fork/);
+  assert.doesNotMatch(snapshot, /ELECTRON_RUN_AS_NODE/);
 });
 
 test("release-mode native binaries are runnable before packaging", () => {
@@ -46,6 +59,43 @@ test("desktop packages the Veil binary used by managed local mode", () => {
   assert.match(preparePackage, /process\.platform === "win32" \? "veil\.exe" : "veil"/);
 });
 
+test("desktop builds llama-server from the pinned commit and packages it", () => {
+  const config = fs.readFileSync(configUrl, "utf8");
+  const preparePackage = fs.readFileSync(preparePackageUrl, "utf8");
+  const verifyPackage = fs.readFileSync(new URL("../scripts/verify-package.ts", import.meta.url), "utf8");
+  const pin = fs.readFileSync(new URL("../../../third_party/llama.cpp.pin", import.meta.url), "utf8");
+
+  assert.match(pin, /^repository=https:\/\/github\.com\/ggml-org\/llama\.cpp\.git$/m);
+  assert.match(pin, /^tag=b\d+$/m);
+  assert.match(pin, /^commit=[0-9a-f]{40}$/m);
+
+  assert.match(config, /- from: \.package\/llama-server\r?\n\s+to: llama-server/);
+  // Cloning a tag is not enough: a tag can be moved, a commit cannot.
+  assert.match(preparePackage, /head !== pin\.commit/);
+  // No libcurl, and with it no `-hf` remote-download path.
+  assert.match(preparePackage, /"-DLLAMA_CURL=OFF"/);
+  // Never -march=native: a release binary must run on CPUs older than the one
+  // that built it, and macOS older than the SDK that built it.
+  assert.match(preparePackage, /"-DGGML_NATIVE=OFF"/);
+  assert.match(preparePackage, /-DCMAKE_OSX_DEPLOYMENT_TARGET=12\.0/);
+  // One build serves every machine because the backends are chosen on the
+  // user's machine: a missing Vulkan loader is a skipped backend, not a
+  // process that will not start.
+  assert.match(preparePackage, /"-DGGML_BACKEND_DL=ON"/);
+  assert.match(preparePackage, /"-DGGML_CPU_ALL_VARIANTS=ON"/);
+  // Backend libraries are loaded, not linked, so a targeted build would leave
+  // them unbuilt and ship an app with nothing to run on.
+  assert.doesNotMatch(preparePackage, /"--target", "llama-server"/);
+  assert.match(verifyPackage, /has no loadable ggml backend/);
+  assert.match(verifyPackage, /has no CPU backend to fall back to/);
+  // The packaged executable must report the commit the pin names. Not the
+  // build number: llama.cpp derives that from tag history a shallow clone does
+  // not have, so it self-reports "build 1" whichever release was checked out.
+  assert.match(verifyPackage, /commit=\(\[0-9a-f\]\{40\}\)/);
+  assert.match(verifyPackage, /commit \$\{commit\.slice\(0, 7\)\}/);
+  assert.match(verifyPackage, /verifyLlamaServer\(path\.join\(resources, "llama-server"/);
+});
+
 test("desktop packages the native Rust runner instead of a Node launcher", () => {
   const config = fs.readFileSync(configUrl, "utf8");
   const preparePackage = fs.readFileSync(preparePackageUrl, "utf8");
@@ -62,17 +112,6 @@ test("desktop packages the native Rust runner instead of a Node launcher", () =>
   assert.doesNotMatch(preparePackage, /umbratic-runner\.cjs|dist["'], ["']cli\.js/);
 });
 
-test("desktop packaging jobs install Go and Rust before building native services", () => {
-  const workflow = fs.readFileSync(packageWorkflowUrl, "utf8");
-  const packageJob = workflow.slice(workflow.indexOf("\n  package:"), workflow.indexOf("\n  publish-release:"));
-
-  assert.match(packageJob, /uses: actions\/setup-go@[0-9a-f]{40} # v7(?:\.\d+)?/);
-  assert.match(packageJob, /rustup toolchain install 1\.96\.0/);
-  assert.ok(packageJob.search(/uses: actions\/setup-go@[0-9a-f]{40}/) < packageJob.indexOf("npm --workspace @umbratic/desktop run package"));
-  assert.ok(packageJob.indexOf("rustup toolchain install 1.96.0") < packageJob.indexOf("npm --workspace @umbratic\/desktop run package"));
-  assert.ok(packageJob.indexOf("npm --workspace @umbratic/desktop run package") < packageJob.indexOf("npm --workspace @umbratic/desktop run verify:package"));
-});
-
 test("the Windows uninstaller offers an explicit local-data removal option", () => {
   const config = fs.readFileSync(configUrl, "utf8");
   const include = fs.readFileSync(installerIncludeUrl, "utf8");
@@ -83,54 +122,31 @@ test("the Windows uninstaller offers an explicit local-data removal option", () 
   assert.match(include, /\$\{NSD_Uncheck\}/);
 });
 
-test("desktop packaging runs only for version tags", () => {
-  const packageWorkflow = fs.readFileSync(packageWorkflowUrl, "utf8");
+test("pull-request audit does not package or run the full suite", () => {
   const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-  const packageTriggers = packageWorkflow.slice(
-    packageWorkflow.indexOf("on:"),
-    packageWorkflow.indexOf("\npermissions:"),
-  );
   const verifyTriggers = verifyWorkflow.slice(
     verifyWorkflow.indexOf("on:"),
     verifyWorkflow.indexOf("\npermissions:"),
   );
 
-  assert.match(packageTriggers, /tags:\r?\n\s+- "v\*"/);
-  assert.doesNotMatch(packageTriggers, /branches:|pull_request:/);
   assert.match(verifyTriggers, /branches:\r?\n\s+- main/);
   assert.match(verifyTriggers, /pull_request:/);
-  // Solo-developer CI: the audit runs on pull requests only. Merges to main
-  // trigger nothing, and the full verification runs on tagged releases.
   assert.doesNotMatch(verifyTriggers, /push:/);
   assert.doesNotMatch(verifyWorkflow, /run package|electron-builder/);
   assert.doesNotMatch(verifyWorkflow, /test:all|release:check/);
 });
 
-test("desktop workflows omit the unused Squirrel peer dependency", () => {
-  const packageWorkflow = fs.readFileSync(packageWorkflowUrl, "utf8");
+test("pull-request audit omits the unused Squirrel peer dependency", () => {
   const verifyWorkflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
-
-  assert.doesNotMatch(packageWorkflow, /npm ci --ignore-scripts\s*$/m);
-  assert.match(packageWorkflow, /npm ci --ignore-scripts --omit=peer/g);
-  // The pull-request audit is lockfile-only: no npm ci at all, and the audit
-  // itself skips peer dependencies the same way installs do.
   assert.doesNotMatch(verifyWorkflow, /npm ci/);
   assert.match(verifyWorkflow, /npm audit --package-lock-only --ignore-scripts --omit=peer/);
 });
 
-test("desktop release workflow pins actions and limits write permission to publishing", () => {
-  const workflow = fs.readFileSync(packageWorkflowUrl, "utf8");
+test("pull-request audit pins actions and stays read-only", () => {
+  const workflow = fs.readFileSync(verifyWorkflowUrl, "utf8");
   const actionReferences = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
-  assert.ok(actionReferences.length >= 5);
+  assert.ok(actionReferences.length >= 2);
   assert.ok(actionReferences.every((reference) => /@[0-9a-f]{40}$/.test(reference)));
   assert.match(workflow, /^permissions:\r?\n  contents: read$/m);
-  const verifyJob = workflow.slice(workflow.indexOf("\n  verify:"), workflow.indexOf("\n  package:"));
-  const packageJob = workflow.slice(workflow.indexOf("\n  package:"), workflow.indexOf("\n  publish-release:"));
-  const publishJob = workflow.slice(workflow.indexOf("\n  publish-release:"));
-  assert.match(verifyJob, /^\n  verify:/);
-  assert.match(packageJob, /^\n  package:/);
-  assert.doesNotMatch(verifyJob, /contents: write/);
-  assert.doesNotMatch(packageJob, /contents: write/);
-  assert.match(publishJob, /permissions:\r?\n      contents: write/);
-  assert.doesNotMatch(publishJob, /delete-asset|--clobber/);
+  assert.doesNotMatch(workflow, /contents: write/);
 });

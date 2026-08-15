@@ -3,6 +3,7 @@ import {
   decodeRunnerEvent,
   type RunnerEvent,
 } from "./runnerEventDecoder";
+import { progressKind } from "../shared/backendEvents";
 import type {
   BackendUiEvent,
   CommandClass,
@@ -59,9 +60,6 @@ export type RunnerEventAdapterOptions = {
   onFailure(message: string, details?: RunnerFailureDetails): void;
   onInvalid(input: { message: string; code: string; type?: string }): void;
   onQueueUpdated?(event: Extract<RunnerEvent, { type: "run.queue.updated" }>): void;
-  /** Diagnostic-only: the run's hidden intent classification. Never rendered. */
-  onOrientDecision?(event: Extract<RunnerEvent, { type: "orient.decision" }>): void;
-  onOrientEvidenceRetry?(event: Extract<RunnerEvent, { type: "orient.evidence_retry" }>): void;
 };
 
 function eventAt(event: RunnerEvent): string | undefined {
@@ -92,7 +90,12 @@ export class RunnerEventAdapter {
         this.emitAssistant(event.text, eventAt(event), eventEndedAt(event));
         return;
       case "assistant.progress.delta":
-        this.emitProgress(event.text, eventAt(event), eventEndedAt(event));
+        this.emitProgress(
+          event.text,
+          eventAt(event),
+          eventEndedAt(event),
+          progressKind(event),
+        );
         return;
       case "tool.requested":
         this.handleToolRequested(event);
@@ -267,15 +270,10 @@ export class RunnerEventAdapter {
       case "run.queue.updated":
         this.options.onQueueUpdated?.(event);
         return;
-      case "orient.decision":
-        // Deliberately no emit: the bucket id goes to the diagnostic log only
-        // and must never reach the renderer.
-        this.options.onOrientDecision?.(event);
-        return;
-      case "orient.evidence_retry":
-        // Same rule as the decision it follows: diagnostics only.
-        this.options.onOrientEvidenceRetry?.(event);
-        return;
+      default: {
+        const _exhaustive: never = event;
+        return _exhaustive;
+      }
     }
   };
 
@@ -306,12 +304,13 @@ export class RunnerEventAdapter {
     });
   }
 
-  private emitProgress(text: string, at?: string, endedAt?: string): void {
+  private emitProgress(text: string, at?: string, endedAt?: string, kind?: "thinking"): void {
     if (!text) return;
     this.options.emit({
       type: "assistant.progress.delta",
       taskId: this.options.task.id,
       text,
+      ...(kind ? { kind } : {}),
       at,
       endedAt,
     });

@@ -1,0 +1,52 @@
+.imagePreviewScrim {
+  padding: 18px;
+}
+
+.imagePreviewDialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(920px, 100%);
+  height: min(720px, 100%);
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--modal-bg);
+  box-shadow: 0 24px 70px var(--shadow-color);
+  overflow: hidden;
+}
+
+.imagePreviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.imagePreviewHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.imagePreviewCanvas {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  background: var(--surface);
+}
+
+.imagePreviewCanvas img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}

@@ -178,8 +178,7 @@ type ChatInput struct {
 	Tools           any
 	Skills          []prompts.SkillMetadata
 	MaxOutputTokens int
-	// HarnessBucket is protected control metadata, not system text. A caller can
-	// select a catalog bucket for the endpoint's route and nothing else.
+	// HarnessBucket is accepted and ignored: it does not change the prompt.
 	HarnessBucket string
 	// Model is the registry id the caller picked, empty for the server default.
 	// It is only ever set when the server published a registry to pick from.
@@ -187,6 +186,10 @@ type ChatInput struct {
 	// Thinking is "on", "off", or empty. A hint like HarnessBucket: an
 	// unreadable value falls through to empty rather than failing the request.
 	Thinking string
+	// ReasoningVisible is true only for a JSON boolean true. Anything else —
+	// absent, a string, an object a later harness invents — is false, which is
+	// the same request a client that never sent the field would have made.
+	ReasoningVisible bool
 }
 
 type chatRequest struct {
@@ -200,7 +203,8 @@ type chatRequest struct {
 	Model           string                  `json:"model"`
 	// Thinking decodes as any so a harness that sends a shape this build has no
 	// reader for is treated as having sent nothing, rather than being refused.
-	Thinking any `json:"thinking"`
+	Thinking         any `json:"thinking"`
+	ReasoningVisible any `json:"reasoning_visible"`
 }
 
 // normalizeThinkingDirective reads the tolerant thinking hint. Anything that is
@@ -225,8 +229,7 @@ func normalizeThinkingDirective(value any) string {
 // DecodeChatInput validates a chat request for a specific route. Validation is
 // bounds and authority only: sizes and counts are enforced, client attempts to
 // write system text are rejected, and everything else the harness sends is
-// passed through or stripped. The route is still required because
-// harness_bucket selects a playbook from that route's catalog.
+// passed through or stripped. The route still selects the route prompt.
 //
 // allowedModels is the registry this server published. Empty means the server
 // never offered a choice, so naming a model stays refused loudly — a client
@@ -258,7 +261,7 @@ func DecodeChatInput(r io.Reader, route prompts.Route, allowedModels []string) (
 			return ChatInput{}, fmt.Errorf("field %q is not allowed", field)
 		}
 	}
-	stripUnknownFields(raw, "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket", "model", "thinking")
+	stripUnknownFields(raw, "input", "messages", "stream", "tools", "skills", "max_output_tokens", "harness_bucket", "model", "thinking", "reasoning_visible")
 
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -299,10 +302,8 @@ func DecodeChatInput(r io.Reader, route prompts.Route, allowedModels []string) (
 	if err != nil {
 		return ChatInput{}, err
 	}
-	// harness_bucket is a hint, not an enum. A value this build knows selects its
-	// playbook; anything else is counted and falls through to the same assembly a
-	// request with no bucket gets, so a harness that learns a new bucket before
-	// Veil does still runs.
+	// harness_bucket is a hint, not an enum. Any value is accepted. Unknown
+	// values are counted. The field does not change the protected prompt.
 	bucket := strings.TrimSpace(req.HarnessBucket)
 	if len(bucket) > MaxHarnessBucketBytes {
 		bucket = ""
@@ -325,15 +326,24 @@ func DecodeChatInput(r io.Reader, route prompts.Route, allowedModels []string) (
 	}
 
 	return ChatInput{
-		Messages:        req.Messages,
-		Stream:          req.Stream,
-		Tools:           req.Tools,
-		Skills:          skills,
-		MaxOutputTokens: req.MaxOutputTokens,
-		HarnessBucket:   bucket,
-		Model:           selectedModel,
-		Thinking:        normalizeThinkingDirective(req.Thinking),
+		Messages:         req.Messages,
+		Stream:           req.Stream,
+		Tools:            req.Tools,
+		Skills:           skills,
+		MaxOutputTokens:  req.MaxOutputTokens,
+		HarnessBucket:    bucket,
+		Model:            selectedModel,
+		Thinking:         normalizeThinkingDirective(req.Thinking),
+		ReasoningVisible: normalizeReasoningVisible(req.ReasoningVisible),
 	}, nil
+}
+
+// normalizeReasoningVisible is the tolerant reader for the show-thinking hint.
+// Only a JSON true forwards reasoning; every other shape is "do not show",
+// which is also the default.
+func normalizeReasoningVisible(value any) bool {
+	flag, ok := value.(bool)
+	return ok && flag
 }
 
 // validateToolContract is bounds-only. Veil does not arbitrate tool schemas:

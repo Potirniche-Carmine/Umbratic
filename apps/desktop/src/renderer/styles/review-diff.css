@@ -518,25 +518,6 @@
   font-size: 11px;
 }
 
-.reviewPanel > .reviewFooter {
-  position: relative;
-  justify-content: flex-end;
-  gap: 7px;
-  min-height: 50px;
-  padding: 9px 12px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
-  background: color-mix(in srgb, var(--material-structural) 90%, transparent);
-}
-
-.reviewEndLabel {
-  flex: 1 1 auto;
-  color: var(--faint);
-  font-size: 10px;
-  font-weight: 680;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
-}
-
 :root[data-theme="light"] .reviewFileCanvas,
 :root[data-theme="light"] .reviewLineGutter,
 :root[data-theme="light"] .reviewDiffColumnHeaders {

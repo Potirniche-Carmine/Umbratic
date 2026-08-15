@@ -40,7 +40,11 @@ type Config struct {
 	IdentityStorePath   string
 	Mode                model.Mode
 	ProviderBaseURL     string
-	DefaultModel        string
+	// ProviderAPIKey is the bearer sent to the model runtime. In local mode the
+	// desktop mints one per app run, so the llama-server it started answers only
+	// to the Veil it started alongside.
+	ProviderAPIKey string
+	DefaultModel   string
 	// Models is the routing registry, always at least one entry.
 	Models []ModelEntry
 	// ModelSelectionEnabled is true only when VEIL_MODELS was set. It gates the
@@ -62,7 +66,17 @@ type Config struct {
 	RequestTimeout         time.Duration
 	StreamIdleTimeout      time.Duration
 	MaxBodyBytes           int64
-	RAG                    RAG
+	// SpeechBaseURL and SpeechModel address the transcription runtime that backs
+	// dictation. Both empty is the normal case: a deployment without them has no
+	// /api/transcribe route and withholds the feature name, rather than
+	// advertising a capability that would fail on first use.
+	SpeechBaseURL string
+	SpeechModel   string
+	// SpeechAPIKey is optional. A Console-managed vLLM speech model on the
+	// company's own network needs none; the desktop's llama-server sidecar is
+	// started with a per-run key and will refuse a call without it.
+	SpeechAPIKey string
+	RAG           RAG
 	// Networks whose X-Forwarded-For header may be believed. Empty by default,
 	// so an unconfigured deployment keys rate limits on the immediate peer
 	// rather than on a header any client can forge.
@@ -166,7 +180,10 @@ func Load() (Config, error) {
 
 	var generation model.GenerationProfile
 	if mode == model.ModeLocal {
-		generation = model.LocalGenerationProfile(maxOutputTokens)
+		generation, err = loadLocalGenerationProfile(maxOutputTokens)
+		if err != nil {
+			return Config{}, err
+		}
 	} else {
 		generation, err = loadServerGenerationProfile(maxOutputTokens)
 		if err != nil {
@@ -184,6 +201,7 @@ func Load() (Config, error) {
 		IdentityStorePath:      strings.TrimSpace(os.Getenv("VEIL_IDENTITY_STORE_PATH")),
 		Mode:                   mode,
 		ProviderBaseURL:        strings.TrimSpace(os.Getenv("VEIL_PROVIDER_BASE_URL")),
+		ProviderAPIKey:         strings.TrimSpace(os.Getenv("VEIL_PROVIDER_API_KEY")),
 		DefaultModel:           strings.TrimSpace(os.Getenv("VEIL_MODEL")),
 		ContextLength:          contextLength,
 		MaxOutputTokens:        generation.MaxOutputTokens,
@@ -196,6 +214,9 @@ func Load() (Config, error) {
 		TelemetryStorePath:     strings.TrimSpace(os.Getenv("VEIL_TELEMETRY_STORE_PATH")),
 		TelemetryRetentionDays: telemetryRetentionDays,
 		TelemetryMaxBodyBytes:  telemetryMaxBodyBytes,
+		SpeechBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("VEIL_SPEECH_BASE_URL")), "/"),
+		SpeechModel:            strings.TrimSpace(os.Getenv("VEIL_SPEECH_MODEL")),
+		SpeechAPIKey:           strings.TrimSpace(os.Getenv("VEIL_SPEECH_API_KEY")),
 		ModelTimeout:           modelTimeout,
 		RequestTimeout:         requestTimeout,
 		StreamIdleTimeout:      streamIdleTimeout,
@@ -253,8 +274,40 @@ func Load() (Config, error) {
 	if err := loadModelRegistry(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := validateSpeech(&cfg); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+// SpeechEnabled reports whether this deployment can transcribe. It gates both
+// the route and the advertised feature name, so the two can never disagree.
+func (c Config) SpeechEnabled() bool {
+	return c.SpeechBaseURL != "" && c.SpeechModel != ""
+}
+
+// validateSpeech refuses a half-configured runtime. Setting one variable and
+// not the other is always a mistake, and silently disabling dictation would
+// send the administrator looking for the fault in the client.
+func validateSpeech(cfg *Config) error {
+	if cfg.SpeechBaseURL == "" && cfg.SpeechModel == "" {
+		return nil
+	}
+	if cfg.SpeechBaseURL == "" {
+		return errors.New("VEIL_SPEECH_BASE_URL is required when VEIL_SPEECH_MODEL is set")
+	}
+	if cfg.SpeechModel == "" {
+		return errors.New("VEIL_SPEECH_MODEL is required when VEIL_SPEECH_BASE_URL is set")
+	}
+	if len(cfg.SpeechModel) > MaxModelIDBytes {
+		return fmt.Errorf("VEIL_SPEECH_MODEL is longer than %d bytes", MaxModelIDBytes)
+	}
+	parsed, err := url.Parse(cfg.SpeechBaseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("VEIL_SPEECH_BASE_URL must be an http or https URL")
+	}
+	return nil
 }
 
 // loadModelRegistry fills cfg.Models. Unset VEIL_MODELS synthesizes the
@@ -339,6 +392,53 @@ func (c Config) ModelIDs() []string {
 		ids = append(ids, entry.ID)
 	}
 	return ids
+}
+
+// loadLocalGenerationProfile takes the fixed local profile and lets the desktop
+// override the sampling on top of it.
+//
+// Only the sampling: the concurrency and queue numbers describe one desktop
+// serving one person and are not the launcher's business. Every override
+// defaults to the fixed profile's own value, so a desktop that sets none of
+// them gets exactly what local mode has always done.
+func loadLocalGenerationProfile(maxOutputTokens int) (model.GenerationProfile, error) {
+	profile := model.LocalGenerationProfile(maxOutputTokens)
+	temperature, err := envFloat("VEIL_TEMPERATURE", profile.Temperature)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	topP, err := envFloat("VEIL_TOP_P", profile.TopP)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	topK, err := envInt("VEIL_TOP_K", profile.TopK)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	minP, err := envFloat("VEIL_MIN_P", profile.MinP)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	presencePenalty, err := envFloat("VEIL_PRESENCE_PENALTY", profile.PresencePenalty)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	repetitionPenalty, err := envFloat("VEIL_REPETITION_PENALTY", profile.RepetitionPenalty)
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	reasoningEffort, err := model.ParseReasoningEffort(os.Getenv("VEIL_REASONING_EFFORT"))
+	if err != nil {
+		return model.GenerationProfile{}, err
+	}
+	profile.Temperature = temperature
+	profile.TopP = topP
+	profile.TopK = topK
+	profile.MinP = minP
+	profile.PresencePenalty = presencePenalty
+	profile.RepetitionPenalty = repetitionPenalty
+	profile.ReasoningEffort = reasoningEffort
+	return profile, nil
 }
 
 func loadServerGenerationProfile(maxOutputTokens int) (model.GenerationProfile, error) {

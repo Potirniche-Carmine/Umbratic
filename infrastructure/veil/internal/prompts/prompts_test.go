@@ -245,12 +245,9 @@ func TestBuildRejectsUnknownRoute(t *testing.T) {
 	}
 }
 
-// The per-tool-call status line is retired from the prompts entirely: the
-// classifier supplies the opening orientation and mid-run tool rows narrate
-// the work, so no prompt tier may reintroduce a per-call preamble. Every
-// prompt-side placement of the rule was tried, and each one either produced
-// mid-turn recaps, kilobyte preambles, or no preamble at all depending on
-// wording and position — the definition of a rule this model cannot hold.
+// The per-tool-call status line is retired from the prompts entirely: mid-run
+// tool rows narrate the work, so no prompt tier may reintroduce a per-call
+// preamble.
 func TestNoPromptTierAsksForAPerCallStatusLine(t *testing.T) {
 	for _, prompt := range []string{GlobalSystemPrompt(allWorkspaceTools()), playbookHeader} {
 		for _, gone := range []string{
@@ -263,6 +260,8 @@ func TestNoPromptTierAsksForAPerCallStatusLine(t *testing.T) {
 			"second status preamble",
 			"at most three short sentences",
 			"call its tool in the same message you mention it",
+			"first tool call",
+			"the next tool",
 		} {
 			if strings.Contains(prompt, gone) {
 				t.Fatalf("a prompt tier still asks for a per-call status line (%q)", gone)
@@ -279,35 +278,23 @@ func TestNoPromptTierAsksForAPerCallStatusLine(t *testing.T) {
 	}
 }
 
-// The global prompt owns identity, safety, and tool mechanics; the playbook
-// owns the workflow. A workflow directive in the global prompt re-litigates a
-// decision the classifier already made and competes with the playbook, so any
-// phrase that prescribes whether to use tools or a task recipe is banned here.
+// The global prompt owns identity, safety, and tool mechanics. Skills carry
+// task-specific workflows. A phrase that prescribes a task recipe or whether
+// to use tools belongs in a skill, not here.
 func TestGlobalPromptCarriesNoWorkflowDirectives(t *testing.T) {
 	global := strings.ToLower(GlobalSystemPrompt(allWorkspaceTools()))
 	for _, directive := range []string{
-		// Whether-to-use-tools heuristics: that decision belongs to orient.
 		"answer directly and do not call a tool",
 		"do not inspect the workspace only to fill a direct answer",
-		// Task recipes: repo_orient step 1 must not live in the global prompt.
 		"for an exhaustive folder overview",
 		"begin with ls",
 		"use find for recursion",
-		// Step-level deliverable anchoring is playbook territory too.
 		"in your final response",
+		"protected task playbook",
+		"harness_bucket",
 	} {
 		if strings.Contains(global, directive) {
 			t.Fatalf("global prompt contains workflow directive %q", directive)
-		}
-	}
-	// The precedence rule is what replaces those directives: the playbook
-	// defines the plan and the global prompt must say it does not compete.
-	for _, want := range []string{
-		"it defines the turn's plan",
-		"they do not override a present playbook's plan",
-	} {
-		if !strings.Contains(global, want) {
-			t.Fatalf("global prompt missing precedence statement %q", want)
 		}
 	}
 }

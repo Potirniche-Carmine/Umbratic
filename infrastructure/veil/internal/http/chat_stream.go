@@ -63,7 +63,7 @@ func (s *Server) streamChat(w http.ResponseWriter, ctx context.Context, route pr
 		started: startedAt,
 		onFirst: s.stream.timeToFirstToken.observe,
 	}
-	streamErr := model.WriteOpenAIChatSSE(ctx, s.cfg.Mode, observer, resp.Body, s.cfg.StreamIdleTimeout, annotation)
+	streamErr := model.WriteOpenAIChatSSE(ctx, s.cfg.Mode, observer, resp.Body, s.cfg.StreamIdleTimeout, annotation, req.ReasoningVisible)
 	s.stream.streamDuration.observe(time.Since(startedAt))
 	if err := streamErr; err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {

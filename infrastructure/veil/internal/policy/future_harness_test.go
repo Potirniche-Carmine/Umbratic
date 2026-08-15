@@ -94,6 +94,15 @@ func TestFutureHarnessChatRequestsAllSucceed(t *testing.T) {
 			},
 		},
 		{
+			name: "reasoning_visible this build has a reader for",
+			body: `{"input":"hello","reasoning_visible":true,"thinking_trace_hint":"full"}`,
+			check: func(t *testing.T, input ChatInput) {
+				if !input.ReasoningVisible {
+					t.Fatal("a known boolean must survive")
+				}
+			},
+		},
+		{
 			name: "everything at once",
 			body: `{"input":"ship it","harness_bucket":"incident_triage","response_mode":"progress","skills":[{"id":"go","name":"Go","source":"marketplace","tier":2}],"tools":[{"type":"function","function":{"name":"run","description":"Run.","parameters":{"type":"object","properties":{"cmd":{"type":"string","pattern":".*"}},"additionalProperties":true}}}]}`,
 		},

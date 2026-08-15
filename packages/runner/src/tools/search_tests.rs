@@ -669,3 +669,89 @@ async fn glob_patterns_in_path_relocate_to_the_glob_argument() {
     .await
     .unwrap();
 }
+
+/// Nested vendor and cache trees must not be listed, found, or indexed. A
+/// prefix of `node_modules/` at the workspace root is not enough: this repo
+/// keeps `apps/desktop/node_modules`, crate `target/` dirs, and a
+/// `.llama-cache` checkout that holds more markdown than the project itself.
+#[tokio::test]
+async fn nested_generated_trees_are_invisible_to_search_find_and_ls() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for relative in [
+        "docs",
+        "apps/desktop/.llama-cache/llama.cpp",
+        "apps/desktop/node_modules/pkg",
+        "packages/runner/target/debug",
+    ] {
+        std::fs::create_dir_all(root.join(relative)).unwrap();
+    }
+    std::fs::write(root.join("README.md"), "# app\n").unwrap();
+    std::fs::write(root.join("docs/guide.md"), "# guide\n").unwrap();
+    std::fs::write(
+        root.join("apps/desktop/.llama-cache/llama.cpp/README.md"),
+        "# llama\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("apps/desktop/node_modules/pkg/README.md"),
+        "# pkg\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("packages/runner/target/debug/README.md"),
+        "# target\n",
+    )
+    .unwrap();
+    for index in 0..200 {
+        std::fs::write(
+            root.join("apps/desktop/.llama-cache/llama.cpp")
+                .join(format!("doc-{index}.md")),
+            "generated\n",
+        )
+        .unwrap();
+    }
+    let session = crate::session::test_session(root);
+
+    let found = find_tool(
+        &session,
+        json!({"path":".","glob":"*.md"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(found.content.contains("README.md"), "{}", found.content);
+    assert!(found.content.contains("docs/guide.md"), "{}", found.content);
+    assert!(!found.content.contains(".llama-cache"), "{}", found.content);
+    assert!(!found.content.contains("node_modules"), "{}", found.content);
+    assert!(!found.content.contains("/target/"), "{}", found.content);
+
+    let listed = ls_tool(
+        &session,
+        json!({"path":"apps/desktop"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !listed.content.contains(".llama-cache"),
+        "{}",
+        listed.content
+    );
+    assert!(
+        !listed.content.contains("node_modules"),
+        "{}",
+        listed.content
+    );
+
+    let searched = run_search(&session, json!({"query":"README","mode":"path","path":"."})).await;
+    assert_eq!(searched.status, "success", "{:?}", searched.error_message);
+    assert!(
+        !searched.content.contains(".llama-cache"),
+        "{}",
+        searched.content
+    );
+    assert!(
+        !searched.content.contains("node_modules"),
+        "{}",
+        searched.content
+    );
+}

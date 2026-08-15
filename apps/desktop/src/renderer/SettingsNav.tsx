@@ -1,15 +1,19 @@
-import { BarChart3, Brain, Server, Sparkles, Type, User } from "lucide-react";
+import { BarChart3, Brain, Info, Keyboard, Mic, Server, Sparkles, Type, User } from "lucide-react";
 
 /** The sections of the settings dialog, in the order they are shown. */
-export type SettingsTab = "account" | "remote" | "harness" | "appearance" | "skills" | "telemetry";
+export type SettingsTab = "account" | "remote" | "harness" | "appearance" | "voice" | "keyboard" | "skills" | "telemetry" | "about";
 
 const sections: Array<{ id: SettingsTab; label: string; icon: typeof User }> = [
   { id: "account", label: "Connection", icon: User },
   { id: "remote", label: "Remote", icon: Server },
   { id: "harness", label: "Harness", icon: Brain },
   { id: "appearance", label: "Appearance", icon: Type },
+  { id: "voice", label: "Voice", icon: Mic },
+  // Beside Voice, which is where the one chord it documents comes from.
+  { id: "keyboard", label: "Keyboard", icon: Keyboard },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "telemetry", label: "Telemetry", icon: BarChart3 },
+  { id: "about", label: "About", icon: Info },
 ];
 
 export function SettingsNav({

@@ -2,13 +2,9 @@ package model
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 )
 
@@ -36,13 +32,9 @@ type Registry struct {
 	defaultID string
 	order     []string
 	entries   map[string]*registryEntry
-	// thinkingSupport caches the local runtime's answer per model id. The probe
-	// is an extra round trip, and the answer only changes when the administrator
-	// pulls a different build of the same tag.
-	thinkingSupport sync.Map
 }
 
-func NewRegistry(mode Mode, defaultID string, specs []RegistrySpec, timeout time.Duration) (*Registry, error) {
+func NewRegistry(mode Mode, defaultID string, apiKey string, specs []RegistrySpec, timeout time.Duration) (*Registry, error) {
 	if len(specs) == 0 {
 		return nil, errors.New("model registry requires at least one model")
 	}
@@ -60,6 +52,7 @@ func NewRegistry(mode Mode, defaultID string, specs []RegistrySpec, timeout time
 			BaseURL:          spec.BaseURL,
 			ContextLength:    spec.ContextLength,
 			Timeout:          timeout,
+			APIKey:           apiKey,
 			EmbeddingBaseURL: spec.EmbeddingBaseURL,
 			EmbeddingModel:   spec.EmbeddingModel,
 		})
@@ -94,9 +87,10 @@ func (r *Registry) DoChat(ctx context.Context, req ChatRequest) (*http.Response,
 	return r.clientFor(req.Model).DoChat(ctx, r.resolveThinking(ctx, req))
 }
 
-// resolveThinking drops a thinking directive the local runtime cannot carry.
-// Some Ollama builds error on `think` for a model without the capability, so an
-// unconfirmed capability means the field is omitted rather than guessed.
+// resolveThinking drops a thinking directive for a model that has no thinking
+// to direct. `chat_template_kwargs.enable_thinking` reaches a chat template
+// that may not read it, so sending it unasked would be a silent no-op that
+// still reads, in a trace, as a directive that was honoured.
 func (r *Registry) resolveThinking(ctx context.Context, req ChatRequest) ChatRequest {
 	if req.Thinking == nil || r.mode != ModeLocal {
 		return req
@@ -152,68 +146,14 @@ func (r *Registry) Available(ctx context.Context, modelID string) (bool, error) 
 }
 
 // ThinkingSupported answers whether a thinking directive means anything for
-// this model. Server entries answer from the administrator's declaration;
-// local entries ask the runtime, because Ollama knows and the admin may not.
-func (r *Registry) ThinkingSupported(ctx context.Context, modelID string) bool {
+// this model. Both modes answer from the declaration that came with the spec:
+// server entries from the administrator's registry, local entries from the
+// model catalog the desktop downloaded the weights out of. Neither runtime
+// exposes the capability, and a wrong guess is worse than a stated fact.
+func (r *Registry) ThinkingSupported(_ context.Context, modelID string) bool {
 	entry, ok := r.entries[modelID]
 	if !ok {
 		return false
 	}
-	if r.mode != ModeLocal {
-		return entry.spec.Reasoning
-	}
-	if cached, ok := r.thinkingSupport.Load(modelID); ok {
-		return cached.(bool)
-	}
-	supported := entry.client.thinkingCapable(ctx, modelID)
-	r.thinkingSupport.Store(modelID, supported)
-	return supported
-}
-
-// thinkingCapable asks Ollama what the model can do. A probe failure is read as
-// "not supported": sending `think` to a runtime that rejects it fails the turn,
-// while omitting it only loses a directive.
-func (c *Client) thinkingCapable(ctx context.Context, modelID string) bool {
-	if c.mode != ModeLocal || c.showEndpoint == "" {
-		return false
-	}
-	resp, err := c.postJSON(ctx, c.showEndpoint, map[string]any{"model": modelID})
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false
-	}
-	var payload any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
-		return false
-	}
-	return ollamaCapabilitiesFromPayload(payload)["thinking"]
-}
-
-// ollamaCapabilitiesFromPayload reads the capability list from an api/show
-// response. Unknown capability names are kept: this build only asks about
-// thinking, but the set is what the runtime said, not what this build knows.
-func ollamaCapabilitiesFromPayload(payload any) map[string]bool {
-	capabilities := map[string]bool{}
-	record, ok := payload.(map[string]any)
-	if !ok {
-		return capabilities
-	}
-	rows, ok := record["capabilities"].([]any)
-	if !ok {
-		return capabilities
-	}
-	for _, row := range rows {
-		name, ok := row.(string)
-		if !ok {
-			continue
-		}
-		name = strings.ToLower(strings.TrimSpace(name))
-		if name != "" {
-			capabilities[name] = true
-		}
-	}
-	return capabilities
+	return entry.spec.Reasoning
 }

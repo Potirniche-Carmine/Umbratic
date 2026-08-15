@@ -49,6 +49,21 @@ pub fn is_excluded_path(value: &str) -> bool {
         "desktop.ini",
         "node_modules",
         ".git",
+        ".llama-cache",
+        ".venv",
+        "venv",
+        "target",
+        "dist",
+        "dist-electron",
+        "build",
+        "coverage",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".next",
+        ".vite",
+        "vendor",
+        ".umbratic",
     ];
     let basename = parts.last().copied().unwrap_or("");
     prefixes.iter().any(|prefix| normalized.starts_with(prefix))
@@ -206,6 +221,11 @@ mod tests {
     #[test]
     fn excluded_paths_cover_generated_trees_and_our_own_artifact() {
         assert!(is_excluded_path("node_modules/x/index.js"));
+        assert!(is_excluded_path("apps/desktop/node_modules/pkg/index.js"));
+        assert!(is_excluded_path(
+            "apps/desktop/.llama-cache/llama.cpp/README.md"
+        ));
+        assert!(is_excluded_path("packages/runner/target/debug/build.rs"));
         assert!(is_excluded_path("target/debug/build.rs"));
         assert!(is_excluded_path(".umbratic/index/graph.json"));
         assert!(is_excluded_path("src/__pycache__/a.py"));

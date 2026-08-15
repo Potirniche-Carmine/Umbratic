@@ -15,18 +15,20 @@ import type {
   FileSearchResult,
   HarnessProfileId,
   IdeInfo,
+  LocalCatalogModel,
   LocalModelInfo,
   PastedAttachmentInput,
   PermissionMode,
+  ReasoningEffort,
   RepositoryInfo,
   ServerModelInfo,
   SkillDocument,
   SkillInfo,
   TaskInfo,
-  TaskState,
   UserNotes,
   WorkspaceMode,
 } from "../shared/desktopApi";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
 import { chatTitleFromFirstMessage, stableChatTitle } from "../shared/chatTitle";
 import {
   attachmentDetail,
@@ -46,6 +48,7 @@ import {
   folderName,
   isImageAttachment,
   relativeChatAge,
+  samePathKey,
   shortHash,
   stateLabel,
   titleFromPrompt,
@@ -57,10 +60,9 @@ import {
   type WorktreeChatGroup,
 } from "./chatListPresentation";
 import type {
-  AppearanceSettings, AppearanceTheme, ComposerActivitySegment, ComposerSubmission,
+  AppearanceSettings, ComposerActivitySegment, ComposerSubmission,
   ComposerTimelineItem, IdeChoice, PermissionRequest, PromptMention, QueuedComposerPrompt,
-  RequiredToolContractReason, RequiredToolContractRequirement, ResponseFeedbackDialogState,
-  ReviewFile, RunnerToolId, SkillSourceFilter, ToolErrorCode, ToolResultStatus,
+  ResponseFeedbackDialogState, ReviewFile, SkillSourceFilter,
 } from "./rendererTypes";
 import { readQueuedPrompts } from "./queuedPrompts";
 import { QueuedPromptList } from "./queuedPromptList";
@@ -69,7 +71,6 @@ import {
   DEFAULT_CONTEXT_LENGTH,
   contextMeterState,
   estimateContextUsage,
-  formatTokenCount,
   normalizeContextLength,
   shouldShowContextMeter,
   type ContextEstimateMessage,
@@ -78,11 +79,16 @@ import { ContextMeter } from "./contextMeter";
 import {
   BranchPicker,
   ComposerModelPicker,
+  DictationControl,
   PermissionModePicker,
-  WorkspaceModePicker,
-  contextBadge,
+  WorktreeToggle,
   type ComposerModelOption,
 } from "./ComposerControls";
+import { insertTranscript, useDictation } from "./dictation";
+import { setShortcutOverrides, shortcutForEvent, type ShortcutId, type ShortcutOverrides } from "./keyboardShortcuts";
+import { ShortcutTooltip } from "./Tooltip";
+import { KeyboardSettingsPanel } from "./KeyboardSettings";
+import { AboutSettingsPanel } from "./AboutSettings";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { eventDetail, eventTitle } from "./eventDisplay";
@@ -90,7 +96,6 @@ import {
   AtSign,
   BarChart3,
   Brain,
-  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -99,9 +104,7 @@ import {
   Cloud,
   Copy,
   Ellipsis,
-  ExternalLink,
   File,
-  FileText,
   Folder,
   FolderPlus,
   FolderX,
@@ -111,12 +114,13 @@ import {
   Loader2,
   MessageSquareX,
   MessageSquareText,
+  Mic,
+  MicOff,
   Monitor,
   Moon,
   PanelRight,
   Paperclip,
   Play,
-  Plus,
   RefreshCw,
   Send,
   Server,
@@ -132,7 +136,6 @@ import {
   Trash2,
   TriangleAlert,
   Type,
-  Undo2,
   User,
   X,
 } from "lucide-react";
@@ -142,21 +145,13 @@ import {
   composerPromptForSend,
   continueNumberedList,
   insertPastedComposerText,
-  markdownPreview,
-  matchHighlightSegments,
-  parseMarkdown,
   promptMentionsAttachment,
   rankSkillMatches,
-  isEscapedMarkdownAt,
-  stabilizeStreamingInlineText,
-  type MarkdownBlock,
 } from "./composerText";
 import { restoreUnsavedDraft, unsavedDraftScopeFor } from "./unsavedDraft";
 import { AssistantMessage } from "./assistantMessage";
 import { normalizeReviewFile, type ReviewFile as NormalizedReviewFile } from "../shared/reviewDiff";
 import { isDocumentReviewArtifactPath, type DocumentReviewSnapshot } from "../shared/documentReview";
-import { safeExternalUrl } from "../shared/externalLink";
-import { InlineLink, readMarkdownLink } from "./inlineLink";
 import { appendTaskEvent, compactTaskEvents, removeResponseFeedback } from "../shared/taskEvents";
 import {
   responseFeedbackReasons,
@@ -167,23 +162,75 @@ import { ReviewPanel } from "./review/ReviewPanel";
 import { defaultModelEndpointSettings } from "./endpointSettings";
 import { ConnectionSettingsPanel, useConnectionSettings } from "./ConnectionSettings";
 import { AppearanceSettingsPanel } from "./AppearanceSettings";
+import { VoiceSettings } from "./VoiceSettings";
 import { SettingsNav, type SettingsTab } from "./SettingsNav";
 import { TelemetrySettingsPanel } from "./TelemetrySettings";
 import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
 import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
-  reduceApprovalChecks,
   reducePendingPermission,
   reduceVisibleTask,
   taskEventEffects,
-  type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
-import { activityHasNarration, activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
+import { activityHasNarration, activityHasTools, activitySummary } from "./activityTiming";
+import { composerTimelineFromEvents } from "./composerTimeline";
+import {
+  activityToolGroups,
+  commandRunsFromEvents,
+  pendingPermissionFromEvents,
+  reconcileActivityDisclosureState,
+} from "./composerActivity";
+import { copyPlainText } from "./copyPlainText";
+import {
+  AssistantAnswerContent,
+  MarkdownContent,
+  WorkMarkdownContent,
+} from "./markdownContent";
+import { filterSkillsBySource, skillPreviewMarkdown } from "./skillDisplay";
+import { reviewCloseSpring, reviewOpenSpring, reviewSpringStep, type ReviewSpring } from "./reviewSpring";
+import {
+  cssFontValue,
+  defaultMonoFontChoices,
+  defaultUiFontChoices,
+  localFontAccessAvailable,
+  listLocalFontFamilies,
+  readAppearanceSettings,
+  readWorkspaceMode,
+  uniqueFonts,
+  writeAppearanceSettings,
+  writeWorkspaceMode,
+} from "./appearanceStorage";
+import { AttachmentPreviewList, normalizeAttachment } from "./attachmentPreview";
+import {
+  ComposerGreeting,
+  DocumentReviewResponseLink,
+  ModelStartupNotice,
+  ReviewSummaryCard,
+} from "./composerChrome";
+import {
+  clamp,
+  isElementAtBottom,
+  isElementNearBottom,
+  placeElementAtBottom,
+  scrollElementToBottom,
+} from "./composerScroll";
+import { defaultHarnessProfileId, isHarnessProfileId } from "./harnessProfile";
+import { HarnessSettingsPanel } from "./HarnessSettings";
+import {
+  MentionMatchText,
+  mentionAtCursor,
+  mentionCategories,
+  mentionCategoryIcon,
+  renderPromptHighlights,
+  skillMention,
+  type MentionCategoryId,
+} from "./promptMentions";
+import { SkillsSettingsPanel } from "./SkillsSettings";
+import { formatFileSize, taskStatusDetail, taskStatusTitle } from "./taskStatusDisplay";
 import { CompactionRow } from "./compactionRow";
 import { providerReconnectFromEvents } from "./connectionStatus";
-export { providerReconnectFromEvents } from "./connectionStatus";
 import { IdeIcon } from "./ideLogos";
 import {
   activityToolLabel,
@@ -196,139 +243,22 @@ import {
   type CommandClass,
   type CommandRun,
 } from "./commandDisplay";
-export { activityHasNarration, activityHasTools, activitySummary, compactionElapsedLabel } from "./activityTiming";
-export { commandDetailLabel, commandHasVisibleDetails, commandLabel, commandShellText, commandSummary, commandVisibleOutput };
 
-const appearanceSettingsKey = "umbratic-ui-appearance";
-const workspaceModeKey = "umbratic-ui-workspace-mode";
-const markdownPreviewCharacterLimit = 60000;
 export const streamingMarkdownRenderBatchIntervalMs = 50;
 const maxCachedTaskEventGroups = 24;
 const commandOutputPreviewCharacterLimit = 12000;
 const commandOutputPreviewLineLimit = 5;
 const isMacLike = /Mac|iPhone|iPad/i.test(navigator.platform);
-const defaultAppearanceSettings: AppearanceSettings = {
-  theme: "system",
-  uiFont: "System UI",
-  monoFont: "System UI",
-};
-const defaultUiFontChoices = [
-  "System UI",
-  "Segoe UI",
-  "SF Pro Text",
-  "Inter",
-  "Arial",
-  "Roboto",
-  "Helvetica Neue",
-  "Verdana",
-];
-const defaultMonoFontChoices = [
-  "System UI",
-  "Cascadia Code",
-  "SF Mono",
-  "Consolas",
-  "Menlo",
-  "Monaco",
-  "JetBrains Mono",
-  "Fira Code",
-  "Source Code Pro",
-  "ui-monospace",
-];
-const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultStartupSettings: DesktopStartupSettings = {
-  permissionMode: "normal",
+  // Matches the main-process default so a failed startup read does not flip modes.
+  permissionMode: "auto_safe",
   modelEndpoint: defaultModelEndpointSettings,
-  localModels: [],
   companyConnection: { state: "not_enrolled" },
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
+  reasoningEffort: DEFAULT_REASONING_EFFORT,
+  showThinking: false,
 };
-const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
-  {
-    id: "marketing",
-    name: "Marketing",
-    description: "Campaigns, content, positioning, launch work, site copy, brand context, and lightweight implementation support.",
-  },
-  {
-    id: "sales",
-    name: "Sales",
-    description: "Customer-facing workflows, enablement, proposals, demos, objections, CRM-style notes, and pipeline support.",
-  },
-  {
-    id: "engineering",
-    name: "Engineering",
-    description: "Codebase inspection, implementation, debugging, tests, verification, and precise repository changes.",
-  },
-];
-type LocalFontDescriptor = {
-  family?: string;
-  fullName?: string;
-};
-
-type LocalFontWindow = Window & {
-  queryLocalFonts?: () => Promise<LocalFontDescriptor[]>;
-};
-
-function isAppearanceTheme(value: unknown): value is AppearanceTheme {
-  return value === "system" || value === "light" || value === "dark";
-}
-
-function readAppearanceSettings(): AppearanceSettings {
-  try {
-    const settings = JSON.parse(window.localStorage.getItem(appearanceSettingsKey) ?? "{}") as Partial<AppearanceSettings>;
-    return {
-      theme: isAppearanceTheme(settings.theme) ? settings.theme : defaultAppearanceSettings.theme,
-      uiFont: typeof settings.uiFont === "string" && settings.uiFont.trim() ? settings.uiFont : defaultAppearanceSettings.uiFont,
-      monoFont: typeof settings.monoFont === "string" && settings.monoFont.trim() ? settings.monoFont : defaultAppearanceSettings.monoFont,
-    };
-  } catch {
-    return defaultAppearanceSettings;
-  }
-}
-
-function writeAppearanceSettings(settings: AppearanceSettings) {
-  window.localStorage.setItem(appearanceSettingsKey, JSON.stringify(settings));
-}
-
-function readWorkspaceMode(): WorkspaceMode {
-  return window.localStorage.getItem(workspaceModeKey) === "worktree" ? "worktree" : "local";
-}
-
-function writeWorkspaceMode(mode: WorkspaceMode) {
-  window.localStorage.setItem(workspaceModeKey, mode);
-}
-
-function isHarnessProfileId(value: unknown): value is HarnessProfileId {
-  return value === "marketing" || value === "sales" || value === "engineering";
-}
-
-function uniqueFonts(fonts: string[]): string[] {
-  return Array.from(new Set(fonts.map((font) => font.trim()).filter(Boolean))).sort((a, b) =>
-    a.localeCompare(b, undefined, { sensitivity: "base" }),
-  );
-}
-
-function cssFontValue(font: string, fallback: string): string {
-  if (font === "System UI") return `system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  if (/^(system-ui|ui-monospace|serif|sans-serif|monospace)$/i.test(font)) return `${font}, ${fallback}`;
-  return `"${font.replace(/"/g, "")}", ${fallback}`;
-}
-
-function localFontAccessAvailable(): boolean {
-  return typeof (window as LocalFontWindow).queryLocalFonts === "function";
-}
-
-function normalizeAttachment(file: ChatAttachment): ChatAttachment {
-  const normalized: ChatAttachment = { path: file.path, name: file.name || file.path.split(/[\\/]/).pop() || file.path };
-  if (file.kind === "file" || file.kind === "folder") normalized.kind = file.kind;
-  if (file.source === "chat" || file.source === "workspace") normalized.source = file.source;
-  if (file.storedPath) normalized.storedPath = file.storedPath;
-  if (file.originalPath) normalized.originalPath = file.originalPath;
-  if (file.previewDataUrl?.startsWith("data:image/")) normalized.previewDataUrl = file.previewDataUrl;
-  if (Number.isSafeInteger(file.contextTokens) && (file.contextTokens ?? -1) >= 0) normalized.contextTokens = file.contextTokens;
-  return normalized;
-}
-
 const initialPrompt = "";
 const emptyReviewFiles: ReviewFile[] = [];
 const defaultIdeChoices: IdeChoice[] = [
@@ -358,1537 +288,14 @@ export function takeBatchedBackendEvents(pendingEvents: BackendUiEvent[]): Backe
   return pendingEvents.splice(0);
 }
 
-export function mentionAtCursor(value: string, cursor: number): PromptMention | null {
-  const beforeCursor = value.slice(0, cursor);
-  const match = beforeCursor.match(/(^|\s)([@$])([^\s@$]*)$/);
-  if (!match || match.index === undefined) return null;
-  const start = match.index + match[1].length;
-  return { kind: match[2] === "$" ? "skill" : "file", query: match[3], start, end: cursor };
-}
-
-export function skillMention(skill: SkillInfo): string {
-  return `$${skill.id}`;
-}
-
-type MentionCategoryId = "file" | "folder" | "skill";
-
-type MentionCategory = { id: MentionCategoryId; label: string; hint: string };
-
-const mentionCategories: MentionCategory[] = [
-  { id: "file", label: "Files", hint: "Attach a file from the project" },
-  { id: "folder", label: "Folders", hint: "Reference a folder and everything in it" },
-  { id: "skill", label: "Skills", hint: "Use a skill for this turn" },
-];
-
-function mentionCategoryIcon(id: MentionCategoryId): React.ReactNode {
-  if (id === "folder") return <Folder size={14} />;
-  if (id === "skill") return <Sparkles size={14} />;
-  return <File size={14} />;
-}
-
-function MentionMatchText({ text, query }: { text: string; query: string }) {
-  return (
-    <>
-      {matchHighlightSegments(text, query).map((segment, index) =>
-        segment.hit ? <mark key={index}>{segment.text}</mark> : <React.Fragment key={index}>{segment.text}</React.Fragment>,
-      )}
-    </>
-  );
-}
-
-export function renderPromptHighlights(value: string, files: ChatAttachment[], skills: SkillInfo[]): React.ReactNode[] {
-  const tokens = [
-    ...files.map(normalizeAttachment).map(attachmentMention),
-    ...skills.map(skillMention),
-  ]
-    .filter(Boolean)
-    .sort((left, right) => right.length - left.length);
-  if (!tokens.length) return [value || "\u200b"];
-  const segments: Array<{ text: string; mention: boolean }> = [];
-  let index = 0;
-  while (index < value.length) {
-    const token = tokens.find(
-      (candidate) =>
-        value.startsWith(candidate, index) &&
-        (index === 0 || /\s/.test(value[index - 1])) &&
-        (index + candidate.length === value.length || /\s|[.,;:!?)]/.test(value[index + candidate.length])),
-    );
-    if (token) {
-      segments.push({ text: token, mention: true });
-      index += token.length;
-      continue;
-    }
-    const nextMention = tokens
-      .map((candidate) => value.indexOf(candidate, index + 1))
-      .filter((position) => position >= 0)
-      .sort((left, right) => left - right)[0];
-    const end = nextMention ?? value.length;
-    segments.push({ text: value.slice(index, end), mention: false });
-    index = end;
-  }
-  if (value.endsWith("\n")) segments.push({ text: "\u200b", mention: false });
-  return segments.map((segment, index) =>
-    segment.mention ? (
-      <span className="promptMentionToken" key={`${index}-${segment.text}`}>
-        {segment.text}
-      </span>
-    ) : (
-      segment.text
-    ),
-  );
-}
-
-type ReviewReferenceOptions = {
-  reviewFiles?: ReviewFile[];
-  onReviewFileClick?: (filePath: string) => void;
-};
-
-/**
- * Compares two filesystem paths for identity. Separator and case differences
- * are the two ways the same Windows folder arrives spelled differently.
- */
-export function samePathKey(left: string, right: string): boolean {
-  const key = (value: string) => value.split("\\").join("/").replace(/\/+$/, "").toLowerCase();
-  return key(left) === key(right);
-}
-
-export function normalizeReviewReference(value: string): string {
-  return value
-    .replace(/^@/, "")
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "")
-    .replace(/^[`"']+|[`"',.:;!?]+$/g, "")
-    .trim();
-}
-
-function fileNameFromPath(value: string): string {
-  return value.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? value;
-}
-
-export function reviewFileForReference(value: string, reviewFiles?: ReviewFile[]): ReviewFile | undefined {
-  if (!reviewFiles?.length) return undefined;
-  const reference = normalizeReviewReference(value);
-  if (!reference) return undefined;
-  const normalizedFiles = reviewFiles.map((file) => ({ file, path: normalizeReviewReference(file.path) }));
-  const exact = normalizedFiles.find(({ path }) => path === reference);
-  if (exact) return exact.file;
-  if (reference.includes("/")) {
-    const suffix = normalizedFiles.find(({ path }) => path.endsWith(`/${reference}`));
-    if (suffix) return suffix.file;
-  }
-  const basenameMatches = normalizedFiles.filter(({ path }) => fileNameFromPath(path) === reference);
-  return basenameMatches.length === 1 ? basenameMatches[0].file : undefined;
-}
-
-function renderReferenceToken(part: string, key: string, options?: ReviewReferenceOptions): React.ReactNode {
-  const reviewFile = reviewFileForReference(part, options?.reviewFiles);
-  if (reviewFile && options?.onReviewFileClick) {
-    return (
-      <button className="inlineMentionToken reviewReferenceToken" key={key} type="button" onClick={() => options.onReviewFileClick?.(reviewFile.path)}>
-        {normalizeReviewReference(part)}
-      </button>
-    );
-  }
-  if (part.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(part)) {
-    return (
-      <span className="inlineMentionToken" key={key}>
-        {part}
-      </span>
-    );
-  }
-  return <React.Fragment key={key}>{part}</React.Fragment>;
-}
-
-function renderPlainInlineText(text: string, keyPrefix: string, options?: ReviewReferenceOptions): React.ReactNode[] {
-  return text
-    .split(/(@[A-Za-z0-9][A-Za-z0-9._/-]*|(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}|[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8})/g)
-    .map((part, index) => renderReferenceToken(part, `${keyPrefix}-ref-${index}`, options));
-}
-
-function findClosingBacktickRun(text: string, startIndex: number, runLength: number): number {
-  for (let index = startIndex; index < text.length; index += 1) {
-    if (text[index] !== "`" || isEscapedMarkdownAt(text, index)) continue;
-    let nextIndex = index;
-    while (nextIndex < text.length && text[nextIndex] === "`") nextIndex += 1;
-    if (nextIndex - index === runLength) return index;
-    index = nextIndex - 1;
-  }
-  return -1;
-}
-
 const sidebarDefaultWidth = 230;
 const sidebarMinWidth = 168;
 const sidebarMaxWidth = 230;
 const reviewMinWidth = 360;
 const reviewDefaultWidth = 440;
 const reviewOpenWidthRatio = 0.65;
-export type ReviewSpring = { stiffness: number; damping: number };
-/// Opening is an arrival and can afford to settle. Closing is a dismissal: the
-/// reader has already decided, and every millisecond after that decision is the
-/// panel overstaying. Damping sits just under critical (2√stiffness) in both,
-/// which is the shape the panel has always had.
-export const reviewOpenSpring: ReviewSpring = { stiffness: 420, damping: 38 };
-export const reviewCloseSpring: ReviewSpring = { stiffness: 1400, damping: 72 };
-/// Small enough to stay stable at this spring's stiffness however long a frame
-/// takes, and bounded so returning from a hidden window does not simulate
-/// minutes of motion.
-export const reviewSpringStepSeconds = 1 / 240;
-export const reviewSpringCatchUpSeconds = 0.25;
-
-/// A critically damped spring, advanced in fixed sub-steps. Integrating a whole
-/// frame in one step diverges at this stiffness once a frame reaches 50ms — the
-/// panel threw itself off screen, came back further than it started, and never
-/// met the rest condition — and clamping the frame whole instead just ran the
-/// animation in slow motion under load. Sub-stepping is stable at any frame
-/// length and catches up honestly after a stall.
-export function reviewSpringStep(
-  value: number,
-  velocity: number,
-  target: number,
-  elapsedSeconds: number,
-  spring: ReviewSpring = reviewOpenSpring,
-): { value: number; velocity: number } {
-  let remaining = Math.min(Math.max(elapsedSeconds, 0), reviewSpringCatchUpSeconds);
-  let nextValue = value;
-  let nextVelocity = velocity;
-  while (remaining > 0) {
-    const step = Math.min(reviewSpringStepSeconds, remaining);
-    remaining -= step;
-    nextVelocity += (target - nextValue) * spring.stiffness * step - nextVelocity * spring.damping * step;
-    nextValue += nextVelocity * step;
-  }
-  return { value: nextValue, velocity: nextVelocity };
-}
 const reviewMaxWidthRatio = 0.95;
 const sidebarMaxRatio = 0.28;
-
-function AttachmentPreviewList({
-  files,
-  mode,
-  onRemove,
-  onOpen,
-}: {
-  files: ChatAttachment[];
-  mode: "composer" | "message";
-  onRemove?: (file: ChatAttachment) => void;
-  onOpen?: (file: ChatAttachment) => void;
-}) {
-  if (!files.length) return null;
-  return (
-    <div
-      className={`attachmentPreviewList ${mode === "composer" ? "composerAttachmentList" : "messageAttachmentList"} hasAttachments`}
-    >
-      {files.map((file) => {
-        const key = file.storedPath || file.path;
-        const label = attachmentLabel(file);
-        const image = isImageAttachment(file) && file.previewDataUrl;
-        const interactive = !!onOpen && !onRemove;
-        const previewContent = image ? (
-          <img alt={label} src={file.previewDataUrl} />
-        ) : (
-          <>
-            <span className="attachmentPreviewFileIcon">
-              {file.kind === "folder" ? <Folder size={14} /> : <File size={14} />}
-            </span>
-            <span className="attachmentPreviewFileName">{label}</span>
-          </>
-        );
-        const className = `attachmentPreview ${image ? "imageAttachment" : "fileAttachment"} ${
-          interactive ? "interactiveAttachment" : ""
-        }`;
-        return (
-          <React.Fragment key={key}>
-            {interactive ? (
-              <button className={className} type="button" onClick={() => onOpen(file)} title={label}>
-                {previewContent}
-              </button>
-            ) : (
-              <div className={className} title={label}>
-                {previewContent}
-                {onRemove ? (
-                  <button className="attachmentPreviewRemove" type="button" onClick={() => onRemove(file)} title={`Remove ${label}`}>
-                    <X size={13} />
-                  </button>
-                ) : null}
-              </div>
-            )}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-}
-
-async function copyPlainText(value: string) {
-  const text = value.trimEnd();
-  if (!text) return;
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-    throw new Error("Clipboard API unavailable.");
-  } catch {
-    const node = document.createElement("textarea");
-    node.value = text;
-    node.setAttribute("readonly", "");
-    node.style.position = "fixed";
-    node.style.left = "-9999px";
-    document.body.appendChild(node);
-    node.select();
-    document.execCommand("copy");
-    document.body.removeChild(node);
-  }
-}
-
-export function codeBlockLabel(language: string, content: string): string {
-  const normalized = language.trim().toLowerCase();
-  if (/^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(normalized)) return normalized || "command";
-  if (!normalized && looksLikeCommandBlock(content)) return "command";
-  return normalized || "code";
-}
-
-export function looksLikeCommandBlock(content: string): boolean {
-  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (!lines.length) return false;
-  return lines.every((line) =>
-    /^[$>]/.test(line) ||
-    /^(npm|pnpm|yarn|bun|node|git|cmake|ctest|make|ninja|python|uv|cargo|go|dotnet|winget|brew|sudo|apt-get|dnf|pacman|rg|fd|tree-sitter)\b/i.test(line),
-  );
-}
-
-function MarkdownCodeBlock({ language, content }: { language: string; content: string }) {
-  const [copied, setCopied] = useState(false);
-  const label = codeBlockLabel(language, content);
-  const isCommand = label === "command" || /^(bash|sh|zsh|shell|console|terminal|powershell|ps1|pwsh|cmd|bat)$/i.test(label);
-  async function copyBlock() {
-    await copyPlainText(content);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
-  }
-  return (
-    <figure className={`markdownCodeBlock ${isCommand ? "isCommand" : ""}`}>
-      <figcaption>
-        <span>{label}</span>
-        <button type="button" onClick={() => void copyBlock()} title="Copy code">
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-          <span>{copied ? "Copied" : "Copy"}</span>
-        </button>
-      </figcaption>
-      <pre className="markdownCode">
-        <code>{content}</code>
-      </pre>
-    </figure>
-  );
-}
-
-function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
-  if (status === "passed") return <CheckCircle2 size={15} />;
-  if (status === "failed") return <TriangleAlert size={15} />;
-  return <Loader2 className="spin" size={15} />;
-}
-
-function taskStatusTitle(task: TaskInfo): string {
-  if (task.state === "completed") return "Answered";
-  if (task.state === "review_ready") return "Ready to review";
-  if (task.state === "approved") return "Approved";
-  if (task.state === "merged") return task.workspaceMode === "worktree" ? "Merged" : "Approved";
-  if (task.state === "approving") return "Running approval checks";
-  if (task.state === "running") return "Working";
-  if (task.state === "failed") return "Needs attention";
-  if (task.state === "rejected") return "Undone";
-  if (task.state === "awaiting_worktree_approval") return "Waiting for setup approval";
-  return stateLabel(task.state);
-}
-
-function taskStatusDetail(task: TaskInfo): string {
-  if (task.state === "review_ready") {
-    const changed = task.changedFiles.length;
-    return `${changed} changed file${changed === 1 ? "" : "s"} ready in Review.`;
-  }
-  if (task.state === "merged") {
-    return task.workspaceMode === "worktree"
-      ? "This chat was closed after its approved merge."
-      : "This chat was closed after its workspace changes were approved.";
-  }
-  if (task.state === "approved") return "Changes are saved on disk.";
-  if (task.state === "completed") return "No file changes for this turn.";
-  if (task.state === "rejected") return "Changes were undone.";
-  if (task.latestTest?.passed) return `Verified: ${task.latestTest.output.trim() || task.latestTest.command}`;
-  if (task.error) return task.error;
-  if (task.state === "running") return "Umbratic is working.";
-  return task.workspaceMode === "worktree" ? task.agentBranch : task.worktreePath;
-}
-
-export function commandRunsFromEvents(events: BackendUiEvent[]): CommandRun[] {
-  const runs = new Map<string, CommandRun>();
-  for (const event of events) {
-    if (event.type === "command.started") {
-      const existing = runs.get(event.id);
-      if (existing) {
-        existing.command = event.command;
-        existing.kind = event.kind;
-        existing.toolKind = event.toolKind;
-        existing.commandClass = event.commandClass;
-        existing.cwd = event.cwd;
-        continue;
-      }
-      runs.set(event.id, {
-        id: event.id,
-        command: event.command,
-        kind: event.kind,
-        toolKind: event.toolKind,
-        commandClass: event.commandClass,
-        cwd: event.cwd,
-        stdout: "",
-        stderr: "",
-        exitCode: null,
-        status: "running",
-        startedAt: event.at,
-        endedAt: event.at,
-      });
-      continue;
-    }
-    if (event.type === "command.output") {
-      let run = runs.get(event.id);
-      if (!run) {
-        run = {
-          id: event.id,
-          command: event.id,
-          kind: "bash",
-          commandClass: "unknown",
-          cwd: "",
-          stdout: "",
-          stderr: "",
-          exitCode: null,
-          status: "running",
-          startedAt: event.at,
-          endedAt: event.at,
-        };
-        runs.set(event.id, run);
-      }
-      run.endedAt = event.endedAt ?? event.at ?? run.endedAt;
-      if (event.stream === "stdout") {
-        run.stdout = `${run.stdout}${event.text}`;
-      } else {
-        run.stderr = `${run.stderr}${event.text}`;
-      }
-      continue;
-    }
-    if (event.type === "command.finished") {
-      let run = runs.get(event.id);
-      if (!run) {
-        run = {
-          id: event.id,
-          command: event.id,
-          kind: "bash",
-          commandClass: "unknown",
-          cwd: "",
-          stdout: "",
-          stderr: "",
-          exitCode: null,
-          status: "running",
-          startedAt: event.at,
-          endedAt: event.at,
-        };
-        runs.set(event.id, run);
-      }
-      run.exitCode = event.exitCode;
-      run.status = event.exitCode === 0 ? "passed" : "failed";
-      run.resultStatus = event.status;
-      run.errorCode = event.errorCode;
-      if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
-      run.endedAt = event.at ?? run.endedAt;
-      run.durationMs = event.durationMs;
-    }
-  }
-  return Array.from(runs.values());
-}
-
-export function pendingPermissionFromEvents(events: BackendUiEvent[]): PermissionRequest | null {
-  const requests = new Map<string, PermissionRequest>();
-  for (const event of events) {
-    if (event.type === "permission.requested") {
-      requests.set(event.request.id, event.request);
-      continue;
-    }
-    if (event.type === "permission.resolved") {
-      requests.delete(event.id);
-    }
-  }
-  return Array.from(requests.values()).at(-1) ?? null;
-}
-
-function formatFileSize(bytes: number): string {
-  const value = Math.max(0, Number.isFinite(bytes) ? bytes : 0);
-  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 2 : 1)} MB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-export function activityToolGroups(segments: ComposerActivitySegment[]): Array<{
-  id: string;
-  label: string;
-  runs: CommandRun[];
-  status: CommandRun["status"];
-}> {
-  const groups = new Map<string, { id: string; label: string; runs: CommandRun[]; status: CommandRun["status"] }>();
-  for (const segment of segments) {
-    if (segment.type !== "command") continue;
-    const { key, label } = activityToolLabel(segment.run);
-    const group = groups.get(key) ?? { id: `tool-group-${groups.size + 1}`, label, runs: [], status: "passed" as const };
-    group.runs.push(segment.run);
-    group.status = group.runs.some((run) => run.status === "running")
-      ? "running"
-      : group.runs.some((run) => run.status === "failed")
-        ? "failed"
-        : "passed";
-    groups.set(key, group);
-  }
-  return Array.from(groups.values());
-}
-
-// Assistant text renders as the model wrote it. Stripping a "Umbratic:" prefix
-// was a word list: every phrasing it lacked leaked anyway, and it ate the first
-// words of an answer that legitimately opened on the name.
-export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?: string, taskState?: TaskState): ComposerTimelineItem[] {
-  const runs = new Map<string, CommandRun>();
-  const items: ComposerTimelineItem[] = [];
-  let assistantBuffer = "";
-  let assistantNeedsSeparator = false;
-  let assistantIndex = 0;
-  let activitySegments: ComposerActivitySegment[] = [];
-  let activityStartedAt: string | undefined;
-  let activityEndedAt: string | undefined;
-  let activityIndex = 0;
-  const commandSegmentIds = new Set<string>();
-  let reasoningBuffer = "";
-  let reasoningStartedAt: string | undefined;
-  let reasoningEndedAt: string | undefined;
-  let reasoningIndex = 0;
-  let skillIndex = 0;
-  let compactionIndex = 0;
-  const prompt = taskPrompt?.trim();
-  const hasUserMessages = events.some((event) => event.type === "user.message");
-
-  if (prompt && !hasUserMessages) {
-    const visiblePrompt = visibleReviewPrompt(prompt);
-    items.push({ type: "user", id: "user-prompt", text: visiblePrompt.text, rawText: prompt, reviewFeedback: visiblePrompt.feedback, attachedFiles: [] });
-  }
-
-  // Assistant prose renders where it first appeared and never moves again.
-  //
-  // Classifying it here required knowing whether another tool call was coming,
-  // which is unknowable at the first token — so the old rule streamed
-  // everything inside the open Working block and moved the answer out once the
-  // run settled. That move is exactly what made the final answer arrive as a
-  // jump instead of a stream. Text streams in place instead, and nothing is
-  // ever relocated after the user has read it.
-  //
-  // The runner does the classifying now, because it is the side that can. Prose
-  // written before any tool has run is held there until the step resolves and
-  // arrives as `assistant.progress.delta` when tool calls prove it was a
-  // preamble, so orientation and preambles land inside the Working block from
-  // their first rendered token. What still reaches `assistant.delta` is the
-  // answer, plus mid-plan prose on a step that already has tool results — the
-  // one case nobody can classify early, since holding it would delay the
-  // answer.
-  const flushAssistant = (streaming = false) => {
-    const text = assistantBuffer.trim();
-    if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
-    assistantIndex += 1;
-    items.push({
-      type: "assistant",
-      id: `assistant-${assistantIndex}`,
-      text,
-      streaming: streaming || undefined,
-    });
-    assistantBuffer = ""; assistantNeedsSeparator = false;
-  };
-
-  const markActivityTime = (startedAt?: string, endedAt?: string) => {
-    if (startedAt && !activityStartedAt) {
-      activityStartedAt = startedAt;
-    }
-    const end = endedAt ?? startedAt;
-    if (end) {
-      activityEndedAt = end;
-    }
-  };
-
-  const activeCommandSegment = (id: string) =>
-    activitySegments.some((segment) => segment.type === "command" && segment.run.id === id);
-
-  const ensureCommandSegment = (run: CommandRun) => {
-    if (!commandSegmentIds.has(run.id)) {
-      commandSegmentIds.add(run.id);
-      activitySegments.push({ type: "command", id: run.id, run });
-      return true;
-    }
-    return activeCommandSegment(run.id);
-  };
-
-  const flushActivity = (finished = true) => {
-    if (!activitySegments.length) {
-      if (activityStartedAt && !finished) {
-        activityIndex += 1;
-        items.push({
-          type: "activity",
-          id: `activity-${activityIndex}`,
-          segments: [],
-          startedAt: activityStartedAt,
-          endedAt: activityEndedAt,
-          finished: false,
-        });
-      }
-      activityStartedAt = undefined;
-      activityEndedAt = undefined;
-      return;
-    }
-    // Thinking-only turns (no tools/skills) never settle into a timed Working
-    // block.
-    if (finished && !activityHasTools(activitySegments)) {
-      activitySegments = [];
-      activityStartedAt = undefined;
-      activityEndedAt = undefined;
-      return;
-    }
-    activityIndex += 1;
-    items.push({
-      type: "activity",
-      id: `activity-${activityIndex}`,
-      segments: activitySegments,
-      startedAt: activityStartedAt,
-      endedAt: activityEndedAt,
-      finished,
-    });
-    activitySegments = [];
-    activityStartedAt = undefined;
-    activityEndedAt = undefined;
-  };
-
-  const flushReasoning = (finished = true) => {
-    const text = reasoningBuffer.trim();
-    const redundantCompletion = /^(?:#{1,6}\s*)?work(?:\s+is)?\s+complete(?:d)?[.!:]*$/i.test(text);
-    if (!text || redundantCompletion) {
-      reasoningBuffer = "";
-      reasoningStartedAt = undefined;
-      reasoningEndedAt = undefined;
-      return;
-    }
-    reasoningIndex += 1;
-    markActivityTime(reasoningStartedAt, reasoningEndedAt);
-    activitySegments.push({
-      type: "reasoning",
-      id: `reasoning-${reasoningIndex}`,
-      text,
-      durationMs: thoughtDurationMs(reasoningStartedAt, reasoningEndedAt, finished),
-      finished,
-    });
-    reasoningBuffer = "";
-    reasoningStartedAt = undefined;
-    reasoningEndedAt = undefined;
-  };
-
-  // Prose that arrives before any real work joins the narration inside the
-  // block: it was never rendered anywhere else, so it has no place to keep.
-  const foldProseIntoNarration = () => {
-    if (!assistantBuffer.trim()) return;
-    const separator = reasoningBuffer.trim() ? "\n\n" : "";
-    reasoningBuffer = `${reasoningBuffer}${separator}${assistantBuffer.trim()}`;
-    assistantBuffer = "";
-    assistantNeedsSeparator = false;
-  };
-
-  // Streamed prose never relocates. It renders below the open block from its
-  // first token, so when more work follows it, the block above settles, the
-  // prose stands exactly where the user read it, and the new work opens a new
-  // block beneath it. Folding it into the block instead — the previous rule —
-  // moved a paragraph the user was mid-way through reading, which is the flash
-  // this replaces. The runner keeps one-line preambles out of this path
-  // entirely (they are held and paced as status lines), so a split only
-  // happens at a substantial mid-turn report, not at every sentence — the
-  // failure that originally motivated folding.
-  const proseStandsOrFolds = () => {
-    if (assistantBuffer.trim() && activityHasTools(activitySegments)) {
-      flushReasoning();
-      flushActivity();
-      flushAssistant();
-      return;
-    }
-    foldProseIntoNarration();
-  };
-
-  const narrateAssistantForActivity = () => {
-    proseStandsOrFolds();
-    flushReasoning();
-  };
-
-  for (const event of events) {
-    if (event.type === "user.message") {
-      flushReasoning();
-      flushActivity();
-      flushAssistant();
-      const visiblePrompt = visibleReviewPrompt(event.text);
-      items.push({
-        type: "user",
-        id: `user-${items.length}-${event.text.length}`,
-        text: visiblePrompt.text,
-        rawText: event.text,
-        reviewFeedback: visiblePrompt.feedback,
-        attachedFiles: (event.attachedFiles ?? []).map(normalizeAttachment),
-      });
-      activityStartedAt = event.at;
-      activityEndedAt = undefined;
-      continue;
-    }
-    if (event.type === "assistant.delta") {
-      // The work is over once the model starts speaking, so the first token of a
-      // burst closes the elapsed window. Later tokens of the same answer must not
-      // keep inflating it. A tool afterwards reopens it: the run was not done
-      // talking, and this prose was narration.
-      if (!assistantBuffer) markActivityTime(undefined, event.at);
-      const separator = assistantNeedsSeparator
-        && assistantBuffer.trim()
-        && !/\s$/.test(assistantBuffer)
-        && !/^\s/.test(event.text)
-        ? "\n\n"
-        : "";
-      assistantBuffer = `${assistantBuffer}${separator}${event.text}`;
-      assistantNeedsSeparator = false;
-      continue;
-    }
-    if (event.type === "context.compaction") {
-      // Compaction happens between the model's turns, not inside its thinking,
-      // so it opens the Working block itself rather than waiting for a tool. A
-      // finish updates the row that started it: the elapsed time the user
-      // watched is the elapsed time that settles.
-      if (event.phase === "started") {
-        narrateAssistantForActivity();
-        flushActivity();
-        compactionIndex += 1;
-        items.push({
-          type: "compaction",
-          id: `compaction-${compactionIndex}`,
-          status: "running",
-          startedAt: event.at,
-        });
-        continue;
-      }
-      const open = [...items].reverse().find(
-        (item): item is Extract<ComposerTimelineItem, { type: "compaction" }> =>
-          item.type === "compaction" && item.status === "running",
-      );
-      // A finish with no open marker means the start was never seen — a resumed
-      // chat replaying a truncated event log. Nothing is invented for it.
-      if (!open) continue;
-      open.status = event.outcome ?? "unchanged";
-      open.endedAt = event.at;
-      if (event.reclaimedTokens !== undefined) open.reclaimedTokens = event.reclaimedTokens;
-      continue;
-    }
-    if (event.type === "assistant.progress.delta") {
-      // Prose already buffered came first. Before real work it joins the
-      // passage ahead of this line; after real work it stands where it
-      // streamed, and this line opens the narration of the next block.
-      proseStandsOrFolds();
-      reasoningStartedAt = reasoningStartedAt ?? event.at;
-      reasoningEndedAt = event.endedAt ?? event.at ?? reasoningEndedAt;
-      reasoningBuffer = `${reasoningBuffer}${reasoningBuffer ? "\n\n" : ""}${event.text}`;
-      continue;
-    }
-    if (event.type === "turn.outcome") {
-      // Every outcome that reaches here is terminal, so this is where one turn
-      // ends and the next begins. It has to close the answer: `assistant.done`
-      // is emitted once per *run*, and a queued follow-up answers inside the
-      // same run, so without this the second answer continued the first one's
-      // buffer and the two rendered as a single message.
-      //
-      // A stopped turn ends where it was: whatever had streamed stays exactly
-      // where the user saw it, and the Working block settles around the tools
-      // that did run. Prose keeps its place as a message rather than being
-      // folded into the block — nothing follows it now, so it was the last
-      // thing the run said.
-      //
-      // Block first, then the prose: the work came before the sentence that was
-      // still arriving when the turn ended.
-      flushReasoning();
-      flushActivity();
-      flushAssistant();
-      continue;
-    }
-    if (event.type === "assistant.done") {
-      flushReasoning();
-      // Streaming the answer is not work, so completing it does not extend the
-      // elapsed window either.
-      flushActivity();
-      flushAssistant();
-
-      continue;
-    }
-    if (event.type === "skill.requested") {
-      narrateAssistantForActivity();
-      skillIndex += 1;
-      activitySegments.push({
-        type: "skill",
-        id: `skill-${skillIndex}`,
-        skillId: event.skillId,
-        source: event.source,
-        origin: event.origin,
-        status: "requested",
-        requestId: event.requestId,
-      });
-      markActivityTime(event.at, event.endedAt ?? event.at);
-      continue;
-    }
-    if (event.type === "skill.loaded" || event.type === "skill.failed") {
-      narrateAssistantForActivity();
-      const existing = [...activitySegments].reverse().find(
-        (segment): segment is Extract<ComposerActivitySegment, { type: "skill" }> =>
-          segment.type === "skill" && segment.requestId === event.requestId,
-      );
-      if (existing) {
-        existing.status = event.type === "skill.loaded" ? "loaded" : "failed";
-        if (event.type === "skill.loaded") {
-          existing.contentHash = event.contentHash;
-          existing.bytes = event.bytes;
-        } else {
-          existing.code = event.code;
-          existing.message = event.message;
-        }
-      } else {
-        skillIndex += 1;
-        activitySegments.push({
-          type: "skill",
-          id: `skill-${skillIndex}`,
-          skillId: event.skillId,
-          source: event.source,
-          origin: event.origin,
-          status: event.type === "skill.loaded" ? "loaded" : "failed",
-          requestId: event.requestId,
-          ...(event.type === "skill.loaded"
-            ? { contentHash: event.contentHash, bytes: event.bytes }
-            : { code: event.code, message: event.message }),
-        });
-      }
-      markActivityTime(event.at, event.endedAt ?? event.at);
-      continue;
-    }
-    if (event.type === "command.started") {
-      narrateAssistantForActivity();
-      const existingRun = runs.get(event.id);
-      if (existingRun) {
-        existingRun.command = event.command;
-        existingRun.kind = event.kind;
-        existingRun.toolKind = event.toolKind;
-        existingRun.commandClass = event.commandClass;
-        existingRun.cwd = event.cwd;
-        existingRun.startedAt = existingRun.startedAt ?? event.at;
-        existingRun.endedAt = event.at ?? existingRun.endedAt;
-        if (ensureCommandSegment(existingRun)) {
-          markActivityTime(event.at, event.at);
-        }
-        continue;
-      }
-      const run: CommandRun = {
-        id: event.id,
-        command: event.command,
-        kind: event.kind,
-        toolKind: event.toolKind,
-        commandClass: event.commandClass,
-        cwd: event.cwd,
-        stdout: "",
-        stderr: "",
-        exitCode: null,
-        status: "running",
-        startedAt: event.at,
-        endedAt: event.at,
-      };
-      runs.set(event.id, run);
-      if (ensureCommandSegment(run)) {
-        markActivityTime(event.at, event.at);
-      }
-      continue;
-    }
-    if (event.type === "command.output") {
-      narrateAssistantForActivity();
-      let run = runs.get(event.id);
-      if (!run) {
-        run = {
-          id: event.id,
-          command: event.id,
-          kind: "bash",
-          cwd: "",
-          stdout: "",
-          stderr: "",
-          exitCode: null,
-          status: "running",
-          startedAt: event.at,
-          endedAt: event.endedAt ?? event.at,
-        };
-        runs.set(event.id, run);
-      }
-      run.endedAt = event.endedAt ?? event.at ?? run.endedAt;
-      if (ensureCommandSegment(run)) {
-        markActivityTime(event.at, event.endedAt ?? event.at);
-      }
-      if (event.stream === "stdout") {
-        run.stdout = `${run.stdout}${event.text}`;
-      } else {
-        run.stderr = `${run.stderr}${event.text}`;
-      }
-      continue;
-    }
-    if (event.type === "command.finished") {
-      narrateAssistantForActivity();
-      let run = runs.get(event.id);
-      if (!run) {
-        run = {
-          id: event.id,
-          command: event.id,
-          kind: "bash",
-          cwd: "",
-          stdout: "",
-          stderr: "",
-          exitCode: null,
-          status: "running",
-          startedAt: event.at,
-          endedAt: event.at,
-        };
-        runs.set(event.id, run);
-      }
-      run.exitCode = event.exitCode;
-      run.status = event.exitCode === 0 ? "passed" : "failed";
-      run.resultStatus = event.status;
-      run.errorCode = event.errorCode;
-      if (event.errorMessage && !run.stderr.trim()) run.stderr = event.errorMessage;
-      run.endedAt = event.at ?? run.endedAt;
-      run.durationMs = event.durationMs;
-      if (ensureCommandSegment(run)) {
-        markActivityTime(event.at, event.at);
-      }
-      continue;
-    }
-    if (event.type === "task.error") {
-      flushReasoning();
-      if (activitySegments.length) {
-        markActivityTime(undefined, event.at);
-      } else {
-        activityStartedAt = undefined;
-        activityEndedAt = undefined;
-      }
-      flushActivity();
-      assistantBuffer = `${assistantBuffer}${assistantBuffer.trim() ? "\n\n" : ""}I couldn't complete this request.\n\n${event.message}`;
-      flushAssistant();
-    }
-  }
-  // Trailing text is flushed as an assistant message whether or not the run has
-  // settled, so a streaming answer renders outside the Working block from its
-  // first token rather than appearing there once the run finishes.
-  //
-  // An answer under way also settles the block above it. The work is what the
-  // block is timing, and the model has moved on from it — leaving a clock
-  // ticking on finished work while the reply streams underneath reads as though
-  // two things are happening at once.
-  const answering = assistantBuffer.trim().length > 0;
-  flushReasoning(taskState !== "running");
-  flushActivity(taskState !== "running" || answering);
-  flushAssistant(taskState === "running");
-
-  // The turn's answer is the prose nothing follows *within its own turn*.
-  // Deciding it by position rather than by the run having settled is what keeps
-  // it stable: a message stops being the answer the moment work opens beneath
-  // it, and the real answer is the answer from its first streamed token — it
-  // never restyles under the reader.
-  //
-  // "Nothing follows" has to stop at the next user message. Marking only the
-  // last item of the whole transcript demoted every earlier turn's answer to
-  // narration the instant the next message was sent, so a finished reply shrank
-  // to muted 11px prose while the reader was looking at it.
-  for (const [index, item] of items.entries()) {
-    if (item.type !== "assistant") continue;
-    const next = items[index + 1];
-    if (!next || next.type === "user") {
-      item.final = true;
-    }
-  }
-
-  return items;
-}
-
-export function reconcileActivityDisclosureState(
-  currentExpandedIds: Set<string>,
-  items: ComposerTimelineItem[],
-  taskId: string | undefined,
-  currentAutoOpenedKeys: Set<string>,
-): { expandedIds: Set<string>; autoOpenedKeys: Set<string>; newlyOpenedIds: string[] } {
-  const activities = items.filter(
-    (item): item is Extract<ComposerTimelineItem, { type: "activity" }> => item.type === "activity",
-  );
-  const activityKey = (id: string) => `${taskId ?? "no-task"}:${id}`;
-  const activeIds = new Set(activities.map((item) => item.id));
-  const activeKeys = new Set(activities.map((item) => activityKey(item.id)));
-  const nextExpandedIds = new Set(currentExpandedIds);
-  const nextAutoOpenedKeys = new Set(currentAutoOpenedKeys);
-  const newlyOpenedIds: string[] = [];
-
-  for (const activity of activities) {
-    const key = activityKey(activity.id);
-    // A live compaction block auto-opens for the same reason a tool block does:
-    // the row explaining the pause is the point of showing the block at all.
-    // Narration opens it too, and often first — orientation arrives before any
-    // tool, and a block that stayed shut would replace it with "Thinking".
-    const opensLive = activityHasTools(activity.segments) || activityHasNarration(activity.segments);
-    if (!activity.finished && opensLive && !nextAutoOpenedKeys.has(key)) {
-      nextAutoOpenedKeys.add(key);
-      nextExpandedIds.add(activity.id);
-      newlyOpenedIds.push(activity.id);
-      continue;
-    }
-    if ((!opensLive || activity.finished) && nextAutoOpenedKeys.delete(key)) {
-      nextExpandedIds.delete(activity.id);
-    }
-  }
-
-  for (const id of nextExpandedIds) {
-    if (!activeIds.has(id)) nextExpandedIds.delete(id);
-  }
-  for (const key of nextAutoOpenedKeys) {
-    if (!activeKeys.has(key)) nextAutoOpenedKeys.delete(key);
-  }
-
-  return { expandedIds: nextExpandedIds, autoOpenedKeys: nextAutoOpenedKeys, newlyOpenedIds };
-}
-
-export function renderInlineMarkdown(text: string, options?: ReviewReferenceOptions): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  let plain = "";
-  let keyIndex = 0;
-
-  const flushPlain = () => {
-    if (!plain) return;
-    const key = `inline-${keyIndex}`;
-    nodes.push(<React.Fragment key={key}>{renderPlainInlineText(plain, key, options)}</React.Fragment>);
-    keyIndex += 1;
-    plain = "";
-  };
-
-  const pushCode = (code: string) => {
-    flushPlain();
-    const key = `code-${keyIndex}`;
-    keyIndex += 1;
-    if (reviewFileForReference(code, options?.reviewFiles) || code.startsWith("@") || /[\\/].+\.[A-Za-z0-9]{1,8}$/.test(code)) {
-      nodes.push(renderReferenceToken(code, key, options));
-      return;
-    }
-    nodes.push(<code key={key}>{code}</code>);
-  };
-
-  const pushFormatted = (node: React.ReactNode) => {
-    flushPlain();
-    nodes.push(node);
-    keyIndex += 1;
-  };
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "\\" && /[`*_\\]/.test(text[index + 1] ?? "")) {
-      plain += text[index + 1];
-      index += 1;
-      continue;
-    }
-    if (char === "`" && !isEscapedMarkdownAt(text, index)) {
-      let endOfRun = index;
-      while (endOfRun < text.length && text[endOfRun] === "`") endOfRun += 1;
-      const runLength = endOfRun - index;
-      const closingIndex = findClosingBacktickRun(text, endOfRun, runLength);
-      if (closingIndex >= 0) {
-        pushCode(text.slice(endOfRun, closingIndex));
-        index = closingIndex + runLength - 1;
-        continue;
-      }
-    }
-    if (char === "[" && !isEscapedMarkdownAt(text, index)) {
-      const link = readMarkdownLink(text, index);
-      if (link) {
-        const safeUrl = safeExternalUrl(link.url);
-        if (safeUrl) {
-          pushFormatted(
-            <InlineLink href={safeUrl} key={`link-${keyIndex}`}>
-              {renderInlineMarkdown(link.label, options)}
-            </InlineLink>,
-          );
-          index = link.end;
-          continue;
-        }
-        // An unsafe or unparseable URL is left exactly as written. Rendering
-        // just the label would hide where a hostile link points.
-        plain += text.slice(index, link.end + 1);
-        index = link.end;
-        continue;
-      }
-    }
-    if (text.startsWith("**", index) && !isEscapedMarkdownAt(text, index)) {
-      const closingIndex = text.indexOf("**", index + 2);
-      if (closingIndex > index + 2) {
-        pushFormatted(<strong key={`strong-${keyIndex}`}>{text.slice(index + 2, closingIndex)}</strong>);
-        index = closingIndex + 1;
-        continue;
-      }
-    }
-    if ((char === "*" || char === "_") && !isEscapedMarkdownAt(text, index)) {
-      const closingIndex = text.indexOf(char, index + 1);
-      if (closingIndex > index + 1 && !text.slice(index + 1, closingIndex).includes("\n")) {
-        pushFormatted(<em key={`em-${keyIndex}`}>{text.slice(index + 1, closingIndex)}</em>);
-        index = closingIndex;
-        continue;
-      }
-    }
-    plain += char;
-  }
-
-  flushPlain();
-  return nodes;
-}
-
-function MarkdownBlockView({
-  block,
-  referenceOptions,
-  trailingInline,
-}: {
-  block: MarkdownBlock;
-  blockKey?: string;
-  referenceOptions?: ReviewReferenceOptions;
-  trailingInline?: React.ReactNode;
-}) {
-  if (block.type === "code") {
-    return <MarkdownCodeBlock content={block.content} language={block.language} />;
-  }
-  if (block.type === "heading") {
-    const headingContent = (
-      <>
-        {renderInlineMarkdown(block.text, referenceOptions)}
-        {trailingInline ?? null}
-      </>
-    );
-    if (block.level === 1) return <h3>{headingContent}</h3>;
-    if (block.level === 2) return <h4>{headingContent}</h4>;
-    return <h5>{headingContent}</h5>;
-  }
-  if (block.type === "list") {
-    const listItems = block.items.map((item, itemIndex) => (
-      <li key={itemIndex}>
-        {renderInlineMarkdown(item, referenceOptions)}
-        {itemIndex === block.items.length - 1 ? trailingInline ?? null : null}
-      </li>
-    ));
-    return block.ordered ? <ol>{listItems}</ol> : <ul>{listItems}</ul>;
-  }
-  if (block.type === "rule") return <hr />;
-  if (block.type === "quote") {
-    return <blockquote>{renderInlineMarkdown(block.text, referenceOptions)}{trailingInline ?? null}</blockquote>;
-  }
-  if (block.type === "table") {
-    return (
-      <div className="markdownTableWrapper">
-        <table>
-          <thead>
-            <tr>
-              {block.headers.map((header, headerIndex) => (
-                <th key={headerIndex}>{renderInlineMarkdown(header, referenceOptions)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {row.map((cell, cellIndex) => (
-                  <td key={cellIndex}>{renderInlineMarkdown(cell, referenceOptions)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-  return (
-    <p>
-      {renderInlineMarkdown(block.text, referenceOptions)}
-      {trailingInline ?? null}
-    </p>
-  );
-}
-
-// Settled blocks never change once streamed past, so a stable serialized key
-// lets every block before the live tail skip re-rendering entirely.
-const MemoizedMarkdownBlockView = React.memo(
-  MarkdownBlockView,
-  (previous, next) => previous.blockKey === next.blockKey && previous.referenceOptions === next.referenceOptions,
-);
-
-export function MarkdownContent({
-  content,
-  onReviewFileClick,
-  reviewFiles,
-  trailingInline,
-}: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
-  const blocks = useMemo(() => parseMarkdown(content), [content]);
-  const referenceOptions = useMemo(() => ({ onReviewFileClick, reviewFiles }), [onReviewFileClick, reviewFiles]);
-  return (
-    <div className="markdownContent">
-      {blocks.map((block, index) => (
-        <MarkdownBlockView
-          key={index}
-          block={block}
-          referenceOptions={referenceOptions}
-          trailingInline={index === blocks.length - 1 ? trailingInline : undefined}
-        />
-      ))}
-    </div>
-  );
-}
-
-export function LongMarkdownContent({
-  content,
-  onReviewFileClick,
-  reviewFiles,
-  trailingInline,
-}: { content: string; trailingInline?: React.ReactNode } & ReviewReferenceOptions) {
-  const [expanded, setExpanded] = useState(false);
-  const preview = useMemo(() => markdownPreview(content, markdownPreviewCharacterLimit), [content]);
-  const displayContent = expanded || !preview.truncated ? content : preview.text;
-  return (
-    <>
-      <MarkdownContent content={displayContent} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} trailingInline={trailingInline} />
-      {preview.truncated ? (
-        <div className="messageOverflowNotice">
-          <span>
-            Showing a preview of a long response ({content.length.toLocaleString()} characters).
-          </span>
-          <button type="button" onClick={() => setExpanded((current) => !current)}>
-            {expanded ? "Show preview" : "Show full response"}
-          </button>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-// The live tail block re-renders as markdown with unfinished inline syntax
-// stabilized first, so styling appears progressively instead of popping from
-// plain text to formatted at each paragraph boundary. Everything before the
-// tail is memoized per block and never re-parsed into DOM. parseMarkdown
-// already renders an unterminated ``` fence as a code block, so the split is
-// fence-safe by construction.
-function stabilizedStreamingBlock(block: MarkdownBlock): MarkdownBlock {
-  if (block.type === "paragraph" || block.type === "heading" || block.type === "quote") {
-    return { ...block, text: stabilizeStreamingInlineText(block.text) };
-  }
-  if (block.type === "list" && block.items.length) {
-    const items = [...block.items];
-    items[items.length - 1] = stabilizeStreamingInlineText(items[items.length - 1]);
-    return { ...block, items };
-  }
-  return block;
-}
-
-function StreamingMarkdownContent({ content, caretClassName }: { content: string; caretClassName: string }) {
-  const blocks = useMemo(() => parseMarkdown(content), [content]);
-  const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
-  const caret = <span className={caretClassName} aria-hidden="true" />;
-  const lastBlock = blocks.at(-1);
-  const caretInline = !!lastBlock && ["paragraph", "heading", "list", "quote"].includes(lastBlock.type);
-  return (
-    <div className="markdownContent">
-      {blocks.map((block, index) =>
-        index < blocks.length - 1 ? (
-          <MemoizedMarkdownBlockView key={index} block={block} blockKey={blockKeys[index]} />
-        ) : (
-          <MarkdownBlockView
-            key={index}
-            block={stabilizedStreamingBlock(block)}
-            trailingInline={caretInline ? caret : undefined}
-          />
-        ),
-      )}
-      {caretInline ? null : caret}
-    </div>
-  );
-}
-
-/// Streamed text arrives in bursts — a guided step holds every token until it
-/// resolves and then releases the whole answer as one delta, and local runtimes
-/// batch tokens — but reading speed is steady. The reveal walks toward the full
-/// text on a characters-per-second budget rather than a share of the backlog,
-/// so a burst reads as typing instead of a wall of text. Presentation only: the
-/// full text is already in the timeline, and a settled message renders
-/// complete.
-export const revealCharactersPerSecond = 420;
-/// However far behind the reveal falls, it still finishes within this many
-/// seconds, so a long answer never leaves the reader waiting on the pacing.
-export const revealCatchUpSeconds = 4;
-/// A hidden window stops firing frames. Clamping the measured gap keeps the
-/// return from resuming as one jump.
-const revealMaxFrameMs = 250;
-/// The first frame of a burst has no measured gap; assume a frame's worth so
-/// the reveal starts moving immediately.
-const revealAssumedFrameMs = 16;
-
-export function nextRevealCount(text: string, current: number, elapsedMs: number): number {
-  const backlog = text.length - current;
-  if (backlog <= 0) return current;
-  const charactersPerSecond = Math.max(revealCharactersPerSecond, backlog / revealCatchUpSeconds);
-  const elapsed = Math.min(Math.max(elapsedMs, 0), revealMaxFrameMs) || revealAssumedFrameMs;
-  let next = Math.min(text.length, current + Math.max(1, Math.round((charactersPerSecond * elapsed) / 1000)));
-  // Never split a surrogate pair: half an emoji renders as garbage.
-  const edge = text.charCodeAt(next - 1);
-  if (next < text.length && edge >= 0xd800 && edge <= 0xdbff) next += 1;
-  return next;
-}
-
-/// Text the reader has already watched arrive, so switching tabs and coming
-/// back does not replay it. Survives the component unmounting, which the reveal
-/// state cannot. Bounded because a long session should not grow a set forever.
-const completedReveals = new Set<string>();
-const completedRevealLimit = 500;
-export function markRevealComplete(key: string) {
-  if (completedReveals.size >= completedRevealLimit) completedReveals.clear();
-  completedReveals.add(key);
-}
-export function revealHasCompleted(key: string): boolean {
-  return completedReveals.has(key);
-}
-export function resetCompletedReveals() {
-  completedReveals.clear();
-}
-
-function useRevealedText(text: string, animate: boolean, revealKey: string): string {
-  const [revealedCount, setRevealedCount] = useState(() =>
-    animate && !completedReveals.has(revealKey) ? 0 : text.length,
-  );
-  const lastFrameAt = useRef<number | null>(null);
-  useEffect(() => {
-    if (!animate) {
-      // Held at the end rather than left behind, so text that starts revealing
-      // later picks up from what the reader has seen instead of replaying it.
-      setRevealedCount(text.length);
-      lastFrameAt.current = null;
-      return undefined;
-    }
-    if (revealedCount >= text.length) {
-      // A reused component starting a new, shorter stream begins from zero
-      // rather than running backwards.
-      if (revealedCount > text.length) setRevealedCount(0);
-      else if (text.length > 0) markRevealComplete(revealKey);
-      lastFrameAt.current = null;
-      return undefined;
-    }
-    const frame = requestAnimationFrame((now) => {
-      const elapsed = lastFrameAt.current === null ? 0 : now - lastFrameAt.current;
-      lastFrameAt.current = now;
-      setRevealedCount((current) => nextRevealCount(text, current, elapsed));
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [animate, revealKey, text, revealedCount]);
-  if (!animate) return text;
-  return revealedCount >= text.length ? text : text.slice(0, revealedCount);
-}
-
-/// A guided step releases its whole answer as one delta and the run settles in
-/// the same breath, so the two arrive in one render batch: keying the reveal on
-/// the run still being live meant the settled renderer replaced the revealing
-/// one before a single frame had drawn, and the answer landed whole. `animate`
-/// therefore outlives the run — it says the text arrived over this session's
-/// stream, not that more is coming — and the reveal itself decides when it is
-/// done. `streaming` only holds the caret while the answer is still growing.
-export function AssistantAnswerContent({
-  animate,
-  content,
-  revealKey,
-  streaming,
-  onReviewFileClick,
-  reviewFiles,
-}: {
-  animate: boolean;
-  content: string;
-  revealKey: string;
-  streaming: boolean;
-} & ReviewReferenceOptions) {
-  const revealed = useRevealedText(content, animate, revealKey);
-  if (!streaming && revealed.length >= content.length) {
-    return <LongMarkdownContent content={content} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />;
-  }
-  return (
-    <div className="streamingTextContent">
-      <StreamingMarkdownContent content={revealed} caretClassName="streamingTextCaret" />
-    </div>
-  );
-}
-export function WorkMarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
-  if (streaming) {
-    return (
-      <div className="workMarkdownContent isStreaming">
-        <StreamingMarkdownContent content={content} caretClassName="workStreamingCaret" />
-      </div>
-    );
-  }
-  return (
-    <div className="workMarkdownContent">
-      <MarkdownContent content={content} />
-    </div>
-  );
-}
-function normalizeSkillPreviewHeading(value: string): string {
-  return value.replace(/^#+\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-export function skillPreviewMarkdown(content: string, skillName: string): string {
-  const lines = content.replace(/^---\r?\n[\s\S]*?\r?\n---\s*/, "").trim().split(/\r?\n/);
-  if (lines[0]?.startsWith("# ") && normalizeSkillPreviewHeading(lines[0]) === normalizeSkillPreviewHeading(skillName)) {
-    lines.shift();
-    while (lines[0]?.trim() === "") lines.shift();
-  }
-  return lines.join("\n").trim();
-}
-
-export function filterSkillsBySource(skills: SkillInfo[], filter: SkillSourceFilter): SkillInfo[] {
-  return skills.filter((skill) => skill.source === filter);
-}
-
-export function skillGovernanceLabel(skill: SkillInfo): string {
-  if (skill.checksumStatus === "modified" || skill.modified) return "Modified";
-  if (skill.checksumStatus === "untracked") return "Untracked";
-  return "";
-}
-
-function SkillGovernance({ skill }: { skill: SkillInfo }) {
-  const label = skillGovernanceLabel(skill);
-  if (!label) return null;
-  return <span className={`skillGovernance ${label === "Modified" ? "isModified" : ""}`}>{label}</span>;
-}
-
-function ReviewSummaryCard({
-  files,
-  onOpenReview,
-  totals,
-}: {
-  files: ReviewFile[];
-  onOpenReview(filePath?: string): void;
-  totals: { additions: number; deletions: number };
-}) {
-  if (!files.length) return null;
-  return (
-    <article className="reviewSummaryCard">
-      <button className="reviewSummaryHeader" type="button" onClick={() => onOpenReview()}>
-        <span className="reviewSummaryTitle">
-          <FileText size={15} />
-          <strong>
-            {files.length} file{files.length === 1 ? "" : "s"} changed
-          </strong>
-          <span className="additions">+{totals.additions}</span>
-          <span className="deletions">-{totals.deletions}</span>
-        </span>
-        <span className="reviewSummaryReviewButton">
-          <span>Review</span>
-          <ExternalLink size={13} />
-        </span>
-      </button>
-      <div className="reviewSummaryFiles">
-        {files.map((file) => (
-          <section className={`reviewSummaryFile status-${file.status}`} key={file.path}>
-            <button
-              className="reviewSummaryFileButton"
-              type="button"
-              onClick={() => onOpenReview(file.path)}
-            >
-              <span className="reviewSummaryPath">{file.path}</span>
-              <span className="changeStats" aria-label={`+${file.additions} -${file.deletions}`}>
-                <span className="additions">+{file.additions}</span>
-                <span className="deletions">-{file.deletions}</span>
-              </span>
-              <PanelRight className="reviewSummaryOpenIcon" size={14} />
-            </button>
-          </section>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-export function documentReviewDisplayName(filePath: string): string {
-  const fileName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
-  const stem = fileName.replace(/\.docx$/i, "");
-  const title = stem
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-  return title || fileName;
-}
-
-function DocumentReviewResponseLink({
-  file,
-  onOpenReview,
-}: {
-  file: ReviewFile;
-  onOpenReview(filePath: string): void;
-}) {
-  const fileName = file.path.replace(/\\/g, "/").split("/").pop() ?? file.path;
-  return (
-    <button
-      className="documentResponseLink"
-      type="button"
-      onClick={() => onOpenReview(file.path)}
-      aria-label={`Review ${documentReviewDisplayName(file.path)} document`}
-    >
-      <span className="documentResponseIcon"><FileText size={17} aria-hidden="true" /></span>
-      <span className="documentResponseIdentity">
-        <strong>{documentReviewDisplayName(file.path)}</strong>
-        <small>{fileName}</small>
-      </span>
-      <span className="documentResponseAction">Review <ChevronRight size={13} aria-hidden="true" /></span>
-    </button>
-  );
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function prefersReducedMotion() {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-}
-
-function elementDistanceFromBottom(node: HTMLElement) {
-  return node.scrollHeight - node.scrollTop - node.clientHeight;
-}
-
-function isElementNearBottom(node: HTMLElement, threshold = 72) {
-  return elementDistanceFromBottom(node) < threshold;
-}
-
-function isElementAtBottom(node: HTMLElement) {
-  return elementDistanceFromBottom(node) < 4;
-}
-
-function scrollElementToBottom(node: HTMLElement, behavior: ScrollBehavior = "auto") {
-  const scrollBehavior = behavior === "smooth" && prefersReducedMotion() ? "auto" : behavior;
-  const scroll = () => {
-    if (scrollBehavior === "auto") {
-      node.scrollTop = node.scrollHeight;
-      return;
-    }
-    node.scrollTo({ top: node.scrollHeight, behavior: scrollBehavior });
-  };
-  scroll();
-  window.requestAnimationFrame(() => {
-    scroll();
-  });
-}
-
-function placeElementAtBottom(node: HTMLElement) {
-  node.scrollTop = node.scrollHeight;
-}
 
 function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const initialHarnessProfile = isHarnessProfileId(startupSettings.harnessProfile) ? startupSettings.harnessProfile : defaultHarnessProfileId;
@@ -1922,11 +329,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
-  const streamedAnswerTaskIds = useRef<Set<string>>(new Set());
   const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
   const [responseFeedbackSubmitting, setResponseFeedbackSubmitting] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
-  const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
     previewEnvironment ? new Set(previewEnvironment.reviewFiles.map((file) => file.path)) : new Set(),
   );
@@ -1947,12 +352,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchError, setBranchError] = useState<string | null>(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
-  const [workspaceModeMenuOpen, setWorkspaceModeMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The dictation offer, raised by pressing a microphone that is not set up.
+  const [dictationSetupOffer, setDictationSetupOffer] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const [harnessProfile, setHarnessProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [harnessDraftProfile, setHarnessDraftProfile] = useState<HarnessProfileId>(initialHarnessProfile);
   const [contextLength, setContextLength] = useState(initialContextLength);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
+    isReasoningEffort(startupSettings.reasoningEffort) ? startupSettings.reasoningEffort : DEFAULT_REASONING_EFFORT,
+  );
+  const [showThinking, setShowThinking] = useState(startupSettings.showThinking === true);
   const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
@@ -1991,6 +401,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [reviewWidth, setReviewWidth] = useState(reviewDefaultWidth);
   const [reviewHasSessionWidth, setReviewHasSessionWidth] = useState(false);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
+  // Closing the "Starting model…" card hides this load, not the next one.
+  const [modelStartupDismissed, setModelStartupDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopPending, setStopPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1998,7 +410,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     api,
     backend,
     initialSettings: startupSettings.modelEndpoint,
-    initialLocalModels: startupSettings.localModels,
     initialConnection: startupSettings.companyConnection,
     settingsOpen,
     active: settingsTab === "account",
@@ -2031,6 +442,19 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const streamRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachmentMenuRef = useRef<HTMLDivElement | null>(null);
+  // Where the caret was the last time the composer was touched. Null until it
+  // is touched at all, which dictation has to tell apart from a caret at 0.
+  const promptCaretRef = useRef<number | null>(null);
+  const dictation = useDictation(api, (text) => {
+    setPrompt((current) => {
+      const next = insertTranscript(current, promptCaretRef.current, text);
+      promptCaretRef.current = next.caret;
+      return next.prompt;
+    });
+    textareaRef.current?.focus();
+  });
+  // What the server advertises, or — locally — a downloaded dictation model. Not whether one is loaded: the mic press loads it.
+  const dictationAvailable = backend?.veilFeatures.includes("speech.transcribe") === true || backend?.localDictationReady === true;
   const draftSaveRef = useRef<number | null>(null);
   const lastPersistedDraftRef = useRef<Map<string, { draftPrompt: string; filesSignature: string }>>(new Map());
   const reviewAnimationRef = useRef<number | null>(null);
@@ -2058,6 +482,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const activityBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const activityFollowScrollRef = useRef<Map<string, boolean>>(new Map());
   const activityScrollInputRef = useRef<Set<string>>(new Set());
+  // What each keyboard shortcut does, and whether any of them may fire. Refs
+  // rather than effect dependencies: see where they are filled in below.
+  const shortcutActionsRef = useRef<Partial<Record<ShortcutId, () => void>>>({});
+  const shortcutsBlockedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
@@ -2104,31 +532,74 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const selectedIde = availableIdes.find((ide) => ide.id === selectedIdeId) ?? availableIdes[0] ?? defaultIdeChoices[0];
   const selectedModel = backend?.model ?? null;
   const [serverModels, setServerModels] = useState<ServerModelInfo[]>([]);
-  // The composer offers a choice only where there is one to make: local mode
-  // runs one model per Veil process, and a server that publishes no registry
-  // reports its single configured model.
+  // What is on this computer and ready to load. Local mode runs one model per
+  // Veil process, so the backend only ever reports the loaded one — but the
+  // choice a person actually has is every chat model they have downloaded, and
+  // switching is what the picker is for. Dictation weights are excluded by the
+  // kind, not by a filter here: an ASR model cannot answer a prompt.
+  const [downloadedChatModels, setDownloadedChatModels] = useState<LocalCatalogModel[]>([]);
   // Availability is a server concept: it comes from the published registry,
   // which reports whether each model's process is answering right now.
   const composerModels = useMemo<ComposerModelOption[]>(
-    () => (endpointSettings.mode === "server" && serverModels.length > 0
-      ? serverModels.map((model) => ({
+    () => {
+      if (endpointSettings.mode === "server" && serverModels.length > 0) {
+        return serverModels.map((model) => ({
           id: model.id,
           label: model.display,
           available: model.available,
-          contextBadge: contextBadge(model.contextLength),
-        }))
-      : (backend?.models ?? []).map((model) => ({
-          id: model.modelId,
+        }));
+      }
+      if (endpointSettings.mode === "local" && downloadedChatModels.length > 0) {
+        return downloadedChatModels.map((model) => ({
+          id: model.id,
           label: model.displayName,
-          contextBadge: contextBadge(model.contextLength),
-        }))),
-    [backend?.models, endpointSettings.mode, serverModels],
+        }));
+      }
+      return (backend?.models ?? []).map((model) => ({
+        id: model.modelId,
+        label: model.displayName,
+      }));
+    },
+    [backend?.models, downloadedChatModels, endpointSettings.mode, selectedModel, serverModels],
   );
+  // Re-read when the mode changes and when a different model finishes loading:
+  // the second is what a download completing looks like from here.
+  useEffect(() => {
+    if (endpointSettings.mode !== "local") {
+      setDownloadedChatModels([]);
+      return;
+    }
+    void refreshDownloadedChatModels();
+  }, [endpointSettings.mode, selectedModel?.modelId]);
+  // The levels the selected model reads. Empty for a model that takes no
+  // direction on how hard to think, which is what keeps the section out of the
+  // menu rather than showing a choice the chat template would ignore.
+  const modelReasoningEfforts = selectedModel?.capabilities?.reasoningEfforts ?? [];
   const harnessDirty = harnessDraftProfile !== harnessProfile || harnessDraftContextLength !== contextLength;
   const harnessDraftContextIndex = Math.max(
     0,
     CONTEXT_LENGTH_OPTIONS.findIndex((option) => option === harnessDraftContextLength),
   );
+  // A local model is reading itself into memory. The Connection panel says so
+  // inline, so the floating card is for every other moment — above all the one
+  // the composer's picker starts, where Settings is closed and the only other
+  // sign of life would be an app that has stopped answering.
+  const localModelStarting =
+    connectionSettings.localModelLoading
+    && endpointSettings.mode === "local"
+    && !(settingsOpen && settingsTab === "account");
+  const startingModelName =
+    downloadedChatModels.find((model) => model.id === endpointDraftSettings.modelId)?.displayName
+    || endpointDraftSettings.modelId
+    || "the model";
+  // Pressing the microphone loads the speech weights before the device opens,
+  // and in local mode that is the slow part of the first dictation of a
+  // session. Same card, same reason: a control that spins in silence for
+  // twenty seconds reads as a control that did nothing.
+  const dictationStarting = dictation.status.state === "starting";
+  useEffect(() => {
+    if (!connectionSettings.localModelLoading && !dictationStarting) setModelStartupDismissed(false);
+  }, [connectionSettings.localModelLoading, dictationStarting]);
   const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const localLogInfo = backend?.diagnostics.localLogs ?? { bytes: 0, entries: 0 };
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
@@ -2144,8 +615,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
-  const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
-  const canUndo =
+  // Per file, never per turn: undo puts one reviewed file back, and taking
+  // back more than that is a thing to ask the model for.
+  const canUndoFile =
     !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
@@ -2206,10 +678,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
-  // Only text this session watched arrive reveals. A restored transcript's
-  // events are the same events, so the run having settled cannot tell the two
-  // apart — where they came in can.
-  const answerArrivedLive = task?.id ? streamedAnswerTaskIds.current.has(task.id) : false;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
     || task?.state === "approving"
@@ -2548,9 +1016,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const batch = takeBatchedBackendEvents(pendingBackendEvents);
       if (batch.length === 0) return;
       cacheTaskEvents(batch);
-      for (const event of batch) {
-        if (event.type === "assistant.delta") streamedAnswerTaskIds.current.add(event.taskId);
-      }
       const visibleTaskId = visibleTaskIdRef.current;
       const visibleTaskEvents = visibleTaskId ? batch.filter((event) => event.taskId === visibleTaskId) : [];
       if (visibleTaskEvents.length) {
@@ -2562,7 +1027,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         if (isVisibleTaskEvent) {
           setTask((current) => reduceVisibleTask(current, event));
           setPendingPermission((current) => reducePendingPermission(current, event));
-          setApprovalChecks((current) => reduceApprovalChecks(current, event));
           if (effects.errorMessage) setError(effects.errorMessage);
           if (effects.resetExpandedReview) setExpandedReviewPaths(new Set());
           if (effects.refreshReview) {
@@ -2674,8 +1138,89 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
   }, []);
 
+  // Whether something is layered over the app. Shared by the focus trap below
+  // and by the global shortcuts, which must not reach past a dialog to a
+  // composer the user cannot currently see.
+  const modalOpen =
+    settingsOpen
+    || !!previewAttachment?.previewDataUrl
+    || !!deleteCandidate
+    || showElevatedPermissionsDialog
+    || approvalPending
+    || !!responseFeedbackDialog;
+
+  /** Opens the microphone, or offers the way in when dictation is not set up. */
+  function toggleDictation() {
+    // Mid-flight is not a state to interrupt: the model is being fetched or
+    // the audio is being transcribed, and both finish on their own.
+    if (dictation.status.state === "starting" || dictation.status.state === "transcribing") return;
+    // Pressed while dictation is off, the shortcut answers the way the
+    // microphone button does — by offering the way in rather than by doing
+    // nothing and reading as a broken key.
+    if (!dictationAvailable) {
+      setDictationSetupOffer(true);
+      return;
+    }
+    dictation.toggle();
+  }
+
+  function openSettings(tab?: SettingsTab) {
+    if (tab) setSettingsTab(tab);
+    setSettingsOpen(true);
+    connectionSettings.clearMessage();
+    setFontScanMessage(null);
+    void refreshStatus();
+    void loadSkills();
+  }
+
+  /**
+   * The app's own keyboard shortcuts.
+   *
+   * One document-level listener dispatching off the same table the Keyboard
+   * settings page prints and the tooltips advertise, so a chord that fires and
+   * a chord that is documented cannot drift apart. It runs on capture, because
+   * the composer textarea holds focus almost all the time and a chord caught
+   * there would never reach the window.
+   */
+  // Rewritten every render and read through a ref, so the one listener below
+  // can subscribe once and still call today's closures. A dependency list here
+  // would have to name everything these actions read — the draft, the
+  // attachments, the run — and the day it missed one, a shortcut would quietly
+  // act on a stale copy of the composer.
+  shortcutActionsRef.current = {
+    "dictation.toggle": toggleDictation,
+    "chat.new": () => void newChat(),
+    "app.settings": () => openSettings(),
+    "app.shortcuts": () => openSettings("keyboard"),
+    "review.toggle": () => (reviewClosing ? openReviewPanel() : toggleReviewPanel()),
+    "composer.focus": () => textareaRef.current?.focus(),
+    // Only while there is something to stop, and never twice: a second press
+    // while the first stop is still landing would read as the key doing
+    // nothing rather than as the run already ending.
+    "run.stop": () => { if (isGenerating && !stopPending) void stopTask(); },
+  };
+  // Read the same way, so a chord cannot reach past a dialog to a window the
+  // user cannot currently see.
+  shortcutsBlockedRef.current = modalOpen;
+
   useEffect(() => {
-    const isOpen = settingsOpen || !!previewAttachment?.previewDataUrl || !!deleteCandidate || showElevatedPermissionsDialog || approvalPending || !!responseFeedbackDialog;
+    const runShortcut = (event: KeyboardEvent) => {
+      // Never on the auto-repeat of a held key, and never mid-IME sequence.
+      if (shortcutsBlockedRef.current || event.repeat || event.isComposing) return;
+      const shortcut = shortcutForEvent(event);
+      const action = shortcut && shortcutActionsRef.current[shortcut.id];
+      if (!action) return;
+      event.preventDefault();
+      action();
+    };
+    document.addEventListener("keydown", runShortcut, true);
+    return () => document.removeEventListener("keydown", runShortcut, true);
+  }, []);
+
+  useEffect(() => {
+    const isOpen = modalOpen;
+    // While a modal is up the page behind it holds still: see .modalScrim CSS.
+    document.documentElement.classList.toggle("modalOpen", isOpen);
     if (!isOpen) {
       modalTriggerRef.current?.focus();
       modalTriggerRef.current = null;
@@ -2772,7 +1317,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const target = event.target instanceof Element ? event.target : null;
       if (!target) return;
       if (!target.closest(".branchControl")) setBranchMenuOpen(false);
-      if (!target.closest(".workspaceModeControl")) setWorkspaceModeMenuOpen(false);
       if (!target.closest(".permissionControl")) setPermissionMenuOpen(false);
       if (!target.closest(".idePicker")) setIdeMenuOpen(null);
       if (!target.closest(".chatProjectActions")) setProjectActionMenuKey(null);
@@ -2781,7 +1325,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setBranchMenuOpen(false);
-      setWorkspaceModeMenuOpen(false);
       setPermissionMenuOpen(false);
       setIdeMenuOpen(null);
       setProjectActionMenuKey(null);
@@ -3024,13 +1567,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setFontScanPending(true);
     setFontScanMessage(null);
     try {
-      const queryLocalFonts = (window as LocalFontWindow).queryLocalFonts;
-      if (!queryLocalFonts) {
+      const families = await listLocalFontFamilies();
+      if (!families) {
         setFontScanMessage("System font scanning is not available in this runtime. The curated font list will still work.");
         return;
       }
-      const fonts = await queryLocalFonts();
-      const families = uniqueFonts(fonts.map((font) => font.family || font.fullName || ""));
       if (!families.length) {
         setFontScanMessage("No system fonts were returned.");
         return;
@@ -3063,7 +1604,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setVisibleTask(null);
     closeReviewPanel();
     setPendingPermission(null);
-    setApprovalChecks([]);
     setEvents((current) => nextEvents.reduce((events, event) => appendBackendEvent(events, event), current));
     await persistDraft(chatId, prompt, attachedFiles);
   }
@@ -3118,7 +1658,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
-    setApprovalChecks([]);
     setExpandedActivityIds(new Set());
     setExpandedActivityToolIds(new Set());
     setPendingPermission(null);
@@ -3505,10 +2044,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   async function toggleBranchMenu() {
     if (!repository || repository.kind !== "git") return;
     const next = !branchMenuOpen;
-    if (next) {
-      setWorkspaceModeMenuOpen(false);
-      setPermissionMenuOpen(false);
-    }
+    if (next) setPermissionMenuOpen(false);
     setBranchMenuOpen(next);
     if (next) await refreshBranches();
   }
@@ -3586,32 +2122,71 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
+  /**
+   * The composer's picker and the Connection panel's picker choose the same
+   * thing, so they go through the same code.
+   *
+   * Writing the endpoint settings directly from here saved the right model but
+   * left the settings controller holding the model it was mounted with, which
+   * is what made Connection show "Choose or download a model" beside a
+   * "Loaded" badge for a model that was in fact loaded and answering.
+   */
   async function selectComposerModel(modelId: string) {
     setError(null);
     try {
-      const endpoint = await api.getModelEndpointSettings();
-      await api.saveModelEndpointSettings({ ...endpoint, modelId });
+      const failure = endpointSettings.mode === "server"
+        ? await connectionSettings.selectServerModel(modelId)
+        : await connectionSettings.selectLocalModel(modelId);
+      // The panel shows this too, but it is usually closed when the pick came
+      // from the composer, so the composer says it as well.
+      if (failure) {
+        setError(failure);
+        return;
+      }
       await refreshStatus();
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
 
-  function toggleWorkspaceMode() {
-    setWorkspaceModeMenuOpen((open) => {
-      const next = !open;
-      if (next) {
-        setBranchMenuOpen(false);
-        setPermissionMenuOpen(false);
-      }
-      return next;
-    });
+  /**
+   * The chat models on this computer, for the composer's picker. Chat kind
+   * only, so dictation weights never appear as something that could answer a
+   * prompt, and downloaded only, because choosing one loads it.
+   */
+  async function refreshDownloadedChatModels() {
+    const rows = await api.listLocalModels({ kind: "chat" }).catch(() => [] as LocalCatalogModel[]);
+    setDownloadedChatModels(rows.filter((row) => row.downloaded));
+  }
+
+  async function updateReasoningEffort(next: ReasoningEffort) {
+    const previous = reasoningEffort;
+    setReasoningEffort(next);
+    setError(null);
+    try {
+      const saved = await api.saveReasoningEffort(next);
+      setReasoningEffort(saved.reasoningEffort);
+      setBackend(saved.status);
+    } catch (cause) {
+      setReasoningEffort(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateShowThinking(next: boolean) {
+    const previous = showThinking;
+    setShowThinking(next);
+    try {
+      setShowThinking(await api.saveShowThinking(next));
+    } catch (cause) {
+      setShowThinking(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
   }
 
   function selectWorkspaceMode(mode: WorkspaceMode) {
     setWorkspaceMode(mode);
     writeWorkspaceMode(mode);
-    setWorkspaceModeMenuOpen(false);
   }
 
   function noteComposerScrollInput(node: HTMLElement, forcePause = false) {
@@ -3745,7 +2320,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (!isContinuingChat) {
       setVisibleTask(null);
       setEvents([]);
-      setApprovalChecks([]);
       setExpandedActivityIds(new Set());
       setExpandedActivityToolIds(new Set());
       setExpandedReviewPaths(new Set());
@@ -4055,7 +2629,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const next = open === owner ? null : owner;
       if (next) {
         setBranchMenuOpen(false);
-        setWorkspaceModeMenuOpen(false);
         setPermissionMenuOpen(false);
       }
       return next;
@@ -4343,44 +2916,20 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
   }
 
-  async function approveMerge() {
-    if (!task) return;
-    setBusy(true);
-    setApprovalChecks([]);
-    setTask((current) => (current ? { ...current, state: "approving" } : current));
-    try {
-      const result = await api.approveTaskMerge({ taskId: task.id });
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      setTask((current) => {
-        const next = current ? { ...current, state: "approved" as const, patchHash: result.patchHash } : current;
-        if (next) upsertChatFromTask(next);
-        return next;
-      });
-    } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function undoTask() {
-    if (!task || !canUndo) return;
+  async function undoReviewFile(filePath: string) {
+    if (!task || !canUndoFile) return;
     setBusy(true);
     setIdeMenuOpen(null);
     try {
-      await api.rejectTask({ taskId: task.id, cleanup: true });
-      setExpandedReviewPaths(new Set());
-      setTask((current) => {
-        const next = current
-          ? { ...current, state: "rejected" as const, changedFiles: [], reviewFiles: [] }
-          : current;
-        if (next) upsertChatFromTask(next);
-        return next;
+      const next = await api.revertReviewFile({ taskId: task.id, path: filePath });
+      if (!next) return;
+      setExpandedReviewPaths((current) => {
+        const remaining = new Set(current);
+        remaining.delete(filePath);
+        return remaining;
       });
-      void loadChats();
+      setTask(next);
+      upsertChatFromTask(next);
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -4396,6 +2945,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   }
 
   function updateMention(value: string, cursor: number | null) {
+    // Every composer interaction routes through here, which makes it the one
+    // place that knows where the caret is. Dictation reads it later.
+    if (cursor !== null) promptCaretRef.current = cursor;
     const nextMention = cursor === null ? null : mentionAtCursor(value, cursor);
     setMention(nextMention);
     if (!nextMention) setFileMatches([]);
@@ -4812,7 +3364,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         prepareVisibleTaskLoad(chat.taskId ?? null);
         setActiveChatId(chat.id);
         setEvents(cachedEvents);
-        setApprovalChecks([]);
         setExpandedActivityIds(new Set());
         setExpandedActivityToolIds(new Set());
         setPendingPermission(null);
@@ -4853,7 +3404,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         setActiveChatId(chat.id);
         setVisibleTask(nextTask);
         setEvents(compactBackendEvents(nextEvents, 500));
-        setApprovalChecks([]);
         setExpandedActivityIds(new Set());
         setExpandedActivityToolIds(new Set());
         setPendingPermission(pendingPermissionFromEvents(nextEvents));
@@ -4879,7 +3429,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
-    setApprovalChecks([]);
     setExpandedActivityIds(new Set());
     setExpandedActivityToolIds(new Set());
     setPendingPermission(null);
@@ -5063,9 +3612,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             <div className="sideHeader">
               <h2>Chats</h2>
               <div className="newActionSplit" role="toolbar" aria-label="Create">
-                <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat" title="New chat">
-                  <SquarePen size={13} />
-                </button>
+                <ShortcutTooltip id="chat.new" placement="bottom">
+                  <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat">
+                    <SquarePen size={13} />
+                  </button>
+                </ShortcutTooltip>
                 <button
                   className="newActionButton"
                   type="button"
@@ -5212,24 +3763,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
 
         <div className="sidebarFooter">
-          <div className="sidebarBrand" aria-hidden="true">
-            <span className="sidebarBrandLogo" />
-            <span className="confidentialMark">Private and Confidential</span>
-          </div>
-          <button
-            className="settingsPlaceholder"
-            type="button"
-            onClick={() => {
-              setSettingsOpen(true);
-              connectionSettings.clearMessage();
-              setFontScanMessage(null);
-              void refreshStatus();
-              void loadSkills();
-            }}
-          >
-            <Settings size={16} />
-            <span>Settings</span>
-          </button>
+          <div className="sidebarBrand" aria-hidden="true"><span className="sidebarBrandRow"><span className="sidebarBrandMark" /><span className="sidebarBrandName">Umbratic</span></span><span className="confidentialMark">Private and Confidential</span></div>
+          <ShortcutTooltip id="app.settings">
+            <button
+              className="settingsPlaceholder"
+              type="button"
+              onClick={() => openSettings()}
+            >
+              <Settings size={16} />
+              <span>Settings</span>
+            </button>
+          </ShortcutTooltip>
         </div>
       </aside>
 
@@ -5252,15 +3796,21 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               </div>
               <div className="composerHeaderActions">
                 {renderIdePicker("composer")}
-                <button
-                  className="chromeButton composerReviewToggle"
-                  type="button"
-                  onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
-                  aria-pressed={reviewOpen && !reviewClosing}
-                  title={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                <ShortcutTooltip
+                  id="review.toggle"
+                  label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                  placement="bottom"
                 >
-                  <PanelRight size={15} />
-                </button>
+                  <button
+                    className="chromeButton composerReviewToggle"
+                    type="button"
+                    onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
+                    aria-pressed={reviewOpen && !reviewClosing}
+                    aria-label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                  >
+                    <PanelRight size={15} />
+                  </button>
+                </ShortcutTooltip>
               </div>
             </div>
             <div
@@ -5331,10 +3881,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         }
                       >
                         <AssistantAnswerContent
-                          animate={Boolean(item.streaming) || (answerArrivedLive && item.id === lastAssistantItemId)}
                           content={item.text}
                           onReviewFileClick={openReviewReference}
-                          revealKey={`${task?.id ?? "task"}:${item.id}`}
                           reviewFiles={reviewFiles}
                           streaming={Boolean(item.streaming)}
                         />
@@ -5416,10 +3964,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                     if (segment.type === "reasoning") {
                                       return (
                                         <section
-                                          className={`activityLogEntry reasoningLog ${segment.finished ? "" : "isStreaming"}`}
+                                          className={`activityLogEntry reasoningLog ${segment.kind === "thinking" ? "isThinking" : ""} ${segment.finished ? "" : "isStreaming"}`}
                                           key={segment.id}
                                         >
-                                          <WorkMarkdownContent content={segment.text.trim()} streaming={!segment.finished} />
+                                          <WorkMarkdownContent content={segment.text.trim()} streaming={!item.finished && !segment.finished} />
                                         </section>
                                       );
                                     }
@@ -5500,8 +4048,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   )}
                   {codeReviewFiles.length && reviewReadyForDisplay ? (
                     <ReviewSummaryCard
-                      files={codeReviewFiles}
-                      onOpenReview={(filePath) => openReviewPanel(filePath)}
+                      fileCount={codeReviewFiles.length}
+                      onOpenReview={() => openReviewPanel()}
                       totals={codeReviewTotals}
                     />
                   ) : null}
@@ -5553,7 +4101,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               riding along with the message being written. They were two trays in
               two places, which read as two unrelated things when they are both
               just "what is going out next". */}
-          <div className={`composerPendingTray ${activeQueuedPrompts.length || reviewPromptFeedback.length ? "hasPending" : ""}`}>
+          <div className={`composerPendingTray ${
+            activeQueuedPrompts.length || reviewPromptFeedback.length || dictation.status.error
+              ? "hasPending"
+              : ""
+          }`}>
             <QueuedPromptList
               items={activeQueuedPrompts}
               isGenerating={isGenerating}
@@ -5566,6 +4118,23 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 setReviewFeedbackDialogOpen(true);
               }}
             />
+            {dictation.status.error ? (
+              // Sized to its sentence rather than to the composer: a line about
+              // one microphone press that ruled a bar across the full width read
+              // as a state the whole composer was in.
+              <div className="dictationNotice" role="status" aria-live="polite">
+                <Mic size={13} aria-hidden="true" />
+                <span>{dictation.status.error}</span>
+                <button
+                  className="dictationNoticeDismiss"
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={dictation.dismissError}
+                >
+                  <X size={11} aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
             {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
           </div>
           <div className="promptControls">
@@ -5610,47 +4179,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             />
 
             {canUseWorktreeMode && !remoteConnectionId ? (
-              <WorkspaceModePicker
-                mode={workspaceMode}
+              <WorktreeToggle
                 useWorktree={useWorktreeForNextRun}
                 locked={workspaceModeLocked}
                 disabled={busy}
-                open={workspaceModeMenuOpen}
-                onToggleMenu={toggleWorkspaceMode}
-                onSelect={selectWorkspaceMode}
-              />
-            ) : null}
-
-            <PermissionModePicker
-              mode={permissionMode}
-              open={permissionMenuOpen}
-              onToggleMenu={() => {
-                setPermissionMenuOpen((open) => {
-                  const next = !open;
-                  if (next) {
-                    setBranchMenuOpen(false);
-                    setWorkspaceModeMenuOpen(false);
-                  }
-                  return next;
-                });
-              }}
-              onSelect={(mode) => {
-                setPermissionMenuOpen(false);
-                void updatePermissionMode(mode);
-              }}
-            />
-
-            {composerModels.length > 1 ? (
-              <ComposerModelPicker
-                models={composerModels}
-                selectedId={selectedModel?.modelId ?? ""}
-                disabled={busy}
-                disabledReason="Wait for the current run to finish"
-                onOpen={() => {
-                  if (endpointSettings.mode !== "server") return;
-                  void api.listServerModels().then(setServerModels).catch(() => undefined);
-                }}
-                onSelect={(modelId) => void selectComposerModel(modelId)}
+                onToggle={(next) => selectWorkspaceMode(next ? "worktree" : "local")}
               />
             ) : null}
 
@@ -5665,17 +4198,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 <Paperclip size={14} />
                 {attachedFiles.length ? <span className="attachmentCount">{attachedFiles.length}</span> : null}
               </button>
-              {showContextMeter ? (
-                <ContextMeter
-                  estimate={contextEstimate}
-                  state={contextMeterLabel}
-                  breakdown={runnerContextUsage?.breakdown}
-                  compactionBlocked={runnerContextUsage?.compactionBlocked}
-                  compactionBlockedReason={runnerContextUsage?.compactionBlockedReason}
-                  compacting={contextCompacting}
-                  draftTokens={composerDraftTokens}
-                />
-              ) : null}
             </div>
           </div>
           {closedChatNotice ? (
@@ -5822,7 +4344,40 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 </div>
               </div>
             ) : null}
+            {/* Pressing the microphone before dictation is set up is the one
+                moment someone is definitely interested in it. The offer floats
+                over the prompt text rather than displacing anything, so it
+                costs no height and nothing in the composer moves. The text
+                behind it is blurred back: the question is the only thing worth
+                reading while it is up, and the rail stays clear so the
+                microphone that raised it is still there to press. */}
             <div className="promptInputShell">
+              {dictationSetupOffer && !dictationAvailable ? (
+                <div
+                  className="dictationSetupOverlay"
+                  role="status"
+                  onMouseDown={(event) => { if (event.target === event.currentTarget) setDictationSetupOffer(false); }}
+                >
+                  <div className="dictationSetupCard">
+                    <span className="dictationSetupIcon"><MicOff size={13} aria-hidden="true" /></span>
+                    <span className="dictationSetupText">Dictation is off</span>
+                    <button
+                      type="button"
+                      className="primaryAction dictationSetupAction"
+                      onClick={() => {
+                        setDictationSetupOffer(false);
+                        setSettingsOpen(true);
+                        setSettingsTab("voice");
+                      }}
+                    >
+                      Voice settings
+                    </button>
+                    <button className="dictationSetupDismiss" type="button" aria-label="Dismiss" onClick={() => setDictationSetupOffer(false)}>
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               {/* Always in the flow, so the shell's three rows line up whether or
                   not anything is attached; it collapses to nothing when empty. */}
               <div className="promptAttachmentStrip">
@@ -5832,6 +4387,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 <div className="promptHighlight" aria-hidden="true">
                   <div style={{ transform: `translateY(-${promptScrollTop}px)` }}>
                     {renderPromptHighlights(prompt, attachedFiles, skills)}
+                    {/* The words being spoken, muted, in the box they are going
+                        into. They are drawn behind the textarea rather than
+                        written into it: a partial is replaced whole on every
+                        update, and rewriting the value would move a caret the
+                        user may have placed. Only the final text is inserted. */}
+                    {dictation.status.preview ? (
+                      <span className="promptDictationGhost">
+                        {prompt && !prompt.endsWith(" ") ? " " : ""}
+                        {dictation.status.preview}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <textarea
@@ -5846,38 +4412,119 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   onScroll={(event) => setPromptScrollTop(event.currentTarget.scrollTop)}
                   disabled={busy || !!closedChatNotice}
                   placeholder={
-                    closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
+                    // The ghost transcript occupies the same line, so the
+                    // placeholder stands down rather than printing under it.
+                    dictation.status.preview
+                      ? ""
+                      : closedChatNotice ? "This chat is closed. Start a new chat for more changes." : todayPromptLabel
                   }
                 />
               </div>
               <div className="promptActionRail">
+                {/* What this turn will do, on the left: speak it instead of
+                    typing it, and whether it may act without asking. What will
+                    answer it, on the right. The two halves are separate
+                    questions and the gap between them is what says so. */}
+                <div className="promptRailGroup promptRailLeft">
+                  <DictationControl status={dictation.status} enabled={dictationAvailable} onToggle={dictation.toggle}
+                    devices={dictation.devices} deviceId={dictation.deviceId} onSelectDevice={dictation.selectDevice}
+                    onRequestSetup={() => setDictationSetupOffer(true)} />
+                  <PermissionModePicker
+                    mode={permissionMode}
+                    open={permissionMenuOpen}
+                    onToggleMenu={() => {
+                      setPermissionMenuOpen((open) => {
+                        const next = !open;
+                        if (next) setBranchMenuOpen(false);
+                        return next;
+                      });
+                    }}
+                    onSelect={(mode) => {
+                      setPermissionMenuOpen(false);
+                      void updatePermissionMode(mode);
+                    }}
+                  />
+                </div>
+                <div className="promptRailGroup promptRailRight">
+                  {composerModels.length > 1 || modelReasoningEfforts.length > 0 || endpointSettings.mode === "local" ? (
+                    <ComposerModelPicker
+                      models={composerModels}
+                      selectedId={selectedModel?.modelId ?? ""}
+                      disabled={busy}
+                      disabledReason="Wait for the current run to finish"
+                      onOpen={() => {
+                        if (endpointSettings.mode !== "server") {
+                          void refreshDownloadedChatModels();
+                          return;
+                        }
+                        void api.listServerModels().then(setServerModels).catch(() => undefined);
+                      }}
+                      efforts={modelReasoningEfforts}
+                      effort={reasoningEffort}
+                      effortDisabled={busy || isGenerating}
+                      showThinking={showThinking}
+                      showThinkingAvailable={backend?.veilFeatures.includes("chat.reasoning_visible") === true}
+                      onSelect={(modelId) => void selectComposerModel(modelId)}
+                      onSelectEffort={(next) => void updateReasoningEffort(next)}
+                      onToggleShowThinking={(next) => void updateShowThinking(next)}
+                      onManage={endpointSettings.mode === "local" ? () => {
+                        setSettingsOpen(true);
+                        setSettingsTab("account");
+                      } : undefined}
+                    />
+                  ) : selectedModel ? (
+                    // One model is still worth naming: the answer to "what am I
+                    // talking to" should not depend on there being a choice.
+                    <span className="promptRailModelName" title={`Model: ${selectedModel.displayName}`}>
+                      {selectedModel.displayName}
+                    </span>
+                  ) : null}
+                  {showContextMeter ? (
+                    <ContextMeter
+                      estimate={contextEstimate}
+                      state={contextMeterLabel}
+                      breakdown={runnerContextUsage?.breakdown}
+                      compactionBlocked={runnerContextUsage?.compactionBlocked}
+                      compactionBlockedReason={runnerContextUsage?.compactionBlockedReason}
+                      compacting={contextCompacting}
+                      draftTokens={composerDraftTokens}
+                    />
+                  ) : null}
                 {isGenerating && !hasComposerMessage ? (
-                  <button
-                    className="sendButton stopButton"
-                    type="button"
-                    onClick={() => void stopTask()}
-                    disabled={stopPending}
-                    aria-label={stopPending ? "Stopping generation" : "Stop generation"}
-                    title={stopPending ? "Stopping generation" : "Stop generation"}
-                  >
-                    {stopPending ? <Loader2 className="spin" size={17} /> : <Square aria-hidden="true" fill="currentColor" size={12} />}
-                  </button>
+                  // A chord is only named while it would do something: offering
+                  // one beside "Stopping generation" advertises a key for a
+                  // state that ignores it.
+                  <ShortcutTooltip id="run.stop" label="Stop generation" disabled={stopPending}>
+                    <button
+                      className="sendButton stopButton"
+                      type="button"
+                      onClick={() => void stopTask()}
+                      disabled={stopPending}
+                      aria-label={stopPending ? "Stopping generation" : "Stop generation"}
+                    >
+                      {stopPending ? <Loader2 className="spin" size={17} /> : <Square aria-hidden="true" fill="currentColor" size={12} />}
+                    </button>
+                  </ShortcutTooltip>
                 ) : isGenerating ? (
-                  <button
-                    className="sendButton queueButton"
-                    type="button"
-                    onClick={queueCurrentPrompt}
-                    disabled={!canQueue}
-                    aria-label="Queue prompt"
-                    title="Queue prompt"
-                  >
-                    <Send aria-hidden="true" size={16} />
-                  </button>
+                  <ShortcutTooltip id="composer.send" label="Queue prompt">
+                    <button
+                      className="sendButton queueButton"
+                      type="button"
+                      onClick={queueCurrentPrompt}
+                      disabled={!canQueue}
+                      aria-label="Queue prompt"
+                    >
+                      <Send aria-hidden="true" size={16} />
+                    </button>
+                  </ShortcutTooltip>
                 ) : (
-                  <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
-                    {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
-                  </button>
+                  <ShortcutTooltip id="composer.send" label="Send prompt">
+                    <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt">
+                      {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
+                    </button>
+                  </ShortcutTooltip>
                 )}
+                </div>
               </div>
             </div>
           </div>
@@ -5893,13 +4540,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           scope={task?.reviewScope ?? tasklessReviewScope}
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
-          canUndo={canUndo}
-          canApprove={canApprove}
+          canUndoFile={canUndoFile}
           selectedIdeLabel={selectedIde.label}
-          approvalVisible={task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged"}
           onClose={closeReviewPanel}
-          onUndo={undoTask}
-          onApprove={approveMerge}
+          onUndoFile={(filePath) => void undoReviewFile(filePath)}
           onOpenFile={openReviewFile}
           onScopeChange={changeReviewScope}
           onResizePointerDown={beginReviewResize}
@@ -6048,94 +4692,22 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                 {settingsTab === "remote" ? <RemoteSettingsPanel controller={remoteSettings} /> : null}
 
                 {settingsTab === "harness" ? (
-                  <div className="settingsPanel">
-                    <div className="settingsPanelHead">
-                      <h3>Harness</h3>
-                      <p>Choose the working profile Umbratic uses when it starts a new run.</p>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <h4>Profile</h4>
-                      <div className="harnessOptionGrid">
-                        {harnessProfiles.map((profile) => (
-                          <button
-                            key={profile.id}
-                            type="button"
-                            className={`harnessOption ${harnessDraftProfile === profile.id ? "isActive" : ""}`}
-                            aria-pressed={harnessDraftProfile === profile.id}
-                            onClick={() => selectHarnessProfile(profile.id)}
-                          >
-                            <span className="harnessOptionHead">
-                              <strong>{profile.name}</strong>
-                              {harnessDraftProfile === profile.id ? <Check size={14} /> : null}
-                            </span>
-                            <em>{profile.description}</em>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className={`settingsGroup contextLengthGroup ${endpointDraftSettings.mode === "server" ? "isDisabled" : ""}`}>
-                      <div className="contextLengthHead">
-                        <div>
-                          <h4>Model context</h4>
-                          <p>Choose the context window requested from Ollama in Local mode.</p>
-                        </div>
-                      </div>
-                      <div className="contextLengthSliderShell">
-                        <input
-                          className="contextLengthSlider"
-                          type="range"
-                          min={0}
-                          max={CONTEXT_LENGTH_OPTIONS.length - 1}
-                          step={1}
-                          value={harnessDraftContextIndex}
-                          disabled={endpointDraftSettings.mode === "server"}
-                          aria-label="Model context length"
-                          aria-valuetext={`${formatTokenCount(harnessDraftContextLength)} tokens${harnessDraftContextLength === DEFAULT_CONTEXT_LENGTH ? ", default" : ""}`}
-                          style={{
-                            "--context-slider-progress": `${(harnessDraftContextIndex / (CONTEXT_LENGTH_OPTIONS.length - 1)) * 100}%`,
-                          } as React.CSSProperties}
-                          onChange={(event) => {
-                            const option = CONTEXT_LENGTH_OPTIONS[Number(event.currentTarget.value)] ?? DEFAULT_CONTEXT_LENGTH;
-                            setHarnessDraftContextLength(option);
-                            setHarnessMessage(null);
-                          }}
-                        />
-                        <div className="contextLengthSliderLabels" aria-hidden="true">
-                          {CONTEXT_LENGTH_OPTIONS.map((option, index) => (
-                            <span
-                              key={option}
-                              className={harnessDraftContextLength === option ? "isActive" : ""}
-                              style={{ left: `${(index / (CONTEXT_LENGTH_OPTIONS.length - 1)) * 100}%` }}
-                            >
-                              <strong>{formatTokenCount(option)}</strong>
-                              {option === DEFAULT_CONTEXT_LENGTH ? <small>Default</small> : null}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <p className="contextLengthHint">
-                        {endpointDraftSettings.mode === "server"
-                          ? "Context length is managed by your Veil server. Switch to Local to configure it here."
-                          : "64K is the default. Veil verifies the effective model limit when each new chat starts; larger windows use more memory."}
-                      </p>
-                    </div>
-
-                    <div className="settingsActions harnessSettingsActions">
-                      <button
-                        className={`settingsInlineButton ${harnessSaveFeedback === "saved" ? "isSuccess" : ""}`}
-                        type="button"
-                        onClick={() => void saveHarnessProfile()}
-                        disabled={harnessSaving || !harnessDirty}
-                      >
-                        <Check size={13} />
-                        <span>{harnessSaveFeedback === "saved" ? "Saved" : "Save harness"}</span>
-                      </button>
-                      {harnessDirty ? <p className="settingsMessage">Unsaved harness changes.</p> : null}
-                      {harnessMessage ? <p className="settingsMessage settingsMessageError">{harnessMessage}</p> : null}
-                    </div>
-                  </div>
+                  <HarnessSettingsPanel
+                    draftProfile={harnessDraftProfile}
+                    draftContextLength={harnessDraftContextLength}
+                    draftContextIndex={harnessDraftContextIndex}
+                    endpointMode={endpointDraftSettings.mode}
+                    saving={harnessSaving}
+                    saveFeedback={harnessSaveFeedback}
+                    dirty={harnessDirty}
+                    message={harnessMessage}
+                    onSelectProfile={selectHarnessProfile}
+                    onDraftContextLength={(option) => {
+                      setHarnessDraftContextLength(option);
+                      setHarnessMessage(null);
+                    }}
+                    onSave={() => void saveHarnessProfile()}
+                  />
                 ) : null}
 
                 {settingsTab === "appearance" ? (
@@ -6151,197 +4723,49 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   />
                 ) : null}
 
+                {settingsTab === "voice" ? (
+                  <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
+                    serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
+                ) : null}
+                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} /> : null}
                 {settingsTab === "skills" ? (
-                  <div className="settingsPanel">
-                    <div className="settingsPanelHead">
-                      <h3>Skills</h3>
-                      <p>
-                        Focused guidance for specific work.
-                      </p>
-                    </div>
-
-                    <div className="settingsGroup">
-                      <div className="skillSectionHeader">
-                        <h4>Available skills</h4>
-                        <div className="skillSectionActions">
-                          <button
-                            className="settingsInlineButton"
-                            type="button"
-                            onClick={() => {
-                              setSkillsMessage(null);
-                              void loadSkills();
-                            }}
-                            disabled={skillsLoading}
-                            title="Refresh skills"
-                          >
-                            {skillsLoading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
-                            <span>Refresh</span>
-                          </button>
-                          <button className="settingsInlineButton" type="button" onClick={() => void openSkillsFolder()}>
-                            <FolderOpen size={13} />
-                            <span>Open folder</span>
-                          </button>
-                          <button className="settingsInlineButton" type="button" onClick={() => void importSkill()} disabled={skillsLoading}>
-                            <FileText size={13} />
-                            <span>Import</span>
-                          </button>
-                          <button
-                            className="settingsInlineButton"
-                            type="button"
-                            onClick={() => {
-                              setNewSkillFormOpen((open) => !open);
-                              setSkillsMessage(null);
-                            }}
-                          >
-                            <Plus size={13} />
-                            <span>New skill</span>
-                          </button>
-                        </div>
-                      </div>
-                      <div className="segmented skillFilter" aria-label="Skill source filter">
-                        <button
-                          type="button"
-                          className={skillSourceFilter === "local" ? "active" : ""}
-                          onClick={() => selectSkillSourceFilter("local")}
-                        >
-                          Personal
-                        </button>
-                        <button
-                          type="button"
-                          className={skillSourceFilter === "system" ? "active" : ""}
-                          onClick={() => selectSkillSourceFilter("system")}
-                        >
-                          System
-                        </button>
-                      </div>
-
-                      {newSkillFormOpen ? (
-                        <form
-                          className="skillCreateForm"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            void submitCreateSkill();
-                          }}
-                        >
-                          <input
-                            type="text"
-                            placeholder="Skill name (e.g. Personal style guide)"
-                            value={newSkillName}
-                            onChange={(event) => setNewSkillName(event.target.value)}
-                            autoFocus
-                            disabled={creatingSkill}
-                          />
-                          <button type="submit" className="settingsInlineButton" disabled={creatingSkill || !newSkillName.trim()}>
-                            {creatingSkill ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
-                            <span>Create</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="chromeButton"
-                            onClick={() => {
-                              setNewSkillFormOpen(false);
-                              setNewSkillName("");
-                            }}
-                            disabled={creatingSkill}
-                          >
-                            <X size={13} />
-                          </button>
-                        </form>
-                      ) : null}
-
-                      {skillsLoading && !skillsLoaded ? (
-                        <div className="settingsEmpty">
-                          <Loader2 className="spin" size={16} />
-                          <span>Loading skills…</span>
-                        </div>
-                      ) : skills.length === 0 ? (
-                        <div className="settingsEmpty">
-                          <Sparkles size={16} />
-                          <span>No skills yet. Use New skill, or add a folder with a SKILL.md to the directory above.</span>
-                        </div>
-                      ) : visibleSkills.length === 0 ? (
-                        <div className="settingsEmpty">
-                          <Sparkles size={16} />
-                          <span>No skills match this filter.</span>
-                        </div>
-                      ) : (
-                        <ul className="skillList">
-                          {visibleSkills.map((skill) => (
-                            <li key={skill.id} className={`skillRow ${selectedSkillId === skill.id ? "isSelected" : ""}`}>
-                              <div className="skillRowTop">
-                                <button
-                                  type="button"
-                                  className="skillRowButton"
-                                  onClick={() => void toggleSkillPreview(skill.id)}
-                                  aria-expanded={selectedSkillId === skill.id}
-                                >
-                                  <ChevronRight className="skillExpandIcon" size={14} aria-hidden="true" />
-                                  <div className="skillRowText">
-                                    <strong>{skill.name}</strong>
-                                    <em>{skill.description || skillMention(skill)}</em>
-                                    <SkillGovernance skill={skill} />
-                                  </div>
-                                </button>
-                                <button
-                                  type="button"
-                                  className={`toggle ${skillsEnabled[skill.id] ? "isOn" : ""}`}
-                                  role="switch"
-                                  aria-checked={!!skillsEnabled[skill.id]}
-                                  aria-label={`Toggle ${skill.name}`}
-                                  onClick={() => void toggleSkillSetting(skill.id)}
-                                >
-                                  <span className="toggleKnob" />
-                                </button>
-                              </div>
-                              {selectedSkillId === skill.id ? (
-                                <div className="skillPreviewPanel">
-                                  <div className="skillPreviewHeader">
-                                    <span>{skillPreviewLoading ? "Loading preview" : "Preview"}</span>
-                                    <div className="skillPreviewActions">
-                                      {skillDocument?.source === "system" && skillDocument.modified ? (
-                                        <button
-                                          type="button"
-                                          className="settingsInlineButton"
-                                          onClick={() => void resetSelectedSystemSkill()}
-                                          disabled={skillPreviewLoading}
-                                        >
-                                          <Undo2 size={13} />
-                                          <span>Reset</span>
-                                        </button>
-                                      ) : null}
-                                      <button
-                                        type="button"
-                                        className="settingsInlineButton"
-                                        onClick={() => void openSelectedSkillInEditor()}
-                                        disabled={!skillDocument || skillPreviewLoading}
-                                      >
-                                        <ExternalLink size={13} />
-                                        <span>Edit</span>
-                                      </button>
-                                    </div>
-                                  </div>
-                                  {skillPreviewLoading ? (
-                                    <div className="skillPreviewEmpty">
-                                      <Loader2 className="spin" size={14} />
-                                      <span>Loading skill preview</span>
-                                    </div>
-                                  ) : selectedSkillPreview ? (
-                                    <div className="skillPreviewBody">
-                                      <MarkdownContent content={selectedSkillPreview} />
-                                    </div>
-                                  ) : (
-                                    <p className="skillPreviewEmpty">No preview content.</p>
-                                  )}
-                                </div>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-
-                      {skillsMessage ? <p className="settingsMessage">{skillsMessage}</p> : null}
-                    </div>
-                  </div>
+                  <SkillsSettingsPanel
+                    skills={skills}
+                    visibleSkills={visibleSkills}
+                    skillsEnabled={skillsEnabled}
+                    skillsLoading={skillsLoading}
+                    skillsLoaded={skillsLoaded}
+                    skillSourceFilter={skillSourceFilter}
+                    selectedSkillId={selectedSkillId}
+                    selectedSkillPreview={selectedSkillPreview}
+                    skillPreviewLoading={skillPreviewLoading}
+                    skillDocument={skillDocument}
+                    newSkillFormOpen={newSkillFormOpen}
+                    newSkillName={newSkillName}
+                    creatingSkill={creatingSkill}
+                    skillsMessage={skillsMessage}
+                    onRefresh={() => {
+                      setSkillsMessage(null);
+                      void loadSkills();
+                    }}
+                    onOpenFolder={() => void openSkillsFolder()}
+                    onImport={() => void importSkill()}
+                    onToggleNewSkillForm={() => {
+                      setNewSkillFormOpen((open) => !open);
+                      setSkillsMessage(null);
+                    }}
+                    onSelectSourceFilter={selectSkillSourceFilter}
+                    onNewSkillName={setNewSkillName}
+                    onCreateSkill={() => void submitCreateSkill()}
+                    onCancelNewSkill={() => {
+                      setNewSkillFormOpen(false);
+                      setNewSkillName("");
+                    }}
+                    onTogglePreview={(skillId) => void toggleSkillPreview(skillId)}
+                    onToggleEnabled={(skillId) => void toggleSkillSetting(skillId)}
+                    onResetSystemSkill={() => void resetSelectedSystemSkill()}
+                    onOpenInEditor={() => void openSelectedSkillInEditor()}
+                  />
                 ) : null}
 
                 {settingsTab === "telemetry" ? (
@@ -6354,6 +4778,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     onClear={() => void clearLocalLogs()}
                   />
                 ) : null}
+                {settingsTab === "about" ? <AboutSettingsPanel api={api} /> : null}
+                <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic · Private and confidential</span></div>
               </div>
             </div>
           </section>
@@ -6446,6 +4872,25 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
       ) : null}
 
+      {localModelStarting && !modelStartupDismissed ? (
+        <ModelStartupNotice
+          title="Starting model…"
+          detail={`Loading ${startingModelName} into memory.`}
+          onCancel={() => void connectionSettings.unloadLocalModel()}
+          onDismiss={() => setModelStartupDismissed(true)}
+        />
+      ) : dictationStarting ? (
+        // The speech model loads on the press rather than at startup, so the
+        // first dictation of a session waits on gigabytes with nothing but a
+        // 16px spinner to show for it. This is the same card, saying so.
+        <ModelStartupNotice
+          title="Starting dictation…"
+          detail="Loading the speech model into memory."
+          onCancel={dictation.cancel}
+          onDismiss={() => setModelStartupDismissed(true)}
+        />
+      ) : null}
+
       {error ? (
         <div className="toast" role="alert">
           <TriangleAlert size={16} />
@@ -6456,23 +4901,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
       ) : null}
 
-    </div>
-  );
-}
-
-function Empty({ label }: { label: string }) {
-  return (
-    <div className="emptyState">
-      <CircleDashed size={18} />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function ComposerGreeting({ label }: { label: string }) {
-  return (
-    <div className="composerGreeting">
-      <span>{label}</span>
     </div>
   );
 }
@@ -6492,5 +4920,11 @@ if (rootElement) {
     rootElement.umbraticRoot ??= createRoot(rootElement);
     rootElement.umbraticRoot.render(<App startupSettings={startupSettings} />);
   };
-  void api.getStartupSettings().then(renderApp, () => renderApp(defaultStartupSettings));
+  // The stored chords are put in force before the first paint, not after it: a
+  // window that draws its tooltips with the shipped keys and then corrects
+  // itself has spent its one first impression advertising the wrong ones.
+  void (async () => {
+    setShortcutOverrides(await api.getKeyBindings().catch(() => ({})) as ShortcutOverrides);
+    renderApp(await api.getStartupSettings().catch(() => defaultStartupSettings));
+  })();
 }

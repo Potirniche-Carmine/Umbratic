@@ -1,11 +1,17 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
+  AppUpdateStatus,
   ChatAttachment,
   DesktopApi,
+  DictationEvent,
+  DictationSettings,
   HarnessProfileId,
+  KeyBindingSettings,
+  ModelDownloadEvent,
   PastedAttachmentInput,
   PermissionMode,
+  ReasoningEffort,
   RemoteConnectionDraft,
   WorkspaceIndexEvent,
 } from "../shared/desktopApi";
@@ -91,6 +97,8 @@ const umbraticApi = {
   checkoutRepositoryBranch: (input: { repositoryId?: string; repositoryPath?: string; branch: string }) =>
     invoke("umbratic:checkout-repository-branch", input),
   getBackendStatus: () => invoke("umbratic:get-backend-status"),
+  loadLocalModel: () => invoke("umbratic:load-local-model"),
+  unloadLocalModel: () => invoke("umbratic:unload-local-model"),
   getStartupSettings: () => invoke("umbratic:get-startup-settings"),
   getCapabilityProbes: (input?: { force?: boolean }) => invoke("umbratic:get-capability-probes", input ?? {}),
   listRemoteConnections: () => invoke("umbratic:list-remote-connections"),
@@ -111,12 +119,29 @@ const umbraticApi = {
   saveHarnessProfile: (input: HarnessProfileId) => invoke("umbratic:save-harness-profile", input),
   getContextLength: () => invoke("umbratic:get-context-length"),
   saveContextLength: (input: number) => invoke("umbratic:save-context-length", input),
+  getReasoningEffort: () => invoke("umbratic:get-reasoning-effort"),
+  saveReasoningEffort: (input: ReasoningEffort) => invoke("umbratic:save-reasoning-effort", input),
+  saveShowThinking: (input: boolean) => invoke("umbratic:save-show-thinking", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     invoke("umbratic:get-model-endpoint-settings", input),
-  getCachedLocalModels: (input: { baseUrl: string }) =>
-    invoke("umbratic:get-cached-local-models", input),
-  probeLocalModels: (input: { baseUrl: string }) =>
-    invoke("umbratic:probe-local-models", input),
+  getDictationSettings: () => invoke("umbratic:get-dictation-settings"),
+  saveDictationSettings: (input: DictationSettings) =>
+    invoke("umbratic:save-dictation-settings", input),
+  getKeyBindings: () => invoke("umbratic:get-key-bindings"),
+  saveKeyBindings: (input: KeyBindingSettings) => invoke("umbratic:save-key-bindings", input),
+  listLocalModels: (input: { kind: "chat" | "dictation" }) =>
+    invoke("umbratic:list-local-models", input),
+  downloadLocalModel: (input: { id: string }) =>
+    invoke("umbratic:download-local-model", input),
+  cancelLocalModelDownload: (input: { id: string }) =>
+    invoke("umbratic:cancel-local-model-download", input),
+  setLocalModelQuant: (input: { id: string; quant: string }) =>
+    invoke("umbratic:set-local-model-quant", input),
+  addCustomLocalModel: (input: { reference: string }) =>
+    invoke("umbratic:add-custom-local-model", input),
+  removeCustomLocalModel: (input: { id: string }) =>
+    invoke("umbratic:remove-custom-local-model", input),
+  openModelsFolder: () => invoke("umbratic:open-models-folder"),
   listServerModels: () => invoke("umbratic:list-server-models"),
   saveModelEndpointSettings: (input: {
     mode: "local" | "server";
@@ -184,14 +209,37 @@ const umbraticApi = {
     invoke("umbratic:open-repository-in-ide", input),
   openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
     invoke("umbratic:open-task-in-ide", input),
-  approveTaskMerge: (input: { taskId: string }) => invoke("umbratic:approve-task-merge", input),
-  rejectTask: (input: { taskId: string; cleanup: boolean }) => invoke("umbratic:reject-task", input),
+  revertReviewFile: (input: { taskId: string; path: string }) => invoke("umbratic:revert-review-file", input),
   keepWorktree: (input: { taskId: string }) => invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => invoke("umbratic:cancel-task", input),
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
     invoke("umbratic:set-response-feedback", input),
   setWindowChromeTheme: (theme: "dark" | "light") => invoke("umbratic:set-window-chrome-theme", theme),
   openExternal: (input: { url: string }) => invoke("umbratic:open-external", input),
+  requestMicrophoneAccess: () => invoke("umbratic:request-microphone-access", undefined),
+  startDictation: (input: { language?: string }) => invoke("umbratic:start-dictation", input),
+  sendDictationAudio: (input: { chunk: Uint8Array }) => invoke("umbratic:send-dictation-audio", input),
+  stopDictation: () => invoke("umbratic:stop-dictation", undefined),
+  cancelDictation: () => invoke("umbratic:cancel-dictation", undefined),
+  getAppUpdateStatus: () => invoke("umbratic:get-app-update-status", undefined),
+  checkForAppUpdate: () => invoke("umbratic:check-for-app-update", undefined),
+  setAutomaticAppUpdates: (input: { enabled: boolean }) => invoke("umbratic:set-automatic-app-updates", input),
+  installAppUpdate: () => invoke("umbratic:install-app-update", undefined),
+  onAppUpdateStatus: (callback: (status: AppUpdateStatus) => void) => {
+    const listener = (_event: IpcRendererEvent, value: AppUpdateStatus) => callback(value);
+    ipcRenderer.on("umbratic:app-update-status", listener);
+    return () => ipcRenderer.removeListener("umbratic:app-update-status", listener);
+  },
+  onDictationEvent: (callback: (event: DictationEvent) => void) => {
+    const listener = (_event: IpcRendererEvent, value: DictationEvent) => callback(value);
+    ipcRenderer.on("umbratic:dictation-event", listener);
+    return () => ipcRenderer.removeListener("umbratic:dictation-event", listener);
+  },
+  onModelDownloadEvent: (callback: (event: ModelDownloadEvent) => void) => {
+    const listener = (_event: IpcRendererEvent, value: ModelDownloadEvent) => callback(value);
+    ipcRenderer.on("umbratic:model-download", listener);
+    return () => ipcRenderer.removeListener("umbratic:model-download", listener);
+  },
   onWorkspaceIndex: (callback: (event: WorkspaceIndexEvent) => void) => {
     const listener = (_event: IpcRendererEvent, value: WorkspaceIndexEvent) => callback(value);
     ipcRenderer.on("umbratic:workspace-index", listener);

@@ -88,8 +88,25 @@ pub struct ProviderConfig {
     /// Veil advertises `chat.model_selection`: a Veil with no registry refuses
     /// the field outright, so sending it optimistically would fail every turn.
     pub send_model_field: bool,
+    /// Whether chat bodies may carry `thinking`. Off unless the desktop
+    /// confirmed the Veil advertises `chat.thinking_toggle`.
+    pub send_thinking_field: bool,
+    /// `"on"` or `"off"` from the composer picker. Absent means this runner
+    /// does not know, so chat bodies omit the field.
+    pub thinking: Option<String>,
+    /// Whether chat bodies may carry `reasoning_visible`. Off unless the
+    /// desktop confirmed the Veil advertises `chat.reasoning_visible`.
+    pub send_reasoning_visible_field: bool,
+    /// Whether this run asked Veil to forward reasoning tokens. Off by default.
+    pub reasoning_visible: bool,
     pub headers: BTreeMap<String, String>,
     pub mtls: Option<MtlsConfig>,
+}
+
+impl ProviderConfig {
+    pub fn thinking_off(&self) -> bool {
+        self.thinking.as_deref() == Some("off")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -524,6 +541,27 @@ fn parse_runner_config(raw: &str) -> Result<RunnerConfig, String> {
             .get("sendModelField")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        send_thinking_field: provider_object
+            .get("sendThinkingField")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        thinking: match provider_object
+            .get("thinking")
+            .and_then(Value::as_str)
+            .map(str::trim)
+        {
+            Some("on") => Some("on".into()),
+            Some("off") => Some("off".into()),
+            _ => None,
+        },
+        send_reasoning_visible_field: provider_object
+            .get("sendReasoningVisibleField")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reasoning_visible: provider_object
+            .get("reasoningVisible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         headers,
         mtls,
     };
@@ -625,6 +663,10 @@ mod tests {
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
             send_model_field: false,
+            send_thinking_field: false,
+            thinking: None,
+            send_reasoning_visible_field: false,
+            reasoning_visible: false,
             headers: BTreeMap::new(),
             mtls: None,
         };
@@ -644,6 +686,10 @@ mod tests {
             api_key: Arc::new(RwLock::new(String::new())),
             model_id: "m".into(),
             send_model_field: false,
+            send_thinking_field: false,
+            thinking: None,
+            send_reasoning_visible_field: false,
+            reasoning_visible: false,
             headers: BTreeMap::new(),
             mtls: None,
         }
@@ -780,6 +826,29 @@ mod tests {
             serde_json::to_string(&PermissionMode::AutoSafe).unwrap(),
             "\"auto_safe\""
         );
+    }
+
+    #[test]
+    fn thinking_directive_is_on_off_or_absent() {
+        let body = |thinking: &str, send: bool| {
+            format!(
+                r#"{{"password":"p","cwd":"/tmp","provider":{{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m","thinking":{thinking},"sendThinkingField":{send}}}}}"#
+            )
+        };
+        let off = parse_runner_config(&body("\"off\"", true)).unwrap();
+        assert!(off.provider.thinking_off());
+        assert!(off.provider.send_thinking_field);
+        let on = parse_runner_config(&body("\"on\"", false)).unwrap();
+        assert_eq!(on.provider.thinking.as_deref(), Some("on"));
+        assert!(!on.provider.send_thinking_field);
+        let ignored = parse_runner_config(&body("\"medium\"", true)).unwrap();
+        assert_eq!(ignored.provider.thinking, None);
+        let visible = parse_runner_config(
+            r#"{"password":"p","cwd":"/tmp","provider":{"name":"Veil","baseURL":"http://127.0.0.1:1","mode":"local","chatEndpointPath":"/api/engineering/chat","modelId":"m","sendReasoningVisibleField":true,"reasoningVisible":true}}"#,
+        )
+        .unwrap();
+        assert!(visible.provider.send_reasoning_visible_field);
+        assert!(visible.provider.reasoning_visible);
     }
 
     #[test]

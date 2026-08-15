@@ -1,10 +1,25 @@
+/*
+ * The dock still spans the pane — its background and its top fade are what
+ * separate the composer from the conversation — but everything inside it shares
+ * one column, and that column is exactly as wide as the row of controls.
+ *
+ * The prompt box used to be a fixed 980px while the pills above it were only as
+ * wide as their own text, so the two read as unrelated objects. Now the pills
+ * decide, and a longer project name widens both together. Only `.promptControls`
+ * contributes its width to the track; everything else is `width: 0` with a
+ * `min-width: 100%`, which is what stops a long prompt from pushing the box out
+ * past the row it is meant to match.
+ */
 .promptDock {
   position: relative;
   z-index: 24;
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  /* Floor, then the control row's own width. `fit-content()` is not valid
+     inside `minmax()`, so the ceiling is a max-width on the row itself. */
+  grid-template-columns: minmax(min(100%, var(--prompt-min-width)), max-content);
+  justify-content: center;
+  align-content: end;
   gap: 9px;
   min-width: 0;
   padding: 10px clamp(22px, 4vw, 48px) 14px;
@@ -48,8 +63,11 @@
   align-items: center;
   justify-content: flex-start;
   gap: 5px;
-  width: var(--prompt-width);
-  min-width: 0;
+  /* The one child that decides the shared width: it is the only item that
+     contributes to the track, and `auto` lets it stretch back out to the floor
+     when its own content is narrower. */
+  width: auto;
+  max-width: var(--prompt-max-width);
   min-height: 30px;
   overflow: visible;
   padding: 0 4px;
@@ -60,7 +78,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: var(--prompt-width);
+  width: 0;
+  min-width: 100%;
   min-height: 34px;
   padding: 8px 10px;
   border: 1px solid rgba(178, 186, 197, 0.24);
@@ -82,6 +101,61 @@
   white-space: nowrap;
 }
 
+/*
+ * A dictation failure is a note about one press, not a condition the composer
+ * is in, so it is a pill the length of its own sentence rather than a bar the
+ * width of the prompt. It also carries its own dismiss: the notice clears
+ * itself after a few seconds, and the button is for anyone who has already read
+ * it. Red rather than the connection notice's amber — nothing is still trying.
+ */
+.dictationNotice {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 5px 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--text) 84%, var(--red));
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  font-size: 11.5px;
+}
+
+.dictationNotice > svg {
+  flex: 0 0 auto;
+  color: var(--red);
+}
+
+.dictationNotice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictationNoticeDismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  opacity: 0.62;
+}
+
+.dictationNoticeDismiss:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
 /* Losing the server sits directly above the composer, where the user is
    already looking at an input that has stopped responding. It is amber rather
    than red: the turn is still trying, and nothing has been lost yet. */
@@ -89,7 +163,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  width: var(--prompt-width);
+  width: 0;
+  min-width: 100%;
   min-height: 34px;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
@@ -382,28 +457,31 @@
   min-width: 0;
 }
 
-.workspaceModeControl {
+/*
+ * The worktree checkbox.
+ *
+ * It reads as a pill like its neighbours above the box, but the tick is the
+ * whole point: the state is legible without opening anything, which is what a
+ * two-item menu could never manage. The native input stays in the markup and
+ * keeps the semantics; only its painting is ours.
+ */
+.worktreeToggle {
   position: relative;
   z-index: 44;
-  display: flex;
-  align-items: center;
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.workspaceModeTrigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
   height: 28px;
-  padding: 0 9px;
+  padding: 0 11px 0 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
   background: var(--control-bg);
   font-weight: 500;
   font-size: 12px;
+  cursor: pointer;
+  user-select: none;
   transition:
     background 150ms ease,
     border-color 150ms ease,
@@ -411,72 +489,67 @@
     transform 150ms ease;
 }
 
-.workspaceModeTrigger:hover:not(:disabled) {
+.worktreeToggle:hover:not(.isLocked) {
   color: var(--text);
   background: var(--control-hover);
   border-color: var(--line-strong);
   transform: translateY(-1px);
 }
 
-.workspaceModeControl.isWorktree .workspaceModeTrigger {
+.worktreeToggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.worktreeToggleBox {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: transparent;
+  background: var(--surface-3, transparent);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.worktreeToggle.isOn {
   color: color-mix(in srgb, var(--text) 82%, var(--accent));
   border-color: var(--line-strong);
   background: var(--control-active);
 }
 
-.workspaceModeControl.isWorktree .workspaceModeTrigger:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--control-hover);
+.worktreeToggle.isOn .worktreeToggleBox {
+  color: var(--bg);
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
-.workspaceModeTrigger svg {
-  flex: 0 0 auto;
+/* Locked means the choice is already behind this chat, not that the control
+   is broken, so it dims rather than disappearing. */
+.worktreeToggle.isLocked {
+  opacity: 0.62;
+  cursor: default;
 }
 
-.workspaceModeTrigger span {
+.worktreeToggle:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line-strong));
+}
+
+.worktreeToggle > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.workspaceModeMenu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 7px);
-  z-index: 120;
-  display: grid;
-  gap: 3px;
-  min-width: 154px;
-  padding: 5px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--modal-bg);
-  box-shadow: 0 18px 42px var(--shadow-color);
-  backdrop-filter: none;
-  animation: menuRise 180ms ease both;
-}
-
-.workspaceModeMenu button {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  min-height: 30px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: var(--muted);
-  text-align: left;
-  font-weight: 600;
-}
-
-.workspaceModeMenu button:hover,
-.workspaceModeMenu button.active {
-  color: var(--text);
-  background: var(--control-hover);
-}
-
-.workspaceModeMenu button.active svg {
-  color: var(--accent);
 }
 
 .permissionTrigger {
@@ -500,10 +573,12 @@
     transform 150ms ease;
 }
 
+/* Tone, not a lift: this pill lives in the prompt's material strip, and a
+   control that hops on hover inside a floating surface reads as jitter. The
+   press already answers with a scale, which is the feedback that matters. */
 .permissionTrigger:hover {
   border-color: var(--line-strong);
   background: var(--control-hover);
-  transform: translateY(-1px);
 }
 
 .permissionTrigger svg:first-child {
@@ -690,7 +765,7 @@
     display: none;
   }
 
-  .workspaceModeTrigger span {
+  .worktreeToggle > span:last-child {
     display: none;
   }
 

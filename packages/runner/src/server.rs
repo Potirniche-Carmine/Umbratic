@@ -682,7 +682,7 @@ async fn queue_action(
             // A steer no longer aborts. Aborting discarded the in-flight step,
             // crossed a run boundary, and made the client race the busy guard to
             // resubmit; the running turn now absorbs the steer at its next step
-            // boundary instead, keeping one run, one orientation, and whatever
+            // boundary instead, keeping one run and whatever
             // the current tool call was in the middle of doing.
             QueueAction::Steer | QueueAction::FollowUp | QueueAction::Drop => {}
         }

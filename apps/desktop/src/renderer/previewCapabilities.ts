@@ -1,7 +1,3 @@
-import {
-  harnessSystemSkillIds,
-  readPreviewHarnessProfile,
-} from "./previewSupport";
 import type {
   CapabilityProbeReport,
   CapabilityProbeResult,
@@ -103,6 +99,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-git-worktree",
@@ -111,6 +109,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-markdown",
@@ -119,6 +119,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-python",
@@ -127,6 +129,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-data-analysis",
@@ -135,6 +139,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-pdf",
@@ -143,6 +149,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-presentations",
@@ -151,6 +159,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-documents",
@@ -159,6 +169,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
   {
     id: "umbratic-spreadsheets",
@@ -167,6 +179,8 @@ export const previewDefaultSkills: SkillInfo[] = [
     enabled: true,
     source: "system",
     readOnly: false,
+    checksumStatus: "known_good",
+    modified: false,
   },
 ];
 

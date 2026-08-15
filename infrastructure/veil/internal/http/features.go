@@ -13,8 +13,9 @@ var serverFeatures = []string{
 	// rather than schema-arbitrated. A harness may send constructs this build has
 	// never seen and let the provider judge them.
 	"tools.bounds_only",
-	// harness_bucket is a free-form hint. An unknown value defaults to no
-	// playbook instead of failing the request.
+	// harness_bucket is a free-form hint. The field is accepted and does not
+	// change the protected prompt. An unknown value is counted rather than
+	// failing the request.
 	"chat.harness_bucket_hint",
 	// Unknown body fields on product routes are stripped and counted.
 	"chat.tolerant_body",
@@ -31,6 +32,11 @@ var serverFeatures = []string{
 	// harness_bucket — the name exists so a client knows the field means
 	// something here, not so an unknown value can be refused.
 	"chat.thinking_toggle",
+	// Chat bodies may carry `reasoning_visible`. Security-semantic: the
+	// default is still to strip reasoning tokens, and a client must see this
+	// name before asking to forward them. An older server that never
+	// advertised it keeps stripping even if the field arrives.
+	"chat.reasoning_visible",
 }
 
 // modelSelectionFeature is advertised only while a registry is configured. It
@@ -44,16 +50,25 @@ const modelSelectionFeature = "chat.model_selection"
 // capability that would silently do nothing.
 const ragFeature = "rag"
 
+// speechFeature is advertised only while a transcription runtime is
+// configured. Like rag, a name is a promise: a server with no ASR endpoint
+// wired up cannot keep this one, and a microphone button that fails on first
+// press is worse than no microphone button.
+const speechFeature = "speech.transcribe"
+
 // Features returns the advertised capability list. The slice is built fresh so
 // a caller cannot rewrite what this server claims to support.
-func Features(ragEnabled, modelSelectionEnabled bool) []string {
-	names := make([]string, 0, len(serverFeatures)+2)
+func Features(ragEnabled, modelSelectionEnabled, speechEnabled bool) []string {
+	names := make([]string, 0, len(serverFeatures)+3)
 	names = append(names, serverFeatures...)
 	if ragEnabled {
 		names = append(names, ragFeature)
 	}
 	if modelSelectionEnabled {
 		names = append(names, modelSelectionFeature)
+	}
+	if speechEnabled {
+		names = append(names, speechFeature)
 	}
 	return names
 }

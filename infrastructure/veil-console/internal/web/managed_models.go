@@ -57,7 +57,12 @@ type modelForm struct {
 	ID          string
 	DisplayName string
 	Command     string
+	Role        string
 }
+
+// SpeechSelected drives the add form's role control, so a rejected submission
+// comes back with the role the administrator picked rather than the default.
+func (f modelForm) SpeechSelected() bool { return f.Role == config.RoleSpeech }
 
 func (s *Server) modelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "models.html", s.modelsData(r, "", "", nil))
@@ -108,7 +113,9 @@ func (s *Server) modelsData(r *http.Request, errorMessage, noticeMessage string,
 	// Only meaningful against a running Veil: with none there is nothing for a
 	// change to be pending against, and the next start picks the stored set up.
 	stored, _ := config.ModelsEnvJSON(models)
-	view.PendingApply = s.supervisor.Status().Running && stored != s.supervisor.ModelsEnvironment()
+	storedSpeech := strings.Join(config.SpeechEnvironment(models), "\n")
+	view.PendingApply = s.supervisor.Status().Running &&
+		(stored != s.supervisor.ModelsEnvironment() || storedSpeech != s.supervisor.SpeechEnvironment())
 
 	session := r.Context().Value(sessionKey).(requestSession)
 	processStatus := s.supervisor.Status()
@@ -165,12 +172,13 @@ func parseModelForm(r *http.Request, id string) (config.ManagedModel, modelForm)
 		ID:          strings.TrimSpace(r.FormValue("id")),
 		DisplayName: strings.TrimSpace(r.FormValue("display_name")),
 		Command:     strings.TrimSpace(r.FormValue("command")),
+		Role:        config.NormalizeRole(r.FormValue("role")),
 	}
 	if id != "" {
 		form.ID = id
 	}
 	model := config.ManagedModel{
-		ID: form.ID, DisplayName: form.DisplayName, Command: form.Command,
+		ID: form.ID, DisplayName: form.DisplayName, Command: form.Command, Role: form.Role,
 	}
 	// Store it laid out one flag per line however it arrived, so a pasted
 	// one-liner is readable the next time the card is opened.

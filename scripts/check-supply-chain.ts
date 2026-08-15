@@ -264,26 +264,58 @@ if (fs.existsSync(path.join(root, "node_modules"))) {
   }
 }
 
-const workflow = fs.readFileSync(path.join(root, ".github/workflows/package-desktop.yml"), "utf8");
-if (!workflow.includes(`cargo install cargo-audit --locked --version ${supplyChainPolicy.cargoAuditVersion}`)) {
-  fail(`CI must install cargo-audit ${supplyChainPolicy.cargoAuditVersion} with --locked.`);
-}
-if (!workflow.includes(`golang.org/x/vuln/cmd/govulncheck@v${supplyChainPolicy.govulncheckVersion}`)) {
-  fail(`CI must install govulncheck ${supplyChainPolicy.govulncheckVersion}.`);
-}
-if (!workflow.includes(`rustup toolchain install ${supplyChainPolicy.rustVersion} --profile minimal`)) {
-  fail(`CI must install the pinned Rust ${supplyChainPolicy.rustVersion} toolchain.`);
-}
-for (const match of workflow.matchAll(/^\s*runs-on:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
-  if (match[1].endsWith("-latest")) {
-    fail(`GitHub runner ${match[1]} must use an explicit operating-system image.`);
+const workflowsDir = path.join(root, ".github/workflows");
+for (const name of fs.readdirSync(workflowsDir).sort()) {
+  if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
+  const workflow = fs.readFileSync(path.join(workflowsDir, name), "utf8");
+  const label = `.github/workflows/${name}`;
+  for (const match of workflow.matchAll(/^\s*runs-on:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
+    if (match[1].endsWith("-latest")) {
+      fail(`${label}: GitHub runner ${match[1]} must use an explicit operating-system image.`);
+    }
+  }
+  for (const match of workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
+    const reference = match[1];
+    if (!/@[0-9a-f]{40}$/.test(reference)) {
+      fail(`${label}: GitHub Action ${reference} must be pinned to a full commit SHA.`);
+    }
   }
 }
-for (const match of workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)) {
-  const reference = match[1];
-  if (!/@[0-9a-f]{40}$/.test(reference)) {
-    fail(`GitHub Action ${reference} must be pinned to a full commit SHA.`);
+
+// llama.cpp is vendored by source build, not by a package manager, so its pin is
+// checked here rather than through a lockfile.
+const llamaPin = fs.readFileSync(path.join(root, "third_party/llama.cpp.pin"), "utf8");
+const llamaFields = new Map(
+  llamaPin
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => [line.slice(0, line.indexOf("=")).trim(), line.slice(line.indexOf("=") + 1).trim()]),
+);
+if (llamaFields.get("repository") !== "https://github.com/ggml-org/llama.cpp.git") {
+  fail("third_party/llama.cpp.pin must clone llama.cpp from its upstream GitHub repository.");
+}
+if (!/^b\d+$/.test(llamaFields.get("tag") ?? "")) {
+  fail("third_party/llama.cpp.pin must pin a llama.cpp build tag such as b10419.");
+}
+if (!/^[0-9a-f]{40}$/.test(llamaFields.get("commit") ?? "")) {
+  fail("third_party/llama.cpp.pin must pin a full 40-character commit SHA.");
+}
+const preparePackageScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/prepare-package.ts"), "utf8");
+for (const requiredFlag of [
+  "-DLLAMA_CURL=OFF",
+  // Never -march=native in a build somebody else runs.
+  "-DGGML_NATIVE=OFF",
+  // Backends are selected on the user's machine, not on the build machine.
+  "-DGGML_BACKEND_DL=ON",
+  "-DGGML_CPU_ALL_VARIANTS=ON",
+]) {
+  if (!preparePackageScript.includes(requiredFlag)) {
+    fail(`Packaged llama-server must be configured with ${requiredFlag}.`);
   }
+}
+if (!preparePackageScript.includes("pin.commit")) {
+  fail("Packaged llama-server must verify the cloned checkout against the pinned commit SHA.");
 }
 
 const desktopDevScript = fs.readFileSync(path.join(root, "apps/desktop/scripts/dev.ts"), "utf8");

@@ -179,7 +179,9 @@ export async function runRunnerTask(
   let runnerFailureDetails: { category?: string; code?: string; detail?: string } = {};
   let intent = intentPrompt ?? task.prompt;
   try {
-    const { providers, selected } = await resolveSelectedModel();
+    // Sending a prompt is the explicit ask to use the model: load it if it is
+    // not already up.
+    const { providers, selected } = await resolveSelectedModel("always");
     if (!taskStillRunning(task)) {
       return;
     }
@@ -327,33 +329,6 @@ export async function runRunnerTask(
           taskId: task.id,
           message: invalid.message,
           data: { code: invalid.code, type: invalid.type },
-        });
-      },
-      onOrientDecision: (decision) => {
-        // A successful classification is routine and was only ever recorded to
-        // watch the feature land — one warn row per run, on every run, for
-        // something that went right. Only the degraded outcome is kept: that is
-        // orient actually failing, and the run silently losing its playbook.
-        if (decision.outcome !== "degraded") return;
-        recordLocalDiagnostic({
-          level: "warn",
-          source: "runner",
-          event: "orient.degraded",
-          taskId: task.id,
-          message: decision.message ?? "Orient failed; the run continued without a playbook.",
-          data: {},
-        });
-      },
-      onOrientEvidenceRetry: (retry) => {
-        // Kept: this is the model answering a workspace question without
-        // looking at the workspace, which is a fault, not a milestone.
-        recordLocalDiagnostic({
-          level: "warn",
-          source: "runner",
-          event: "orient.evidence_retry",
-          taskId: task.id,
-          message: "The model answered before calling any tool; the answer was refused once.",
-          data: { ...(retry.bucket ? { bucket: retry.bucket } : {}) },
         });
       },
       onQueueUpdated: (queueEvent) => {

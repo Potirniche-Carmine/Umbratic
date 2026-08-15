@@ -73,16 +73,14 @@ func (c *Client) PrefixTokens(ctx context.Context, key, modelID string, messages
 		return annotation
 	}
 	annotation := UsageAnnotation{SystemPromptTokens: estimatedPrefixTokens(messages)}
-	if c.mode == ModeServer {
-		if exact, ok := c.tokenizePrefix(ctx, modelID, messages); ok {
-			annotation = UsageAnnotation{SystemPromptTokens: exact, Exact: true}
-		}
+	if exact, ok := c.tokenizePrefix(ctx, modelID, messages); ok {
+		annotation = UsageAnnotation{SystemPromptTokens: exact, Exact: true}
 	}
 	c.prefixTokens.put(key, annotation)
 	return annotation
 }
 
-// The fallback for a runtime with no tokenize endpoint. Four bytes per token
+// The fallback for a tokenize call that did not answer. Four bytes per token
 // is the same order of magnitude every harness uses for a preflight estimate,
 // and the `exact` flag is what stops the desktop from presenting it as a
 // measurement.
@@ -90,11 +88,18 @@ func estimatedPrefixTokens(messages []Message) int {
 	return (len(prefixText(messages)) + 3) / 4
 }
 
+// tokenizePrefix asks the runtime to count the prefix exactly.
+//
+// Both runtimes answer at /tokenize with `{"tokens":[...]}`, but they disagree
+// on what to send: vLLM takes the chat shape and applies the template itself,
+// while llama-server tokenizes one `content` string. Sending either body to the
+// other runtime is a 400, so the shape follows the mode.
 func (c *Client) tokenizePrefix(ctx context.Context, modelID string, messages []Message) (int, bool) {
-	resp, err := c.postJSON(ctx, c.tokenizeEndpoint, map[string]any{
-		"model":    modelID,
-		"messages": messages,
-	})
+	body := map[string]any{"model": modelID, "messages": messages}
+	if c.mode == ModeLocal {
+		body = map[string]any{"content": prefixText(messages)}
+	}
+	resp, err := c.postJSON(ctx, c.tokenizeEndpoint, body)
 	if err != nil {
 		return 0, false
 	}
@@ -104,12 +109,21 @@ func (c *Client) tokenizePrefix(ctx context.Context, modelID string, messages []
 		return 0, false
 	}
 	var payload struct {
-		Count int `json:"count"`
+		Count  int   `json:"count"`
+		Tokens []any `json:"tokens"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil || payload.Count <= 0 {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&payload); err != nil {
 		return 0, false
 	}
-	return payload.Count, true
+	// vLLM reports `count`; llama-server reports only the token array.
+	count := payload.Count
+	if count <= 0 {
+		count = len(payload.Tokens)
+	}
+	if count <= 0 {
+		return 0, false
+	}
+	return count, true
 }
 
 func annotateUsage(payload map[string]any, annotation UsageAnnotation) {

@@ -145,6 +145,8 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   // The bucket selector is a runtime decision; no bucket field is ever config.
   assert.equal("harness_bucket" in config.provider, false);
   assert.equal("harnessBucket" in config, false);
+  assert.equal(config.provider.thinking, "on");
+  assert.equal(config.provider.sendThinkingField, false);
   assert.deepEqual(plain(config.provider.capabilities), {
     parallelToolCalls: false,
     vision: false,
@@ -219,14 +221,15 @@ test("engineering harness mode uses its Veil route without runtime prompt profil
   assert.equal(config.runtimeProfiles, undefined);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-python"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-git-worktree"), true);
-  assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
-  assert.equal(config.skills.some((skill) => skill.id === "umbratic-data-analysis"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-cmake"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), false);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-spreadsheets"), false);
   assert.equal(config.provider.chatEndpointPath, "/api/engineering/chat");
   assert.equal(config.contextLength, 32768);
   assert.equal("system" in config, false);
 });
 
-test("business harness modes keep their Veil route and the complete system skill catalog", () => {
+test("business harness modes keep their Veil route and the matching business skill catalog", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-runner-adapter-markdown-"));
   const { adapter, storage } = loadRunnerAdapter(userData);
   storage.writeHarnessProfileSetting("marketing");
@@ -250,11 +253,13 @@ test("business harness modes keep their Veil route and the complete system skill
 
   const config = adapter.buildUmbraticRunnerConfig(task, model);
   assert.equal(config.runtimeProfiles, undefined);
-  assert.equal(config.skills.some((skill) => skill.id === "umbratic-git-worktree"), true);
-  assert.equal(config.skills.some((skill) => skill.id === "umbratic-cmake"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-git-worktree"), false);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-cmake"), false);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-data-analysis"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-pdf"), true);
   assert.equal(config.skills.some((skill) => skill.id === "umbratic-presentations"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-marketing-brief"), true);
+  assert.equal(config.skills.some((skill) => skill.id === "umbratic-sales-enablement"), false);
   assert.equal(config.provider.chatEndpointPath, "/api/marketing/chat");
   assert.equal("system" in config, false);
 });
@@ -497,4 +502,23 @@ test("the runner names its model only when the server invited it", () => {
   // from, and the local Veil refuses the field.
   storage.writeModelEndpointSettings({ mode: "local", baseUrl: "http://127.0.0.1:11434", modelId: "qwen3:8b" });
   assert.equal(sendModelField("qwen3:8b"), false);
+
+  const thinkingConfig = () => adapter.buildUmbraticRunnerConfig(task, model("qwen3-32b")).provider;
+  features.recordVeilFeatures([]);
+  assert.equal(thinkingConfig().sendThinkingField, false);
+  features.recordVeilFeatures(["chat.thinking_toggle"]);
+  assert.equal(thinkingConfig().sendThinkingField, true);
+  assert.equal(thinkingConfig().thinking, "on");
+  storage.writeReasoningEffortSetting("off");
+  assert.equal(thinkingConfig().thinking, "off");
+  features.recordVeilFeatures(["chat.reasoning_visible"]);
+  storage.writeShowThinkingSetting(true);
+  storage.writeReasoningEffortSetting("medium");
+  assert.equal(thinkingConfig().sendReasoningVisibleField, true);
+  assert.equal(thinkingConfig().reasoningVisible, true);
+  features.recordVeilFeatures([]);
+  assert.equal(thinkingConfig().sendReasoningVisibleField, false);
+  storage.writeReasoningEffortSetting("off");
+  features.recordVeilFeatures(["chat.reasoning_visible"]);
+  assert.equal(thinkingConfig().reasoningVisible, false);
 });

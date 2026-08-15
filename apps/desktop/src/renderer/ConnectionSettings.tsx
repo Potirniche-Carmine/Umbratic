@@ -10,11 +10,7 @@ import type {
 import { CompanyServerActions } from "./CompanyServerActions";
 import { Combobox } from "./Combobox";
 import { contextBadge } from "./ComposerControls";
-import {
-  localModelCacheKey,
-  readCachedLocalModels,
-  writeCachedLocalModels,
-} from "./localModelCache";
+import { CustomModelAdd, LocalModelFolder, LocalModelMenu, useLocalModelCatalog } from "./LocalModelList";
 import {
   defaultModelEndpointSettings,
   endpointDefaultsForMode,
@@ -37,16 +33,10 @@ function modelPlaceholder(
   return count > 0 ? "Choose a model" : texts.empty;
 }
 
-// Applying a local model restarts the local Veil and loads the weights into
-// memory, so skimming through the picker waits for the selection to settle
-// and only loads the model the user lands on.
-const LOCAL_MODEL_COMMIT_DELAY_MS = 600;
-
 type ConnectionSettingsOptions = {
   api: DesktopApi;
   backend: BackendStatus | null;
   initialSettings: ModelEndpointSettings;
-  initialLocalModels: string[];
   initialConnection: CompanyConnectionStatus;
   settingsOpen: boolean;
   active: boolean;
@@ -57,22 +47,12 @@ export function useConnectionSettings({
   api,
   backend,
   initialSettings,
-  initialLocalModels,
   initialConnection,
   settingsOpen,
   active,
   onBackendStatus,
 }: ConnectionSettingsOptions) {
   const normalizedInitialSettings = useRef(normalizeEndpointSettings(initialSettings)).current;
-  const initialLocalBaseUrl = normalizedInitialSettings.mode === "local"
-    ? localModelCacheKey(normalizedInitialSettings.baseUrl)
-    : "";
-  const seededLocalModels = normalizedInitialSettings.mode === "local"
-    ? writeCachedLocalModels(initialLocalBaseUrl, [
-        normalizedInitialSettings.modelId,
-        ...initialLocalModels,
-      ])
-    : [];
   const [settings, setSettings] = useState<ModelEndpointSettings>(normalizedInitialSettings);
   const [draft, setDraft] = useState<ModelEndpointSettings>(normalizedInitialSettings);
   const [companyConnection, setCompanyConnection] = useState<CompanyConnectionStatus>(initialConnection);
@@ -80,16 +60,14 @@ export function useConnectionSettings({
   const [saveFeedback, setSaveFeedback] = useState<"idle" | "saved">("idle");
   const [companyAction, setCompanyAction] = useState<"connect" | "disconnect" | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // True while a picked model's weights are loading, so the model card can say
+  // so. Counted, not boolean: a quick second pick must not clear the first
+  // pick's indicator early.
+  const [localModelLoading, setLocalModelLoading] = useState(false);
+  const [localModelUnloading, setLocalModelUnloading] = useState(false);
+  const localLoadCountRef = useRef(0);
   const [message, setMessage] = useState<string | null>(null);
-  const [localModelDiscovery, setLocalModelDiscovery] = useState<{
-    baseUrl: string;
-    models: string[];
-    status: ModelDiscoveryStatus;
-  }>({
-    baseUrl: initialLocalBaseUrl,
-    models: seededLocalModels,
-    status: seededLocalModels.length > 0 ? "ready" : "idle",
-  });
+  const localCatalog = useLocalModelCatalog(api, "chat", settingsOpen && active);
   // What the connected Veil publishes. Empty on a server too old to publish a
   // registry, which is the same state as "not connected yet" — both mean there
   // is no choice to offer here.
@@ -100,34 +78,6 @@ export function useConnectionSettings({
   const modeDraftsRef = useRef<Partial<Record<ModelEndpointMode, ModelEndpointSettings>>>({
     [normalizedInitialSettings.mode]: normalizedInitialSettings,
   });
-  const localModelCommitTimerRef = useRef<number | null>(null);
-  const pendingLocalModelIdRef = useRef<string | null>(null);
-  const commitLocalModelRef = useRef<(modelId: string) => Promise<void>>(() => Promise.resolve());
-
-  function cancelPendingLocalModelCommit() {
-    pendingLocalModelIdRef.current = null;
-    if (localModelCommitTimerRef.current !== null) {
-      window.clearTimeout(localModelCommitTimerRef.current);
-      localModelCommitTimerRef.current = null;
-    }
-  }
-
-  // Choosing a local model reads as applied the moment it is clicked, so a
-  // selection still waiting out its debounce is saved, not discarded, when the
-  // settings dialog closes.
-  function flushPendingLocalModelCommit() {
-    const modelId = pendingLocalModelIdRef.current;
-    if (modelId === null) return;
-    cancelPendingLocalModelCommit();
-    void commitLocalModelRef.current(modelId);
-  }
-
-  useEffect(() => () => {
-    if (localModelCommitTimerRef.current !== null) {
-      window.clearTimeout(localModelCommitTimerRef.current);
-    }
-  }, []);
-
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
   const companyEnrollmentRequired =
     draft.mode === "server"
@@ -146,22 +96,19 @@ export function useConnectionSettings({
     ?? (companyEnrollmentRequired && !draft.secret.trim() ? "Enter the Enrollment code." : null);
   const editingEnabled = backend?.endpointConfig.endpointEditingAllowed ?? true;
   const formDisabled = !editingEnabled;
-  const localRuntimeUrlValid = endpointValidationMessage({ ...draft, modelId: "__probe__" }) === null;
-  const draftLocalBaseUrl = localModelCacheKey(draft.baseUrl);
-  const localModelDiscoveryCurrent = localModelDiscovery.baseUrl === draftLocalBaseUrl;
-  const cachedLocalModels = readCachedLocalModels(draftLocalBaseUrl, draft.modelId);
-  const localModelStatus = refreshing && draft.mode === "local"
-    ? "loading"
-    : localModelDiscoveryCurrent
-      ? localModelDiscovery.status
-      : cachedLocalModels.length > 0 ? "ready" : "idle";
-  const localModels = localModelDiscoveryCurrent ? localModelDiscovery.models : cachedLocalModels;
-  const refreshDisabled = refreshing || saving || (draft.mode === "server" ? dirty : !localRuntimeUrlValid);
-  const displayState = backend?.endpoint === "degraded" ? "ready" : backend?.endpoint ?? "checking";
+  const refreshDisabled = refreshing || saving || (draft.mode === "server" && dirty);
+  // Local mode with nothing loaded is a resting state, not a failure: the
+  // backend leaves the provider message empty for it, and the panel shows a
+  // quiet "Not loaded" instead of an alarmed "Unavailable".
+  const notLoaded =
+    draft.mode === "local"
+    && backend?.endpoint === "unavailable"
+    && !backend.providers[0]?.message;
+  const displayState = notLoaded ? "idle" : backend?.endpoint === "degraded" ? "ready" : backend?.endpoint ?? "checking";
   const statusLabel =
     backend?.endpoint === "ready" || backend?.endpoint === "degraded"
       ? "Connected"
-      : backend ? "Unavailable" : "Checking";
+      : notLoaded ? "Not loaded" : backend ? "Unavailable" : "Checking";
 
   useEffect(() => {
     if (!settingsOpen || !active) return;
@@ -173,44 +120,6 @@ export function useConnectionSettings({
       current = false;
     };
   }, [active, api, settingsOpen]);
-
-  // Local mode discovers models itself. Showing a cached list and waiting for
-  // the user to press refresh is what made choosing a model feel like a chore,
-  // and it is why a first run could start with no model selected at all.
-  useEffect(() => {
-    if (!settingsOpen || !active || draft.mode !== "local" || !localRuntimeUrlValid) return;
-    let current = true;
-    const baseUrl = draftLocalBaseUrl;
-    void (async () => {
-      const cached = await api.getCachedLocalModels({ baseUrl }).catch(() => [] as string[]);
-      if (!current) return;
-      const seeded = writeCachedLocalModels(baseUrl, [draft.modelId, ...cached]);
-      setLocalModelDiscovery((discovery) => (
-        discovery.baseUrl === baseUrl && discovery.status === "loading"
-          ? discovery
-          : { baseUrl, models: seeded, status: "loading" }
-      ));
-      const probe = await api
-        .probeLocalModels({ baseUrl })
-        .catch(() => ({ status: "unavailable" as const, models: [] as string[] }));
-      if (!current) return;
-      const models = probe.status === "ready"
-        ? writeCachedLocalModels(baseUrl, probe.models)
-        : seeded;
-      setLocalModelDiscovery({ baseUrl, models, status: probe.status });
-    })();
-    return () => {
-      current = false;
-    };
-  }, [
-    active,
-    api,
-    draft.mode,
-    draft.modelId,
-    draftLocalBaseUrl,
-    localRuntimeUrlValid,
-    settingsOpen,
-  ]);
 
   // Server mode asks the server, for the same reason local mode probes the
   // runtime: a list the user has to press refresh to see is a list they will
@@ -240,7 +149,6 @@ export function useConnectionSettings({
   }, [active, api, draft.mode, settingsOpen]);
 
   function updateDraft(patch: Partial<ModelEndpointSettings>) {
-    cancelPendingLocalModelCommit();
     saveSequenceRef.current += 1;
     setSaving(false);
     setSaveFeedback("idle");
@@ -290,33 +198,47 @@ export function useConnectionSettings({
     setDraft(settings);
     setMessage(null);
     modeDraftsRef.current = { [settings.mode]: settings };
-    flushPendingLocalModelCommit();
   }
 
-  // In local mode there is nothing to confirm: no secret, no headers, and the
-  // runtime URL is validated as it is typed. Choosing a model is the whole
-  // decision, so choosing it saves it. The picker updates instantly; the save
-  // waits LOCAL_MODEL_COMMIT_DELAY_MS so browsing between installed models
-  // does not load each one along the way.
-  async function selectLocalModel(modelId: string) {
-    updateDraft({ modelId });
-    if (!editingEnabled) return;
-    pendingLocalModelIdRef.current = modelId;
-    localModelCommitTimerRef.current = window.setTimeout(() => {
-      pendingLocalModelIdRef.current = null;
-      localModelCommitTimerRef.current = null;
-      void commitLocalModelRef.current(modelId);
-    }, LOCAL_MODEL_COMMIT_DELAY_MS);
-  }
-
-  async function commitLocalModelSelection(modelId: string) {
+  // In local mode there is nothing to confirm: no URL, no secret, no headers.
+  // Choosing a downloaded model is the whole decision, so choosing it saves it,
+  // which restarts llama-server on the new weights.
+  //
+  // Returns the failure, if there was one, as well as showing it here: the
+  // composer's picker calls this too, and a failure raised while the settings
+  // panel is closed would otherwise be reported to nobody.
+  async function selectLocalModel(modelId: string): Promise<string | null> {
+    // Re-picking the model that is already shown is not a settings change: if
+    // it is running there is nothing to do, and if it is not, this is the ask
+    // to load it — without restarting anything else.
+    if (modelId === draft.modelId && modelId === settings.modelId) {
+      if (backend?.endpoint === "ready" || backend?.endpoint === "degraded") return null;
+      const requestId = saveSequenceRef.current + 1;
+      saveSequenceRef.current = requestId;
+      setMessage(null);
+      localLoadCountRef.current += 1;
+      setLocalModelLoading(true);
+      try {
+        const result = await api.loadLocalModel();
+        if (requestId === saveSequenceRef.current) onBackendStatus(result.status);
+      } catch (cause) {
+        const failure = String(cause instanceof Error ? cause.message : cause);
+        if (requestId === saveSequenceRef.current) setMessage(failure);
+        return failure;
+      } finally {
+        localLoadCountRef.current -= 1;
+        if (localLoadCountRef.current === 0) setLocalModelLoading(false);
+      }
+      return null;
+    }
     const next = normalizeEndpointSettings({
       ...(modeDraftsRef.current.local ?? draft),
       modelId,
       headers: defaultModelEndpointSettings.headers,
       secret: "",
     });
-    if (endpointValidationMessage(next)) return;
+    const invalid = endpointValidationMessage(next);
+    if (invalid) return invalid;
     const requestId = saveSequenceRef.current + 1;
     saveSequenceRef.current = requestId;
     const previous = settings;
@@ -325,58 +247,72 @@ export function useConnectionSettings({
     modeDraftsRef.current.local = next;
     setSaveFeedback("saved");
     setMessage(null);
+    localLoadCountRef.current += 1;
+    setLocalModelLoading(true);
     try {
       const result = await api.saveModelEndpointSettings(next);
-      if (requestId !== saveSequenceRef.current) return;
+      if (requestId !== saveSequenceRef.current) return null;
       const normalized = normalizeEndpointSettings(result.settings);
       setSettings(normalized);
       setDraft(normalized);
       modeDraftsRef.current.local = normalized;
       onBackendStatus(result.status);
     } catch (cause) {
-      if (requestId !== saveSequenceRef.current) return;
+      const failure = String(cause instanceof Error ? cause.message : cause);
+      if (requestId !== saveSequenceRef.current) return failure;
       setSettings(previous);
       setDraft(previous);
       modeDraftsRef.current.local = previous;
       setSaveFeedback("idle");
-      setMessage(String(cause instanceof Error ? cause.message : cause));
+      setMessage(failure);
+      return failure;
+    } finally {
+      localLoadCountRef.current -= 1;
+      if (localLoadCountRef.current === 0) setLocalModelLoading(false);
+    }
+    return null;
+  }
+  /**
+   * Gives the weights back. The counterpart of picking a model, and the only
+   * way short of quitting to reclaim the gigabytes a resident model holds.
+   */
+  async function unloadLocalModel() {
+    const requestId = saveSequenceRef.current + 1;
+    saveSequenceRef.current = requestId;
+    setMessage(null);
+    // Its own flag rather than the loading one: a trigger that reads "Loading"
+    // while the model is being released says the opposite of what is happening.
+    setLocalModelUnloading(true);
+    try {
+      const result = await api.unloadLocalModel();
+      if (requestId === saveSequenceRef.current) onBackendStatus(result.status);
+    } catch (cause) {
+      if (requestId === saveSequenceRef.current) {
+        setMessage(String(cause instanceof Error ? cause.message : cause));
+      }
+    } finally {
+      if (requestId === saveSequenceRef.current) setLocalModelUnloading(false);
     }
   }
-  // The debounced timer must call the commit from the latest render so it
-  // saves against current state rather than the state at click time.
-  commitLocalModelRef.current = commitLocalModelSelection;
 
+  // In local mode this is the manual load: the one action that starts the
+  // model stack outside of picking a model or sending a prompt. Server mode
+  // keeps it as a plain re-check.
   async function refresh() {
     if (refreshDisabled) return;
     const requestId = saveSequenceRef.current + 1;
     saveSequenceRef.current = requestId;
-    const localMode = draft.mode === "local";
-    const probeBaseUrl = localModelCacheKey(draft.baseUrl);
-    const modelsBeforeRefresh = readCachedLocalModels(probeBaseUrl, draft.modelId);
     setRefreshing(true);
-    if (localMode) {
-      setLocalModelDiscovery({
-        baseUrl: probeBaseUrl,
-        models: modelsBeforeRefresh,
-        status: "loading",
-      });
-    }
     setMessage(null);
     try {
-      const [status, modelProbe] = await Promise.all([
-        dirty ? Promise.resolve(null) : api.getBackendStatus(),
-        localMode
-          ? api.probeLocalModels({ baseUrl: probeBaseUrl }).catch(() => ({ status: "unavailable" as const, models: [] as [] }))
-          : Promise.resolve(null),
-      ]);
+      if (draft.mode === "local") await localCatalog.reload();
+      const status = dirty
+        ? null
+        : draft.mode === "local"
+          ? (await api.loadLocalModel()).status
+          : await api.getBackendStatus();
       if (requestId !== saveSequenceRef.current) return;
       if (status) onBackendStatus(status);
-      if (modelProbe) {
-        const models = modelProbe.status === "ready"
-          ? writeCachedLocalModels(probeBaseUrl, modelProbe.models)
-          : modelsBeforeRefresh;
-        setLocalModelDiscovery({ baseUrl: probeBaseUrl, models, status: modelProbe.status });
-      }
     } catch (cause) {
       if (requestId === saveSequenceRef.current) {
         setMessage(String(cause instanceof Error ? cause.message : cause));
@@ -392,7 +328,6 @@ export function useConnectionSettings({
       setMessage(validation);
       return;
     }
-    cancelPendingLocalModelCommit();
     const requestId = saveSequenceRef.current + 1;
     saveSequenceRef.current = requestId;
     const nextDraft = normalizeEndpointSettings({
@@ -413,10 +348,6 @@ export function useConnectionSettings({
       setSettings(optimisticLocalSettings);
       setDraft(optimisticLocalSettings);
       modeDraftsRef.current.local = optimisticLocalSettings;
-      writeCachedLocalModels(
-        optimisticLocalSettings.baseUrl,
-        readCachedLocalModels(optimisticLocalSettings.baseUrl, optimisticLocalSettings.modelId),
-      );
     }
     if (nextDraft.mode === "server" && nextDraft.secret) setDraft({ ...nextDraft, secret: "" });
     try {
@@ -532,8 +463,11 @@ export function useConnectionSettings({
   /**
    * Picking a server model is a settings write like any other, not a
    * connection change: the enrollment, the URL, and the session all stay.
+   *
+   * Returns the failure the same way `selectLocalModel` does, and for the same
+   * reason — the composer's picker shares this path.
    */
-  async function selectServerModel(modelId: string) {
+  async function selectServerModel(modelId: string): Promise<string | null> {
     const next = normalizeEndpointSettings({
       ...(modeDraftsRef.current.server ?? draft),
       modelId,
@@ -547,22 +481,27 @@ export function useConnectionSettings({
     setMessage(null);
     try {
       const result = await api.saveModelEndpointSettings(next);
-      if (requestId !== saveSequenceRef.current) return;
+      if (requestId !== saveSequenceRef.current) return null;
       const normalized = normalizeEndpointSettings(result.settings);
       setSettings(normalized);
       setDraft(normalized);
       modeDraftsRef.current.server = normalized;
       onBackendStatus(result.status);
     } catch (cause) {
-      if (requestId !== saveSequenceRef.current) return;
+      const failure = String(cause instanceof Error ? cause.message : cause);
+      if (requestId !== saveSequenceRef.current) return failure;
       setSettings(previous);
       setDraft(previous);
       modeDraftsRef.current.server = previous;
-      setMessage(String(cause instanceof Error ? cause.message : cause));
+      setMessage(failure);
+      return failure;
     }
+    return null;
   }
 
   return {
+    api,
+    backend,
     settings,
     draft,
     serverModels,
@@ -574,6 +513,8 @@ export function useConnectionSettings({
     saveFeedback,
     companyAction,
     refreshing,
+    localModelLoading,
+    localModelUnloading,
     message,
     dirty,
     companyServerConnected,
@@ -581,14 +522,13 @@ export function useConnectionSettings({
     validation,
     editingEnabled,
     formDisabled,
-    localRuntimeUrlValid,
-    localModelStatus,
-    localModels,
+    localCatalog,
     refreshDisabled,
     displayState,
     statusLabel,
     updateDraft,
     selectLocalModel,
+    unloadLocalModel,
     selectMode,
     clearMessage: () => setMessage(null),
     resetDraft,
@@ -604,12 +544,15 @@ export type ConnectionSettingsController = ReturnType<typeof useConnectionSettin
 
 export function ConnectionSettingsPanel({ controller }: { controller: ConnectionSettingsController }) {
   const {
+    backend,
     draft,
     companyConnection,
     saving,
     saveFeedback,
     companyAction,
     refreshing,
+    localModelLoading,
+    localModelUnloading,
     message,
     dirty,
     companyServerConnected,
@@ -617,9 +560,7 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
     validation,
     editingEnabled,
     formDisabled,
-    localRuntimeUrlValid,
-    localModelStatus,
-    localModels,
+    localCatalog,
     serverModels,
     serverModelStatus,
     refreshDisabled,
@@ -639,19 +580,21 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
             className={`serverHealthText ${displayState}`}
             role="status"
             aria-label={statusLabel}
-            title={statusLabel}
           >
             <span className="serverStatusDot" aria-hidden="true" />
+            <span className="serverHealthLabel">
+              {refreshing ? draft.mode === "local" ? "Loading model…" : "Checking" : statusLabel}
+            </span>
           </span>
           <button
-            className="settingsIconButton connectionRefreshButton"
+            className="settingsIconButton"
             type="button"
             onClick={() => void controller.refresh()}
             disabled={refreshDisabled}
-            title={draft.mode === "local"
-              ? localRuntimeUrlValid ? "Check runtime and models" : "Enter a valid local runtime URL"
-              : dirty ? "Save changes before checking" : "Check connection"}
-            aria-label={draft.mode === "local" ? "Check runtime and models" : "Check connection"}
+            title={dirty && draft.mode === "server"
+              ? "Save changes before checking"
+              : draft.mode === "local" ? "Load the model and check again" : "Check again"}
+            aria-label={draft.mode === "local" ? "Load the model and check again" : "Check again"}
           >
             <RefreshCw className={refreshing ? "spin" : ""} size={14} />
           </button>
@@ -687,34 +630,28 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
       </div>
 
       <div className="settingsGroup">
-        <h4>{draft.mode === "local" ? "Local model" : "Company server"}</h4>
+        <h4>{draft.mode === "local" ? "Local collection" : "Company server"}</h4>
         {draft.mode === "local" ? (
           <>
-            <Combobox
+            <LocalModelMenu
               label="Model"
-              disabled={formDisabled}
-              items={localModels.map((modelId) => ({ id: modelId, label: modelId }))}
+              models={localCatalog.models}
+              progress={localCatalog.progress}
               selectedId={draft.modelId}
-              placeholder={modelPlaceholder(localModelStatus, localModels.length, {
-                loading: "Checking installed models…",
-                unavailable: "Ollama is not running",
-                empty: "No models installed",
-              })}
+              disabled={formDisabled || localModelUnloading}
+              loading={localModelLoading || refreshing}
+              loaded={backend?.endpoint === "ready" || backend?.endpoint === "degraded"}
+              placeholder="Choose or download a model"
               onSelect={(modelId) => void controller.selectLocalModel(modelId)}
+              onDownload={(modelId) => void localCatalog.download(modelId)}
+              onCancel={(modelId) => void localCatalog.cancel(modelId)}
+              onQuantChange={(modelId, quant) => void localCatalog.setQuant(modelId, quant)}
+              onRemove={(modelId) => void localCatalog.removeCustom(modelId)}
+              onUnload={() => void controller.unloadLocalModel()}
             />
-            <details className="settingsAdvanced">
-              <summary>Advanced</summary>
-              <label className="settingsField">
-                <span>Ollama URL</span>
-                <input
-                  value={draft.baseUrl}
-                  disabled={formDisabled}
-                  onChange={(event) => controller.updateDraft({ baseUrl: event.currentTarget.value })}
-                  placeholder="http://127.0.0.1:11434"
-                  spellCheck={false}
-                />
-              </label>
-            </details>
+            <CustomModelAdd disabled={formDisabled} onAdd={(reference) => localCatalog.addCustom(reference)} />
+            {localCatalog.message ? <p className="settingsMessage">{localCatalog.message}</p> : null}
+            <LocalModelFolder api={controller.api} />
           </>
         ) : companyServerConnected && companyConnection.state === "enrolled" ? (
           <div className="companyEnrollmentStatus">
@@ -808,8 +745,41 @@ export function ConnectionSettingsPanel({ controller }: { controller: Connection
         <div className="connectionFeedback" aria-live="polite">
           {!editingEnabled ? <p className="settingsMessage">This connection is managed by your organization.</p> : null}
           {message ? <p className="settingsMessage">{message}</p> : null}
+          {/* The runtime's own account of why it is not up. Without it the
+              status dot says "Unavailable" and nothing says why. */}
+          {!message && draft.mode === "local" && backend?.endpoint === "unavailable" && backend.providers[0]?.message
+            ? <p className="settingsMessage">{backend.providers[0].message}</p>
+            : null}
         </div>
       </div>
+
+      {/* The machine's own capabilities only matter when the model runs on this
+          machine; a company server brings its own hardware. */}
+      {backend && draft.mode === "local" ? <DetectedSystem system={backend.system} /> : null}
     </div>
+  );
+}
+
+/**
+ * What the machine itself brings, independent of the selected model.
+ *
+ * Worth stating plainly: a driver that leaves the runtime on the processor is
+ * invisible otherwise, and the user's only symptom is that answers are slow.
+ */
+function DetectedSystem({ system }: { system: BackendStatus["system"] }) {
+  const quality = system.quality === "optimal"
+    ? "Optimal"
+    : system.quality === "good" ? "Good" : "CPU only";
+  return (
+    <p className="detectedSystem" title={system.acceleratorDevice ?? undefined}>
+      <span className="detectedSystemLabel">Detected system</span>
+      <span>{system.totalRamGB} GB RAM</span>
+      <span aria-hidden="true">·</span>
+      <span>{system.accelerator ?? "No GPU acceleration"}</span>
+      <span className={`detectedSystemQuality is-${system.quality}`}>{quality}</span>
+      {system.quality === "cpu" ? (
+        <span className="detectedSystemHint">Updating your graphics driver may speed up responses.</span>
+      ) : null}
+    </p>
   );
 }

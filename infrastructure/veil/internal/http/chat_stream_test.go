@@ -20,11 +20,13 @@ func (f *fakeModelClient) PrefixTokens(_ context.Context, _, _ string, messages 
 
 func TestChatRouteReportsItsOwnProtectedPrefixSize(t *testing.T) {
 	modelClient := &fakeModelClient{
-		streamContentType: "application/x-ndjson",
+		streamContentType: "text/event-stream",
 		streamBody: strings.Join([]string{
-			`{"message":{"role":"assistant","content":"hello"},"done":true,"prompt_eval_count":1234,"eval_count":56}`,
+			`data: {"choices":[{"delta":{"role":"assistant","content":"hello"}}]}`,
+			`data: {"choices":[],"usage":{"prompt_tokens":1234,"completion_tokens":56,"total_tokens":1290}}`,
+			`data: [DONE]`,
 			"",
-		}, "\n"),
+		}, "\n\n"),
 	}
 	cfg := testConfig()
 	cfg.Mode = model.ModeLocal

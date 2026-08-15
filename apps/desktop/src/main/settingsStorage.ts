@@ -13,7 +13,8 @@ import {
 } from "./config";
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
-import type { DesktopStartupSettings } from "../shared/desktopApi";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
+import type { DesktopStartupSettings, DictationSettings, KeyBindingSettings, ReasoningEffort } from "../shared/desktopApi";
 import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
 import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
 import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
@@ -36,10 +37,16 @@ type RawSettings = {
   skills?: Record<string, boolean>;
   harnessProfile?: unknown;
   contextLength?: unknown;
+  reasoningEffort?: unknown;
+  showThinking?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
-  localModelCache?: unknown;
+  dictation?: unknown;
+  keybindings?: unknown;
   remoteConnections?: unknown;
+  customModels?: unknown;
+  localQuants?: unknown;
+  automaticAppUpdates?: unknown;
 };
 
 type SettingsRow = {
@@ -51,65 +58,6 @@ type NoteRow = {
 };
 const appSettingsKey = "app";
 const userNotesId = "user";
-const localModelCacheLimit = 8;
-const localModelLimit = 200;
-type StoredLocalModelCacheEntry = {
-  baseUrl: string;
-  models: string[];
-  updatedAt: string;
-};
-
-function localModelCacheKey(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, "");
-}
-
-function normalizedLocalModelCache(value: unknown): StoredLocalModelCacheEntry[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.baseUrl !== "string" || !Array.isArray(entry.models)) return [];
-    const baseUrl = localModelCacheKey(entry.baseUrl);
-    if (!baseUrl) return [];
-    const models = Array.from(new Set(
-      entry.models
-        .filter((model): model is string => typeof model === "string")
-        .map((model) => model.trim())
-        .filter((model) => model.length > 0 && model.length <= 256),
-    )).slice(0, localModelLimit);
-    return [{
-      baseUrl,
-      models,
-      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
-    }];
-  }).slice(0, localModelCacheLimit);
-}
-
-function cachedLocalModels(settings: RawSettings, baseUrl: string): string[] {
-  const key = localModelCacheKey(baseUrl);
-  return normalizedLocalModelCache(settings.localModelCache)
-    .find((entry) => entry.baseUrl === key)?.models ?? [];
-}
-
-export function readCachedLocalModels(baseUrl: string): string[] {
-  return cachedLocalModels(readRawSettings(), baseUrl);
-}
-
-export function writeCachedLocalModels(baseUrl: string, models: readonly string[]): string[] {
-  const key = localModelCacheKey(baseUrl);
-  if (!key) return [];
-  const normalized = Array.from(new Set(
-    models.map((model) => model.trim()).filter((model) => model.length > 0 && model.length <= 256),
-  )).slice(0, localModelLimit);
-  const settings = readRawSettings();
-  const entries = normalizedLocalModelCache(settings.localModelCache)
-    .filter((entry) => entry.baseUrl !== key);
-  writeRawSettings({
-    ...settings,
-    localModelCache: [{ baseUrl: key, models: normalized, updatedAt: new Date().toISOString() }, ...entries]
-      .slice(0, localModelCacheLimit),
-  });
-  return normalized;
-}
-
 function readRawSettings(): RawSettings {
   return withAppDatabase((db) => {
     const row = db.prepare("SELECT payload FROM settings WHERE key = ?").get(appSettingsKey) as SettingsRow | undefined;
@@ -233,6 +181,25 @@ export function clearCompanyDeviceCredential(): void {
 
 export function companyConnectionStatus() {
   return companyConnectionStatusFromValue(readRawSettings().companyCredential);
+}
+
+/**
+ * Forgets which local model was chosen, so every launch starts with none.
+ *
+ * A remembered pick is a model queued to load: the first prompt of the session
+ * brings up gigabytes of weights nobody asked for that run. Choosing is cheap
+ * and the collection is right there, so the session begins with the machine
+ * idle and the user decides when that changes. The rest of the local endpoint —
+ * mode, URL — is left alone; only the pick is per-session.
+ */
+export function clearLocalModelSelection(): void {
+  const settings = readRawSettings();
+  const local = settings.modelEndpoints?.local;
+  if (!local || !local.modelId) return;
+  writeRawSettings({
+    ...settings,
+    modelEndpoints: { ...settings.modelEndpoints, local: { ...local, modelId: "" } },
+  });
 }
 
 export function readModelEndpointSettings(): ActiveModelEndpointSettings { return modelEndpointSettings(readRawSettings()); }
@@ -385,6 +352,39 @@ export function readContextLengthSetting(): number {
   return normalizeContextLength(readRawSettings().contextLength ?? DEFAULT_CONTEXT_LENGTH);
 }
 
+/**
+ * How hard a thinking model is asked to think.
+ *
+ * One setting for the app rather than one per model: only models that read an
+ * effort are ever run at one, and a person who decided they want less thinking
+ * meant it about their work, not about a particular set of weights.
+ */
+export function readReasoningEffortSetting(): ReasoningEffort {
+  const stored = readRawSettings().reasoningEffort;
+  return isReasoningEffort(stored) ? stored : DEFAULT_REASONING_EFFORT;
+}
+
+export function writeReasoningEffortSetting(value: unknown): ReasoningEffort {
+  const reasoningEffort = isReasoningEffort(value) ? value : DEFAULT_REASONING_EFFORT;
+  const settings = readRawSettings();
+  writeRawSettings({
+    ...settings,
+    reasoningEffort,
+  });
+  return reasoningEffort;
+}
+
+/** Live thinking in Working. Absent or anything other than true is off. */
+export function readShowThinkingSetting(): boolean {
+  return readRawSettings().showThinking === true;
+}
+
+export function writeShowThinkingSetting(value: unknown): boolean {
+  const showThinking = value === true;
+  writeRawSettings({ ...readRawSettings(), showThinking });
+  return showThinking;
+}
+
 export function writeContextLengthSetting(value: unknown): number {
   const contextLength = normalizeContextLength(value);
   const settings = readRawSettings();
@@ -395,26 +395,150 @@ export function writeContextLengthSetting(value: unknown): number {
   return contextLength;
 }
 
+/**
+ * Dictation is off until a model is chosen. "off" is a real stored value, not
+ * an absent one: a user who turns dictation off has made a decision, and the
+ * next release adding a default must not undo it.
+ */
+export function readDictationSettings(): DictationSettings {
+  return normalizedDictationSettings(readRawSettings().dictation);
+}
+
+export function writeDictationSettings(value: unknown): DictationSettings {
+  const dictation = normalizedDictationSettings(value);
+  writeRawSettings({ ...readRawSettings(), dictation });
+  return dictation;
+}
+
+function normalizedDictationSettings(value: unknown): DictationSettings {
+  // English by default rather than automatic detection. A two-word utterance
+  // carries little evidence of its language, and a confident transcript in the
+  // wrong one is harder to notice than a missed word. Auto stays available for
+  // anyone who switches languages.
+  if (!isRecord(value)) return { model: "off", language: defaultDictationLanguage, deviceId: null };
+  const model = value.model === "qwen3-asr-0.6b" || value.model === "qwen3-asr-1.7b" ? value.model : "off";
+  // The chosen microphone, as the browser's own device id. Null is "whatever
+  // the system calls default", which is also what a stored id that no longer
+  // matches any device falls back to — the renderer checks that, because only
+  // it can enumerate. Bounded here: it is an opaque string from an untrusted
+  // surface, and nothing downstream should meet an unbounded one.
+  const deviceId = typeof value.deviceId === "string" && value.deviceId.length > 0 && value.deviceId.length <= 256
+    ? value.deviceId
+    : null;
+  // A language hint is a BCP-47-ish tag the runtime is given verbatim, so it is
+  // bounded and character-restricted here rather than trusted. An explicitly
+  // stored null means the user chose automatic detection and keeps it.
+  if (value.language === null) return { model, language: null, deviceId };
+  const language = typeof value.language === "string" && /^[A-Za-z]{2,8}(-[A-Za-z0-9]{2,8})*$/.test(value.language)
+    ? value.language
+    : defaultDictationLanguage;
+  return { model, language, deviceId };
+}
+
+/** What dictation assumes it is hearing until someone says otherwise. */
+export const defaultDictationLanguage = "en";
+
+/**
+ * How many rebound chords are kept.
+ *
+ * Comfortably more than the table has rows, and a ceiling all the same: the
+ * record arrives from the renderer keyed by ids this process deliberately does
+ * not know, so its size is the one thing that can be bounded here.
+ */
+const maxKeyBindings = 64;
+
+/**
+ * The chords the user changed.
+ *
+ * Only the differences are stored. Keeping the whole table would pin every
+ * default to the version that wrote the file, so a release that moves one could
+ * never move it for anybody who had opened the Keyboard page once.
+ */
+export function readKeyBindings(): KeyBindingSettings {
+  return normalizedKeyBindings(readRawSettings().keybindings);
+}
+
+export function writeKeyBindings(value: unknown): KeyBindingSettings {
+  const keybindings = normalizedKeyBindings(value);
+  writeRawSettings({ ...readRawSettings(), keybindings });
+  return keybindings;
+}
+
+function normalizedKeyBindings(value: unknown): KeyBindingSettings {
+  if (!isRecord(value)) return {};
+  const bindings: KeyBindingSettings = {};
+  for (const [id, raw] of Object.entries(value)) {
+    if (Object.keys(bindings).length >= maxKeyBindings) break;
+    // The id names a shortcut in the renderer's table, which this process has no
+    // copy of and no business having one of: what a chord *does* is a question
+    // about the interface. Shape and size are what can be checked here, and an
+    // id that no longer exists is dropped on the way back in rather than here.
+    if (!/^[a-z][a-z.]{0,63}$/.test(id) || !isRecord(raw)) continue;
+    // A key is one `event.key` value: a single character, or a name like
+    // "Enter". Anything longer is not a key this app could ever match.
+    if (typeof raw.key !== "string" || raw.key.length === 0 || raw.key.length > 20) continue;
+    bindings[id] = {
+      key: raw.key,
+      ...(raw.primary === true ? { primary: true } : {}),
+      ...(raw.shift === true ? { shift: true } : {}),
+      ...(raw.alt === true ? { alt: true } : {}),
+    };
+  }
+  return bindings;
+}
+
+/**
+ * Whether the app checks downloads.umbratic.ai for a newer release on its own.
+ * On until turned off: an installed app that never learns about a fix is the
+ * worse default. Only an explicit `false` is off, so an older settings file
+ * with nothing stored reads as on rather than as a choice nobody made.
+ */
+export function readAutomaticAppUpdatesSetting(): boolean {
+  return readRawSettings().automaticAppUpdates !== false;
+}
+
+export function writeAutomaticAppUpdatesSetting(value: unknown): boolean {
+  const automaticAppUpdates = value !== false;
+  writeRawSettings({ ...readRawSettings(), automaticAppUpdates });
+  return automaticAppUpdates;
+}
+
+/**
+ * How a stored permission mode reads, and what an absent one means.
+ *
+ * Absent means nobody has chosen, and the choice for anyone who has not
+ * chosen is Auto: asking before every low-risk read is a question with one
+ * sensible answer, and a first run spent clicking through it teaches the user
+ * to approve without looking. Only an explicit "normal" turns it off, so a
+ * user who did choose keeps their choice through this change.
+ */
+function permissionModeFromValue(value: unknown): PermissionMode {
+  return value === "normal" ? "normal" : "auto_safe";
+}
+
 export function readPermissionModeSetting(): PermissionMode {
-  return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
+  return permissionModeFromValue(readRawSettings().permissionMode);
 }
 
 export function readStartupSettings(): DesktopStartupSettings {
   const settings = readRawSettings();
   const endpoint = modelEndpointSettings(settings);
   return {
-    permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
+    permissionMode: permissionModeFromValue(settings.permissionMode),
     modelEndpoint: publicModelEndpointSettings(endpoint),
-    localModels: endpoint.mode === "local"
-      ? Array.from(new Set([endpoint.modelId, ...cachedLocalModels(settings, endpoint.baseUrl)].filter(Boolean)))
-      : [],
     companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
+    reasoningEffort: isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT,
+    showThinking: settings.showThinking === true,
   };
 }
 
 export function writePermissionModeSetting(value: unknown): PermissionMode {
+  // Stricter than the read: an absent setting is nobody's choice and takes the
+  // default, but an unrecognized *write* is a bug, and a bug should not be able
+  // to elevate anything. It lands on "normal" and stays stored, which is also
+  // what makes "normal" an explicit choice the read above will honour.
   const permissionMode: PermissionMode = value === "auto_safe" ? "auto_safe" : "normal";
   const settings = readRawSettings();
   writeRawSettings({
@@ -434,6 +558,44 @@ export function readStoredRemoteConnections(): unknown {
 
 export function writeStoredRemoteConnections(value: unknown): void {
   writeRawSettings({ ...readRawSettings(), remoteConnections: value });
+}
+
+/**
+ * The stored custom-model list, verbatim. Shape and pinning belong to
+ * `customModels.ts`; this module only owns the settings blob.
+ */
+export function readStoredCustomModels(): unknown {
+  return readRawSettings().customModels;
+}
+
+export function writeStoredCustomModels(value: unknown): void {
+  writeRawSettings({ ...readRawSettings(), customModels: value });
+}
+
+const quantPattern = /^[A-Z0-9][A-Z0-9_.-]{0,31}$/i;
+
+/**
+ * Which quantization each local model should download and run, keyed by model
+ * id. Only deviations from a model's default are stored, so a later change to
+ * a catalog default reaches everyone who never chose.
+ */
+export function readLocalQuantSelections(): Record<string, string> {
+  const stored = readRawSettings().localQuants;
+  if (!isRecord(stored)) return {};
+  return Object.fromEntries(
+    Object.entries(stored).filter(([id, quant]) =>
+      /^[A-Za-z0-9][\w-]{0,160}$/.test(id) && typeof quant === "string" && quantPattern.test(quant),
+    ),
+  ) as Record<string, string>;
+}
+
+export function writeLocalQuantSelection(modelId: string, quant: string | null): Record<string, string> {
+  const current = readLocalQuantSelections();
+  const next = { ...current };
+  if (quant === null) delete next[modelId];
+  else if (quantPattern.test(quant)) next[modelId] = quant;
+  writeRawSettings({ ...readRawSettings(), localQuants: next });
+  return next;
 }
 
 export function readNotes(): UserNotes {

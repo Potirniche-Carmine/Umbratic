@@ -40,8 +40,6 @@ function electronMock(userData) {
 function loadStorage(userData, home = userData) {
   setEnv({
     HOME: home,
-    OLLAMA_BASE_URL: "",
-    OLLAMA_API_KEY: "",
     USERPROFILE: home,
     UMBRATIC_ALLOW_ENDPOINT_EDIT: "true",
     UMBRATIC_FORCE_LOCAL_ENDPOINT: undefined,
@@ -451,18 +449,18 @@ test("endpoint settings default to the local model runtime", () => {
 
   assert.equal(storage.hasStoredModelEndpointSettings(), false);
   assert.equal(storage.readModelEndpointSettings().mode, "local");
-  assert.equal(storage.readModelEndpointSettings().baseUrl, "http://127.0.0.1:11434");
+  assert.equal(storage.readModelEndpointSettings().baseUrl, "");
   assert.equal(storage.readModelEndpointSettings().modelId, "");
 
   const savedLocal = storage.writeModelEndpointSettings({
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "llama3.2",
+    baseUrl: "",
+    modelId: "gemma4-e4b",
     secret: "must-not-be-stored",
     headers: [{ name: "X-Ignored", value: "also-not-stored" }],
   });
   assert.equal(savedLocal.mode, "local");
-  assert.equal(savedLocal.modelId, "llama3.2");
+  assert.equal(savedLocal.modelId, "gemma4-e4b");
   assert.equal(savedLocal.secret, "");
   assert.deepEqual(plain(savedLocal.headers), [{ name: "", value: "" }, { name: "", value: "" }]);
   assert.equal(storage.hasStoredModelEndpointSettings(), true);
@@ -482,8 +480,8 @@ test("local model settings remain in SQLite after a switch to a company server",
 
   storage.writeModelEndpointSettings({
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "qwen3:8b",
+    baseUrl: "",
+    modelId: "gemma4-e4b",
   });
   storage.writeModelEndpointSettings({
     mode: "server",
@@ -494,37 +492,15 @@ test("local model settings remain in SQLite after a switch to a company server",
   assert.equal(storage.readModelEndpointSettings().mode, "server");
   assert.deepEqual(plain(storage.readModelEndpointSettingsForMode("local")), {
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "qwen3:8b",
+    baseUrl: "",
+    modelId: "gemma4-e4b",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
   });
 
   const rawSettings = JSON.parse(readSettingsPayloadText(userData));
-  assert.equal(rawSettings.modelEndpoints.local.modelId, "qwen3:8b");
+  assert.equal(rawSettings.modelEndpoints.local.modelId, "gemma4-e4b");
   assert.equal(rawSettings.modelEndpoints.server.baseUrl, "https://veil.example.internal");
-});
-
-test("local model discovery is cached in SQLite by normalized runtime URL", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-model-cache-"));
-  const storage = loadStorage(userData);
-
-  assert.deepEqual(plain(storage.readCachedLocalModels("http://127.0.0.1:11434")), []);
-  assert.deepEqual(plain(storage.writeCachedLocalModels(
-    "http://127.0.0.1:11434///",
-    ["qwen3", " qwen3 ", "gemma3"],
-  )), ["qwen3", "gemma3"]);
-  assert.deepEqual(
-    plain(storage.readCachedLocalModels("http://127.0.0.1:11434")),
-    ["qwen3", "gemma3"],
-  );
-
-  const reloaded = loadStorage(userData);
-  assert.deepEqual(
-    plain(reloaded.readCachedLocalModels("http://127.0.0.1:11434/")),
-    ["qwen3", "gemma3"],
-  );
-  assert.match(readSettingsPayloadText(userData), /"localModelCache"/);
 });
 
 test("an explicitly forced local configuration overrides a stored server endpoint for the session", () => {
@@ -540,27 +516,26 @@ test("an explicitly forced local configuration overrides a stored server endpoin
     },
   });
   process.env.UMBRATIC_FORCE_LOCAL_ENDPOINT = "1";
-  process.env.UMBRATIC_LOCAL_RUNTIME_BASE_URL = "http://127.0.0.1:11434";
-  process.env.UMBRATIC_LOCAL_MODEL_ID = "gemma4:12b-it-q4_K_M";
+    process.env.UMBRATIC_LOCAL_MODEL_ID = "gemma4-12b";
   const storage = loadTypeScriptModule(storagePath, { cache: new Map(), mocks: { electron: electronMock(userData) } });
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    baseUrl: "http://127.0.0.1:11434",
-    modelId: "gemma4:12b-it-q4_K_M",
+    baseUrl: "",
+    modelId: "gemma4-12b",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
   });
 
   storage.writeModelEndpointSettings({
     mode: "local",
-    baseUrl: "http://127.0.0.1:11500",
+    baseUrl: "",
     modelId: "user-selected-model",
   });
 
   assert.deepEqual(plain(storage.readModelEndpointSettings()), {
     mode: "local",
-    baseUrl: "http://127.0.0.1:11500",
+    baseUrl: "",
     modelId: "user-selected-model",
     secret: "",
     headers: [{ name: "", value: "" }, { name: "", value: "" }],
@@ -575,12 +550,18 @@ test("tool, skill, harness, permission, and notes settings sanitize invalid inpu
   assert.equal(storage.readContextLengthSetting(), 64000);
   assert.equal(storage.writeContextLengthSetting(128000), 128000);
   assert.equal(storage.writeContextLengthSetting(999999), 256000);
-  assert.equal(storage.readPermissionModeSetting(), "normal");
+  // Nobody has chosen yet, so the default stands: Auto.
+  assert.equal(storage.readPermissionModeSetting(), "auto_safe");
   assert.equal(storage.writePermissionModeSetting("auto_safe"), "auto_safe");
   assert.equal(loadStorage(userData).readPermissionModeSetting(), "auto_safe");
+  // "Normal" is a choice, not an absence, and survives being read back.
+  assert.equal(storage.writePermissionModeSetting("normal"), "normal");
+  assert.equal(loadStorage(userData).readPermissionModeSetting(), "normal");
   writeSettingsPayload(userData, { harnessProfile: "invalid" });
   assert.equal(storage.readHarnessProfileSetting(), "engineering");
-  assert.equal(storage.readPermissionModeSetting(), "normal");
+  assert.equal(storage.readPermissionModeSetting(), "auto_safe");
+  // Writes stay strict: an unrecognized one is a bug, and a bug must not be
+  // able to elevate anything.
   assert.equal(storage.writePermissionModeSetting("bypass"), "normal");
   assert.equal(storage.writePermissionModeSetting("invalid"), "normal");
 
@@ -782,6 +763,61 @@ test("startup settings use one SQLite settings-row read", () => {
   }
 });
 
+test("the run mode, and each mode's own settings, survive a relaunch", () => {
+  // What the app boots from is `readStartupSettings`, not `readModelEndpointSettings`,
+  // so that is what has to remember the choice: a user who was on the company
+  // server yesterday must not open the app on Local today.
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-mode-"));
+  const storage = loadStorage(userData);
+
+  // Fresh install: Local, with nothing configured against it.
+  assert.equal(storage.readStartupSettings().modelEndpoint.mode, "local");
+
+  storage.writeModelEndpointSettings({
+    mode: "server",
+    baseUrl: "https://veil.example.internal",
+    modelId: "qwen3-32b",
+  });
+  const afterServer = loadStorage(userData).readStartupSettings().modelEndpoint;
+  assert.equal(afterServer.mode, "server");
+  assert.equal(afterServer.baseUrl, "https://veil.example.internal");
+  assert.equal(afterServer.modelId, "qwen3-32b");
+
+  // Switching to Local and relaunching stays Local, and remembers the local
+  // model rather than falling back to the catalog default.
+  loadStorage(userData).writeModelEndpointSettings({ mode: "local", baseUrl: "", modelId: "qwen38-27b" });
+  const afterLocal = loadStorage(userData).readStartupSettings().modelEndpoint;
+  assert.equal(afterLocal.mode, "local");
+  assert.equal(afterLocal.modelId, "qwen38-27b");
+
+  // And the server's own URL and model are still on disk while Local is the
+  // active mode, so switching back offers them rather than empty fields: each
+  // mode keeps its own settings beside the active one. This is the read the
+  // Connection panel makes when the run mode is switched.
+  const rememberedServer = loadStorage(userData).readModelEndpointSettingsForMode("server");
+  assert.equal(rememberedServer.baseUrl, "https://veil.example.internal");
+  assert.equal(rememberedServer.modelId, "qwen3-32b");
+});
+
+test("everything else the app boots with survives a relaunch too", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-startup-"));
+  const storage = loadStorage(userData);
+
+  storage.writePermissionModeSetting("normal");
+  storage.writeHarnessProfileSetting("marketing");
+  storage.writeContextLengthSetting(128000);
+  storage.writeReasoningEffortSetting("high");
+
+  const relaunched = loadStorage(userData).readStartupSettings();
+  assert.equal(relaunched.permissionMode, "normal");
+  assert.equal(relaunched.harnessProfile, "marketing");
+  assert.equal(relaunched.contextLength, 128000);
+  assert.equal(relaunched.reasoningEffort, "high");
+  assert.equal(relaunched.showThinking, false);
+  storage.writeShowThinkingSetting(true);
+  assert.equal(loadStorage(userData).readStartupSettings().showThinking, true);
+});
+
 test("the server model choice survives a relaunch", () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-model-"));
   const storage = loadStorage(userData);
@@ -804,4 +840,54 @@ test("the server model choice survives a relaunch", () => {
     modelId: "veil-managed",
   });
   assert.equal(relaunched.readModelEndpointSettings().modelId, "veil-managed");
+});
+
+test("automatic app updates are on until explicitly turned off, and only an explicit false is off", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-"));
+  const storage = loadStorage(userData);
+
+  // Nothing stored: on. An older settings file has no opinion.
+  assert.equal(storage.readAutomaticAppUpdatesSetting(), true);
+  assert.equal(storage.writeAutomaticAppUpdatesSetting(false), false);
+  assert.equal(storage.readAutomaticAppUpdatesSetting(), false);
+  assert.equal(JSON.parse(readSettingsPayloadText(userData)).automaticAppUpdates, false);
+  // Anything that is not the literal false is on: a malformed write cannot
+  // silently switch checks off.
+  assert.equal(storage.writeAutomaticAppUpdatesSetting("no"), true);
+  assert.equal(storage.readAutomaticAppUpdatesSetting(), true);
+  writeSettingsPayload(userData, { automaticAppUpdates: "off" });
+  assert.equal(storage.readAutomaticAppUpdatesSetting(), true);
+});
+
+test("rebound chords survive a relaunch, and only the differences are kept", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-desktop-storage-"));
+  const storage = loadStorage(userData);
+
+  // Nothing stored is not "no shortcuts" — it is "none of them were changed".
+  assert.deepEqual(plain(storage.readKeyBindings()), {});
+  storage.writeKeyBindings({ "chat.new": { key: "t", primary: true, shift: false } });
+  // False modifiers are dropped rather than stored: a binding is the keys that
+  // are held, and a record full of falses says the same thing at three times
+  // the size.
+  assert.deepEqual(plain(readSettingsPayloadText(userData) && JSON.parse(readSettingsPayloadText(userData)).keybindings), {
+    "chat.new": { key: "t", primary: true },
+  });
+  assert.deepEqual(plain(loadStorage(userData).readKeyBindings()), { "chat.new": { key: "t", primary: true } });
+
+  // What the renderer sends is not trusted: the id names a row in a table this
+  // process deliberately has no copy of, so shape and size are what is checked.
+  storage.writeKeyBindings({
+    "chat.new": { key: "t", primary: true },
+    "Chat.New": { key: "u", primary: true },
+    "chat.long": { key: "x".repeat(21), primary: true },
+    "chat.empty": { key: "" },
+    "chat.wrong": "⌘K",
+  });
+  assert.deepEqual(Object.keys(plain(storage.readKeyBindings())), ["chat.new"]);
+
+  // And a payload written by hand cannot grow without bound.
+  const many = {};
+  for (let index = 0; index < 200; index += 1) many[`chat.k${"a".repeat(index % 12)}${index % 7}`] = { key: "q", alt: true };
+  writeSettingsPayload(userData, { keybindings: many });
+  assert.ok(Object.keys(plain(loadStorage(userData).readKeyBindings())).length <= 64);
 });

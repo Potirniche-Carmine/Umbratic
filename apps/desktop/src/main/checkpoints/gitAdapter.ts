@@ -215,39 +215,52 @@ export async function createGitCheckpoint(input: CheckpointGitInput): Promise<Ch
   }
 }
 
-export async function restoreGitCheckpoint(input: {
+/**
+ * Put one file back the way the checkpoint has it, and leave every other file
+ * in the worktree alone.
+ *
+ * The whole-worktree restore above is deliberately not reused here: it resets
+ * the tree and the index wholesale, which is exactly the "one click erases the
+ * turn" outcome this is meant to avoid. A path that the checkpoint does not
+ * carry was created after it, so putting it back means removing it.
+ */
+export async function restoreGitCheckpointPath(input: {
   workspacePath: string;
   checkpointCommit: string;
-  treeOid: string;
-  indexTreeOid: string;
+  relativePath: string;
 }): Promise<void> {
-  const workspacePath = path.resolve(input.workspacePath);
-  if (![input.checkpointCommit, input.treeOid, input.indexTreeOid].every((oid) => /^[a-f0-9]{40,64}$/i.test(oid))) {
+  if (!/^[a-f0-9]{40,64}$/i.test(input.checkpointCommit)) {
     throw new Error("Checkpoint object identity is invalid.");
   }
-  const { root } = await assertEligible(workspacePath, input.checkpointCommit);
-  const commitTree = await git(root, ["rev-parse", `${input.checkpointCommit}^{tree}`]);
-  if (commitTree !== input.treeOid) throw new Error("Checkpoint tree does not match its commit.");
-  await git(root, ["cat-file", "-e", `${input.indexTreeOid}^{tree}`]);
-
-  await git(root, ["clean", "-fd"]);
-  await git(root, ["read-tree", "--reset", "-u", input.treeOid]);
-  await git(root, ["read-tree", input.indexTreeOid]);
-  if (await git(root, ["write-tree"]) !== input.indexTreeOid) {
-    throw new Error("Checkpoint index restoration failed validation.");
+  const relative = input.relativePath.replaceAll("\\", "/");
+  if (!relative || path.posix.isAbsolute(relative) || relative.split("/").some((part) => part === ".." || part === "")) {
+    throw new Error("Invalid path to restore.");
   }
-
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-checkpoint-verify-"));
-  const verificationEnv: NodeJS.ProcessEnv = { GIT_INDEX_FILE: path.join(temporary, "index"), GIT_OPTIONAL_LOCKS: "0" };
-  try {
-    await git(root, ["read-tree", input.treeOid], verificationEnv);
-    await git(root, ["update-index", "-q", "--refresh"], verificationEnv);
-    await git(root, ["diff-files", "--quiet", "--"], verificationEnv);
-  } catch {
-    throw new Error("Checkpoint worktree restoration failed validation.");
-  } finally {
-    fs.rmSync(temporary, { recursive: true, force: true });
+  if (blockedCheckpointPath(relative)) {
+    throw new Error(`Refusing to restore ${relative}.`);
   }
+  const { root } = await assertEligible(input.workspacePath, input.checkpointCommit);
+  const target = path.resolve(root, relative);
+  if (!inside(root, target) || target === root) {
+    throw new Error("Refusing to restore a path outside the worktree.");
+  }
+  for (let directory = path.dirname(target); inside(root, directory) && directory !== root; directory = path.dirname(directory)) {
+    if (fs.lstatSync(directory, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error("Refusing to restore through a symbolic link.");
+    }
+  }
+  if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error("Refusing to restore through a symbolic link.");
+  }
+  const inCheckpoint = await git(root, ["cat-file", "-e", `${input.checkpointCommit}:${relative}`])
+    .then(() => true)
+    .catch(() => false);
+  if (inCheckpoint) {
+    await git(root, ["checkout", input.checkpointCommit, "--", relative]);
+    return;
+  }
+  await git(root, ["rm", "-f", "--ignore-unmatch", "--", relative]).catch(() => undefined);
+  if (fs.existsSync(target)) fs.rmSync(target, { force: true });
 }
 
 export async function materializeCheckpointWorktree(input: {

@@ -13,7 +13,7 @@ import { veilManagedModelId } from "./endpointConfig";
 import { currentLocalVeilConnection } from "./localVeil";
 import { umbraticRunnerHardeningEnvironment, assertUmbraticRunnerConfig } from "./policy";
 import { enabledPromptSkills } from "./skills";
-import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointSettings } from "./storage";
+import { readContextLengthSetting, readHarnessProfileSetting, readModelEndpointSettings, readReasoningEffortSetting, readShowThinkingSetting } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type {
   CapabilityProbeReport,
@@ -101,8 +101,7 @@ export function buildUmbraticRunnerConfig(
       id: selectedModel.providerId,
       name: selectedModel.providerName,
       baseURL: selectedModel.baseUrl,
-      // Trusted config, not inferred from the URL: the runner selects its orient
-      // timeout from this, and a wrong guess would silently change degradation.
+      // Trusted config, not inferred from the URL.
       mode: endpointSettings.mode,
       chatEndpointPath: route.chatEndpointPath,
       apiKey: localVeil?.authToken ?? "",
@@ -114,6 +113,12 @@ export function buildUmbraticRunnerConfig(
         endpointSettings.mode === "server"
         && connectedVeilSupports(veilFeature.modelSelection)
         && selectedModel.modelId !== veilManagedModelId,
+      // Same gating as `model`: an older Veil that never advertised the toggle
+      // must see the body it has always seen.
+      sendThinkingField: connectedVeilSupports(veilFeature.thinkingToggle),
+      thinking: readReasoningEffortSetting() === "off" ? "off" : "on",
+      sendReasoningVisibleField: connectedVeilSupports(veilFeature.reasoningVisible),
+      reasoningVisible: readShowThinkingSetting() && readReasoningEffortSetting() !== "off",
       capabilities: selectedModel.capabilities ?? {
         parallelToolCalls: endpointSettings.mode === "local",
         vision: false,

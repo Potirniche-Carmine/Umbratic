@@ -44,6 +44,9 @@ fn producer_and_runner_agree_on_the_workspace_fingerprint() {
 fn producer_and_runner_agree_on_excluded_paths() {
     let cases = [
         "node_modules/left-pad/index.js",
+        "apps/desktop/node_modules/pkg/index.js",
+        "apps/desktop/.llama-cache/llama.cpp/README.md",
+        "packages/runner/target/debug/thing.rs",
         "target/debug/thing.rs",
         "dist/bundle.js",
         ".git/config",
@@ -51,6 +54,7 @@ fn producer_and_runner_agree_on_excluded_paths() {
         "coverage/lcov.info",
         ".venv/lib/x.py",
         "src/service.ts",
+        "src/build.ts",
         "docs/plan.md",
     ];
     for case in cases {

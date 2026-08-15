@@ -20,8 +20,7 @@ use crate::{
 
 /// reqwest's Display hides the useful cause — "error sending request for url
 /// (...)" says nothing about *why*. The distinction between "operation timed
-/// out" and "connection refused" lives in the error source chain, and a live
-/// degraded-orient diagnostic proved useless without it.
+/// out" and "connection refused" lives in the error source chain.
 fn describe_request_error(error: &reqwest::Error) -> String {
     let mut message = error.to_string();
     let mut source = std::error::Error::source(error);
@@ -60,249 +59,11 @@ pub struct VeilChatResult {
     /// byte-length estimate.
     pub system_prompt_tokens_exact: bool,
     pub truncated_tool_arguments: bool,
-    /// Held text under `HoldPolicy::All`, released or dropped by the caller.
-    pub held_text: String,
-}
-
-/// `None` streams live (unguided). `All` withholds until the step resolves so
-/// tool-step prose can be dropped and evidence-required fabrications refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HoldPolicy {
-    None,
-    All,
 }
 
 pub struct VeilRequestOptions {
     pub max_output_tokens: u64,
     pub include_tools: bool,
-    /// The run's validated bucket selector. Protected control metadata, not
-    /// prompt text: Veil renders the playbook from its own catalog.
-    pub harness_bucket: Option<String>,
-    /// How this step's assistant text is withheld while it streams.
-    pub hold: HoldPolicy,
-}
-
-/// A validated classifier decision for the active run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrientDecision {
-    pub bucket: String,
-    /// `None` for `direct_answer`, and for a guided bucket whose sentence
-    /// failed validation — the sentence is the optional part of the decision.
-    pub summary_sentence: Option<String>,
-    /// Veil's resolved answer to "may this turn end without calling a tool?".
-    /// It arrives with the decision rather than being derived here, because the
-    /// bucket catalog lives in Veil and a second copy would drift.
-    pub evidence_required: bool,
-}
-
-/// The bucket that suppresses the playbook and the status sentence entirely.
-pub const DIRECT_ANSWER_BUCKET: &str = "direct_answer";
-
-const MAX_ORIENT_REQUEST_BYTES: usize = 32 * 1024;
-const ORIENT_HEAD_TAIL_BYTES: usize = 16 * 1024;
-const MAX_SUMMARY_SENTENCE_RUNES: usize = 240;
-/// Matches prompts.MaxOrientContextRunes in Veil.
-const MAX_ORIENT_CONTEXT_RUNES: usize = 600;
-const ORIENT_OMISSION_MARKER: &str = "\n[... request text omitted ...]\n";
-
-/// Truncates to a UTF-8-safe head and tail so a long paste still classifies on
-/// its actual intent rather than being rejected.
-fn bounded_request_text(text: &str) -> String {
-    if text.len() <= MAX_ORIENT_REQUEST_BYTES {
-        return text.to_owned();
-    }
-    let mut head_end = ORIENT_HEAD_TAIL_BYTES.min(text.len());
-    while !text.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-    let mut tail_start = text.len().saturating_sub(ORIENT_HEAD_TAIL_BYTES);
-    while !text.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
-    if tail_start < head_end {
-        tail_start = head_end;
-    }
-    format!(
-        "{}{ORIENT_OMISSION_MARKER}{}",
-        &text[..head_end],
-        &text[tail_start..]
-    )
-}
-
-/// Keeps the end of the previous reply, which is where an offer or a question a
-/// follow-up answers actually lives. Rune-bounded, so a long answer cannot
-/// inflate a classification request.
-fn bounded_context_tail(response: &str) -> String {
-    let trimmed = response.trim();
-    let runes = trimmed.chars().count();
-    if runes <= MAX_ORIENT_CONTEXT_RUNES {
-        return trimmed.to_owned();
-    }
-    let tail = trimmed
-        .chars()
-        .skip(runes - MAX_ORIENT_CONTEXT_RUNES)
-        .collect::<String>();
-    format!("…{tail}")
-}
-
-/// Runner check on the status sentence: non-empty, one line, rune-capped, and
-/// free of the decision's own bucket id as a token. No punctuation rule — that
-/// made the line English-only. Underscore-rejection used to drop real paths
-/// like `main_test.go`; checking only the chosen bucket id is enough.
-fn valid_summary_sentence(sentence: &str, bucket: &str) -> bool {
-    !sentence.is_empty()
-        && !sentence.contains('\n')
-        && !sentence.contains('\r')
-        && sentence.chars().count() <= MAX_SUMMARY_SENTENCE_RUNES
-        && !mentions_bucket_id(sentence, bucket)
-}
-
-/// True when the sentence carries `bucket` as a standalone token (`_` counts).
-fn mentions_bucket_id(sentence: &str, bucket: &str) -> bool {
-    let bucket = bucket.to_ascii_lowercase();
-    sentence
-        .to_ascii_lowercase()
-        .split(|character: char| !character.is_alphanumeric() && character != '_')
-        .any(|token| token == bucket)
-}
-
-/// Classifies one accepted run. Orient can only add behavior: every failure
-/// path returns `Err`, and the caller then runs exactly today's chat path.
-pub async fn orient_request(
-    session: &Session,
-    request_text: &str,
-    previous_response: &str,
-) -> Result<OrientDecision, String> {
-    let request_text = bounded_request_text(request_text);
-    if request_text.trim().is_empty() {
-        return Err("orient skipped for a blank request".into());
-    }
-    let (mut endpoint, host_header) = request_endpoint(&session.config.provider)?;
-    // The Veil route allowlist is widened only here. Ordinary chat still accepts
-    // only the three chat paths.
-    endpoint.set_path("/api/internal/orient");
-    endpoint.set_query(None);
-    let route = provider_endpoint_url(&session.config.provider)?
-        .path()
-        .trim_start_matches("/api/")
-        .trim_end_matches('/')
-        .to_owned();
-    let body = json!({
-        "route": route,
-        "requestText": request_text,
-        // Bounded here as well as in Veil: a long answer must never be the
-        // reason a classification request grows.
-        "previousResponse": bounded_context_tail(previous_response),
-    });
-    // Local orient must survive a cold model load plus however long the model
-    // chooses to think: Ollama loading weights routinely takes tens of
-    // seconds, thinking is deliberately uncapped, and the chat request after
-    // orient would block on the same load anyway, so waiting here adds no
-    // end-to-end latency when cold and none when warm. 10s degraded a live
-    // run for no benefit.
-    let timeout = match session.config.provider.mode {
-        crate::config::ProviderMode::Server => std::time::Duration::from_secs(3),
-        crate::config::ProviderMode::Local => std::time::Duration::from_secs(120),
-    };
-    let client = shared_client(&session.config.provider)?;
-    let mut request = client
-        .post(endpoint)
-        .timeout(timeout)
-        .header("Content-Type", "application/json");
-    if let Some(host) = host_header {
-        request = request.header("Host", host);
-    }
-    let bearer = provider_bearer(&session.config.provider);
-    if !bearer.trim().is_empty() {
-        request = request.bearer_auth(&bearer);
-    }
-    for (name, value) in &session.config.provider.headers {
-        request = request.header(name, value);
-    }
-    let response = request
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| format!("orient failed: {}", describe_request_error(&error)))?;
-    if bytes.len() > 8 * 1024 {
-        return Err("orient returned an oversized response".into());
-    }
-    let payload: Value =
-        serde_json::from_slice(&bytes).map_err(|_| "orient returned invalid JSON".to_owned())?;
-    if !status.is_success() {
-        let code = payload
-            .get("code")
-            .and_then(Value::as_str)
-            .unwrap_or("invalid_orient_decision");
-        // Veil attaches a static failure reason (never model output); carry it
-        // into the degraded diagnostic so the log says why orient degraded.
-        return Err(
-            match payload
-                .get("reason")
-                .and_then(Value::as_str)
-                .filter(|reason| !reason.trim().is_empty())
-            {
-                Some(reason) => format!("{code}: {reason}"),
-                None => code.to_owned(),
-            },
-        );
-    }
-    parse_orient_payload(&payload)
-}
-
-/// Validates one successful orient response body.
-///
-/// Split from the transport so the envelope rules — the closed key set, the
-/// required bucket, the optional sentence, the optional evidence flag — are
-/// testable without standing up an HTTP server.
-fn parse_orient_payload(payload: &Value) -> Result<OrientDecision, String> {
-    let Some(object) = payload.as_object() else {
-        return Err("invalid_orient_decision".into());
-    };
-    if object
-        .keys()
-        .any(|key| key != "bucket" && key != "summarySentence" && key != "evidenceRequired")
-    {
-        return Err("invalid_orient_decision".into());
-    }
-    let bucket = object
-        .get("bucket")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "invalid_orient_decision".to_owned())?
-        .to_owned();
-    if bucket == DIRECT_ANSWER_BUCKET {
-        return Ok(OrientDecision {
-            bucket,
-            summary_sentence: None,
-            evidence_required: false,
-        });
-    }
-    // Absent or non-boolean means "not required": the flag can only add a
-    // check, so an older Veil that does not send it degrades to today's path.
-    let evidence_required = object
-        .get("evidenceRequired")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    // The sentence is optional: a missing or invalid one is dropped and the
-    // validated bucket still guides the run.
-    let sentence = match object.get("summarySentence") {
-        Some(Value::String(value)) => {
-            let trimmed = value.trim();
-            valid_summary_sentence(trimmed, &bucket).then(|| trimmed.to_owned())
-        }
-        _ => None,
-    };
-    Ok(OrientDecision {
-        bucket,
-        summary_sentence: sentence,
-        evidence_required,
-    })
 }
 
 pub async fn compact_context(
@@ -497,15 +258,90 @@ fn append_content(result: &mut VeilChatResult, text: String) {
 fn emit_completed_output(
     sink: &EventSink,
     session: &Session,
-    result: &mut VeilChatResult,
+    result: &VeilChatResult,
     text_streamed: bool,
-    hold: HoldPolicy,
 ) {
-    if text_streamed || result.content.is_empty() || !result.held_text.is_empty() {
+    if text_streamed || result.content.is_empty() {
         return;
     }
-    let content = result.content.clone();
-    stream_or_hold(sink, session, result, content, hold);
+    emit_visible_content(sink, session, result, &result.content);
+}
+
+fn emit_delta(sink: &EventSink, session: &Session, text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    sink.emit(json!({
+        "type": "assistant.delta",
+        "taskId": session.task_id,
+        "text": text,
+        "at": now_iso()
+    }));
+    true
+}
+
+fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
+    emit_progress(sink, session, text, None)
+}
+
+fn emit_progress(sink: &EventSink, session: &Session, text: &str, kind: Option<&str>) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    sink.emit(match kind {
+        Some(kind) => json!({
+            "type": "assistant.progress.delta",
+            "taskId": session.task_id,
+            "text": text,
+            "kind": kind,
+            "at": now_iso()
+        }),
+        None => json!({
+            "type": "assistant.progress.delta",
+            "taskId": session.task_id,
+            "text": text,
+            "at": now_iso()
+        }),
+    });
+    true
+}
+
+fn emit_visible_content(
+    sink: &EventSink,
+    session: &Session,
+    result: &VeilChatResult,
+    content: &str,
+) -> bool {
+    if result.tool_calls.is_empty() {
+        emit_delta(sink, session, content)
+    } else {
+        emit_narration(sink, session, content)
+    }
+}
+
+fn emit_streamed(
+    sink: &EventSink,
+    session: &Session,
+    result: &VeilChatResult,
+    content: &str,
+    reasoning: &str,
+) -> bool {
+    let mut streamed = false;
+    if session.config.provider.reasoning_visible {
+        streamed |= emit_progress(sink, session, reasoning, Some("thinking"));
+    }
+    streamed |= emit_visible_content(sink, session, result, content);
+    streamed
+}
+
+fn reasoning_text(delta: &Map<String, Value>) -> String {
+    for key in ["reasoning_content", "reasoning", "thinking"] {
+        let text = text_content(delta.get(key));
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    String::new()
 }
 
 fn append_veil_delta(
@@ -560,7 +396,7 @@ fn process_veil_payload(
     payload: Value,
     result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
-) -> String {
+) -> (String, String) {
     if let Some(usage) = payload.get("usage") {
         update_usage(result, usage);
     }
@@ -569,18 +405,18 @@ fn process_veil_payload(
         .and_then(Value::as_array)
         .and_then(|values| values.first());
     let Some(choice) = choice else {
-        return String::new();
+        return (String::new(), String::new());
     };
     if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
         result.truncated_tool_arguments = true;
     }
     let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
-        return String::new();
+        return (String::new(), String::new());
     };
     let content = text_content(delta.get("content"));
     append_content(result, content.clone());
     append_veil_delta(result, delta, partial);
-    content
+    (content, reasoning_text(delta))
 }
 
 fn update_usage(result: &mut VeilChatResult, usage: &Value) {
@@ -689,71 +525,17 @@ fn process_veil_line(
     line: &str,
     result: &mut VeilChatResult,
     partial: &mut BTreeMap<usize, (String, String, String)>,
-) -> Result<(bool, String), String> {
+) -> Result<(bool, String, String), String> {
     let Some(data) = sse_data(line) else {
-        return Ok((false, String::new()));
+        return Ok((false, String::new(), String::new()));
     };
     if data.trim() == "[DONE]" {
-        return Ok((true, String::new()));
+        return Ok((true, String::new(), String::new()));
     }
     let payload = serde_json::from_str::<Value>(data)
         .map_err(|_| "Veil stream contained invalid JSON".to_owned())?;
-    let content = process_veil_payload(payload, result, partial);
-    Ok((false, content))
-}
-
-fn emit_delta(sink: &EventSink, session: &Session, text: &str) -> bool {
-    if text.is_empty() {
-        return false;
-    }
-    sink.emit(json!({
-        "type": "assistant.delta",
-        "taskId": session.task_id,
-        "text": text,
-        "at": now_iso()
-    }));
-    true
-}
-
-/// Emits text that a held request withheld, once the caller has decided the step
-/// is fit to show. Dropping the held text instead is how a refused step leaves
-/// nothing behind.
-pub fn release_held_text(sink: &EventSink, session: &Session, result: &mut VeilChatResult) {
-    let held = std::mem::take(&mut result.held_text);
-    emit_delta(sink, session, &held);
-}
-
-/// Run narration: prose the UI shows inside the working block rather than as an
-/// answer. It is display output only — `assistant.progress.delta` is dropped
-/// from the conversation history the model reads back.
-pub fn emit_narration(sink: &EventSink, session: &Session, text: &str) -> bool {
-    if text.trim().is_empty() {
-        return false;
-    }
-    sink.emit(json!({
-        "type": "assistant.progress.delta",
-        "taskId": session.task_id,
-        "text": text.trim(),
-        "at": now_iso()
-    }));
-    true
-}
-
-/// Routes one chunk of already-redacted assistant text to the event stream or to
-/// the hold buffer. Returns whether anything reached the stream, which is what
-/// `emit_completed_output` uses to avoid emitting the message twice.
-fn stream_or_hold(
-    sink: &EventSink,
-    session: &Session,
-    result: &mut VeilChatResult,
-    text: String,
-    hold: HoldPolicy,
-) -> bool {
-    if hold == HoldPolicy::None {
-        return emit_delta(sink, session, &text);
-    }
-    result.held_text.push_str(&text);
-    false
+    let (content, reasoning) = process_veil_payload(payload, result, partial);
+    Ok((false, content, reasoning))
 }
 
 fn fill_missing_tool_call_ids(calls: &mut [ToolCall]) {
@@ -785,8 +567,6 @@ pub async fn stream_veil_chat(
     let VeilRequestOptions {
         max_output_tokens,
         include_tools,
-        harness_bucket,
-        hold,
     } = options;
     if session.is_aborted() {
         return Err("model request aborted".into());
@@ -805,14 +585,12 @@ pub async fn stream_veil_chat(
         tools,
         max_output_tokens,
         include_tools,
-        harness_bucket.as_deref(),
     );
 
     let attempt_input = VeilAttemptInput {
         endpoint,
         host_header,
         body,
-        hold,
     };
     let mut attempt = 1_u32;
     loop {
@@ -858,9 +636,7 @@ async fn attempt_veil_chat(
         endpoint,
         host_header,
         body,
-        hold,
     } = input;
-    let hold = *hold;
     // A misconfigured provider answers the same way every time.
     let client =
         shared_client(&session.config.provider).map_err(VeilAttemptError::final_failure)?;
@@ -940,9 +716,11 @@ async fn attempt_veil_chat(
             if let Some(error) = veil_stream_error(&line) {
                 return Err(VeilAttemptError::final_failure(error).committed_if(committed));
             }
-            let (line_completed, content) = process_veil_line(&line, &mut result, &mut partial)
-                .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
-            text_streamed |= stream_or_hold(sink, session, &mut result, content, hold);
+            let (line_completed, content, reasoning) =
+                process_veil_line(&line, &mut result, &mut partial).map_err(|error| {
+                    VeilAttemptError::final_failure(error).committed_if(committed)
+                })?;
+            text_streamed |= emit_streamed(sink, session, &result, &content, &reasoning);
             if line_completed {
                 completed = true;
             }
@@ -958,9 +736,10 @@ async fn attempt_veil_chat(
         if let Some(error) = veil_stream_error(trailing) {
             return Err(VeilAttemptError::final_failure(error).committed_if(committed));
         }
-        let (line_completed, content) = process_veil_line(trailing, &mut result, &mut partial)
-            .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
-        text_streamed |= stream_or_hold(sink, session, &mut result, content, hold);
+        let (line_completed, content, reasoning) =
+            process_veil_line(trailing, &mut result, &mut partial)
+                .map_err(|error| VeilAttemptError::final_failure(error).committed_if(committed))?;
+        text_streamed |= emit_streamed(sink, session, &result, &content, &reasoning);
         if line_completed {
             completed = true;
         }
@@ -979,7 +758,7 @@ async fn attempt_veil_chat(
             call.arguments = Value::String("{\"__umbratic_truncated_tool_arguments__\":".into());
         }
     }
-    emit_completed_output(sink, session, &mut result, text_streamed, hold);
+    emit_completed_output(sink, session, &result, text_streamed);
     Ok(result)
 }
 

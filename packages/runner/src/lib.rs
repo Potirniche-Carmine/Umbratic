@@ -7,7 +7,6 @@ pub mod diagnostics;
 pub mod events;
 pub mod loop_runtime;
 pub mod lsp;
-mod orient;
 pub mod permission;
 pub mod policy;
 mod public_progress;

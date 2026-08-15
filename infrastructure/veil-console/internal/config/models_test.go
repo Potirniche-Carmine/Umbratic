@@ -306,3 +306,69 @@ func TestDefaultCommandIsValidForANewModel(t *testing.T) {
 		t.Fatalf("fp8 is the default 8-bit KV cache: %q", model.Command)
 	}
 }
+
+func speechModel() ManagedModel {
+	return ManagedModel{
+		ID: "qwen3-asr", DisplayName: "Qwen3 ASR",
+		Command: "serve Qwen/Qwen3-ASR-1.7B --port 8010 --served-model-name qwen3-asr",
+		Role:    RoleSpeech,
+	}
+}
+
+// The dictation runtime answers /v1/audio/transcriptions, not chat. Listing it
+// in VEIL_MODELS would put a model in the client's picker that fails every
+// message sent to it.
+func TestSpeechModelsStayOutOfTheChatRegistry(t *testing.T) {
+	value, err := ModelsEnvJSON([]ManagedModel{validModel(), speechModel()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(value), &entries); err != nil {
+		t.Fatalf("VEIL_MODELS must be a JSON array: %v", err)
+	}
+	if len(entries) != 1 || entries[0]["id"] != "qwen3-32b" {
+		t.Fatalf("only chat models are published: %#v", entries)
+	}
+
+	// A deployment whose only model is the speech one publishes no registry at
+	// all, so Veil keeps its single-model behavior instead of advertising
+	// selection over an empty list.
+	onlySpeech, err := ModelsEnvJSON([]ManagedModel{speechModel()})
+	if err != nil || onlySpeech != "" {
+		t.Fatalf("a speech-only fleet means no VEIL_MODELS: %q %v", onlySpeech, err)
+	}
+}
+
+func TestSpeechEnvironmentAddressesTheRuntimeItSupervises(t *testing.T) {
+	if env := SpeechEnvironment([]ManagedModel{validModel()}); len(env) != 0 {
+		t.Fatalf("no speech model means dictation stays off: %#v", env)
+	}
+
+	env := SpeechEnvironment([]ManagedModel{validModel(), speechModel()})
+	want := []string{
+		"VEIL_SPEECH_BASE_URL=http://127.0.0.1:8010/v1",
+		"VEIL_SPEECH_MODEL=qwen3-asr",
+	}
+	if len(env) != len(want) {
+		t.Fatalf("both variables travel together or neither does: %#v", env)
+	}
+	for index := range want {
+		if env[index] != want[index] {
+			t.Fatalf("expected %q, got %q", want[index], env[index])
+		}
+	}
+}
+
+func TestOnlyOneModelMayBeTheDictationRuntime(t *testing.T) {
+	second := speechModel()
+	second.ID = "whisper"
+	second.Command = "serve openai/whisper-large-v3 --port 8011 --served-model-name whisper"
+
+	if err := ValidateManagedModels([]ManagedModel{speechModel(), second}, 8177, 8080); err == nil {
+		t.Fatal("Veil takes one speech endpoint, so a second must be refused at save time")
+	}
+	if err := ValidateManagedModels([]ManagedModel{validModel(), speechModel()}, 8177, 8080); err != nil {
+		t.Fatalf("one chat model beside one speech model is the normal deployment: %v", err)
+	}
+}

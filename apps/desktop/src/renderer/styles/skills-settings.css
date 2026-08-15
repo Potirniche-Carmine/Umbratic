@@ -552,6 +552,20 @@
   background: color-mix(in srgb, var(--surface-2) 54%, transparent);
   font-weight: 600;
   cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.settingsInlineButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--line) 58%, var(--text));
+  background: color-mix(in srgb, var(--surface-3) 56%, transparent);
+}
+
+/* Every control in the app gives way under the cursor. Without it a press that
+   starts a slow action reads as a press that did not register, which is how a
+   user ends up clicking three times. */
+.settingsInlineButton:active:not(:disabled),
+.settingsIconButton:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .settingsInlineButton:hover:not(:disabled) {

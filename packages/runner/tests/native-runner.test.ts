@@ -399,15 +399,15 @@ test("native runner preserves authenticated API, streaming tools, permissions, p
         ].includes(String(event.type)))
         .map((event) => event.type),
       [
-        "assistant.delta", "tool.requested", "tool.policy.stage",
+        "assistant.progress.delta", "tool.requested", "tool.policy.stage",
         "tool.output", "tool.finished", "step.settled", "assistant.delta", "step.settled", "run.settled",
       ],
-      "the read scenario keeps one stable public lifecycle trajectory with no pre-tool progress row",
+      "a tool-step preamble is narration; the answer after the tool is the reply",
     );
     assert.equal(
-      events.events.some((event) => event.type === "assistant.delta" && event.text === "I will read the requested file before I answer."),
+      events.events.some((event) => event.type === "assistant.progress.delta" && event.text === "I will read the requested file before I answer."),
       true,
-      "plain model preamble text streams on the assistant channel",
+      "tool-step prose streams into the Working block",
     );
     assert.equal(
       JSON.stringify(events.events).includes("RAW_REASONING_MARKER"),

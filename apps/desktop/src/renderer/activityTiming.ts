@@ -37,7 +37,7 @@ export function activityHasTools(segments: ReadonlyArray<{ type: string }> | und
 /// This is the whole reason a block opens before its first tool: narration is
 /// written to be read while it is true. It used to render as a message outside
 /// the block, so a closed block cost nothing; now that it lives inside, a block
-/// that stays shut during orientation shows the reader a bare "Thinking" and
+/// that stays shut during orientation shows the reader a bare "Working" and
 /// hides the one sentence saying what is about to happen.
 export function activityHasNarration(
   segments: ReadonlyArray<{ type: string; text?: string }> | undefined,
@@ -65,7 +65,7 @@ export function activitySummary(item: TimedActivity, now = Date.now()): string {
   const end = item.finished ? eventTimeMs(item.endedAt) ?? start : now;
   const duration = formatDuration(start === undefined || end === undefined ? null : Math.max(0, end - start));
   if (!item.finished) {
-    if (!activityHasTools(item.segments)) return "Thinking";
+    if (!activityHasTools(item.segments)) return "Working";
     return ["Working", duration].filter(Boolean).join(" · ");
   }
   return duration ? `Worked for ${duration}` : "Work complete";

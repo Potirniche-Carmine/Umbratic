@@ -85,9 +85,6 @@ pub struct Session {
     /// marked stale at the start of every accepted run, so between-turn editor
     /// changes are observed without a filesystem watcher.
     pub search_index: Arc<SearchIndex>,
-    /// The last valid orient bucket for this session. A continuity hint only,
-    /// for referential follow-ups such as "yes, draft it". It is cleared on any
-    /// orient failure so a stale playbook can never be reused.
     /// The tool contract presented to the model, frozen on first use and reused
     /// for every step of the task.
     pub(crate) tool_surface: OnceLock<Arc<ToolSurface>>,
@@ -328,6 +325,10 @@ pub(crate) fn test_config(cwd: &std::path::Path) -> Arc<RunnerConfig> {
             api_key: Arc::new(std::sync::RwLock::new(String::new())),
             model_id: "test".into(),
             send_model_field: false,
+            send_thinking_field: false,
+            thinking: None,
+            send_reasoning_visible_field: false,
+            reasoning_visible: false,
             headers: std::collections::BTreeMap::new(),
             mtls: None,
         },

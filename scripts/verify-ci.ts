@@ -1,3 +1,7 @@
+// Local verification gate: pinned toolchains, supply-chain audit and SBOM,
+// then the full test suite. Releases are packaged on this machine afterwards
+// (`npm run desktop:release` / `npm run publish:release`), not by GitHub.
+
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -7,11 +11,10 @@ const root = path.resolve(import.meta.dirname, "..");
 const policy = JSON.parse(fs.readFileSync(path.join(root, "supply-chain-policy.json"), "utf8"));
 
 const flags = new Set(process.argv.slice(2));
-const release = flags.has("--release");
 const skipInstall = flags.has("--skip-install");
 for (const flag of flags) {
-  if (flag !== "--release" && flag !== "--skip-install") {
-    console.error(`Unknown flag ${flag}. Usage: node scripts/verify-ci.ts [--release] [--skip-install]`);
+  if (flag !== "--skip-install") {
+    console.error(`Unknown flag ${flag}. Usage: node scripts/verify-ci.ts [--skip-install]`);
     process.exit(2);
   }
 }
@@ -46,7 +49,7 @@ function requireExactTool(label, actual, expected, remedy) {
     return;
   }
   if (actual !== expected) {
-    preflightFailures.push(`${label} is ${actual}, but CI pins ${expected}. ${remedy}`);
+    preflightFailures.push(`${label} is ${actual}, but the repository pins ${expected}. ${remedy}`);
   }
 }
 
@@ -56,7 +59,7 @@ function requireMinimumTool(label, actual, minimum, remedy) {
     return;
   }
   if (compareVersions(actual, minimum) < 0) {
-    preflightFailures.push(`${label} is ${actual}, but CI requires at least ${minimum}. ${remedy}`);
+    preflightFailures.push(`${label} is ${actual}, but the repository requires at least ${minimum}. ${remedy}`);
   }
 }
 
@@ -85,7 +88,7 @@ requireExactTool(
 );
 
 // Read the toolchain Go actually resolves inside the module, so an automatic
-// toolchain switch counts the same way it does on the CI runner.
+// toolchain switch is counted the same way a pinned go.mod would.
 requireMinimumTool(
   "Go",
   capture("go", ["env", "GOVERSION"], path.join(root, "infrastructure/veil"))
@@ -109,9 +112,9 @@ requireExactTool(
 );
 
 if (preflightFailures.length > 0) {
-  console.error("\nLocal toolchain does not match CI:");
+  console.error("\nLocal toolchain does not match the repository pins:");
   for (const failure of preflightFailures) console.error(`- ${failure}`);
-  console.error("\nFix the above so a local pass means the same thing as a CI pass.");
+  console.error("\nFix the above before running the rest of the suite.");
   process.exit(1);
 }
 
@@ -127,17 +130,13 @@ for (const script of ["supply-chain:audit", "supply-chain:sbom"]) {
   const [command, args] = npmInvocation(["run", script]);
   steps.push({ label: script, command, args });
 }
-// A release run is the full verification followed by the packaged build the
-// release workflow ships, so a local pass covers the same ground.
-for (const script of release ? ["test:all", "desktop:release"] : ["test:all"]) {
-  const [command, args] = npmInvocation(["run", script]);
-  steps.push({
-    label: script,
-    command,
-    args,
-    env: { CARGO_NET_OFFLINE: "true" },
-  });
-}
+const [testCommand, testArgs] = npmInvocation(["run", "test:all"]);
+steps.push({
+  label: "test:all",
+  command: testCommand,
+  args: testArgs,
+  env: { CARGO_NET_OFFLINE: "true" },
+});
 
 const started = process.hrtime.bigint();
 for (const [index, step] of steps.entries()) {
@@ -152,13 +151,11 @@ for (const [index, step] of steps.entries()) {
     console.error(
       `\n${step.label} failed: ${result.error?.message ?? `exit code ${result.status ?? "unknown"}`}`,
     );
-    console.error("CI would fail here too. Fix this before pushing.");
+    console.error("Fix this before releasing.");
     process.exit(result.status ?? 1);
   }
 }
 
 const minutes = (Number(process.hrtime.bigint() - started) / 60e9).toFixed(1);
-console.log(`\nAll ${release ? "Package Desktop Harness" : "Verify"} workflow steps passed locally in ${minutes} min.`);
-console.log(
-  `Runner difference: this ran on ${process.platform}/${process.arch}; CI runs ubuntu-24.04, so platform-specific native and packaging behaviour is still only proven there.`,
-);
+console.log(`\nLocal verification passed on ${process.platform}/${process.arch} in ${minutes} min.`);
+console.log("Packaging is still this machine's job: npm run desktop:release, then npm run publish:release.");

@@ -41,11 +41,13 @@ func TestOrientRouteReturnsAValidatedDecisionWithADeterministicProfile(t *testin
 	if client.req.Temperature != 0 || client.req.TopP != 1 {
 		t.Fatalf("orient must be deterministic: %#v", client.req)
 	}
-	// No output cap and no forced reasoning effort: the model decides how much
-	// to think. Every cap tried was blown by a thinking-by-default model
-	// reasoning inside the budget and returning an empty content.
-	if client.req.MaxOutputTokens != 0 {
-		t.Fatalf("orient must not cap the output, got %d", client.req.MaxOutputTokens)
+	// Thinking off plus a small cap: the decision is one JSON object, and a
+	// thinking-by-default model must not spend the budget on a hidden trace.
+	if client.req.MaxOutputTokens != 512 {
+		t.Fatalf("orient must cap the classifier output, got %d", client.req.MaxOutputTokens)
+	}
+	if client.req.Thinking == nil || *client.req.Thinking {
+		t.Fatalf("orient must force thinking off: %#v", client.req.Thinking)
 	}
 	if client.req.ReasoningEffort != model.ReasoningNone || client.req.ThinkingTokenBudget != nil || client.req.ParallelTools {
 		t.Fatalf("orient must not force a reasoning effort or parallelize: %#v", client.req)
@@ -197,12 +199,11 @@ func TestOrientRouteRejectsInvalidRequestsAndWrongMethods(t *testing.T) {
 	}
 }
 
-func TestChatRouteRendersTheVeilOwnedPlaybookLastAndOnlyWhenSelected(t *testing.T) {
+func TestChatRouteDoesNotInjectAPlaybookForAnyBucketSelector(t *testing.T) {
 	cfg := testConfig()
 	cfg.ContextLength = 64_000
 	skills := `[{"id":"umbratic-security-review","name":"Security Review","description":"Security review.","source":"system"}]`
 
-	// Without a selector the assembly is exactly today's shape.
 	plainClient := &fakeModelClient{}
 	plainServer := NewServer(cfg, plainClient)
 	plainReq := httptest.NewRequest(http.MethodPost, "/api/engineering/chat",
@@ -216,32 +217,21 @@ func TestChatRouteRendersTheVeilOwnedPlaybookLastAndOnlyWhenSelected(t *testing.
 		}
 	}
 
-	guidedClient := &fakeModelClient{}
-	guidedServer := NewServer(cfg, guidedClient)
-	guidedReq := httptest.NewRequest(http.MethodPost, "/api/engineering/chat",
-		strings.NewReader(`{"messages":[{"role":"user","content":"audit the auth code"}],"skills":`+skills+`,"harness_bucket":"deep_review"}`))
-	guidedReq.Header.Set("Authorization", "Bearer test-token")
-	guidedServer.ServeHTTP(httptest.NewRecorder(), guidedReq)
-	guided := guidedClient.req.Messages
-
-	if len(guided) != len(baseline)+1 {
-		t.Fatalf("a selector must add exactly one protected message: %d vs %d", len(guided), len(baseline))
-	}
-	playbook, _ := guided[len(guided)-2].Content.(string)
-	if !strings.Contains(playbook, "Your task playbook for this turn.") {
-		t.Fatalf("playbook must be the last protected message, got %q", playbook)
-	}
-	if !strings.Contains(playbook, "umbratic-security-review") {
-		t.Fatal("an enabled preferred skill must be named in the playbook")
-	}
-	if guided[len(guided)-1].Role != "user" {
-		t.Fatal("client messages must follow the playbook")
-	}
-	// Everything before the playbook is byte-stable, so only the playbook slot
-	// invalidates the prefix cache.
-	for i := 0; i < len(baseline)-1; i++ {
-		if baseline[i].Content != guided[i].Content {
-			t.Fatalf("protected prefix segment %d changed when a playbook was added", i)
+	for _, bucket := range []string{"deep_review", "not_a_bucket", "campaign_plan", "direct_answer"} {
+		guidedClient := &fakeModelClient{}
+		guidedServer := NewServer(cfg, guidedClient)
+		guidedReq := httptest.NewRequest(http.MethodPost, "/api/engineering/chat",
+			strings.NewReader(`{"messages":[{"role":"user","content":"audit the auth code"}],"skills":`+skills+`,"harness_bucket":"`+bucket+`"}`))
+		guidedReq.Header.Set("Authorization", "Bearer test-token")
+		guidedServer.ServeHTTP(httptest.NewRecorder(), guidedReq)
+		guided := guidedClient.req.Messages
+		if len(guided) != len(baseline) {
+			t.Fatalf("%s selector must not add a protected message: %d vs %d", bucket, len(guided), len(baseline))
+		}
+		for i := range baseline {
+			if baseline[i].Content != guided[i].Content {
+				t.Fatalf("%s selector changed protected prefix segment %d", bucket, i)
+			}
 		}
 	}
 }

@@ -52,6 +52,25 @@ fn tool_execution_segments_use_path_scoped_conflicts_and_global_barriers() {
         crate::tool_scheduling::execution_segments(&session, &command),
         vec![vec![0], vec![1], vec![2]]
     );
+
+    let search_reads = vec![
+        call("search", "search", Some(".")),
+        call("read-a", "read", Some("a.txt")),
+        call("read-b", "read", Some("b.txt")),
+    ];
+    assert_eq!(
+        crate::tool_scheduling::execution_segments(&session, &search_reads),
+        vec![vec![0, 1, 2]]
+    );
+
+    let search_write = vec![
+        call("search", "search", Some(".")),
+        call("write-a", "write", Some("a.txt")),
+    ];
+    assert_eq!(
+        crate::tool_scheduling::execution_segments(&session, &search_write),
+        vec![vec![0], vec![1]]
+    );
 }
 
 #[tokio::test]

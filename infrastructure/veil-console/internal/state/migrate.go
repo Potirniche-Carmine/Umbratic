@@ -27,6 +27,7 @@ var migrations = []migration{
 	{name: "configurations_generation_profile", apply: upgradeLegacyConfigurations},
 	{name: "rag_corpus", apply: applyCorpusSchema},
 	{name: "managed_models", apply: applyManagedModelSchema},
+	{name: "managed_model_role", apply: applyManagedModelRole},
 }
 
 // Connection pragmas. These are per-connection settings rather than schema, and
@@ -183,6 +184,23 @@ func applyCorpusSchema(tx *sql.Tx) error {
 
 func applyManagedModelSchema(tx *sql.Tx) error {
 	_, err := tx.Exec(managedModelSchema)
+	return err
+}
+
+// applyManagedModelRole adds the column that separates a chat model from the
+// transcription model. Existing rows become `chat`, which is what they have
+// always been: an upgrade must not change what a running deployment serves.
+func applyManagedModelRole(tx *sql.Tx) error {
+	var count int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('managed_models') WHERE name='role'`,
+	).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	_, err := tx.Exec(`ALTER TABLE managed_models ADD COLUMN role TEXT NOT NULL DEFAULT 'chat'`)
 	return err
 }
 

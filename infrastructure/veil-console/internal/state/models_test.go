@@ -11,6 +11,49 @@ func managedFixture() config.ManagedModel {
 	return config.ManagedModel{
 		ID: "qwen3-32b", DisplayName: "Qwen 32B",
 		Command: "serve Qwen/Qwen3-32B --port 8001 --served-model-name qwen3-32b --max-model-len 32768",
+		Role:    config.RoleChat,
+	}
+}
+
+// TestManagedModelRoleRoundTripsAndDefaults covers the column added after the
+// table shipped: a role written as anything unrecognized comes back as chat,
+// because a typo must never promote a model into the dictation slot.
+func TestManagedModelRoleRoundTripsAndDefaults(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(tempStateDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	speech := managedFixture()
+	speech.ID, speech.Role = "qwen3-asr", config.RoleSpeech
+	speech.Command = "serve Qwen/Qwen3-ASR-1.7B --port 8010 --served-model-name qwen3-asr"
+	if err := store.InsertManagedModel(ctx, speech); err != nil {
+		t.Fatal(err)
+	}
+
+	garbled := managedFixture()
+	garbled.ID, garbled.Role = "typo", "speach"
+	garbled.Command = "serve Qwen/Qwen3-4B --port 8002 --served-model-name typo --max-model-len 32768"
+	if err := store.InsertManagedModel(ctx, garbled); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, _, err := store.ManagedModel(ctx, "qwen3-asr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.IsSpeech() {
+		t.Fatalf("the speech role must survive the round trip: %#v", stored)
+	}
+
+	stored, _, err = store.ManagedModel(ctx, "typo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Role != config.RoleChat {
+		t.Fatalf("an unrecognized role must land on chat, not dictation: %#v", stored)
 	}
 }
 

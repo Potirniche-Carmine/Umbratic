@@ -13,6 +13,7 @@ import type {
   TelemetryPolicyInfo,
 } from "./types";
 import { isRecord, normalizeRelativePath, pathInside } from "./utils";
+export { isLocalhostUrl } from "./utils";
 
 export const umbraticPolicyVersion = "umbratic-enterprise-mvp-2";
 export const umbraticRunnerName = "UmbraticRunner";
@@ -65,7 +66,30 @@ const generatedRuntimePrefixes = [
   "%systemdrive%/programdata/microsoft/windows/caches/",
 ];
 
-const generatedRuntimeNames = new Set(["__pycache__", "cmakefiles", ".ds_store", "thumbs.db", "desktop.ini"]);
+const generatedRuntimeNames = new Set([
+  "__pycache__",
+  "cmakefiles",
+  ".ds_store",
+  "thumbs.db",
+  "desktop.ini",
+  "node_modules",
+  ".git",
+  ".llama-cache",
+  ".venv",
+  "venv",
+  "target",
+  "dist",
+  "dist-electron",
+  "build",
+  "coverage",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".next",
+  ".vite",
+  "vendor",
+  ".umbratic",
+]);
 
 const generatedRuntimeExtensions = new Set([
   ".pyc",
@@ -188,7 +212,7 @@ function commandHasNetworkIntent(command: string): boolean {
 
 function commandLooksDestructive(command: string): boolean {
   return (
-    /\brm\s+(-[^\s]*r[^\s]*f|-[^\s]*f[^\s]*r)\b/i.test(command) ||
+    /\brm\b/i.test(command) ||
     /\bRemove-Item\b/i.test(command) ||
     /\b(del|erase|rmdir)\b/i.test(command) ||
     gitCommandLooksDestructive(command)
@@ -388,19 +412,6 @@ export function baseUrlHost(baseUrl: string): string {
   }
 }
 
-export function isLocalhostUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      (hostname === "localhost" || hostname === "::1" || hostname.startsWith("127."))
-    );
-  } catch {
-    return false;
-  }
-}
-
 export function isHttpModelUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -513,6 +524,14 @@ export function assertUmbraticRunnerConfig(
   assert(
     provider.sendModelField !== true || provider.modelId !== veilManagedModelId,
     "the server-default sentinel must never be sent as a model name",
+  );
+  assert(
+    provider.sendThinkingField === undefined || typeof provider.sendThinkingField === "boolean",
+    "provider sendThinkingField must be an explicit boolean when present",
+  );
+  assert(
+    provider.thinking === undefined || provider.thinking === "on" || provider.thinking === "off",
+    "provider thinking must be on, off, or absent",
   );
   assert(!("system" in config), "protected system prompts must stay inside Veil");
 }

@@ -63,3 +63,24 @@ func TestThinkingDirectiveIsTolerant(t *testing.T) {
 		}
 	}
 }
+
+func TestReasoningVisibleIsTolerant(t *testing.T) {
+	cases := map[string]bool{
+		`{"input":"hi","reasoning_visible":true}`: true,
+		`{"input":"hi"}`: false,
+		`{"input":"hi","reasoning_visible":false}`:       false,
+		`{"input":"hi","reasoning_visible":"true"}`:      false,
+		`{"input":"hi","reasoning_visible":1}`:           false,
+		`{"input":"hi","reasoning_visible":null}`:        false,
+		`{"input":"hi","reasoning_visible":{"on":true}}`: false,
+	}
+	for body, want := range cases {
+		input, err := DecodeChatInput(strings.NewReader(body), prompts.EngineeringChat, nil)
+		if err != nil {
+			t.Fatalf("%s must never be refused: %v", body, err)
+		}
+		if input.ReasoningVisible != want {
+			t.Fatalf("%s: expected %v, got %v", body, want, input.ReasoningVisible)
+		}
+	}
+}

@@ -24,21 +24,79 @@ extraResources:
     to: runner
   - from: .package/veil
     to: veil
+  - from: .package/llama-server
+    to: llama-server
+# Where installed apps look for updates. Nothing here uploads: `--publish never`
+# stays in force and scripts/publish-release.ts does the uploading. The block
+# exists so that electron-builder writes latest.yml / latest-mac.yml next to
+# the installers and bakes this address into the app as app-update.yml.
+publish:
+  provider: generic
+  url: https://downloads.umbratic.ai/releases
+# Supported platforms: Windows x64, Windows arm64, and macOS arm64. One
+# installer per platform — the runnable-in-place build lives in win-unpacked.
 mac:
   icon: assets/icons/icon.icns
   category: public.app-category.developer-tools
+  # Signed with whatever Developer ID Application identity the keychain holds,
+  # and notarized when the APPLE_* variables from ~/.umbratic/release.env are
+  # present; without either the build is unsigned and only for looking at.
+  # The hardened runtime is on by default. The entitlements add the microphone
+  # to electron-builder's defaults, for the app and everything inside it.
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+  # macOS refuses microphone access outright — no prompt, no entry in Privacy &
+  # Security — unless the bundle says what it wants the microphone for. This
+  # string is the sentence the system alert shows.
+  extendInfo:
+    NSMicrophoneUsageDescription: Umbratic uses the microphone to dictate prompts. Audio is transcribed by the model you selected and never leaves your chosen runtime.
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+dmg:
+  icon: assets/icons/icon.icns
 win:
   icon: assets/icons/icon.ico
+  # x64 and arm64 are separate builds carrying differently-compiled sidecars,
+  # so the architecture is part of the file name. Without it both land on the
+  # release as Umbratic-${version}.exe and one silently replaces the other.
+  # The updater picks the file whose name carries its own architecture.
+  artifactName: Umbratic-${version}-${arch}.${ext}
+  # Signing is Azure Trusted Signing, configured per release machine: the
+  # package script passes win.azureSignOptions from ~/.umbratic/release.env.
+  # It is not written here because every unsigned developer package
+  # would then try to sign and fail.
   target:
     - nsis
-    - portable
-portable:
-  artifactName: Umbratic-${version}-portable.${ext}
+# Flipped after pack, before signing. runAsNode stays off: the PDF renderer is
+# a utilityProcess, not ELECTRON_RUN_AS_NODE. file:// extra privileges stay on
+# because the packaged renderer is still loaded with loadFile.
+# Apple Silicon kills a fuse-patched binary whose ad-hoc signature was not
+# reset. Developer ID signing does that for a release; unsigned local packages
+# never sign, so the fuse flip has to re-sign itself.
+# asar header validation stays off: electron-builder hashes package.json, then
+# strips scripts and devDependencies into the archive, so the fuse aborts at
+# launch with a hash mismatch. onlyLoadAppFromAsar still blocks the unpacked
+# app/ fallback.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: false
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: true
+  resetAdHocDarwinSignature: true
 nsis:
   include: scripts/installer.nsh
+  # Same filled tile as the app: the 16–48px frames in the .ico are the
+  # large steel shield on the app background, so the setup wizard matches
+  # the installed binary.
+  installerIcon: assets/icons/icon.ico
+  uninstallerIcon: assets/icons/icon.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

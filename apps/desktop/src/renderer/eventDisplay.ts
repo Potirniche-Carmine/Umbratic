@@ -6,7 +6,7 @@ export function eventTitle(event: BackendUiEvent): string {
   switch (event.type) {
     case "user.message": return "user";
     case "assistant.delta": return "assistant";
-    case "assistant.progress.delta": return "thinking";
+    case "assistant.progress.delta": return event.kind === "thinking" ? "thinking" : "progress";
     case "assistant.done": return "assistant done";
     case "worktree.requested": return "worktree requested";
     case "worktree.created": return "worktree created";

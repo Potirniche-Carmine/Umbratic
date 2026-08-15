@@ -59,7 +59,10 @@ type BackendEventMeta = { at?: string; endedAt?: string };
 export type BackendUiEvent = BackendEventMeta & (
   | { type: "user.message"; taskId: string; text: string; attachedFiles?: BackendChatAttachment[] }
   | { type: "assistant.delta"; taskId: string; text: string }
-  | { type: "assistant.progress.delta"; taskId: string; text: string }
+  // `kind: "thinking"` is model chain-of-thought. Untagged progress is the
+  // run's public account of itself — orientation, tool-step preambles, and
+  // compaction labels. Unknown kinds are ignored, never rejected.
+  | { type: "assistant.progress.delta"; taskId: string; text: string; kind?: "thinking" }
   | { type: "assistant.done"; taskId: string }
   | { type: "worktree.requested"; taskId: string; branch: string; path: string; baseCommit: string }
   | { type: "worktree.created"; taskId: string; branch: string; path: string }
@@ -82,7 +85,8 @@ export type BackendUiEvent = BackendEventMeta & (
   | { type: "context.compressed"; taskId: string; toolCallId: string; toolKind: string; kind: string; strategy: string; hash?: string; originalBytes: number; outputBytes: number }
   | { type: "context.retrieved"; taskId: string; toolCallId: string; hash: string; offset: number; bytesShown: number; totalBytes: number }
   | { type: "permission.requested"; taskId: string; request: BackendPermissionRequest }
-  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; latestTest?: BackendTestResult }
+  | { type: "permission.resolved"; taskId: string; id: string; decision: "allow" | "deny" }
+  | { type: "review.ready"; taskId: string; changedFiles: string[]; reviewFiles: NormalizedReviewFile[]; latestTest?: BackendTestResult }
   | { type: "review.changed_since_ready"; taskId: string; previousPatchHash: string; currentPatchHash: string; changedFileCount: number }
   | { type: "approval.check"; taskId: string; name: string; status: "running" | "passed" | "failed"; detail?: string }
   | { type: "merge.approval"; taskId: string; decision: "approved" | "rejected"; cleanup?: boolean; reason?: string }
@@ -300,6 +304,11 @@ function validPayload(value: Record<string, unknown>, type: string): boolean {
     default:
       return false;
   }
+}
+
+export function progressKind(event: unknown): "thinking" | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  return (event as { kind?: unknown }).kind === "thinking" ? "thinking" : undefined;
 }
 
 export function parseBackendUiEvent(value: unknown): BackendEventParseResult {

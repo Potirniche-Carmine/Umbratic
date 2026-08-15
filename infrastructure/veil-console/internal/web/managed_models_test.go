@@ -282,3 +282,74 @@ func TestASavedCommandThatIsNotRunningYetIsCalledOut(t *testing.T) {
 func managedTestModel() config.ManagedModel {
 	return config.ManagedModel{ID: "qwen3-32b", DisplayName: "Qwen 32B", Command: testCommand}
 }
+
+const speechCommand = "serve Qwen/Qwen3-ASR-1.7B --host 127.0.0.1 --port 8010 --served-model-name qwen3-asr"
+
+// The dictation runtime is registered and supervised exactly like a chat model.
+// What differs is where it lands in Veil's configuration, so the page has to
+// let an administrator say which one a model is, and show the answer back.
+func TestModelsPageRegistersADictationRuntime(t *testing.T) {
+	_, handler, cookies, csrf, closeServer := signedInConsole(t)
+	defer closeServer()
+
+	chat := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, nil))
+	if chat.Code != http.StatusSeeOther {
+		t.Fatalf("chat model create failed: %d", chat.Code)
+	}
+	speech := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, map[string]string{
+		"id": "qwen3-asr", "display_name": "Qwen3 ASR", "command": speechCommand, "role": "speech",
+	}))
+	if speech.Code != http.StatusSeeOther {
+		t.Fatalf("speech model create failed: %d", speech.Code)
+	}
+
+	body := authorizedGet(t, handler, cookies, "/models").Body.String()
+	for _, expected := range []string{
+		`name="role"`,
+		`<option value="speech" selected>Dictation</option>`,
+		`<option value="chat" selected>Chat</option>`,
+		"Qwen3 ASR", "qwen3-asr",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("the models page must show %q", expected)
+		}
+	}
+
+	// Veil takes one speech endpoint, so a second must be refused rather than
+	// silently picked between.
+	second := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, map[string]string{
+		"id": "whisper", "display_name": "Whisper",
+		"command": "serve openai/whisper-large-v3 --host 127.0.0.1 --port 8011 --served-model-name whisper",
+		"role":    "speech",
+	}))
+	if second.Code == http.StatusSeeOther {
+		t.Fatal("a second dictation runtime must be refused at save time")
+	}
+	if !strings.Contains(second.Body.String(), "only one model can be the dictation runtime") {
+		t.Fatalf("the refusal must say why: %s", second.Body.String())
+	}
+}
+
+// A role is a form value, so an unrecognized one must land on chat rather than
+// promote a model into the dictation slot.
+func TestUnknownRoleFallsBackToChat(t *testing.T) {
+	server, handler, cookies, csrf, closeServer := signedInConsole(t)
+	defer closeServer()
+
+	created := authorizedPost(t, handler, cookies, "/models/create", modelFormValues(csrf, map[string]string{
+		"role": "speach",
+	}))
+	if created.Code != http.StatusSeeOther {
+		t.Fatalf("create failed: %d", created.Code)
+	}
+	models, err := server.store.ManagedModels(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].IsSpeech() {
+		t.Fatalf("a typo must not register a dictation runtime: %#v", models)
+	}
+	if env := config.SpeechEnvironment(models); len(env) != 0 {
+		t.Fatalf("no dictation runtime means no speech configuration: %#v", env)
+	}
+}

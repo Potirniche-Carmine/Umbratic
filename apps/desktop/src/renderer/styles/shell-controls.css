@@ -67,7 +67,6 @@
 
 .wideButton,
 .primaryAction,
-.rejectAction,
 .secondaryAction {
   display: inline-flex;
   align-items: center;
@@ -96,12 +95,6 @@
   color: #07111e;
 }
 
-.rejectAction {
-  border: 1px solid rgba(255, 111, 122, 0.34);
-  color: #ffc4c9;
-  background: rgba(255, 111, 122, 0.12);
-}
-
 .iconButton:hover,
 .wideButton:hover,
 .secondaryAction:hover {
@@ -110,11 +103,6 @@
 
 .primaryAction:hover:not(:disabled) {
   background: #79b4ff;
-}
-
-.rejectAction:hover:not(:disabled) {
-  border-color: rgba(255, 111, 122, 0.52);
-  background: rgba(255, 111, 122, 0.18);
 }
 
 .workspaceCard,

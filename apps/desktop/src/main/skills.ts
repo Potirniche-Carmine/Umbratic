@@ -6,25 +6,13 @@ import * as zlib from "node:zlib";
 import { app } from "electron";
 
 import { skillsDirectory } from "./appPaths";
-import { readSkillSettings, writeSkillSettings } from "./storage";
+import { readHarnessProfileSetting, readSkillSettings, writeSkillSettings } from "./storage";
 import { pathInside } from "./utils";
+import { systemSkillEnabled, systemSkillIds } from "../shared/harnessSkills";
+import type { SkillDocument, SkillInfo } from "../shared/desktopApi";
 
-export type SkillSource = "system" | "local";
-export type SkillChecksumStatus = "known_good" | "modified" | "untracked";
-export type SkillInfo = {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  source: SkillSource;
-  readOnly: boolean;
-  checksum?: string;
-  checksumStatus: SkillChecksumStatus;
-  modified: boolean;
-  provenance?: "bundled" | "created" | "imported";
-  paths?: string[];
-};
-export type SkillDocument = SkillInfo & { path: string; content: string };
+export type SkillSource = SkillInfo["source"];
+export type SkillChecksumStatus = SkillInfo["checksumStatus"];
 export type PromptSkillInfo = {
   id: string;
   name: string;
@@ -70,23 +58,7 @@ const skillImportTempPrefix = "umbratic-skill-import-";
 const skillManifestFileName = ".manifest.json";
 const zipUnixSymlinkMode = 0o120000;
 
-const systemSkillDefinitions: SystemSkillDefinition[] = [
-  { id: "umbratic-skill-creator" },
-  { id: "umbratic-git-worktree" },
-  { id: "umbratic-markdown" },
-  { id: "umbratic-python" },
-  { id: "umbratic-pdf" },
-  { id: "umbratic-data-analysis" },
-  { id: "umbratic-presentations" },
-  { id: "umbratic-documents" },
-  { id: "umbratic-spreadsheets" },
-  { id: "umbratic-cmake" },
-  { id: "umbratic-discovery" },
-  { id: "umbratic-product-spec" },
-  { id: "umbratic-security-review" },
-  { id: "umbratic-marketing-brief" },
-  { id: "umbratic-sales-enablement" },
-];
+const systemSkillDefinitions: SystemSkillDefinition[] = systemSkillIds.map((id) => ({ id }));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -424,7 +396,7 @@ function systemSkillDisplayInfo(skill: SystemSkillDefinition, settings: Record<s
     id: skill.id,
     name: meta.name || skill.id,
     description: meta.description || skillDescriptionFromMarkdown(content),
-    enabled: settings[skill.id] !== false,
+    enabled: systemSkillEnabled(skill.id, readHarnessProfileSetting(), settings),
     source: "system",
     readOnly: false,
     checksum,
@@ -481,8 +453,9 @@ export function enabledPromptSkills(
   settings = readSkillSettings(),
 ): PromptSkillInfo[] {
   ensureSystemSkillFiles(directory);
+  const profile = readHarnessProfileSetting();
   const systemSkills = systemSkillDefinitions
-    .filter((skill) => settings[skill.id] !== false)
+    .filter((skill) => systemSkillEnabled(skill.id, profile, settings))
     .map((skill) => {
       const info = systemSkillDisplayInfo(skill, settings, directory);
       return {

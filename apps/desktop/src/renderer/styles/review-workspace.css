@@ -146,8 +146,7 @@
 .reviewClosing .reviewTopbar,
 .reviewClosing .reviewFileToolbar,
 .reviewClosing .reviewFeedbackTray,
-.reviewClosing .reviewDiffColumnHeaders,
-.reviewClosing .reviewPanel > .reviewFooter {
+.reviewClosing .reviewDiffColumnHeaders {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

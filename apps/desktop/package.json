@@ -12,8 +12,9 @@
     "build:native": "cargo build --locked --release --workspace",
     "benchmark:checkpoints": "node scripts/benchmark-checkpoints.ts",
     "copy:system-skills": "node scripts/copy-system-skills.ts",
+    "generate:icons": "node scripts/generate-app-icons.ts",
     "prepare:package": "node scripts/prepare-package.ts",
-    "package": "npm run build && npm run prepare:package && electron-builder --config electron-builder.yml --publish never",
+    "package": "npm run build && npm run prepare:package && node scripts/package.ts",
     "verify:package": "node scripts/verify-package.ts",
     "test:all": "npm run build:native && npm run build:main && npm run typecheck && npm run test:native && npm run test:unit",
     "test:composer": "node tests/composer-text.test.ts",
@@ -22,6 +23,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
   },
   "dependencies": {
+    "electron-updater": "6.8.9",
     "lucide-react": "1.27.0",
     "pdf-to-img": "6.2.0",
     "react": "19.2.8",

@@ -51,10 +51,10 @@ function browserGlobals() {
   };
 }
 
-function loadRenderer() {
+function loadMarkdown() {
   const icon = (props) => React.createElement("svg", props);
   const lucide = Object.fromEntries(iconNames.map((name) => [name, icon]));
-  return loadTypeScriptModule(new URL("../src/renderer/main.tsx", import.meta.url), {
+  return loadTypeScriptModule(new URL("../src/renderer/markdownContent.tsx", import.meta.url), {
     cache: new Map(),
     globals: browserGlobals(),
     mocks: {
@@ -69,7 +69,7 @@ function loadRenderer() {
 // A reply that cites its sources used to show the raw `[label](url)` syntax,
 // which is the one piece of markdown the renderer never learned.
 test("markdown links render as links and keep their label formatting", () => {
-  const { MarkdownContent } = loadRenderer();
+  const { MarkdownContent } = loadMarkdown();
   const html = renderToStaticMarkup(
     React.createElement(MarkdownContent, {
       content: "Built with [Next.js](https://nextjs.org/) and [**Tailwind**](https://tailwindcss.com/).",
@@ -87,7 +87,7 @@ test("markdown links render as links and keep their label formatting", () => {
 // an unsafe scheme is shown exactly as written rather than hidden behind text
 // that claims to be somewhere else.
 test("an unsafe link URL is left visible instead of becoming an anchor", () => {
-  const { MarkdownContent } = loadRenderer();
+  const { MarkdownContent } = loadMarkdown();
   for (const raw of [
     "[Click here](javascript:alert(1))",
     "[Trusted site](data:text/html,<script>alert(1)</script>)",
@@ -100,7 +100,7 @@ test("an unsafe link URL is left visible instead of becoming an anchor", () => {
 });
 
 test("bracketed text that is not a link is untouched", () => {
-  const { MarkdownContent } = loadRenderer();
+  const { MarkdownContent } = loadMarkdown();
   const html = renderToStaticMarkup(
     React.createElement(MarkdownContent, { content: "See [1] and [not a link] (parens)." }),
   );
@@ -110,7 +110,7 @@ test("bracketed text that is not a link is untouched", () => {
 });
 
 test("link parsing survives brackets in the label and parentheses in the URL", () => {
-  const { MarkdownContent } = loadRenderer();
+  const { MarkdownContent } = loadMarkdown();
   const html = renderToStaticMarkup(
     React.createElement(MarkdownContent, {
       content: "[Ruby [lang]](https://en.wikipedia.org/wiki/Ruby_(programming_language)) ships.",

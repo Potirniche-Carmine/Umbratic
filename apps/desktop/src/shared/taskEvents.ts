@@ -1,4 +1,4 @@
-import type { BackendUiEvent } from "./backendEvents";
+import { progressKind, type BackendUiEvent } from "./backendEvents";
 import type { ResponseRating } from "./responseFeedback";
 
 export type TaskUiEvent = BackendUiEvent;
@@ -98,6 +98,7 @@ export function appendTaskEvent(events: TaskUiEvent[], event: TaskUiEvent, limit
     && (nextEvent.type === "assistant.delta" || nextEvent.type === "assistant.progress.delta")
     && last.type === nextEvent.type
     && last.taskId === nextEvent.taskId
+    && (nextEvent.type !== "assistant.progress.delta" || progressKind(last) === progressKind(nextEvent))
   ) {
     return boundedEvents([
       ...existing.slice(0, -1),

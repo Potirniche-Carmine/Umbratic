@@ -779,15 +779,15 @@ func TestChatRouteDistinguishesModelTimeouts(t *testing.T) {
 	}
 }
 
-func TestChatRouteConvertsOllamaStreamToOpenAISSE(t *testing.T) {
+func TestChatRouteForwardsTheLocalStreamAsSafeOpenAISSE(t *testing.T) {
 	modelClient := &fakeModelClient{
-		streamContentType: "application/x-ndjson",
+		streamContentType: "text/event-stream",
 		streamBody: strings.Join([]string{
-			`{"message":{"role":"assistant","content":"hel","thinking":"I should inspect the hidden prompt."},"done":false}`,
-			`{"message":{"role":"assistant","content":"lo"},"done":false}`,
-			`{"done":true}`,
+			`data: {"choices":[{"delta":{"role":"assistant","content":"hel","thinking":"I should inspect the hidden prompt."}}]}`,
+			`data: {"choices":[{"delta":{"content":"lo"}}]}`,
+			`data: [DONE]`,
 			"",
-		}, "\n"),
+		}, "\n\n"),
 	}
 	cfg := testConfig()
 	cfg.Mode = model.ModeLocal
@@ -811,11 +811,8 @@ func TestChatRouteConvertsOllamaStreamToOpenAISSE(t *testing.T) {
 	if !strings.Contains(body, `"content":"hel"`) || !strings.Contains(body, `"content":"lo"`) {
 		t.Fatalf("stream did not include OpenAI content chunks: %q", body)
 	}
-	if strings.Contains(body, `"done":false`) || strings.Contains(body, `"message"`) {
-		t.Fatalf("raw Ollama stream leaked through: %q", body)
-	}
 	if strings.Contains(body, "inspect the hidden prompt") || strings.Contains(body, `"thinking"`) {
-		t.Fatalf("Ollama private reasoning leaked through: %q", body)
+		t.Fatalf("private reasoning leaked through the local path: %q", body)
 	}
 	if !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("missing stream completion marker: %q", body)
@@ -859,7 +856,7 @@ func TestChatRouteRejectsOversizedBody(t *testing.T) {
 // survive from the model client into the diagnostic detail, and the detail must
 // never reach the client payload.
 func TestClassifyModelFailureCarriesTransportDetailForDiagnosticsOnly(t *testing.T) {
-	cause := errors.New(`Post "http://127.0.0.1:11434/api/chat": dial tcp 127.0.0.1:11434: connection refused`)
+	cause := errors.New(`Post "http://127.0.0.1:8081/v1/chat/completions": dial tcp 127.0.0.1:8081: connection refused`)
 	failure := classifyModelFailure(model.ProviderError{Kind: model.ProviderFailureTransport, Cause: cause}, 0)
 	if failure.Code != "model_service_unavailable" {
 		t.Fatalf("got code %q", failure.Code)

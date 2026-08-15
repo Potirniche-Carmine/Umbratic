@@ -138,19 +138,13 @@ export async function startProvider() {
       "Content-Type": "text/event-stream",
       "X-Umbratic-Stream-Version": "2",
     });
-    if (scenario === "evidence-required" && !encoded.includes("used no workspace evidence")) {
-      // The regression: a confident architecture summary with no tool calls, on
-      // a bucket that may not answer without evidence.
-      response.end(sse({ choices: [{ delta: { content: "This project is a three-layer monorepo with a desktop shell, a Go gateway, and a Rust sidecar." } }] }) + "data: [DONE]\n\n");
-    } else if (scenario === "evidence-required" && !encoded.includes("ls: . (ok)")) {
+    if (scenario === "evidence-required" && !encoded.includes("ls: . (ok)")) {
       response.end(sse({ choices: [{ delta: { content: "Listing the workspace root now.", tool_calls: [{ index: 0, id: "evidence-ls", function: { name: "ls", arguments: "{\"path\":\".\"}" } }] } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "evidence-required") {
       response.end(sse({ choices: [{ delta: { content: "The workspace root holds README.md." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "guided-tour") {
-      // A long guided tour: a short preamble before every read, thirteen
-      // reads, then the answer. The runner drops every volunteered preamble
-      // and injects nothing into the model's context — the orientation is the
-      // run's only status line.
+      // A long tour: a short preamble before every read, thirteen reads, then
+      // the answer. The harness injects nothing into the model's context.
       const completed = new Set(
         Array.from(encoded.matchAll(/read: tour-(\d+)\.txt \(ok\)/g), (match) => Number(match[1])),
       ).size;
@@ -170,19 +164,23 @@ export async function startProvider() {
         function: { name: "read", arguments: "{\"path\":\"README.md\",\"limit\":2}" },
       }] } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "streamed-trim" && !encoded.includes("read: site.js (ok)")) {
-      // A long mid-turn report with a tool call. The runner must hold and
-      // drop it: mid-plan prose never reaches the user.
+      // A long mid-turn report with a tool call. Guided steps omit that prose:
+      // mid-plan text never reaches the user.
       const report = "The documentation describes a static bakery site with one page and a couple of scripts. ".repeat(8);
       response.end(sse({ choices: [{ delta: {
         content: `${report.trim()} Next, I will read the site script to confirm this behavior.`,
         tool_calls: [{ index: 0, id: "stream-read-js", function: { name: "read", arguments: "{\"path\":\"site.js\",\"limit\":2}" } }],
       } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "streamed-trim") {
-      // The final answer. It ships when the step has no tools — what the model
-      // writes here is what the user sees.
+      // The final answer streams live, one delta at a time — what the model
+      // writes here is what the user sees, as it is generated.
       const body = "The bakery site is one static page with no build step and plain vanilla scripting. ".repeat(9);
       const announcement = "To go deeper, I will now examine the configuration files. Starting with the main config, which appears central.";
-      response.end(sse({ choices: [{ delta: { content: `${body.trim()} ${announcement}` } }] }) + "data: [DONE]\n\n");
+      response.end(
+        sse({ choices: [{ delta: { content: `${body.trim()} ` } }] })
+        + sse({ choices: [{ delta: { content: announcement } }] })
+        + "data: [DONE]\n\n",
+      );
     } else if (scenario === "required-inspection") {
       response.end(sse({ choices: [{ delta: { content: "I can explain this directly without changing or inspecting the workspace." } }] }) + "data: [DONE]\n\n");
     } else if (scenario === "lsp-degraded" && !encoded.includes("freshness")) {
@@ -309,7 +307,9 @@ export async function startProvider() {
       response.write(payload.subarray(0, markerIndex + 1));
       setImmediate(() => response.end(payload.subarray(markerIndex + 1)));
     } else {
-      response.end(sse({ choices: [{ delta: { content: "Native runner complete." } }] }) + sse({ choices: [], usage: { prompt_tokens: 16, completion_tokens: 4 } }) + "data: [DONE]\n\n");
+      const delta: Record<string, unknown> = { content: "Native runner complete." };
+      if (body.reasoning_visible === true) delta.reasoning_content = "RAW_REASONING_MARKER";
+      response.end(sse({ choices: [{ delta }] }) + sse({ choices: [], usage: { prompt_tokens: 16, completion_tokens: 4 } }) + "data: [DONE]\n\n");
     }
   });
   await new Promise<void>((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));

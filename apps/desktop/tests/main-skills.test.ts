@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
+import { systemSkillEnabledFlags } from "../src/shared/harnessSkills.ts";
 
 const skillsPath = new URL("../src/main/skills.ts", import.meta.url);
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -173,10 +174,56 @@ test("listSkills reads folder and markdown skills with frontmatter and settings"
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-sales"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-engineering"), false);
   assert.equal(systemSkills.some((skill) => skill.id === "umbratic-pdf" && skill.name === "PDF & OCR"), true);
+  assert.equal(systemSkills.find((skill) => skill.id === "umbratic-spreadsheets")?.enabled, false);
+  assert.equal(systemSkills.find((skill) => skill.id === "umbratic-git-worktree")?.enabled, true);
   assert.equal(fs.existsSync(path.join(directory, "system", "umbratic-pdf", "SKILL.md")), true);
 
   const disabledSystem = await skills.listSkills(directory, { "umbratic-markdown": false });
   assert.equal(disabledSystem.skills.find((skill) => skill.id === "umbratic-markdown").enabled, false);
+});
+
+test("system skills follow the current harness unless the user overrides them", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-harness-skills-"));
+  const skills = loadSkills(userData);
+  const storage = loadTypeScriptModule(new URL("../src/main/storage.ts", import.meta.url), {
+    cache: new Map(),
+    mocks: { electron: electronMock(userData) },
+  });
+  const directory = seedSkillsDirectory();
+  const enabled = (listing, id) => listing.skills.find((skill) => skill.id === id)?.enabled;
+
+  const engineering = await skills.listSkills(directory, {});
+  assert.equal(enabled(engineering, "umbratic-git-worktree"), true);
+  assert.equal(enabled(engineering, "umbratic-cmake"), true);
+  assert.equal(enabled(engineering, "umbratic-spreadsheets"), false);
+  assert.equal(enabled(engineering, "umbratic-presentations"), false);
+  assert.equal(enabled(engineering, "umbratic-marketing-brief"), false);
+
+  storage.writeHarnessProfileSetting("marketing");
+  const marketing = await skills.listSkills(directory, {});
+  assert.equal(enabled(marketing, "umbratic-marketing-brief"), true);
+  assert.equal(enabled(marketing, "umbratic-spreadsheets"), true);
+  assert.equal(enabled(marketing, "umbratic-presentations"), true);
+  assert.equal(enabled(marketing, "umbratic-git-worktree"), false);
+  assert.equal(enabled(marketing, "umbratic-cmake"), false);
+  assert.equal(enabled(marketing, "umbratic-sales-enablement"), false);
+
+  storage.writeHarnessProfileSetting("sales");
+  const sales = await skills.listSkills(directory, {});
+  assert.equal(enabled(sales, "umbratic-sales-enablement"), true);
+  assert.equal(enabled(sales, "umbratic-marketing-brief"), false);
+  assert.equal(enabled(sales, "umbratic-spreadsheets"), true);
+  assert.equal(enabled(sales, "umbratic-git-worktree"), false);
+
+  const reenabled = await skills.listSkills(directory, { "umbratic-cmake": true });
+  assert.equal(enabled(reenabled, "umbratic-cmake"), true);
+  assert.equal(enabled(reenabled, "umbratic-git-worktree"), false);
+
+  storage.writeSkillSettings({ "umbratic-spreadsheets": true });
+  assert.equal(enabled(await skills.listSkills(directory), "umbratic-spreadsheets"), true);
+  storage.writeSkillSettings(systemSkillEnabledFlags("engineering"));
+  assert.equal(enabled(await skills.listSkills(directory), "umbratic-spreadsheets"), false);
+  assert.equal(enabled(await skills.listSkills(directory), "umbratic-git-worktree"), true);
 });
 
 test("listSkills does not list the reserved system root", async () => {
@@ -206,7 +253,8 @@ test("enabledPromptSkills returns every enabled skill as metadata with a readabl
   assert.equal(catalog.some((skill) => skill.id === "umbratic-python"), false);
   assert.equal(catalog.some((skill) => skill.id === "engineering-review"), true);
   assert.equal(catalog.some((skill) => skill.id === "umbratic-skill-creator"), true);
-  assert.equal(catalog.some((skill) => skill.id === "umbratic-presentations"), true);
+  assert.equal(catalog.some((skill) => skill.id === "umbratic-cmake"), true);
+  assert.equal(catalog.some((skill) => skill.id === "umbratic-presentations"), false);
   assert.equal(catalog.every((skill) => !("fullContent" in skill) && !("content" in skill) && !("reason" in skill)), true);
   assert.equal(catalog.every((skill) => fs.existsSync(skill.instructionPath)), true);
 });
@@ -380,4 +428,17 @@ test("importSkill rejects zip archives with too many entries or symlink entries"
     fs.rmSync(crowdedPath, { force: true });
     fs.rmSync(symlinkPath, { force: true });
   }
+});
+
+test("SkillInfo lives in the shared IPC contract, not a second main or renderer copy", () => {
+  const skillsSource = fs.readFileSync(new URL("../src/main/skills.ts", import.meta.url), "utf8");
+  const shared = fs.readFileSync(new URL("../src/shared/desktopApiTypes.ts", import.meta.url), "utf8");
+  const rendererTypes = fs.readFileSync(new URL("../src/renderer/rendererTypes.ts", import.meta.url), "utf8");
+  const mainTypes = fs.readFileSync(new URL("../src/main/types.ts", import.meta.url), "utf8");
+  assert.match(shared, /export type SkillInfo =/);
+  assert.match(shared, /source: "system" \| "local"/);
+  assert.match(shared, /paths\?: string\[\]/);
+  assert.doesNotMatch(skillsSource, /export type SkillInfo/);
+  assert.doesNotMatch(rendererTypes, /export type SkillInfo/);
+  assert.doesNotMatch(mainTypes, /export type SkillInfo =/);
 });

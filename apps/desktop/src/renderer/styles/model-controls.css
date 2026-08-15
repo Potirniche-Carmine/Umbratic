@@ -1,9 +1,9 @@
 /*
  * The composer's model picker.
  *
- * It sits in `.promptControls` and borrows the 28px pill grammar the workspace,
- * permission, and branch controls already use — a new control that invented its
- * own shape would read as belonging to a different app.
+ * It sits in the prompt box's bottom rail and borrows the 28px pill grammar the
+ * workspace, permission, and branch controls already use — a new control that
+ * invented its own shape would read as belonging to a different app.
  */
 
 .modelControl {
@@ -78,7 +78,9 @@
  */
 .modelMenu {
   position: absolute;
-  left: 0;
+  /* Right-anchored: the picker now lives at the right end of the prompt box's
+     rail, and a left-anchored menu would open off the edge of the pane. */
+  right: 0;
   bottom: calc(100% + 7px);
   z-index: 120;
   display: grid;
@@ -89,24 +91,150 @@
   border-radius: var(--radius);
   background: var(--modal-bg);
   box-shadow: 0 18px 42px var(--shadow-color);
-  transform-origin: bottom left;
+  transform-origin: bottom right;
   animation: menuRise 180ms ease both;
 }
 
 .modelMenu button {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   min-height: 30px;
   padding: 0 8px;
   border-radius: 6px;
-  color: var(--muted);
+  color: var(--text);
   text-align: left;
   font-weight: 600;
   transition:
     background 150ms ease,
     color 150ms ease;
+}
+
+/*
+ * Rows with nothing in the leading column, which is most of them now: the
+ * status dot only exists for server models. Without this the label would be
+ * indented by an empty track on every local row.
+ */
+.modelMenu .modelMenuRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.modelMenu .modelMenuRow:has(.modelStatusDot),
+.modelMenu .modelMenuBack {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+/*
+ * Section labels, not choices. Uppercase and a step quieter than the rows so
+ * Effort / Model read as names for the group, not as a fifth option in it.
+ */
+.modelMenuHeading {
+  margin: 0;
+  padding: 7px 8px 4px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The first heading sits flush with the menu's own padding. */
+.modelMenuHeading:first-child {
+  padding-top: 3px;
+}
+
+/* A later heading starts a new group, so a line separates it from the rows
+   above — otherwise Effort, Show thinking, and Model sit in one grey stack. */
+.modelMenuHeading:not(:first-child) {
+  margin-top: 4px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.modelMenuCheck {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  margin: 1px 0 2px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.modelMenuCheck:hover {
+  background: var(--control-hover);
+}
+
+.modelMenuCheck input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.modelMenuCheckBox {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: transparent;
+  background: var(--surface-3);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.modelMenuCheck.isOn .modelMenuCheckBox {
+  color: var(--bg);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.modelMenuCheck:focus-within .modelMenuCheckBox {
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* The chevron says there is another page behind this row, so it points the
+   way the page will come from. */
+.modelMenu .modelMenuStep svg,
+.modelMenu .modelMenuBack svg {
+  color: var(--faint);
+}
+
+.modelMenu .modelMenuBack {
+  color: var(--faint);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.modelMenu .modelMenuBack:hover {
+  color: var(--text);
+}
+
+.modelMenu button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.modelMenu button:disabled:hover {
+  background: transparent;
 }
 
 .modelMenu button:hover,
@@ -124,13 +252,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.modelContextBadge {
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
 }
 
 /*

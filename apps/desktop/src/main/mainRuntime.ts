@@ -70,7 +70,16 @@ export const pendingTaskSteers = new Map<string, PendingTaskPrompt>();
 export const pendingTaskFollowUps = new Map<string, PendingTaskPrompt[]>();
 export const pendingTaskCancelWaits = new Map<string, () => void>();
 export const runnerGracefulCancelDeadlineMs = 2_000;
-export const runtimeAppIconPath = path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
+/**
+ * On Windows the window icon must be the multi-size .ico: the shell reads the
+ * 16–48px renditions for the title bar, taskbar, and hover preview, where a
+ * single large PNG would be rescaled on the fly and come out soft or warped.
+ * Elsewhere the PNG serves; macOS ignores window icons and uses the bundle's
+ * .icns.
+ */
+export const runtimeAppIconPath = process.platform === "win32"
+  ? path.resolve(__dirname, "../../assets/icons/icon.ico")
+  : path.resolve(__dirname, "../../assets/brand/Umbratic/umbratic-icon-512.png");
 export const textAttachmentByteLimit = 512 * 1024;
 export const chatAttachmentByteLimit = 25 * 1024 * 1024;
 export const imageAttachmentByteLimit = 10 * 1024 * 1024;

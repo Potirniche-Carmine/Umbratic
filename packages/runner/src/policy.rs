@@ -54,12 +54,34 @@ pub fn is_generated_runtime_path(value: &str) -> bool {
         "coverage/",
         "%systemdrive%/programdata/microsoft/windows/caches/",
     ];
+    // Directory names match any path component. A prefix of `node_modules/`
+    // misses `apps/desktop/node_modules` and a prefix of `target/` misses
+    // `packages/runner/target`. `.llama-cache` is a checked-out llama.cpp tree
+    // with its own docs and node_modules; walking it is what made a folder
+    // tour spend minutes on generated markdown.
     let names = [
         "__pycache__",
         "cmakefiles",
         ".ds_store",
         "thumbs.db",
         "desktop.ini",
+        "node_modules",
+        ".git",
+        ".llama-cache",
+        ".venv",
+        "venv",
+        "target",
+        "dist",
+        "dist-electron",
+        "build",
+        "coverage",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".next",
+        ".vite",
+        "vendor",
+        ".umbratic",
     ];
     let extensions = [
         "pyc", "pyo", "o", "obj", "a", "lib", "so", "dylib", "dll", "exe", "pdb",
@@ -300,6 +322,22 @@ fn token_is_blocked_path(token: &str) -> bool {
     is_blocked_path(&normalized) || is_blocked_path(&expanded)
 }
 
+/// Whether a token is an absolute filesystem path. A slash *inside* a relative
+/// path (`apps/desktop/src`) is not one; matching those as `/desktop/src` is
+/// what used to block ordinary workspace commands.
+fn token_is_absolute_path(token: &str) -> bool {
+    if cfg!(windows) {
+        let bytes = token.as_bytes();
+        (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/'))
+            || token.starts_with("\\\\")
+    } else {
+        token.starts_with('/')
+    }
+}
+
 pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassification {
     let trimmed = command.trim();
     if trimmed.is_empty() {
@@ -341,26 +379,16 @@ pub fn classify_command_text(command: &str, cwd: Option<&Path>) -> CommandClassi
             };
         }
     }
-    if let Some(root) = cwd {
-        static ABSOLUTE_PATH: OnceLock<Regex> = OnceLock::new();
-        let absolute = ABSOLUTE_PATH.get_or_init(|| {
-            Regex::new(if cfg!(windows) {
-                r#"(?i)(?:[A-Z]:\\|\\\\)[^\s\"'`<>|;&]*"#
-            } else {
-                r#"/(?:[^\s\"'`<>|;&]+)"#
-            })
-            .expect("static absolute-path regex must compile")
-        });
-        if absolute
-            .find_iter(trimmed)
-            .any(|found| !path_inside(root, Path::new(found.as_str())))
-        {
-            return CommandClassification {
-                command_class: "external-directory",
-                risky: true,
-                reason: Some("external path"),
-            };
-        }
+    if let Some(root) = cwd
+        && tokens
+            .iter()
+            .any(|token| token_is_absolute_path(token) && !path_inside(root, Path::new(token)))
+    {
+        return CommandClassification {
+            command_class: "external-directory",
+            risky: true,
+            reason: Some("external path"),
+        };
     }
     classify_command_body(trimmed, &tokens)
 }
@@ -377,10 +405,10 @@ fn regex(pattern: &'static str, value: &str) -> bool {
     regex.is_match(value)
 }
 
-/// The audited read-only class, which Auto-safe runs without a prompt. The
-/// whole segment has to prove itself: a locator name is not enough, because
-/// `find` reaches an arbitrary interpreter through `-exec` and deletes through
-/// `-delete`, and any of these can redirect their output into a file.
+/// Proven locator commands. Auto-safe runs these without a prompt; a locator
+/// name is not enough, because `find` reaches an arbitrary interpreter through
+/// `-exec` and deletes through `-delete`, and any of these can redirect their
+/// output into a file.
 fn is_audited_read_only(trimmed: &str, tokens: &[String]) -> bool {
     let Some(first) = tokens.first() else {
         return false;
@@ -412,7 +440,7 @@ fn is_audited_read_only(trimmed: &str, tokens: &[String]) -> bool {
 
 fn classify_command_body(trimmed: &str, tokens: &[String]) -> CommandClassification {
     if regex(
-        r"(?i)\brm\s+(-\S*r\S*f|-\S*f\S*r)\b|\bRemove-Item\b|\b(del|erase|rmdir)\b|\bgit(?:\.exe)?\b.*\b(reset\s+--hard|clean\s+-\S*f|branch\s+(?:-D|--delete\s+--force)|worktree\s+(?:remove|prune)|push\s+.*(?:--force|-f|--force-with-lease))\b",
+        r"(?i)\brm\b|\bRemove-Item\b|\b(del|erase|rmdir)\b|\bgit(?:\.exe)?\b.*\b(reset\s+--hard|clean\s+-\S*f|branch\s+(?:-D|--delete\s+--force)|worktree\s+(?:remove|prune)|push\s+.*(?:--force|-f|--force-with-lease))\b",
         trimmed,
     ) {
         return CommandClassification {
@@ -540,6 +568,16 @@ mod tests {
     #[test]
     fn generated_and_blocked_paths_are_closed() {
         assert!(is_generated_runtime_path("node_modules/a.js"));
+        assert!(is_generated_runtime_path(
+            "apps/desktop/node_modules/pkg/index.js"
+        ));
+        assert!(is_generated_runtime_path(
+            "apps/desktop/.llama-cache/llama.cpp/README.md"
+        ));
+        assert!(is_generated_runtime_path(
+            "packages/runner/target/debug/umbratic_runner"
+        ));
+        assert!(!is_generated_runtime_path("src/build.ts"));
         assert!(is_generated_runtime_path("src/__pycache__/x.pyc"));
         assert!(is_generated_runtime_path(
             "%SystemDrive%/ProgramData/Microsoft/Windows/Caches/cversions.2.db"
@@ -655,6 +693,26 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(
             classify_command_text("cat /etc/hosts", Some(&workspace)).command_class,
+            "external-directory"
+        );
+        assert_eq!(
+            classify_command_text("find apps/desktop/src -name '*.ts'", Some(&workspace))
+                .command_class,
+            "read"
+        );
+        assert_eq!(
+            classify_command_text("node scripts/check-source-size.ts", Some(&workspace))
+                .command_class,
+            "shell"
+        );
+        assert_eq!(
+            classify_command_text("git ls-files apps/desktop/src/renderer", Some(&workspace))
+                .command_class,
+            "git-read"
+        );
+        let inside = format!("cd {} && ls", workspace.display());
+        assert_ne!(
+            classify_command_text(&inside, Some(&workspace)).command_class,
             "external-directory"
         );
     }

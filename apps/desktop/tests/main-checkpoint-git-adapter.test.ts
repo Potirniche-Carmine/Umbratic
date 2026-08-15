@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 
-import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpoint } from "../src/main/checkpoints/gitAdapter.ts";
+import { createGitCheckpoint, materializeCheckpointWorktree, restoreGitCheckpointPath } from "../src/main/checkpoints/gitAdapter.ts";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -130,14 +130,11 @@ test("checkpoint refuses symbolic links and junctions instead of following them"
   }
 });
 
-test("turn restore returns the worktree and staged state to the checkpoint", async () => {
+test("per-file restore returns one file and leaves the rest of the turn alone", async () => {
   const root = fixtureRepository();
   try {
-    fs.writeFileSync(path.join(root, "tracked.txt"), "staged state\n");
-    git(root, ["add", "tracked.txt"]);
     fs.writeFileSync(path.join(root, "tracked.txt"), "turn start\n");
     fs.writeFileSync(path.join(root, "turn-start.txt"), "present before turn\n");
-    const statusBefore = git(root, ["status", "--porcelain=v1"]);
     const checkpoint = await createGitCheckpoint({
       workspacePath: root,
       taskId: "task-undo",
@@ -146,21 +143,51 @@ test("turn restore returns the worktree and staged state to the checkpoint", asy
     });
 
     fs.writeFileSync(path.join(root, "tracked.txt"), "changed by turn\n");
-    fs.rmSync(path.join(root, "turn-start.txt"));
-    fs.writeFileSync(path.join(root, "turn-only.txt"), "remove on undo\n");
-    git(root, ["add", "-A"]);
+    fs.writeFileSync(path.join(root, "turn-start.txt"), "also changed by turn\n");
+    fs.writeFileSync(path.join(root, "turn-only.txt"), "created by turn\n");
 
-    await restoreGitCheckpoint({
+    await restoreGitCheckpointPath({
       workspacePath: root,
       checkpointCommit: checkpoint.commitOid,
-      treeOid: checkpoint.treeOid,
-      indexTreeOid: checkpoint.indexTreeOid,
+      relativePath: "tracked.txt",
     });
 
     assert.equal(fs.readFileSync(path.join(root, "tracked.txt"), "utf8"), "turn start\n");
-    assert.equal(fs.readFileSync(path.join(root, "turn-start.txt"), "utf8"), "present before turn\n");
+    // Everything the undo did not name is still exactly as the turn left it.
+    assert.equal(fs.readFileSync(path.join(root, "turn-start.txt"), "utf8"), "also changed by turn\n");
+    assert.equal(fs.readFileSync(path.join(root, "turn-only.txt"), "utf8"), "created by turn\n");
+
+    // A file the checkpoint never had is undone by going away again.
+    await restoreGitCheckpointPath({
+      workspacePath: root,
+      checkpointCommit: checkpoint.commitOid,
+      relativePath: "turn-only.txt",
+    });
     assert.equal(fs.existsSync(path.join(root, "turn-only.txt")), false);
-    assert.equal(git(root, ["status", "--porcelain=v1"]), statusBefore);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("per-file restore refuses paths outside the worktree and blocked paths", async () => {
+  const root = fixtureRepository();
+  try {
+    const checkpoint = await createGitCheckpoint({
+      workspacePath: root,
+      taskId: "task-undo-guard",
+      checkpointId: "guard",
+      seedCommit: "HEAD",
+    });
+    for (const relativePath of ["../escape.txt", ".git/config", ".env"]) {
+      await assert.rejects(
+        () => restoreGitCheckpointPath({
+          workspacePath: root,
+          checkpointCommit: checkpoint.commitOid,
+          relativePath,
+        }),
+        /Invalid path to restore|Refusing to restore/,
+      );
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

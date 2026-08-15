@@ -1,4 +1,4 @@
-import type { BackendUiEvent } from "./types";
+import { progressKind, type BackendUiEvent } from "../shared/backendEvents";
 
 const commandOutputLimit = 16_384;
 const progressOutputLimit = 24_000;
@@ -19,8 +19,13 @@ function isStreamingEvent(event: BackendUiEvent): event is Extract<
 function sameStream(left: BackendUiEvent, right: BackendUiEvent): boolean {
   if (!isStreamingEvent(left) || !isStreamingEvent(right)) return false;
   if (left.type !== right.type || left.taskId !== right.taskId) return false;
-  if (left.type !== "command.output" || right.type !== "command.output") return true;
-  return left.id === right.id && left.stream === right.stream;
+  if (left.type === "command.output" && right.type === "command.output") {
+    return left.id === right.id && left.stream === right.stream;
+  }
+  if (left.type === "assistant.progress.delta" && right.type === "assistant.progress.delta") {
+    return progressKind(left) === progressKind(right);
+  }
+  return true;
 }
 
 export function appendBufferedBackendEvent(events: BackendUiEvent[], event: BackendUiEvent) {

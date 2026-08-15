@@ -21,14 +21,21 @@
     "brace-expansion": "5.0.9",
     "fast-uri": "3.1.5",
     "jake": "12.10.1",
+    "js-yaml": "4.3.1",
+    "nanoid": "3.3.18",
     "node-gyp": {
       "undici": "6.28.0"
+    },
+    "pdf-to-img": {
+      "pdfjs-dist": "6.2.108"
     },
     "postcss": "8.5.25"
   },
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
     "desktop:release": "node scripts/build-go-services.ts && npm --workspace @umbratic/desktop run package && npm --workspace @umbratic/desktop run verify:package",
+    "publish:release": "node scripts/publish-release.ts",
+    "release:version": "npm version --workspaces --include-workspace-root --no-git-tag-version --ignore-scripts",
     "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",
     "veil:test": "cd infrastructure/veil && go test ./...",
     "veil-console:dev": "node scripts/run-veil-console.ts dev",

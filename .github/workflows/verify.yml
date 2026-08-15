@@ -1,9 +1,8 @@
 name: Audit
 
 # Solo-developer CI: pull requests get a fast dependency audit and nothing
-# else — the full test-and-build verification is runnable locally and still
-# gates every tagged release in package-desktop.yml, which is the only place
-# binaries are built. Nothing runs on merges to main.
+# else. Releases are built on the two local machines and published to
+# downloads.umbratic.ai — see docs/releasing.md. Nothing runs on merges to main.
 
 on:
   pull_request:
@@ -32,7 +31,7 @@ jobs:
           node-version-file: .nvmrc
 
       # Lockfile-only, so no dependency install and no toolchain setup: the
-      # whole job stays under a minute. The deeper Rust/Go audits and
-      # provenance checks still run in the tagged-release workflow.
+      # whole job stays under a minute. Deeper Rust/Go audits run locally
+      # with npm run supply-chain:audit before a release.
       - name: Audit npm dependency vulnerabilities
         run: npm audit --package-lock-only --ignore-scripts --omit=peer --audit-level=low

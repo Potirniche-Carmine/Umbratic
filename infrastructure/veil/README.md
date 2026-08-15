@@ -152,14 +152,20 @@ Veil can reach. `VEIL_MODEL` must exactly match a model returned by the runtime.
 | `VEIL_PROVIDER_BASE_URL` | Yes | None | Base URL of the private model runtime. Keep this runtime inaccessible to public clients. |
 | `VEIL_MODEL` | Yes | None | Model ID Veil uses for health checks, connection, and chat. It must exactly match an ID reported by the runtime. With `VEIL_MODELS` set it must also name one of that registry's ids, and it is the default a request with no `model` gets. |
 | `VEIL_MODELS` | Server | Unset | JSON array of routable models. Unset means the single-model behavior below, byte for byte. |
+| `VEIL_SPEECH_BASE_URL` | No | Unset | Base URL of the transcription runtime that backs dictation, such as `vllm serve Qwen/Qwen3-ASR-1.7B`. Set it together with `VEIL_SPEECH_MODEL`; either one alone refuses to start. Unset means no `/api/transcribe` route and no `speech.transcribe` feature name. |
+| `VEIL_SPEECH_MODEL` | No | Unset | Served model id the transcription runtime answers to. Never appears in `/api/models`: it transcribes audio and would fail every chat request sent to it. |
 | `VEIL_ENV_FILE` | No | `.env` | Env file to load. Use `-` to disable env-file loading. This variable must be set in the process environment because it selects the file to read. |
 | `VEIL_ADDR` | No | `127.0.0.1:8080` | Address and port on which Veil listens. Keep the default when a local reverse proxy or Cloudflare Tunnel connects over loopback. |
 | `VEIL_TRUSTED_PROXY_CIDRS` | No | Empty | Comma-separated addresses or CIDRs whose `X-Forwarded-For` is believed when keying identity rate limits. Leave empty unless the proxy overwrites that header; otherwise a client picks its own bucket. Console sets loopback for the supervised deployment. |
 | `VEIL_CONTEXT_LENGTH` | No | `0` | Context window in tokens for local Ollama mode. A positive value is sent as `options.num_ctx`; `0` or unset uses Ollama's default. Unused in server mode. |
 | `VEIL_MAX_OUTPUT_TOKENS` | No | `8192` | Server-owned maximum generated tokens per response. Clients may request less, never more. |
-| `VEIL_TEMPERATURE` | Server | `0.2` | Sampling temperature from `0.0` to `2.0`. Ignored in local mode, which uses a fixed profile. |
-| `VEIL_TOP_P` | Server | `0.95` | Nucleus sampling from greater than `0.0` to `1.0`. Ignored in local mode. |
-| `VEIL_REASONING_EFFORT` | Server | `none` | `none`, `low`, `medium`, or `high`. Sent on every vLLM chat request when not `none`. |
+| `VEIL_TEMPERATURE` | No | `0.2` | Sampling temperature from `0.0` to `2.0`. |
+| `VEIL_TOP_P` | No | `0.95` | Nucleus sampling from greater than `0.0` to `1.0`. |
+| `VEIL_TOP_K` | Local | Unset | Top-k truncation. Omitted from the request when unset, which is the runtime's own default. |
+| `VEIL_MIN_P` | Local | Unset | Min-p truncation from `0.0` to `1.0`. Omitted when unset or zero. |
+| `VEIL_PRESENCE_PENALTY` | Local | Unset | Presence penalty from `-2.0` to `2.0`. Omitted when unset or zero. |
+| `VEIL_REPETITION_PENALTY` | Local | Unset | Repetition penalty from `0.0` to `2.0`. Omitted when unset or zero. |
+| `VEIL_REASONING_EFFORT` | No | `none` | `none`, `off`, `on`, `low`, `medium`, or `high`. `none` says nothing about thinking; `off` turns it off; `on` turns it on without a degree, for templates that read only `enable_thinking`. Sent as `reasoning_effort` on every chat request when it is a level, and in local mode also as `chat_template_kwargs`, which is where llama.cpp's Jinja templates read it from. |
 | `VEIL_THINKING_TOKEN_BUDGET` | Server | Unset | Optional non-negative thinking token budget no greater than `VEIL_MAX_OUTPUT_TOKENS`. |
 | `VEIL_MODEL_PARALLEL_TOOL_CALLS` | Server | `true` | Whether Veil sets `parallel_tool_calls` on vLLM requests that include tools. |
 | `VEIL_MAX_CONCURRENT_REQUESTS` | Server / Local profile | `32` / `4` | Global admission semaphore for model work. |

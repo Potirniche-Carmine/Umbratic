@@ -83,7 +83,7 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 		"Your task playbook for this turn.",
 		"what work happens, in what order, and when to stop",
 		"this plan sets the work",
-		"Start now with your first tool call",
+		"Start now with the needed tool call(s)",
 		"Keep the plan to yourself",
 		"Preferred skills (optional): umbratic-security-review",
 		"read_skill",
@@ -97,7 +97,13 @@ func TestPlaybookRendersBodyStopAndOnlyEnabledSkills(t *testing.T) {
 	// The status line is harness-paced now; a per-call formatting rule here
 	// would become the nearest instruction before every tool call and compete
 	// with the plan.
-	for _, gone := range []string{"Before each tool call", "one short sentence", "write one sentence"} {
+	for _, gone := range []string{
+		"Before each tool call",
+		"one short sentence",
+		"write one sentence",
+		"first tool call",
+		"the next tool",
+	} {
 		if strings.Contains(rendered, gone) {
 			t.Fatalf("the playbook must not ask for a per-call status line (%q)", gone)
 		}
@@ -136,13 +142,14 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 		for name, want := range map[string]string{
 			"read-only":            "leave the files as they are",
 			"no drive-by fixes":    "name it in your answer",
-			"first move is a tool": "Make a tool call your first action",
+			"first move is a tool": "A tool is how you learn what is here",
 			"docs before source":   "documents before any source",
-			"reads every document": "every other Markdown, plain-text, or word-processor document",
+			"reads every document": "docs folder or contributing notes",
 			"source reads bounded": "has stopped being a tour",
 			"no guessed paths":     "Read paths you have seen",
 			"answer is unbounded":  "as much room as it needs",
 			"self-terminating":     "write the answer from what you have",
+			"no folder walk":       "Do not ls every subdirectory",
 		} {
 			if !strings.Contains(rendered, want) {
 				t.Fatalf("repo_orient lost its %s rule (%q):\n%s", name, want, rendered)
@@ -158,6 +165,9 @@ func TestRepoOrientKeepsTheRulesItEarned(t *testing.T) {
 	bucket, _ := BucketFor(EngineeringChat, "repo_orient")
 	if !strings.Contains(bucket.When, "tell me more about this folder") {
 		t.Fatal("repo_orient must claim the folder-tour phrasing for the classifier")
+	}
+	if strings.Contains(rendered, "search for document files") || strings.Contains(rendered, "every other Markdown") {
+		t.Fatal("repo_orient must not send the model on a whole-tree document search")
 	}
 }
 
@@ -743,10 +753,10 @@ func TestRepoOrientGraphVariantIsOneCoherentNumberedPlan(t *testing.T) {
 	}
 	rendered := PlaybookPrompt(EngineeringChat, "repo_orient", nil, tools)
 
-	if !strings.Contains(rendered, "1. Call workspace_graph with action summary.") {
-		t.Fatalf("step 1 must itself be the graph call:\n%s", rendered)
+	if !strings.Contains(rendered, "1. In one response, call workspace_graph with action summary and read the project's own documents") {
+		t.Fatalf("step 1 must itself be the graph call, batched with document reads:\n%s", rendered)
 	}
-	if strings.Contains(rendered, "1. List the workspace root.") {
+	if strings.Contains(rendered, "1. In one response, list the workspace root") {
 		t.Fatalf("the listing imperative must be replaced, not accompanied:\n%s", rendered)
 	}
 	for _, patch := range []string{"replace step", "instead of step", "skip step"} {
@@ -754,21 +764,21 @@ func TestRepoOrientGraphVariantIsOneCoherentNumberedPlan(t *testing.T) {
 			t.Fatalf("the plan must not ask the model to amend it (%q):\n%s", patch, rendered)
 		}
 	}
-	// Steps 3 and 4 gate what counts as a real path. If they still name only a
+	// Later steps gate what counts as a real path. If they still name only a
 	// listing, they contradict a step 1 that never lists anything.
 	if !strings.Contains(rendered, "Read paths you have seen in the graph") {
-		t.Fatalf("step 4 must accept the graph as a source of real paths:\n%s", rendered)
+		t.Fatalf("a later step must accept the graph as a source of real paths:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "directories the listing showed") {
 		t.Fatalf("step 3 must not depend on a listing that step 1 no longer does:\n%s", rendered)
 	}
 	// Numbering is generated, so it cannot drift out of order.
-	for number := 1; number <= 5; number++ {
+	for number := 1; number <= 4; number++ {
 		if !strings.Contains(rendered, "\n"+strconv.Itoa(number)+". ") {
 			t.Fatalf("step %d is missing from the rendered plan:\n%s", number, rendered)
 		}
 	}
-	if strings.Contains(rendered, "\n6. ") {
+	if strings.Contains(rendered, "\n5. ") {
 		t.Fatalf("substitution must not add a step:\n%s", rendered)
 	}
 }
@@ -780,10 +790,10 @@ func TestRepoOrientWithoutTheGraphRendersTheOriginalPlan(t *testing.T) {
 	if strings.Contains(rendered, "workspace_graph") {
 		t.Fatalf("a harness without the tool must never be told to call it:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "1. List the workspace root.") {
+	if !strings.Contains(rendered, "1. In one response, list the workspace root") {
 		t.Fatalf("the original step 1 must survive:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "3. Then read only what the documents left unexplained: the entry points and directories the listing showed") {
-		t.Fatalf("the original step 3 must survive:\n%s", rendered)
+	if !strings.Contains(rendered, "2. Do not ls every subdirectory. The root listing is the layout.") {
+		t.Fatalf("the original step 2 must survive:\n%s", rendered)
 	}
 }

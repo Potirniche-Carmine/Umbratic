@@ -1,9 +1,9 @@
 //! Ordering rules for one batch of model tool calls.
 //!
-//! A batch is split into segments that may run concurrently. A tool that reads
-//! or writes session-wide state is a barrier and runs alone; two calls touching
-//! the same path where either writes are separated. Everything else runs in
-//! parallel, which is the whole point of letting the model emit a batch.
+//! A batch is split into segments that may run concurrently. Commands,
+//! programs, and patches are global barriers. Search is a barrier only when
+//! the same batch also writes or runs a command. Two calls touching the same
+//! path where either writes are separated. Everything else runs in parallel.
 
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
@@ -48,14 +48,32 @@ pub(crate) enum ToolAccess {
     Path { path: PathBuf, write: bool },
 }
 
-pub(crate) fn tool_access(session: &Session, call: &ToolCall) -> ToolAccess {
-    // `search` reads a session-wide index that a write, patch, or command in the
-    // same batch can invalidate, so it never runs concurrently with one.
+fn batch_mutates(calls: &[ToolCall]) -> bool {
+    calls.iter().any(|call| {
+        matches!(
+            call.name.as_str(),
+            "command" | "run_program" | "apply_patch" | "write" | "edit"
+        )
+    })
+}
+
+fn tool_access_in_batch(session: &Session, call: &ToolCall, batch_mutates: bool) -> ToolAccess {
+    // Commands, programs, and patches are unbounded filesystem effects.
+    // `search` only races a write in the same batch: it reads a session-wide
+    // index that those mutations can invalidate. Alongside reads it can run
+    // concurrently.
     if matches!(
         call.name.as_str(),
-        "command" | "run_program" | "apply_patch" | "search"
+        "command" | "run_program" | "apply_patch"
     ) {
         return ToolAccess::Global;
+    }
+    if call.name == "search" {
+        return if batch_mutates {
+            ToolAccess::Global
+        } else {
+            ToolAccess::Free
+        };
     }
     let write = matches!(call.name.as_str(), "write" | "edit");
     if !write && !matches!(call.name.as_str(), "read" | "lsp") {
@@ -83,6 +101,7 @@ pub(crate) fn execution_segments(session: &Session, calls: &[ToolCall]) -> Vec<V
     let mut segments = Vec::new();
     let mut current = Vec::new();
     let mut locks = BTreeMap::<PathBuf, bool>::new();
+    let mutating = batch_mutates(calls);
     let flush = |segments: &mut Vec<Vec<usize>>,
                  current: &mut Vec<usize>,
                  locks: &mut BTreeMap<PathBuf, bool>| {
@@ -92,7 +111,7 @@ pub(crate) fn execution_segments(session: &Session, calls: &[ToolCall]) -> Vec<V
         locks.clear();
     };
     for (index, call) in calls.iter().enumerate() {
-        match tool_access(session, call) {
+        match tool_access_in_batch(session, call, mutating) {
             ToolAccess::Global => {
                 flush(&mut segments, &mut current, &mut locks);
                 segments.push(vec![index]);

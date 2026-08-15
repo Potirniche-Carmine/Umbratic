@@ -35,6 +35,24 @@ export const veilFeature = {
    * must be present before the field is ever sent.
    */
   modelSelection: "chat.model_selection",
+  /**
+   * Chat bodies may carry a `thinking` directive. Tolerant like
+   * `harness_bucket`: the name exists so a client knows the field means
+   * something here, not so an unknown value can be refused.
+   */
+  thinkingToggle: "chat.thinking_toggle",
+  /**
+   * Chat bodies may carry `reasoning_visible`. Security-semantic: the default
+   * is still to strip reasoning tokens, so this name must be present before
+   * the field is ever sent.
+   */
+  reasoningVisible: "chat.reasoning_visible",
+  /**
+   * `POST /api/transcribe` exists and a speech runtime is configured behind it.
+   * Advertised only while both are true, so the composer hides its microphone
+   * rather than offering a button that fails on first press.
+   */
+  speechTranscribe: "speech.transcribe",
 } as const;
 
 export type VeilFeature = (typeof veilFeature)[keyof typeof veilFeature];

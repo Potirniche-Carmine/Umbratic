@@ -775,7 +775,6 @@
   width: 100%;
   min-height: 40px;
   padding: 9px 11px;
-  border-bottom: 1px solid var(--line);
   color: inherit;
   text-align: left;
   cursor: pointer;
@@ -791,8 +790,7 @@
 }
 
 .reviewSummaryTitle,
-.reviewSummaryReviewButton,
-.reviewSummaryFileButton {
+.reviewSummaryReviewButton {
   display: flex;
   align-items: center;
 }
@@ -806,7 +804,6 @@
 
 .reviewSummaryTitle svg,
 .reviewSummaryReviewButton svg,
-.reviewSummaryOpenIcon,
 .reviewTopActions svg,
 .openReviewFileButton svg,
 .reviewFileChevronButton svg {
@@ -840,110 +837,6 @@
 .reviewSummaryHeader:hover .reviewSummaryReviewButton {
   color: var(--text);
   background: var(--control-hover);
-}
-
-.reviewSummaryFiles {
-  display: grid;
-  min-width: 0;
-}
-
-.reviewSummaryFile {
-  position: relative;
-  min-width: 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.reviewSummaryFile::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 2px;
-  content: "";
-  background: transparent;
-  opacity: 0.58;
-}
-
-.reviewSummaryFile.status-added {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 3.5%, transparent), transparent 54%),
-    rgba(255, 255, 255, 0.004);
-}
-
-.reviewSummaryFile.status-added::before {
-  background: var(--diff-add);
-}
-
-.reviewSummaryFile.status-deleted {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 3.5%, transparent), transparent 54%),
-    rgba(255, 255, 255, 0.004);
-}
-
-.reviewSummaryFile.status-deleted::before {
-  background: var(--diff-remove);
-}
-
-.reviewSummaryFile.status-modified {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--amber) 3.5%, transparent), transparent 54%),
-    rgba(255, 255, 255, 0.004);
-}
-
-.reviewSummaryFile.status-modified::before {
-  background: var(--amber);
-}
-
-:root[data-theme="light"] .reviewSummaryFile.status-added {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--diff-add) 3.5%, transparent), transparent 54%),
-    rgba(255, 255, 255, 0.2);
-}
-
-:root[data-theme="light"] .reviewSummaryFile.status-deleted {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--diff-remove) 3.5%, transparent), transparent 54%),
-    rgba(255, 255, 255, 0.2);
-}
-
-:root[data-theme="light"] .reviewSummaryFile.status-modified {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--amber) 3.5%, transparent), transparent 54%),
-    rgba(255, 255, 255, 0.2);
-}
-
-.reviewSummaryFile:last-child {
-  border-bottom: 0;
-}
-
-.reviewSummaryFileButton {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px 18px;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  min-height: 42px;
-  padding: 9px 11px;
-  color: var(--text);
-  text-align: left;
-}
-
-.reviewSummaryFileButton:hover {
-  background: rgba(178, 186, 197, 0.045);
-}
-
-.reviewSummaryPath {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.reviewSummaryOpenIcon {
-  color: var(--muted);
-  justify-self: center;
 }
 
 .activityLiveOutput {

@@ -139,9 +139,26 @@ pub(super) async fn find_tool(
     } else {
         WalkDir::new(&absolute).min_depth(1)
     };
+    // Same prune search uses: skip the entry and do not descend. Filtering
+    // after the walk still visits every file under `.llama-cache` and `target`.
     for entry in walker
         .follow_links(false)
         .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            if entry.file_type().is_symlink() {
+                return false;
+            }
+            let relative_workspace = entry
+                .path()
+                .strip_prefix(&workspace_root)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            !should_skip(&relative_workspace)
+        })
         .filter_map(Result::ok)
     {
         let relative_workspace = entry

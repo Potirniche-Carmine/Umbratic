@@ -2,14 +2,15 @@ import {
   DEFAULT_CONTEXT_LENGTH,
   normalizeContextLength,
 } from "../shared/contextWindow";
+import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
 import type {
-  ChatAttachment,
   ChatRecord,
   HarnessProfileId,
   IdeInfo,
   ModelEndpointMode,
   PermissionMode,
   PublicModelEndpointSettings,
+  ReasoningEffort,
   RepositoryInfo,
   UserNotes,
 } from "../shared/desktopApi";
@@ -21,6 +22,7 @@ const previewChatsKey = "umbratic-preview-chats";
 const previewNotesKey = "umbratic-preview-notes";
 const previewHarnessProfileKey = "umbratic-preview-harness-profile";
 const previewContextLengthKey = "umbratic-preview-context-length";
+const previewReasoningEffortKey = "umbratic-preview-reasoning-effort";
 const previewEndpointSettingsKey = "umbratic-preview-endpoint-settings";
 export const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultModelEndpointSettings: ModelEndpointSettings = {
@@ -34,40 +36,6 @@ const defaultModelEndpointSettings: ModelEndpointSettings = {
     { name: "", value: "", valueConfigured: false },
   ],
 };
-export const harnessSystemSkillIds: Record<HarnessProfileId, ReadonlySet<string>> = {
-  engineering: new Set([
-    "umbratic-skill-creator",
-    "umbratic-git-worktree",
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-cmake",
-    "umbratic-discovery",
-    "umbratic-product-spec",
-    "umbratic-security-review",
-  ]),
-  marketing: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-    "umbratic-discovery",
-    "umbratic-marketing-brief",
-  ]),
-  sales: new Set([
-    "umbratic-markdown",
-    "umbratic-python",
-    "umbratic-pdf",
-    "umbratic-data-analysis",
-    "umbratic-presentations",
-    "umbratic-documents",
-    "umbratic-spreadsheets",
-    "umbratic-discovery",
-    "umbratic-sales-enablement",
-  ]),
-};
 export const defaultIdeChoices: IdeInfo[] = [
   { id: "code", label: "VS Code", icon: "vscode" },
   { id: "visualstudio", label: "Visual Studio", icon: "visualstudio" },
@@ -77,7 +45,9 @@ export const defaultIdeChoices: IdeInfo[] = [
     icon: navigator.platform.toLowerCase().includes("mac") ? "finder" : "explorer",
   },
 ];
-let previewPermissionMode: PermissionMode = "normal";
+// The app's own default for anyone who has not chosen, so the preview shows
+// the composer the way a fresh install does.
+let previewPermissionMode: PermissionMode = "auto_safe";
 
 export function readPreviewProjects(): RepositoryInfo[] {
   try {
@@ -147,6 +117,25 @@ export function readPreviewContextLength(): number {
     window.localStorage.getItem(previewContextLengthKey)
       ?? DEFAULT_CONTEXT_LENGTH,
   );
+}
+
+export function readPreviewReasoningEffort(): ReasoningEffort {
+  const stored = window.localStorage.getItem(previewReasoningEffortKey);
+  return isReasoningEffort(stored) ? stored : DEFAULT_REASONING_EFFORT;
+}
+
+export function writePreviewReasoningEffort(effort: ReasoningEffort): void {
+  window.localStorage.setItem(previewReasoningEffortKey, effort);
+}
+
+const previewShowThinkingKey = "umbratic-preview-show-thinking";
+
+export function readPreviewShowThinking(): boolean {
+  return window.localStorage.getItem(previewShowThinkingKey) === "true";
+}
+
+export function writePreviewShowThinking(value: boolean): void {
+  window.localStorage.setItem(previewShowThinkingKey, value ? "true" : "false");
 }
 
 export function writePreviewContextLength(contextLength: number): void {
@@ -242,28 +231,6 @@ export function publicPreviewEndpointSettings(
       valueConfigured: header.valueConfigured || !!header.value,
     })),
   };
-}
-
-export function normalizeAttachment(file: ChatAttachment): ChatAttachment {
-  const normalized: ChatAttachment = {
-    path: file.path,
-    name: file.name || file.path.split(/[\\/]/).pop() || file.path,
-  };
-  if (file.source === "chat" || file.source === "workspace") {
-    normalized.source = file.source;
-  }
-  if (file.storedPath) normalized.storedPath = file.storedPath;
-  if (file.originalPath) normalized.originalPath = file.originalPath;
-  if (file.previewDataUrl?.startsWith("data:image/")) {
-    normalized.previewDataUrl = file.previewDataUrl;
-  }
-  if (
-    Number.isSafeInteger(file.contextTokens)
-    && (file.contextTokens ?? -1) >= 0
-  ) {
-    normalized.contextTokens = file.contextTokens;
-  }
-  return normalized;
 }
 
 export function getPreviewPermissionMode(): PermissionMode {

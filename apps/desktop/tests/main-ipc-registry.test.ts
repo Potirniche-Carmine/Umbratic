@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { desktopIpcChannels } from "../src/shared/desktopApi.ts";
 import { loadTypeScriptModule } from "./helpers/load-ts-module.ts";
 
 test("IPC registry registers every shared channel and blocks untrusted senders", async () => {
@@ -14,6 +13,9 @@ test("IPC registry registers every shared channel and blocks untrusted senders",
       },
     },
   };
+  const { desktopIpcChannels } = loadTypeScriptModule(
+    new URL("../src/shared/desktopApi.ts", import.meta.url),
+  );
   const { registerDesktopIpcHandlers } = loadTypeScriptModule(
     new URL("../src/main/ipcRegistry.ts", import.meta.url),
     { mocks: { electron } },

@@ -26,6 +26,33 @@ type ManagedModel struct {
 	ID          string
 	DisplayName string
 	Command     string
+	// Role decides which Veil setting this process feeds. Both roles are the
+	// same kind of child — one vLLM serving one model on one loopback port —
+	// but a transcription runtime answers /v1/audio/transcriptions rather than
+	// /v1/chat/completions, so putting it in the chat registry would publish a
+	// model that fails every request a client could send it.
+	Role string
+}
+
+const (
+	// RoleChat is the default and what every model registered before this
+	// column existed is.
+	RoleChat = "chat"
+	// RoleSpeech is the transcription runtime that backs dictation. Veil takes
+	// one speech endpoint, so at most one model may hold this role.
+	RoleSpeech = "speech"
+)
+
+// IsSpeech reports whether this model backs dictation rather than chat.
+func (m ManagedModel) IsSpeech() bool { return NormalizeRole(m.Role) == RoleSpeech }
+
+// NormalizeRole maps an empty or unknown role onto chat. The value arrives from
+// a form, and a typo must not silently promote a model into the speech slot.
+func NormalizeRole(value string) string {
+	if strings.TrimSpace(value) == RoleSpeech {
+		return RoleSpeech
+	}
+	return RoleChat
 }
 
 const (
@@ -300,7 +327,14 @@ func (m ManagedModel) Port() int {
 func ValidateManagedModels(models []ManagedModel, consolePort, veilPort int) error {
 	seenID := map[string]bool{}
 	seenPort := map[int]bool{}
+	speechModels := 0
 	for _, model := range models {
+		if NormalizeRole(model.Role) == RoleSpeech {
+			speechModels++
+			if speechModels > 1 {
+				return errors.New("only one model can be the dictation runtime")
+			}
+		}
 		facts, err := model.Parse()
 		if err != nil {
 			return fmt.Errorf("model %q: %w", model.ID, err)
@@ -341,14 +375,18 @@ type modelEnvEntry struct {
 	ContextLength   int    `json:"context_length"`
 }
 
-// ModelsEnvJSON renders VEIL_MODELS. Empty when there are no managed models, so
+// ModelsEnvJSON renders VEIL_MODELS. Empty when there are no chat models, so
 // Veil keeps its single-model behavior and never advertises model selection.
+//
+// The speech model is deliberately absent: it answers transcription requests,
+// not chat, and listing it would put a model in the picker that fails every
+// message sent to it.
 func ModelsEnvJSON(models []ManagedModel) (string, error) {
-	if len(models) == 0 {
-		return "", nil
-	}
 	entries := make([]modelEnvEntry, 0, len(models))
 	for _, model := range models {
+		if NormalizeRole(model.Role) != RoleChat {
+			continue
+		}
 		facts, err := model.Parse()
 		if err != nil {
 			return "", err
@@ -369,9 +407,33 @@ func ModelsEnvJSON(models []ManagedModel) (string, error) {
 			ContextLength: facts.MaxModelLen,
 		})
 	}
+	if len(entries) == 0 {
+		return "", nil
+	}
 	encoded, err := json.Marshal(entries)
 	if err != nil {
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+// SpeechEnvironment renders the two variables that turn dictation on in Veil.
+// Empty when no model holds the speech role, which is what keeps
+// /api/transcribe absent and the feature name unadvertised rather than
+// advertising a capability with nothing behind it.
+func SpeechEnvironment(models []ManagedModel) []string {
+	for _, model := range models {
+		if NormalizeRole(model.Role) != RoleSpeech {
+			continue
+		}
+		facts, err := model.Parse()
+		if err != nil {
+			return nil
+		}
+		return []string{
+			fmt.Sprintf("VEIL_SPEECH_BASE_URL=http://127.0.0.1:%d/v1", facts.Port),
+			"VEIL_SPEECH_MODEL=" + model.ID,
+		}
+	}
+	return nil
 }

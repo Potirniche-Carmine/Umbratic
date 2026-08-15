@@ -22,11 +22,7 @@ func captureBody(t *testing.T, mode Mode, chatPath string, handler http.HandlerF
 				t.Errorf("chat body did not decode: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if mode == ModeServer {
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
-			} else {
-				_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"ok"}}`))
-			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 			return
 		}
 		if handler != nil {
@@ -86,38 +82,24 @@ func TestVLLMChatOmitsReasoningEffortWhenSuppressed(t *testing.T) {
 	}
 }
 
-func TestOllamaChatCarriesThinkOnlyOnDirective(t *testing.T) {
+// llama-server reaches the chat template with the same kwargs vLLM does, so a
+// thinking directive travels the same way in both modes.
+func TestLocalChatCarriesThinkingOnlyOnDirective(t *testing.T) {
 	base := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
 
-	body := captureBody(t, ModeLocal, "/api/chat", nil, base)
-	if _, present := body["think"]; present {
+	body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, base)
+	if _, present := body["chat_template_kwargs"]; present {
 		t.Fatalf("no directive must leave the body exactly as it was: %#v", body)
 	}
 
 	for _, want := range []bool{true, false} {
 		request := base
 		request.Thinking = boolPointer(want)
-		body := captureBody(t, ModeLocal, "/api/chat", nil, request)
-		if body["think"] != want {
-			t.Fatalf("think must mirror the directive: %#v", body)
+		body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, request)
+		kwargs, ok := body["chat_template_kwargs"].(map[string]any)
+		if !ok || kwargs["enable_thinking"] != want {
+			t.Fatalf("enable_thinking must mirror the directive: %#v", body)
 		}
-	}
-}
-
-func TestOllamaCapabilitiesParse(t *testing.T) {
-	var payload any
-	if err := json.Unmarshal([]byte(`{"capabilities":["completion","tools","Thinking",7,""]}`), &payload); err != nil {
-		t.Fatal(err)
-	}
-	capabilities := ollamaCapabilitiesFromPayload(payload)
-	if !capabilities["thinking"] || !capabilities["tools"] {
-		t.Fatalf("declared capabilities must be readable case-insensitively: %#v", capabilities)
-	}
-	if len(capabilities) != 3 {
-		t.Fatalf("unreadable entries must be dropped, not guessed: %#v", capabilities)
-	}
-	if got := ollamaCapabilitiesFromPayload(map[string]any{}); len(got) != 0 {
-		t.Fatalf("a payload with no capability list means unknown, not supported: %#v", got)
 	}
 }
 
@@ -144,5 +126,82 @@ func TestPrefixTokenCacheKeyIncludesTheModel(t *testing.T) {
 	small := client.PrefixTokens(context.Background(), "same-prefix", "small", messages)
 	if big.SystemPromptTokens != 400 || small.SystemPromptTokens != 100 {
 		t.Fatalf("each model must get its own count: big=%d small=%d", big.SystemPromptTokens, small.SystemPromptTokens)
+	}
+}
+
+// The local chat path is the one that carries a configured effort into the
+// chat template, because llama.cpp reads it from there rather than from the
+// top-level OpenAI field.
+func TestLocalChatCarriesConfiguredReasoningEffort(t *testing.T) {
+	base := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
+
+	request := base
+	request.ReasoningEffort = ReasoningHigh
+	body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, request)
+	kwargs, ok := body["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["reasoning_effort"] != "high" || kwargs["enable_thinking"] != true {
+		t.Fatalf("an effort must reach the chat template: %#v", body)
+	}
+	if body["reasoning_effort"] != "high" {
+		t.Fatalf("an effort must stay on the request too: %#v", body)
+	}
+
+	off := base
+	off.ReasoningEffort = ReasoningOff
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, off)
+	kwargs, ok = body["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["enable_thinking"] != false {
+		t.Fatalf("off must turn thinking off: %#v", body)
+	}
+	if _, present := body["reasoning_effort"]; present {
+		t.Fatalf("off must not also say how hard to think: %#v", body)
+	}
+
+	// "on" is thinking with no degree: the template is told to think and is
+	// told nothing about how hard, because it cannot read that.
+	on := base
+	on.ReasoningEffort = ReasoningOn
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, on)
+	kwargs, ok = body["chat_template_kwargs"].(map[string]any)
+	if !ok || kwargs["enable_thinking"] != true {
+		t.Fatalf("on must turn thinking on: %#v", body)
+	}
+	if _, present := kwargs["reasoning_effort"]; present {
+		t.Fatalf("on must not grade the thinking it asked for: %#v", kwargs)
+	}
+	if _, present := body["reasoning_effort"]; present {
+		t.Fatalf("on must not send a degree on the request either: %#v", body)
+	}
+
+	none := base
+	none.ReasoningEffort = ReasoningNone
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, none)
+	if _, present := body["chat_template_kwargs"]; present {
+		t.Fatalf("saying nothing must leave the template alone: %#v", body)
+	}
+}
+
+// The recommended samplers only travel when a model card recommended them; a
+// zero is the runtime's own default and is left off the wire.
+func TestChatCarriesRecommendedSamplersWhenSet(t *testing.T) {
+	base := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}
+
+	body := captureBody(t, ModeLocal, "/v1/chat/completions", nil, base)
+	for _, field := range []string{"top_k", "min_p", "presence_penalty", "repetition_penalty"} {
+		if _, present := body[field]; present {
+			t.Fatalf("%s must not travel unset: %#v", field, body)
+		}
+	}
+
+	request := base
+	request.TopK = 20
+	request.PresencePenalty = 1.5
+	request.RepetitionPenalty = 1.0
+	body = captureBody(t, ModeLocal, "/v1/chat/completions", nil, request)
+	if body["top_k"] != float64(20) || body["presence_penalty"] != 1.5 || body["repetition_penalty"] != 1.0 {
+		t.Fatalf("recommended samplers must reach the runtime: %#v", body)
+	}
+	if _, present := body["min_p"]; present {
+		t.Fatalf("a zero min_p is the default and must stay off the wire: %#v", body)
 	}
 }

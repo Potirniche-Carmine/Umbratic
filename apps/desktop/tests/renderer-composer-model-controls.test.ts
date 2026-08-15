@@ -23,7 +23,8 @@ test("the model menu grows upward from the trigger it belongs to", () => {
   const menu = declarations(".modelMenu");
   assert.match(menu, /bottom:\s*calc\(100% \+ 7px\)/);
   assert.match(menu, /min-width:\s*240px/);
-  assert.match(menu, /transform-origin:\s*bottom left/);
+  // Right-anchored since the picker moved into the prompt box's bottom rail.
+  assert.match(menu, /transform-origin:\s*bottom right/);
   assert.match(menu, /animation:\s*menuRise 180ms ease both/);
 });
 
@@ -46,14 +47,64 @@ test("menu rows are radio items and a stopped model stays visible and selectable
 
 test("the picker disables itself during a run and says why", () => {
   assert.match(main, /disabledReason="Wait for the current run to finish"/);
-  assert.match(controls, /title=\{disabled \? disabledReason \?\? "" : `Model: \$\{selected\?\.label \?\? selectedId\}`\}/);
+  assert.match(controls, /title=\{disabled \? disabledReason \?\? "" : `Model: \$\{selectedLabel\}`\}/);
 });
 
-test("the composer offers a choice only where one exists", () => {
-  // One model is not a choice: the picker is absent rather than showing a menu
-  // with a single row.
-  assert.match(main, /composerModels\.length > 1 \? \(/);
-  assert.match(controls, /if \(models\.length === 0\) return null;/);
+test("the composer always offers a way to reach a model", () => {
+  // A second model, or a level on the one model, or local mode at all: with
+  // nothing downloaded the control is the only route from the composer to
+  // where models come from, so it stays.
+  assert.match(main, /composerModels\.length > 1 \|\| modelReasoningEfforts\.length > 0 \|\| endpointSettings\.mode === "local" \? \(/);
+  assert.match(controls, /Download a model…/);
+  assert.match(controls, /"Choose a model"/);
+  // The old early return would have hidden it exactly when it was needed most.
+  assert.doesNotMatch(controls, /if \(models\.length === 0\) return null;/);
+});
+
+test("effort levels are the selected model's own, shown inside its menu", () => {
+  // A per-model list, not a fixed four: the section is absent for a model that
+  // reads no effort, rather than offering a choice its template would ignore.
+  assert.match(controls, /efforts\.length > 0 \? \(/);
+  assert.match(controls, /<p className="modelMenuHeading">Effort<\/p>/);
+  assert.match(controls, /Show thinking/);
+  assert.match(controls, /effort !== "off"/);
+  assert.match(controls, /className="modelMenuCheck/);
+  assert.match(controls, /className="modelMenuCheckBox"/);
+  assert.match(declarations(".modelMenuCheck"), /display:\s*flex/);
+  assert.match(declarations(".modelMenuCheck"), /justify-content:\s*space-between/);
+  assert.match(declarations(".modelMenuCheck input"), /opacity:\s*0/);
+  assert.match(declarations(".modelMenuCheckBox"), /border-radius:\s*4px/);
+  assert.match(declarations(".modelMenuHeading"), /text-transform:\s*uppercase/);
+  assert.match(declarations(".modelMenu button"), /color:\s*var\(--text\)/);
+  assert.match(controls, /<p className="modelMenuHeading">Model<\/p>/);
+  assert.ok(
+    controls.indexOf("modelMenuHeading\">Effort") < controls.indexOf("Show thinking")
+      && controls.indexOf("Show thinking") < controls.indexOf("className=\"modelMenuCheckBox\"")
+      && controls.indexOf("Show thinking") < controls.indexOf("modelMenuHeading\">Model"),
+    "Show thinking sits under Effort, with its tick after the words",
+  );
+  assert.match(main, /efforts=\{modelReasoningEfforts\}/);
+  assert.match(main, /showThinking=\{showThinking\}/);
+  assert.match(main, /onToggleShowThinking=\{\(next\) => void updateShowThinking\(next\)\}/);
+  // The model list is a step in from the main page, not a wall of rows under
+  // the levels.
+  assert.match(controls, /setPage\("models"\)/);
+  // Closing puts it back on the main page, so it never reopens on a sub-page
+  // the user did not leave it on.
+  assert.match(controls, /if \(!open\) \{\s*\n\s*placedRef\.current = false;\s*\n\s*setPage\("main"\);/);
+  // Except with nothing chosen yet, where the list is the only page worth
+  // showing: making someone press "Choose a model" and then "Model ›" is two
+  // clicks to answer a question the trigger already asked. Once per opening,
+  // so Back still works.
+  assert.match(controls, /if \(placedRef\.current \|\| !unchosen \|\| models\.length === 0\) return;/);
+  assert.match(controls, /placedRef\.current = true;\s*\n\s*setPage\("models"\);/);
+});
+
+test("the model name carries no icon and no context window", () => {
+  const trigger = controls.slice(controls.indexOf('className="modelTrigger"'), controls.indexOf("</button>", controls.indexOf('className="modelTrigger"')));
+  assert.doesNotMatch(trigger, /<Cpu/);
+  assert.doesNotMatch(controls, /modelContextBadge/);
+  assert.doesNotMatch(controls, /contextBadge\?:/);
 });
 
 test("every settings dropdown is the same control", () => {
@@ -72,17 +123,4 @@ test("every settings dropdown is the same control", () => {
     const source = readFileSync(new URL(`../src/renderer/${file}`, import.meta.url), "utf8");
     assert.doesNotMatch(source, /<select\b/, `${file} should use Combobox rather than a native select`);
   }
-});
-
-test("context windows are labelled the way the menu shows them", () => {
-  // Evaluated from source rather than imported: the module is TSX, and this
-  // helper is plain arithmetic that does not need React to be loaded.
-  const source = controls.slice(controls.indexOf("export function contextBadge"));
-  const body = source.slice(source.indexOf("{"), source.indexOf("\n}") + 2);
-  const contextBadge = new Function(`return function contextBadge(contextLength) ${body}`)();
-  assert.equal(contextBadge(98_304), "98k");
-  assert.equal(contextBadge(1_000_000), "1.0M");
-  assert.equal(contextBadge(512), "512");
-  assert.equal(contextBadge(0), undefined);
-  assert.equal(contextBadge(undefined), undefined);
 });
