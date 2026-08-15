@@ -109,11 +109,14 @@ export function recommendedModelId(kind: CatalogModelKind, ram: number): string 
   if (kind === "dictation") return ram < 16 ? "qwen3-asr-0.6b" : "qwen3-asr-1.7b";
   if (ram < 12) return "gemma4-e2b";
   if (ram < 16) return "gemma4-e4b";
-  // The 27B is only suggested on a machine with memory to spare, which in
-  // practice is a machine with a discrete GPU behind it. Below that the 12B is
-  // the one that will actually feel good, even though the larger model remains
-  // one click away for anyone who wants it.
-  if (ram < 64) return "gemma4-12b";
+  // 32 GB, not 64: the 27B's default quantization is about 17 GB of weights,
+  // and with the KV cache for a long context on top it wants roughly 22 GB to
+  // be comfortable. A 32 GB machine has that, and the 27B is the only model
+  // here whose tool calling holds up over a long agentic run — recommending
+  // the 12B to a 48 GB laptop was sending the machine's whole advantage
+  // unused. Below 32 the 12B is still the one that will feel good, and the
+  // 27B stays one click away for anyone who wants it.
+  if (ram < 32) return "gemma4-12b";
   return "qwen38-27b";
 }
 

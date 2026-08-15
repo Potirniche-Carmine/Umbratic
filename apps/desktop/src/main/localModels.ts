@@ -80,6 +80,7 @@ export function listLocalModels(dataRoot: string, kind: CatalogModelKind): Local
       minRamGB: model.minRamGB,
       recommended,
       uncensored: model.uncensored === true,
+      ...(model.role ? { role: model.role } : {}),
       custom,
       selectedQuant: chosen.quant,
       quants: model.quants.map((quant, index) => ({

@@ -326,7 +326,7 @@
   left: 0;
   right: 0;
   /* The rail's own height, so the strip below stays clear. */
-  bottom: 44px;
+  bottom: 36px;
   z-index: 6;
   display: grid;
   place-items: center;

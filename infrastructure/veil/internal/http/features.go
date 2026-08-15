@@ -13,8 +13,9 @@ var serverFeatures = []string{
 	// rather than schema-arbitrated. A harness may send constructs this build has
 	// never seen and let the provider judge them.
 	"tools.bounds_only",
-	// harness_bucket is a free-form hint. An unknown value defaults to no
-	// playbook instead of failing the request.
+	// harness_bucket is a free-form hint. The field is accepted and does not
+	// change the protected prompt. An unknown value is counted rather than
+	// failing the request.
 	"chat.harness_bucket_hint",
 	// Unknown body fields on product routes are stripped and counted.
 	"chat.tolerant_body",
@@ -31,6 +32,11 @@ var serverFeatures = []string{
 	// harness_bucket — the name exists so a client knows the field means
 	// something here, not so an unknown value can be refused.
 	"chat.thinking_toggle",
+	// Chat bodies may carry `reasoning_visible`. Security-semantic: the
+	// default is still to strip reasoning tokens, and a client must see this
+	// name before asking to forward them. An older server that never
+	// advertised it keeps stripping even if the field arrives.
+	"chat.reasoning_visible",
 }
 
 // modelSelectionFeature is advertised only while a registry is configured. It

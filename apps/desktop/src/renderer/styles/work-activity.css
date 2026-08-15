@@ -61,17 +61,6 @@
   box-shadow: none;
 }
 
-.workStreamingCaret {
-  display: inline-block;
-  width: 0;
-  height: 0.9em;
-  margin-left: 3px;
-  border-right: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  opacity: 0.72;
-  transform: translateY(1px);
-  animation: streamingCaretBlink 1s steps(2, start) infinite;
-}
-
 /* A tool row is the same register as the header above it and the narration
    around the block: the run reporting on itself. Setting it heavier than that
    narration made a list of file reads compete with the answer for attention. */

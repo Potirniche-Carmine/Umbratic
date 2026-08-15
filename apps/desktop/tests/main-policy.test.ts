@@ -13,6 +13,10 @@ test("desktop policy identifies generated runtime artifacts without creating pro
   assert.equal(policy.isGeneratedRuntimePath(".DS_Store"), true);
   assert.equal(policy.isGeneratedRuntimePath("notes/Desktop.ini"), true);
   assert.equal(policy.isGeneratedRuntimePath("%SystemDrive%/ProgramData/Microsoft/Windows/Caches/cversions.2.db"), true);
+  assert.equal(policy.isGeneratedRuntimePath("apps/desktop/node_modules/pkg/index.js"), true);
+  assert.equal(policy.isGeneratedRuntimePath("apps/desktop/.llama-cache/llama.cpp/README.md"), true);
+  assert.equal(policy.isGeneratedRuntimePath("packages/runner/target/debug/umbratic_runner"), true);
+  assert.equal(policy.isGeneratedRuntimePath("src/build.ts"), false);
   assert.equal("runtimeProfileForPrompt" in policy, false);
 });
 
@@ -55,6 +59,9 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     ["cat config/.env", "blocked-path", true],
     ["cat *.env", "blocked-path", true],
     ["type id_rsa", "blocked-path", true],
+    ["find apps/desktop/src -name '*.ts'", "read", false],
+    ["node scripts/check-source-size.ts", "shell", false],
+    ["git ls-files apps/desktop/src/renderer", "git-read", false],
     ["cat src/tokenizer.rs", "read", false],
     ["cat docs/secret-management.md", "markdown", false],
     ["cat tests/credential_store.rs", "read", false],
@@ -67,8 +74,9 @@ test("desktop command classifier blocks unsafe branches and allows expected tool
     assert.equal(got.risky, risky, command);
   }
   assert.equal(policy.runtimeDiagnostics().python.barePythonVerification, "allowed_uv_preferred");
-  // Desktop still honors runner safety.action === "allow", but interpreters now Confirm in the runner.
+  // Desktop still honors runner safety.action === "allow". Interpreters Allow in Auto-run.
   assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("git status", cwd), "allow"), true);
+  assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("python script.py", cwd), "allow"), true);
   assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("python script.py", cwd), "confirm"), false);
   assert.equal(policy.canAutoResolvePermission("auto_safe", "bash", policy.classifyCommandText("uv run python script.py", cwd), "confirm"), false);
   assert.equal(policy.canAutoResolvePermission("normal", "bash", policy.classifyCommandText("git status", cwd), "allow"), false);
@@ -125,7 +133,7 @@ test("hardening config asserts provider, model, permission, and tool boundaries"
     ),
     /sendModelField/,
   );
-  // provider.mode is trusted config that selects the runner's orient timeout,
+  // provider.mode is trusted config,
   // so it must be explicit rather than inferred from the URL.
   for (const mode of [undefined, "", "auto", "Local", 1]) {
     assert.throws(

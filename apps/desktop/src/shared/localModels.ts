@@ -28,6 +28,12 @@ export type LocalCatalogModel = {
   recommended: boolean;
   /** Safety training removed. Shown, never suggested. */
   uncensored: boolean;
+  /**
+   * What the model is for, in a tag and a sentence. Absent for dictation
+   * weights, which are chosen by size, and for models added from a Hugging
+   * Face reference, which this collection has never read the card for.
+   */
+  role?: { label: string; detail: string };
   /** Added by the user from a Hugging Face reference, so it can be removed too. */
   custom: boolean;
   selectedQuant: string;

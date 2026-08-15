@@ -13,18 +13,17 @@ import (
 	"umbratic-veil/internal/prompts"
 )
 
-// Orient sets no output cap and does not suppress thinking: the model decides
-// how much to reason before answering. Every cap tried so far (96, then 256)
-// was blown by a thinking-by-default model reasoning inside the budget and
-// returning an empty content. The harness constrains the *shape* instead —
-// the response schema means whatever content arrives can only be one decision
-// object — and validation rejects anything else.
+// Orient is a classifier, not a generation. Thinking is forced off and the
+// output is capped: earlier caps (96, then 256) were blown because thinking
+// stayed on and ate the budget, returning empty content. With thinking off,
+// the schema-constrained JSON decision fits in a small bound.
+const orientMaxOutputTokens = 512
 
 // handleOrient classifies one request into a hidden intent bucket.
 //
 // It is modeled on the compaction handler: non-streaming, server-prompted, one
 // upstream call, free-form output parsed and validated server-side. It is
-// deliberately deterministic — temperature 0, no tools, no thinking — because
+// deliberately deterministic — temperature 0, no tools, thinking off — because
 // the only useful output is a closed enum plus one sentence.
 func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 	input, err := policy.DecodeOrientInput(http.MaxBytesReader(w, r.Body, policy.MaxOrientRequestBytes+1024))
@@ -41,16 +40,16 @@ func (s *Server) handleOrient(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "unknown route")
 		return
 	}
+	thinkingOff := false
 	req := model.ChatRequest{
-		Model:    s.cfg.DefaultModel,
-		Messages: messages,
-		Stream:   false,
-		// ReasoningNone means "do not force an effort level", not "forbid
-		// thinking": the local path leaves Ollama's thinking default alone and
-		// the server path omits reasoning_effort entirely.
+		Model:           s.cfg.DefaultModel,
+		Messages:        messages,
+		Stream:          false,
 		Temperature:     0,
 		TopP:            1,
+		MaxOutputTokens: orientMaxOutputTokens,
 		ReasoningEffort: model.ReasoningNone,
+		Thinking:        &thinkingOff,
 		ParallelTools:   false,
 		ResponseSchema:  prompts.OrientResponseSchema(),
 	}

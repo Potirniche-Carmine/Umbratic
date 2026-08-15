@@ -109,7 +109,7 @@ test("WorkMarkdownContent renders safe markdown with a distinct streaming marker
   // from plain text to styled when the next paragraph boundary arrives.
   assert.match(html, /<ul>/);
   assert.match(html, /Run tests/);
-  assert.match(html, /workStreamingCaret/);
+  assert.doesNotMatch(html, /workStreamingCaret/);
   assert.doesNotMatch(html, /streamingPlainTail/);
   assert.doesNotMatch(html, /\*\*Inspecting\*\*/);
 });
@@ -187,12 +187,22 @@ test("feedback dialog and prompt controls do not allow horizontal growth", () =>
   // The rail holds two groups now — how the turn is written on the left, what
   // answers it on the right — so it spreads rather than pushing everything right.
   assert.match(actionRailRule, /justify-content:\s*space-between/);
-  assert.match(actionRailRule, /min-height:\s*44px/);
-  // Translucent chrome, not a second box: a light-catching edge rather than a
-  // divider, a tint that fades in rather than a flat fill, and real blur.
-  assert.match(actionRailRule, /border-top:\s*1px solid var\(--material-edge\)/);
-  assert.match(actionRailRule, /background:\s*linear-gradient\(/);
-  assert.match(actionRailRule, /backdrop-filter:\s*blur\(16px\) saturate\(170%\)/);
+  assert.match(actionRailRule, /min-height:\s*36px/);
+  // No strip at all. Even a translucent one draws a rectangle under the text,
+  // and a rectangle with a hairline on top of it is a second box: the controls
+  // sit on the prompt's own surface instead.
+  assert.match(actionRailRule, /border-top:\s*0/);
+  assert.match(actionRailRule, /background:\s*transparent/);
+  assert.doesNotMatch(actionRailRule, /backdrop-filter/);
+  assert.doesNotMatch(actionRailRule, /linear-gradient/);
+  // And the controls in it are borderless, so nothing inside the box outlines
+  // itself against the box's own outline.
+  const railControlsRule = composerCss.match(
+    /\.promptActionRail \.permissionControl \.permissionTrigger,\n\.promptActionRail \.modelControl \.modelTrigger,\n\.promptActionRail \.dictationControl \{[^}]+\}/s,
+  )?.[0] ?? "";
+  assert.match(railControlsRule, /border:\s*0/);
+  assert.match(railControlsRule, /background:\s*transparent/);
+  assert.doesNotMatch(railControlsRule, /border-radius:\s*999px/);
   assert.match(textareaRule, /max-width:\s*100%/);
   assert.match(textareaRule, /overflow-x:\s*hidden/);
   assert.match(textareaRule, /overflow-wrap:\s*anywhere/);
@@ -363,8 +373,8 @@ test("command aggregation, pending permissions, and timelines reflect real event
     { type: "assistant.progress.delta", taskId: "task-1", text: "Editing files", at: "2026-01-01T00:00:02.000Z" },
     events[5],
   ])));
-  assert.deepEqual(groupedProgressTimeline.map((item) => item.type), ["user", "assistant"]);
-  assert.equal(groupedProgressTimeline[1].text, "**Umbratic AI**: Done");
+  assert.deepEqual(groupedProgressTimeline.map((item) => item.type), ["user", "activity", "assistant"]);
+  assert.equal(groupedProgressTimeline[2].text, "**Umbratic AI**: Done");
   const runningGroupedProgressTimeline = composerTimelineFromEvents([
     events[0],
     { type: "assistant.progress.delta", taskId: "task-1", text: "Reading files", at: "2026-01-01T00:00:01.000Z" },
@@ -465,9 +475,9 @@ test("command aggregation, pending permissions, and timelines reflect real event
   // streamed below a block with real work in it stands exactly there: the
   // block above settles and the next tool opens a new block beneath it.
   // Folding that prose into the block instead — the old rule — moved a
-  // paragraph mid-read, which is the flash this replaces. The runner keeps
-  // one-line preambles out of assistant.delta on guided runs, so a split
-  // happens at a substantial mid-turn report, not at every sentence.
+  // paragraph mid-read, which is the flash this replaces. Guided tool-step
+  // preambles stay out of assistant.delta, so a split happens at a
+  // substantial mid-turn report, not at every sentence.
   const multiRoundTimeline = JSON.parse(JSON.stringify(composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "can you tell me about this folder?", at: "2026-01-01T00:00:00.000Z" },
     { type: "assistant.delta", taskId: "task-1", text: "I'll start by listing all the contents of the root directory.", at: "2026-01-01T00:00:01.000Z" },
@@ -558,10 +568,10 @@ test("command aggregation, pending permissions, and timelines reflect real event
   ], undefined, "completed")));
   assert.deepEqual(
     delayedFirstTokenTimeline.map((item) => item.type),
-    ["user", "assistant"],
-    "tool-less answers leave Thinking without a timed Working summary",
+    ["user", "activity", "assistant"],
+    "thinking stays in Working and collapses when the answer starts",
   );
-  assert.equal(delayedFirstTokenTimeline[1].text, "Summary");
+  assert.equal(delayedFirstTokenTimeline[2].text, "Summary");
 
   const waitingTimeline = composerTimelineFromEvents([
     { type: "user.message", taskId: "task-1", text: "Summarize the attachment", at: "2026-01-01T00:00:00.000Z" },
@@ -628,9 +638,10 @@ test("command aggregation, pending permissions, and timelines reflect real event
   ], undefined, "running");
   assert.deepEqual(
     JSON.parse(JSON.stringify(streamingAnswerTimeline.map((item) => item.type))),
-    ["user", "assistant"],
+    ["user", "activity", "assistant"],
   );
-  assert.equal(streamingAnswerTimeline[1].streaming, true);
+  assert.equal(streamingAnswerTimeline[2].streaming, true);
+  assert.equal(streamingAnswerTimeline[1].segments[0].finished, true);
   const streamingDisclosure = reconcileActivityDisclosureState(
     toolsDisclosure.expandedIds,
     streamingAnswerTimeline,
@@ -784,71 +795,21 @@ test("stream batching drains queued assistant text without adding a display back
   assert.equal(queue.length, 0);
 });
 
-test("streamed text reveals at a reading pace instead of a share of the backlog", () => {
-  const { nextRevealCount, revealCharactersPerSecond, revealCatchUpSeconds } = loadRenderer();
+test("a streaming answer shows the text as it arrives, and a settled answer is complete", () => {
+  const { AssistantAnswerContent } = loadRenderer();
 
-  const frameMs = 16;
-  const perFrame = Math.round((revealCharactersPerSecond * frameMs) / 1000);
-
-  // A burst reveals at the steady budget, not proportionally to its size.
-  const burst = "x".repeat(1200);
-  assert.equal(nextRevealCount(burst, 0, frameMs), perFrame);
-  assert.equal(nextRevealCount(burst, 600, frameMs), 600 + perFrame);
-
-  // A backlog large enough that the steady budget would outlast the catch-up
-  // window speeds up just enough to land inside it.
-  const long = "x".repeat(8000);
-  assert.equal(
-    nextRevealCount(long, 0, frameMs),
-    Math.round(((long.length / revealCatchUpSeconds) * frameMs) / 1000),
-  );
-
-  // The first frame of a burst has no measured gap and still moves.
-  assert.equal(nextRevealCount(burst, 0, 0), perFrame);
-
-  // Never stalls, never overshoots, never runs backwards past the end.
-  assert.equal(nextRevealCount(burst, 0, 0.1), 1);
-  assert.equal(nextRevealCount("abc", 1, 10_000), 3);
-  assert.equal(nextRevealCount("abc", 3, frameMs), 3);
-
-  // A hidden window's missed frames do not become one jump.
-  assert.ok(nextRevealCount(long, 0, 60_000) < long.length);
-
-  // Half an emoji renders as garbage, so the pair is revealed together.
-  const emoji = `${"x".repeat(perFrame - 1)}😀tail`;
-  assert.equal(nextRevealCount(emoji, 0, frameMs), perFrame + 1);
-});
-
-test("a settled answer still reveals, and an answer already read never replays", () => {
-  const { AssistantAnswerContent, markRevealComplete, resetCompletedReveals, revealHasCompleted } = loadRenderer();
-  resetCompletedReveals();
-
-  const content = "The whole answer arrived in one delta.";
+  const content = "The answer streams token by token.";
   const render = (props) =>
     renderToStaticMarkup(React.createElement(AssistantAnswerContent, { content, ...props }));
 
-  // The run settling in the same batch as the answer is the case that used to
-  // skip the reveal entirely: `streaming` is already false on the first frame.
-  const settled = render({ animate: true, revealKey: "task-1:assistant-1", streaming: false });
-  assert.match(settled, /streamingTextContent/);
-  assert.doesNotMatch(settled, /arrived in one delta/);
+  const streaming = render({ streaming: true });
+  assert.match(streaming, /streamingTextContent/);
+  assert.match(streaming, /The answer streams token by token/);
+  assert.match(streaming, /streamingTextCaret/);
 
-  // A restored transcript renders whole.
-  const restored = render({ animate: false, revealKey: "task-1:assistant-1", streaming: false });
-  assert.doesNotMatch(restored, /streamingTextContent/);
-  assert.match(restored, /arrived in one delta/);
-
-  // Text the reader has already watched arrive is not replayed when the
-  // component remounts — switching away from a chat and back is not a rerun.
-  assert.equal(revealHasCompleted("task-1:assistant-1"), false);
-  markRevealComplete("task-1:assistant-1");
-  const remounted = render({ animate: true, revealKey: "task-1:assistant-1", streaming: false });
-  assert.doesNotMatch(remounted, /streamingTextContent/);
-  assert.match(remounted, /arrived in one delta/);
-
-  // A different message is still its own reveal.
-  const next = render({ animate: true, revealKey: "task-1:assistant-2", streaming: false });
-  assert.match(next, /streamingTextContent/);
+  const settled = render({ streaming: false });
+  assert.doesNotMatch(settled, /streamingTextContent/);
+  assert.match(settled, /The answer streams token by token/);
 });
 
 test("the review panel's close spring stays stable however long a frame takes", () => {

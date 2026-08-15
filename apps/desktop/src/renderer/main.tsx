@@ -87,6 +87,10 @@ import {
   type ComposerModelOption,
 } from "./ComposerControls";
 import { insertTranscript, useDictation } from "./dictation";
+import { setShortcutOverrides, shortcutForEvent, type ShortcutId, type ShortcutOverrides } from "./keyboardShortcuts";
+import { ShortcutTooltip } from "./Tooltip";
+import { KeyboardSettingsPanel } from "./KeyboardSettings";
+import { AboutSettingsPanel } from "./AboutSettings";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { eventDetail, eventTitle } from "./eventDisplay";
@@ -180,11 +184,9 @@ import { RemoteChatBadge, RemoteHostPicker } from "./RemoteControls";
 import { RemoteSettingsPanel, useRemoteSettings } from "./RemoteSettings";
 import { appendReviewFeedback, reviewCommentLineLabel, visibleReviewPrompt, type ReviewCommentDraft, type ReviewFeedbackReference } from "./review/reviewComments";
 import {
-  reduceApprovalChecks,
   reducePendingPermission,
   reduceVisibleTask,
   taskEventEffects,
-  type ApprovalCheck,
   type TaskPermissionRequest,
 } from "./taskEventReducer";
 import { activityHasNarration, activityHasTools, activitySummary, thoughtDurationMs } from "./activityTiming";
@@ -243,12 +245,14 @@ const defaultMonoFontChoices = [
 ];
 const defaultHarnessProfileId: HarnessProfileId = "engineering";
 const defaultStartupSettings: DesktopStartupSettings = {
-  permissionMode: "normal",
+  // Matches the main-process default so a failed startup read does not flip modes.
+  permissionMode: "auto_safe",
   modelEndpoint: defaultModelEndpointSettings,
   companyConnection: { state: "not_enrolled" },
   harnessProfile: defaultHarnessProfileId,
   contextLength: DEFAULT_CONTEXT_LENGTH,
   reasoningEffort: DEFAULT_REASONING_EFFORT,
+  showThinking: false,
 };
 const harnessProfiles: Array<{ id: HarnessProfileId; name: string; description: string }> = [
   {
@@ -689,12 +693,6 @@ function MarkdownCodeBlock({ language, content }: { language: string; content: s
   );
 }
 
-function ApprovalIcon({ status }: { status: ApprovalCheck["status"] }) {
-  if (status === "passed") return <CheckCircle2 size={15} />;
-  if (status === "failed") return <TriangleAlert size={15} />;
-  return <Loader2 className="spin" size={15} />;
-}
-
 function taskStatusTitle(task: TaskInfo): string {
   if (task.state === "completed") return "Answered";
   if (task.state === "review_ready") return "Ready to review";
@@ -884,21 +882,11 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
 
   // Assistant prose renders where it first appeared and never moves again.
   //
-  // Classifying it here required knowing whether another tool call was coming,
-  // which is unknowable at the first token — so the old rule streamed
-  // everything inside the open Working block and moved the answer out once the
-  // run settled. That move is exactly what made the final answer arrive as a
-  // jump instead of a stream. Text streams in place instead, and nothing is
-  // ever relocated after the user has read it.
-  //
-  // The runner does the classifying now, because it is the side that can. Prose
-  // written before any tool has run is held there until the step resolves and
-  // arrives as `assistant.progress.delta` when tool calls prove it was a
-  // preamble, so orientation and preambles land inside the Working block from
-  // their first rendered token. What still reaches `assistant.delta` is the
-  // answer, plus mid-plan prose on a step that already has tool results — the
-  // one case nobody can classify early, since holding it would delay the
-  // answer.
+  // The runner streams the answer as `assistant.delta` while it is generated.
+  // Guided tool-calling steps omit accompanying prose, so orientation and the
+  // tool rows are the mid-run story, and the answer lands in this buffer from
+  // its first token. Mid-plan prose on a step that already has tool results is
+  // the one case that still reaches here — holding it would delay the answer.
   const flushAssistant = (streaming = false) => {
     const text = assistantBuffer.trim();
     if (!text) { assistantBuffer = ""; assistantNeedsSeparator = false; return; }
@@ -951,9 +939,9 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
       activityEndedAt = undefined;
       return;
     }
-    // Thinking-only turns (no tools/skills) never settle into a timed Working
-    // block.
-    if (finished && !activityHasTools(activitySegments)) {
+    // Keep a finished block that holds narration so live thinking can collapse
+    // rather than vanish when the answer starts.
+    if (finished && !activityHasTools(activitySegments) && !activityHasNarration(activitySegments)) {
       activitySegments = [];
       activityStartedAt = undefined;
       activityEndedAt = undefined;
@@ -1011,10 +999,9 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   // prose stands exactly where the user read it, and the new work opens a new
   // block beneath it. Folding it into the block instead — the previous rule —
   // moved a paragraph the user was mid-way through reading, which is the flash
-  // this replaces. The runner keeps one-line preambles out of this path
-  // entirely (they are held and paced as status lines), so a split only
-  // happens at a substantial mid-turn report, not at every sentence — the
-  // failure that originally motivated folding.
+  // this replaces. Guided tool-step preambles stay off this path entirely, so
+  // a split only happens at a substantial mid-turn report, not at every
+  // sentence — the failure that originally motivated folding.
   const proseStandsOrFolds = () => {
     if (assistantBuffer.trim() && activityHasTools(activitySegments)) {
       flushReasoning();
@@ -1297,7 +1284,7 @@ export function composerTimelineFromEvents(events: BackendUiEvent[], taskPrompt?
   // ticking on finished work while the reply streams underneath reads as though
   // two things are happening at once.
   const answering = assistantBuffer.trim().length > 0;
-  flushReasoning(taskState !== "running");
+  flushReasoning(taskState !== "running" || answering);
   flushActivity(taskState !== "running" || answering);
   flushAssistant(taskState === "running");
 
@@ -1599,10 +1586,10 @@ function stabilizedStreamingBlock(block: MarkdownBlock): MarkdownBlock {
   return block;
 }
 
-function StreamingMarkdownContent({ content, caretClassName }: { content: string; caretClassName: string }) {
+function StreamingMarkdownContent({ content, caretClassName }: { content: string; caretClassName?: string }) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
   const blockKeys = useMemo(() => blocks.map((block) => JSON.stringify(block)), [blocks]);
-  const caret = <span className={caretClassName} aria-hidden="true" />;
+  const caret = caretClassName ? <span className={caretClassName} aria-hidden="true" /> : null;
   const lastBlock = blocks.at(-1);
   const caretInline = !!lastBlock && ["paragraph", "heading", "list", "quote"].includes(lastBlock.type);
   return (
@@ -1623,119 +1610,30 @@ function StreamingMarkdownContent({ content, caretClassName }: { content: string
   );
 }
 
-/// Streamed text arrives in bursts — a guided step holds every token until it
-/// resolves and then releases the whole answer as one delta, and local runtimes
-/// batch tokens — but reading speed is steady. The reveal walks toward the full
-/// text on a characters-per-second budget rather than a share of the backlog,
-/// so a burst reads as typing instead of a wall of text. Presentation only: the
-/// full text is already in the timeline, and a settled message renders
-/// complete.
-export const revealCharactersPerSecond = 420;
-/// However far behind the reveal falls, it still finishes within this many
-/// seconds, so a long answer never leaves the reader waiting on the pacing.
-export const revealCatchUpSeconds = 4;
-/// A hidden window stops firing frames. Clamping the measured gap keeps the
-/// return from resuming as one jump.
-const revealMaxFrameMs = 250;
-/// The first frame of a burst has no measured gap; assume a frame's worth so
-/// the reveal starts moving immediately.
-const revealAssumedFrameMs = 16;
-
-export function nextRevealCount(text: string, current: number, elapsedMs: number): number {
-  const backlog = text.length - current;
-  if (backlog <= 0) return current;
-  const charactersPerSecond = Math.max(revealCharactersPerSecond, backlog / revealCatchUpSeconds);
-  const elapsed = Math.min(Math.max(elapsedMs, 0), revealMaxFrameMs) || revealAssumedFrameMs;
-  let next = Math.min(text.length, current + Math.max(1, Math.round((charactersPerSecond * elapsed) / 1000)));
-  // Never split a surrogate pair: half an emoji renders as garbage.
-  const edge = text.charCodeAt(next - 1);
-  if (next < text.length && edge >= 0xd800 && edge <= 0xdbff) next += 1;
-  return next;
-}
-
-/// Text the reader has already watched arrive, so switching tabs and coming
-/// back does not replay it. Survives the component unmounting, which the reveal
-/// state cannot. Bounded because a long session should not grow a set forever.
-const completedReveals = new Set<string>();
-const completedRevealLimit = 500;
-export function markRevealComplete(key: string) {
-  if (completedReveals.size >= completedRevealLimit) completedReveals.clear();
-  completedReveals.add(key);
-}
-export function revealHasCompleted(key: string): boolean {
-  return completedReveals.has(key);
-}
-export function resetCompletedReveals() {
-  completedReveals.clear();
-}
-
-function useRevealedText(text: string, animate: boolean, revealKey: string): string {
-  const [revealedCount, setRevealedCount] = useState(() =>
-    animate && !completedReveals.has(revealKey) ? 0 : text.length,
-  );
-  const lastFrameAt = useRef<number | null>(null);
-  useEffect(() => {
-    if (!animate) {
-      // Held at the end rather than left behind, so text that starts revealing
-      // later picks up from what the reader has seen instead of replaying it.
-      setRevealedCount(text.length);
-      lastFrameAt.current = null;
-      return undefined;
-    }
-    if (revealedCount >= text.length) {
-      // A reused component starting a new, shorter stream begins from zero
-      // rather than running backwards.
-      if (revealedCount > text.length) setRevealedCount(0);
-      else if (text.length > 0) markRevealComplete(revealKey);
-      lastFrameAt.current = null;
-      return undefined;
-    }
-    const frame = requestAnimationFrame((now) => {
-      const elapsed = lastFrameAt.current === null ? 0 : now - lastFrameAt.current;
-      lastFrameAt.current = now;
-      setRevealedCount((current) => nextRevealCount(text, current, elapsed));
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [animate, revealKey, text, revealedCount]);
-  if (!animate) return text;
-  return revealedCount >= text.length ? text : text.slice(0, revealedCount);
-}
-
-/// A guided step releases its whole answer as one delta and the run settles in
-/// the same breath, so the two arrive in one render batch: keying the reveal on
-/// the run still being live meant the settled renderer replaced the revealing
-/// one before a single frame had drawn, and the answer landed whole. `animate`
-/// therefore outlives the run — it says the text arrived over this session's
-/// stream, not that more is coming — and the reveal itself decides when it is
-/// done. `streaming` only holds the caret while the answer is still growing.
 export function AssistantAnswerContent({
-  animate,
   content,
-  revealKey,
   streaming,
   onReviewFileClick,
   reviewFiles,
 }: {
-  animate: boolean;
   content: string;
-  revealKey: string;
   streaming: boolean;
 } & ReviewReferenceOptions) {
-  const revealed = useRevealedText(content, animate, revealKey);
-  if (!streaming && revealed.length >= content.length) {
-    return <LongMarkdownContent content={content} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />;
+  if (streaming) {
+    return (
+      <div className="streamingTextContent">
+        <StreamingMarkdownContent content={content} caretClassName="streamingTextCaret" />
+      </div>
+    );
   }
-  return (
-    <div className="streamingTextContent">
-      <StreamingMarkdownContent content={revealed} caretClassName="streamingTextCaret" />
-    </div>
-  );
+  return <LongMarkdownContent content={content} onReviewFileClick={onReviewFileClick} reviewFiles={reviewFiles} />;
 }
+
 export function WorkMarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
   if (streaming) {
     return (
       <div className="workMarkdownContent isStreaming">
-        <StreamingMarkdownContent content={content} caretClassName="workStreamingCaret" />
+        <StreamingMarkdownContent content={content} />
       </div>
     );
   }
@@ -1774,23 +1672,29 @@ function SkillGovernance({ skill }: { skill: SkillInfo }) {
   return <span className={`skillGovernance ${label === "Modified" ? "isModified" : ""}`}>{label}</span>;
 }
 
+/**
+ * One line at the end of a turn saying how much changed, and nothing else. The
+ * file list lives in the review panel this opens: printing it twice made the
+ * composer scroll for a summary, and the panel is where the paths are
+ * clickable anyway.
+ */
 function ReviewSummaryCard({
-  files,
+  fileCount,
   onOpenReview,
   totals,
 }: {
-  files: ReviewFile[];
-  onOpenReview(filePath?: string): void;
+  fileCount: number;
+  onOpenReview(): void;
   totals: { additions: number; deletions: number };
 }) {
-  if (!files.length) return null;
+  if (!fileCount) return null;
   return (
     <article className="reviewSummaryCard">
-      <button className="reviewSummaryHeader" type="button" onClick={() => onOpenReview()}>
+      <button className="reviewSummaryHeader" type="button" onClick={onOpenReview}>
         <span className="reviewSummaryTitle">
           <FileText size={15} />
           <strong>
-            {files.length} file{files.length === 1 ? "" : "s"} changed
+            {fileCount} file{fileCount === 1 ? "" : "s"} changed
           </strong>
           <span className="additions">+{totals.additions}</span>
           <span className="deletions">-{totals.deletions}</span>
@@ -1800,24 +1704,6 @@ function ReviewSummaryCard({
           <ExternalLink size={13} />
         </span>
       </button>
-      <div className="reviewSummaryFiles">
-        {files.map((file) => (
-          <section className={`reviewSummaryFile status-${file.status}`} key={file.path}>
-            <button
-              className="reviewSummaryFileButton"
-              type="button"
-              onClick={() => onOpenReview(file.path)}
-            >
-              <span className="reviewSummaryPath">{file.path}</span>
-              <span className="changeStats" aria-label={`+${file.additions} -${file.deletions}`}>
-                <span className="additions">+{file.additions}</span>
-                <span className="deletions">-{file.deletions}</span>
-              </span>
-              <PanelRight className="reviewSummaryOpenIcon" size={14} />
-            </button>
-          </section>
-        ))}
-      </div>
     </article>
   );
 }
@@ -1929,11 +1815,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [collapsedWorktreeKeys, setCollapsedWorktreeKeys] = useState<Set<string>>(() => new Set());
   const [projectActionMenuKey, setProjectActionMenuKey] = useState<string | null>(null);
   const [events, setEvents] = useState<BackendUiEvent[]>(previewEnvironment?.events ?? []);
-  const streamedAnswerTaskIds = useRef<Set<string>>(new Set());
   const [responseFeedbackDialog, setResponseFeedbackDialog] = useState<ResponseFeedbackDialogState | null>(null);
   const [responseFeedbackSubmitting, setResponseFeedbackSubmitting] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
-  const [approvalChecks, setApprovalChecks] = useState<ApprovalCheck[]>([]);
   const [expandedReviewPaths, setExpandedReviewPaths] = useState<Set<string>>(() =>
     previewEnvironment ? new Set(previewEnvironment.reviewFiles.map((file) => file.path)) : new Set(),
   );
@@ -1964,6 +1848,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
     isReasoningEffort(startupSettings.reasoningEffort) ? startupSettings.reasoningEffort : DEFAULT_REASONING_EFFORT,
   );
+  const [showThinking, setShowThinking] = useState(startupSettings.showThinking === true);
   const [harnessDraftContextLength, setHarnessDraftContextLength] = useState(initialContextLength);
   const [harnessMessage, setHarnessMessage] = useState<string | null>(null);
   const [harnessSaving, setHarnessSaving] = useState(false);
@@ -2002,6 +1887,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const [reviewWidth, setReviewWidth] = useState(reviewDefaultWidth);
   const [reviewHasSessionWidth, setReviewHasSessionWidth] = useState(false);
   const [showElevatedPermissionsDialog, setShowElevatedPermissionsDialog] = useState(false);
+  // Closing the "Starting model…" card hides this load, not the next one.
+  const [modelStartupDismissed, setModelStartupDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopPending, setStopPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2081,6 +1968,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   const activityBodyRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const activityFollowScrollRef = useRef<Map<string, boolean>>(new Map());
   const activityScrollInputRef = useRef<Set<string>>(new Set());
+  // What each keyboard shortcut does, and whether any of them may fire. Refs
+  // rather than effect dependencies: see where they are filled in below.
+  const shortcutActionsRef = useRef<Partial<Record<ShortcutId, () => void>>>({});
+  const shortcutsBlockedRef = useRef(false);
   const visibleTaskIdRef = useRef<string | null>(previewEnvironment?.task.id ?? null);
   const taskEventsByTaskIdRef = useRef<Map<string, BackendUiEvent[]>>(new Map());
 
@@ -2175,6 +2066,26 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     0,
     CONTEXT_LENGTH_OPTIONS.findIndex((option) => option === harnessDraftContextLength),
   );
+  // A local model is reading itself into memory. The Connection panel says so
+  // inline, so the floating card is for every other moment — above all the one
+  // the composer's picker starts, where Settings is closed and the only other
+  // sign of life would be an app that has stopped answering.
+  const localModelStarting =
+    connectionSettings.localModelLoading
+    && endpointSettings.mode === "local"
+    && !(settingsOpen && settingsTab === "account");
+  const startingModelName =
+    downloadedChatModels.find((model) => model.id === endpointDraftSettings.modelId)?.displayName
+    || endpointDraftSettings.modelId
+    || "the model";
+  // Pressing the microphone loads the speech weights before the device opens,
+  // and in local mode that is the slow part of the first dictation of a
+  // session. Same card, same reason: a control that spins in silence for
+  // twenty seconds reads as a control that did nothing.
+  const dictationStarting = dictation.status.state === "starting";
+  useEffect(() => {
+    if (!connectionSettings.localModelLoading && !dictationStarting) setModelStartupDismissed(false);
+  }, [connectionSettings.localModelLoading, dictationStarting]);
   const telemetrySyncEnabled = backend?.diagnostics.telemetry.syncEnabled ?? endpointSettings.mode === "server";
   const localLogInfo = backend?.diagnostics.localLogs ?? { bytes: 0, entries: 0 };
   const activeChat = activeChatId ? chats.find((chat) => chat.id === activeChatId) : undefined;
@@ -2190,8 +2101,9 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
   );
   const canStart = (prompt.trim().length > 0 || reviewPromptFeedback.length > 0) && !busy && !isGenerating && !closedChatNotice;
   const canQueue = hasComposerMessage && isGenerating && !busy && !steerPending && !closedChatNotice;
-  const canApprove = task?.state === "review_ready" && reviewFiles.length > 0 && !busy;
-  const canUndo =
+  // Per file, never per turn: undo puts one reviewed file back, and taking
+  // back more than that is a thing to ask the model for.
+  const canUndoFile =
     !!task && task.state !== "approved" && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed" && !busy;
   const canOpenIde = !!task && task.state !== "merged" && task.state !== "rejected" && task.state !== "completed";
   const approvalPending = task?.state === "awaiting_worktree_approval" || !!pendingPermission;
@@ -2252,10 +2164,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     return items.length <= composerItemSoftLimit ? items : items.slice(-composerItemSoftLimit);
   }, [task?.prompt, task?.state, visibleEvents]);
   const lastAssistantItemId = [...composerItems].reverse().find((item) => item.type === "assistant")?.id;
-  // Only text this session watched arrive reveals. A restored transcript's
-  // events are the same events, so the run having settled cannot tell the two
-  // apart — where they came in can.
-  const answerArrivedLive = task?.id ? streamedAnswerTaskIds.current.has(task.id) : false;
   const reviewReadyForDisplay =
     task?.state === "review_ready"
     || task?.state === "approving"
@@ -2594,9 +2502,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       const batch = takeBatchedBackendEvents(pendingBackendEvents);
       if (batch.length === 0) return;
       cacheTaskEvents(batch);
-      for (const event of batch) {
-        if (event.type === "assistant.delta") streamedAnswerTaskIds.current.add(event.taskId);
-      }
       const visibleTaskId = visibleTaskIdRef.current;
       const visibleTaskEvents = visibleTaskId ? batch.filter((event) => event.taskId === visibleTaskId) : [];
       if (visibleTaskEvents.length) {
@@ -2608,7 +2513,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         if (isVisibleTaskEvent) {
           setTask((current) => reduceVisibleTask(current, event));
           setPendingPermission((current) => reducePendingPermission(current, event));
-          setApprovalChecks((current) => reduceApprovalChecks(current, event));
           if (effects.errorMessage) setError(effects.errorMessage);
           if (effects.resetExpandedReview) setExpandedReviewPaths(new Set());
           if (effects.refreshReview) {
@@ -2720,8 +2624,87 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     };
   }, []);
 
+  // Whether something is layered over the app. Shared by the focus trap below
+  // and by the global shortcuts, which must not reach past a dialog to a
+  // composer the user cannot currently see.
+  const modalOpen =
+    settingsOpen
+    || !!previewAttachment?.previewDataUrl
+    || !!deleteCandidate
+    || showElevatedPermissionsDialog
+    || approvalPending
+    || !!responseFeedbackDialog;
+
+  /** Opens the microphone, or offers the way in when dictation is not set up. */
+  function toggleDictation() {
+    // Mid-flight is not a state to interrupt: the model is being fetched or
+    // the audio is being transcribed, and both finish on their own.
+    if (dictation.status.state === "starting" || dictation.status.state === "transcribing") return;
+    // Pressed while dictation is off, the shortcut answers the way the
+    // microphone button does — by offering the way in rather than by doing
+    // nothing and reading as a broken key.
+    if (!dictationAvailable) {
+      setDictationSetupOffer(true);
+      return;
+    }
+    dictation.toggle();
+  }
+
+  function openSettings(tab?: SettingsTab) {
+    if (tab) setSettingsTab(tab);
+    setSettingsOpen(true);
+    connectionSettings.clearMessage();
+    setFontScanMessage(null);
+    void refreshStatus();
+    void loadSkills();
+  }
+
+  /**
+   * The app's own keyboard shortcuts.
+   *
+   * One document-level listener dispatching off the same table the Keyboard
+   * settings page prints and the tooltips advertise, so a chord that fires and
+   * a chord that is documented cannot drift apart. It runs on capture, because
+   * the composer textarea holds focus almost all the time and a chord caught
+   * there would never reach the window.
+   */
+  // Rewritten every render and read through a ref, so the one listener below
+  // can subscribe once and still call today's closures. A dependency list here
+  // would have to name everything these actions read — the draft, the
+  // attachments, the run — and the day it missed one, a shortcut would quietly
+  // act on a stale copy of the composer.
+  shortcutActionsRef.current = {
+    "dictation.toggle": toggleDictation,
+    "chat.new": () => void newChat(),
+    "app.settings": () => openSettings(),
+    "app.shortcuts": () => openSettings("keyboard"),
+    "review.toggle": () => (reviewClosing ? openReviewPanel() : toggleReviewPanel()),
+    "composer.focus": () => textareaRef.current?.focus(),
+    // Only while there is something to stop, and never twice: a second press
+    // while the first stop is still landing would read as the key doing
+    // nothing rather than as the run already ending.
+    "run.stop": () => { if (isGenerating && !stopPending) void stopTask(); },
+  };
+  // Read the same way, so a chord cannot reach past a dialog to a window the
+  // user cannot currently see.
+  shortcutsBlockedRef.current = modalOpen;
+
   useEffect(() => {
-    const isOpen = settingsOpen || !!previewAttachment?.previewDataUrl || !!deleteCandidate || showElevatedPermissionsDialog || approvalPending || !!responseFeedbackDialog;
+    const runShortcut = (event: KeyboardEvent) => {
+      // Never on the auto-repeat of a held key, and never mid-IME sequence.
+      if (shortcutsBlockedRef.current || event.repeat || event.isComposing) return;
+      const shortcut = shortcutForEvent(event);
+      const action = shortcut && shortcutActionsRef.current[shortcut.id];
+      if (!action) return;
+      event.preventDefault();
+      action();
+    };
+    document.addEventListener("keydown", runShortcut, true);
+    return () => document.removeEventListener("keydown", runShortcut, true);
+  }, []);
+
+  useEffect(() => {
+    const isOpen = modalOpen;
     // While a modal is up the page behind it holds still: see .modalScrim CSS.
     document.documentElement.classList.toggle("modalOpen", isOpen);
     if (!isOpen) {
@@ -3109,7 +3092,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setVisibleTask(null);
     closeReviewPanel();
     setPendingPermission(null);
-    setApprovalChecks([]);
     setEvents((current) => nextEvents.reduce((events, event) => appendBackendEvent(events, event), current));
     await persistDraft(chatId, prompt, attachedFiles);
   }
@@ -3164,7 +3146,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
-    setApprovalChecks([]);
     setExpandedActivityIds(new Set());
     setExpandedActivityToolIds(new Set());
     setPendingPermission(null);
@@ -3629,11 +3610,27 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     }
   }
 
+  /**
+   * The composer's picker and the Connection panel's picker choose the same
+   * thing, so they go through the same code.
+   *
+   * Writing the endpoint settings directly from here saved the right model but
+   * left the settings controller holding the model it was mounted with, which
+   * is what made Connection show "Choose or download a model" beside a
+   * "Loaded" badge for a model that was in fact loaded and answering.
+   */
   async function selectComposerModel(modelId: string) {
     setError(null);
     try {
-      const endpoint = await api.getModelEndpointSettings();
-      await api.saveModelEndpointSettings({ ...endpoint, modelId });
+      const failure = endpointSettings.mode === "server"
+        ? await connectionSettings.selectServerModel(modelId)
+        : await connectionSettings.selectLocalModel(modelId);
+      // The panel shows this too, but it is usually closed when the pick came
+      // from the composer, so the composer says it as well.
+      if (failure) {
+        setError(failure);
+        return;
+      }
       await refreshStatus();
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
@@ -3650,11 +3647,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setDownloadedChatModels(rows.filter((row) => row.downloaded));
   }
 
-  /**
-   * Saving restarts the local stack, so the pill moves at once and the stored
-   * answer wins if it disagrees. Leaving the pill on the old level until a
-   * restart finished would read as a control that ignored the click.
-   */
   async function updateReasoningEffort(next: ReasoningEffort) {
     const previous = reasoningEffort;
     setReasoningEffort(next);
@@ -3665,6 +3657,17 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
       setBackend(saved.status);
     } catch (cause) {
       setReasoningEffort(previous);
+      setError(String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
+  async function updateShowThinking(next: boolean) {
+    const previous = showThinking;
+    setShowThinking(next);
+    try {
+      setShowThinking(await api.saveShowThinking(next));
+    } catch (cause) {
+      setShowThinking(previous);
       setError(String(cause instanceof Error ? cause.message : cause));
     }
   }
@@ -3805,7 +3808,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     if (!isContinuingChat) {
       setVisibleTask(null);
       setEvents([]);
-      setApprovalChecks([]);
       setExpandedActivityIds(new Set());
       setExpandedActivityToolIds(new Set());
       setExpandedReviewPaths(new Set());
@@ -4402,44 +4404,20 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     });
   }
 
-  async function approveMerge() {
-    if (!task) return;
-    setBusy(true);
-    setApprovalChecks([]);
-    setTask((current) => (current ? { ...current, state: "approving" } : current));
-    try {
-      const result = await api.approveTaskMerge({ taskId: task.id });
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      setTask((current) => {
-        const next = current ? { ...current, state: "approved" as const, patchHash: result.patchHash } : current;
-        if (next) upsertChatFromTask(next);
-        return next;
-      });
-    } catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function undoTask() {
-    if (!task || !canUndo) return;
+  async function undoReviewFile(filePath: string) {
+    if (!task || !canUndoFile) return;
     setBusy(true);
     setIdeMenuOpen(null);
     try {
-      await api.rejectTask({ taskId: task.id, cleanup: true });
-      setExpandedReviewPaths(new Set());
-      setTask((current) => {
-        const next = current
-          ? { ...current, state: "rejected" as const, changedFiles: [], reviewFiles: [] }
-          : current;
-        if (next) upsertChatFromTask(next);
-        return next;
+      const next = await api.revertReviewFile({ taskId: task.id, path: filePath });
+      if (!next) return;
+      setExpandedReviewPaths((current) => {
+        const remaining = new Set(current);
+        remaining.delete(filePath);
+        return remaining;
       });
-      void loadChats();
+      setTask(next);
+      upsertChatFromTask(next);
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -4874,7 +4852,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         prepareVisibleTaskLoad(chat.taskId ?? null);
         setActiveChatId(chat.id);
         setEvents(cachedEvents);
-        setApprovalChecks([]);
         setExpandedActivityIds(new Set());
         setExpandedActivityToolIds(new Set());
         setPendingPermission(null);
@@ -4915,7 +4892,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         setActiveChatId(chat.id);
         setVisibleTask(nextTask);
         setEvents(compactBackendEvents(nextEvents, 500));
-        setApprovalChecks([]);
         setExpandedActivityIds(new Set());
         setExpandedActivityToolIds(new Set());
         setPendingPermission(pendingPermissionFromEvents(nextEvents));
@@ -4941,7 +4917,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
     setActiveChatId(null);
     setVisibleTask(null);
     setEvents([]);
-    setApprovalChecks([]);
     setExpandedActivityIds(new Set());
     setExpandedActivityToolIds(new Set());
     setPendingPermission(null);
@@ -5125,9 +5100,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
             <div className="sideHeader">
               <h2>Chats</h2>
               <div className="newActionSplit" role="toolbar" aria-label="Create">
-                <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat" title="New chat">
-                  <SquarePen size={13} />
-                </button>
+                <ShortcutTooltip id="chat.new" placement="bottom">
+                  <button className="newActionButton" type="button" onClick={newChat} aria-label="New chat">
+                    <SquarePen size={13} />
+                  </button>
+                </ShortcutTooltip>
                 <button
                   className="newActionButton"
                   type="button"
@@ -5275,20 +5252,16 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
 
         <div className="sidebarFooter">
           <div className="sidebarBrand" aria-hidden="true"><span className="sidebarBrandRow"><span className="sidebarBrandMark" /><span className="sidebarBrandName">Umbratic</span></span><span className="confidentialMark">Private and Confidential</span></div>
-          <button
-            className="settingsPlaceholder"
-            type="button"
-            onClick={() => {
-              setSettingsOpen(true);
-              connectionSettings.clearMessage();
-              setFontScanMessage(null);
-              void refreshStatus();
-              void loadSkills();
-            }}
-          >
-            <Settings size={16} />
-            <span>Settings</span>
-          </button>
+          <ShortcutTooltip id="app.settings">
+            <button
+              className="settingsPlaceholder"
+              type="button"
+              onClick={() => openSettings()}
+            >
+              <Settings size={16} />
+              <span>Settings</span>
+            </button>
+          </ShortcutTooltip>
         </div>
       </aside>
 
@@ -5311,15 +5284,21 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               </div>
               <div className="composerHeaderActions">
                 {renderIdePicker("composer")}
-                <button
-                  className="chromeButton composerReviewToggle"
-                  type="button"
-                  onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
-                  aria-pressed={reviewOpen && !reviewClosing}
-                  title={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                <ShortcutTooltip
+                  id="review.toggle"
+                  label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                  placement="bottom"
                 >
-                  <PanelRight size={15} />
-                </button>
+                  <button
+                    className="chromeButton composerReviewToggle"
+                    type="button"
+                    onClick={reviewClosing ? () => openReviewPanel() : toggleReviewPanel}
+                    aria-pressed={reviewOpen && !reviewClosing}
+                    aria-label={reviewOpen && !reviewClosing ? "Hide review" : reviewClosing ? "Keep review open" : "Open review"}
+                  >
+                    <PanelRight size={15} />
+                  </button>
+                </ShortcutTooltip>
               </div>
             </div>
             <div
@@ -5390,10 +5369,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                         }
                       >
                         <AssistantAnswerContent
-                          animate={Boolean(item.streaming) || (answerArrivedLive && item.id === lastAssistantItemId)}
                           content={item.text}
                           onReviewFileClick={openReviewReference}
-                          revealKey={`${task?.id ?? "task"}:${item.id}`}
                           reviewFiles={reviewFiles}
                           streaming={Boolean(item.streaming)}
                         />
@@ -5478,7 +5455,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                                           className={`activityLogEntry reasoningLog ${segment.finished ? "" : "isStreaming"}`}
                                           key={segment.id}
                                         >
-                                          <WorkMarkdownContent content={segment.text.trim()} streaming={!segment.finished} />
+                                          <WorkMarkdownContent content={segment.text.trim()} streaming={!item.finished && !segment.finished} />
                                         </section>
                                       );
                                     }
@@ -5559,8 +5536,8 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   )}
                   {codeReviewFiles.length && reviewReadyForDisplay ? (
                     <ReviewSummaryCard
-                      files={codeReviewFiles}
-                      onOpenReview={(filePath) => openReviewPanel(filePath)}
+                      fileCount={codeReviewFiles.length}
+                      onOpenReview={() => openReviewPanel()}
                       totals={codeReviewTotals}
                     />
                   ) : null}
@@ -5630,9 +5607,20 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
               }}
             />
             {dictation.status.error ? (
-              <div className="connectionNotice dictationNotice" role="status" aria-live="polite">
-                <Mic size={14} aria-hidden="true" />
+              // Sized to its sentence rather than to the composer: a line about
+              // one microphone press that ruled a bar across the full width read
+              // as a state the whole composer was in.
+              <div className="dictationNotice" role="status" aria-live="polite">
+                <Mic size={13} aria-hidden="true" />
                 <span>{dictation.status.error}</span>
+                <button
+                  className="dictationNoticeDismiss"
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={dictation.dismissError}
+                >
+                  <X size={11} aria-hidden="true" />
+                </button>
               </div>
             ) : null}
             {reviewPromptFeedback.length ? <button className="composerReviewFeedback" type="button" onClick={() => { setReviewFeedbackPreview(null); setReviewFeedbackDialogOpen(true); }} aria-haspopup="dialog"><span className="composerReviewFeedbackIcon"><MessageSquareText size={12} /></span><span>Review feedback</span><ChevronRight className="composerReviewFeedbackChevron" size={12} aria-hidden="true" /></button> : null}
@@ -5953,9 +5941,6 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       disabled={busy}
                       disabledReason="Wait for the current run to finish"
                       onOpen={() => {
-                        // Refreshed on open as well as on mount: a model
-                        // downloaded in settings while this menu was closed
-                        // should be in it the first time it is opened.
                         if (endpointSettings.mode !== "server") {
                           void refreshDownloadedChatModels();
                           return;
@@ -5965,8 +5950,11 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                       efforts={modelReasoningEfforts}
                       effort={reasoningEffort}
                       effortDisabled={busy || isGenerating}
+                      showThinking={showThinking}
+                      showThinkingAvailable={backend?.veilFeatures.includes("chat.reasoning_visible") === true}
                       onSelect={(modelId) => void selectComposerModel(modelId)}
                       onSelectEffort={(next) => void updateReasoningEffort(next)}
+                      onToggleShowThinking={(next) => void updateShowThinking(next)}
                       onManage={endpointSettings.mode === "local" ? () => {
                         setSettingsOpen(true);
                         setSettingsTab("account");
@@ -5991,31 +5979,38 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     />
                   ) : null}
                 {isGenerating && !hasComposerMessage ? (
-                  <button
-                    className="sendButton stopButton"
-                    type="button"
-                    onClick={() => void stopTask()}
-                    disabled={stopPending}
-                    aria-label={stopPending ? "Stopping generation" : "Stop generation"}
-                    title={stopPending ? "Stopping generation" : "Stop generation"}
-                  >
-                    {stopPending ? <Loader2 className="spin" size={17} /> : <Square aria-hidden="true" fill="currentColor" size={12} />}
-                  </button>
+                  // A chord is only named while it would do something: offering
+                  // one beside "Stopping generation" advertises a key for a
+                  // state that ignores it.
+                  <ShortcutTooltip id="run.stop" label="Stop generation" disabled={stopPending}>
+                    <button
+                      className="sendButton stopButton"
+                      type="button"
+                      onClick={() => void stopTask()}
+                      disabled={stopPending}
+                      aria-label={stopPending ? "Stopping generation" : "Stop generation"}
+                    >
+                      {stopPending ? <Loader2 className="spin" size={17} /> : <Square aria-hidden="true" fill="currentColor" size={12} />}
+                    </button>
+                  </ShortcutTooltip>
                 ) : isGenerating ? (
-                  <button
-                    className="sendButton queueButton"
-                    type="button"
-                    onClick={queueCurrentPrompt}
-                    disabled={!canQueue}
-                    aria-label="Queue prompt"
-                    title="Queue prompt"
-                  >
-                    <Send aria-hidden="true" size={16} />
-                  </button>
+                  <ShortcutTooltip id="composer.send" label="Queue prompt">
+                    <button
+                      className="sendButton queueButton"
+                      type="button"
+                      onClick={queueCurrentPrompt}
+                      disabled={!canQueue}
+                      aria-label="Queue prompt"
+                    >
+                      <Send aria-hidden="true" size={16} />
+                    </button>
+                  </ShortcutTooltip>
                 ) : (
-                  <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt" title="Send prompt">
-                    {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
-                  </button>
+                  <ShortcutTooltip id="composer.send" label="Send prompt">
+                    <button className="sendButton" type="button" onClick={() => void startTask()} disabled={!canStart} aria-label="Send prompt">
+                      {busy ? <Loader2 className="spin" size={17} /> : <Send aria-hidden="true" size={17} />}
+                    </button>
+                  </ShortcutTooltip>
                 )}
                 </div>
               </div>
@@ -6033,13 +6028,10 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
           scope={task?.reviewScope ?? tasklessReviewScope}
           canUseWorktreeScope={repository?.kind === "git" || task?.workspaceKind === "git"}
           canOpenIde={canOpenIde}
-          canUndo={canUndo}
-          canApprove={canApprove}
+          canUndoFile={canUndoFile}
           selectedIdeLabel={selectedIde.label}
-          approvalVisible={task?.state === "review_ready" || task?.state === "approving" || task?.state === "merged"}
           onClose={closeReviewPanel}
-          onUndo={undoTask}
-          onApprove={approveMerge}
+          onUndoFile={(filePath) => void undoReviewFile(filePath)}
           onOpenFile={openReviewFile}
           onScopeChange={changeReviewScope}
           onResizePointerDown={beginReviewResize}
@@ -6295,6 +6287,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                   <VoiceSettings api={api} backend={backend} active onBackendStatus={setBackend}
                     serverMode={connectionSettings.settings.mode === "server"} speechAdvertised={dictationAvailable} />
                 ) : null}
+                {settingsTab === "keyboard" ? <KeyboardSettingsPanel api={api} /> : null}
                 {settingsTab === "skills" ? (
                   <div className="settingsPanel">
                     <div className="settingsPanelHead">
@@ -6498,6 +6491,7 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
                     onClear={() => void clearLocalLogs()}
                   />
                 ) : null}
+                {settingsTab === "about" ? <AboutSettingsPanel api={api} /> : null}
                 <div className="settingsFooter" aria-hidden="true"><span className="sidebarBrandMark" /><span>Umbratic · Private and confidential</span></div>
               </div>
             </div>
@@ -6591,6 +6585,25 @@ function App({ startupSettings }: { startupSettings: DesktopStartupSettings }) {
         </div>
       ) : null}
 
+      {localModelStarting && !modelStartupDismissed ? (
+        <ModelStartupNotice
+          title="Starting model…"
+          detail={`Loading ${startingModelName} into memory.`}
+          onCancel={() => void connectionSettings.unloadLocalModel()}
+          onDismiss={() => setModelStartupDismissed(true)}
+        />
+      ) : dictationStarting ? (
+        // The speech model loads on the press rather than at startup, so the
+        // first dictation of a session waits on gigabytes with nothing but a
+        // 16px spinner to show for it. This is the same card, saying so.
+        <ModelStartupNotice
+          title="Starting dictation…"
+          detail="Loading the speech model into memory."
+          onCancel={dictation.cancel}
+          onDismiss={() => setModelStartupDismissed(true)}
+        />
+      ) : null}
+
       {error ? (
         <div className="toast" role="alert">
           <TriangleAlert size={16} />
@@ -6622,6 +6635,48 @@ function ComposerGreeting({ label }: { label: string }) {
   );
 }
 
+/**
+ * Weights being read into memory, while it is happening.
+ *
+ * Picking a model in the prompt box — or pressing the microphone, which loads
+ * the speech model on the press — starts a load that takes as long as it takes
+ * to read gigabytes off disk. The only sign of either used to be a spinner
+ * inside the control that started it, which on a 26px button is no sign at
+ * all: the app simply looked hung. So it says so where the user is looking, a
+ * card at the top of the window, naming what is loading and offering the way
+ * out, because a load nobody can stop is the worst version of this.
+ *
+ * Cancel abandons the load; the close button only hides the card and the load
+ * carries on.
+ */
+function ModelStartupNotice({
+  title,
+  detail,
+  onCancel,
+  onDismiss,
+}: {
+  title: string;
+  detail: string;
+  onCancel(): void;
+  onDismiss(): void;
+}) {
+  return (
+    <div className="modelStartupNotice" role="status" aria-live="polite">
+      <Loader2 className="spin" size={16} aria-hidden="true" />
+      <div className="modelStartupText">
+        <strong>{title}</strong>
+        <span>{detail}</span>
+      </div>
+      <button className="modelStartupCancel" type="button" onClick={onCancel}>
+        Cancel
+      </button>
+      <button className="modelStartupDismiss" type="button" onClick={onDismiss} aria-label="Hide this notice">
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 type RootElement = HTMLElement & {
   umbraticRoot?: ReturnType<typeof createRoot>;
 };
@@ -6637,5 +6692,11 @@ if (rootElement) {
     rootElement.umbraticRoot ??= createRoot(rootElement);
     rootElement.umbraticRoot.render(<App startupSettings={startupSettings} />);
   };
-  void api.getStartupSettings().then(renderApp, () => renderApp(defaultStartupSettings));
+  // The stored chords are put in force before the first paint, not after it: a
+  // window that draws its tooltips with the shipped keys and then corrects
+  // itself has spent its one first impression advertising the wrong ones.
+  void (async () => {
+    setShortcutOverrides(await api.getKeyBindings().catch(() => ({})) as ShortcutOverrides);
+    renderApp(await api.getStartupSettings().catch(() => defaultStartupSettings));
+  })();
 }

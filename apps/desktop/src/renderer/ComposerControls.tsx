@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, GitBranch, Hand, Loader2
 
 import type { PermissionMode, ReasoningEffort } from "../shared/desktopApi";
 import type { DictationDevice, DictationStatus } from "./dictation";
+import { ShortcutTooltip, Tooltip } from "./Tooltip";
 
 /**
  * The live microphone level, as four bars.
@@ -117,29 +118,32 @@ export function DictationControl({
   return (
     <>
       <div className={`dictationControl ${recording ? "isRecording" : ""} ${enabled ? "" : "isOff"}`}>
-      <button
-        className="dictationButton"
-        type="button"
-        onClick={() => (enabled ? onToggle() : onRequestSetup())}
-        disabled={busy}
-        aria-label={label}
-        aria-pressed={recording}
-        title={label}
-      >
-        {busy ? (
-          <Loader2 className="spin" size={16} />
-        ) : recording ? (
-          <>
-            <DictationLevelMeter level={status.level} />
-            {/* The bars say the microphone is live; the square says what
-                pressing does. Swapping one for the other on hover means the
-                button is never ambiguous about either. */}
-            <Square className="dictationStopIcon" aria-hidden="true" fill="currentColor" size={11} />
-          </>
-        ) : (
-          <Mic aria-hidden="true" size={16} />
-        )}
-      </button>
+      {/* Only where the key would actually do something: naming a chord beside
+          "Transcribing" would offer a shortcut for a state that ignores it. */}
+      <ShortcutTooltip id="dictation.toggle" label={label} disabled={busy}>
+        <button
+          className="dictationButton"
+          type="button"
+          onClick={() => (enabled ? onToggle() : onRequestSetup())}
+          disabled={busy}
+          aria-label={label}
+          aria-pressed={recording}
+        >
+          {busy ? (
+            <Loader2 className="spin" size={16} />
+          ) : recording ? (
+            <>
+              <DictationLevelMeter level={status.level} />
+              {/* The bars say the microphone is live; the square says what
+                  pressing does. Swapping one for the other on hover means the
+                  button is never ambiguous about either. */}
+              <Square className="dictationStopIcon" aria-hidden="true" fill="currentColor" size={11} />
+            </>
+          ) : (
+            <Mic aria-hidden="true" size={16} />
+          )}
+        </button>
+      </ShortcutTooltip>
       {/* Which microphone is a property of the microphone button, so it hangs
           off it rather than living in settings — the moment someone notices the
           wrong input is the moment they are reaching for this control.
@@ -147,21 +151,25 @@ export function DictationControl({
           that appears a beat after the composer has settled reads as the layout
           still moving. */}
       <div className={`dictationDevices ${menuAt ? "isOpen" : ""}`} ref={deviceRootRef}>
-        <button
-          className="dictationDeviceTrigger"
-          type="button"
-          aria-expanded={!!menuAt}
-          aria-haspopup="listbox"
-          aria-label="Choose microphone"
-          title="Choose microphone"
-          disabled={recording || busy}
-          onClick={toggleDeviceMenu}
-          onKeyDown={(event) => { if (event.key === "Escape") setMenuAt(null); }}
-        >
-          <svg width="8" height="5" viewBox="0 0 8 5" aria-hidden="true">
-            <path fill="currentColor" d="M0.8 0.6h6.4L4 4.4z" />
-          </svg>
-        </button>
+        {/* The app's tooltip here too, though there is no chord to print: the
+            two halves are one control, and a system tooltip on one of them
+            beside the app's own on the other reads as two different things. */}
+        <Tooltip content="Choose microphone" disabled={recording || busy || !!menuAt}>
+          <button
+            className="dictationDeviceTrigger"
+            type="button"
+            aria-expanded={!!menuAt}
+            aria-haspopup="listbox"
+            aria-label="Choose microphone"
+            disabled={recording || busy}
+            onClick={toggleDeviceMenu}
+            onKeyDown={(event) => { if (event.key === "Escape") setMenuAt(null); }}
+          >
+            <svg width="8" height="5" viewBox="0 0 8 5" aria-hidden="true">
+              <path fill="currentColor" d="M0.8 0.6h6.4L4 4.4z" />
+            </svg>
+          </button>
+        </Tooltip>
         {menuAt ? createPortal(
           <div
             className="dictationDeviceMenu"
@@ -241,6 +249,9 @@ export function ComposerModelPicker({
   onSelect,
   onSelectEffort,
   onManage,
+  showThinking = false,
+  showThinkingAvailable = false,
+  onToggleShowThinking,
 }: {
   models: ComposerModelOption[];
   selectedId: string;
@@ -259,6 +270,11 @@ export function ComposerModelPicker({
   onSelectEffort(next: ReasoningEffort): void;
   /** Takes the user to where models are downloaded. */
   onManage?(): void;
+  /** Live model thinking in the Working block. Off until asked. */
+  showThinking?: boolean;
+  /** The connected Veil advertised `chat.reasoning_visible`. */
+  showThinkingAvailable?: boolean;
+  onToggleShowThinking?(next: boolean): void;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -271,6 +287,12 @@ export function ComposerModelPicker({
   // leaves the composer with no answer to "what will answer this, and how do I
   // choose one" at exactly the moment the user has not chosen.
   const selectedLabel = selected?.label || selectedId || "Choose a model";
+  // Nothing chosen yet: the menu's only useful page is the list of models, and
+  // making someone press "Choose a model" and then "Model ›" to reach it is two
+  // clicks to answer a question the trigger already asked. With a model chosen
+  // the main page is right again — effort is the thing being changed most, and
+  // the model is one step away rather than a wall of rows.
+  const unchosen = !selected;
 
   useEffect(() => {
     if (!open) return;
@@ -285,11 +307,23 @@ export function ComposerModelPicker({
     if (disabled) setOpen(false);
   }, [disabled]);
 
-  // Always reopen on the main page: a menu that remembers it was left on a
-  // sub-page reopens somewhere the user did not put it.
+  // Reopen on the main page, never where it was left: a menu that remembers a
+  // sub-page reopens somewhere the user did not put it. The exception is a
+  // composer with no model yet, which opens straight onto the list — and only
+  // once per opening, so pressing Back still gets you out of it.
+  const placedRef = useRef(false);
   useEffect(() => {
-    if (!open) setPage("main");
-  }, [open]);
+    if (!open) {
+      placedRef.current = false;
+      setPage("main");
+      return;
+    }
+    if (placedRef.current || !unchosen || models.length === 0) return;
+    // The list is refreshed as the menu opens, so this runs again when it
+    // lands rather than only at the moment of the press.
+    placedRef.current = true;
+    setPage("models");
+  }, [models.length, open, unchosen]);
 
   return (
     <div className={`modelControl ${open ? "isOpen" : ""}`} ref={rootRef}>
@@ -335,6 +369,19 @@ export function ComposerModelPicker({
                     </button>
                   ))}
                 </>
+              ) : null}
+              {efforts.length > 0 && showThinkingAvailable && effort !== "off" && onToggleShowThinking ? (
+                <label className={`modelMenuCheck ${showThinking ? "isOn" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={showThinking}
+                    onChange={(event) => onToggleShowThinking(event.target.checked)}
+                  />
+                  Show thinking
+                  <span className="modelMenuCheckBox" aria-hidden="true">
+                    <Check size={10} strokeWidth={3.25} />
+                  </span>
+                </label>
               ) : null}
               <p className="modelMenuHeading">Model</p>
               {models.length === 0 ? (

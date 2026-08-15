@@ -103,6 +103,20 @@ Bumping the pin is a supply-chain review: read the intervening release notes,
 update both `tag` and `commit`, and rerun packaging and `verify:package` on both
 platforms.
 
+## Releases and the update feed
+
+Releases are built and signed on our own machines and published to
+`downloads.umbratic.ai` (Cloudflare R2) by `scripts/publish-release.ts`, which
+talks S3's API directly with a SigV4 signature rather than through an SDK. The
+installed app updates from that feed through electron-updater: macOS refuses an
+app not signed by the same Team ID and Windows verifies the installer's
+publisher, and neither the app nor the script trusts the transport for
+anything else. Published installers are immutable, the channel file never
+moves to an older release, and an unsigned build is refused at publish time.
+The update check sends nothing but a `User-Agent` naming the build, and can be
+turned off in Settings → About. [docs/releasing.md](releasing.md) is the
+runbook.
+
 ## Dependency updates
 
 Routine version updates come from Dependabot and wait 14 days after publication.

@@ -1,7 +1,9 @@
 import type { LocalModelInfo } from "../shared/desktopApi";
 import { companyEndpoint } from "./config";
 import { currentCompanySessionToken } from "./companyIdentity";
+import { customModel } from "./customModels";
 import { currentLocalVeilConnection } from "./localVeil";
+import { catalogModel } from "./modelCatalog";
 import { readModelEndpointSettings } from "./storage";
 
 /**
@@ -46,11 +48,26 @@ export function endpointProvider(): typeof companyEndpoint & {
 export function configuredEndpointModel(): LocalModelInfo {
   const provider = endpointProvider();
   const settings = readModelEndpointSettings();
+  // Local mode names the model the user actually picked. The sentinel belongs
+  // to server mode, where it means "whatever the server defaults to" — there is
+  // nothing for it to stand in for here, and leaving it in place meant every
+  // control that matches the selection against the downloaded models found no
+  // match and printed the sentinel as if it were a model name.
+  if (settings.mode === "local") {
+    const model = catalogModel(settings.modelId) ?? customModel(settings.modelId);
+    return {
+      providerId: provider.providerId,
+      providerName: provider.providerName,
+      modelId: settings.modelId,
+      displayName: model?.displayName ?? settings.modelId,
+      baseUrl: provider.baseUrl,
+    };
+  }
   return {
     providerId: provider.providerId,
     providerName: provider.providerName,
     modelId: veilManagedModelId,
-    displayName: settings.mode === "local" ? settings.modelId : provider.providerName,
+    displayName: provider.providerName,
     baseUrl: provider.baseUrl,
   };
 }

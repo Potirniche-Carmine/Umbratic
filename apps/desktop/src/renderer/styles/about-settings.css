@@ -1,0 +1,96 @@
+/* About: this build and the release feed. Two rows in the bordered card the
+   other panes use for a control: a title, one detail line, and the action
+   beside it. The detail line is one line tall whether or not it has text and
+   never wraps, so a row is the same height in every state; the button is the
+   only thing on the row that changes. */
+.aboutRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+}
+
+.aboutRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.aboutRowText strong {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+}
+
+/* The version beside the name: a quiet monospace tag with lining, tabular
+   numerals, so 0.0.3 and 0.0.10 read the same width and the row does not
+   move when a release lands. Emphasis comes from the name's weight, not from
+   the number. */
+.aboutVersion {
+  padding: 1px 6px 1px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 80%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
+}
+
+.aboutRowText span {
+  display: block;
+  min-height: 1lh;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aboutRow .settingsInlineButton,
+.aboutRow .toggle {
+  flex: 0 0 auto;
+}
+
+/* The button's labels are different widths; it holds the widest so nothing
+   on the row shifts as it asks, spins, and answers. It also does not dim
+   while it works — dimming a control for a second and undimming it reads as
+   a flash, not as feedback; the spinner is the feedback. */
+.aboutCheck {
+  min-width: 124px;
+}
+
+.aboutCheck[aria-busy="true"] {
+  pointer-events: none;
+}
+
+.aboutSpin {
+  animation: aboutSpin 900ms linear infinite;
+}
+
+@keyframes aboutSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aboutSpin {
+    animation: none;
+  }
+}

@@ -1,7 +1,7 @@
 import { getMainWindow } from "./mainRuntime";
 import { setMainWindow, setPermissionModeValue } from "./mainRuntime";
 import { onWorkspaceIndexProgress } from "./indexerService";
-import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveReasoningEffortSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
+import { clearLocalDiagnosticLogs, connectCompanyConnection, disconnectCompanyConnection, disconnectCompanyServerSession, enrollCompanyConnection, exportLocalDiagnostics, exportTelemetryBundle, getBackendStatus, getCapabilityProbes, importSkillFromDialog, listServerModels, loadLocalModel, openModelsFolder, openRunnerDiagnosticsFolder, openSkillInEditor, openSkillsFolder, recordRendererProductEvent, retryTelemetrySpoolQueue, saveContextLengthSetting, saveDictationSettings, saveReasoningEffortSetting, saveShowThinkingSetting, saveHarnessProfileSetting, saveModelEndpointSettings, unloadLocalModel } from "./backendSettings";
 import { createChat, deleteChat, deleteProject, deleteProjectChats, getNotes, updateChatDraft, updateChatProject, updateNotes } from "./chatStore";
 import { clearUnsavedDraft, readUnsavedDraft, writeUnsavedDraft } from "./unsavedDrafts";
 import { createCheckpoint, deleteCheckpoint, forkCheckpoint, listTaskCheckpoints, restoreCheckpoint, setCheckpointPinned } from "./checkpointActions";
@@ -20,7 +20,7 @@ import {
   saveRemoteConnection,
   setRemoteDefaultDirectory,
 } from "./remoteService";
-import { approveTaskMerge, approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, rejectTask, setResponseFeedback, startTask, steerTask } from "./taskActions";
+import { approveWorktreeCreation, cancelTask, dropQueuedTaskPrompt, keepWorktree, listQueuedTaskPrompts, queueFollowUpTask, revertReviewFile, setResponseFeedback, startTask, steerTask } from "./taskActions";
 import { respondToToolPermission } from "./taskCommands";
 import { worktreeRootForRepo } from "./worktreeOps";
 import {
@@ -59,6 +59,8 @@ import {
   readContextLengthSetting,
   readReasoningEffortSetting,
   readDictationSettings,
+  readKeyBindings,
+  writeKeyBindings,
   readHarnessProfileSetting,
   readModelEndpointSettings,
   readModelEndpointSettingsForMode,
@@ -93,6 +95,7 @@ import { readTaskDocumentReview } from "./documentReview";
 import { reconcileCheckpointLifecycle } from "./checkpoints/reconcile";
 import * as appPaths from "./appPaths";
 import { startLocalCacheMaintenance, stopLocalCacheMaintenance } from "./cacheMaintenance";
+import { appUpdateStatus, checkForAppUpdate, installAppUpdate, onAppUpdateStatus, setAutomaticAppUpdates, startAppUpdates, stopAppUpdates } from "./appUpdates";
 const isDev = !app.isPackaged;
 // Electron's asar fs shim constructs fs.Stats, which Node deprecates as
 // DEP0180. In a packaged app the warning is internals noise printed to the
@@ -404,6 +407,8 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     },
     getDictationSettings: async () => readDictationSettings(),
     saveDictationSettings: (input) => saveDictationSettings(input),
+    getKeyBindings: async () => readKeyBindings(),
+    saveKeyBindings: async (input) => writeKeyBindings(input),
     listLocalModels: async (input) =>
       listLocalModels(app.getPath("userData"), input?.kind === "dictation" ? "dictation" : "chat"),
     downloadLocalModel: async (input) => {
@@ -479,6 +484,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     saveContextLength: (input) => saveContextLengthSetting(input),
     getReasoningEffort: () => readReasoningEffortSetting(),
     saveReasoningEffort: (input) => saveReasoningEffortSetting(input),
+    saveShowThinking: (input) => saveShowThinkingSetting(input),
     exportTelemetry: () => exportTelemetryBundle(),
     exportLocalDiagnostics: () => exportLocalDiagnostics(),
     clearLocalDiagnostics: () => clearLocalDiagnosticLogs(),
@@ -504,8 +510,7 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     approveWorktreeCreation: (input) => approveWorktreeCreation(input),
     respondToToolPermission: (input) => respondToToolPermission(input),
     openTaskInIde: (input) => openTaskInIde(input),
-    approveTaskMerge: (input) => approveTaskMerge(input),
-    rejectTask: (input) => rejectTask(input),
+    revertReviewFile: (input) => revertReviewFile(input),
     keepWorktree: (input) => keepWorktree(input),
     cancelTask: (input) => cancelTask(input),
     setResponseFeedback: (input) => setResponseFeedback(input),
@@ -519,6 +524,10 @@ function desktopIpcHandlers(): DesktopIpcHandlers {
     sendDictationAudio: async (input) => sendDictationAudio(input),
     stopDictation: async () => stopDictation(),
     cancelDictation: async () => cancelDictation(),
+    getAppUpdateStatus: async () => appUpdateStatus(),
+    checkForAppUpdate: () => checkForAppUpdate(),
+    setAutomaticAppUpdates: async (input) => setAutomaticAppUpdates(input?.enabled),
+    installAppUpdate: async () => installAppUpdate(),
   };
 }
 
@@ -575,6 +584,9 @@ app.whenReady().then(async () => {
   onModelDownloadEvent((event) => {
     getMainWindow()?.webContents.send("umbratic:model-download", event);
   });
+  onAppUpdateStatus((status) => {
+    getMainWindow()?.webContents.send("umbratic:app-update-status", status);
+  });
   Menu.setApplicationMenu(null);
   // No model is loaded at startup — loading gigabytes of weights is something
   // the user asks for from the connection panel or by sending a prompt. The
@@ -582,6 +594,7 @@ app.whenReady().then(async () => {
   // cache instead of paying for `llama-server --list-devices`.
   void systemProfile();
   await createWindow();
+  startAppUpdates();
   void retryTelemetrySpoolQueue().catch((cause) => {
     recordLocalDiagnostic({
       level: "warn",
@@ -632,6 +645,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopAppUpdates();
   stopLocalCacheMaintenance();
   // A download in flight leaves its .partial file behind on purpose: the next
   // attempt resumes from it rather than starting the gigabytes over.

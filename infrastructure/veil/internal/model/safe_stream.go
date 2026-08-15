@@ -10,7 +10,7 @@ import (
 // Both runtimes stream OpenAI SSE, so there is one reader for both. It
 // forwards frames rather than rebuilding them: whatever the runtime already
 // structured — tool calls above all — must reach the runner unchanged.
-func writeSafeOpenAIChatSSE(mode Mode, dst io.Writer, src io.Reader, annotation UsageAnnotation) error {
+func writeSafeOpenAIChatSSE(mode Mode, dst io.Writer, src io.Reader, annotation UsageAnnotation, forwardReasoning bool) error {
 	scanner := bufio.NewScanner(src)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	sentDone := false
@@ -50,7 +50,9 @@ func writeSafeOpenAIChatSSE(mode Mode, dst io.Writer, src io.Reader, annotation 
 		if json.Unmarshal([]byte(data), &payload) != nil {
 			return ProviderError{Kind: ProviderFailureInvalidResponse}
 		}
-		stripPrivateReasoning(payload)
+		if !forwardReasoning {
+			stripPrivateReasoning(payload)
+		}
 		annotateUsage(payload, annotation)
 		var calls []map[string]any
 		if healer != nil {

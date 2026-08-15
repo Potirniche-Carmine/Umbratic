@@ -67,14 +67,38 @@ test("the recommendation follows installed memory", () => {
   assert.equal(hardware.recommendedModelId("chat", 12), "gemma4-e4b");
   assert.equal(hardware.recommendedModelId("chat", 15.9), "gemma4-e4b");
   assert.equal(hardware.recommendedModelId("chat", 16), "gemma4-12b");
-  assert.equal(hardware.recommendedModelId("chat", 32), "gemma4-12b");
-  // The 27B waits for a machine that very likely has a GPU behind it.
-  assert.equal(hardware.recommendedModelId("chat", 63), "gemma4-12b");
-  assert.equal(hardware.recommendedModelId("chat", 64), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", 31.9), "gemma4-12b");
+  // 32 GB is enough for the 27B's ~17 GB of weights plus a long context's KV
+  // cache, and the 27B is the only model here whose tool calling holds up over
+  // a long agentic run — so it is what a 48 GB machine is offered.
+  assert.equal(hardware.recommendedModelId("chat", 32), "qwen38-27b");
+  assert.equal(hardware.recommendedModelId("chat", 48), "qwen38-27b");
   assert.equal(hardware.recommendedModelId("chat", 128), "qwen38-27b");
 
   assert.equal(hardware.recommendedModelId("dictation", 8), "qwen3-asr-0.6b");
   assert.equal(hardware.recommendedModelId("dictation", 16), "qwen3-asr-1.7b");
+});
+
+test("every chat model says what it is for, not just how big it is", () => {
+  // Size answers "will this run". It does not answer "should I pick this",
+  // and the difference between these rows is whether their tool calling holds
+  // up — which no number in the list has ever said.
+  for (const model of catalog.catalogModels("chat")) {
+    assert.ok(model.role, `${model.id} should carry a role`);
+    assert.ok(model.role.label.length > 0 && model.role.label.length <= 20, `${model.id} role tag stays short`);
+    assert.ok(model.role.detail.length > 40, `${model.id} role should explain itself`);
+  }
+  const byId = (id: string) => catalog.catalogModels("chat").find((model) => model.id === id);
+  // The small ones say plainly that agentic work is not what they are for.
+  for (const id of ["gemma4-e2b", "gemma4-e4b", "gemma4-e4b-uncensored"]) {
+    assert.match(byId(id).role.detail, /[Tt]ool calling is inconsistent|inconsistent/);
+  }
+  // And the one that is says so.
+  assert.equal(byId("qwen38-27b").role.label, "Agentic");
+  // Dictation weights are chosen by size alone, so they carry nothing to say.
+  for (const model of catalog.catalogModels("dictation")) {
+    assert.equal(model.role, undefined);
+  }
 });
 
 // A recommendation is what someone gets without choosing, so it never lands on

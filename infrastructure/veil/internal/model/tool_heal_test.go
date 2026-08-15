@@ -123,7 +123,7 @@ func TestLocalStreamHealsLeakedToolCalls(t *testing.T) {
 			}
 			var dst bytes.Buffer
 			if err := WriteOpenAIChatSSE(
-				context.Background(), ModeLocal, &dst, strings.NewReader(sse(frames...)), time.Second, UsageAnnotation{},
+				context.Background(), ModeLocal, &dst, strings.NewReader(sse(frames...)), time.Second, UsageAnnotation{}, false,
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +155,7 @@ func TestLocalStreamLeavesStructuredToolCallsAlone(t *testing.T) {
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}}]}`,
 	)
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, strings.NewReader(stream), time.Second, UsageAnnotation{}); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, strings.NewReader(stream), time.Second, UsageAnnotation{}, false); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
@@ -174,7 +174,7 @@ func TestLocalStreamLeavesStructuredToolCallsAlone(t *testing.T) {
 func TestServerStreamIsNotHealed(t *testing.T) {
 	stream := sse(contentFrame(`<tool_call>{"name":"read","arguments":{"path":"a"}}</tool_call>`))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, strings.NewReader(stream), time.Second, UsageAnnotation{}); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, strings.NewReader(stream), time.Second, UsageAnnotation{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(dst.String(), `"tool_calls"`) {

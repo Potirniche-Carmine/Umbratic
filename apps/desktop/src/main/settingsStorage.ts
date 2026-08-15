@@ -14,7 +14,7 @@ import {
 import { defaultToolSettings, enabledToolsFromSettings, isRunnerToolId, toolSettingsFromEnabledTools } from "./toolSettings";
 import { DEFAULT_CONTEXT_LENGTH, normalizeContextLength } from "../shared/contextWindow";
 import { DEFAULT_REASONING_EFFORT, isReasoningEffort } from "../shared/desktopApi";
-import type { DesktopStartupSettings, DictationSettings, ReasoningEffort } from "../shared/desktopApi";
+import type { DesktopStartupSettings, DictationSettings, KeyBindingSettings, ReasoningEffort } from "../shared/desktopApi";
 import { assertCompanyCredentialStorageAvailable, companyConnectionStatusFromValue } from "./companyCredentialStorage";
 import { decodeCompanyDeviceCredential, encodeCompanyDeviceCredential, readProtectedString, writeProtectedString } from "./companyCredentialStorage";
 import type { CompanyDeviceCredential, StoredProtectedString } from "./companyCredentialStorage";
@@ -38,12 +38,15 @@ type RawSettings = {
   harnessProfile?: unknown;
   contextLength?: unknown;
   reasoningEffort?: unknown;
+  showThinking?: unknown;
   permissionMode?: unknown;
   companyCredential?: unknown;
   dictation?: unknown;
+  keybindings?: unknown;
   remoteConnections?: unknown;
   customModels?: unknown;
   localQuants?: unknown;
+  automaticAppUpdates?: unknown;
 };
 
 type SettingsRow = {
@@ -371,6 +374,17 @@ export function writeReasoningEffortSetting(value: unknown): ReasoningEffort {
   return reasoningEffort;
 }
 
+/** Live thinking in Working. Absent or anything other than true is off. */
+export function readShowThinkingSetting(): boolean {
+  return readRawSettings().showThinking === true;
+}
+
+export function writeShowThinkingSetting(value: unknown): boolean {
+  const showThinking = value === true;
+  writeRawSettings({ ...readRawSettings(), showThinking });
+  return showThinking;
+}
+
 export function writeContextLengthSetting(value: unknown): number {
   const contextLength = normalizeContextLength(value);
   const settings = readRawSettings();
@@ -424,24 +438,107 @@ function normalizedDictationSettings(value: unknown): DictationSettings {
 /** What dictation assumes it is hearing until someone says otherwise. */
 export const defaultDictationLanguage = "en";
 
+/**
+ * How many rebound chords are kept.
+ *
+ * Comfortably more than the table has rows, and a ceiling all the same: the
+ * record arrives from the renderer keyed by ids this process deliberately does
+ * not know, so its size is the one thing that can be bounded here.
+ */
+const maxKeyBindings = 64;
+
+/**
+ * The chords the user changed.
+ *
+ * Only the differences are stored. Keeping the whole table would pin every
+ * default to the version that wrote the file, so a release that moves one could
+ * never move it for anybody who had opened the Keyboard page once.
+ */
+export function readKeyBindings(): KeyBindingSettings {
+  return normalizedKeyBindings(readRawSettings().keybindings);
+}
+
+export function writeKeyBindings(value: unknown): KeyBindingSettings {
+  const keybindings = normalizedKeyBindings(value);
+  writeRawSettings({ ...readRawSettings(), keybindings });
+  return keybindings;
+}
+
+function normalizedKeyBindings(value: unknown): KeyBindingSettings {
+  if (!isRecord(value)) return {};
+  const bindings: KeyBindingSettings = {};
+  for (const [id, raw] of Object.entries(value)) {
+    if (Object.keys(bindings).length >= maxKeyBindings) break;
+    // The id names a shortcut in the renderer's table, which this process has no
+    // copy of and no business having one of: what a chord *does* is a question
+    // about the interface. Shape and size are what can be checked here, and an
+    // id that no longer exists is dropped on the way back in rather than here.
+    if (!/^[a-z][a-z.]{0,63}$/.test(id) || !isRecord(raw)) continue;
+    // A key is one `event.key` value: a single character, or a name like
+    // "Enter". Anything longer is not a key this app could ever match.
+    if (typeof raw.key !== "string" || raw.key.length === 0 || raw.key.length > 20) continue;
+    bindings[id] = {
+      key: raw.key,
+      ...(raw.primary === true ? { primary: true } : {}),
+      ...(raw.shift === true ? { shift: true } : {}),
+      ...(raw.alt === true ? { alt: true } : {}),
+    };
+  }
+  return bindings;
+}
+
+/**
+ * Whether the app checks downloads.umbratic.ai for a newer release on its own.
+ * On until turned off: an installed app that never learns about a fix is the
+ * worse default. Only an explicit `false` is off, so an older settings file
+ * with nothing stored reads as on rather than as a choice nobody made.
+ */
+export function readAutomaticAppUpdatesSetting(): boolean {
+  return readRawSettings().automaticAppUpdates !== false;
+}
+
+export function writeAutomaticAppUpdatesSetting(value: unknown): boolean {
+  const automaticAppUpdates = value !== false;
+  writeRawSettings({ ...readRawSettings(), automaticAppUpdates });
+  return automaticAppUpdates;
+}
+
+/**
+ * How a stored permission mode reads, and what an absent one means.
+ *
+ * Absent means nobody has chosen, and the choice for anyone who has not
+ * chosen is Auto: asking before every low-risk read is a question with one
+ * sensible answer, and a first run spent clicking through it teaches the user
+ * to approve without looking. Only an explicit "normal" turns it off, so a
+ * user who did choose keeps their choice through this change.
+ */
+function permissionModeFromValue(value: unknown): PermissionMode {
+  return value === "normal" ? "normal" : "auto_safe";
+}
+
 export function readPermissionModeSetting(): PermissionMode {
-  return readRawSettings().permissionMode === "auto_safe" ? "auto_safe" : "normal";
+  return permissionModeFromValue(readRawSettings().permissionMode);
 }
 
 export function readStartupSettings(): DesktopStartupSettings {
   const settings = readRawSettings();
   const endpoint = modelEndpointSettings(settings);
   return {
-    permissionMode: settings.permissionMode === "auto_safe" ? "auto_safe" : "normal",
+    permissionMode: permissionModeFromValue(settings.permissionMode),
     modelEndpoint: publicModelEndpointSettings(endpoint),
     companyConnection: companyConnectionStatusFromValue(settings.companyCredential),
     harnessProfile: isHarnessProfileId(settings.harnessProfile) ? settings.harnessProfile : defaultHarnessProfileId,
     contextLength: normalizeContextLength(settings.contextLength ?? DEFAULT_CONTEXT_LENGTH),
     reasoningEffort: isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT,
+    showThinking: settings.showThinking === true,
   };
 }
 
 export function writePermissionModeSetting(value: unknown): PermissionMode {
+  // Stricter than the read: an absent setting is nobody's choice and takes the
+  // default, but an unrecognized *write* is a bug, and a bug should not be able
+  // to elevate anything. It lands on "normal" and stays stored, which is also
+  // what makes "normal" an explicit choice the read above will honour.
   const permissionMode: PermissionMode = value === "auto_safe" ? "auto_safe" : "normal";
   const settings = readRawSettings();
   writeRawSettings({

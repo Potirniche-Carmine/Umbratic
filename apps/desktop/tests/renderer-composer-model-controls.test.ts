@@ -66,12 +66,38 @@ test("effort levels are the selected model's own, shown inside its menu", () => 
   // reads no effort, rather than offering a choice its template would ignore.
   assert.match(controls, /efforts\.length > 0 \? \(/);
   assert.match(controls, /<p className="modelMenuHeading">Effort<\/p>/);
+  assert.match(controls, /Show thinking/);
+  assert.match(controls, /effort !== "off"/);
+  assert.match(controls, /className="modelMenuCheck/);
+  assert.match(controls, /className="modelMenuCheckBox"/);
+  assert.match(declarations(".modelMenuCheck"), /display:\s*flex/);
+  assert.match(declarations(".modelMenuCheck"), /justify-content:\s*space-between/);
+  assert.match(declarations(".modelMenuCheck input"), /opacity:\s*0/);
+  assert.match(declarations(".modelMenuCheckBox"), /border-radius:\s*4px/);
+  assert.match(declarations(".modelMenuHeading"), /text-transform:\s*uppercase/);
+  assert.match(declarations(".modelMenu button"), /color:\s*var\(--text\)/);
   assert.match(controls, /<p className="modelMenuHeading">Model<\/p>/);
+  assert.ok(
+    controls.indexOf("modelMenuHeading\">Effort") < controls.indexOf("Show thinking")
+      && controls.indexOf("Show thinking") < controls.indexOf("className=\"modelMenuCheckBox\"")
+      && controls.indexOf("Show thinking") < controls.indexOf("modelMenuHeading\">Model"),
+    "Show thinking sits under Effort, with its tick after the words",
+  );
   assert.match(main, /efforts=\{modelReasoningEfforts\}/);
+  assert.match(main, /showThinking=\{showThinking\}/);
+  assert.match(main, /onToggleShowThinking=\{\(next\) => void updateShowThinking\(next\)\}/);
   // The model list is a step in from the main page, not a wall of rows under
   // the levels.
   assert.match(controls, /setPage\("models"\)/);
-  assert.match(controls, /if \(!open\) setPage\("main"\);/);
+  // Closing puts it back on the main page, so it never reopens on a sub-page
+  // the user did not leave it on.
+  assert.match(controls, /if \(!open\) \{\s*\n\s*placedRef\.current = false;\s*\n\s*setPage\("main"\);/);
+  // Except with nothing chosen yet, where the list is the only page worth
+  // showing: making someone press "Choose a model" and then "Model ›" is two
+  // clicks to answer a question the trigger already asked. Once per opening,
+  // so Back still works.
+  assert.match(controls, /if \(placedRef\.current \|\| !unchosen \|\| models\.length === 0\) return;/);
+  assert.match(controls, /placedRef\.current = true;\s*\n\s*setPage\("models"\);/);
 });
 
 test("the model name carries no icon and no context window", () => {

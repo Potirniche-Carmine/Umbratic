@@ -34,6 +34,8 @@
   "scripts": {
     "desktop:dev": "npm --workspace @umbratic/desktop run dev",
     "desktop:release": "node scripts/build-go-services.ts && npm --workspace @umbratic/desktop run package && npm --workspace @umbratic/desktop run verify:package",
+    "publish:release": "node scripts/publish-release.ts",
+    "release:version": "npm version --workspaces --include-workspace-root --no-git-tag-version --ignore-scripts",
     "veil:dev": "cd infrastructure/veil && go run ./cmd/veil",
     "veil:test": "cd infrastructure/veil && go test ./...",
     "veil-console:dev": "node scripts/run-veil-console.ts dev",

@@ -42,7 +42,7 @@ Treat HTTP input and runtime output as untrusted:
 - Never log API keys, authorization headers, raw secrets, full prompts, full model responses, or unredacted workspace content.
 - Reject missing/invalid authentication, oversized bodies, unknown fields where the contract is strict, unknown routes, models outside the published registry, and client attempts to override protected system guidance. Unknown *vocabulary* on product routes is stripped and counted, never rejected — see the root wire-compatibility rules.
 - Keep runtime credentials and model configuration server-side.
-- Reasoning content never leaves Veil. `stripPrivateReasoning` drops it from vLLM streams and the Ollama `thinking` field is dropped alongside it. A client's `thinking` directive decides whether the model reasons, never whether that reasoning is shown, and no feature may turn this into a toggle.
+- Reasoning content is stripped by default. `stripPrivateReasoning` drops it from vLLM streams and the Ollama `thinking` field is dropped alongside it. A client's `thinking` directive decides whether the model reasons. Forwarding those tokens is a separate opt-in: the client must see `chat.reasoning_visible` on `/api/health` and send `reasoning_visible: true`. Absent or false keeps today's strip.
 - Apply server, header, body, stream, idle, and outbound-call timeouts appropriate to each endpoint.
 - Preserve backpressure, cancellation, status mapping, and safe error behavior when either side disconnects.
 - Do not expose stack traces, runtime addresses, provider bodies, or sensitive configuration in health checks or errors.

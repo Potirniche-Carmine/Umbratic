@@ -101,17 +101,59 @@
   white-space: nowrap;
 }
 
-/* A dictation failure is not a connection problem, so it borrows the notice's
-   shape without its amber. */
-.connectionNotice.dictationNotice {
-  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+/*
+ * A dictation failure is a note about one press, not a condition the composer
+ * is in, so it is a pill the length of its own sentence rather than a bar the
+ * width of the prompt. It also carries its own dismiss: the notice clears
+ * itself after a few seconds, and the button is for anyone who has already read
+ * it. Red rather than the connection notice's amber — nothing is still trying.
+ */
+.dictationNotice {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 5px 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+  border-radius: 999px;
   color: color-mix(in srgb, var(--text) 84%, var(--red));
   background: color-mix(in srgb, var(--red) 7%, transparent);
+  font-size: 11.5px;
 }
 
-.connectionNotice.dictationNotice svg {
+.dictationNotice > svg {
   flex: 0 0 auto;
   color: var(--red);
+}
+
+.dictationNotice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dictationNoticeDismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  opacity: 0.62;
+}
+
+.dictationNoticeDismiss:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
 }
 
 /* Losing the server sits directly above the composer, where the user is

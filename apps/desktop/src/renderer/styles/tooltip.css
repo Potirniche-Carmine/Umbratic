@@ -1,0 +1,97 @@
+/*
+ * The app's own tooltip, in place of the platform's.
+ *
+ * It is the same object as the shortcut rows in Settings — the same keycaps, the
+ * same surface, the same hairline — because a chord printed two ways is two
+ * things to learn. What it is not is the system's tooltip: that one is drawn by
+ * the window server in the system's font, and it cannot hold a keycap at all.
+ *
+ * Above the composer's menus, because a tooltip is the last thing drawn over
+ * whatever raised it, and it never takes a pointer: it is a caption, and a
+ * caption that can be hovered can be hovered off the thing it captions.
+ */
+.umbraticTooltip {
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 280px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--glass-strong);
+  box-shadow: 0 10px 24px var(--shadow-color);
+  color: var(--text);
+  font-family: var(--app-font);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+  /* Centred on the trigger, and lifted or dropped clear of it. The transform is
+     what makes `left` the middle of the tooltip rather than its left edge, so a
+     control near either window edge is still captioned over itself. */
+  transform: translate(-50%, -100%);
+  animation: tooltipIn 120ms ease-out;
+}
+
+.umbraticTooltip.isBelow {
+  transform: translate(-50%, 0);
+}
+
+/* Wraps only when it has to. A hint that reaches the width of the window is no
+   longer a hint, but one broken across two lines mid-phrase is worse. */
+.umbraticTooltipText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.umbraticTooltipKeys {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+/* The same keycap as the Keyboard settings page, one size down: this one sits
+   on a line of text rather than at the end of a settings row. */
+.umbraticTooltipKeys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--control-bg);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes tooltipIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 3px));
+  }
+}
+
+@keyframes tooltipInBelow {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -3px);
+  }
+}
+
+.umbraticTooltip.isBelow {
+  animation-name: tooltipInBelow;
+}
+
+/* Motion is opt-out here as everywhere else: the tooltip still appears, it just
+   appears rather than arrives. */
+@media (prefers-reduced-motion: reduce) {
+  .umbraticTooltip {
+    animation: none;
+  }
+}

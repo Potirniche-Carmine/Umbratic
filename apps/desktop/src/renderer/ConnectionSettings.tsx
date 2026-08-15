@@ -203,12 +203,16 @@ export function useConnectionSettings({
   // In local mode there is nothing to confirm: no URL, no secret, no headers.
   // Choosing a downloaded model is the whole decision, so choosing it saves it,
   // which restarts llama-server on the new weights.
-  async function selectLocalModel(modelId: string) {
+  //
+  // Returns the failure, if there was one, as well as showing it here: the
+  // composer's picker calls this too, and a failure raised while the settings
+  // panel is closed would otherwise be reported to nobody.
+  async function selectLocalModel(modelId: string): Promise<string | null> {
     // Re-picking the model that is already shown is not a settings change: if
     // it is running there is nothing to do, and if it is not, this is the ask
     // to load it — without restarting anything else.
     if (modelId === draft.modelId && modelId === settings.modelId) {
-      if (backend?.endpoint === "ready" || backend?.endpoint === "degraded") return;
+      if (backend?.endpoint === "ready" || backend?.endpoint === "degraded") return null;
       const requestId = saveSequenceRef.current + 1;
       saveSequenceRef.current = requestId;
       setMessage(null);
@@ -218,14 +222,14 @@ export function useConnectionSettings({
         const result = await api.loadLocalModel();
         if (requestId === saveSequenceRef.current) onBackendStatus(result.status);
       } catch (cause) {
-        if (requestId === saveSequenceRef.current) {
-          setMessage(String(cause instanceof Error ? cause.message : cause));
-        }
+        const failure = String(cause instanceof Error ? cause.message : cause);
+        if (requestId === saveSequenceRef.current) setMessage(failure);
+        return failure;
       } finally {
         localLoadCountRef.current -= 1;
         if (localLoadCountRef.current === 0) setLocalModelLoading(false);
       }
-      return;
+      return null;
     }
     const next = normalizeEndpointSettings({
       ...(modeDraftsRef.current.local ?? draft),
@@ -233,7 +237,8 @@ export function useConnectionSettings({
       headers: defaultModelEndpointSettings.headers,
       secret: "",
     });
-    if (endpointValidationMessage(next)) return;
+    const invalid = endpointValidationMessage(next);
+    if (invalid) return invalid;
     const requestId = saveSequenceRef.current + 1;
     saveSequenceRef.current = requestId;
     const previous = settings;
@@ -246,23 +251,26 @@ export function useConnectionSettings({
     setLocalModelLoading(true);
     try {
       const result = await api.saveModelEndpointSettings(next);
-      if (requestId !== saveSequenceRef.current) return;
+      if (requestId !== saveSequenceRef.current) return null;
       const normalized = normalizeEndpointSettings(result.settings);
       setSettings(normalized);
       setDraft(normalized);
       modeDraftsRef.current.local = normalized;
       onBackendStatus(result.status);
     } catch (cause) {
-      if (requestId !== saveSequenceRef.current) return;
+      const failure = String(cause instanceof Error ? cause.message : cause);
+      if (requestId !== saveSequenceRef.current) return failure;
       setSettings(previous);
       setDraft(previous);
       modeDraftsRef.current.local = previous;
       setSaveFeedback("idle");
-      setMessage(String(cause instanceof Error ? cause.message : cause));
+      setMessage(failure);
+      return failure;
     } finally {
       localLoadCountRef.current -= 1;
       if (localLoadCountRef.current === 0) setLocalModelLoading(false);
     }
+    return null;
   }
   /**
    * Gives the weights back. The counterpart of picking a model, and the only
@@ -455,8 +463,11 @@ export function useConnectionSettings({
   /**
    * Picking a server model is a settings write like any other, not a
    * connection change: the enrollment, the URL, and the session all stay.
+   *
+   * Returns the failure the same way `selectLocalModel` does, and for the same
+   * reason — the composer's picker shares this path.
    */
-  async function selectServerModel(modelId: string) {
+  async function selectServerModel(modelId: string): Promise<string | null> {
     const next = normalizeEndpointSettings({
       ...(modeDraftsRef.current.server ?? draft),
       modelId,
@@ -470,19 +481,22 @@ export function useConnectionSettings({
     setMessage(null);
     try {
       const result = await api.saveModelEndpointSettings(next);
-      if (requestId !== saveSequenceRef.current) return;
+      if (requestId !== saveSequenceRef.current) return null;
       const normalized = normalizeEndpointSettings(result.settings);
       setSettings(normalized);
       setDraft(normalized);
       modeDraftsRef.current.server = normalized;
       onBackendStatus(result.status);
     } catch (cause) {
-      if (requestId !== saveSequenceRef.current) return;
+      const failure = String(cause instanceof Error ? cause.message : cause);
+      if (requestId !== saveSequenceRef.current) return failure;
       setSettings(previous);
       setDraft(previous);
       modeDraftsRef.current.server = previous;
-      setMessage(String(cause instanceof Error ? cause.message : cause));
+      setMessage(failure);
+      return failure;
     }
+    return null;
   }
 
   return {

@@ -22,15 +22,15 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model               string
-	Messages            []Message
-	Stream              bool
-	Tools               any
-	ToolChoice          any
-	ParallelTools       bool
-	MaxOutputTokens     int
-	Temperature float64
-	TopP        float64
+	Model           string
+	Messages        []Message
+	Stream          bool
+	Tools           any
+	ToolChoice      any
+	ParallelTools   bool
+	MaxOutputTokens int
+	Temperature     float64
+	TopP            float64
 	// The truncation and penalty samplers. Each is omitted from the request
 	// when zero, which is also each one's no-op value.
 	TopK                int
@@ -41,9 +41,12 @@ type ChatRequest struct {
 	ThinkingTokenBudget *int
 	// Thinking forces the model to reason, or not to, for this request. nil
 	// leaves the runtime on its own default. It controls whether the model
-	// thinks, never whether that thinking is shown — reasoning content stays
-	// stripped either way.
+	// thinks, not whether that thinking is shown.
 	Thinking *bool
+	// ReasoningVisible forwards reasoning tokens on the stream. False (the
+	// default) keeps stripPrivateReasoning. The HTTP layer only sets this when
+	// the client sent reasoning_visible after Veil advertised the feature.
+	ReasoningVisible bool
 	// ResponseSchema constrains local generation to this JSON schema through
 	// the runtime's grammar-backed structured outputs. nil leaves generation
 	// unconstrained. Local mode only; the server path ignores it, because a
@@ -337,9 +340,9 @@ func (c *Client) DoChat(ctx context.Context, req ChatRequest) (*http.Response, e
 	return c.doOpenAIChat(ctx, req)
 }
 
-func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration, annotation UsageAnnotation) error {
+func WriteOpenAIChatSSE(ctx context.Context, mode Mode, dst io.Writer, src io.Reader, idleTimeout time.Duration, annotation UsageAnnotation, forwardReasoning bool) error {
 	src = withIdleAndCancel(ctx, src, idleTimeout)
-	return writeSafeOpenAIChatSSE(mode, dst, src, annotation)
+	return writeSafeOpenAIChatSSE(mode, dst, src, annotation, forwardReasoning)
 }
 
 func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {

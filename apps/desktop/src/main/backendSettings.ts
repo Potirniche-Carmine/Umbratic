@@ -70,6 +70,7 @@ import {
   writeHarnessProfileSetting,
   writeContextLengthSetting,
   writeReasoningEffortSetting,
+  writeShowThinkingSetting,
   writeDictationSettings,
   writeModelEndpointSettings,
 } from "./storage";
@@ -310,6 +311,10 @@ export async function saveReasoningEffortSetting(input: unknown) {
   return { reasoningEffort, status };
 }
 
+export function saveShowThinkingSetting(input: unknown) {
+  return writeShowThinkingSetting(input === true);
+}
+
 export async function saveContextLengthSetting(input: unknown) {
   if (activeRunnerProcesses.size > 0) {
     throw new Error("Wait for the active run to finish before changing the context length.");
@@ -416,9 +421,15 @@ export async function resolveSelectedModel(
   // catalog, not from Veil: llama-server does not publish what its chat
   // template reads, and the catalog is where that was reviewed and recorded.
   const localEntry = settings.mode === "local" ? resolveLocalModel(settings.modelId) : null;
+  // The catalog's answer stands on its own: it is what was reviewed and
+  // recorded, and a health payload that says nothing about capabilities must
+  // not take the effort levels down with it.
+  const localEfforts = [...(localEntry?.reasoningEfforts ?? [])];
   const capabilities = health.capabilities
-    ? { ...health.capabilities, reasoningEfforts: [...(localEntry?.reasoningEfforts ?? [])] }
-    : undefined;
+    ? { ...health.capabilities, reasoningEfforts: localEfforts }
+    : localEfforts.length > 0
+      ? { parallelToolCalls: true, vision: false, reasoning: true, reasoningEfforts: localEfforts }
+      : undefined;
   const availableModel = { ...configured, capabilities };
   let models: LocalModelInfo[] = health.status === "ready" ? [availableModel] : [];
   let selected: LocalModelInfo | null = health.status === "ready" ? availableModel : null;

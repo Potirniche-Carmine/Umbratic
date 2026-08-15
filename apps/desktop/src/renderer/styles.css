@@ -15,7 +15,9 @@
 @import "./styles/settings.css";
 @import "./styles/remote.css";
 @import "./styles/skills-settings.css";
+@import "./styles/about-settings.css";
 @import "./styles/local-models.css";
 @import "./styles/review-workspace.css";
 @import "./styles/review-diff.css";
+@import "./styles/tooltip.css";
 @import "./styles/motion-accessibility.css";

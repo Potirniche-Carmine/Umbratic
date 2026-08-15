@@ -331,33 +331,6 @@ export async function runRunnerTask(
           data: { code: invalid.code, type: invalid.type },
         });
       },
-      onOrientDecision: (decision) => {
-        // A successful classification is routine and was only ever recorded to
-        // watch the feature land — one warn row per run, on every run, for
-        // something that went right. Only the degraded outcome is kept: that is
-        // orient actually failing, and the run silently losing its playbook.
-        if (decision.outcome !== "degraded") return;
-        recordLocalDiagnostic({
-          level: "warn",
-          source: "runner",
-          event: "orient.degraded",
-          taskId: task.id,
-          message: decision.message ?? "Orient failed; the run continued without a playbook.",
-          data: {},
-        });
-      },
-      onOrientEvidenceRetry: (retry) => {
-        // Kept: this is the model answering a workspace question without
-        // looking at the workspace, which is a fault, not a milestone.
-        recordLocalDiagnostic({
-          level: "warn",
-          source: "runner",
-          event: "orient.evidence_retry",
-          taskId: task.id,
-          message: "The model answered before calling any tool; the answer was refused once.",
-          data: { ...(retry.bucket ? { bucket: retry.bucket } : {}) },
-        });
-      },
       onQueueUpdated: (queueEvent) => {
         // "applied" means the running turn already absorbed the steer at a step
         // boundary; the conversation has it and there is nothing to launch.

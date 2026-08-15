@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 import type { BackendUiEvent } from "../shared/backendEvents";
 import type {
+  AppUpdateStatus,
   ChatAttachment,
   DesktopApi,
   DictationEvent,
   DictationSettings,
   HarnessProfileId,
+  KeyBindingSettings,
   ModelDownloadEvent,
   PastedAttachmentInput,
   PermissionMode,
@@ -119,11 +121,14 @@ const umbraticApi = {
   saveContextLength: (input: number) => invoke("umbratic:save-context-length", input),
   getReasoningEffort: () => invoke("umbratic:get-reasoning-effort"),
   saveReasoningEffort: (input: ReasoningEffort) => invoke("umbratic:save-reasoning-effort", input),
+  saveShowThinking: (input: boolean) => invoke("umbratic:save-show-thinking", input),
   getModelEndpointSettings: (input?: { mode?: "local" | "server" }) =>
     invoke("umbratic:get-model-endpoint-settings", input),
   getDictationSettings: () => invoke("umbratic:get-dictation-settings"),
   saveDictationSettings: (input: DictationSettings) =>
     invoke("umbratic:save-dictation-settings", input),
+  getKeyBindings: () => invoke("umbratic:get-key-bindings"),
+  saveKeyBindings: (input: KeyBindingSettings) => invoke("umbratic:save-key-bindings", input),
   listLocalModels: (input: { kind: "chat" | "dictation" }) =>
     invoke("umbratic:list-local-models", input),
   downloadLocalModel: (input: { id: string }) =>
@@ -204,8 +209,7 @@ const umbraticApi = {
     invoke("umbratic:open-repository-in-ide", input),
   openTaskInIde: (input: { taskId: string; ideId: string; filePath?: string }) =>
     invoke("umbratic:open-task-in-ide", input),
-  approveTaskMerge: (input: { taskId: string }) => invoke("umbratic:approve-task-merge", input),
-  rejectTask: (input: { taskId: string; cleanup: boolean }) => invoke("umbratic:reject-task", input),
+  revertReviewFile: (input: { taskId: string; path: string }) => invoke("umbratic:revert-review-file", input),
   keepWorktree: (input: { taskId: string }) => invoke("umbratic:keep-worktree", input),
   cancelTask: (input: { taskId: string }) => invoke("umbratic:cancel-task", input),
   setResponseFeedback: (input: { taskId: string; messageId: string; rating: ResponseRating | null; reason?: ResponseFeedbackReason; comment?: string }) =>
@@ -217,6 +221,15 @@ const umbraticApi = {
   sendDictationAudio: (input: { chunk: Uint8Array }) => invoke("umbratic:send-dictation-audio", input),
   stopDictation: () => invoke("umbratic:stop-dictation", undefined),
   cancelDictation: () => invoke("umbratic:cancel-dictation", undefined),
+  getAppUpdateStatus: () => invoke("umbratic:get-app-update-status", undefined),
+  checkForAppUpdate: () => invoke("umbratic:check-for-app-update", undefined),
+  setAutomaticAppUpdates: (input: { enabled: boolean }) => invoke("umbratic:set-automatic-app-updates", input),
+  installAppUpdate: () => invoke("umbratic:install-app-update", undefined),
+  onAppUpdateStatus: (callback: (status: AppUpdateStatus) => void) => {
+    const listener = (_event: IpcRendererEvent, value: AppUpdateStatus) => callback(value);
+    ipcRenderer.on("umbratic:app-update-status", listener);
+    return () => ipcRenderer.removeListener("umbratic:app-update-status", listener);
+  },
   onDictationEvent: (callback: (event: DictationEvent) => void) => {
     const listener = (_event: IpcRendererEvent, value: DictationEvent) => callback(value);
     ipcRenderer.on("umbratic:dictation-event", listener);

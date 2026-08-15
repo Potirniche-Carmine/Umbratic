@@ -358,10 +358,12 @@ export function LocalModelMenu({
                 onClick={() => choose(leadingOption.id)}
                 onKeyDown={(event) => rowKeyDown(event, leadingOption.id)}
               >
-                <span className="localModelName">{leadingOption.label}</span>
-                <span className="localModelAction">
-                  {selectedId === leadingOption.id ? <Check className="localModelTick" size={14} /> : null}
-                </span>
+                <div className="localModelRowMain">
+                  <span className="localModelName">{leadingOption.label}</span>
+                  <span className="localModelAction">
+                    {selectedId === leadingOption.id ? <Check className="localModelTick" size={14} /> : null}
+                  </span>
+                </div>
               </div>
             ) : null}
 
@@ -386,10 +388,25 @@ export function LocalModelMenu({
                   {model.recommended ? <span className="localModelBadge">Recommended</span> : null}
                 </>
               );
+              // What the model is for. Size answers "will this run"; this
+              // answers "should I pick it", and they are not the same question
+              // — a 3 GB model chosen for agentic work reads as a broken app
+              // rather than as the wrong model.
+              //
+              // Its own line under the controls, given the row's full width, so
+              // a row carrying a badge does not get a narrower sentence than
+              // the row above it.
+              const role = model.role ? (
+                <span className="localModelRole">
+                  <strong>{model.role.label}</strong>
+                  {model.role.detail}
+                </span>
+              ) : null;
 
               if (downloading) {
                 return (
                   <div className="localModelRow isMenuRow" key={model.id}>
+                    <div className="localModelRowMain">
                     <span className="localModelName">{model.displayName}</span>
                     <span
                       className="localModelProgress"
@@ -415,6 +432,8 @@ export function LocalModelMenu({
                         <X size={14} />
                       </button>
                     </span>
+                    </div>
+                    {role}
                   </div>
                 );
               }
@@ -422,6 +441,7 @@ export function LocalModelMenu({
               if (!model.downloaded) {
                 return (
                   <div className="localModelRow isMenuRow" key={model.id}>
+                    <div className="localModelRowMain">
                     <span className="localModelName">{model.displayName}</span>
                     {badges}
                     {quantPicker}
@@ -439,6 +459,8 @@ export function LocalModelMenu({
                         <Download size={14} />
                       </button>
                     </span>
+                    </div>
+                    {role}
                   </div>
                 );
               }
@@ -453,6 +475,7 @@ export function LocalModelMenu({
                   onClick={() => { if (!disabled) choose(model.id); }}
                   onKeyDown={(event) => { if (!disabled) rowKeyDown(event, model.id); }}
                 >
+                  <div className="localModelRowMain">
                   <span className="localModelName">{model.displayName}</span>
                   {badges}
                   {/* Unload lives on the model's own row rather than beside the
@@ -477,6 +500,8 @@ export function LocalModelMenu({
                   <span className="localModelAction">
                     {selected ? <Check className="localModelTick" size={14} /> : null}
                   </span>
+                  </div>
+                  {role}
                 </div>
               );
             })}

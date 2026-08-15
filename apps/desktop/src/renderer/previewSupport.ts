@@ -80,7 +80,9 @@ export const defaultIdeChoices: IdeInfo[] = [
     icon: navigator.platform.toLowerCase().includes("mac") ? "finder" : "explorer",
   },
 ];
-let previewPermissionMode: PermissionMode = "normal";
+// The app's own default for anyone who has not chosen, so the preview shows
+// the composer the way a fresh install does.
+let previewPermissionMode: PermissionMode = "auto_safe";
 
 export function readPreviewProjects(): RepositoryInfo[] {
   try {
@@ -159,6 +161,16 @@ export function readPreviewReasoningEffort(): ReasoningEffort {
 
 export function writePreviewReasoningEffort(effort: ReasoningEffort): void {
   window.localStorage.setItem(previewReasoningEffortKey, effort);
+}
+
+const previewShowThinkingKey = "umbratic-preview-show-thinking";
+
+export function readPreviewShowThinking(): boolean {
+  return window.localStorage.getItem(previewShowThinkingKey) === "true";
+}
+
+export function writePreviewShowThinking(value: boolean): void {
+  window.localStorage.setItem(previewShowThinkingKey, value ? "true" : "false");
 }
 
 export function writePreviewContextLength(contextLength: number): void {

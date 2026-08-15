@@ -15,7 +15,6 @@ use crate::{
     },
     conversation_state::{ConversationStateSnapshotInput, snapshot_conversation_state},
     events::{empty_summary, increment, now_iso, step_settled_event},
-    orient::orient_once,
     permission::PermissionBroker,
     public_progress::{PublicProgressSchedule, compaction_finished, compaction_started},
     repeat_guard::RepeatGuard,
@@ -27,9 +26,7 @@ use crate::{
     tool_scheduling::execute_calls,
     tools::{ToolCall, ToolResult, tool_surface, validate_tool_call_batch},
     turn_snapshot::TurnSnapshot,
-    veil_client::{
-        HoldPolicy, VeilChatResult, VeilRequestOptions, release_held_text, stream_veil_chat,
-    },
+    veil_client::{VeilChatResult, VeilRequestOptions, stream_veil_chat},
 };
 
 const MAX_TOOL_TURNS: usize = 64;
@@ -75,13 +72,12 @@ fn message_content(parts: Vec<InputPart>) -> Value {
     )
 }
 
-/// A preamble is narration for the user, not conversation state. It already
-/// streamed to the desktop, and the tool calls below it carry every fact the
-/// next step needs. Persisting it would put the model's own prose back in its
-/// context, where each step imitates and extends the longest preamble it can
-/// see; that ratchet is what turns a one-line preamble into a mid-turn recap by
-/// step five. Dropping it here is what makes the one-sentence rule stable
-/// instead of advisory.
+/// A preamble is not conversation state. The tool calls below it carry every
+/// fact the next step needs. Persisting it would put the model's own prose back
+/// in its context, where each step imitates and extends the longest preamble it
+/// can see; that ratchet is what turns a one-line preamble into a mid-turn
+/// recap by step five. Dropping it here is what makes the one-sentence rule
+/// stable instead of advisory.
 fn assistant_tool_message(calls: &[ToolCall]) -> Value {
     json!({
         "role": "assistant",
@@ -233,13 +229,11 @@ async fn record_compaction_verdict(session: &Session, result: &VeilChatResult) {
 fn turn_snapshot(
     surface: std::sync::Arc<crate::tools::ToolSurface>,
     prepared: &PreparedRequest,
-    harness_bucket: Option<String>,
 ) -> TurnSnapshot {
     TurnSnapshot::new(
         surface,
         prepared.messages.clone(),
         prepared.max_output_tokens,
-        harness_bucket,
     )
 }
 
@@ -388,7 +382,6 @@ async fn final_without_tools(
     sink: &EventSink,
     summary: &mut Value,
     fallback: &str,
-    harness_bucket: Option<&str>,
 ) {
     let Ok(mut prepared) = prepared_messages(session, &[], sink).await else {
         emit_fallback_answer(session, sink, summary, fallback).await;
@@ -403,10 +396,6 @@ async fn final_without_tools(
         VeilRequestOptions {
             max_output_tokens: prepared.max_output_tokens,
             include_tools: false,
-            harness_bucket: harness_bucket.map(str::to_owned),
-            // final_without_tools is the last word of the run; there is no
-            // later step that could refuse it, so nothing is held.
-            hold: HoldPolicy::None,
         },
     )
     .await;
@@ -425,10 +414,6 @@ async fn final_without_tools(
             VeilRequestOptions {
                 max_output_tokens: prepared.max_output_tokens,
                 include_tools: false,
-                harness_bucket: harness_bucket.map(str::to_owned),
-                // final_without_tools is the last word of the run; there is no
-                // later step that could refuse it, so nothing is held.
-                hold: HoldPolicy::None,
             },
         )
         .await;
@@ -514,8 +499,8 @@ async fn publish_step_settled(
 /// Injects a pending steer into the running turn as the next user message.
 ///
 /// The steer is appended to the same conversation the loop is already working
-/// through, so nothing about the run resets: the orient decision, the run id,
-/// and every tool result collected so far all survive.
+/// through, so nothing about the run resets: the run id and every tool result
+/// collected so far all survive.
 async fn apply_pending_steer(session: &Arc<Session>, sink: &EventSink, run_id: &str) {
     let taken = {
         let mut queue = session.queue.lock().await;
@@ -567,20 +552,10 @@ pub async fn run_turn(
     messages.push(json!({ "role": "user", "content": message_content(parts) }));
     drop(messages);
 
-    // Orient runs exactly once per accepted run, after the current user message
-    // is appended and before the tool loop. Every step of this run reuses the
-    // decision, including compaction and context-overflow retries.
-    let orient = orient_once(&session, &sink, &explicit_text).await;
-    let harness_bucket = orient.bucket.clone();
-
     let mut summary = empty_summary();
     set_run_outcome(&mut summary, RunOutcome::Completed);
     let mut consecutive_failed = 0usize;
     let mut consecutive_invalid = 0usize;
-    // The evidence rule fires at most once per run. A model that answers from
-    // nothing twice is answering deliberately, and a second refusal would only
-    // spend the turn budget on the same argument.
-    let mut evidence_retried = false;
     let mut repeat_guard = RepeatGuard::default();
     let mut public_progress = PublicProgressSchedule::default();
     let mut step_index = 0_u32;
@@ -598,9 +573,9 @@ pub async fn run_turn(
         // A steer lands here, between one step settling and the next request
         // going out, so the tool call that was running finished normally and its
         // result is already in the conversation. Injecting rather than aborting
-        // keeps one run, which means one orientation and one status sentence:
-        // the model reads the new instruction as the next thing the user said,
-        // with everything it has already learned still in front of it.
+        // keeps one run: the model reads the new instruction as the next thing
+        // the user said, with everything it has already learned still in front
+        // of it.
         apply_pending_steer(&session, &sink, &run_id).await;
         // Everything this request depends on is captured once, before it goes
         // out. A deferred change landing mid-request cannot reach the in-flight
@@ -608,22 +583,8 @@ pub async fn run_turn(
         let surface = tool_surface(&session);
         let tools = surface.specs().to_vec();
         let mut prepared = prepared_messages(&session, &tools, &sink).await?;
-        let mut snapshot = Arc::new(turn_snapshot(
-            surface.clone(),
-            &prepared,
-            harness_bucket.clone(),
-        ));
+        let mut snapshot = Arc::new(turn_snapshot(surface.clone(), &prepared));
         sink.emit(context_event(&session, prepared.usage));
-        // Guided steps hold every token until the step resolves. Tool-calling
-        // steps then drop that text: orientation plus the tool rows are the
-        // whole mid-run story. Only a finished answer (no tool calls) is
-        // released. Streaming live before knowing whether tools arrived is
-        // what used to leak kilobyte mid-plan reports between rounds.
-        let hold = if harness_bucket.is_none() {
-            HoldPolicy::None
-        } else {
-            HoldPolicy::All
-        };
         let mut response = stream_veil_chat(
             &session,
             &sink,
@@ -632,8 +593,6 @@ pub async fn run_turn(
             VeilRequestOptions {
                 max_output_tokens: snapshot.max_output_tokens(),
                 include_tools: true,
-                harness_bucket: snapshot.harness_bucket().map(str::to_owned),
-                hold,
             },
         )
         .await;
@@ -646,11 +605,7 @@ pub async fn run_turn(
                 prepared = prepared_messages(&session, &tools, &sink).await?;
                 // Compaction replaced the conversation state, so the turn is
                 // re-snapshotted rather than reusing stale prompt assembly.
-                snapshot = Arc::new(turn_snapshot(
-                    surface.clone(),
-                    &prepared,
-                    harness_bucket.clone(),
-                ));
+                snapshot = Arc::new(turn_snapshot(surface.clone(), &prepared));
                 sink.emit(context_event(&session, prepared.usage));
                 response = stream_veil_chat(
                     &session,
@@ -660,14 +615,12 @@ pub async fn run_turn(
                     VeilRequestOptions {
                         max_output_tokens: snapshot.max_output_tokens(),
                         include_tools: true,
-                        harness_bucket: snapshot.harness_bucket().map(str::to_owned),
-                        hold,
                     },
                 )
                 .await;
             }
         }
-        let mut result = match response {
+        let result = match response {
             Ok(result) => result,
             Err(error) if error.to_ascii_lowercase().contains("aborted") => {
                 return Ok(reconcile_aborted_run(
@@ -695,63 +648,7 @@ pub async fn run_turn(
         }
         let calls = result.tool_calls.clone();
         increment(&mut summary, "toolCalls", calls.len() as u64);
-        if !calls.is_empty() {
-            // Any prose on a tool-calling step is dropped unshown. The
-            // orientation opens the run and the tool rows narrate every call
-            // after it — that is the whole status story.
-            result.held_text.clear();
-        }
         if calls.is_empty() {
-            // An evidence-required bucket that produces a finished answer
-            // before any tool has run has described a workspace it never
-            // looked at. A live repo_orient run did exactly this: a confident,
-            // wholly invented architecture summary, zero tool calls, and
-            // nothing in the transcript marking it as unverified. The answer is
-            // refused once and the plan is restarted rather than shipped.
-            if orient.evidence_required
-                && !evidence_retried
-                && summary["toolCalls"].as_u64().unwrap_or(0) == 0
-                && !result.content.trim().is_empty()
-            {
-                evidence_retried = true;
-                let call = ToolCall {
-                    id: format!(
-                        "missing-evidence-{}",
-                        summary["turns"].as_u64().unwrap_or(0)
-                    ),
-                    name: "missing_workspace_evidence".into(),
-                    arguments: json!({}),
-                    index: 0,
-                };
-                let error = "That answer used no workspace evidence: this turn has run no tool, so nothing in it is verified. Discard it and start the playbook now with real tool calls. Describe only what a tool result actually shows.";
-                append_assistant_turn(
-                    &session,
-                    assistant_tool_message(std::slice::from_ref(&call)),
-                    &result,
-                )
-                .await;
-                session
-                    .messages
-                    .lock()
-                    .await
-                    .push(json!({"role":"tool","tool_call_id":call.id,"content":error}));
-                sink.emit(json!({
-                    "type": "orient.evidence_retry",
-                    "taskId": session.task_id,
-                    "bucket": orient.bucket(),
-                    "at": now_iso()
-                }));
-                publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
-                continue;
-            }
-            // No refusal applied, so the step stands and anything held for
-            // it is shown. The branch above returns without releasing,
-            // which is what leaves a refused answer with no trace in the UI.
-            //
-            // There is deliberately no text inspection here. Mid-plan prose is
-            // dropped by structure (tool calls present), never by wording; the
-            // final no-tool message ships verbatim.
-            release_held_text(&sink, &session, &mut result);
             if !result.content.trim().is_empty() {
                 increment(
                     &mut summary,
@@ -772,7 +669,6 @@ pub async fn run_turn(
                 &sink,
                 &mut summary,
                 "The model did not provide a final answer.",
-                harness_bucket.as_deref(),
             )
             .await;
             set_run_outcome(&mut summary, RunOutcome::ModelGaveUp);
@@ -790,7 +686,7 @@ pub async fn run_turn(
             drop(messages);
             publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             if consecutive_invalid >= MAX_INVALID_CALL_REPAIRS {
-                final_without_tools(&session, &sink, &mut summary, "I stopped after repeated invalid workspace tool calls. Review the latest tool error before trying a different approach.", harness_bucket.as_deref()).await;
+                final_without_tools(&session, &sink, &mut summary, "I stopped after repeated invalid workspace tool calls. Review the latest tool error before trying a different approach.").await;
                 set_run_outcome(&mut summary, RunOutcome::ModelGaveUp);
                 publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
                 return Ok(summary);
@@ -838,7 +734,7 @@ pub async fn run_turn(
             consecutive_failed += 1
         }
         if consecutive_failed >= MAX_FAILED_TOOL_TURNS {
-            final_without_tools(&session, &sink, &mut summary, "I stopped after repeated workspace tool failures. Review the latest tool output before trying a different approach.", harness_bucket.as_deref()).await;
+            final_without_tools(&session, &sink, &mut summary, "I stopped after repeated workspace tool failures. Review the latest tool output before trying a different approach.").await;
             set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
             publish_step_settled(&session, &sink, &run_id, &mut step_index, "completed").await;
             return Ok(summary);
@@ -849,7 +745,6 @@ pub async fn run_turn(
                 &sink,
                 &mut summary,
                 "I stopped because the same workspace tool call returned the same result repeatedly.",
-                harness_bucket.as_deref(),
             )
             .await;
             set_run_outcome(&mut summary, RunOutcome::SafetyLimit);
@@ -862,7 +757,6 @@ pub async fn run_turn(
         &sink,
         &mut summary,
         "I reached the workspace tool safety limit before finishing.",
-        harness_bucket.as_deref(),
     )
     .await;
     set_run_outcome(&mut summary, RunOutcome::SafetyLimit);

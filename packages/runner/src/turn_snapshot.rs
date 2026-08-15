@@ -26,31 +26,15 @@ pub struct TurnSnapshot {
     messages: Vec<Value>,
     tools: Vec<Value>,
     max_output_tokens: u64,
-    /// The active run's validated bucket selector, if orient produced a guided
-    /// decision. It changes the request, so the snapshot owns it. It is a
-    /// selector only: the playbook bytes are Veil-owned and never hashed here.
-    harness_bucket: Option<String>,
 }
 
 impl TurnSnapshot {
-    pub fn new(
-        surface: Arc<ToolSurface>,
-        messages: Vec<Value>,
-        max_output_tokens: u64,
-        harness_bucket: Option<String>,
-    ) -> Self {
+    pub fn new(surface: Arc<ToolSurface>, messages: Vec<Value>, max_output_tokens: u64) -> Self {
         Self {
             tools: surface.specs().to_vec(),
             messages,
             max_output_tokens,
-            harness_bucket,
         }
-    }
-
-    /// The validated bucket selector for every normal request and retry in this
-    /// run. `None` for direct answers and every degraded run.
-    pub fn harness_bucket(&self) -> Option<&str> {
-        self.harness_bucket.as_deref()
     }
 
     pub fn messages(&self) -> &[Value] {
@@ -83,12 +67,10 @@ mod tests {
             surface,
             vec![json!({"role": "user", "content": "original request"})],
             4_096,
-            Some("code_change".into()),
         );
         let before_messages = snapshot.messages().to_vec();
         let before_tools = snapshot.tools().to_vec();
         let before_budget = snapshot.max_output_tokens();
-        let before_bucket = snapshot.harness_bucket().map(str::to_owned);
         assert!(!before_tools.is_empty(), "the turn must declare its tools");
 
         // Queued input landing mid-request.
@@ -116,6 +98,5 @@ mod tests {
         assert_eq!(snapshot.messages(), before_messages.as_slice());
         assert_eq!(snapshot.tools(), before_tools.as_slice());
         assert_eq!(snapshot.max_output_tokens(), before_budget);
-        assert_eq!(snapshot.harness_bucket().map(str::to_owned), before_bucket);
     }
 }

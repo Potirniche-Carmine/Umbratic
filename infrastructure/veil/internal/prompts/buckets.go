@@ -80,23 +80,23 @@ var engineeringBuckets = []Bucket{
 		When:     "Map the repository, \"what is here\", \"tell me more about this folder\", a high-level tour.",
 		Preamble: "A read-only tour, documentation first. Look and report: when you spot a problem, name it in your answer and leave the files as they are.",
 		Steps: []string{
-			"List the workspace root. Make a tool call your first action: a tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds.",
-			"Read the project's own documents before any source, and read all of them: the readme in the root, plus every other Markdown, plain-text, or word-processor document the listing shows or a search for document files finds. Whatever the project wrote about itself outranks what you would infer from filenames. Skip an instruction file that workspace context already supplied — you are holding it already.",
-			"Then read only what the documents left unexplained: the entry points and directories the listing showed, enough to say what each part is for, and only as far into each file as the map needs. The documents carry the tour, source reads fill its gaps, and a tour that reads dozens of source files has stopped being a tour.",
+			"In one response, list the workspace root and read the project's own documents before any source: the readme in the root, plus the docs folder or contributing notes the listing shows beside it. A tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds. Skip an instruction file that workspace context already supplied — you are holding it already. Do not search the whole tree for every markdown file.",
+			"Do not ls every subdirectory. The root listing is the layout. If a document named a part that is still unexplained, read that path from the listing — independent reads in one response. The documents carry the tour, a few named reads fill its gaps, and a tour that lists every folder or reads dozens of source files has stopped being a tour.",
 			"Read paths you have seen in a listing or search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
 			"Then stop exploring and answer: what the project is, how it is organized, how it runs when that is evident, and what you did not cover.",
 		},
-		// Steps 3 and 4 change too. They name a listing as the only thing that
-		// makes a path real, so leaving them alone would contradict a step 1
-		// that never lists anything.
+		// Step 1 batches the graph summary with the document reads. Steps 2 and 3
+		// change too: they name a listing as the only thing that makes a path
+		// real, so leaving them alone would contradict a step 1 that never lists
+		// anything.
 		GraphSteps: map[int]string{
-			1: "Call workspace_graph with action summary. Make a tool call your first action: a tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds. The summary names this workspace's files and its main symbols together, so start there and list the workspace root when it leaves a gap.",
-			3: "Then read only what the documents left unexplained: the entry points the graph and any listing named, enough to say what each part is for, and as far into each file as the map needs. The graph already gave you each symbol's name and location, so spend the few reads you need on what the code does. A tour that reads dozens of source files has stopped being a tour.",
-			4: "Read paths you have seen in the graph, a listing, or a search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
+			1: "In one response, call workspace_graph with action summary and read the project's own documents before any source: the readme in the root, plus the docs folder or contributing notes the graph or listing shows beside it. A tool is how you learn what is here, and a tour written from the project's name alone is a guess however plausible it sounds. The summary names this workspace's files and its main symbols together, so start there. Skip an instruction file that workspace context already supplied — you are holding it already. Do not search the whole tree for every markdown file.",
+			2: "Do not ls every subdirectory the summary already named. If a document named a part that is still unexplained, read that path from the graph — independent reads in one response. The graph already gave you each symbol's name and location, so spend the few reads you need on what the docs left open. A tour that lists every folder or reads dozens of source files has stopped being a tour.",
+			3: "Read paths you have seen in the graph, a listing, or a search result. A path you expect because similar projects have one is a guess, and guessed reads stall the tour.",
 		},
 		Closing: `Give the answer as much room as it needs. You just read the project, so put what you found into it.
 
-When listings and searches stop showing you anything new, write the answer from what you have.`,
+When you have the root layout and the project's own docs, write the answer from what you have. Do not keep listing.`,
 		PreferredSkills:  []string{"umbratic-markdown"},
 		Stop:             "the map is delivered. Write a file only when the user asked for a durable map.",
 		RequiresEvidence: true,
@@ -104,10 +104,10 @@ When listings and searches stop showing you anything new, write the answer from 
 	{
 		ID:   "code_explain",
 		When: "How does X work, explain this module, trace a data flow.",
-		Playbook: `1. Search for the symbols and paths the request names. If the area has documentation of its own, read that first; it names the parts worth reading.
-2. Set context on that search: when the lines around a hit already answer the question, answer from them. Where they fall short, read a window around the hit and follow the references you need.
-3. Read paths you have seen in a listing or search result. When a read fails, its error lists what that directory really holds; pick from that list.
-4. Explain with exact paths and symbols, each one taken from a tool result.`,
+		Playbook: `Search for the symbols and paths the request names; emit independent searches together. If the area has documentation of its own, read that first; it names the parts worth reading.
+When the lines around a hit already answer the question, answer from them. Where they fall short, read a window around the hit and follow the references you need.
+Read paths you have seen in a listing or search result. When a read fails, its error lists what that directory really holds; pick from that list.
+Explain with exact paths and symbols, each one taken from a tool result.`,
 		GraphGuidance:    "Locate the symbol with workspace_graph query first, then read its callers from that result instead of grepping for them.",
 		Stop:             "the explanation is clear. Leave the files as they are.",
 		RequiresEvidence: true,
@@ -115,10 +115,10 @@ When listings and searches stop showing you anything new, write the answer from 
 	{
 		ID:   "debug_failure",
 		When: "A crash, exception, failing test, or \"why is this broken\".",
-		Playbook: `1. Gather the failure itself first: the message, the log, the failing check, from the request or the workspace.
-2. Search for the code it points at, with context to see what surrounds each hit, and read a window where that is not enough. Use mode regex when a literal query cannot express the pattern. Reproduce when that is safe and useful.
-3. Fix only if the user asked for a fix; otherwise report the root cause.
-4. Re-run the failing check after any fix.`,
+		Playbook: `Gather the failure itself first: the message, the log, the failing check, from the request or the workspace.
+Search for the code it points at — independent searches in one response — with context to see what surrounds each hit, and read a window where that is not enough. Use mode regex when a literal query cannot express the pattern. Reproduce when that is safe and useful.
+Fix only if the user asked for a fix; otherwise report the root cause.
+Re-run the failing check after any fix.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		GraphGuidance:    "Locate the failing symbol with workspace_graph query, then read its callers from that result before grepping for them.",
 		Stop:             "you have a verified fix or a concrete root-cause answer.",
@@ -127,10 +127,10 @@ When listings and searches stop showing you anything new, write the answer from 
 	{
 		ID:   "code_change",
 		When: "Implement, add a feature, or fix a bug with actual code changes.",
-		Playbook: `1. Read before you write. Search for the regions you will actually change and read those, opening a whole file only when the change genuinely spans it. Understand the code you are changing and the style around it.
-2. Edit in place rather than rewriting whole files, and match what is already there. Copy oldText from a read that covered those exact lines.
-3. Verify with the narrowest check that proves the change works.
-4. Report the paths you changed and the verification result, and keep it to that.`,
+		Playbook: `Read before you write. Search for the regions you will actually change and read those, emitting independent searches and reads together, opening a whole file only when the change genuinely spans it. Understand the code you are changing and the style around it.
+Edit in place rather than rewriting whole files, and match what is already there. Copy oldText from a read that covered those exact lines.
+Verify with the narrowest check that proves the change works.
+Report the paths you changed and the verification result, and keep it to that.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the change is made and verified, or a blocker needs the user.",
@@ -139,10 +139,10 @@ When listings and searches stop showing you anything new, write the answer from 
 	{
 		ID:   "review_audit",
 		When: "A normal code review, quality pass, or a light \"any issues here?\".",
-		Playbook: `1. Settle the scope: a diff, the paths named, or the area the user pointed at.
-2. Search across that scope with context where a bare match is not conclusive, read windows where it is not, and keep track of what you did and did not cover.
-3. Order findings by severity, each with the path and symbol that shows it.
-4. Report what you find. Make changes when the user asked you to fix them.`,
+		Playbook: `Settle the scope: a diff, the paths named, or the area the user pointed at.
+Search across that scope with context where a bare match is not conclusive, emit independent searches together, read windows where it is not, and keep track of what you did and did not cover.
+Order findings by severity, each with the path and symbol that shows it.
+Report what you find. Make changes when the user asked you to fix them.`,
 		PreferredSkills:  []string{"umbratic-git-worktree", "umbratic-security-review"},
 		GraphGuidance:    "Call workspace_graph changes first, then read the symbols it ranks highest and stop there. Those symbols are what the diff touched.",
 		Stop:             "the findings are reported, plus an optional fix pass if the user asked for one.",
@@ -167,10 +167,10 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 	{
 		ID:   "test_verify",
 		When: "Run tests, add tests, or check that something works.",
-		Playbook: `1. Find how this project runs its checks, from its own documentation or configuration rather than from convention.
-2. Run the narrowest command that answers the question.
-3. Add or adjust tests only if the user asked for that.
-4. Report pass or fail with the part of the output that shows it.`,
+		Playbook: `Find how this project runs its checks, from its own documentation or configuration rather than from convention.
+Run the narrowest command that answers the question.
+Add or adjust tests only if the user asked for that.
+Report pass or fail with the part of the output that shows it.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake"},
 		Stop:             "the results are reported and interpreted.",
 		RequiresEvidence: true,
@@ -178,10 +178,10 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 	{
 		ID:   "refactor_migrate",
 		When: "Restructure, migrate, compare two module versions, or a multi-file redesign with implementation.",
-		Playbook: `1. Scope both sides. Search out the regions that differ and read those windows to compare what they actually do, not what their names suggest.
-2. Decide the order of the edits before making any of them.
-3. Work in dependency order and verify after each meaningful chunk rather than at the end.
-4. Summarize the risks and whatever is left over.`,
+		Playbook: `Scope both sides. Search out the regions that differ and read those windows together to compare what they actually do, not what their names suggest.
+Decide the order of the edits before making any of them.
+Work in dependency order and verify after each meaningful chunk rather than at the end.
+Summarize the risks and whatever is left over.`,
 		PreferredSkills:  []string{"umbratic-python", "umbratic-cmake", "umbratic-git-worktree"},
 		GraphGuidance:    "Before editing a shared symbol, call workspace_graph affected on it to see what depends on it.",
 		Stop:             "the sequenced changes are made and verified, or the requested plan is delivered.",
@@ -190,9 +190,9 @@ Anti-stuck: when several waves stop producing a new class of finding, stop and w
 	{
 		ID:   "docs_change",
 		When: "Update a README, comments, or existing docs where the content is already known.",
-		Playbook: `1. Find the documents in question and read what they currently say.
-2. Edit for accuracy, and make no drive-by code changes.
-3. Keep the tone and structure of the surrounding documentation.`,
+		Playbook: `Find the documents in question and read what they currently say.
+Edit for accuracy, and make no drive-by code changes.
+Keep the tone and structure of the surrounding documentation.`,
 		PreferredSkills:  []string{"umbratic-markdown"},
 		Stop:             "the doc edit is complete.",
 		RequiresEvidence: true,
@@ -214,10 +214,10 @@ Ending this turn on questions alone is a good outcome when you need more to go o
 	{
 		ID:   OpenTaskBucket,
 		When: "The request does not fit cleanly, or it is a multi-intent blob.",
-		Playbook: `1. Identify the primary actionable goal in the request.
-2. Complete tightly related requested outcomes together, and say so when you leave part of a request for later.
-3. If the request contains genuinely independent deliverables needing different workflows, ask which to do first.
-4. Prefer stopping and asking over a speculative multi-hop tool loop.`,
+		Playbook: `Identify the primary actionable goal in the request.
+Complete tightly related requested outcomes together, and say so when you leave part of a request for later.
+If the request contains genuinely independent deliverables needing different workflows, ask which to do first.
+Prefer stopping and asking over a speculative multi-hop tool loop.`,
 		Stop: "one coherent outcome is delivered, or a single clarifying question is asked.",
 	},
 }
@@ -708,7 +708,7 @@ func mentionsBucketID(route Route, sentence string) bool {
 // is to state the precedence split, anchor the final message, and push the
 // model into the first step.
 const playbookHeader = `Your task playbook for this turn. It sets what work happens, in what order, and when to stop. The global instructions cover who you are and how to call tools; this plan sets the work. Follow it, and adapt as evidence changes it.
-Keep the plan to yourself. Do not summarize progress, findings, or next steps while tools remain — call the next tool with no intervening report. Speak to the user only in your last message, the one with no tool calls; keep everything you find for that message. Start now with your first tool call, or with the questions the plan asks for.`
+Keep the plan to yourself. Do not summarize progress, findings, or next steps while tools remain — call the needed tool call(s) with no intervening report. Speak to the user only in your last message, the one with no tool calls; keep everything you find for that message. Start now with the needed tool call(s), or with the questions the plan asks for. Independent reads, listings, and searches belong in one response.`
 
 const playbookAntiLoop = `If a tool fails, read the error and try a different approach.`
 

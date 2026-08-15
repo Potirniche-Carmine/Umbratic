@@ -11,7 +11,7 @@ test("native runner sends the model name only when configured to", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "umbratic-native-directives-"));
   const logPath = path.join(cwd, "diagnostics.jsonl");
   const provider = await startProvider();
-
+  try {
   // Default configuration: the desktop confirmed nothing, so the field does not
   // travel. This is the body an older Veil has always received.
   const plain = await startRunner(cwd, provider.url, logPath);
@@ -67,13 +67,94 @@ test("native runner sends the model name only when configured to", async () => {
   assert.ok(directives.length > 0, "the configured run must reach the fake Veil");
   for (const body of directives) {
     assert.equal(body.model, "qwen3-32b", "a confirmed registry means every request names its model");
+    assert.equal("thinking" in body, false, "thinking stays off the wire until its own feature is confirmed");
   }
+
+  const thinkingRun = await startRunner(cwd, provider.url, logPath, {
+    provider: {
+      id: "company-endpoint",
+      name: "Test Veil",
+      baseURL: provider.url,
+      mode: "local",
+      chatEndpointPath: "/api/engineering/chat",
+      apiKey: "local",
+      modelId: "test",
+      sendThinkingField: true,
+      thinking: "off",
+      capabilities: { parallelToolCalls: true, vision: false, reasoning: false },
+    },
+  });
+  const thinkingStart = provider.requests.length;
+  try {
+    const events = await eventCollector(thinkingRun);
+    try {
+      const session = await createSession(thinkingRun);
+      assert.equal((await prompt(thinkingRun, session.id, "hello there")).status, 204);
+      await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
+    } finally {
+      await events.close();
+    }
+  } finally {
+    await thinkingRun.close();
+  }
+  const thinkingBodies = provider.requests
+    .slice(thinkingStart)
+    .filter((entry) => entry.path?.endsWith("/chat"))
+    .map((entry) => entry.body as Record<string, unknown>);
+  assert.ok(thinkingBodies.length > 0, "the thinking-off run must reach the fake Veil");
+  for (const body of thinkingBodies) {
+    assert.equal(body.thinking, "off");
+    assert.equal("model" in body, false);
+  }
+  assert.equal(provider.orientRequests.length, 0, "the runner must not call the classifier");
   assert.equal(
     JSON.stringify(provider.requests).includes("RAW_REASONING_MARKER"),
     false,
-    "reasoning content never leaves Veil",
+    "reasoning tokens never appear in chat request bodies",
   );
 
-  await provider.close();
-  fs.rmSync(cwd, { recursive: true, force: true });
+  const visibleRun = await startRunner(cwd, provider.url, logPath, {
+    provider: {
+      id: "company-endpoint",
+      name: "Test Veil",
+      baseURL: provider.url,
+      mode: "local",
+      chatEndpointPath: "/api/engineering/chat",
+      apiKey: "local",
+      modelId: "test",
+      sendReasoningVisibleField: true,
+      reasoningVisible: true,
+      capabilities: { parallelToolCalls: true, vision: false, reasoning: true },
+    },
+  });
+  const visibleStart = provider.requests.length;
+  try {
+    const events = await eventCollector(visibleRun);
+    try {
+      const session = await createSession(visibleRun);
+      assert.equal((await prompt(visibleRun, session.id, "hello there")).status, 204);
+      await events.waitFor((event) => event.type === "run.settled" && event.sessionId === session.id);
+      assert.equal(
+        events.events.some((event) => event.type === "assistant.progress.delta" && String(event.text).includes("RAW_REASONING_MARKER")),
+        true,
+        "opted-in reasoning streams as Working narration",
+      );
+    } finally {
+      await events.close();
+    }
+  } finally {
+    await visibleRun.close();
+  }
+  const visibleBodies = provider.requests
+    .slice(visibleStart)
+    .filter((entry) => entry.path?.endsWith("/chat"))
+    .map((entry) => entry.body as Record<string, unknown>);
+  assert.ok(visibleBodies.length > 0, "the show-thinking run must reach the fake Veil");
+  for (const body of visibleBodies) {
+    assert.equal(body.reasoning_visible, true);
+  }
+  } finally {
+    await provider.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
 });

@@ -129,7 +129,7 @@ func TestModelsRouteCachesAvailabilityProbes(t *testing.T) {
 
 func TestFeaturesFollowTheRegistryState(t *testing.T) {
 	always := Features(false, false, false)
-	for _, name := range []string{"models.list", "chat.thinking_toggle"} {
+	for _, name := range []string{"models.list", "chat.thinking_toggle", "chat.reasoning_visible"} {
 		if !slices.Contains(always, name) {
 			t.Fatalf("%q is advertised on every build: %#v", name, always)
 		}
@@ -244,6 +244,19 @@ func TestChatThinkingDirectiveReachesTheRequest(t *testing.T) {
 	send(`{"input":"hi","thinking":"whenever"}`)
 	if client.req.Thinking != nil {
 		t.Fatal("an unknown directive must behave as no directive")
+	}
+
+	send(`{"input":"hi","reasoning_visible":true}`)
+	if !client.req.ReasoningVisible {
+		t.Fatal("reasoning_visible true must reach the request")
+	}
+	send(`{"input":"hi"}`)
+	if client.req.ReasoningVisible {
+		t.Fatal("absent reasoning_visible must keep the strip")
+	}
+	send(`{"input":"hi","thinking":"off","reasoning_visible":true}`)
+	if client.req.ReasoningVisible {
+		t.Fatal("thinking off must still strip reasoning")
 	}
 }
 

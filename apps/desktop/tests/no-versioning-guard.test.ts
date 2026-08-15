@@ -49,6 +49,8 @@ const descriptiveVersionFiles = new Set([
   "apps/desktop/src/renderer/previewCapabilities.ts",
   "apps/desktop/tests/main-capabilities.test.ts",
   "apps/desktop/tests/main-ocr-runtime.test.ts",
+  // electron-updater's UpdateInfo, a shape we do not own, describing a release.
+  "apps/desktop/tests/main-app-updates.test.ts",
   "apps/desktop/tests/no-versioning-guard.test.ts",
 ]);
 

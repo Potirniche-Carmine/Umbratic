@@ -102,6 +102,47 @@ export type CatalogModel = {
    * this is a choice worth making on purpose.
    */
   uncensored?: boolean;
+  /**
+   * What this model is actually good for, in one line, shown on its row.
+   *
+   * Size is not the answer to "which of these should I pick": the thing that
+   * separates them here is whether their tool calling holds up, and a list
+   * that only prints gigabytes lets someone choose a 3 GB model for agentic
+   * work and conclude the app is broken when it loops. Written as what the
+   * model is for rather than as a warning — every row here is worth running,
+   * for something.
+   *
+   * Optional, and absent in two places on purpose: dictation weights are
+   * chosen by size alone, and a model somebody added from a Hugging Face
+   * reference is one this catalog has never read the card for. Saying nothing
+   * is the honest answer there.
+   */
+  role?: ModelRole;
+};
+
+/**
+ * The short tag and the sentence behind it. The tag is what the eye catches
+ * scanning the list; the sentence is what settles the choice.
+ */
+export type ModelRole = {
+  /** One or two words, shown as the row's tag. */
+  label: string;
+  detail: string;
+};
+
+/**
+ * The E-series: small enough to run anywhere, and the reason the list needs
+ * this column at all. They hold a conversation well and call tools erratically,
+ * which is the one thing gigabytes never say.
+ */
+const chatOnlyRole: ModelRole = {
+  label: "Chat",
+  detail: "Good for questions and drafting. Tool calling is inconsistent, so not for agentic runs.",
+};
+
+const uncensoredChatRole: ModelRole = {
+  label: "Security chat",
+  detail: "Answers security questions the safety-trained builds decline. Tool calling is inconsistent.",
 };
 
 /**
@@ -175,6 +216,7 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 8,
+    role: chatOnlyRole,
     ...gemmaReasoning,
   },
   {
@@ -226,6 +268,7 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 12,
+    role: chatOnlyRole,
     ...gemmaReasoning,
   },
   {
@@ -277,6 +320,10 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 16,
+    role: {
+      label: "Light agentic",
+      detail: "Steadier tool calling than the E-series, and still light. Fine for short agentic runs.",
+    },
     ...gemmaReasoning,
   },
   {
@@ -328,6 +375,10 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 32,
+    role: {
+      label: "Agentic",
+      detail: "Reliable tool calling over long multi-step runs. The one to pick for agentic work.",
+    },
     reasoning: true,
     // Its chat template reads `reasoning_effort` and refuses anything but low,
     // medium and xhigh — "high" is remapped to xhigh by the template itself,
@@ -394,63 +445,79 @@ export const modelCatalog: readonly CatalogModel[] = [
       },
     ],
     minRamGB: 12,
+    role: uncensoredChatRole,
     ...gemmaReasoning,
     uncensored: true,
   },
   {
-    id: "qwen36-27b-uncensored",
+    id: "qwen38-27b-abliterated",
     kind: "chat",
-    displayName: "Qwen3.6 27B Uncensored",
-    hfRepo: "DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF",
-    hfRevision: "4106c6bd31bb0f7cd5fa3624b65eb198ed606c54",
-    // IQ4_XS leads rather than Q4_K_M: this repository publishes the 27B at
-    // that quantization as its balance point, and it lands at a comparable
-    // size and quality.
+    displayName: "Qwen3.8 27B Abliterated",
+    hfRepo: "Blackfrost-AI/Qwen3.8-27B-ABLITERATED-GGUF",
+    hfRevision: "ad53dea7863fcc212b2b084e2634420b4d5f7d2e",
+    // The plain K-quant ladder, Q4_K_M first as the card's own default. The
+    // repository also publishes vision projectors; they are left out because
+    // chat here is text-only and an mmproj nobody loads is a gigabyte of
+    // download for nothing.
     quants: [
-      {
-        quant: "IQ4_XS",
-        files: [{
-          name: "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ4_XS.gguf",
-          bytes: 16_582_361_632,
-          sha256: "d1175dc3668e8edcc922c790918e2123029aaf7697d706df65f8e088864b397c",
-        }],
-      },
-      {
-        quant: "IQ3_M",
-        files: [{
-          name: "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ3_M.gguf",
-          bytes: 14_080_729_632,
-          sha256: "4408a4815176070afb560ddadcf5883f524e159056e7e830274777a3a9c9b176",
-        }],
-      },
       {
         quant: "Q4_K_M",
         files: [{
-          name: "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q4_K_M.gguf",
-          bytes: 18_047_255_072,
-          sha256: "8440f2a076f149f65bf16975f3a08359936ba2658fc1827b51a30b717de49acb",
+          name: "Qwen3.8-27B-ABLITERATED-Q4_K_M.gguf",
+          bytes: 16_547_401_920,
+          sha256: "202bbe49a634f531f82d71bb0cab35b25bbfd97242cf30a5b3d92ad3ceaa977b",
+        }],
+      },
+      {
+        quant: "Q3_K_M",
+        files: [{
+          name: "Qwen3.8-27B-ABLITERATED-Q3_K_M.gguf",
+          bytes: 13_301_444_800,
+          sha256: "9d6c6b7bca3a27c7ee4b217602651a4bde8ed261edad95ad6a1d6656cd884b6b",
         }],
       },
       {
         quant: "Q5_K_M",
         files: [{
-          name: "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q5_K_M.gguf",
-          bytes: 20_730_954_272,
-          sha256: "8b92b4cdd0a0cdd1bb12f6568a41ae12ad4f0d0818d12e89bf89ecb2c0876860",
+          name: "Qwen3.8-27B-ABLITERATED-Q5_K_M.gguf",
+          bytes: 19_231_101_120,
+          sha256: "5a06d1dfe87aeebca0beba56cebbccaaf591a5e7210b93ae62804731fb598b46",
         }],
       },
       {
         quant: "Q6_K",
         files: [{
-          name: "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q6_K.gguf",
-          bytes: 23_582_384_672,
-          sha256: "f1e1b337fda4ec8e39974f69a385f970381488e9bb41d039d85959aeb5350457",
+          name: "Qwen3.8-27B-ABLITERATED-Q6_K.gguf",
+          bytes: 22_082_531_520,
+          sha256: "3d78a14fa954c1b66fe9f80191f6698a26caf916608bccbaf1480a5223e49440",
+        }],
+      },
+      {
+        quant: "Q8_0",
+        files: [{
+          name: "Qwen3.8-27B-ABLITERATED-Q8_0.gguf",
+          bytes: 28_595_765_440,
+          sha256: "fe89cb15122c29b31b79f34e7ffe0e18c053e7e1798944adf5608d3ab0be180a",
         }],
       },
     ],
     minRamGB: 32,
+    role: {
+      label: "Security agentic",
+      detail: "Security and offensive research, with tool calling solid enough for agentic runs.",
+    },
     reasoning: true,
-    reasoningEfforts: ["off", "on"],
+    // No "high" here, unlike the stock Qwen3.8 above. This build's template
+    // dropped the line that remaps `high` onto `xhigh`, so anything outside
+    // low/medium/xhigh raises out of the template and the request fails. The
+    // ladder stops at medium rather than offering a level that errors.
+    reasoningEfforts: ["off", "low", "medium"],
+    // The card serves it with one set of numbers and says nothing about a
+    // separate non-thinking set, so both slots point at the same thing.
+    sampling: {
+      thinking: { temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 0.0, repetitionPenalty: 1.0 },
+      instruct: { temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0, presencePenalty: 0.0, repetitionPenalty: 1.0 },
+    },
     uncensored: true,
   },
   // Dictation weights stay at Q8_0, and it is the only quantization offered.

@@ -103,7 +103,7 @@
   min-height: 30px;
   padding: 0 8px;
   border-radius: 6px;
-  color: var(--muted);
+  color: var(--text);
   text-align: left;
   font-weight: 600;
   transition:
@@ -126,21 +126,89 @@
 }
 
 /*
- * Section labels. Quiet and small — they name what the rows beneath them
- * change, and a heading that competes with its own rows is noise.
+ * Section labels, not choices. Uppercase and a step quieter than the rows so
+ * Effort / Model read as names for the group, not as a fifth option in it.
  */
 .modelMenuHeading {
   margin: 0;
-  padding: 7px 8px 3px;
+  padding: 7px 8px 4px;
   color: var(--faint);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* The first heading sits flush with the menu's own padding. */
 .modelMenuHeading:first-child {
   padding-top: 3px;
+}
+
+/* A later heading starts a new group, so a line separates it from the rows
+   above — otherwise Effort, Show thinking, and Model sit in one grey stack. */
+.modelMenuHeading:not(:first-child) {
+  margin-top: 4px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.modelMenuCheck {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  margin: 1px 0 2px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.modelMenuCheck:hover {
+  background: var(--control-hover);
+}
+
+.modelMenuCheck input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.modelMenuCheckBox {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: transparent;
+  background: var(--surface-3);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.modelMenuCheck.isOn .modelMenuCheckBox {
+  color: var(--bg);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.modelMenuCheck:focus-within .modelMenuCheckBox {
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 /* The chevron says there is another page behind this row, so it points the

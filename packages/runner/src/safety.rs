@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::policy::classify_command_text;
 
-pub const COMMAND_POLICY_VERSION: &str = "command-safety-v3";
+pub const COMMAND_POLICY_VERSION: &str = "command-safety-v4";
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_SEGMENTS: usize = 32;
 
@@ -112,6 +112,46 @@ struct DecisionSpec {
     rule_id: &'static str,
     explanation: &'static str,
     suggestion: Option<&'static str>,
+}
+
+fn has_output_redirect(segment: &str) -> bool {
+    segment.contains('>')
+}
+
+fn is_dependency_mutation(segment: &str) -> bool {
+    let lower = segment.to_ascii_lowercase();
+    let package = [
+        "uv", "pip", "pip3", "npm", "pnpm", "yarn", "bun", "cargo", "go",
+    ]
+    .iter()
+    .any(|name| {
+        lower
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|token| token == *name)
+    });
+    let mutating = ["install", "add", "update", "upgrade"].iter().any(|name| {
+        lower
+            .split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+            .any(|token| token == *name)
+    });
+    package && mutating
+}
+
+fn has_find_action(segment: &str) -> bool {
+    segment.split_whitespace().any(|token| {
+        matches!(
+            token.to_ascii_lowercase().as_str(),
+            "-exec"
+                | "-execdir"
+                | "-ok"
+                | "-okdir"
+                | "-delete"
+                | "-fls"
+                | "-fprint"
+                | "-fprint0"
+                | "-fprintf"
+        )
+    })
 }
 
 fn decision(command: &str, cwd: &Path, spec: DecisionSpec) -> SafetyDecision {
@@ -230,17 +270,14 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
     let mut strictest: Option<DecisionSpec> = None;
     for segment in &segments {
         let classified = classify_command_text(segment, Some(cwd));
+        let confirm_harm = dynamic
+            || has_output_redirect(segment)
+            || has_find_action(segment)
+            || is_dependency_mutation(segment)
+            || classified.risky;
         let (action, severity, certainty, rule, explanation, suggestion) = match classified
             .command_class
         {
-            "network" => (
-                SafetyAction::Confirm,
-                SafetySeverity::High,
-                SafetyCertainty::Exact,
-                "network_access",
-                "Network access can transmit workspace content and requires explicit approval.",
-                None,
-            ),
             "blocked-path" => (
                 SafetyAction::Deny,
                 SafetySeverity::Critical,
@@ -257,12 +294,12 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 "The command references a path outside the active workspace.",
                 None,
             ),
-            "read" | "git-read" if !dynamic => (
-                SafetyAction::Allow,
-                SafetySeverity::Info,
+            "network" => (
+                SafetyAction::Confirm,
+                SafetySeverity::High,
                 SafetyCertainty::Exact,
-                "audited_read_only",
-                "The command is an audited read-only operation.",
+                "network_access",
+                "Network access can transmit workspace content and requires explicit approval.",
                 None,
             ),
             "destructive-file" => (
@@ -273,21 +310,15 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 "The command can remove or discard workspace state.",
                 Some("Create a checkpoint or preview the affected paths first."),
             ),
-            // Interpreters, test runners, package managers, and shells always Confirm.
-            // AutoSafe must not execute workspace-controlled code without approval.
-            "package-manager" | "cmake-build" | "compiler" | "python-runtime" | "shell" => (
+            "git-write" => (
                 SafetyAction::Confirm,
                 SafetySeverity::Medium,
-                if dynamic {
-                    SafetyCertainty::Unknown
-                } else {
-                    SafetyCertainty::Heuristic
-                },
-                "repository_code_execution",
-                "The command executes repository-controlled code, a shell, or changes dependencies.",
+                SafetyCertainty::Exact,
+                "git_write",
+                "The command mutates git state and requires approval.",
                 None,
             ),
-            _ => (
+            _ if confirm_harm => (
                 SafetyAction::Confirm,
                 SafetySeverity::Medium,
                 if dynamic {
@@ -297,10 +328,30 @@ pub fn evaluate_command(command: &str, cwd: &Path) -> SafetyDecision {
                 },
                 if dynamic {
                     "unsupported_dynamic_code"
+                } else if has_output_redirect(segment) {
+                    "workspace_redirect"
+                } else if has_find_action(segment) {
+                    "find_action"
                 } else {
-                    "unproven_command"
+                    "repository_code_execution"
                 },
-                "The command is not proven read-only and requires one-time approval.",
+                "The command can mutate the workspace, reach the network, or run an unconstrained action.",
+                None,
+            ),
+            "read" | "git-read" => (
+                SafetyAction::Allow,
+                SafetySeverity::Info,
+                SafetyCertainty::Exact,
+                "audited_read_only",
+                "The command is an audited read-only operation.",
+                None,
+            ),
+            _ => (
+                SafetyAction::Allow,
+                SafetySeverity::Info,
+                SafetyCertainty::Heuristic,
+                "workspace_command",
+                "The command stays in the workspace and is not a destructive, network, or install action.",
                 None,
             ),
         };
@@ -348,20 +399,37 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("npm test", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("cargo test", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("npm install left-pad", cwd).action,
             SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("curl https://example.com", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("cat notes.txt > stolen.txt", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("cd /workspace && find apps/desktop/src -name '*.ts'", cwd).action,
+            SafetyAction::Allow
         );
         assert_eq!(
             evaluate_command("python bubble_sort.py", cwd).action,
-            SafetyAction::Confirm
+            SafetyAction::Allow
         );
         assert_eq!(
             evaluate_command("py bubble_sort.py", cwd).action,
-            SafetyAction::Confirm
+            SafetyAction::Allow
         );
-        assert_eq!(
-            evaluate_command("pytest", cwd).action,
-            SafetyAction::Confirm
-        );
+        assert_eq!(evaluate_command("pytest", cwd).action, SafetyAction::Allow);
         assert_eq!(
             evaluate_command("uv python install 3.12", cwd).action,
             SafetyAction::Confirm
@@ -380,11 +448,11 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("uv run python bubble_sort.py", cwd).action,
-            SafetyAction::Confirm
+            SafetyAction::Allow
         );
         assert_eq!(
             evaluate_command("uv tool run ruff check .", cwd).action,
-            SafetyAction::Confirm
+            SafetyAction::Allow
         );
         assert_eq!(
             evaluate_command("pip install example", cwd).action,
@@ -392,6 +460,30 @@ mod tests {
         );
         assert_eq!(
             evaluate_command("powershell -Command Get-ChildItem", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("node scripts/check-source-size.ts", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command(
+                "find apps/desktop/src -type f -name '*.ts' | xargs wc -l | sort -rn | head -20",
+                cwd
+            )
+            .action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("git ls-files apps/desktop/src/renderer", cwd).action,
+            SafetyAction::Allow
+        );
+        assert_eq!(
+            evaluate_command("git commit -am update", cwd).action,
+            SafetyAction::Confirm
+        );
+        assert_eq!(
+            evaluate_command("rm file.txt", cwd).action,
             SafetyAction::Confirm
         );
         assert_eq!(evaluate_command("rm -rf /", cwd).action, SafetyAction::Deny);
@@ -411,11 +503,11 @@ mod tests {
         );
     }
 
-    /// The auto-allow boundary. Anything that reaches an interpreter, mutates
-    /// the workspace, or reads a blocked path must never be `Allow`, because
-    /// Auto-safe runs `Allow` without a prompt.
+    /// Auto-safe runs `Allow` without a prompt. Deletion, redirects, find
+    /// actions, and blocked paths must never be Allow. Ordinary workspace
+    /// locators, tests, and scripts may be.
     #[test]
-    fn the_auto_allow_boundary_excludes_execution_and_blocked_paths() {
+    fn the_auto_allow_boundary_excludes_harmful_commands() {
         let cwd = Path::new("/workspace");
         for command in [
             "find . -type f -exec sh -c id ;",
@@ -442,6 +534,14 @@ mod tests {
             let decision = evaluate_command(command, cwd);
             assert_eq!(decision.action, SafetyAction::Allow, "{command}");
             assert_eq!(decision.rule_id, "audited_read_only", "{command}");
+        }
+        for command in [
+            "node scripts/check-source-size.ts",
+            "npm test",
+            "find apps/desktop/src | xargs wc -l",
+        ] {
+            let decision = evaluate_command(command, cwd);
+            assert_eq!(decision.action, SafetyAction::Allow, "{command}");
         }
     }
 }

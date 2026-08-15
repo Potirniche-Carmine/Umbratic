@@ -145,6 +145,8 @@ test("buildUmbraticRunnerConfig uses harness route, endpoint headers, enabled to
   // The bucket selector is a runtime decision; no bucket field is ever config.
   assert.equal("harness_bucket" in config.provider, false);
   assert.equal("harnessBucket" in config, false);
+  assert.equal(config.provider.thinking, "on");
+  assert.equal(config.provider.sendThinkingField, false);
   assert.deepEqual(plain(config.provider.capabilities), {
     parallelToolCalls: false,
     vision: false,
@@ -497,4 +499,23 @@ test("the runner names its model only when the server invited it", () => {
   // from, and the local Veil refuses the field.
   storage.writeModelEndpointSettings({ mode: "local", baseUrl: "http://127.0.0.1:11434", modelId: "qwen3:8b" });
   assert.equal(sendModelField("qwen3:8b"), false);
+
+  const thinkingConfig = () => adapter.buildUmbraticRunnerConfig(task, model("qwen3-32b")).provider;
+  features.recordVeilFeatures([]);
+  assert.equal(thinkingConfig().sendThinkingField, false);
+  features.recordVeilFeatures(["chat.thinking_toggle"]);
+  assert.equal(thinkingConfig().sendThinkingField, true);
+  assert.equal(thinkingConfig().thinking, "on");
+  storage.writeReasoningEffortSetting("off");
+  assert.equal(thinkingConfig().thinking, "off");
+  features.recordVeilFeatures(["chat.reasoning_visible"]);
+  storage.writeShowThinkingSetting(true);
+  storage.writeReasoningEffortSetting("medium");
+  assert.equal(thinkingConfig().sendReasoningVisibleField, true);
+  assert.equal(thinkingConfig().reasoningVisible, true);
+  features.recordVeilFeatures([]);
+  assert.equal(thinkingConfig().sendReasoningVisibleField, false);
+  storage.writeReasoningEffortSetting("off");
+  features.recordVeilFeatures(["chat.reasoning_visible"]);
+  assert.equal(thinkingConfig().reasoningVisible, false);
 });

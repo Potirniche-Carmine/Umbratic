@@ -11,7 +11,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import pcmTapUrl from "./pcmTap.worklet.js?url";
-import { microphoneChoices, type DictationDevice } from "./microphones";
+import {
+  captureConstraints,
+  microphoneChoices,
+  microphoneLabel,
+  microphoneUnavailableMessage,
+  silentMicrophoneMessage,
+  type DictationDevice,
+} from "./microphones";
 import type { DesktopApi, DictationEvent, DictationSettings } from "../shared/desktopApi";
 
 /**
@@ -50,6 +57,33 @@ export type DictationStatus = {
 /** How often the level meter is repainted. Fast enough to look live, slow
  *  enough that a 125-frame-per-second capture does not drive React. */
 const levelFrameMs = 50;
+
+/**
+ * How long a dictation failure stays up.
+ *
+ * It is a note about a press that did not work, not a condition of the
+ * composer, so it clears itself: an error that outlives the attempt sits over
+ * the prompt for the rest of the session and starts reading as chrome.
+ */
+const errorNoticeMs = 8000;
+
+/**
+ * How long a recording may hear nothing before saying so.
+ *
+ * A microphone that is open but delivering digital silence is indistinguishable
+ * from one that is working while nobody talks — until the transcript comes back
+ * empty and the whole press looks like it did nothing. Long enough that a pause
+ * before speaking does not trip it, short enough to still be about this press.
+ */
+const silenceNoticeMs = 5000;
+
+/**
+ * The level below which a frame is treated as nothing at all. Room tone through
+ * a live microphone sits an order of magnitude above this; a device that is not
+ * actually feeding the app reads as exactly zero.
+ */
+const silenceFloor = 0.004;
+
 
 /**
  * Splices a finished transcript into a draft at the caret.
@@ -114,6 +148,8 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
   status: DictationStatus;
   toggle(): void;
   cancel(): void;
+  /** Takes the failure notice down early. It goes on its own regardless. */
+  dismissError(): void;
   /** Microphones this machine offers, for the composer's device menu. */
   devices: DictationDevice[];
   /** The chosen device id, or "" for whatever the system calls default. */
@@ -135,6 +171,10 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
   // rendering that many times would cost more than the recording does.
   const levelRef = useRef(0);
   const levelTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Whether anything at all has been heard on this recording, and the timer
+  // that complains if nothing has. Disarmed by the first frame with sound in it.
+  const heardSoundRef = useRef(false);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transcriptRef = useRef(onTranscript);
   transcriptRef.current = onTranscript;
 
@@ -142,6 +182,10 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
     if (levelTimerRef.current) {
       clearInterval(levelTimerRef.current);
       levelTimerRef.current = null;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
     }
     levelRef.current = 0;
   }, []);
@@ -199,6 +243,11 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
       if (!current) return;
       const inputs = microphoneChoices(listed);
       setDevices(inputs);
+      // Only prune against a list that actually names devices. Until the
+      // microphone has been permitted once, Chromium answers with a single
+      // anonymous row carrying no id at all, and dropping the stored choice
+      // against that list forgot the headset the user picked last session.
+      if (!inputs.some((device) => device.deviceId)) return;
       setDeviceId((chosen) => (chosen && !inputs.some((device) => device.deviceId === chosen) ? "" : chosen));
     };
     void api.getDictationSettings().then((settings) => {
@@ -216,13 +265,21 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
 
   const selectDevice = useCallback((next: string) => {
     setDeviceId(next);
-    const settings = settingsRef.current;
-    if (!settings) return;
-    const saved = { ...settings, deviceId: next || null };
-    settingsRef.current = saved;
-    // Saving a microphone does not disturb the loaded model: the main process
-    // restarts the speech runtime only when the model itself changes.
-    void api.saveDictationSettings(saved).catch(() => undefined);
+    // Re-read before writing rather than merging onto the copy taken at mount.
+    // Saving the whole settings record means every field in the stale copy is
+    // written back too, and a dictation model downloaded in Voice settings
+    // after this composer mounted was silently reset to "off" by the act of
+    // choosing a microphone — which then failed the next press with "Download
+    // a dictation model".
+    void (async () => {
+      const settings = await api.getDictationSettings().catch(() => settingsRef.current);
+      if (!settings) return;
+      const saved = { ...settings, deviceId: next || null };
+      settingsRef.current = saved;
+      // Saving a microphone does not disturb the loaded model: the main process
+      // restarts the speech runtime only when the model itself changes.
+      await api.saveDictationSettings(saved).catch(() => undefined);
+    })();
   }, [api]);
 
   const stop = useCallback(() => {
@@ -264,31 +321,49 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
     }
 
     let stream: MediaStream;
+    // A chosen microphone that has since been unplugged still falls back to the
+    // default — but as a second, deliberate attempt that says so, rather than by
+    // asking for a preference the browser can quietly answer with another
+    // device's audio.
+    let fellBack = false;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          // Preferred, not required: a chosen microphone that has since been
-          // unplugged should fall back to the default rather than refuse.
-          ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
-        },
-      });
+      stream = await navigator.mediaDevices.getUserMedia(captureConstraints(deviceId));
     } catch {
-      void api.cancelDictation().catch(() => undefined);
-      // Consent was already given, so this is a device problem rather than a
-      // permission one, and saying which is the difference between a user who
-      // plugs in a headset and one who hunts through system settings.
-      setStatus({ state: "idle", preview: "", level: 0, error: "No microphone is available." });
-      return;
+      try {
+        if (!deviceId) throw new Error("no device");
+        stream = await navigator.mediaDevices.getUserMedia(captureConstraints(""));
+        fellBack = true;
+      } catch {
+        void api.cancelDictation().catch(() => undefined);
+        // Consent was already given, so this is a device problem rather than a
+        // permission one, and saying which is the difference between a user who
+        // plugs in a headset and one who hunts through system settings.
+        setStatus({ state: "idle", preview: "", level: 0, error: "No microphone is available." });
+        return;
+      }
     }
+    // What is actually recording, which after a fallback is not what was picked.
+    const openLabel = microphoneLabel(stream.getAudioTracks()[0]?.label ?? "");
+
+    // Consent has now been given at least once, which is the moment the browser
+    // starts reporting real device ids and names. Until then the list is a row
+    // of "Microphone 1" with blank ids, so the device menu was offering choices
+    // that could not be told apart or reliably chosen.
+    void navigator.mediaDevices.enumerateDevices().then(
+      (listed) => setDevices(microphoneChoices(listed)),
+      () => undefined,
+    );
 
     // Opening the context at the target rate is what makes the browser resample
     // for us; a 48 kHz device needs no arithmetic here.
     const context = new AudioContext({ sampleRate: captureSampleRate });
     try {
       await context.audioWorklet.addModule(pcmTapUrl);
+      // A context built after a slow await — and loading local ASR weights is
+      // tens of seconds of them — is far enough from the press that the page may
+      // no longer count as user-activated, and an autoplay-suspended context
+      // runs no worklet at all. Resuming is a no-op when it was already running.
+      if (context.state === "suspended") await context.resume();
     } catch {
       stream.getTracks().forEach((track) => track.stop());
       void context.close().catch(() => undefined);
@@ -299,7 +374,9 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
 
     const tap = new AudioWorkletNode(context, "pcm-tap");
     tap.port.onmessage = (message: MessageEvent<Float32Array>) => {
-      levelRef.current = Math.max(levelRef.current, frameLevel(message.data));
+      const level = frameLevel(message.data);
+      if (level > silenceFloor) heardSoundRef.current = true;
+      levelRef.current = Math.max(levelRef.current, level);
       void api.sendDictationAudio({ chunk: toPCM16(message.data) }).catch(() => undefined);
     };
     // The tap has no output worth hearing, so it is not connected to the
@@ -309,6 +386,17 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
     streamRef.current = stream;
     contextRef.current = context;
     stopTimerRef.current = setTimeout(stop, maxRecordingMs);
+    // A device that is open but sending zeroes looks exactly like a working one
+    // until the transcript comes back empty. The recording is not stopped — the
+    // words might still be arriving — but the notice turns a press that appeared
+    // to do nothing into a device problem with somewhere to go.
+    heardSoundRef.current = false;
+    silenceTimerRef.current = setTimeout(() => {
+      if (heardSoundRef.current) return;
+      setStatus((current) => (
+        current.state === "recording" ? { ...current, error: silentMicrophoneMessage(openLabel) } : current
+      ));
+    }, silenceNoticeMs);
     // The peak is drained on every frame, so the meter falls back to quiet on
     // its own rather than holding the loudest moment of the whole recording.
     levelTimerRef.current = setInterval(() => {
@@ -316,15 +404,19 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
       levelRef.current = 0;
       setStatus((current) => (current.state === "recording" ? { ...current, level } : current));
     }, levelFrameMs);
-    setStatus({ state: "recording", preview: "", level: 0, error: null });
+    setStatus({ state: "recording", preview: "", level: 0, error: fellBack ? microphoneUnavailableMessage : null });
   }, [api, deviceId, stop, stopMetering]);
 
+  // Read through a ref rather than from inside a `setStatus` updater. An
+  // updater is called during render and may be called more than once, so
+  // starting a recording from inside one could open the microphone twice for a
+  // single press — and the second attempt cancels the first.
+  const stateRef = useRef(status.state);
+  stateRef.current = status.state;
+
   const toggle = useCallback(() => {
-    setStatus((current) => {
-      if (current.state === "idle") void start();
-      else if (current.state === "recording") stop();
-      return current;
-    });
+    if (stateRef.current === "idle") void start();
+    else if (stateRef.current === "recording") stop();
   }, [start, stop]);
 
   const cancel = useCallback(() => {
@@ -333,7 +425,19 @@ export function useDictation(api: DesktopApi, onTranscript: (text: string) => vo
     setStatus({ state: "idle", preview: "", level: 0, error: null });
   }, [api, releaseDevice]);
 
-  return { status, toggle, cancel, devices, deviceId, selectDevice };
+  const dismissError = useCallback(() => {
+    setStatus((current) => (current.error === null ? current : { ...current, error: null }));
+  }, []);
+
+  // The notice takes itself down. Keyed on the message so a second failure
+  // restarts the clock rather than inheriting the first one's remaining time.
+  useEffect(() => {
+    if (!status.error) return;
+    const timer = setTimeout(dismissError, errorNoticeMs);
+    return () => clearTimeout(timer);
+  }, [dismissError, status.error]);
+
+  return { status, toggle, cancel, dismissError, devices, deviceId, selectDevice };
 }
 
 export type { DictationDevice } from "./microphones";

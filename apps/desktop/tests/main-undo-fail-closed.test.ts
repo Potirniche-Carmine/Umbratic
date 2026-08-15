@@ -50,7 +50,7 @@ function fixture(taskId: string) {
     createdAt: task.createdAt,
     state: "active",
   }];
-  let restoreCalls = 0;
+  const restoredPaths = [];
   const storage = {
     readTasks: () => [task],
     readTaskCheckpoints: () => checkpoints,
@@ -88,8 +88,8 @@ function fixture(taskId: string) {
       logicalBytes: 64,
       ref: `refs/umbratic/checkpoints/${taskId}/${checkpointId}`,
     }),
-    restoreGitCheckpoint: async () => {
-      restoreCalls += 1;
+    restoreGitCheckpointPath: async (input) => {
+      restoredPaths.push(input.relativePath);
     },
     deleteGitCheckpointRef: async () => undefined,
     materializeCheckpointWorktree: async () => undefined,
@@ -102,41 +102,33 @@ function fixture(taskId: string) {
   return {
     task,
     service,
-    restoreCalls: () => restoreCalls,
+    restoredPaths,
   };
 }
 
-test("reject restore requires a verified pre-turn checkpoint", async () => {
-  const state = fixture("task-reject-ok");
-  await state.service.restoreIsolatedWorktreeForReject(state.task, true);
-  assert.equal(state.restoreCalls(), 1);
-  assert.equal(state.task.turnCheckpointId, undefined);
+test("per-file undo restores exactly the file it was given", async () => {
+  const state = fixture("task-undo-ok");
+  await state.service.restoreTurnCheckpointFile(state.task, "tracked.txt");
+  assert.deepEqual(state.restoredPaths, ["tracked.txt"]);
+  // The checkpoint stays: the next file somebody undoes needs it too.
+  assert.equal(state.task.turnCheckpointId, "checkpoint-pre-turn");
 });
 
-test("reject without turnCheckpointId fails closed and never restores", async () => {
-  const state = fixture("task-reject-missing");
+test("undo without turnCheckpointId fails closed and never restores", async () => {
+  const state = fixture("task-undo-missing");
   state.task.turnCheckpointId = undefined;
   await assert.rejects(
-    () => state.service.restoreIsolatedWorktreeForReject(state.task, true),
-    /Automatic reject is unsafe: no verified pre-turn checkpoint/,
+    () => state.service.restoreTurnCheckpointFile(state.task, "tracked.txt"),
+    /Undo is unsafe: no verified pre-turn checkpoint/,
   );
-  assert.equal(state.restoreCalls(), 0);
+  assert.deepEqual(state.restoredPaths, []);
 });
 
-test("reject with missing worktree fails closed", async () => {
-  const state = fixture("task-reject-missing-worktree");
-  await assert.rejects(
-    () => state.service.restoreIsolatedWorktreeForReject(state.task, false),
-    /Automatic reject is unsafe: no verified pre-turn checkpoint/,
-  );
-  assert.equal(state.restoreCalls(), 0);
-});
-
-test("folder reject without baseline fails closed", () => {
-  const state = fixture("task-reject-folder");
+test("folder undo without baseline fails closed", () => {
+  const state = fixture("task-undo-folder");
   state.task.baselineFiles = undefined;
   assert.throws(
-    () => state.service.assertFolderRejectBaseline(state.task),
-    /Automatic reject is unsafe: no verified undo baseline/,
+    () => state.service.assertFolderUndoBaseline(state.task),
+    /Undo is unsafe: no verified undo baseline/,
   );
 });

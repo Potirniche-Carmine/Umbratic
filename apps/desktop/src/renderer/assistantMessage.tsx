@@ -30,9 +30,8 @@ type AssistantMessageProps = {
  * real answer further down past a collapsed Working block.
  *
  * So the answer is the only message at full strength, and the only one that
- * carries actions. What is left out here is mid-plan prose on a step that
- * already has tool results: the runner cannot hold that without delaying the
- * answer, so it streams in place and recedes if work opens beneath it.
+ * carries actions. Mid-plan prose on a step that already has tool results
+ * streams in place and recedes if work opens beneath it.
  */
 export function AssistantMessage({
   item,

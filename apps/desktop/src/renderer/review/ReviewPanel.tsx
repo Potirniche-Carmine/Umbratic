@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText, X } from "lucide-react";
+import { Check, ChevronDown, Columns2, ExternalLink, FileText, MessageSquarePlus, PanelRight, Rows3, Undo2, WrapText } from "lucide-react";
 import {
   isDocumentReviewArtifactPath,
   type DocumentReviewSnapshot,
@@ -59,16 +59,14 @@ export function ReviewPanel({
   files,
   initialSelectedPath,
   taskId,
-  patchHash,  scope,
+  patchHash,
+  scope,
   canUseWorktreeScope,
   canOpenIde,
-  canUndo,
-  canApprove,
+  canUndoFile,
   selectedIdeLabel,
-  approvalVisible,
   onClose,
-  onUndo,
-  onApprove,
+  onUndoFile,
   onOpenFile,
   onScopeChange,
   onResizePointerDown,
@@ -79,16 +77,14 @@ export function ReviewPanel({
   files: ReviewFile[];
   initialSelectedPath?: string;
   taskId: string;
-  patchHash?: string;  scope: "task" | "worktree";
+  patchHash?: string;
+  scope: "task" | "worktree";
   canUseWorktreeScope: boolean;
   canOpenIde: boolean;
-  canUndo: boolean;
-  canApprove: boolean;
+  canUndoFile: boolean;
   selectedIdeLabel: string;
-  approvalVisible: boolean;
   onClose(): void;
-  onUndo(): void;
-  onApprove(): void;
+  onUndoFile(path: string): void;
   onOpenFile(path: string): void;
   onScopeChange(scope: "task" | "worktree"): void;
   onResizePointerDown(event: React.PointerEvent<HTMLDivElement>): void;
@@ -116,7 +112,8 @@ export function ReviewPanel({
   const [editorOpen, setEditorOpen] = useState(false);
   const [feedbackAdded, setFeedbackAdded] = useState(false);
   const [commentBody, setCommentBody] = useState("");
-  const [comments, setComments] = useState<ReviewCommentDraft[]>([]);  const [scopeOpen, setScopeOpen] = useState(false);
+  const [comments, setComments] = useState<ReviewCommentDraft[]>([]);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [selectedScope, setSelectedScope] = useState(scope);
   const commentRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -349,7 +346,6 @@ export function ReviewPanel({
             <button type="button" className="reviewControlButton" onClick={() => setScopeOpen((open) => !open)} aria-expanded={scopeOpen}><span>{selectedScope === "worktree" ? "Whole diff" : "Turn changes"}</span><ChevronDown size={13} /></button>
             {scopeOpen ? <div className="reviewScopeMenu" role="menu"><button type="button" role="menuitemradio" aria-checked={selectedScope === "task"} className={selectedScope === "task" ? "isSelected" : ""} onClick={() => chooseScope("task")}><span><strong>Turn changes</strong><small>Changes made in this model turn</small></span>{selectedScope === "task" ? <Check size={14} /> : null}</button>{canUseWorktreeScope ? <button type="button" role="menuitemradio" aria-checked={selectedScope === "worktree"} className={selectedScope === "worktree" ? "isSelected" : ""} onClick={() => chooseScope("worktree")}><span><strong>Whole diff</strong><small>All uncommitted changes against HEAD</small></span>{selectedScope === "worktree" ? <Check size={14} /> : null}</button> : null}</div> : null}
           </div>
-          <button className="reviewIconButton" type="button" onClick={onUndo} disabled={!canUndo} title="Undo this turn's changes"><Undo2 size={15} /></button>
           <button className="reviewIconButton" type="button" onClick={onClose} title="Hide review" aria-label="Hide review"><PanelRight size={16} /></button>
         </div>
       </header>
@@ -398,6 +394,7 @@ export function ReviewPanel({
                 </span>
                 {!selectedFileIsDocument && splitFits ? <span className="reviewSegmentedControl" aria-label="Diff layout"><button type="button" className={viewMode === "split" ? "isActive" : ""} onClick={() => chooseViewMode("split")} title="Side by side"><Columns2 size={14} /><span>Side by side</span></button><button type="button" className={viewMode === "unified" ? "isActive" : ""} onClick={() => chooseViewMode("unified")} title="Unified"><Rows3 size={14} /><span>Unified</span></button></span> : null}
                 {!selectedFileIsDocument ? <button className={`reviewIconButton ${wrap ? "isActive" : ""}`} type="button" onClick={toggleWrap} title={wrap ? "Disable line wrapping" : "Wrap long lines"}><WrapText size={15} /></button> : null}
+                <button className="reviewIconButton" type="button" onClick={() => onUndoFile(selectedFile.path)} disabled={!canUndoFile} title={`Undo changes to ${splitReviewPath(selectedFile.path).name}`} aria-label={`Undo changes to ${selectedFile.path}`}><Undo2 size={15} /></button>
                 <button className="reviewIconButton" type="button" onClick={() => onOpenFile(selectedFile.path)} disabled={!canOpenIde || selectedFile.status === "deleted"} title={`Open in ${selectedIdeLabel}`}><ExternalLink size={15} /></button>
               </div>
             </header>
@@ -411,7 +408,6 @@ export function ReviewPanel({
           </main>
         </div>
       ) : <div className="reviewEmptyState"><FileText size={24} /><strong>No changes to review</strong><span>Refresh the task after files change.</span></div>}
-      {approvalVisible ? <footer className="reviewFooter"><span className="reviewEndLabel">End of changes</span><button className="rejectAction" type="button" disabled={!canUndo} onClick={onUndo}><X size={15} />Reject changes</button><button className="primaryAction" type="button" disabled={!canApprove} onClick={onApprove}><Check size={15} />Accept</button></footer> : null}
     </section>
   );
 }

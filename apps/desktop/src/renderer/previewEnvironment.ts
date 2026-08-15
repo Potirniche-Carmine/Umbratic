@@ -10,6 +10,7 @@ import {
   type ReviewFile,
 } from "../shared/reviewDiff";
 import type {
+  AppUpdateStatus,
   BackendUiEvent,
   CapabilityProbeReport,
   CapabilityProbeResult,
@@ -55,6 +56,7 @@ import {
   readPreviewChats,
   readPreviewContextLength,
   readPreviewReasoningEffort,
+  readPreviewShowThinking,
   readPreviewEndpointSettings,
   readPreviewHarnessProfile,
   readPreviewNotes,
@@ -63,6 +65,7 @@ import {
   writePreviewChats,
   writePreviewContextLength,
   writePreviewReasoningEffort,
+  writePreviewShowThinking,
   writePreviewEndpointSettings,
   writePreviewHarnessProfile,
   writePreviewNotes,
@@ -90,11 +93,6 @@ const composerTestEscapedPlan = composerTestParams.has("escapedPlan");
 // A conversation that has moved on. The answer to the first question has to
 // still read as an answer once the second one is asked.
 const composerTestTwoTurns = composerTestParams.has("twoTurns");
-// Three slices of one guided run, frozen mid-flight, so the live path can be
-// looked at rather than reasoned about: `?stage=orienting` before any tool,
-// `?stage=working` with a tool open, `?stage=answering` with the answer part
-// way through streaming. Each is a prefix of the same event list a real run
-// produces, in the order it produces it.
 const composerTestStage = ["orienting", "working", "answering"].includes(composerTestParams.get("stage") ?? "")
   ? composerTestParams.get("stage") as "orienting" | "working" | "answering"
   : null;
@@ -220,9 +218,7 @@ const composerTestEvents: BackendUiEvent[] = composerTestTour ? composerTestTour
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 8_000).toISOString() },
 ] : composerTestEscapedPlan ? [
   { type: "user.message", taskId: "composer-test", text: composerTestVisiblePrompt, at: new Date(Date.now() - 11_000).toISOString() },
-  // A guided run's pre-tool prose reaches the desktop as narration: orient's
-  // sentence is narration by construction, and the model's own preamble is held
-  // until the step's tool calls prove it was one.
+  // Orientation and other run narration land inside the Working block.
   { type: "assistant.progress.delta", taskId: "composer-test", text: "I’ll write a bubble sort script, save it, then verify it runs correctly with test cases.", at: new Date(Date.now() - 10_500).toISOString(), endedAt: new Date(Date.now() - 10_000).toISOString() },
   { type: "command.started", taskId: "composer-test", id: "write-bubble-sort", command: "write bubble_sort.py", cwd: "/workspace/Umbratic", kind: "edit", commandClass: "edit", at: new Date(Date.now() - 9_000).toISOString() },
   { type: "command.finished", taskId: "composer-test", id: "write-bubble-sort", exitCode: 0, at: new Date(Date.now() - 8_000).toISOString() },
@@ -597,6 +593,13 @@ const previewChatModel = {
   },
 };
 
+const previewUpdateStatus: AppUpdateStatus = {
+  installedVersion: "0.0.0-preview",
+  automatic: true,
+  checkedAt: null,
+  state: { phase: "unsupported" },
+};
+
 function createPreviewApi(): DesktopApi {
   let previewCompanyConnection: CompanyConnectionStatus = { state: "not_enrolled" };
   let previewCompanySessionConnected = false;
@@ -810,7 +813,7 @@ function createPreviewApi(): DesktopApi {
     permissionMode: getPreviewPermissionMode(),
     // `?dictation` advertises the speech feature so the composer's microphone
     // can be exercised in the preview harness, which has no Veil behind it.
-    veilFeatures: composerTestParams.has("dictation") ? ["speech.transcribe"] : [],
+    veilFeatures: ["chat.reasoning_visible", ...(composerTestParams.has("dictation") ? ["speech.transcribe"] : [])],
     localDictationReady: composerTestParams.has("dictation"),
     system: { totalRamGB: 32, accelerator: "Vulkan", acceleratorDevice: "NVIDIA GeForce RTX 4070", quality: "optimal" as const },
     endpointConfig: {
@@ -867,6 +870,7 @@ function createPreviewApi(): DesktopApi {
     harnessProfile: readPreviewHarnessProfile(),
     contextLength: readPreviewContextLength(),
     reasoningEffort: readPreviewReasoningEffort(),
+    showThinking: readPreviewShowThinking(),
   }),
   getCapabilityProbes: async () => previewCapabilityReport(),
   ...previewRemoteApi,
@@ -883,6 +887,10 @@ function createPreviewApi(): DesktopApi {
     writePreviewReasoningEffort(reasoningEffort);
     return { reasoningEffort, status: await previewApi.getBackendStatus() };
   },
+  saveShowThinking: async (input) => {
+    writePreviewShowThinking(input === true);
+    return readPreviewShowThinking();
+  },
   getContextLength: async () => readPreviewContextLength(),
   saveContextLength: async (input) => {
     const contextLength = normalizeContextLength(input);
@@ -892,6 +900,8 @@ function createPreviewApi(): DesktopApi {
   getModelEndpointSettings: async () => readPreviewEndpointSettings(),
   getDictationSettings: async () => ({ model: "off" as const, language: null, deviceId: null }),
   saveDictationSettings: async (input) => ({ dictation: input, status: await previewApi.getBackendStatus() }),
+  getKeyBindings: async () => ({}),
+  saveKeyBindings: async (input) => input,
   listLocalModels: async ({ kind }) => previewCatalog(kind),
   downloadLocalModel: async () => ({ ok: true as const }),
   cancelLocalModelDownload: async () => ({ ok: true as const }),
@@ -902,6 +912,12 @@ function createPreviewApi(): DesktopApi {
   removeCustomLocalModel: async () => ({ ok: true as const }),
   openModelsFolder: async () => ({ ok: true as const, directory: "/preview/models" }),
   onModelDownloadEvent: () => () => undefined,
+  // The preview is not an installed build; it shows the state one would.
+  getAppUpdateStatus: async () => previewUpdateStatus,
+  checkForAppUpdate: async () => previewUpdateStatus,
+  setAutomaticAppUpdates: async ({ enabled }) => ({ ...previewUpdateStatus, automatic: enabled }),
+  installAppUpdate: async () => undefined,
+  onAppUpdateStatus: () => () => undefined,
   // The browser preview has no Veil, so it publishes no registry: the composer
   // model picker stays hidden here exactly as it does against an older server.
   listServerModels: async () => [],
@@ -990,8 +1006,7 @@ function createPreviewApi(): DesktopApi {
   respondToToolPermission: async () => undefined,
   openRepositoryInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
   openTaskInIde: async () => ({ ok: false, message: "Electron preload is not available." }),
-  approveTaskMerge: async () => ({ ok: false, message: "Electron preload is not available." }),
-  rejectTask: async () => undefined,
+  revertReviewFile: async () => null,
   keepWorktree: async () => undefined,
   cancelTask: async () => undefined,
   setResponseFeedback: async () => undefined,

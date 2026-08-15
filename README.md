@@ -40,11 +40,12 @@ no-installer builds to `target/release/desktop`:
 npm run desktop:release
 ```
 
-On Windows this produces `Umbratic-<version>.exe` (installer) and
-`Umbratic-<version>-portable.exe`, which runs with no installation. On macOS it
-produces `Umbratic-<version>.dmg` and `Umbratic-<version>-mac.zip`, which
-unzips to `Umbratic.app`. Each build runs on its own platform; electron-builder
-cannot produce a macOS app from Windows or the reverse.
+On Windows this produces `Umbratic-<version>-<arch>.exe` (installer). On macOS
+it produces `Umbratic-<version>.dmg` and `Umbratic-<version>.zip`, which unzips
+to `Umbratic.app`. Each build runs on its own platform; electron-builder cannot
+produce a macOS app from Windows or the reverse. Signing, notarization, and
+publishing to `downloads.umbratic.ai` — where installed apps look for updates
+— are covered in [docs/releasing.md](docs/releasing.md).
 
 Both carry their own Veil binary, so a packaged app runs with no install script
 and no separate Veil process to start.

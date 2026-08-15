@@ -34,6 +34,11 @@ export const ignoredSnapshotDirectories = new Set([
   "coverage",
   ".next",
   ".vite",
+  ".llama-cache",
+  "vendor",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
 ]);
 
 export function readTextFileIfSafe(filePath: string): string | null {

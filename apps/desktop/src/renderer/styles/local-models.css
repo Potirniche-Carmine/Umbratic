@@ -32,15 +32,25 @@
   font-weight: 500;
 }
 
-/* The collection menu: the whole model list inside one dropdown. */
+/* The collection menu: the whole model list inside one dropdown. Taller than
+   it was, because every row now carries a line about what the model is for and
+   a menu that showed three and a half of them would hide the choice it exists
+   to present. */
 .localModelMenu {
-  max-height: 340px;
+  max-height: 420px;
   padding: 6px;
 }
 
+/*
+ * A menu row is two stacked lines, not one line that wraps: the controls and
+ * the model's role line. Wrapping put the last control of a full row — the
+ * tick on the selected model — alone on the second line, reading as a stray
+ * mark rather than as this row's state.
+ */
 .localModelRow.isMenuRow {
+  display: block;
   min-height: 36px;
-  padding: 0 6px 0 9px;
+  padding: 3px 6px 3px 9px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -228,14 +238,69 @@
   margin-top: 2px;
 }
 
+/* The title of the row. A step up from the note under it in size and weight
+   both, so which one is the model's name is never a question. */
 .localModelName {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 640;
+  letter-spacing: -0.002em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The controls, on one line that never wraps. */
+.localModelRowMain {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  min-width: 0;
+}
+
+/*
+ * What the model is for, on its own line under the row's controls.
+ *
+ * Given the whole row rather than a column beside the size and the
+ * quantization: as a column it would be narrower on any row that also carries
+ * a badge, so the one row with a "Recommended" pill would be the one whose
+ * sentence got cut.
+ *
+ * Two lines at most, so a long sentence cannot turn one row into a paragraph.
+ * Scoped to the row so it outranks `.modelPicker span`, which holds every span
+ * in this dropdown to one unwrapped line — right for a trigger's label, wrong
+ * for the only sentence in the list.
+ */
+.localModelRow .localModelRole {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-width: 0;
+  margin: -1px 0 4px;
+  color: var(--faint);
+  /* Clearly subordinate to the name above it: smaller, lighter, and dimmer, so
+     the row reads as a title with a note under it rather than as two lines of
+     equal weight competing to be read first. */
+  font-size: 10.75px;
+  font-weight: 420;
+  line-height: 1.42;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+/* The tag: the two words someone scanning the list will actually read, ahead
+   of the sentence that settles it. Inline rather than a pill — the row already
+   carries pills, and a third would compete with them for the same meaning. */
+.localModelRow .localModelRole strong {
+  margin-right: 6px;
+  color: color-mix(in srgb, var(--muted) 70%, var(--accent));
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .localModelNote {

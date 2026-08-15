@@ -502,14 +502,15 @@ button.attachmentPreview:focus-visible {
   /* Attachments, editor, rail. The first track is empty and zero-height until
      something is picked, which is what lets the box grow upward rather than
      reserving room for chips that are usually not there. */
-  grid-template-rows: auto minmax(38px, auto) 44px;
+  grid-template-rows: auto minmax(56px, auto) 36px;
   width: 100%;
   max-width: 100%;
-  min-height: 82px;
+  min-height: 92px;
   min-width: 0;
-  /* Visible, not hidden: the rail's pills open their menus upward and a
-     clipping shell would cut every one of them off at its own edge. The rail
-     carries the bottom corners itself so nothing bleeds past the radius. */
+  /* Visible, not hidden: the rail's controls open their menus upward and a
+     clipping shell would cut every one of them off at its own edge. Nothing in
+     the rail paints a background of its own, so nothing bleeds past the
+     radius either. */
   overflow: visible;
   border: 1px solid var(--line-strong);
   border-radius: var(--prompt-radius);
@@ -525,7 +526,7 @@ button.attachmentPreview:focus-visible {
 .promptEditor {
   position: relative;
   min-width: 0;
-  min-height: 38px;
+  min-height: 56px;
   overflow: hidden;
 }
 
@@ -538,8 +539,8 @@ button.attachmentPreview:focus-visible {
   position: absolute;
   inset: 0;
   z-index: 0;
-  min-height: 38px;
-  max-height: 160px;
+  min-height: 56px;
+  max-height: 340px;
   padding: 9px 14px 11px;
   border: 0;
   border-radius: var(--radius);
@@ -580,8 +581,8 @@ button.attachmentPreview:focus-visible {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  min-height: 38px;
-  max-height: 160px;
+  min-height: 56px;
+  max-height: 340px;
   field-sizing: content;
   resize: none;
   scrollbar-gutter: stable;
@@ -614,42 +615,154 @@ button.attachmentPreview:focus-visible {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  /* Taller than the two icon buttons it used to hold: the rail now carries
-     28px pills, and 34px left them overhanging their own row. */
-  min-height: 44px;
-  padding: 0 9px;
+  /* Just enough for the 26px controls to sit in with air around them. The rail
+     is no longer a strip of its own, so it is only as tall as what it holds. */
+  min-height: 36px;
+  padding: 0 6px;
   /*
-   * A material the controls sit on, not a second box stacked under the first.
+   * No strip at all: no edge, no tint, no blur.
    *
-   * A flat fill plus a divider drew a hard rectangle, which is what made the
-   * composer read as two blocks. This is the translucent-chrome treatment
-   * instead: the tint fades in from nothing rather than starting at a line,
-   * the hairline is a light-catching edge rather than a rule, and the blur
-   * gives the strip the thickness that separates it from the text above.
+   * A material — even a translucent one — still draws a rectangle under the
+   * text, and a rectangle with a hairline on top of it is a second box no
+   * matter how softly it fades in. The controls sit directly on the prompt's
+   * own surface instead, and the only shapes in the row are the ones the
+   * pointer draws by hovering.
    */
-  border-top: 1px solid var(--material-edge);
-  border-radius: 0 0 var(--prompt-radius) var(--prompt-radius);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--surface-2) 34%, transparent),
-    color-mix(in srgb, var(--surface-2) 82%, transparent) 62%
-  );
-  -webkit-backdrop-filter: blur(16px) saturate(170%);
-  backdrop-filter: blur(16px) saturate(170%);
+  border-top: 0;
+  background: transparent;
   box-sizing: border-box;
 }
 
 /*
- * Vibrancy: text over a translucent surface needs more contrast and a touch
- * more weight than text on a solid one, or it goes muddy as the material
- * picks up what is behind it.
+ * The rail's controls, as one grammar: text and an icon on the box's own
+ * surface, with no border and no fill at rest. Small, quiet, and legible —
+ * outlined pills inside the box competed with the box's own outline, and three
+ * of them in a row read as a toolbar bolted underneath rather than as the
+ * bottom of the thing being written in.
+ *
+ * Each selector carries a third class so these win over the standalone pill
+ * rules the same controls use elsewhere, whatever order the sheets load in.
  */
-.promptActionRail .permissionLabel,
-.promptActionRail .worktreeToggle,
-.promptActionRail .modelTrigger > span,
-.promptRailModelName {
-  letter-spacing: 0.006em;
-  font-weight: 560;
+.promptActionRail .permissionControl .permissionTrigger,
+.promptActionRail .modelControl .modelTrigger,
+.promptActionRail .dictationControl {
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.promptActionRail .permissionControl .permissionTrigger,
+.promptActionRail .modelControl .modelTrigger {
+  gap: 5px;
+  padding: 0 7px;
+  font-size: 11.5px;
+  font-weight: 520;
+  letter-spacing: 0.004em;
+}
+
+/* Hover is the whole affordance here, so it has to be visible without being a
+   box: a soft tint the size of the control, and the label coming up to full
+   strength with it. The microphone is left out on purpose — each of its two
+   halves answers the pointer for itself, which is what says they are two
+   presses rather than one. */
+.promptActionRail .permissionControl .permissionTrigger:hover,
+.promptActionRail .modelControl .modelTrigger:hover:not(:disabled) {
+  color: var(--text);
+  border-color: transparent;
+  /* The full tint, not the soft one the outlined pills use: with no border at
+     rest, this is the only thing that answers the pointer, so it has to be
+     seen rather than merely be there. */
+  background: var(--control-hover);
+}
+
+.promptActionRail .permissionControl .permissionTrigger:hover svg:first-child,
+.promptActionRail .modelControl .modelTrigger:hover:not(:disabled) svg {
+  color: inherit;
+}
+
+/* Open is a held state, so it holds a tint rather than only answering the
+   pointer — the menu above it belongs to a control that still looks pressed. */
+.promptActionRail .permissionControl .permissionTrigger[aria-expanded="true"],
+.promptActionRail .modelControl.isOpen .modelTrigger {
+  color: var(--text);
+  border-color: transparent;
+  background: var(--control-active);
+}
+
+/* Elevated permissions are said by the shield and the words beside it; the
+   pill's tinted fill was a third way of saying it, inside a box that has no
+   other fills in it. */
+.promptActionRail .permissionControl.isElevated .permissionTrigger {
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+
+.promptActionRail .permissionControl.isElevated .permissionTrigger:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+/* The microphone keeps its split-control seam, which is what says the chevron
+   belongs to the button beside it — but it loses the capsule that made the
+   pair a pill. */
+.promptActionRail .dictationControl .dictationButton {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px 0 0 7px;
+}
+
+.promptActionRail .dictationControl .dictationDeviceTrigger {
+  height: 26px;
+  border-radius: 0 7px 7px 0;
+}
+
+.promptActionRail .dictationControl .dictationDeviceTrigger::before {
+  top: 8px;
+  bottom: 8px;
+}
+
+/* The same full tint as its neighbours: one hover weight for the whole row. */
+.promptActionRail .dictationControl .dictationButton:hover:not(:disabled),
+.promptActionRail .dictationControl .dictationDeviceTrigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--control-hover);
+}
+
+/*
+ * Recording lights the whole control, and still pulses: a live microphone has
+ * to be unmistakable. Without a border to colour, the fill and the ring carry
+ * it.
+ *
+ * One fill, on the control. The halves must not tint themselves on top of it —
+ * two translucent reds stacked on the left half and one on the right made the
+ * capsule read as two mismatched blocks with a seam down the middle, which is
+ * the opposite of what a split control should say about itself.
+ */
+.promptActionRail .dictationControl.isRecording {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+}
+
+.promptActionRail .dictationControl.isRecording .dictationButton,
+.promptActionRail .dictationControl.isRecording .dictationDeviceTrigger {
+  background: transparent;
+}
+
+/* Hover still answers the half that is under the pointer, a shade deeper than
+   the fill it sits on rather than a different colour on top of it. */
+.promptActionRail .dictationControl.isRecording .dictationButton:hover:not(:disabled),
+.promptActionRail .dictationControl.isRecording .dictationDeviceTrigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+/* The seam is a division inside one object, so it is drawn in the control's
+   own colour rather than the neutral hairline the idle state uses. */
+.promptActionRail .dictationControl.isRecording .dictationDeviceTrigger::before {
+  background: color-mix(in srgb, var(--red) 34%, transparent);
 }
 
 /*
@@ -661,20 +774,15 @@ button.attachmentPreview:focus-visible {
   transition: transform 100ms ease-out;
 }
 
-/* Frostier and solid when translucency is unwelcome, and a defined edge when
-   contrast is. Neither is a reason to lose the separation itself. */
-@media (prefers-reduced-transparency: reduce) {
-  .promptActionRail {
-    background: var(--surface-2);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-}
-
+/* Borderless controls rely on hover alone to say they are pressable, which is
+   exactly what a contrast preference asks us not to do. The outlines come back
+   there, and only there. */
 @media (prefers-contrast: more) {
-  .promptActionRail {
-    border-top-color: var(--line-strong);
-    background: var(--surface-2);
+  .promptActionRail .permissionControl .permissionTrigger,
+  .promptActionRail .modelControl .modelTrigger,
+  .promptActionRail .dictationControl {
+    border: 1px solid var(--line-strong);
+    color: var(--text);
   }
 }
 
@@ -712,7 +820,7 @@ button.attachmentPreview:focus-visible {
   white-space: nowrap;
   color: var(--muted);
   font-weight: 500;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .composer textarea:focus {

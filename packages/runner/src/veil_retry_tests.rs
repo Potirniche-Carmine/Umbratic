@@ -106,10 +106,13 @@ fn a_turn_that_produced_anything_is_committed_and_never_retried() {
         false
     ));
 
-    // Text withheld by a guided step still exists and would be duplicated.
-    let held = VeilChatResult {
-        held_text: "partial answer".into(),
-        ..VeilChatResult::default()
-    };
-    assert!(committed_output(&held, &partial, false));
+    // Text already on the result is committed: re-sending would duplicate it.
+    assert!(committed_output(
+        &VeilChatResult {
+            content: "partial answer".into(),
+            ..VeilChatResult::default()
+        },
+        &partial,
+        false
+    ));
 }

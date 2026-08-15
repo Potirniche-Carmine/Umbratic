@@ -73,6 +73,7 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["saveHarnessProfile", ["marketing"], "umbratic:save-harness-profile"],
     ["getContextLength", [], "umbratic:get-context-length", undefined],
     ["saveContextLength", [64000], "umbratic:save-context-length"],
+    ["saveShowThinking", [true], "umbratic:save-show-thinking"],
     ["getModelEndpointSettings", [{ mode: "local" }], "umbratic:get-model-endpoint-settings"],
     ["getDictationSettings", [], "umbratic:get-dictation-settings", undefined],
     ["saveDictationSettings", [{ model: "qwen3-asr-1.7b", language: null }], "umbratic:save-dictation-settings"],
@@ -109,14 +110,17 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
     ["respondToToolPermission", [{ taskId: "task-1", id: "perm", decision: "allow" }], "umbratic:respond-tool-permission"],
     ["openRepositoryInIde", [{ repositoryId: "repo", ideId: "vscode" }], "umbratic:open-repository-in-ide"],
     ["openTaskInIde", [{ taskId: "task-1", ideId: "vscode" }], "umbratic:open-task-in-ide"],
-    ["approveTaskMerge", [{ taskId: "task-1" }], "umbratic:approve-task-merge"],
-    ["rejectTask", [{ taskId: "task-1", cleanup: true }], "umbratic:reject-task"],
+    ["revertReviewFile", [{ taskId: "task-1", path: "src/main.ts" }], "umbratic:revert-review-file"],
     ["keepWorktree", [{ taskId: "task-1" }], "umbratic:keep-worktree"],
     ["cancelTask", [{ taskId: "task-1" }], "umbratic:cancel-task"],
     ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: "good", comment: "Useful." }], "umbratic:set-response-feedback"],
     ["setResponseFeedback", [{ taskId: "task-1", messageId: "m1", rating: null }], "umbratic:set-response-feedback"],
     ["setWindowChromeTheme", ["dark"], "umbratic:set-window-chrome-theme"],
     ["openExternal", [{ url: "https://example.com/" }], "umbratic:open-external"],
+    ["getAppUpdateStatus", [], "umbratic:get-app-update-status", undefined],
+    ["checkForAppUpdate", [], "umbratic:check-for-app-update", undefined],
+    ["setAutomaticAppUpdates", [{ enabled: false }], "umbratic:set-automatic-app-updates"],
+    ["installAppUpdate", [], "umbratic:install-app-update", undefined],
   ];
 
   for (const [method, args, channel, explicitInput] of cases) {
@@ -150,6 +154,14 @@ test("preload exposes every desktop API method on the expected IPC channel", asy
   assert.deepEqual(plain(downloadEvents), [{ id: "gemma4-e4b", receivedBytes: 1, totalBytes: 2, state: "downloading" }]);
   stopDownloads();
   assert.equal(listeners.has("umbratic:model-download"), false);
+
+  const updateStatuses = [];
+  const stopUpdates = exposedApi.onAppUpdateStatus((status) => updateStatuses.push(status));
+  assert.equal(listeners.has("umbratic:app-update-status"), true);
+  listeners.get("umbratic:app-update-status")({}, { installedVersion: "0.0.3", automatic: true, checkedAt: null, state: { phase: "current" } });
+  assert.deepEqual(plain(updateStatuses), [{ installedVersion: "0.0.3", automatic: true, checkedAt: null, state: { phase: "current" } }]);
+  stopUpdates();
+  assert.equal(listeners.has("umbratic:app-update-status"), false);
 });
 
 test("a failed call reports the message the main process wrote, not Electron's wrapper", async () => {

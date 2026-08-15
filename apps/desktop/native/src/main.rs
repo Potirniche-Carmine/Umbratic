@@ -56,6 +56,11 @@ fn ignored_directory(name: &str) -> bool {
             | "coverage"
             | ".next"
             | ".vite"
+            | ".llama-cache"
+            | "vendor"
+            | ".pytest_cache"
+            | ".mypy_cache"
+            | ".ruff_cache"
     )
 }
 
@@ -305,6 +310,8 @@ mod tests {
     #[test]
     fn generated_and_secret_directories_are_ignored() {
         assert!(ignored_directory("node_modules"));
+        assert!(ignored_directory(".llama-cache"));
+        assert!(ignored_directory("target"));
         assert!(blocked_path(".ssh/id_ed25519"));
         assert!(blocked_path("config/.env.local"));
         assert!(!blocked_path("src/main.rs"));

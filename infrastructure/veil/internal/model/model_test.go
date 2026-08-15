@@ -514,7 +514,7 @@ func TestWriteOpenAIChatSSEPassesLocalToolCallsThrough(t *testing.T) {
 		"",
 	}, "\n\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}, false); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
@@ -548,12 +548,32 @@ func TestWriteOpenAIChatSSEStripsPrivateReasoningFromVLLM(t *testing.T) {
 		"",
 	}, "\n\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, src, time.Second, UsageAnnotation{}); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, src, time.Second, UsageAnnotation{}, false); err != nil {
 		t.Fatal(err)
 	}
 	body := dst.String()
 	if strings.Contains(body, "hidden plan") || strings.Contains(body, "hidden thought") || strings.Contains(body, "reasoning_content") || strings.Contains(body, `"thinking"`) {
 		t.Fatalf("private reasoning leaked through: %q", body)
+	}
+	if !strings.Contains(body, `"content":"Safe progress."`) || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("safe content or completion marker was lost: %q", body)
+	}
+}
+
+func TestWriteOpenAIChatSSEForwardsReasoningWhenAsked(t *testing.T) {
+	src := strings.NewReader(strings.Join([]string{
+		`data: {"choices":[{"delta":{"role":"assistant","reasoning_content":"shown plan"}}]}`,
+		`data: {"choices":[{"delta":{"content":"Safe progress.","thinking":"shown thought"}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n"))
+	var dst bytes.Buffer
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &dst, src, time.Second, UsageAnnotation{}, true); err != nil {
+		t.Fatal(err)
+	}
+	body := dst.String()
+	if !strings.Contains(body, "shown plan") || !strings.Contains(body, "shown thought") {
+		t.Fatalf("opted-in reasoning was stripped: %q", body)
 	}
 	if !strings.Contains(body, `"content":"Safe progress."`) || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("safe content or completion marker was lost: %q", body)
@@ -566,7 +586,7 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 		"oversized line":     "data: " + strings.Repeat("x", 4*1024*1024+1) + "\n\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &bytes.Buffer{}, strings.NewReader(stream), time.Second, UsageAnnotation{}); err == nil {
+			if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &bytes.Buffer{}, strings.NewReader(stream), time.Second, UsageAnnotation{}, false); err == nil {
 				t.Fatal("expected invalid stream error")
 			}
 		})
@@ -575,11 +595,11 @@ func TestWriteOpenAIChatSSERejectsUnsafeVLLMStreams(t *testing.T) {
 
 func TestWriteOpenAIChatSSERejectsUnsafeLocalStreams(t *testing.T) {
 	for name, stream := range map[string]string{
-		"missing completion": `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
+		"missing completion":     `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
 		"not server-sent events": `{"message":{"role":"assistant","content":"partial"},"done":false}` + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(stream), time.Second, UsageAnnotation{}); err == nil {
+			if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bytes.Buffer{}, strings.NewReader(stream), time.Second, UsageAnnotation{}, false); err == nil {
 				t.Fatal("expected invalid stream error")
 			}
 		})
@@ -594,7 +614,7 @@ func TestWriteOpenAIChatSSEStripsPrivateReasoningFromTheLocalRuntime(t *testing.
 		"",
 	}, "\n\n"))
 	var dst bytes.Buffer
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &dst, src, time.Second, UsageAnnotation{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(dst.String(), "hidden plan") || strings.Contains(dst.String(), "reasoning_content") {
@@ -702,7 +722,7 @@ func TestUsageFramesCarryTheProtectedPrefixSize(t *testing.T) {
 		`data: [DONE]`,
 		"",
 	}, "\n\n"))
-	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &vllm, vllmStream, time.Second, annotation); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeServer, &vllm, vllmStream, time.Second, annotation, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(vllm.String(), `"system_prompt_tokens":3187`) {
@@ -725,7 +745,7 @@ func TestUsageFramesCarryTheProtectedPrefixSize(t *testing.T) {
 		"",
 	}, "\n\n"))
 	estimated := UsageAnnotation{SystemPromptTokens: 812}
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &local, localStream, time.Second, estimated); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &local, localStream, time.Second, estimated, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(local.String(), `"system_prompt_tokens":812`) {
@@ -742,7 +762,7 @@ func TestUsageFramesCarryTheProtectedPrefixSize(t *testing.T) {
 		`data: [DONE]`,
 		"",
 	}, "\n\n"))
-	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bare, bareStream, time.Second, UsageAnnotation{}); err != nil {
+	if err := WriteOpenAIChatSSE(context.Background(), ModeLocal, &bare, bareStream, time.Second, UsageAnnotation{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(bare.String(), "system_prompt_tokens") {

@@ -52,6 +52,8 @@ export type DesktopStartupSettings = {
   harnessProfile: HarnessProfileId;
   contextLength: number;
   reasoningEffort: ReasoningEffort;
+  /** Live model thinking in the Working block. Off until the user asks. */
+  showThinking: boolean;
 };
 
 /** How a remote connection proves who it is. */
@@ -178,15 +180,7 @@ export type ModelCapabilities = {
   reasoningEfforts?: ReasoningEffort[];
 };
 
-/**
- * How hard the model is asked to think.
- *
- * "off" is a level, not the absence of one — for a model that thinks by
- * default, turning it off is a decision somebody made. "on" is thinking with
- * no degree attached, which is all some templates understand: they read
- * `enable_thinking` and nothing finer, so grading it would be a dial wired to
- * nothing. Which of these a model offers is the model's own business.
- */
+/** How hard the model is asked to think. "off" is a level, not an absence. */
 export type ReasoningEffort = "off" | "on" | "low" | "medium" | "high";
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = ["off", "on", "low", "medium", "high"];
@@ -505,6 +499,52 @@ export type DictationSettings = {
 };
 
 /**
+ * One rebound chord, as it is stored.
+ *
+ * `primary` is Command on a Mac and Control everywhere else, so one stored
+ * binding covers a user who moves between the two. The shortcut's id and what
+ * it does are the renderer's business — this side keeps only the keys.
+ */
+export type StoredKeyBinding = {
+  key: string;
+  primary?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+};
+
+/**
+ * Only the chords the user actually changed, by shortcut id. A stored copy of
+ * the whole table would pin every default to whatever shipped the day it was
+ * written, so a release that moves one could never move it for them.
+ */
+export type KeyBindingSettings = Record<string, StoredKeyBinding>;
+
+/**
+ * Where the installed app stands against the release feed at downloads.umbratic.ai.
+ *
+ * `automatic` is the one setting: whether the app checks on its own. Off means
+ * the feed is only ever reached by "Check now", which is the contract for a
+ * machine that is meant to stay quiet. `checkedAt` is the last time this
+ * session consulted the feed, so a user can see that "up to date" is a fresh
+ * answer rather than an old one. Downloads happen in the background; the
+ * `ready` state is the one that asks something of the user.
+ */
+export type AppUpdateStatus = {
+  installedVersion: string;
+  automatic: boolean;
+  checkedAt: string | null;
+  state:
+    /** A development build, which has no feed to check. */
+    | { phase: "unsupported" }
+    | { phase: "idle" }
+    | { phase: "checking" }
+    | { phase: "current" }
+    | { phase: "downloading"; latestVersion: string; percent: number }
+    | { phase: "ready"; latestVersion: string }
+    | { phase: "failed"; message: string };
+};
+
+/**
  * What this machine brings to running a model, independent of which model is
  * chosen. Reported so a user whose graphics driver leaves the app on the
  * processor sees that, rather than concluding the app is just slow.
@@ -681,9 +721,12 @@ export type DesktopApi = {
     reasoningEffort: ReasoningEffort;
     status: BackendStatus;
   }>;
+  saveShowThinking(input: boolean): Promise<boolean>;
   getModelEndpointSettings(input?: {
     mode?: ModelEndpointMode;
   }): Promise<PublicModelEndpointSettings>;
+  getKeyBindings(): Promise<KeyBindingSettings>;
+  saveKeyBindings(input: KeyBindingSettings): Promise<KeyBindingSettings>;
   getDictationSettings(): Promise<DictationSettings>;
   saveDictationSettings(input: DictationSettings): Promise<{ dictation: DictationSettings; status: BackendStatus }>;
   listLocalModels(input: { kind: LocalCatalogModelKind }): Promise<LocalCatalogModel[]>;
@@ -834,17 +877,12 @@ export type DesktopApi = {
     ideId: string;
     filePath?: string;
   }): Promise<{ ok: true } | { ok: false; message: string }>;
-  approveTaskMerge(input: { taskId: string }): Promise<
-    | {
-        ok: true;
-        targetBranch: string;
-        commit: string;
-        patchHash: string;
-        metadataPath: string;
-      }
-    | { ok: false; message: string }
-  >;
-  rejectTask(input: { taskId: string; cleanup: boolean }): Promise<void>;
+  /**
+   * Puts one reviewed file back to how it was before the turn. There is no
+   * whole-turn counterpart on purpose: undo is per file so that a stray click
+   * can never take back more than the file being looked at.
+   */
+  revertReviewFile(input: { taskId: string; path: string }): Promise<TaskInfo | null>;
   keepWorktree(input: { taskId: string }): Promise<void>;
   cancelTask(input: { taskId: string }): Promise<void>;
   setResponseFeedback(input: {
@@ -877,7 +915,15 @@ export type DesktopApi = {
   stopDictation(): Promise<void>;
   /** Abandons the recording without waiting for a transcript. */
   cancelDictation(): Promise<void>;
+  getAppUpdateStatus(): Promise<AppUpdateStatus>;
+  /** Consults the feed now and answers once it has, before any download. */
+  checkForAppUpdate(): Promise<AppUpdateStatus>;
+  setAutomaticAppUpdates(input: { enabled: boolean }): Promise<AppUpdateStatus>;
+  /** Quits into the downloaded release. Only meaningful in the `ready` state. */
+  installAppUpdate(): Promise<void>;
   onBackendEvent(callback: (event: BackendUiEvent) => void): () => void;
+  /** Every change to the update status, including download progress. */
+  onAppUpdateStatus(callback: (status: AppUpdateStatus) => void): () => void;
   /**
    * Transcripts for the open dictation. Partials replace each other and a
    * terminal event ends the session.
@@ -944,9 +990,12 @@ export const desktopIpcChannels = {
   saveContextLength: "umbratic:save-context-length",
   getReasoningEffort: "umbratic:get-reasoning-effort",
   saveReasoningEffort: "umbratic:save-reasoning-effort",
+  saveShowThinking: "umbratic:save-show-thinking",
   getModelEndpointSettings: "umbratic:get-model-endpoint-settings",
   getDictationSettings: "umbratic:get-dictation-settings",
   saveDictationSettings: "umbratic:save-dictation-settings",
+  getKeyBindings: "umbratic:get-key-bindings",
+  saveKeyBindings: "umbratic:save-key-bindings",
   listLocalModels: "umbratic:list-local-models",
   downloadLocalModel: "umbratic:download-local-model",
   cancelLocalModelDownload: "umbratic:cancel-local-model-download",
@@ -986,8 +1035,7 @@ export const desktopIpcChannels = {
   respondToToolPermission: "umbratic:respond-tool-permission",
   openRepositoryInIde: "umbratic:open-repository-in-ide",
   openTaskInIde: "umbratic:open-task-in-ide",
-  approveTaskMerge: "umbratic:approve-task-merge",
-  rejectTask: "umbratic:reject-task",
+  revertReviewFile: "umbratic:revert-review-file",
   keepWorktree: "umbratic:keep-worktree",
   cancelTask: "umbratic:cancel-task",
   setResponseFeedback: "umbratic:set-response-feedback",
@@ -998,8 +1046,12 @@ export const desktopIpcChannels = {
   sendDictationAudio: "umbratic:send-dictation-audio",
   stopDictation: "umbratic:stop-dictation",
   cancelDictation: "umbratic:cancel-dictation",
+  getAppUpdateStatus: "umbratic:get-app-update-status",
+  checkForAppUpdate: "umbratic:check-for-app-update",
+  setAutomaticAppUpdates: "umbratic:set-automatic-app-updates",
+  installAppUpdate: "umbratic:install-app-update",
 } as const satisfies Record<
-  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent">,
+  Exclude<keyof DesktopApi, "onBackendEvent" | "onWorkspaceIndex" | "onDictationEvent" | "onModelDownloadEvent" | "onAppUpdateStatus">,
   string
 >;
 

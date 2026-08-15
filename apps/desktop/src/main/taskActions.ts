@@ -1,22 +1,19 @@
 import { getPermissionMode } from "./mainRuntime";
 import { assertReusableWorktreeForRepository, chatWorktreeTaskId, findReusableWorktreeTask, taskUsesIsolatedWorktree, worktreeRootTaskId } from "./worktreeOps";
 import { chatId, createChat, hiddenChatRepository, hiddenChatWorkspacePath, taskId } from "./chatStore";
-import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, failTask, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
+import { activeRunnerProcesses, activeStartTaskRequests, appendUserMessage, clearPendingPermissionsForTask, emit, getTask, missingSnapshotValue, pendingRunnerPrompts, pendingTaskCancelWaits, pendingTaskFollowUps, pendingTaskSteers, publicTask, recentStartTaskRequests, recordProductTelemetry, runnerGracefulCancelDeadlineMs, saveTask } from "./mainRuntime";
 import { capabilityNeedsForPrompt, runnerPromptForTask } from "./taskPromptContext";
 import { inspectRepository } from "./repositoryOps";
-import { emitReviewChangedSinceReady, refreshReview } from "./reviewFiles";
+import { refreshReview } from "./reviewFiles";
 import { createWorktreeAndRunRunner, runRunnerTask } from "./taskRunner";
-import { isBinarySnapshotValue, readTextFileIfSafe, sanitizeAttachments, snapshotFolder } from "./workspaceSnapshot";
-import { taskMetadataPath, worktreeRootForRepo } from "./worktreeOps";
+import { isBinarySnapshotValue, sanitizeAttachments, snapshotFolder } from "./workspaceSnapshot";
+import { worktreeRootForRepo } from "./worktreeOps";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { chatTitleFromFirstMessage } from "../shared/chatTitle";
 
-import {
-  taskStatesThatCanOpen,
-} from "./config";
 import {
   capabilityTelemetrySnapshot,
   probeLocalCapabilities,
@@ -33,7 +30,6 @@ import {
   umbraticPolicyVersion,
   umbraticRunnerName,
   umbraticRunnerVersion,
-  isBlockedPath,
   isGeneratedRuntimePath,
 } from "./policy";
 import {
@@ -42,15 +38,12 @@ import {
   readModelEndpointSettings,
   readProjects,
   readTask,
-  writeJsonFile,
 } from "./storage";
 import { enabledToolsFromSettings, normalizeEnabledTools } from "./toolSettings";
 import type {
-  ApproveResult,
   ChatAttachment,
   ChatRecord,
   RepositoryInfo,
-  ReviewFile,
   TaskInfo,
   TaskRecord,
   TaskRemote,
@@ -59,8 +52,9 @@ import type {
 import { hasSymlinkComponent, isRecord, pathInside, requiredString, slugify } from "./utils";
 import { isResponseFeedbackReason, removeResponseFeedback } from "../shared/taskEvents";
 import {
-  assertFolderRejectBaseline,
-  restoreIsolatedWorktreeForReject,
+  assertFolderUndoBaseline,
+  restoreTurnCheckpointFile,
+  UNDO_UNSAFE_NO_CHECKPOINT,
 } from "./checkpoints/service";
 
 export function closedTaskMessage(task: TaskRecord): string | undefined {
@@ -429,202 +423,66 @@ export async function approveWorktreeCreation(input: unknown): Promise<void> {
   await createWorktreeAndRunRunner(task, promptForRun);
 }
 
-export function secretScanText(text: string): string | null {
-  const patterns: Array<[string, RegExp]> = [
-    ["private key", /-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/],
-    ["generic secret assignment", /\b(?:api[_-]?key|secret|token|password)\b\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{20,}/i],
-    ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
-    ["GitHub token", /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/],
-  ];
-  for (const [label, pattern] of patterns) {
-    if (pattern.test(text)) {
-      return label;
+/** One file back to its pre-turn content, from the folder snapshot. */
+export function restoreFolderTaskFile(task: TaskRecord, filePath: string) {
+  const baseline = task.baselineFiles ?? {};
+  if (isBinarySnapshotValue(baseline[filePath])) {
+    throw new Error(`Undo cannot safely restore the earlier binary content of ${filePath}.`);
+  }
+  const absolute = path.resolve(task.worktreePath, filePath);
+  if (!pathInside(task.worktreePath, absolute) || hasSymlinkComponent(task.worktreePath, absolute)) {
+    throw new Error(`Refusing to restore a path outside the task folder: ${filePath}`);
+  }
+  if (fs.existsSync(absolute) && fs.lstatSync(absolute).isSymbolicLink()) {
+    throw new Error(`Refusing to restore through a symbolic link: ${filePath}`);
+  }
+  // Absent from the baseline means the turn created it, and putting it back
+  // means it goes away again.
+  if (!Object.prototype.hasOwnProperty.call(baseline, filePath) || baseline[filePath] === missingSnapshotValue) {
+    if (fs.existsSync(absolute)) fs.rmSync(absolute, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  fs.writeFileSync(absolute, baseline[filePath]);
+}
+
+/**
+ * Undo one reviewed file, and only that file.
+ *
+ * There is deliberately no whole-turn counterpart: a single mis-click should
+ * never be able to take back more than the file somebody was looking at, and
+ * anything broader is a thing to ask the model for, where it is visible and
+ * reversible.
+ */
+export async function revertReviewFile(input: unknown): Promise<TaskInfo | null> {
+  if (!isRecord(input)) {
+    throw new Error("Invalid revert input.");
+  }
+  const task = getTask(requiredString(input.taskId, "taskId"));
+  const filePath = requiredString(input.path, "path").replace(/\\/g, "/");
+  if (isGeneratedRuntimePath(filePath)) {
+    throw new Error(`${filePath} is generated at runtime and is not restored by undo.`);
+  }
+  if (!task.reviewFiles.some((file) => file.path === filePath)) {
+    throw new Error(`${filePath} is not part of this review.`);
+  }
+  if (taskUsesIsolatedWorktree(task)) {
+    if (!fs.existsSync(task.worktreePath)) {
+      throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
     }
+    await restoreTurnCheckpointFile(task, filePath);
+  } else {
+    assertFolderUndoBaseline(task);
+    restoreFolderTaskFile(task, filePath);
   }
-  return null;
-}
-
-export async function approvalCheck(task: TaskRecord, name: string, run: () => Promise<string | void>): Promise<void> {
-  emit({ type: "approval.check", taskId: task.id, name, status: "running" });
-  try {
-    const result = await run();
-    const detail = typeof result === "string" ? result : undefined;
-    emit({ type: "approval.check", taskId: task.id, name, status: "passed", detail });
-  } catch (error) {
-    const detail = String(error instanceof Error ? error.message : error);
-    emit({ type: "approval.check", taskId: task.id, name, status: "failed", detail });
-    throw error;
-  }
-}
-
-export async function approveTaskMerge(input: unknown): Promise<ApproveResult> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid approval input.");
-  }
-  const task = getTask(requiredString(input.taskId, "taskId"));
-  recordProductTelemetry("task.accepted", {
-    taskId: task.id,
-    chatId: task.chatId,
-    repositoryId: task.repositoryId,
-  });
-  emit({ type: "merge.approval", taskId: task.id, decision: "approved" });
-  task.state = "approving";
-  saveTask(task);
-  try {
-    let allowedFiles: string[] = [];
-    let patchHash = "";
-
-    await approvalCheck(task, "agent run completed", async () => {
-      if (!task.latestTest?.passed) {
-        throw new Error("Umbratic runner has not completed successfully for this task.");
-      }
-      return task.latestTest.command;
-    });
-    await approvalCheck(task, "blocked files", async () => {
-      const reviewFiles = await refreshReview(task);
-      emitReviewChangedSinceReady(task, reviewFiles);
-      const dangerous = reviewFiles.map((file) => file.path).filter((file) => isBlockedPath(file));
-      if (dangerous.length > 0) {
-        throw new Error(`Blocked path changed: ${dangerous.join(", ")}`);
-      }
-      allowedFiles = reviewFiles.map((file) => file.path).filter((file) => !isGeneratedRuntimePath(file));
-      if (allowedFiles.length === 0) {
-        throw new Error("No allowed file changes to approve.");
-      }
-      task.changedFiles = allowedFiles;
-      return `${allowedFiles.length} file${allowedFiles.length === 1 ? "" : "s"}`;
-    });
-    await approvalCheck(task, "secret scan", async () => {
-      const patch = task.reviewFiles.map((file) => file.patch).join("\n");
-      const diffHit = secretScanText(patch);
-      if (diffHit) {
-        throw new Error(`Potential ${diffHit} in patch.`);
-      }
-      for (const file of allowedFiles) {
-        const absolute = path.join(task.worktreePath, file);
-        const text = readTextFileIfSafe(absolute);
-        if (text) {
-          const hit = secretScanText(text);
-          if (hit) {
-            throw new Error(`Potential ${hit} in ${file}.`);
-          }
-        }
-      }
-      return "passed";
-    });
-    await approvalCheck(task, "record metadata", async () => {
-      const patch = task.reviewFiles.map((file) => file.patch).join("\n");
-      patchHash = crypto.createHash("sha256").update(patch).digest("hex");
-      task.state = "approved";
-      task.approvedAt = new Date().toISOString();
-      task.patchHash = patchHash;
-      task.metadataPath = taskMetadataPath(task);
-      writeJsonFile(task.metadataPath, {
-        id: task.id,
-        workspaceKind: task.workspaceKind,
-        workspaceMode: task.workspaceMode,
-        originalRepoPath: task.originalRepoPath,
-        originalBranch: task.originalBranch,
-        baseCommit: task.baseCommit,
-        agentBranch: task.agentBranch,
-        worktreePath: task.worktreePath,
-        changedFiles: task.changedFiles,
-        latestTest: task.latestTest,
-        patchHash,
-        approvedAt: task.approvedAt,
-      });
-      saveTask(task);
-      return patchHash.slice(0, 12);
-    });
-    const target = taskUsesIsolatedWorktree(task)
-      ? task.agentBranch || task.worktreePath
-      : task.workspaceKind === "git"
-        ? task.originalBranch
-        : "folder";
-    emit({ type: "approval.completed", taskId: task.id, target, patchHash });
-    return { ok: true, targetBranch: target, commit: patchHash, patchHash, metadataPath: task.metadataPath ?? "" };
-  } catch (error) {
-    const message = String(error instanceof Error ? error.message : error);
-    failTask(task, message);
-    return { ok: false, message };
-  }
-}
-
-export async function rejectTask(input: unknown): Promise<void> {
-  if (!isRecord(input)) {
-    throw new Error("Invalid reject input.");
-  }
-  const task = getTask(requiredString(input.taskId, "taskId"));
   recordProductTelemetry("task.undone", {
     taskId: task.id,
     chatId: task.chatId,
     repositoryId: task.repositoryId,
   });
-  const run = activeRunnerProcesses.get(task.id);
-  if (run) {
-    activeRunnerProcesses.delete(task.id);
-    stopRunnerProcess(run);
-  }
-  pendingRunnerPrompts.delete(task.id);
-  clearPendingPermissionsForTask(task.id);
-  const cleanup = input.cleanup === true;
-  emit({ type: "merge.approval", taskId: task.id, decision: "rejected", cleanup, reason: "user rejected review" });
-  if (cleanup && taskStatesThatCanOpen.has(task.state)) {
-    if (taskUsesIsolatedWorktree(task)) {
-      await restoreIsolatedWorktreeForReject(task, fs.existsSync(task.worktreePath));
-      task.changedFiles = [];
-      task.reviewFiles = [];
-    } else {
-      assertFolderRejectBaseline(task);
-      restoreFolderTaskChanges(task, await refreshReview(task));
-      task.changedFiles = [];
-      task.reviewFiles = [];
-    }
-  } else if (!taskUsesIsolatedWorktree(task) && cleanup) {
-    assertFolderRejectBaseline(task);
-    restoreFolderTaskChanges(task, await refreshReview(task));
-    task.changedFiles = [];
-    task.reviewFiles = [];
-  }
-  task.state = "rejected";
-  task.rejectedAt = new Date().toISOString();
+  await refreshReview(task, task.reviewScope === "worktree" ? "worktree" : "task");
   saveTask(task);
-}
-
-export function restoreFolderTaskChanges(task: TaskRecord, reviewFiles: ReviewFile[]) {
-  const baseline = task.baselineFiles ?? {};
-  const unsafeBinary = reviewFiles.find((file) => isBinarySnapshotValue(baseline[file.path]));
-  if (unsafeBinary) {
-    throw new Error(`Undo cannot safely restore the earlier binary content of ${unsafeBinary.path}.`);
-  }
-  for (const file of reviewFiles) {
-    if (isGeneratedRuntimePath(file.path)) {
-      continue;
-    }
-    const absolute = path.resolve(task.worktreePath, file.path);
-    if (!pathInside(task.worktreePath, absolute) || hasSymlinkComponent(task.worktreePath, absolute)) {
-      throw new Error(`Refusing to restore a path outside the task folder: ${file.path}`);
-    }
-    try {
-      if (fs.existsSync(absolute) && fs.lstatSync(absolute).isSymbolicLink()) {
-        throw new Error(`Refusing to restore through a symbolic link: ${file.path}`);
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("Refusing to restore")) throw error;
-    }
-    if (Object.prototype.hasOwnProperty.call(baseline, file.path)) {
-      if (baseline[file.path] === missingSnapshotValue) {
-        if (fs.existsSync(absolute)) fs.rmSync(absolute, { force: true });
-        continue;
-      }
-      fs.mkdirSync(path.dirname(absolute), { recursive: true });
-      fs.writeFileSync(absolute, baseline[file.path]);
-      continue;
-    }
-    if (fs.existsSync(absolute)) {
-      fs.rmSync(absolute, { force: true });
-    }
-  }
+  return publicTask(task);
 }
 
 export async function keepWorktree(input: unknown): Promise<void> {

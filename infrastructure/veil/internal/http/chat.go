@@ -43,20 +43,12 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			),
 		)
 		skills := input.Skills
-		// The playbook is Veil-owned text rendered from the validated (route,
-		// bucket) pair. The client never supplies prompt text, only a selector,
-		// and the playbook lands after the skill catalog so everything before it
-		// stays byte-stable and prefix-cacheable.
-		var protectedMessages []model.Message
-		if playbook := prompts.PlaybookPrompt(route, input.HarnessBucket, skills, input.Tools); playbook != "" {
-			protectedMessages = []model.Message{{Role: "system", Content: playbook}}
-		}
-		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, protectedMessages, skills, input.Tools)
+		messages, err := prompts.BuildWithProtectedMessages(route, clientMessages, nil, skills, input.Tools)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return
 		}
-		protectedPrefix, err := prompts.ProtectedPrefix(route, protectedMessages, skills, input.Tools)
+		protectedPrefix, err := prompts.ProtectedPrefix(route, nil, skills, input.Tools)
 		if err != nil {
 			writeJSONError(w, http.StatusNotFound, "unknown route")
 			return
@@ -113,6 +105,9 @@ func (s *Server) handleChat(route prompts.Route) http.HandlerFunc {
 			ReasoningEffort:     profile.ReasoningEffort,
 			ThinkingTokenBudget: profile.ThinkingTokenBudget,
 			Thinking:            thinking,
+			// Thinking off means there is nothing to show; the strip stays on
+			// even if the harness asked to see tokens that will not exist.
+			ReasoningVisible: input.ReasoningVisible && (thinking == nil || *thinking),
 		}
 		contextLength := s.contextLengthFor(selectedModel)
 		if estimated, ok := finalRequestFits(req, contextLength); !ok {

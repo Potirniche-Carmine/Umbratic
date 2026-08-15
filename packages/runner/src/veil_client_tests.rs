@@ -1,164 +1,20 @@
 use super::*;
 use crate::config::MtlsConfig;
 
-// Veil owns the bucket catalog, so "may this turn answer without tools?"
-// arrives as a resolved flag. It is additive: a Veil that predates it still
-// parses, and the run simply keeps today's behavior.
 #[test]
-fn an_orient_decision_carries_veils_evidence_requirement() {
-    let guided = parse_orient_payload(
-        &json!({"bucket":"repo_orient","summarySentence":"I will map this repository.","evidenceRequired":true}),
-    )
-    .unwrap();
-    assert_eq!(guided.bucket, "repo_orient");
-    assert!(guided.evidence_required);
-    assert_eq!(
-        guided.summary_sentence.as_deref(),
-        Some("I will map this repository.")
-    );
-
-    let optional = parse_orient_payload(
-        &json!({"bucket":"spec_discovery","summarySentence":null,"evidenceRequired":false}),
-    )
-    .unwrap();
-    assert!(!optional.evidence_required);
-    assert!(optional.summary_sentence.is_none());
-
-    // Absent flag, older Veil: the rule cannot fire, and nothing degrades.
-    let legacy =
-        parse_orient_payload(&json!({"bucket":"repo_orient","summarySentence":null})).unwrap();
-    assert!(!legacy.evidence_required);
-
-    // direct_answer never guides a run, so it never requires evidence.
-    let direct = parse_orient_payload(
-        &json!({"bucket":"direct_answer","summarySentence":null,"evidenceRequired":true}),
-    )
-    .unwrap();
-    assert!(!direct.evidence_required);
-
-    // The key set stays closed: an unexpected field is still a rejection.
-    assert!(parse_orient_payload(&json!({"bucket":"repo_orient","playbook":"do this"})).is_err());
-}
-
-// The runner's own sentence check is a bound and a shape, never a vocabulary.
-// It used to reject any sentence containing an underscore — a superset chosen
-// to cover the bucket catalog it does not hold — which on this route is most
-// real sentences, since naming a file is the useful thing a status line does.
-// Requiring a trailing "." or "!" was the same mistake in punctuation.
-#[test]
-fn the_status_sentence_survives_underscores_and_non_english_punctuation() {
-    for sentence in [
-        "I will trace the failure through main_test.go and report the cause.",
-        "I will check whether snake_case names are already normalized?",
-        "このリポジトリの構成を調べます。",
-        "I will start with the entry points",
-    ] {
-        let decision = parse_orient_payload(
-            &json!({"bucket":"repo_orient","summarySentence":sentence,"evidenceRequired":true}),
-        )
-        .unwrap();
-        assert_eq!(
-            decision.summary_sentence.as_deref(),
-            Some(sentence),
-            "{sentence}"
-        );
-    }
-
-    // The bucket id itself is hidden harness state, and it arrives with the
-    // sentence, so the check that matters stays precise rather than broad.
-    let leaked = parse_orient_payload(
-        &json!({"bucket":"repo_orient","summarySentence":"I will run repo_orient over this workspace."}),
-    )
-    .unwrap();
-    assert_eq!(leaked.bucket, "repo_orient");
-    assert!(leaked.summary_sentence.is_none());
-
-    // A bound is still a bound.
-    let long = "x".repeat(MAX_SUMMARY_SENTENCE_RUNES + 1);
-    assert!(
-        parse_orient_payload(&json!({"bucket":"repo_orient","summarySentence":long}))
-            .unwrap()
-            .summary_sentence
-            .is_none()
-    );
-    assert!(
-        parse_orient_payload(&json!({"bucket":"repo_orient","summarySentence":"One.\nTwo."}))
-            .unwrap()
-            .summary_sentence
-            .is_none()
-    );
-}
-
-// Holding text until the step resolves is what lets the runner decide whether
-// it was the answer without ever moving text after the fact. Releasing shows
-// it; dropping a result on the floor is how a refused step leaves no trace.
-#[test]
-fn released_held_text_is_the_answer_and_an_empty_hold_says_nothing() {
+fn live_text_is_the_answer() {
     let directory = tempfile::tempdir().unwrap();
     let session = crate::session::test_session(directory.path());
     let sink = crate::session::test_sink(directory.path());
     let mut events = sink.subscribe();
 
-    let mut answer = VeilChatResult {
-        held_text: "The config sets three limits.".into(),
-        ..VeilChatResult::default()
-    };
-    release_held_text(&sink, &session, &mut answer);
+    assert!(emit_delta(&sink, &session, "The config sets three limits."));
     let delta = events.try_recv().unwrap();
     assert_eq!(delta["type"], "assistant.delta");
     assert_eq!(delta["text"], "The config sets three limits.");
-    // Released means released: nothing is left to emit a second time.
-    assert!(answer.held_text.is_empty());
 
-    // A step that held nothing says nothing, so a refused step still leaves no
-    // trace in the UI.
-    let mut empty = VeilChatResult::default();
-    release_held_text(&sink, &session, &mut empty);
+    assert!(!emit_delta(&sink, &session, ""));
     assert!(events.try_recv().is_err());
-
-    // The orientation is the one narration line, and it is emitted directly.
-    assert!(emit_narration(
-        &sink,
-        &session,
-        "I will look at the failing test."
-    ));
-    let narration = events.try_recv().unwrap();
-    assert_eq!(narration["type"], "assistant.progress.delta");
-    assert_eq!(narration["text"], "I will look at the failing test.");
-}
-
-// Guided holding withholds every token until the step resolves. Tool-calling
-// steps drop that text; a finished answer releases it. Size never decides —
-// structure does — so a long mid-plan report cannot leak between tool rounds.
-#[test]
-fn guided_holding_withholds_all_text_until_released() {
-    let directory = tempfile::tempdir().unwrap();
-    let session = crate::session::test_session(directory.path());
-    let sink = crate::session::test_sink(directory.path());
-    let mut events = sink.subscribe();
-    let mut result = VeilChatResult::default();
-
-    assert!(!stream_or_hold(
-        &sink,
-        &session,
-        &mut result,
-        "a".repeat(5_000),
-        HoldPolicy::All,
-    ));
-    assert_eq!(result.held_text.chars().count(), 5_000);
-    assert!(events.try_recv().is_err());
-
-    // Unguided steps still stream live.
-    let mut live = VeilChatResult::default();
-    assert!(stream_or_hold(
-        &sink,
-        &session,
-        &mut live,
-        "hello".into(),
-        HoldPolicy::None,
-    ));
-    assert!(live.held_text.is_empty());
-    assert_eq!(events.try_recv().unwrap()["text"], "hello");
 }
 
 #[test]
@@ -329,6 +185,10 @@ fn provider_with_mtls(mtls: MtlsConfig) -> ProviderConfig {
         api_key: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
         model_id: "test".into(),
         send_model_field: false,
+        send_thinking_field: false,
+        thinking: None,
+        send_reasoning_visible_field: false,
+        reasoning_visible: false,
         headers: BTreeMap::new(),
         mtls: Some(mtls),
     }
@@ -363,22 +223,27 @@ fn a_newer_veil_stream_does_not_break_this_runner() {
         "id: 42",
         "retry: 1000",
     ] {
-        let (done, content) = process_veil_line(line, &mut result, &mut calls).unwrap();
+        let (done, content, _) = process_veil_line(line, &mut result, &mut calls).unwrap();
         assert!(!done, "{line} must not end the stream");
         assert!(content.is_empty(), "{line} must contribute no content");
     }
 
     // Unknown fields alongside the ones this build reads are ignored, and the
     // content still arrives.
-    let (_, content) = process_veil_line(
-        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\",\"annotations\":[{\"kind\":\"cite\"}]},\"logprobs\":null}],\"veilTrace\":{\"span\":\"abc\"},\"serverHints\":{\"cacheWarm\":true}}",
+    let (_, content, reasoning) = process_veil_line(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hi\",\"reasoning_content\":\"hidden\",\"annotations\":[{\"kind\":\"cite\"}]},\"logprobs\":null}],\"veilTrace\":{\"span\":\"abc\"},\"serverHints\":{\"cacheWarm\":true}}",
         &mut result,
         &mut calls,
     )
     .unwrap();
     assert_eq!(content, "hi");
+    assert_eq!(reasoning, "hidden");
+    assert!(
+        !result.content.contains("hidden"),
+        "reasoning must not join the answer"
+    );
 
-    let (done, _) = process_veil_line("data: [DONE]", &mut result, &mut calls).unwrap();
+    let (done, _, _) = process_veil_line("data: [DONE]", &mut result, &mut calls).unwrap();
     assert!(done);
 }
 
@@ -386,27 +251,38 @@ fn a_newer_veil_stream_does_not_break_this_runner() {
 /// opt-in: a body that carries neither is the body this runner has always sent.
 mod chat_body {
     use super::*;
-    use crate::{config::RunnerConfig, veil_client::chat_request_body};
+    use crate::{config::RunnerConfig, veil_request::chat_request_body};
     use serde_json::json;
     use std::sync::Arc;
 
-    fn config(send_model_field: bool) -> Arc<RunnerConfig> {
+    fn config(
+        send_model_field: bool,
+        thinking: Option<&str>,
+        send_thinking_field: bool,
+    ) -> Arc<RunnerConfig> {
         let directory = std::env::temp_dir();
         let mut config = (*crate::session::test_config(&directory)).clone();
         config.provider.model_id = "qwen3-32b".into();
         config.provider.send_model_field = send_model_field;
+        config.provider.send_thinking_field = send_thinking_field;
+        config.provider.thinking = thinking.map(str::to_owned);
+        config.provider.send_reasoning_visible_field = false;
+        config.provider.reasoning_visible = false;
         Arc::new(config)
     }
 
-    fn body(send_model_field: bool) -> serde_json::Map<String, Value> {
-        let config = config(send_model_field);
+    fn body(
+        send_model_field: bool,
+        thinking: Option<&str>,
+        send_thinking_field: bool,
+    ) -> serde_json::Map<String, Value> {
+        let config = config(send_model_field, thinking, send_thinking_field);
         chat_request_body(
             &config,
             &[json!({"role":"user","content":"hi"})],
             &[],
             1024,
             false,
-            None,
         )
         .as_object()
         .unwrap()
@@ -415,9 +291,41 @@ mod chat_body {
 
     #[test]
     fn the_model_is_named_only_when_the_desktop_confirmed_the_feature() {
-        let sent = body(true);
+        let sent = body(true, None, false);
         assert_eq!(sent["model"], json!("qwen3-32b"));
         assert_eq!(sent["stream"], json!(true));
-        assert!(!body(false).contains_key("model"));
+        assert!(!body(false, None, false).contains_key("model"));
+    }
+
+    #[test]
+    fn thinking_is_named_only_when_the_desktop_confirmed_the_feature() {
+        assert!(!body(false, Some("off"), false).contains_key("thinking"));
+        assert!(!body(false, None, true).contains_key("thinking"));
+        let off = body(false, Some("off"), true);
+        assert_eq!(off["thinking"], json!("off"));
+        assert!(!off.contains_key("model"));
+        assert_eq!(body(false, Some("on"), true)["thinking"], json!("on"));
+    }
+
+    #[test]
+    fn reasoning_visible_is_named_only_when_the_desktop_confirmed_the_feature() {
+        let body_of = |send: bool, visible: bool| {
+            let mut config = (*crate::session::test_config(&std::env::temp_dir())).clone();
+            config.provider.send_reasoning_visible_field = send;
+            config.provider.reasoning_visible = visible;
+            chat_request_body(
+                &config,
+                &[json!({"role":"user","content":"hi"})],
+                &[],
+                1024,
+                false,
+            )
+            .as_object()
+            .unwrap()
+            .clone()
+        };
+        assert!(!body_of(false, true).contains_key("reasoning_visible"));
+        assert!(!body_of(true, false).contains_key("reasoning_visible"));
+        assert_eq!(body_of(true, true)["reasoning_visible"], json!(true));
     }
 }

@@ -16,7 +16,6 @@ pub(crate) fn chat_request_body(
     tools: &[Value],
     max_output_tokens: u64,
     include_tools: bool,
-    harness_bucket: Option<&str>,
 ) -> Value {
     let mut body = json!({
         "messages": encoded_messages(messages),
@@ -30,9 +29,6 @@ pub(crate) fn chat_request_body(
     if include_tools && !tools.is_empty() {
         object.insert("tools".into(), Value::Array(tools.to_vec()));
     }
-    if let Some(bucket) = harness_bucket.filter(|value| !value.is_empty()) {
-        object.insert("harness_bucket".into(), Value::String(bucket.to_owned()));
-    }
     // Naming the model is only admissible on a Veil that published a registry,
     // which the desktop confirms before setting this flag.
     if config.provider.send_model_field {
@@ -40,6 +36,23 @@ pub(crate) fn chat_request_body(
             "model".into(),
             Value::String(config.provider.model_id.clone()),
         );
+    }
+    // Same gating as `model`: an older Veil that never advertised the toggle
+    // must see the body it has always seen.
+    if config.provider.send_thinking_field
+        && let Some(thinking) = config
+            .provider
+            .thinking
+            .as_deref()
+            .filter(|value| *value == "on" || *value == "off")
+    {
+        object.insert("thinking".into(), Value::String(thinking.to_owned()));
+    }
+    // Same gating as `thinking`: an older Veil that never advertised the
+    // feature must see the body it has always seen. Only the true case is
+    // sent — absent means strip, which is also the default.
+    if config.provider.send_reasoning_visible_field && config.provider.reasoning_visible {
+        object.insert("reasoning_visible".into(), Value::Bool(true));
     }
     body
 }

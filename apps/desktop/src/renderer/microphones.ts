@@ -55,3 +55,46 @@ export function microphoneChoices(
     }));
   return [...named.filter((device) => device.isDefault), ...named.filter((device) => !device.isDefault)];
 }
+
+/** Said when the picked microphone could not be opened and the default was. */
+export const microphoneUnavailableMessage =
+  "That microphone is unavailable, so the system default is recording.";
+
+/** Said when the device is open and every frame of it is silence. */
+export function silentMicrophoneMessage(label: string): string {
+  return label
+    ? `${label} is not sending any sound. Check that it is not muted, and that it is the input you meant.`
+    : "The microphone is not sending any sound. Check that it is not muted.";
+}
+
+/**
+ * What is asked of the capture device.
+ *
+ * Echo cancellation is off, and that is the whole reason dictation could open a
+ * chosen microphone and then record silence from it. Nothing in this app plays
+ * audio, so there is no echo to cancel — but asking for it on macOS routes
+ * capture through the system's voice-processing unit, which follows the
+ * *default* system input rather than the one named here. Lid closed and a
+ * headset in use, that default is a built-in microphone that is not there to
+ * record: every frame arrives as zeroes and the transcript comes back empty.
+ *
+ * The chosen device is `exact` rather than `ideal` for the same reason. A
+ * preference that cannot be met is answered with some other microphone's audio,
+ * and the wrong device recorded silently is worse than a refusal the caller can
+ * explain — so the fallback to the default is taken one level up, deliberately,
+ * and said out loud when it happens.
+ */
+export function captureConstraints(deviceId: string): MediaStreamConstraints {
+  return {
+    audio: {
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: true,
+      // Quiet USB headsets and far-field laptop microphones differ by more than
+      // the transcriber tolerates; letting the browser even them out costs
+      // nothing and is not device-routing the way cancellation is.
+      autoGainControl: true,
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    },
+  };
+}

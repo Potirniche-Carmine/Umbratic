@@ -12,7 +12,7 @@ import {
   writeTaskWorkspace,
 } from "../storage";
 import type { TaskCheckpoint, TaskRecord, TaskWorkspace } from "../types";
-import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpoint } from "./gitAdapter";
+import { createGitCheckpoint, deleteGitCheckpointRef, materializeCheckpointWorktree, removeManagedWorktree, restoreGitCheckpointPath } from "./gitAdapter";
 import * as path from "node:path";
 
 const taskLocks = new Map<string, Promise<void>>();
@@ -119,52 +119,38 @@ export async function createTurnCheckpoint(task: TaskRecord): Promise<TaskCheckp
   return checkpoint;
 }
 
-export async function restoreTurnCheckpoint(task: TaskRecord): Promise<boolean> {
-  if (!task.turnCheckpointId) return false;
+export const UNDO_UNSAFE_NO_CHECKPOINT =
+  "Undo is unsafe: no verified pre-turn checkpoint.";
+export const UNDO_UNSAFE_NO_BASELINE =
+  "Undo is unsafe: no verified undo baseline.";
+
+/**
+ * Fail-closed restore of one file to its pre-turn state, for isolated git
+ * worktrees. Never resets to task.baseCommit, and never touches a file other
+ * than the one named: undo is per file, so a turn is only ever given back the
+ * work somebody asked for by name.
+ */
+export async function restoreTurnCheckpointFile(task: TaskRecord, relativePath: string): Promise<void> {
+  if (!task.turnCheckpointId) {
+    throw new Error(UNDO_UNSAFE_NO_CHECKPOINT);
+  }
   const checkpoint = readyCheckpoint(task.id, task.turnCheckpointId);
-  const indexTreeOid = checkpoint.indexTreeOid;
-  if (checkpoint.source !== "pre_turn" || !indexTreeOid) {
+  if (checkpoint.source !== "pre_turn") {
     throw new Error("The automatic turn checkpoint is not restorable.");
   }
-  await createTaskCheckpoint(task, "pre_restore", "Recovery before undo");
   await serialized(task.id, async () => {
-    await restoreGitCheckpoint({
+    await restoreGitCheckpointPath({
       workspacePath: task.worktreePath,
       checkpointCommit: checkpoint.commitOid,
-      treeOid: checkpoint.treeOid,
-      indexTreeOid,
+      relativePath,
     });
-    task.latestCheckpointId = checkpoint.id;
-    task.turnCheckpointId = undefined;
-    task.baselineFiles = undefined;
-    writeTask(task, false);
   });
-  return true;
-}
-
-export const REJECT_UNSAFE_NO_CHECKPOINT =
-  "Automatic reject is unsafe: no verified pre-turn checkpoint.";
-export const REJECT_UNSAFE_NO_BASELINE =
-  "Automatic reject is unsafe: no verified undo baseline.";
-
-/** Fail-closed reject restore for isolated git worktrees. Never resets to task.baseCommit. */
-export async function restoreIsolatedWorktreeForReject(
-  task: TaskRecord,
-  worktreeExists: boolean = true,
-): Promise<void> {
-  if (!worktreeExists || !task.turnCheckpointId) {
-    throw new Error(REJECT_UNSAFE_NO_CHECKPOINT);
-  }
-  const restored = await restoreTurnCheckpoint(task);
-  if (!restored) {
-    throw new Error(REJECT_UNSAFE_NO_CHECKPOINT);
-  }
 }
 
 /** Fail-closed gate for folder / non-worktree text undo. */
-export function assertFolderRejectBaseline(task: TaskRecord): void {
+export function assertFolderUndoBaseline(task: TaskRecord): void {
   if (!task.baselineFiles) {
-    throw new Error(REJECT_UNSAFE_NO_BASELINE);
+    throw new Error(UNDO_UNSAFE_NO_BASELINE);
   }
 }
 

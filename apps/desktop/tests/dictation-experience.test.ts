@@ -122,7 +122,7 @@ test("pressing the microphone while dictation is off says so, and offers the way
   // Blurs the prompt text back, and stops at the rail so the microphone that
   // raised it stays live underneath.
   assert.match(offerRule, /backdrop-filter:\s*blur\(/);
-  assert.match(offerRule, /bottom:\s*44px/);
+  assert.match(offerRule, /bottom:\s*36px/);
   assert.doesNotMatch(composerControls, /dictationCaption/);
   assert.doesNotMatch(composerControls, /modalScrim/);
   // The control asks; the composer answers. Keeping the offer out of the rail
@@ -140,8 +140,26 @@ test("the live transcript is muted text in the prompt box, never in the rail", (
   assert.match(renderer, /dictation\.status\.preview \? \(/);
   // And the placeholder stands down rather than printing under it.
   assert.match(renderer, /dictation\.status\.preview\s+\?\s+""/);
-  // A failure is a notice above the box, not a caption that resizes the rail.
-  assert.match(renderer, /className="connectionNotice dictationNotice"/);
+  // A failure is a notice above the box, not a caption that resizes the rail —
+  // and it is a pill about one press rather than a bar across the composer, so
+  // it does not borrow the connection notice's full-width shape.
+  assert.match(renderer, /className="dictationNotice"/);
+  assert.doesNotMatch(renderer, /className="connectionNotice dictationNotice"/);
+  // It clears itself, and can be cleared early. An error that outlives the
+  // attempt sits over the prompt for the rest of the session.
+  assert.match(renderer, /onClick=\{dictation\.dismissError\}/);
+  assert.match(read("../src/renderer/dictation.ts"), /setTimeout\(dismissError, errorNoticeMs\)/);
+});
+
+test("choosing a microphone cannot undo the chosen dictation model", () => {
+  // The whole settings record is written on save, so merging onto the copy
+  // taken at mount wrote a stale model back: a model downloaded in Voice
+  // settings after the composer mounted was reset to "off" by picking a
+  // microphone, and the next press failed with "Download a dictation model".
+  const hook = read("../src/renderer/dictation.ts");
+  const select = hook.slice(hook.indexOf("const selectDevice"), hook.indexOf("const stop = useCallback"));
+  assert.match(select, /await api\.getDictationSettings\(\)/);
+  assert.ok(select.indexOf("getDictationSettings") < select.indexOf("saveDictationSettings"));
 });
 
 test("local dictation needs its own model and nothing else", () => {
@@ -268,11 +286,57 @@ test("the microphone can be chosen from the button it belongs to, and the choice
   // matches nothing falls back to the system default rather than failing.
   assert.match(rendererDictation, /!inputs\.some\(\(device\) => device\.deviceId === chosen\) \? "" : chosen/);
   assert.match(rendererDictation, /addEventListener\("devicechange", load\)/);
-  assert.match(rendererDictation, /deviceId \? \{ deviceId: \{ ideal: deviceId \} \} : \{\}/);
+  // But not against a list that names nothing: before consent Chromium answers
+  // with one anonymous row, and pruning against that forgot last session's pick.
+  assert.match(rendererDictation, /if \(!inputs\.some\(\(device\) => device\.deviceId\)\) return;/);
   // Persisted, and persisting it must not disturb loaded weights.
   assert.match(rendererDictation, /api\.saveDictationSettings\(saved\)/);
   assert.match(backendSource, /if \(dictation\.model === previousModel\) return/);
   assert.match(read("../src/main/settingsStorage.ts"), /value\.deviceId\.length <= 256/);
+});
+
+test("the chosen microphone is the one that records, or the app says it is not", async () => {
+  const { captureConstraints } = await import("../src/renderer/microphones.ts");
+  // Echo cancellation is the bug this test exists for. Nothing in the app plays
+  // audio, so there is nothing to cancel — but asking for it on macOS routes
+  // capture through the system voice-processing unit, which follows the default
+  // system input rather than the chosen one. Lid closed, headset in use, and
+  // every frame arrived as zeroes from a microphone that was not there.
+  const audio = captureConstraints("hash-a").audio as MediaTrackConstraints;
+  assert.equal(audio.echoCancellation, false);
+  assert.equal(audio.channelCount, 1);
+  // Exact, not ideal: a preference that cannot be met is answered with some
+  // other device's audio, and the wrong microphone is worse than a refusal.
+  assert.deepEqual(audio.deviceId, { exact: "hash-a" });
+  // Nothing chosen asks for nothing, which is the system default.
+  assert.equal((captureConstraints("").audio as MediaTrackConstraints).deviceId, undefined);
+
+  // The fallback is still taken, but deliberately and out loud.
+  const start = rendererDictation.slice(rendererDictation.indexOf("const start = useCallback"));
+  assert.match(start, /fellBack = true/);
+  assert.match(start, /error: fellBack \? microphoneUnavailableMessage : null/);
+});
+
+test("a microphone that is open and sending nothing says so", () => {
+  // Digital silence is indistinguishable from a working microphone nobody is
+  // talking into — until the transcript comes back empty and the whole press
+  // looks like it did nothing at all.
+  assert.match(rendererDictation, /const silenceNoticeMs = 5000/);
+  assert.match(rendererDictation, /if \(level > silenceFloor\) heardSoundRef\.current = true/);
+  assert.match(rendererDictation, /silenceTimerRef\.current = setTimeout\(/);
+  assert.match(rendererDictation, /if \(heardSoundRef\.current\) return;/);
+  // The recording is not stopped by it: the words may still be arriving.
+  const watchdog = rendererDictation.slice(rendererDictation.indexOf("silenceTimerRef.current = setTimeout("));
+  assert.doesNotMatch(watchdog.slice(0, watchdog.indexOf("}, silenceNoticeMs)")), /stop\(\)/);
+  // And the timer is cleared wherever metering is.
+  assert.match(rendererDictation, /if \(silenceTimerRef\.current\) \{\s*\n\s*clearTimeout\(silenceTimerRef\.current\)/);
+});
+
+test("a context built after a slow model load is resumed before it is trusted", () => {
+  // Local weights take tens of seconds to load, which is long enough for the
+  // press to stop counting as user activation; an autoplay-suspended context
+  // runs no worklet, so the microphone is open and no frame ever arrives.
+  assert.match(rendererDictation, /if \(context\.state === "suspended"\) await context\.resume\(\);/);
 });
 
 test("the microphone and its device chevron are one control", () => {
